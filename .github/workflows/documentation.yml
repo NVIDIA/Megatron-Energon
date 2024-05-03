@@ -9,8 +9,10 @@ jobs:
   docs:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-python@v3
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10' 
       - name: Install dependencies
         run: |
           pip install -U sphinx-rtd-theme sphinx sphinxcontrib-napoleon myst-parser sphinx-click
@@ -18,7 +20,7 @@ jobs:
         run: |
           sphinx-build -b html docs/source _build
       - name: Deploy to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v3
+        uses: peaceiris/actions-gh-pages@v4
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         with:
           publish_branch: gh-pages
