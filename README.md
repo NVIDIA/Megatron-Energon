@@ -8,6 +8,8 @@
 <h3 align="center">Megatron Energon</h3>
   <p align="center">
     Megatron's multi-modal data loader
+    <br /><br />
+    <a href="https://github.com/NVIDIA/Megatron-Energon/actions/workflows/tests.yml"><img src="https://github.com/NVIDIA/Megatron-Energon/actions/workflows/tests.yml/badge.svg" alt="Tests"></a> <a href="https://nvidia.github.io/Megatron-Energon/"><img src="https://github.com/NVIDIA/Megatron-Energon/actions/workflows/documentation.yml/badge.svg" alt="Documentation"></a>
     <br />
     <a href="https://github.com/NVIDIA/Megatron-Energon/issues">Report Bug</a>
     ·
