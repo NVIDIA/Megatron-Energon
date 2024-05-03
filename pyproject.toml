@@ -43,6 +43,9 @@ dev = [
   "sphinx-rtd-theme",
   "sphinx-click",
 ]
+extra = [
+  "torchvision",  # Needed for megatron.energon.transforms
+]
 
 [project.urls]
 Homepage = "https://github.com/NVIDIA/Megatron-Energon"
