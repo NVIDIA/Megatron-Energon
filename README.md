@@ -9,9 +9,9 @@
   <p align="center">
     Megatron's multi-modal data loader
     <br />
-    <a href="#">Report Bug</a>
+    <a href="https://github.com/NVIDIA/Megatron-Energon/issues">Report Bug</a>
     ·
-    <a href="#">Request Feature</a>
+    <a href="https://github.com/NVIDIA/Megatron-Energon/issues">Request Feature</a>
   </p>
 </div>
 
@@ -22,9 +22,9 @@ It is a pip-installable python package that offers
 - dataset-related classes that you can import in your project
 - a command line utility for data preprocessing and conversion
 
-This document is just a quick start. Please also check out the [documentation](https://nvidia.github.io/documentation/megatron-energon/).
+This document is just a quick start. Please also check out the [documentation](https://nvidia.github.io/Megatron-Energon/).
 
-## Installation 
+## Installation
 
 ```shell
 pip install megatron-energon
@@ -36,7 +36,7 @@ pip install git+https://github.com/NVIDIA/Megatron-Energon.git
 
 **NOTE**: We encourage you to install the package (and not just import a local copy). This will ensure you have all the needed dependencies and that you can use the command line tool.
 
-For more details on installing this package, see [here](https://nvidia.github.io/documentation/megatron-energon/).
+For more details on installing this package, see [here](https://nvidia.github.io/Megatron-Energon/installation.html).
 
 ## Usage of command line tool
 
@@ -73,6 +73,6 @@ for batch in train_loader:
     pass
 ```
 
-For more details, read the [documentation](https://nvidia.github.io/documentation/megatron-energon/).
+For more details, read the [documentation](https://nvidia.github.io/Megatron-Energon/).
 
-Most likely, you'll need your own [task encoder](https://nvidia.github.io/documentation/megatron-energon//task_encoders.html).
+Most likely, you'll need your own [task encoder](https://nvidia.github.io/Megatron-Energon/task_encoders.html).
