@@ -13,18 +13,6 @@ from typing import Any, Tuple
 from megatron.energon.epathlib import EPath
 from megatron.energon.epathlib.rclone_config import ConfigEntry
 
-test_config = {
-    "energon": ConfigEntry(
-        name="energon",
-        type="s3",
-        provider="Other",
-        access_key_id="energon",
-        secret_access_key="f3a3dc2554a9d5b3ea8c51e180e81302",
-        region="us-east-1",
-        endpoint="pdx.s8k.io",
-    )
-}
-
 
 class TestEPath(unittest.TestCase):
     def setUp(self):
@@ -101,86 +89,6 @@ class TestEPath(unittest.TestCase):
         # Test globbing with a pattern
         p = EPath("/tmp").glob("epathtestfile_[0-3].bin")
         assert len(list(p)) == 4
-
-    def test_rclone_path(self):
-        """Test the rclone path"""
-
-        p = EPath(
-            "rclone://energon/test/minicomp/shard_000000.tar",
-            config_override=test_config,
-        )
-        logging.info(f"size: {p.size()}")
-        logging.info(f"is file: {p.is_file()}")
-
-        # Read first 12 bytes:
-        with p.open("rb") as f:
-            b = f.read(12)
-            assert isinstance(b, bytes)
-            logging.info(f"bytes: {b}, hex: {b.hex()}")
-
-    def test_multiprocessing(self):
-        """Test the multiprocessing functionality"""
-        import multiprocessing
-
-        def in_own_proc():
-            EPath.prepare_forked_process()
-            epath = EPath(
-                "rclone://energon/test/minicomp/shard_000000.tar",
-                config_override=test_config,
-            )
-            with epath.open("rb", block_size=1024 * 10) as f:
-                cont = f.read(10)
-                assert isinstance(cont, bytes)
-                print(f"Forked process: Read 10 bytes from {p}: {cont.hex()}")
-
-        somepath = EPath(
-            "rclone://energon/test/minicomp/shard_000000.tar", config_override=test_config
-        )
-        with somepath.open("rb", block_size=1024 * 10) as f:
-            cont = f.read(10)
-            assert isinstance(cont, bytes)
-            print(f"Parent proc: Read 10 bytes from {somepath}: {cont.hex()}")
-
-        p = multiprocessing.Process(target=in_own_proc)
-        print("Starting process.")
-        p.start()
-        p.join()
-        print("Process done.")
-
-    def test_multiprocessing_with_forked_epath(self):
-        """Test if copying the EPath object works in a forked process."""
-
-        import multiprocessing
-
-        ctx = multiprocessing.get_context(
-            method="fork"
-        )  # Should be the default in Python<3.14, but let's be sure.
-
-        def in_own_proc(passed_epath_instance: EPath):
-            EPath.prepare_forked_process()
-            print(f"In forked process with PID {os.getpid()}.")
-            print(f"Passed EPath instance was created with PID {passed_epath_instance.fs._pid}.")
-
-            assert passed_epath_instance.fs._pid != os.getpid()
-
-            with passed_epath_instance.open("rb", block_size=1024 * 10) as f:
-                cont = f.read(10)
-                assert isinstance(cont, bytes)
-                print(f"Forked process: Read 10 bytes from {p}: {cont.hex()}")
-
-        somepath = EPath(
-            "rclone://energon/test/minicomp/shard_000000.tar", config_override=test_config
-        )
-        with somepath.open("rb", block_size=1024 * 10) as f:
-            cont = f.read(10)
-            assert isinstance(cont, bytes)
-            print(f"Parent proc: Read 10 bytes from {somepath}: {cont.hex()}")
-
-        p = ctx.Process(target=in_own_proc, args=(somepath,))
-        print("Starting process.")
-        p.start()
-        p.join()
-        print("Process done.")
 
 
 if __name__ == "__main__":
