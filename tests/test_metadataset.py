@@ -3,6 +3,7 @@
 
 """This module defines tests for meta datasets."""
 
+import gc
 import logging
 import sys
 import tempfile
@@ -1035,6 +1036,56 @@ class TestDataset(unittest.TestCase):
         loader.restore_state(state_0)
         order_4 = [data.text for idx, data in zip(range(55 * 20), loader)]
         assert order_1 == order_4
+
+    def test_blending_randomness(self):
+        import random
+
+        import numpy
+
+        for num_workers in [0, 1, 2]:  # Especially also check the num_workers=0 case
+
+            world_size = 4
+            micro_batch_size = 1
+            seed = 42
+
+            configs = (
+                WorkerConfig(rank=0, world_size=world_size, num_workers=num_workers),
+                WorkerConfig(rank=1, world_size=world_size, num_workers=num_workers),
+                WorkerConfig(rank=2, world_size=world_size, num_workers=num_workers),
+            )
+
+            all_ranks_subflavors = []
+            for rank_config in configs:
+                torch.manual_seed(seed)
+                numpy.random.seed(seed)
+                random.seed(seed)
+
+                ds = get_train_dataset(
+                    self.mds_path,
+                    split_part="train",
+                    worker_config=rank_config,
+                    batch_size=micro_batch_size,
+                    shuffle_buffer_size=None,
+                    max_samples_per_sequence=None,
+                )
+                loader = get_loader(ds, worker_config=rank_config)
+
+                subflavors = [data.__subflavor__[0] for idx, data in zip(range(25), loader)]
+
+                all_ranks_subflavors.append(subflavors)
+
+                print(f"Subflavors for rank {rank_config.rank}:", subflavors)
+
+            # Assert that all ranks got different data
+            for i in range(len(all_ranks_subflavors)):
+                for j in range(i + 1, len(all_ranks_subflavors)):
+                    assert (
+                        all_ranks_subflavors[i] != all_ranks_subflavors[j]
+                    ), f"Rank {i} and rank {j} got the same subflavors."
+
+            # Delete all locals, otherwise loaders might be kept alive
+            locals().clear()
+            gc.collect()
 
 
 if __name__ == "__main__":

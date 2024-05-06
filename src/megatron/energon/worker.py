@@ -167,7 +167,12 @@ class WorkerConfig:
                 the current worker, which is the default.
         """
 
-        global_worker_id = self.global_worker_id(override_local_worker_id)
+        if self.num_workers == 0:
+            # If we are not using workers, different ranks should still get a different seed
+            global_worker_id = self.rank
+        else:
+            global_worker_id = self.global_worker_id(override_local_worker_id)
+
         seed_offset = self.seed_offset
 
         seed_hash = hashlib.sha1(f"{global_worker_id},{seed_offset}".encode("utf-8")).digest()
