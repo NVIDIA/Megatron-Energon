@@ -605,7 +605,7 @@ class BaseWebdataset(BaseCoreDataset[T_sample], Generic[T_sample], ABC):
         Returns:
             The set of all parts found in the shards. But at most 50.
         """
-        parent_path = EPath(parent_path)
+        parent_path = EPath(parent_path).absolute()
 
         found_parts = set()
         paths = [path for path in paths for path in braceexpand.braceexpand(path)]

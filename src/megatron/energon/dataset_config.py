@@ -36,6 +36,7 @@ def load_config(
         The instantiated type.
     """
     # Read the config
+    path = path.absolute()
     with path.open() as f:
         data: dict = yaml.safe_load(f)
     if default_kwargs is not None:

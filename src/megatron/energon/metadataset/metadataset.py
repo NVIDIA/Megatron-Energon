@@ -27,7 +27,7 @@ class DatasetReference:
     _dataset: Optional[Union["Metadataset", DatasetLoader]] = None
 
     def prepare(self, parent_path: EPath):
-        self.path = parent_path / self.path
+        self.path = parent_path.absolute() / self.path
         if self.path.is_file():
             assert self.dataset_config == "dataset.yaml", "Must not set dataset_config"
             assert self.split_config == "split.yaml", "Must not set split_config"
@@ -81,6 +81,7 @@ class MetadatasetMixer:
     datasets: List[DatasetReference]
 
     def prepare(self, parent_path: EPath):
+        parent_path = parent_path.absolute()
         for dataset in self.datasets:
             dataset.prepare(parent_path)
 
@@ -122,7 +123,7 @@ class Metadataset(DatasetLoaderInterface):
         splits: Dict[str, MetadatasetMixer],
     ):
         """Create the metadataset"""
-        parent_path = EPath(parent_path)
+        parent_path = EPath(parent_path).absolute()
         self._splits = splits
         # Fix paths
         for split in splits.values():

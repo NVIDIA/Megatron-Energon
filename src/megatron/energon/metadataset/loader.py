@@ -16,7 +16,8 @@ def load_dataset(
     **kwargs,
 ) -> DatasetLoaderInterface:
     """Loads a (meta)dataset."""
-    path = EPath(path)
+    path = EPath(path).absolute()
+
     if path.is_file():
         return load_config(
             path,

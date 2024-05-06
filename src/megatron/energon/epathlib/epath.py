@@ -197,6 +197,8 @@ class EPath:
 
     def absolute(self) -> "EPath":
         if self.protocol == "local":
+            if self.is_absolute():
+                return self
             return EPath(PathlibPath(self.internal_path).absolute())
         else:
             assert self.is_absolute(), "Remote paths are always absolute"
