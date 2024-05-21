@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Union
 
 import torch
 
@@ -21,7 +21,7 @@ class OCRSample(Sample):
     #: The bounding boxes of the blocks in the image float(N, 4|5<x, y, w, h>)
     block_boxes: Optional[torch.Tensor] = None
     #: The classes of the blocks in the image int(N, 1<block_class>)
-    block_classes: Optional[torch.Tensor | List[str]] = None
+    block_classes: Optional[Union[torch.Tensor, List[str]]] = None
     #: The text contained in each block (N,)
     block_text: Optional[List[str]] = None
     #: The bounding boxes of the lines in the image float(N, 4|5<x, y, w, h[, confidence]>)
