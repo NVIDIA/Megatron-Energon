@@ -31,9 +31,7 @@ It's best at
 Try using it together with [Megatron](https://github.com/NVIDIA/Megatron-LM) Core.
 
 # Quickstart
-**Megatron Energon** is the multi-modal data loader of Megatron.
-
-It is a pip-installable python package that offers
+**Megatron Energon** is a pip-installable python package that offers
 - dataset-related classes that you can import in your project
 - a command line utility for data preprocessing and conversion
 
