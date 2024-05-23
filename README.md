@@ -12,9 +12,13 @@
   </p>
 </div>
 
+<br />
+
+ _**DISCLAIMER**: This package contains research code. APIs may change. It may remain under Megatron or be integrated into [NVIDIA's Data Loading Library (DALI)](https://developer.nvidia.com/dali)_
+
 # What is this?
 
-**Megatron Energon** is the multi-modal data loader of Megatron (you can also use it independently).
+**Megatron Energon** is the multi-modal data loader of [Megatron](https://github.com/NVIDIA/Megatron-LM) (you can also use it independently).
 
 It's best at
 
@@ -24,7 +28,7 @@ It's best at
 - ensuring reproducibility and resumability
 - adapting easily to various types of data samples and processing
 
-Try using it together with [Megatron Core](https://github.com/NVIDIA/Megatron-LM).
+Try using it together with [Megatron](https://github.com/NVIDIA/Megatron-LM) Core.
 
 # Quickstart
 **Megatron Energon** is the multi-modal data loader of Megatron.
