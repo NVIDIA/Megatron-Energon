@@ -1,14 +1,9 @@
 <a name="top"></a>
 
 <div align="center">
-  <a href="#">
-    <img src="docs/source/images/energon3_darkbg_border.png" alt="Logo" height="384">
-  </a>
-
-<h3 align="center">Megatron Energon</h3>
+  <h3 align="center">Megatron's multi-modal data loader</h3>
+  <h3 align="center">Megatron Energon</h3>
   <p align="center">
-    Megatron's multi-modal data loader
-    <br /><br />
     <a href="https://github.com/NVIDIA/Megatron-Energon/actions/workflows/tests.yml"><img src="https://github.com/NVIDIA/Megatron-Energon/actions/workflows/tests.yml/badge.svg" alt="Tests"></a> <a href="https://nvidia.github.io/Megatron-Energon/"><img src="https://github.com/NVIDIA/Megatron-Energon/actions/workflows/documentation.yml/badge.svg" alt="Documentation"></a>
     <br />
     <a href="https://github.com/NVIDIA/Megatron-Energon/issues">Report Bug</a>
@@ -16,6 +11,24 @@
     <a href="https://github.com/NVIDIA/Megatron-Energon/issues">Request Feature</a>
   </p>
 </div>
+
+<br />
+
+ _**DISCLAIMER**: This package contains research code. APIs may change. It may remain under Megatron or be integrated into [NVIDIA's Data Loading Library (DALI)](https://developer.nvidia.com/dali)_
+
+# What is this?
+
+**Megatron Energon** is the multi-modal data loader of [Megatron](https://github.com/NVIDIA/Megatron-LM) (you can also use it independently).
+
+It's best at
+
+- loading large training data to train large multi-modal models
+- blending many different datasets together
+- distributing the work across many nodes and processes of a cluster
+- ensuring reproducibility and resumability
+- adapting easily to various types of data samples and processing
+
+Try using it together with [Megatron](https://github.com/NVIDIA/Megatron-LM) Core.
 
 # Quickstart
 **Megatron Energon** is the multi-modal data loader of Megatron.
