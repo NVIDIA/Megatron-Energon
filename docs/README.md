@@ -12,7 +12,7 @@ To build the documentation, you need sphinx and additional packages:
 
 You can install these like
 
-`pip install sphinx-rtd-theme sphinx sphinxcontrib-napoleon myst-parser`
+`pip install sphinx-rtd-theme sphinx sphinxcontrib-napoleon myst-parser sphinx-click`
 
 Use `make html` to build it.
 
