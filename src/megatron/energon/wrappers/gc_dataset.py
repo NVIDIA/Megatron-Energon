@@ -45,8 +45,6 @@ def gc_init_worker(worker_id: int):
             # Can happen if the object is a weakref proxy, don't care
             pass
 
-    print(f"Worker {worker_id} has {num_tensors} frozen cuda tensors")
-
     _frozen_cuda_tensors_initialized = True
 
 
