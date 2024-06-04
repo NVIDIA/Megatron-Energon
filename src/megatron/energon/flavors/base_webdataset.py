@@ -7,6 +7,7 @@ import logging
 import multiprocessing as mp
 import random
 import re
+import torch
 import tarfile
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -84,6 +85,15 @@ ImageDecoder = Literal[
     "pilrgb",
     "pilrgba",
 ]
+
+@dataclasses.dataclass
+class VideoData:
+    #: The input video tensor in the shape (frames, channel, h, w)
+    frames: torch.Tensor
+    #: The input audio frames in the shape (number of channels, number of points)
+    aframes: torch.Tensor
+    #: Metadata for the video and audio. Can contain the fields video_fps (float) and audio_fps (int)
+    info: Dict[str, Union[bool, int, float, str]]
 
 
 @dataclass
@@ -794,7 +804,7 @@ class DefaultGenericWebdataset(BaseWebdataset[T_sample], Generic[T_sample]):
 
 class DefaultDecoderWebdataset(DefaultGenericWebdataset[T_sample], Generic[T_sample]):
     """
-    Basic class for any dataset which contains images. Applies default wds loading logic for all
+    Basic class for any dataset which contains images and / or videos. Applies default wds loading logic for all
     known extensions.
     """
 
@@ -828,9 +838,28 @@ class DefaultDecoderWebdataset(DefaultGenericWebdataset[T_sample], Generic[T_sam
         if self.ignore_decoder_errors:
             return True
         raise exc
+    
+    def _video_decoder(self, key, data):
+        """Extract the video data from default video extensions."""
+        # TODO: This function could be more efficient. It will write the data to `/tmp`,
+        # then load it using `torchvision.io.video.read_video` which uses `av.open` from pyav.
+        # pyav allows providing a file-like object, but torchvision does not expose that interface.
+        # (https://github.com/pytorch/vision/issues/8438)
+        video = webdataset.torch_video(key, data)
+        if video is not None:
+            return VideoData(
+                frames=video[0].permute((0, 3, 1, 2)),
+                aframes=video[1],
+                info=video[2],
+            )
+        return None
 
     def _process_samples(self, dataset: SavableDataset[FilteredSample]) -> SavableDataset[T_sample]:
-        decoder = webdataset.decode(self.image_decode, handler=self._decode_error_handler)
+
+        decoder = webdataset.decode(
+            self.image_decode,
+            self._video_decoder,
+            handler=self._decode_error_handler)
         dataset = IterMapDataset(
             dataset, decoder, error_handler=self.error_handler, stateless_iter_fn=True
         )
