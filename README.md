@@ -14,7 +14,7 @@
 
 <br />
 
- _**DISCLAIMER**: This package contains research code. APIs may change. It may remain under Megatron or be integrated into [NVIDIA's Data Loading Library (DALI)](https://developer.nvidia.com/dali)_
+ _**DISCLAIMER**: This package contains research code. APIs may change._
 
 # What is this?
 
