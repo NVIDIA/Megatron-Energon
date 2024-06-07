@@ -14,7 +14,7 @@ The most important features are:
 * Optimized for high-speed multi-rank training
 * Can easily mix and blend multiple datasets
 * Its state is savable and restorable
-* Suitable for any kind of multi-modal data except long videos
+* Handles various kinds of multi-modal data even in one training
 
 Energon also comes with a command line tool that you can use to prepare your datasets.
 
