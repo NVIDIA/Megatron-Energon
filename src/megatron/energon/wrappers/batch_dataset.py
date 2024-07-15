@@ -112,12 +112,28 @@ class BatchDataset(
                 self.error_handler(e, batch)
 
     def can_restore_sample(self) -> bool:
-        return False
+        # Cannot really verify if the returned elements contain a __restore_key__.
+        # If the user wants to use this, well...
+        return self.dataset.can_restore_sample()
 
-    def restore_sample(self, index: Tuple[Union[str, int], ...]) -> T_batch:
-        # TODO: We'd need to store multiple indices to restore a batch
-        # Also, returned elements don't support __restore_key__. Would need extension.
-        raise NotImplementedError("BatchDataset does not support random access.")
+    def restore_sample(self, index: Tuple[Tuple[Union[str, int], ...], ...]) -> T_batch:
+        # We need to store multiple indices to restore a batch.
+        batch = [
+            self.dataset.restore_sample(inner_idx)
+            for inner_idx in index
+        ]
+        batch_sample = self.batcher(batch)
+        if isinstance(batch_sample, Generator):
+            is_first = True
+            for item in batch_sample:
+                if is_first:
+                    is_first = False
+                else:
+                    raise ValueError("Cannot restore from multiple generated samples")
+                result = item
+            return result
+        else:
+            return batch_sample
 
     def config(self) -> Dict[str, Any]:
         return {

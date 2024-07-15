@@ -139,7 +139,12 @@ class IterMapDataset(
         return self.stateless_iter_fn and self.dataset.can_restore_sample()
 
     def restore_sample(self, index: Tuple[Union[str, int], ...]) -> T_sample:
-        assert self.stateless_iter_fn
+        if not self.stateless_iter_fn:
+            try:
+                raise ValueError("IterMapDataset is not stateless, but restore_sample was called.")
+            except ValueError as e:
+                # This will allow to continue nevertheless, even if it might be erronous
+                self.error_handler(e, index)
         iter_idx = index[0]
         assert isinstance(iter_idx, int)
         inner_sample = self.dataset.restore_sample(index[1:])
@@ -147,9 +152,12 @@ class IterMapDataset(
         for idx, sample in enumerate(self.iter_map_fn(iter([inner_sample]))):
             if idx == iter_idx:
                 return self._add_sample_restore_key(sample, idx, fail_otherwise=True)
-        raise RuntimeError(
-            "Generator did not yield enough samples, but is marked stateless/deterministic."
-        )
+        try:
+            raise ValueError(
+                "Generator did not yield enough samples, but is marked stateless/deterministic."
+            )
+        except ValueError as e:
+            self.error_handler(e, index)
 
     def config(self) -> Dict[str, Any]:
         return {

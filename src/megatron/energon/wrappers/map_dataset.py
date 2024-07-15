@@ -77,25 +77,29 @@ class MapDataset(BaseSingleWrapperDataset[T_sample, T_sample_out], Generic[T_sam
         return self.stateless_map_fn and self.dataset.can_restore_sample()
 
     def restore_sample(self, index: Tuple[Union[str, int], ...]) -> T_sample_out:
-        if self.stateless_map_fn:
-            if inspect.isgeneratorfunction(self.map_fn):
-                local_index = index[0]
-                assert isinstance(local_index, int)
-                index = index[1:]
-            mapped_sample = self.map_fn(self.dataset.restore_sample(index))
-            if isinstance(mapped_sample, Generator):
-                assert inspect.isgeneratorfunction(self.map_fn)
-                for idx, res_sample in enumerate(mapped_sample):
-                    if idx == local_index:
-                        return self._add_sample_restore_key(res_sample, idx, fail_otherwise=True)
-                raise RuntimeError(
-                    "Generator did not yield enough samples, but is marked stateless/deterministic."
-                )
-            else:
-                return mapped_sample
+        if not self.stateless_map_fn:
+            try:
+                raise ValueError("MapDataset is not stateless, but restore_sample was called.")
+            except ValueError as e:
+                # This will allow to continue nevertheless, even if it might be erronous
+                self.error_handler(e, index)
+        if inspect.isgeneratorfunction(self.map_fn):
+            local_index = index[0]
+            assert isinstance(local_index, int)
+            index = index[1:]
+        mapped_sample = self.map_fn(self.dataset.restore_sample(index))
+        if isinstance(mapped_sample, Generator):
+            assert inspect.isgeneratorfunction(self.map_fn)
+            for idx, res_sample in enumerate(mapped_sample):
+                if idx == local_index:
+                    return self._add_sample_restore_key(res_sample, idx, fail_otherwise=True)
+            try:
+                raise ValueError("Generator did not yield enough samples, but is marked stateless/deterministic.")
+            except ValueError as e:
+                # This will allow to continue nevertheless, even if it might be erronous
+                self.error_handler(e, index)
         else:
-            # Raise default error
-            return super().__getitem__(index)
+            return mapped_sample
 
     def config(self) -> Dict[str, Any]:
         return {
