@@ -7,7 +7,6 @@ import logging
 import multiprocessing as mp
 import random
 import re
-import torch
 import tarfile
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -31,6 +30,7 @@ from typing import (
 )
 
 import braceexpand
+import torch
 import webdataset
 import yaml
 
@@ -57,7 +57,7 @@ from megatron.energon.flavors.webdataset.structs import (
 )
 from megatron.energon.module_loader import ModuleLoader
 from megatron.energon.typed_converter import raw_to_typed, to_json_object
-from megatron.energon.worker import WorkerConfig, global_worker_config
+from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.iter_map_dataset import IterMapDataset
 from megatron.energon.wrappers.map_dataset import MapDataset
 
@@ -85,6 +85,7 @@ ImageDecoder = Literal[
     "pilrgb",
     "pilrgba",
 ]
+
 
 @dataclasses.dataclass
 class VideoData:
@@ -131,7 +132,7 @@ class BaseWebdataset(BaseCoreDataset[T_sample], Generic[T_sample], ABC):
         *,
         split_part: str,
         training: bool,
-        worker_config: Optional[WorkerConfig] = None,
+        worker_config: WorkerConfig,
         shuffle_over_epochs: int = 1,
         parallel_shard_iters: Optional[int] = None,
         max_samples_per_sequence: Optional[int] = None,
@@ -147,7 +148,7 @@ class BaseWebdataset(BaseCoreDataset[T_sample], Generic[T_sample], ABC):
             path: Root path to the dataset for relative path resolution.
             split_part: Which part to load (e.g. 'train', 'val', 'test').
             training: If true, apply shuffling and loop the dataset.
-            worker_config: Configuration for the workers. Defaults to `global_worker_config`.
+            worker_config: Configuration for the workers.
             shuffle_over_epochs: Only effective if training=True.
                 How many epochs to shuffle over if training.
                 If = 1, every sample is seen exactly once per epoch.
@@ -166,7 +167,7 @@ class BaseWebdataset(BaseCoreDataset[T_sample], Generic[T_sample], ABC):
         assert self.__sample_type__ is not None, f"Class {type(self)} must define __sample_type__"
         self.path = path
         self.training = training
-        self.worker_config = worker_config or global_worker_config
+        self.worker_config = worker_config
         self.handler = handler
         self.info = raw_to_typed(
             yaml.safe_load((path / MAIN_FOLDER_NAME / info_config).read_text()), WebdatasetInfo
@@ -424,7 +425,7 @@ class BaseWebdataset(BaseCoreDataset[T_sample], Generic[T_sample], ABC):
         # Note that the global number of workers intentionally stay the same if you
         # divide the number of ranks by N, and multiply the number of workers per rank by N.
         # This allows to reproduce the same global batches with a different number of ranks.
-        
+
         num_workers = max(1, worker_config.num_workers)
 
         total_samples = sum(shard.count for shard in shards)
@@ -435,10 +436,7 @@ class BaseWebdataset(BaseCoreDataset[T_sample], Generic[T_sample], ABC):
         # Let's look at the workers of the current local rank.
         # Each worker gets a slice of the global samples as follows:
         local_rank_worker_sample_offsets = [
-            int(
-                (num_workers * worker_config.rank + local_worker_idx)
-                * samples_per_worker
-            )
+            int((num_workers * worker_config.rank + local_worker_idx) * samples_per_worker)
             for local_worker_idx in range(num_workers + 1)
         ]
 
@@ -787,7 +785,11 @@ class DefaultGenericWebdataset(BaseWebdataset[T_sample], Generic[T_sample]):
 
     def _process_samples(self, dataset: SavableDataset[FilteredSample]) -> SavableDataset[T_sample]:
         return MapDataset(
-            dataset, self._load_sample, error_handler=self.error_handler, stateless_map_fn=True
+            dataset,
+            self._load_sample,
+            error_handler=self.error_handler,
+            stateless_map_fn=True,
+            worker_config=self.worker_config,
         )
 
     def _load_sample(self, sample: FilteredSample) -> T_sample:
@@ -838,7 +840,7 @@ class DefaultDecoderWebdataset(DefaultGenericWebdataset[T_sample], Generic[T_sam
         if self.ignore_decoder_errors:
             return True
         raise exc
-    
+
     def _video_decoder(self, key, data):
         """Extract the video data from default video extensions."""
         # TODO: This function could be more efficient. It will write the data to `/tmp`,
@@ -859,9 +861,14 @@ class DefaultDecoderWebdataset(DefaultGenericWebdataset[T_sample], Generic[T_sam
         decoder = webdataset.decode(
             self.image_decode,
             self._video_decoder,
-            handler=self._decode_error_handler)
+            handler=self._decode_error_handler,
+        )
         dataset = IterMapDataset(
-            dataset, decoder, error_handler=self.error_handler, stateless_iter_fn=True
+            dataset,
+            decoder,
+            error_handler=self.error_handler,
+            stateless_iter_fn=True,
+            worker_config=self.worker_config,
         )
         return super()._process_samples(dataset)
 

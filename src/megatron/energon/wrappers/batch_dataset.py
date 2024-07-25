@@ -1,6 +1,7 @@
 # Copyright (c) 2024, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+from dataclasses import dataclass
 from typing import (
     Any,
     Callable,
@@ -17,13 +18,28 @@ from typing import (
 
 from megatron.energon.errors import SYSTEM_EXCEPTIONS, FatalSampleError
 from megatron.energon.flavors.base_dataset import SavableDataset
-from megatron.energon.worker import WorkerConfig, global_worker_config
+from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers._log_exception import log_exception
-from megatron.energon.wrappers.base import BaseSingleWrapperDataset
+from megatron.energon.wrappers.base import (
+    BaseSingleWrapperDataset,
+    BaseSingleWrapperMergedState,
+    BaseSingleWrapperState,
+    wrap_worker_sample_index,
+)
 from megatron.energon.wrappers.skip import SkipSample
 
 T_batch = TypeVar("T_batch", covariant=True)
 T_batch_sample = TypeVar("T_batch_sample", covariant=True)
+
+
+@dataclass
+class BatchState(BaseSingleWrapperState):
+    sample_index: int
+
+
+@dataclass
+class BatchMergedState(BaseSingleWrapperMergedState):
+    sample_indexes: List[int]
 
 
 class BatchDataset(
@@ -36,15 +52,17 @@ class BatchDataset(
     drop_last: bool
     error_handler: Callable[[Exception, List[T_batch_sample]], None]
     worker_config: WorkerConfig
+    _sample_index: List[int]
 
     def __init__(
         self,
         dataset: SavableDataset[T_batch_sample],
         batch_size: int,
         batcher: Callable[[List[T_batch_sample]], T_batch],
+        *,
         drop_last: bool = False,
         error_handler: Callable[[Exception, List[T_batch_sample]], None] = log_exception,
-        worker_config: Optional[WorkerConfig] = None,
+        worker_config: WorkerConfig,
     ):
         """Construct a BatchDataset.
 
@@ -56,14 +74,15 @@ class BatchDataset(
             drop_last: If True, the last batch is dropped if it is smaller than the batch size.
             error_handler: Function which handles exceptions raised by the batcher. The default
                 implementation logs the exception.
-            worker_config: Configuration for the workers. Defaults to `global_worker_config`.
+            worker_config: Configuration for the workers.
         """
         super().__init__(dataset)
         self.batch_size = batch_size
         self.batcher = batcher
         self.drop_last = drop_last
         self.error_handler = error_handler
-        self.worker_config = worker_config or global_worker_config
+        self.worker_config = worker_config
+        self._sample_index = [0] * max(self.worker_config.num_workers, 1)
 
     def __len__(self):
         n_samples = len(self.dataset)
@@ -85,7 +104,8 @@ class BatchDataset(
 
     def __iter__(self) -> Iterator[T_batch]:
         batch: List[T_batch_sample] = []
-        for sample in self.dataset:
+        worker_index = self.worker_config.rank_worker_id()
+        for sample in wrap_worker_sample_index(self.dataset, self._sample_index, worker_index):
             batch.append(sample)
             if len(batch) == self.batch_size:
                 try:
@@ -110,6 +130,27 @@ class BatchDataset(
                 raise FatalSampleError.from_sample(batch)
             except Exception as e:
                 self.error_handler(e, batch)
+
+    def save_state(self) -> BatchState:
+        return BatchState.extend(
+            super().save_state(),
+            sample_index=self._sample_index[self.worker_config.rank_worker_id()],
+        )
+
+    def merge_states(self, states: List[BatchState]) -> BatchMergedState:
+        assert all(s is None or isinstance(s, BatchState) for s in states)
+        return BatchMergedState.extend(
+            super().merge_states(states),
+            sample_indexes=[0 if state is None else state.sample_index for state in states],
+        )
+
+    def restore_state(self, state: Optional[BatchMergedState]) -> None:
+        super().restore_state(state)
+        if state is None:
+            self._sample_index = [0] * max(self.worker_config.num_workers, 1)
+        else:
+            assert isinstance(state, BatchMergedState)
+            self._sample_index = state.sample_indexes
 
     def can_restore_sample(self) -> bool:
         return False

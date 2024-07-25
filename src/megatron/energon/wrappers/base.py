@@ -1,12 +1,14 @@
 # Copyright (c) 2024, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Generic, List, Optional, Tuple, TypeVar, Union
+from typing import Any, Generic, Iterable, List, Optional, Tuple, TypeVar, Union
 
-from megatron.energon.flavors.base_dataset import MergedState, SavableDataset, State
+from megatron.energon.flavors.base_dataset import MergedState, Sample, SavableDataset, State
 from megatron.energon.worker import WorkerConfig
 
+T = TypeVar("T")
 T_sample = TypeVar("T_sample")
 T_sample_out = TypeVar("T_sample_out")
 T_sample_in = TypeVar("T_sample_in")
@@ -88,3 +90,44 @@ class BaseSingleWrapperDataset(
     def verify_worker_config(self, worker_config: WorkerConfig) -> None:
         super().verify_worker_config(worker_config)
         self.dataset.verify_worker_config(worker_config)
+
+
+def wrap_worker_sample_index(src: Iterable[T], index_src: List[int], index_idx: int) -> Iterable[T]:
+    """
+    Wraps the given iterable to push and pop the sample index for the given worker config.
+    """
+    WorkerConfig.active_worker_config.worker_push_sample_index(index_src[index_idx])
+    index_active = True
+    try:
+        for x in src:
+            WorkerConfig.active_worker_config.worker_pop_sample_index()
+            index_active = False
+            index_src[index_idx] += 1
+            yield x
+            WorkerConfig.active_worker_config.worker_push_sample_index(index_src[index_idx])
+            index_active = True
+    finally:
+        if index_active:
+            WorkerConfig.active_worker_config.worker_pop_sample_index()
+
+
+@contextmanager
+def wrap_worker_sample_index_ctx(sample_idx: int):
+    """
+    Wraps the given iterable to push and pop the sample index for the given worker config.
+    """
+    WorkerConfig.active_worker_config.worker_push_sample_index(sample_idx)
+    try:
+        yield
+    finally:
+        WorkerConfig.active_worker_config.worker_pop_sample_index()
+
+
+def get_sample_restore_key(sample: Any) -> Optional[Union[str, int]]:
+    """Gets the restore key from an arbitrary sample."""
+    if isinstance(sample, Sample):
+        return sample.__restore_key__
+    elif isinstance(sample, dict) and "__restore_key__" in sample:
+        return sample["__restore_key__"]
+    else:
+        return None

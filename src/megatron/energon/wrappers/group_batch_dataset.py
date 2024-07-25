@@ -18,7 +18,7 @@ from typing import (
 
 from megatron.energon.errors import SYSTEM_EXCEPTIONS, FatalSampleError
 from megatron.energon.flavors.base_dataset import SavableDataset
-from megatron.energon.worker import WorkerConfig, global_worker_config
+from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers._log_exception import log_exception
 from megatron.energon.wrappers.base import (
     BaseSingleWrapperDataset,
@@ -67,9 +67,10 @@ class GroupBatchDataset(
         batch_size: int,
         group_criterion: Callable[[T_batch_sample], Hashable],
         batcher: Callable[[List[T_batch_sample]], T_batch],
+        *,
         drop_last: bool = False,
         error_handler: Callable[[Exception, List[T_batch_sample]], None] = log_exception,
-        worker_config: Optional[WorkerConfig] = None,
+        worker_config: WorkerConfig,
         n_groups: int = 1,
     ):
         """Construct a GroupBatchDataset.
@@ -82,7 +83,7 @@ class GroupBatchDataset(
                 :exc:`megatron.energon.SkipSample` to skip a sample.
             drop_last: If True, the last batch is dropped if it is smaller than the batch size.
             error_handler: Handler for errors. Defaults to logging and ignoring the exception.
-            worker_config: Configuration for the workers. Defaults to `global_worker_config`.
+            worker_config: Configuration for the workers.
             n_groups: Number of different groups. If not set properly, `len` might be less than the
                 actual number of samples yielded.
         """
@@ -92,7 +93,7 @@ class GroupBatchDataset(
         self.batcher = batcher
         self.drop_last = drop_last
         self.error_handler = error_handler
-        self.worker_config = worker_config or global_worker_config
+        self.worker_config = worker_config
         self.n_groups = n_groups
         self._state_batches = [{} for _ in range(max(self.worker_config.num_workers, 1))]
 

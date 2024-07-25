@@ -1,6 +1,7 @@
 # Copyright (c) 2024, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+from dataclasses import dataclass
 from typing import (
     Any,
     Callable,
@@ -8,6 +9,7 @@ from typing import (
     Generator,
     Generic,
     Iterator,
+    List,
     Optional,
     Tuple,
     TypeVar,
@@ -18,24 +20,28 @@ from torch.utils.data import IterableDataset
 
 from megatron.energon.errors import SYSTEM_EXCEPTIONS, FatalSampleError
 from megatron.energon.flavors.base_dataset import SavableDataset
+from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers._log_exception import log_exception
-from megatron.energon.wrappers.base import BaseSingleWrapperDataset
+from megatron.energon.wrappers.base import (
+    BaseSingleWrapperDataset,
+    BaseSingleWrapperMergedState,
+    BaseSingleWrapperState,
+    wrap_worker_sample_index,
+    wrap_worker_sample_index_ctx,
+)
 
 T_sample = TypeVar("T_sample")
 T_sample_out = TypeVar("T_sample_out")
 
 
-class _ExcSampler:
-    last_sample: Optional[T_sample] = None
-    dataset: IterableDataset[T_sample]
+@dataclass
+class IterMapState(BaseSingleWrapperState):
+    sample_index: int
 
-    def __init__(self, dataset: IterableDataset[T_sample]):
-        self.dataset = dataset
 
-    def __iter__(self) -> Iterator[T_sample]:
-        for sample in self.dataset:
-            self.last_sample = sample
-            yield sample
+@dataclass
+class IterMapMergedState(BaseSingleWrapperMergedState):
+    sample_indexes: List[int]
 
 
 class IterMapDataset(
@@ -51,14 +57,17 @@ class IterMapDataset(
     len_map_fn: Callable[[int], int]
     error_handler: Callable[[Exception, Optional[T_sample]], None]
     stateless_iter_fn: bool
+    _sample_index: List[int]
 
     def __init__(
         self,
         dataset: SavableDataset[T_sample],
         iter_map_fn: Callable[[Iterator[T_sample]], Iterator[T_sample_out]],
+        *,
         len_map_fn: Callable[[int], int] = lambda x: x,
         error_handler: Callable[[Exception, Optional[T_sample]], None] = log_exception,
         stateless_iter_fn: bool = False,
+        worker_config: WorkerConfig,
     ):
         """Construct a IterMapDataset.
         For saving and restoring samples, the iter_map_fn must only yield 0 or 1 sample per
@@ -80,18 +89,27 @@ class IterMapDataset(
                 (it does not aggregate samples (thus key for random access can propagate to inner
                 dataset), yielding zero or multiple samples per fetched sample is fine).
                 Defaults to False.
+            worker_config: Configuration for the workers.
         """
         super().__init__(dataset)
         self.iter_map_fn = iter_map_fn
         self.len_map_fn = len_map_fn
         self.error_handler = error_handler
         self.stateless_iter_fn = stateless_iter_fn
+        self.worker_config = worker_config
+        self._sample_index = [0] * max(self.worker_config.num_workers, 1)
 
     def __len__(self):
         return self.len_map_fn(len(self.dataset))
 
     def __iter__(self) -> Iterator[T_sample_out]:
-        exc_sampler = _ExcSampler(self.dataset)
+        worker_index = self.worker_config.rank_worker_id()
+        last_sample_wrapper = _LastSampleWrapper(self.dataset)
+        dataset_wrapper = wrap_worker_sample_index(
+            last_sample_wrapper,
+            self._sample_index,
+            worker_index,
+        )
         if self.can_restore_sample():
             # The iter_map_fn is stateless. Thus we need to know which inner sample created the
             # outer sample, and the relative outer sample index, so we can restore it.
@@ -102,7 +120,7 @@ class IterMapDataset(
             def reset_idx_iter() -> Generator[T_sample, None, None]:
                 # Resets the inner sample index
                 nonlocal iter_idx
-                for entry in exc_sampler:
+                for entry in dataset_wrapper:
                     iter_idx = 0
                     yield entry
 
@@ -113,27 +131,51 @@ class IterMapDataset(
                 try:
                     for res_sample in self.iter_map_fn(ds_iter):
                         yield self._add_sample_restore_key(
-                            res_sample, iter_idx, fail_otherwise=True
+                            res_sample,
+                            iter_idx,
+                            self._sample_index[worker_index],
+                            fail_otherwise=True,
                         )
                         iter_idx += 1
                 except SYSTEM_EXCEPTIONS:
-                    raise FatalSampleError.from_sample(exc_sampler.last_sample)
+                    raise FatalSampleError.from_sample(last_sample_wrapper.last_sample)
                 except Exception as e:
-                    self.error_handler(e, exc_sampler.last_sample)
+                    self.error_handler(e, last_sample_wrapper.last_sample)
                 else:
                     break
         else:
-            ds_iter = iter(exc_sampler)
+            ds_iter = iter(dataset_wrapper)
             # While True will break when the inner dataset is exhausted, but continue on exception
             while True:
                 try:
                     yield from self.iter_map_fn(ds_iter)
                 except SYSTEM_EXCEPTIONS:
-                    raise FatalSampleError.from_sample(exc_sampler.last_sample)
+                    raise FatalSampleError.from_sample(last_sample_wrapper.last_sample)
                 except Exception as e:
-                    self.error_handler(e, exc_sampler.last_sample)
+                    self.error_handler(e, last_sample_wrapper.last_sample)
                 else:
                     break
+
+    def save_state(self) -> IterMapState:
+        return IterMapState.extend(
+            super().save_state(),
+            sample_index=self._sample_index[self.worker_config.rank_worker_id()],
+        )
+
+    def merge_states(self, states: List[IterMapState]) -> IterMapMergedState:
+        assert all(s is None or isinstance(s, IterMapState) for s in states)
+        return IterMapMergedState.extend(
+            super().merge_states(states),
+            sample_indexes=[0 if state is None else state.sample_index for state in states],
+        )
+
+    def restore_state(self, state: Optional[IterMapMergedState]) -> None:
+        super().restore_state(state)
+        if state is None:
+            self._sample_index = [0] * max(self.worker_config.num_workers, 1)
+        else:
+            assert isinstance(state, IterMapMergedState)
+            self._sample_index = state.sample_indexes
 
     def can_restore_sample(self) -> bool:
         return self.stateless_iter_fn and self.dataset.can_restore_sample()
@@ -141,12 +183,14 @@ class IterMapDataset(
     def restore_sample(self, index: Tuple[Union[str, int], ...]) -> T_sample:
         assert self.stateless_iter_fn
         iter_idx = index[0]
+        sample_idx = index[1]
         assert isinstance(iter_idx, int)
-        inner_sample = self.dataset.restore_sample(index[1:])
+        with wrap_worker_sample_index_ctx(sample_idx):
+            inner_sample = self.dataset.restore_sample(index[2:])
         # Skip inner yielded samples to get the correct sample
         for idx, sample in enumerate(self.iter_map_fn(iter([inner_sample]))):
             if idx == iter_idx:
-                return self._add_sample_restore_key(sample, idx, fail_otherwise=True)
+                return self._add_sample_restore_key(sample, idx, sample_idx, fail_otherwise=True)
         raise RuntimeError(
             "Generator did not yield enough samples, but is marked stateless/deterministic."
         )
@@ -162,3 +206,20 @@ class IterMapDataset(
 
     def __str__(self):
         return f"IterMapDataset(iter_map_fn={self.iter_map_fn}, dataset={self.dataset})"
+
+
+class _LastSampleWrapper:
+    """
+    Wraps the inner dataset and stores the last iterated sample.
+    """
+
+    last_sample: Optional[T_sample] = None
+    dataset: IterableDataset[T_sample]
+
+    def __init__(self, dataset: IterableDataset[T_sample]):
+        self.dataset = dataset
+
+    def __iter__(self) -> Iterator[T_sample]:
+        for sample in self.dataset:
+            self.last_sample = sample
+            yield sample

@@ -55,6 +55,7 @@ no_worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0)
 @dataclass
 class ExtendedCaptioningSample(CaptioningSample):
     batch_index: int
+    sample_index: int
 
 
 class TestDataset(unittest.TestCase):
@@ -274,22 +275,26 @@ class TestDataset(unittest.TestCase):
                 image=x.image,
                 caption=torch.tensor(np.frombuffer(x.caption.encode(), dtype=np.uint8)),
             ),
+            worker_config=no_worker_config,
         )
+
+        def get_ld(ds):
+            return get_loader(ds, worker_config=no_worker_config)
 
         # Check len operator
         assert len(ds) == 50
         # Check if iterating returns the same
-        iter1 = list(ds)
-        iter2 = list(ds)
+        iter1 = list(get_ld(ds))
+        iter2 = list(get_ld(ds))
         assert len(iter1) == 50
         assert len(iter2) == 50
         assert all(elem1.__key__ == elem2.__key__ for elem1, elem2 in zip(iter1, iter2))
 
         # Check case when batch size is larger than dataset size
         batch_sizes = []
-        for wrapped_sample in BatchDataset(
+        for wrapped_sample in get_ld(BatchDataset(
             ds, batch_size=DATASET_SIZE * 2, batcher=generic_batch, worker_config=no_worker_config
-        ):
+        )):
             batch_sizes.append(wrapped_sample.image.shape[0])
         assert batch_sizes == [DATASET_SIZE]
 
@@ -303,7 +308,7 @@ class TestDataset(unittest.TestCase):
 
         cnt = 0
         expected_num_batches = math.ceil(DATASET_SIZE / batch_size)
-        for idx, wrapped_sample in enumerate(batched_ds):
+        for idx, wrapped_sample in enumerate(get_ld(batched_ds)):
             # Check batch sizes
             if idx < expected_num_batches - 1:
                 assert wrapped_sample.image.shape[0] == batch_size
@@ -324,9 +329,8 @@ class TestDataset(unittest.TestCase):
         assert cnt == expected_num_batches
 
         # Check if actual image and caption data are correct
-        loader = get_loader(
+        loader = get_ld(
             BatchDataset(ds, batch_size=9, batcher=generic_batch, worker_config=no_worker_config),
-            worker_config=no_worker_config,
         )
         batch_sizes = []
         dataset_samples = {sample["caption"]: sample["image"] for sample in self.samples}
@@ -353,7 +357,7 @@ class TestDataset(unittest.TestCase):
             sample_type=CaptioningSample,
         )
         captions = set(sample["caption"] for sample in self.samples)
-        for sample in ds:
+        for sample in get_loader(ds, worker_config=no_worker_config):
             captions.remove(sample.caption)
         assert len(captions) == 0
 
@@ -367,7 +371,7 @@ class TestDataset(unittest.TestCase):
             sample_type=CaptioningSample,
         )
         captions = set(sample["caption"] for sample in self.samples)
-        for sample in ds:
+        for sample in get_loader(ds, worker_config=no_worker_config):
             assert sample.caption[:4] == "<SL>"
             captions.remove(sample.caption[4:])
         assert len(captions) == 0
@@ -385,7 +389,7 @@ class TestDataset(unittest.TestCase):
         keys = set(
             f"<SL>parts/data-{idx // 30:d}.tar/{idx:06d}" for idx in range(len(self.samples))
         )
-        for sample in ds:
+        for sample in get_loader(ds, worker_config=no_worker_config):
             assert sample.caption[:4] == "<SL>"
             captions.remove(sample.caption[4:])
             keys.remove(sample.__key__)
@@ -402,7 +406,7 @@ class TestDataset(unittest.TestCase):
             sample_type=CaptioningSample,
         )
 
-        keys = [entry.__key__ for entry in ds]
+        keys = [entry.__key__ for entry in get_loader(ds, worker_config=no_worker_config)]
         assert keys == [
             f"parts/data-1.tar/{i:06d}" for i in list(range(30, 35)) + list(range(40, 50))
         ]
@@ -876,13 +880,12 @@ class TestDataset(unittest.TestCase):
         torch.manual_seed(42)
 
         class TestTaskEncoder(TaskEncoder):
-            def __init__(self):
-                pass
 
             def encode_sample(self, sample):
                 return ExtendedCaptioningSample.extend(
                     sample,
                     batch_index=self.get_current_batch_index(),
+                    sample_index=self.get_current_sample_index(),
                 )
 
         # First, test simple single main-thread loader with accessing get_current_batch_index
@@ -899,8 +902,11 @@ class TestDataset(unittest.TestCase):
         )
 
         batches = list(zip(range(20), loader))
-        print([batch.batch_index for batch_idx, batch in batches])
+        print("bi", [batch.batch_index for batch_idx, batch in batches])
         assert all(all(bi == batch_idx for bi in batch.batch_index) for batch_idx, batch in batches)
+
+        print("si", [batch.sample_index for batch_idx, batch in batches])
+        assert all(all(si == sample_offset + batch_idx * 2 for sample_offset, si in enumerate(batch.sample_index)) for batch_idx, batch in batches)
 
         # Now, test multi-worker loader with accessing get_current_batch_index
         worker_config_r0 = WorkerConfig(rank=0, world_size=2, num_workers=2)
@@ -930,14 +936,20 @@ class TestDataset(unittest.TestCase):
         )
 
         batches = list(zip(range(20), loader))
-        print([batch.batch_index for batch_idx, batch in batches])
+        print("bir0", [batch.batch_index for batch_idx, batch in batches])
         assert all(all(bi == batch_idx for bi in batch.batch_index) for batch_idx, batch in batches)
 
+        print("sir0", [batch.sample_index for batch_idx, batch in batches])
+        assert all(all(bi == batch_idx for bi in batch.batch_index) for batch_idx, batch in batches)
+        assert all(all(si == 2 * sample_offset + (batch_idx * 2 - batch_idx % 2) for sample_offset, si in enumerate(batch.sample_index)) for batch_idx, batch in batches)
+
         batches_r1 = list(zip(range(20), loader_r1))
-        print([batch.batch_index for batch_idx, batch in batches_r1])
+        print("bir0", [batch.batch_index for batch_idx, batch in batches_r1])
+        print("sir1", [batch.sample_index for batch_idx, batch in batches_r1])
         assert all(
             all(bi == batch_idx for bi in batch.batch_index) for batch_idx, batch in batches_r1
         )
+        assert all(all(si == 2 * sample_offset + (batch_idx * 2 - batch_idx % 2) for sample_offset, si in enumerate(batch.sample_index)) for batch_idx, batch in batches_r1)
 
         # Now, test multi-worker loader with accessing get_current_batch_index and save/restore state
         loader = get_savable_loader(
@@ -966,12 +978,14 @@ class TestDataset(unittest.TestCase):
         batches = list(zip(range(20), loader))
         print([batch.batch_index for batch_idx, batch in batches])
         assert all(all(bi == batch_idx for bi in batch.batch_index) for batch_idx, batch in batches)
+        assert all(all(si == 2 * sample_offset + (batch_idx * 2 - batch_idx % 2) for sample_offset, si in enumerate(batch.sample_index)) for batch_idx, batch in batches)
 
         batches_r1 = list(zip(range(20), loader_r1))
         print([batch.batch_index for batch_idx, batch in batches_r1])
         assert all(
             all(bi == batch_idx for bi in batch.batch_index) for batch_idx, batch in batches_r1
         )
+        assert all(all(si == 2 * sample_offset + (batch_idx * 2 - batch_idx % 2) for sample_offset, si in enumerate(batch.sample_index)) for batch_idx, batch in batches_r1)
 
         # Save and restore state
         state = loader.save_state_rank()
@@ -992,7 +1006,9 @@ class TestDataset(unittest.TestCase):
 
         batches = list(zip(range(20, 40), loader))
         print([batch.batch_index for batch_idx, batch in batches])
+        print([batch.sample_index for batch_idx, batch in batches])
         assert all(all(bi == batch_idx for bi in batch.batch_index) for batch_idx, batch in batches)
+        assert all(all(si == 2 * sample_offset + (batch_idx * 2 - batch_idx % 2) for sample_offset, si in enumerate(batch.sample_index)) for batch_idx, batch in batches)
 
     def test_debug_dataset(self):
         torch.manual_seed(42)

@@ -76,11 +76,19 @@ class CrudeWebdataset(DefaultGenericWebdataset[CrudeSample]):
             # With image decoding:
             decoder = webdataset.decode(self.image_decode, handler=self._decode_error_handler)
             dataset = IterMapDataset(
-                dataset, decoder, error_handler=self.error_handler, stateless_iter_fn=True
+                dataset,
+                decoder,
+                error_handler=self.error_handler,
+                stateless_iter_fn=True,
+                worker_config=self.worker_config,
             )
 
         return MapDataset(
-            dataset, self._load_sample, error_handler=self.error_handler, stateless_map_fn=True
+            dataset,
+            self._load_sample,
+            error_handler=self.error_handler,
+            stateless_map_fn=True,
+            worker_config=self.worker_config,
         )
 
     def _load_sample(self, sample: FilteredSample) -> CrudeSample:

@@ -56,5 +56,5 @@ __all__ = [
     "VQAWebdataset",
     "VQAOCRWebdataset",
     "VidQASample",
-    "VidQAWebdataset"
+    "VidQAWebdataset",
 ]

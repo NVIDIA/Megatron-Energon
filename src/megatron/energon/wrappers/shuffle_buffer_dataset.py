@@ -6,11 +6,13 @@ from typing import Any, Dict, Generic, Iterator, List, Optional, Tuple, TypeVar,
 
 from megatron.energon.flavors.base_dataset import Sample, SavableDataset
 from megatron.energon.rng import WorkerRng, WorkerRngMergedState, WorkerRngState
-from megatron.energon.worker import WorkerConfig, global_worker_config
+from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import (
     BaseSingleWrapperDataset,
     BaseSingleWrapperMergedState,
     BaseSingleWrapperState,
+    get_sample_restore_key,
+    wrap_worker_sample_index,
 )
 
 T_sample = TypeVar("T_sample")
@@ -20,12 +22,14 @@ T_sample = TypeVar("T_sample")
 class ShuffleBufferState(BaseSingleWrapperState):
     buffer: List[Tuple[Union[str, int], ...]]
     rng: WorkerRngState
+    sample_index: int
 
 
 @dataclass
 class ShuffleBufferMergedState(BaseSingleWrapperMergedState):
     buffer: List[List[Tuple[Union[str, int], ...]]]
     rng: WorkerRngMergedState
+    sample_indexes: List[int]
 
 
 class ShuffleBufferDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_sample]):
@@ -38,23 +42,26 @@ class ShuffleBufferDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic
     _active_buffer: List[List[T_sample]]
     _active_buffer_restore_keys: List[List[Tuple[Union[str, int], ...]]]
     _restore_pending: bool
+    _sample_index: List[int]
 
     def __init__(
         self,
         dataset: SavableDataset[T_sample],
         size: int,
-        worker_config: Optional[WorkerConfig] = None,
+        *,
+        worker_config: WorkerConfig,
     ):
         """Create a shuffle buffer for the dataset."""
         super().__init__(dataset)
         self.size = size
-        self.worker_config = worker_config or global_worker_config
+        self.worker_config = worker_config
         self._worker_rng = WorkerRng(self.worker_config)
         self._active_buffer = [[] for _ in range(max(self.worker_config.num_workers, 1))]
         self._active_buffer_restore_keys = [
             [] for _ in range(max(self.worker_config.num_workers, 1))
         ]
         self._restore_pending = False
+        self._sample_index = [0] * max(self.worker_config.num_workers, 1)
 
     def __len__(self) -> int:
         return len(self.dataset)
@@ -74,7 +81,7 @@ class ShuffleBufferDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic
             for restore_key in active_buffer_restore_keys:
                 active_buffer.append(self.dataset.restore_sample(restore_key))
         assert len(active_buffer) == len(active_buffer_restore_keys)
-        it = iter(self.dataset)
+        it = iter(wrap_worker_sample_index(self.dataset, self._sample_index, worker_idx))
         while True:
             if len(active_buffer) >= self.size:
                 pop_idx = self._worker_rng.randbelow(len(active_buffer))
@@ -87,12 +94,8 @@ class ShuffleBufferDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic
                     break
                 else:
                     active_buffer.append(sample)
-                    if isinstance(sample, Sample):
-                        active_buffer_restore_keys.append(sample.__restore_key__)
-                    elif isinstance(sample, dict) and "__restore_key__" in sample:
-                        active_buffer_restore_keys.append(sample["__restore_key__"])
-                    else:
-                        active_buffer_restore_keys.append(())
+                    restore_key = get_sample_restore_key(sample) or ()
+                    active_buffer_restore_keys.append(restore_key)
         while len(active_buffer) > 0:
             pop_idx = self._worker_rng.randbelow(len(active_buffer))
             active_buffer_restore_keys.pop(pop_idx)
@@ -112,6 +115,7 @@ class ShuffleBufferDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic
             super().save_state(),
             rng=self._worker_rng.save_state(),
             buffer=list(self._active_buffer_restore_keys[self.worker_config.rank_worker_id()]),
+            sample_index=self._sample_index[self.worker_config.rank_worker_id()],
         )
 
     def merge_states(self, states: List[ShuffleBufferState]) -> ShuffleBufferMergedState:
@@ -120,6 +124,7 @@ class ShuffleBufferDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic
             super().merge_states(states),
             rng=self._worker_rng.merge_states([None if s is None else s.rng for s in states]),
             buffer=[[] if s is None else s.buffer for s in states],
+            sample_indexes=[0 if state is None else state.sample_index for state in states],
         )
 
     def restore_state(self, state: Optional[ShuffleBufferMergedState]) -> None:
@@ -131,12 +136,14 @@ class ShuffleBufferDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic
             ]
             self._restore_pending = False
             self._worker_rng.restore_state(None)
+            self._sample_index = [0] * max(self.worker_config.num_workers, 1)
         else:
             assert isinstance(state, ShuffleBufferMergedState)
             self._active_buffer = [[] for _ in range(max(self.worker_config.num_workers, 1))]
             self._active_buffer_restore_keys = state.buffer
             self._restore_pending = True
             self._worker_rng.restore_state(state.rng)
+            self._sample_index = state.sample_indexes
 
     def can_restore_sample(self) -> bool:
         return False

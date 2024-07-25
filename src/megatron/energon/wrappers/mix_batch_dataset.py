@@ -2,19 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import dataclasses
-from typing import (
-    Any,
-    Callable,
-    Dict,
-    Generator,
-    Generic,
-    Iterator,
-    List,
-    Optional,
-    Tuple,
-    TypeVar,
-    Union,
-)
+from typing import Any, Callable, Dict, Generator, Generic, Iterator, List, Tuple, TypeVar, Union
 
 import torch
 
@@ -98,7 +86,7 @@ class MixBatchDataset(BaseSingleWrapperDataset[T_batch_in, T_batch], Generic[T_b
         batch_mix_fn: Callable[
             [List[T_batch_in]], Union[T_batch, Generator[T_batch, None, None]]
         ] = lambda x: x,
-        worker_config: Optional[WorkerConfig] = None,
+        worker_config: WorkerConfig,
     ):
         """Construct a BlendDataset.
 
@@ -114,7 +102,7 @@ class MixBatchDataset(BaseSingleWrapperDataset[T_batch_in, T_batch], Generic[T_b
                 :func:`megatron.energon.homogeneous_concat_mix` which concatenates the batches. May raise
                 :exc:`megatron.energon.SkipSample` to skip a sample. May also return a generator, which
                 will be iterated over to produce batches.
-            worker_config: Configuration for the workers. Defaults to `global_worker_config`.
+            worker_config: Configuration for the workers.
         """
         super().__init__(
             BatchDataset(

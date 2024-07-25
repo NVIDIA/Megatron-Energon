@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader
 
 from megatron.energon.flavors.base_dataset import SavableDataset
 from megatron.energon.savable_loader import BasicDataLoader, SavableDataLoader
-from megatron.energon.worker import WorkerConfig, global_worker_config
+from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.gc_dataset import GcDataset
 
 T = TypeVar("T")
@@ -16,7 +16,7 @@ T = TypeVar("T")
 def get_savable_loader(
     dataset: SavableDataset[T],
     *,
-    worker_config: Optional[WorkerConfig] = None,
+    worker_config: WorkerConfig,
     checkpoint_every_sec: float = 60,
     checkpoint_every_min_n_samples: Optional[int] = None,
     n_checkpoints: int = 2,
@@ -40,9 +40,6 @@ def get_savable_loader(
         The instantiated :class:`megatron.energon.SavableDataLoader`, yielding batches from the dataset,
         allowing to save the state of the dataset.
     """
-    if worker_config is None:
-        worker_config = global_worker_config
-
     dataset.verify_worker_config(worker_config)
     return SavableDataLoader(
         dataset,
@@ -56,7 +53,7 @@ def get_savable_loader(
 def get_loader(
     dataset: SavableDataset[T],
     *,
-    worker_config: Optional[WorkerConfig] = None,
+    worker_config: WorkerConfig,
 ) -> DataLoader[T]:
     """
     Get a dataloader for the given dataset.
@@ -68,9 +65,6 @@ def get_loader(
     Returns:
         The instantiated :class:`torch.data.DataLoader`, yielding batches from the dataset.
     """
-    if worker_config is None:
-        worker_config = global_worker_config
-
     dataset.verify_worker_config(worker_config)
     return BasicDataLoader(
         GcDataset(dataset),

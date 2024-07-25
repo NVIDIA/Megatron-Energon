@@ -237,7 +237,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 worker_config=worker_config,
             )
             if getattr(self.encode_batch, "__func__", None) is not TaskEncoder.encode_batch:
-                dataset = MapDataset(dataset, self.encode_batch)
+                dataset = MapDataset(dataset, self.encode_batch, worker_config=worker_config)
         else:
             assert (
                 getattr(self.encode_batch, "__func__", None) is TaskEncoder.encode_batch
@@ -255,7 +255,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             or getattr(self.build_cook_crude_sample, "__func__", None)
             is not TaskEncoder.build_cook_crude_sample
         ):
-            dataset = MapDataset(dataset, self.cook_crude_sample)
+            dataset = MapDataset(dataset, self.cook_crude_sample, worker_config=worker_config)
         return dataset
 
     def build_encode_sample(
@@ -265,7 +265,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
     ) -> SavableDataset[T_encoded_sample]:
         """Applies the sample encoder to the dataset."""
         if getattr(self.encode_sample, "__func__", None) is not TaskEncoder.encode_sample:
-            dataset = MapDataset(dataset, self.encode_sample)
+            dataset = MapDataset(dataset, self.encode_sample, worker_config=worker_config)
         return dataset
 
     def build_train_datasets(
@@ -335,7 +335,10 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 assert self.cookers, "CrudeWebdataset found, but no cookers registered."
 
         if len(datasets) > 1:
-            dataset = ConcatDataset(*[dataset for dataset, _ in datasets])
+            dataset = ConcatDataset(
+                *[dataset for dataset, _ in datasets],
+                worker_config=worker_config,
+            )
         elif len(datasets) == 1:
             dataset = datasets[0][0]
         else:
@@ -360,7 +363,21 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         return dataset
 
     def get_current_batch_index(self) -> int:
-        """Returns the current index for the next batch yielded from the current worker."""
+        """Returns the current index for the next batch yielded from the current worker. Each batch
+        on the current rank will get a strictly increasing unique number. Counting happens on each
+        rank separately (i.e. each rank will get the same numbers for same batch index)."""
+        assert (
+            WorkerConfig.active_worker_config is not None
+        ), "The batch_index can only be fetched within the worker, and to be usable, you must use the get_(savable_)loader methods provided from the package."
+        return WorkerConfig.active_worker_config.active_worker_batch_index
+
+    def get_current_sample_index(self) -> int:
+        """Returns the current index for the next sample yielded from the current routine (e.g.
+        for `encode_sample`, `batch`, or `encode_batch`). Each routine will get a number
+        representing the number of calls to that function. Across workers, this number will be
+        unique, but it is not synced across workers, thus it may raise in different intervals (e.g.
+        if batching does not work the same for all batches). When restoring a sample, this number is
+        also restored and can be relied on for deterministic randomness reproduction of a sample."""
         assert (
             WorkerConfig.active_worker_config is not None
         ), "The batch_index can only be fetched within the worker, and to be usable, you must use the get_(savable_)loader methods provided from the package."

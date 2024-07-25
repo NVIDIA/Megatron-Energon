@@ -18,7 +18,6 @@ import webdataset as wds
 from megatron.energon import TextSample, WorkerConfig, get_loader, get_train_dataset
 from megatron.energon.dataset_config import MAIN_FOLDER_NAME, get_dataset_from_config
 from megatron.energon.loader import get_savable_loader
-from megatron.energon.task_encoder.loader import get_val_dataset
 
 
 def _norng_state(state):
@@ -118,12 +117,12 @@ class TestDataset(unittest.TestCase):
         # Check len operator
         assert len(ds) == 55
         # Check if iterating returns the same
-        iter1 = list(ds)
-        iter2 = list(ds)
+        iter1 = list(get_loader(ds, worker_config=worker_config))
+        iter2 = list(get_loader(ds, worker_config=worker_config))
         assert len(iter1) == 55
         assert len(iter2) == 55
         assert all(elem1.__key__ == elem2.__key__ for elem1, elem2 in zip(iter1, iter2))
-        assert all(f"{idx}" == x.text for idx, x in enumerate(ds))
+        assert all(f"{idx}" == x.text for idx, x in enumerate(get_loader(ds, worker_config=worker_config)))
 
         del ds
         gc.collect()

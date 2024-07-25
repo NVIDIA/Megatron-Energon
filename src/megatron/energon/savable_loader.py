@@ -20,7 +20,7 @@ import torch.multiprocessing
 from torch.utils.data import DataLoader, IterableDataset
 
 from megatron.energon.flavors.base_dataset import MergedState, SavableDataset, State
-from megatron.energon.worker import WorkerConfig, global_worker_config
+from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.gc_dataset import GcDataset, gc_init_worker
 from megatron.energon.wrappers.log_sample_dataset import default_get_keys
 
@@ -42,7 +42,7 @@ def _init_worker(seed_per_worker: List[int], worker_id: int):
     gc_init_worker(worker_id)
 
     worker_seed = seed_per_worker[worker_id]
-    
+
     torch.manual_seed(worker_seed)
     numpy.random.seed(worker_seed)
     random.seed(worker_seed)
@@ -72,17 +72,21 @@ class SimpleSavableDatasetWrapper(SavableDataset[Tuple[int, int, T]], Generic[T]
         while self._state_restored:
             self._state_restored = False
             self.worker_config.worker_activate(sample_index)
+            worker_active = True
             try:
                 for src_data in self.dataset:
                     self.worker_config.worker_deactivate()
+                    worker_active = False
                     yield worker_id, sample_index, src_data
                     sample_index += 1
                     if self._state_restored:
                         # Restart iterator after restore
                         break
                     self.worker_config.worker_activate(sample_index)
+                    worker_active = True
             finally:
-                self.worker_config.worker_deactivate()
+                if worker_active:
+                    self.worker_config.worker_deactivate()
 
     def save_state(self) -> State:
         return self.dataset.save_state()
@@ -332,9 +336,11 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
                 while last_was_skip:
                     dataset_has_samples = False
                     self.worker_config.worker_activate(self._sample_index)
+                    worker_active = True
                     try:
                         for src_data in self.dataset:
                             self.worker_config.worker_deactivate()
+                            worker_active = False
                             dataset_has_samples = True
                             if self._skip_samples[self._worker_id] > 0:
                                 # Skip ahead to reach the start of the restored checkpoint
@@ -343,6 +349,7 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
                                 self._sample_index += 1
                                 last_was_skip = True
                                 self.worker_config.worker_activate(self._sample_index)
+                                worker_active = True
                                 continue
                             last_was_skip = False
                             sample_index = self._sample_index
@@ -360,8 +367,10 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
                                 self._command_lock.acquire()
                                 # print(f"{id(self)}:{multiprocessing.current_process().ident} Lock acquired")
                             self.worker_config.worker_activate(self._sample_index)
+                            worker_active = True
                     finally:
-                        self.worker_config.worker_deactivate()
+                        if worker_active:
+                            self.worker_config.worker_deactivate()
 
                     # If the dataset is empty, don't try again and again
                     if not dataset_has_samples:
@@ -610,7 +619,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
         self,
         dataset: SavableDataset[T],
         *,
-        worker_config: Optional[WorkerConfig] = None,
+        worker_config: WorkerConfig,
         checkpoint_every_sec: float = 60,
         checkpoint_every_min_n_samples: Optional[int] = None,
         n_checkpoints: int = 2,
@@ -630,7 +639,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
             n_checkpoints: The number of checkpoints to keep in memory. Only applies if using
                 workers.
         """
-        self.worker_config = worker_config or global_worker_config
+        self.worker_config = worker_config
         self.id = self.next_id()
 
         dataset = GcDataset(dataset)
@@ -963,7 +972,7 @@ class BasicDataLoader(DataLoader[T], Generic[T]):
         self,
         dataset: SavableDataset[T],
         *,
-        worker_config: Optional[WorkerConfig] = None,
+        worker_config: WorkerConfig,
     ):
         """
         Create the dataloader supporting saving and restoring the state.
@@ -975,7 +984,7 @@ class BasicDataLoader(DataLoader[T], Generic[T]):
                It may take the same duration to restore a checkpoint, but introduces additional
                overhead during reading data from the dataset, so this should be chosen accordingly.
         """
-        self.worker_config = worker_config or global_worker_config
+        self.worker_config = worker_config
 
         self.id = SavableDataLoader.next_id()
 

@@ -26,11 +26,11 @@ from megatron.energon.flavors import (
     SimilarityInterleavedWebdataset,
     TextSample,
     TextWebdataset,
+    VidQASample,
+    VidQAWebdataset,
     VQAOCRWebdataset,
     VQASample,
     VQAWebdataset,
-    VidQASample,
-    VidQAWebdataset
 )
 from megatron.energon.loader import get_loader, get_savable_loader
 from megatron.energon.metadataset import (
@@ -125,11 +125,11 @@ __all__ = [
     "TaskEncoder",
     "TextSample",
     "TextWebdataset",
+    "VidQASample",
+    "VidQAWebdataset",
     "VQASample",
     "VQAWebdataset",
     "VQAOCRWebdataset",
-    "VidQASample",
-    "VidQAWebdataset",
     "WorkerConfig",
     "basic_sample_keys",
     "batch_list",

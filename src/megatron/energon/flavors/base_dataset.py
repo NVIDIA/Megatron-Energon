@@ -279,15 +279,15 @@ class SavableDataset(IterableDataset[T_sample], Generic[T_sample], ABC):
         return False
 
     def _add_sample_restore_key(
-        self, sample: T_sample, key: Union[int, str], fail_otherwise: bool = False
+        self, sample: T_sample, *key: Union[int, str], fail_otherwise: bool = False
     ) -> T_sample:
         """Adds a key to a sample. The sample must be a valid `Sample` or dict containing
         __restore_key__, which is a tuple of keys that can be used to restore the inner sample.
         This restore key is prepended with the `key`."""
         if isinstance(sample, Sample):
-            sample.__restore_key__ = (key, *sample.__restore_key__)
+            sample.__restore_key__ = (*key, *sample.__restore_key__)
         elif isinstance(sample, dict) and "__restore_key__" in sample:
-            sample["__restore_key__"] = (key, *sample["__restore_key__"])
+            sample["__restore_key__"] = (*key, *sample["__restore_key__"])
         elif fail_otherwise:
             raise RuntimeError(
                 "Did not yield a sample with a restore key, but is marked "

@@ -5,11 +5,12 @@ from dataclasses import dataclass
 from typing import Any, Dict, Generator, Generic, Iterator, List, Optional, Tuple, TypeVar, Union
 
 from megatron.energon.flavors.base_dataset import SavableDataset
-from megatron.energon.worker import WorkerConfig, global_worker_config
+from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import (
     BaseSingleWrapperDataset,
     BaseSingleWrapperMergedState,
     BaseSingleWrapperState,
+    wrap_worker_sample_index_ctx,
 )
 
 T_sample = TypeVar("T_sample")
@@ -40,7 +41,7 @@ class EpochizeDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_sa
         self,
         dataset: SavableDataset[T_sample],
         length: int,
-        worker_config: Optional[WorkerConfig] = None,
+        worker_config: WorkerConfig,
     ):
         """
         Create the epochized dataset.
@@ -50,11 +51,11 @@ class EpochizeDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_sa
             length: Number of samples to iterate before iteration stops (i.e. one epoch). When
                 iteration continues, the original dataset iterator is resumed and does only restart
                 if exhausted.
-            worker_config: Configuration for the workers. Defaults to `global_worker_config`.
+            worker_config: Configuration for the workers.
         """
         super().__init__(dataset)
         self.length = length
-        self.worker_config = worker_config or global_worker_config
+        self.worker_config = worker_config
         self._offset = [0] * max(self.worker_config.num_workers, 1)
         self._active_iter = None
 
@@ -131,6 +132,10 @@ class EpochizeDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_sa
         else:
             assert isinstance(state, EpochizeMergedState)
             self._offset = state.offset
+
+    def restore_sample(self, index: Tuple[Union[str, int], ...]) -> T_sample:
+        with wrap_worker_sample_index_ctx(index[0]):
+            return self.dataset.restore_sample(index[1:])
 
     def config(self) -> Dict[str, Any]:
         return {

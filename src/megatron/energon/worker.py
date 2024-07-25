@@ -5,17 +5,16 @@ import hashlib
 import json
 import multiprocessing
 from dataclasses import dataclass
-from typing import Any, ClassVar, Dict, Optional, TextIO
+from typing import Any, ClassVar, Dict, List, Optional, TextIO, TypeVar
 
 import torch.distributed
 import torch.utils.data
 
 from megatron.energon.epathlib import EPath
 
-__all__ = (
-    "WorkerConfig",
-    "global_worker_config",
-)
+__all__ = ("WorkerConfig",)
+
+T = TypeVar("T")
 
 
 @dataclass(eq=False)
@@ -66,33 +65,59 @@ class WorkerConfig:
     _worker_debug_file_worker_id: Optional[int] = None
 
     #: The current sample index within the current iterating worker
-    _sample_index: ClassVar[Optional[int]] = None
+    _sample_index_stack: ClassVar[Optional[List[int]]] = None
     #: The current worker config within the current iterating worker
     active_worker_config: ClassVar[Optional["WorkerConfig"]] = None
 
     def worker_activate(self, sample_index: int):
         """Activates the worker config for the current worker and sets it as actively iterating.
         Must be called before next() call on the datasets."""
-        WorkerConfig._sample_index = sample_index
+        assert WorkerConfig.active_worker_config is None
+        WorkerConfig._sample_index_stack = [sample_index]
         WorkerConfig.active_worker_config = self
+
+    def worker_push_sample_index(self, sample_index: int):
+        """Pushes a new sample index to the sample index stack. Should be set by wrapping datasets
+        before calling inners."""
+        assert WorkerConfig.active_worker_config is not None
+        WorkerConfig._sample_index_stack.append(sample_index)
+
+    def worker_pop_sample_index(self):
+        """Pushes a new sample index to the sample index stack. Should be set by wrapping datasets
+        before calling inners."""
+        assert WorkerConfig.active_worker_config is not None
+        return WorkerConfig._sample_index_stack.pop()
 
     def worker_deactivate(self):
         """Deactivates the worker config for the current worker and deactivates it for iterating.
         Must be called after next() call on the datasets."""
-        WorkerConfig._sample_index = None
-        WorkerConfig.active_worker_config = None
+        if WorkerConfig.active_worker_config is not None:
+            assert len(WorkerConfig._sample_index_stack) == 1, "Sample index stack not empty"
+            WorkerConfig._sample_index_stack = None
+            WorkerConfig.active_worker_config = None
 
     @property
     def active_worker_sample_index(self) -> int:
         """Returns the current sample index for the actively iterating worker."""
         # Internal sample index is for the local worker. If using multiple workers per rank, this
         # must be multiplied by the number of workers and offset by the local worker index.
-        return WorkerConfig._sample_index * max(self.num_workers, 1) + self.rank_worker_id()
+        return (
+            WorkerConfig._sample_index_stack[-1] * max(self.num_workers, 1) + self.rank_worker_id()
+        )
+
+    @property
+    def active_worker_batch_index(self) -> int:
+        """Returns the current batch index for the actively iterating worker."""
+        # Internal batch index is for the local worker. If using multiple workers per rank, this
+        # must be multiplied by the number of workers and offset by the local worker index.
+        return (
+            WorkerConfig._sample_index_stack[0] * max(self.num_workers, 1) + self.rank_worker_id()
+        )
 
     def __eq__(self, other):
         """Do not compare everything to check for equal config"""
         if not isinstance(other, WorkerConfig):
-            return NotImplemented
+            return NotImplementedError()
         return all(
             [
                 self.rank == other.rank,
@@ -216,7 +241,3 @@ class WorkerConfig:
                 self._worker_debug_file_worker_id = worker_id
             self._worker_debug_file.write(json.dumps(data) + "\n")
             self._worker_debug_file.flush()
-
-
-#: The global worker config instance used if not overridden.
-global_worker_config = WorkerConfig.default_worker_config(num_workers=0)

@@ -16,7 +16,7 @@ from megatron.energon.flavors.webdataset.config import skip_meta_re, split_name_
 from megatron.energon.flavors.webdataset.itar import get_itar_byte_offset, open_itar
 from megatron.energon.flavors.webdataset.structs import FilteredSample, ShardInfo, reraise_exception
 from megatron.energon.rng import WorkerRng, WorkerRngMergedState, WorkerRngState
-from megatron.energon.worker import WorkerConfig, global_worker_config
+from megatron.energon.worker import WorkerConfig
 
 
 @dataclass
@@ -121,6 +121,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
     def __init__(
         self,
         rank_shards: List[List[ShardInfo]],
+        *,
         worker_config: WorkerConfig,
         exclude: Set[str],
         part_filter: Optional[Callable[[str], bool]] = None,
@@ -152,7 +153,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
         """
         super().__init__()
         self.shards = rank_shards
-        self.worker_config = worker_config or global_worker_config
+        self.worker_config = worker_config
         self.exclude = exclude
         self.part_filter = part_filter
         self.loop = loop
