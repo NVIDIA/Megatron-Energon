@@ -36,7 +36,7 @@ import yaml
 
 from megatron.energon.dataset_config import MAIN_FOLDER_NAME
 from megatron.energon.epathlib import EPath
-from megatron.energon.errors import SYSTEM_EXCEPTIONS
+from megatron.energon.errors import SYSTEM_EXCEPTIONS, FatalSampleError
 from megatron.energon.flavors.base_dataset import (
     BaseCoreDataset,
     MergedState,
@@ -245,7 +245,7 @@ class BaseWebdataset(BaseCoreDataset[T_sample], Generic[T_sample], ABC):
 
     def sample_error_handler(self, e: Exception, sample_key: str):
         if isinstance(e, SYSTEM_EXCEPTIONS):
-            raise SampleError(f"Error in sample {sample_key!r}: {e}") from e
+            raise FatalSampleError(f"Error in sample {sample_key!r}: {e}") from e
 
         self.handler(e, sample_key)
 
@@ -692,7 +692,7 @@ class BaseWebdataset(BaseCoreDataset[T_sample], Generic[T_sample], ABC):
     def can_restore_sample(self) -> bool:
         return True
 
-    def restore_sample(self, key: Tuple[Union[str, int], ...]) -> T_sample:
+    def restore_sample(self, key: Tuple[Union[str, int, tuple], ...]) -> T_sample:
         return self.dataset.restore_sample(key)
 
     def config(self) -> Dict[str, Any]:

@@ -6,7 +6,12 @@ from typing import Any, Dict, Generator, Generic, Iterator, List, Optional, Tupl
 
 import torch
 
-from megatron.energon.flavors.base_dataset import MergedState, SavableDataset, State
+from megatron.energon.flavors.base_dataset import (
+    MergedState,
+    SavableDataset,
+    State,
+    add_sample_restore_key,
+)
 from megatron.energon.rng import WorkerRng, WorkerRngMergedState, WorkerRngState
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset, wrap_worker_sample_index_ctx
@@ -89,10 +94,10 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
         while True:
             ds_idx = self._worker_rng.choice_idx(probs=probs)
             sample_idx = self._sample_indexes[worker_idx][ds_idx]
+            self._sample_indexes[worker_idx][ds_idx] += 1
             with wrap_worker_sample_index_ctx(sample_idx):
                 sample = next(dataset_iters[ds_idx])
-            yield self._add_sample_restore_key(sample, ds_idx, sample_idx)
-            self._sample_indexes[worker_idx][ds_idx] += 1
+            yield add_sample_restore_key(sample, ds_idx, sample_idx, src=self)
 
     def save_state(self) -> BlendDatasetState:
         return BlendDatasetState(
@@ -140,15 +145,17 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
     def can_restore_sample(self) -> bool:
         return all(dataset.can_restore_sample() for dataset, _weight in self.dataset_weights)
 
-    def restore_sample(self, index: Tuple[Union[str, int], ...]) -> T_sample:
-        ds_idx = index[0]
-        sample_idx = index[1]
+    def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_sample:
+        id, ds_idx, sample_idx = index[:3]
+        assert id == type(self).__name__
+        index = index[3:]
         assert isinstance(ds_idx, int)
         with wrap_worker_sample_index_ctx(sample_idx):
-            return self._add_sample_restore_key(
-                self.dataset_weights[ds_idx][0].restore_sample(index[1:]),
+            return add_sample_restore_key(
+                self.dataset_weights[ds_idx][0].restore_sample(index),
                 ds_idx,
                 sample_idx,
+                src=self,
             )
 
     def config(self) -> Dict[str, Any]:

@@ -4,7 +4,7 @@
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Generic, Iterator, List, Optional, Tuple, TypeVar, Union
 
-from megatron.energon.flavors.base_dataset import SavableDataset
+from megatron.energon.flavors.base_dataset import SavableDataset, add_sample_restore_key
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import (
     BaseSingleWrapperDataset,
@@ -57,9 +57,11 @@ class FilterDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_samp
 
     def __iter__(self) -> Iterator[T_sample]:
         worker_index = self.worker_config.rank_worker_id()
-        for sample in wrap_worker_sample_index(self.dataset, self._sample_index, worker_index):
+        for sample_idx, sample in wrap_worker_sample_index(
+            self.dataset, self._sample_index, worker_index
+        ):
             if self.filter_fn(sample):
-                yield self._add_sample_restore_key(sample, self._sample_index[worker_index])
+                yield add_sample_restore_key(sample, sample_idx, src=self)
 
     def save_state(self) -> FilterState:
         return FilterState.extend(
@@ -82,9 +84,12 @@ class FilterDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_samp
             assert isinstance(state, FilterMergedState)
             self._sample_index = state.sample_indexes
 
-    def restore_sample(self, index: Tuple[Union[str, int], ...]) -> T_sample:
-        with wrap_worker_sample_index_ctx(index[0]):
-            return self.dataset.restore_sample(index[1:])
+    def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_sample:
+        id, sample_idx = index[:2]
+        assert id == type(self).__name__
+        index = index[2:]
+        with wrap_worker_sample_index_ctx(sample_idx):
+            return self.dataset.restore_sample(index)
 
     def config(self) -> Dict[str, Any]:
         return {

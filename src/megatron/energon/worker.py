@@ -4,9 +4,11 @@
 import hashlib
 import json
 import multiprocessing
+import random
 from dataclasses import dataclass
 from typing import Any, ClassVar, Dict, List, Optional, TextIO, TypeVar
 
+import numpy
 import torch.distributed
 import torch.utils.data
 
@@ -69,12 +71,16 @@ class WorkerConfig:
     #: The current worker config within the current iterating worker
     active_worker_config: ClassVar[Optional["WorkerConfig"]] = None
 
-    def worker_activate(self, sample_index: int):
+    #: The global rank override for the worker. Required for restoring samples.
+    _worker_override_global_rank: ClassVar[Optional[List[int]]] = None
+
+    def worker_activate(self, sample_index: int, override_global_rank: Optional[int] = None):
         """Activates the worker config for the current worker and sets it as actively iterating.
         Must be called before next() call on the datasets."""
         assert WorkerConfig.active_worker_config is None
         WorkerConfig._sample_index_stack = [sample_index]
         WorkerConfig.active_worker_config = self
+        WorkerConfig._worker_override_global_rank = override_global_rank
 
     def worker_push_sample_index(self, sample_index: int):
         """Pushes a new sample index to the sample index stack. Should be set by wrapping datasets
@@ -95,6 +101,7 @@ class WorkerConfig:
             assert len(WorkerConfig._sample_index_stack) == 1, "Sample index stack not empty"
             WorkerConfig._sample_index_stack = None
             WorkerConfig.active_worker_config = None
+            WorkerConfig._worker_override_global_rank = None
 
     @property
     def active_worker_sample_index(self) -> int:
@@ -146,9 +153,13 @@ class WorkerConfig:
 
     def rank_worker_id(self) -> int:
         """Returns the self worker id within the current rank."""
+        if self._worker_override_global_rank:
+            assert self.worker_id_offset == 0
+            return self._worker_override_global_rank % self.num_workers
         worker_info = torch.utils.data.get_worker_info()
         if worker_info is None:
             return self.worker_id_offset
+        assert worker_info.num_workers == self.num_workers
         return (
             worker_info.id + worker_info.num_workers - self.worker_id_offset
         ) % worker_info.num_workers
@@ -174,6 +185,9 @@ class WorkerConfig:
             override_local_worker_id (int, optional): The local worker id to override. None means
                 the current worker, which is the default.
         """
+        if self._worker_override_global_rank is not None:
+            assert override_local_worker_id is None
+            return self._worker_override_global_rank
 
         if override_local_worker_id is not None:
             return self.rank * self.num_workers + override_local_worker_id
@@ -241,3 +255,10 @@ class WorkerConfig:
                 self._worker_debug_file_worker_id = worker_id
             self._worker_debug_file.write(json.dumps(data) + "\n")
             self._worker_debug_file.flush()
+
+
+def set_global_seeds(seed: int):
+    """Sets the global seeds for torch, numpy and random."""
+    torch.manual_seed(seed)
+    numpy.random.seed(seed)
+    random.seed(seed)

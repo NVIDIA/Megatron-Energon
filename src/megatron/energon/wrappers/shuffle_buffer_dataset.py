@@ -4,7 +4,7 @@
 from dataclasses import dataclass
 from typing import Any, Dict, Generic, Iterator, List, Optional, Tuple, TypeVar, Union
 
-from megatron.energon.flavors.base_dataset import Sample, SavableDataset
+from megatron.energon.flavors.base_dataset import Sample, SavableDataset, add_sample_restore_key
 from megatron.energon.rng import WorkerRng, WorkerRngMergedState, WorkerRngState
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import (
@@ -13,6 +13,7 @@ from megatron.energon.wrappers.base import (
     BaseSingleWrapperState,
     get_sample_restore_key,
     wrap_worker_sample_index,
+    wrap_worker_sample_index_ctx,
 )
 
 T_sample = TypeVar("T_sample")
@@ -79,7 +80,7 @@ class ShuffleBufferDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic
             assert len(active_buffer) == 0
             self._restore_pending = False
             for restore_key in active_buffer_restore_keys:
-                active_buffer.append(self.dataset.restore_sample(restore_key))
+                active_buffer.append(self.restore_sample(restore_key))
         assert len(active_buffer) == len(active_buffer_restore_keys)
         it = iter(wrap_worker_sample_index(self.dataset, self._sample_index, worker_idx))
         while True:
@@ -89,7 +90,12 @@ class ShuffleBufferDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic
                 yield active_buffer.pop(pop_idx)
             else:
                 try:
-                    sample = next(it)
+                    sample_idx, sample = next(it)
+                    add_sample_restore_key(
+                        sample,
+                        sample_idx,
+                        src=self,
+                    )
                 except StopIteration:
                     break
                 else:
@@ -145,11 +151,16 @@ class ShuffleBufferDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic
             self._worker_rng.restore_state(state.rng)
             self._sample_index = state.sample_indexes
 
-    def can_restore_sample(self) -> bool:
-        return False
-
-    def restore_sample(self, restore_key: Tuple[Union[str, int], ...]) -> T_sample:
-        raise NotImplementedError("Cannot restore sample from shuffle buffer.")
+    def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_sample:
+        id, sample_idx = index[:2]
+        assert id == type(self).__name__
+        index = index[2:]
+        with wrap_worker_sample_index_ctx(sample_idx):
+            return add_sample_restore_key(
+                self.dataset.restore_sample(index),
+                sample_idx,
+                src=self,
+            )
 
     def config(self) -> Dict[str, Any]:
         return {

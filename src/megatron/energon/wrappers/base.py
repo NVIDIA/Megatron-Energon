@@ -84,7 +84,7 @@ class BaseSingleWrapperDataset(
     def can_restore_sample(self) -> bool:
         return self.dataset.can_restore_sample()
 
-    def restore_sample(self, index: Tuple[Union[str, int], ...]) -> T_sample_out:
+    def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_sample_out:
         return self.dataset.restore_sample(index)
 
     def verify_worker_config(self, worker_config: WorkerConfig) -> None:
@@ -92,18 +92,21 @@ class BaseSingleWrapperDataset(
         self.dataset.verify_worker_config(worker_config)
 
 
-def wrap_worker_sample_index(src: Iterable[T], index_src: List[int], index_idx: int) -> Iterable[T]:
+def wrap_worker_sample_index(
+    src: Iterable[T], index_src: List[int], index_idx: int
+) -> Iterable[Tuple[int, T]]:
     """
     Wraps the given iterable to push and pop the sample index for the given worker config.
     """
     WorkerConfig.active_worker_config.worker_push_sample_index(index_src[index_idx])
     index_active = True
     try:
-        for x in src:
+        for sample in src:
             WorkerConfig.active_worker_config.worker_pop_sample_index()
             index_active = False
+            sample_idx = index_src[index_idx]
             index_src[index_idx] += 1
-            yield x
+            yield sample_idx, sample
             WorkerConfig.active_worker_config.worker_push_sample_index(index_src[index_idx])
             index_active = True
     finally:

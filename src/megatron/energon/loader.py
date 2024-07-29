@@ -54,7 +54,7 @@ def get_loader(
     dataset: SavableDataset[T],
     *,
     worker_config: WorkerConfig,
-) -> DataLoader[T]:
+) -> BasicDataLoader[T]:
     """
     Get a dataloader for the given dataset.
 

@@ -5,7 +5,7 @@ import dataclasses
 import tarfile
 import warnings
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Generator, Iterator, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, Generator, Iterator, List, Optional, Set, Tuple, Union
 
 import torch
 
@@ -257,6 +257,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
                         __key__=key,
                         __shard__=shard_info.name,
                         __restore_key__=(
+                            "Webdataset",
                             shard_info.name,
                             tarinfo.offset + absolute_tar_begin_byte_offset,
                         ),
@@ -617,8 +618,9 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
     def can_restore_sample(self) -> bool:
         return True
 
-    def restore_sample(self, key: Tuple[str, int]) -> FilteredSample:
-        shard_name, tar_byte_offset = key
+    def restore_sample(self, key: Tuple[Union[str, int, tuple], ...]) -> FilteredSample:
+        id, shard_name, tar_byte_offset = key
+        assert id == "Webdataset"
         shard_path = self.shard_path_map[shard_name]
 
         sample_shard_info = ShardInfo(

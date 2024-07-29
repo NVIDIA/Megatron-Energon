@@ -52,6 +52,7 @@ from megatron.energon.task_encoder import (
     get_train_dataset,
     get_val_dataset,
     get_val_datasets,
+    stateless,
 )
 from megatron.energon.task_encoder.cooking import Cooker, basic_sample_keys
 from megatron.energon.worker import WorkerConfig
@@ -145,4 +146,5 @@ __all__ = [
     "get_val_datasets",
     "homogeneous_concat_mix",
     "load_dataset",
+    "stateless",
 ]

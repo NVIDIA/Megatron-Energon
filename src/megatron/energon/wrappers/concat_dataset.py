@@ -4,7 +4,12 @@
 from dataclasses import dataclass
 from typing import Any, Dict, Generic, Iterator, List, Optional, Tuple, TypeVar, Union
 
-from megatron.energon.flavors.base_dataset import MergedState, SavableDataset, State
+from megatron.energon.flavors.base_dataset import (
+    MergedState,
+    SavableDataset,
+    State,
+    add_sample_restore_key,
+)
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import (
     BaseWrapperDataset,
@@ -62,15 +67,16 @@ class ConcatDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
     def __iter__(self) -> Iterator[T_sample]:
         worker_idx = self.worker_config.rank_worker_id()
         for ds_idx, dataset in enumerate(self.datasets):
-            for sample in wrap_worker_sample_index(
+            for sample_idx, sample in wrap_worker_sample_index(
                 dataset,
                 self._sample_indexes[ds_idx],
                 worker_idx,
             ):
-                yield self._add_sample_restore_key(
+                yield add_sample_restore_key(
                     sample,
                     ds_idx,
-                    self._sample_indexes[ds_idx][worker_idx],
+                    sample_idx,
+                    src=self,
                 )
 
     def save_state(self) -> ConcatState:
@@ -117,15 +123,17 @@ class ConcatDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
     def can_restore_sample(self) -> bool:
         return all(dataset.can_restore_sample() for dataset in self.datasets)
 
-    def restore_sample(self, index: Tuple[Union[str, int], ...]) -> T_sample:
-        ds_idx = index[0]
-        sample_idx = index[1]
+    def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_sample:
+        id, ds_idx, sample_idx = index[:3]
+        assert id == type(self).__name__
+        index = index[3:]
         assert isinstance(ds_idx, int)
         with wrap_worker_sample_index_ctx(sample_idx):
-            return self._add_sample_restore_key(
-                self.datasets[ds_idx].restore_sample(index[2:]),
+            return add_sample_restore_key(
+                self.datasets[ds_idx].restore_sample(index),
                 ds_idx,
                 sample_idx,
+                src=self,
             )
 
     def verify_worker_config(self, worker_config: WorkerConfig) -> None:

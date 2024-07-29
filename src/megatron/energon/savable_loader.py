@@ -19,8 +19,14 @@ import torch.distributed
 import torch.multiprocessing
 from torch.utils.data import DataLoader, IterableDataset
 
-from megatron.energon.flavors.base_dataset import MergedState, SavableDataset, State
-from megatron.energon.worker import WorkerConfig
+from megatron.energon.flavors.base_dataset import (
+    MergedState,
+    SavableDataset,
+    State,
+    add_sample_restore_key,
+)
+from megatron.energon.worker import WorkerConfig, set_global_seeds
+from megatron.energon.wrappers.base import BaseSingleWrapperMergedState, BaseSingleWrapperState
 from megatron.energon.wrappers.gc_dataset import GcDataset, gc_init_worker
 from megatron.energon.wrappers.log_sample_dataset import default_get_keys
 
@@ -32,22 +38,25 @@ def _init_worker(seed_per_worker: List[int], worker_id: int):
 
     Sets the random seeds and prepare EPath for the forked worker process.
     """
-
-    import random
-
-    import numpy
-
     from megatron.energon.epathlib import EPath
 
     gc_init_worker(worker_id)
 
     worker_seed = seed_per_worker[worker_id]
 
-    torch.manual_seed(worker_seed)
-    numpy.random.seed(worker_seed)
-    random.seed(worker_seed)
+    set_global_seeds(worker_seed)
 
     EPath.prepare_forked_process()
+
+
+@dataclass
+class SimpleSavableDatasetState(BaseSingleWrapperState):
+    sample_index: int
+
+
+@dataclass
+class SimpleSavableDatasetMergedState(BaseSingleWrapperMergedState):
+    sample_indexes: List[int]
 
 
 class SimpleSavableDatasetWrapper(SavableDataset[Tuple[int, int, T]], Generic[T]):
@@ -57,32 +66,38 @@ class SimpleSavableDatasetWrapper(SavableDataset[Tuple[int, int, T]], Generic[T]
     dataset: SavableDataset[T]
     worker_config: WorkerConfig
     _state_restored: bool = False
+    _sample_indexes: List[int]
 
     def __init__(self, dataset: SavableDataset[T], worker_config: WorkerConfig):
         self.dataset = dataset
         self.worker_config = worker_config
+        self._sample_index = [0] * max(self.worker_config.num_workers, 1)
 
     def __len__(self):
         return len(self.dataset)
 
     def __iter__(self):
         self._state_restored = True
-        sample_index = 0
         worker_id = self.worker_config.rank_worker_id()
+        global_worker_id = self.worker_config.global_worker_id()
         while self._state_restored:
             self._state_restored = False
-            self.worker_config.worker_activate(sample_index)
+            self.worker_config.worker_activate(self._sample_index[worker_id])
             worker_active = True
             try:
                 for src_data in self.dataset:
                     self.worker_config.worker_deactivate()
                     worker_active = False
+                    sample_index = self._sample_index[worker_id]
+                    src_data = add_sample_restore_key(
+                        src_data, global_worker_id, sample_index, src=self
+                    )
+                    self._sample_index[worker_id] += 1
                     yield worker_id, sample_index, src_data
-                    sample_index += 1
                     if self._state_restored:
                         # Restart iterator after restore
                         break
-                    self.worker_config.worker_activate(sample_index)
+                    self.worker_config.worker_activate(self._sample_index[worker_id])
                     worker_active = True
             finally:
                 if worker_active:
@@ -97,6 +112,24 @@ class SimpleSavableDatasetWrapper(SavableDataset[Tuple[int, int, T]], Generic[T]
     def restore_state(self, state: MergedState):
         self.dataset.restore_state(state)
         self._state_restored = True
+
+    def can_restore_sample(self) -> bool:
+        return self.dataset.can_restore_sample()
+
+    def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T:
+        id, global_worker_id, sample_idx = index[:3]
+        assert id == type(self).__name__
+        index = index[3:]
+        self.worker_config.worker_activate(sample_idx, override_global_rank=global_worker_id)
+        try:
+            return add_sample_restore_key(
+                self.dataset.restore_sample(index),
+                global_worker_id,
+                sample_idx,
+                src=self,
+            )
+        finally:
+            self.worker_config.worker_deactivate()
 
     def config(self) -> Dict[str, Any]:
         return self.dataset.config()
@@ -313,6 +346,7 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
         # First: Set the worker offset globally for the current worker
         WorkerConfig.worker_id_offset = self._worker_offset
         self._worker_id = self.worker_config.rank_worker_id()
+        global_worker_id = self.worker_config.global_worker_id()
         if self._cmd_thread is None:
             self._running = True
             self._command_lock = threading.RLock()
@@ -353,6 +387,9 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
                                 continue
                             last_was_skip = False
                             sample_index = self._sample_index
+                            add_sample_restore_key(
+                                src_data, global_worker_id, sample_index, src=self
+                            )
                             self._sample_index += 1
                             self._store_checkpoint()
                             try:
@@ -526,6 +563,24 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
             self._worker_offset = worker_offset
             self.dataset.restore_state(state.dataset_state)
             self._skip_samples = state.offset
+
+    def can_restore_sample(self) -> bool:
+        return self.dataset.can_restore_sample()
+
+    def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T:
+        id, global_worker_id, sample_idx = index[:3]
+        assert id == type(self).__name__
+        index = index[3:]
+        self.worker_config.worker_activate(sample_idx, override_global_rank=global_worker_id)
+        try:
+            return add_sample_restore_key(
+                self.dataset.restore_sample(index),
+                global_worker_id,
+                sample_idx,
+                src=self,
+            )
+        finally:
+            self.worker_config.worker_deactivate()
 
     def config(self) -> Dict[str, Any]:
         return self.dataset.config()
@@ -944,6 +999,13 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
                 state = local_object[0]
         self.restore_state_rank(state)
 
+    def can_restore_sample(self) -> bool:
+        return self.dataset.can_restore_sample()
+
+    def restore_sample(self, sample_key: Tuple[Union[str, int, tuple], ...]) -> T:
+        """Restores a sample from a key. This is useful to debug the dataset."""
+        return self.dataset.restore_sample(sample_key)
+
     def config(self):
         """Get the configuration, which defines the dataset. Useful in conjunction with `save_state`
         and `restore_state` to match the configuration as well."""
@@ -1109,6 +1171,13 @@ class BasicDataLoader(DataLoader[T], Generic[T]):
             "prefetch_factor": None if self.num_workers == 0 else self.prefetch_factor,
             "dataset": self.dataset.config(),
         }
+
+    def can_restore_sample(self) -> bool:
+        return self.dataset.can_restore_sample()
+
+    def restore_sample(self, sample_key: Tuple[Union[str, int, tuple], ...]) -> T:
+        """Restores a sample from a key. This is useful to debug the dataset."""
+        return self.dataset.restore_sample(sample_key)
 
 
 def _sample_str(self, sample):

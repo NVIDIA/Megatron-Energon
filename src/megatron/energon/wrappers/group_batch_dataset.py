@@ -187,7 +187,7 @@ class GroupBatchDataset(
     def can_restore_sample(self) -> bool:
         return False
 
-    def restore_sample(self, index: Tuple[Union[str, int], ...]) -> T_batch:
+    def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_batch:
         # TODO: We'd need to store multiple indices to restore a batch
         # Also, returned elements don't support __restore_key__. Would need extension.
         raise NotImplementedError("GroupBatchDataset does not support random access.")

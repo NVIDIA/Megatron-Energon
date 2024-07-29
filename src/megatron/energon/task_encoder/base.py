@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import dataclasses
+import functools
 from abc import ABC
 from dataclasses import is_dataclass
 from typing import (
@@ -30,7 +31,7 @@ from megatron.energon.flavors.base_dataset import (
 )
 from megatron.energon.flavors.crude import CrudeSample, CrudeWebdataset
 from megatron.energon.task_encoder.cooking import Cooker
-from megatron.energon.worker import WorkerConfig
+from megatron.energon.worker import WorkerConfig, set_global_seeds
 from megatron.energon.wrappers import (
     BatchDataset,
     BlendDataset,
@@ -100,6 +101,50 @@ def batch_list(batch: List[Any]) -> Any:
     return batch
 
 
+def stateless(
+    fn: Optional[Callable[..., T_sample]] = None, *, restore_seeds: bool = False
+) -> Callable[..., T_sample]:
+    """Decorator to mark a function of the task encoder as restorable.
+
+    Args:
+        fn: The function to decorate.
+        restore_seeds: Whether to restore the seeds for the function. I.e. the seeds are set
+            from the sample index and the worker seed, such that they can be restored when a sample
+            is restored from that function.
+
+    Usage:
+
+        @stateless
+        def encode_sample(self, sample: T_sample) -> T_encoded_sample:
+            ...
+
+
+        # Or if randomness is used (e.g. for augmentations):
+        @stateless(restore_seeds=True)
+        def encode_sample(self, sample: T_sample) -> T_encoded_sample:
+            ...
+    """
+    if fn is None:
+        return lambda f: stateless(f, restore_seeds=restore_seeds)
+    if restore_seeds:
+        worker_seed = None
+
+        @functools.wraps(fn)
+        def seed_wrapper(self, *args, **kwargs):
+            nonlocal worker_seed
+            if worker_seed is None:
+                worker_seed = WorkerConfig.active_worker_config.worker_seed()
+            seed = hash((worker_seed, self.get_current_sample_index()))
+            set_global_seeds((seed & (seed >> 32)) & 0xFFFFFFFF)
+            return fn(self, *args, **kwargs)
+
+        setattr(seed_wrapper, "__stateless__", True)
+        return seed_wrapper
+
+    setattr(fn, "__stateless__", True)
+    return fn
+
+
 @dataclasses.dataclass
 class Batch(PinMemoryMixin):
     """Base class for a batch dataclass. Provides a default implementation for pinning memory."""
@@ -133,6 +178,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             assert isinstance(sample, Sample), "Sample must be a complete Sample or a CrudeSample"
             return sample
 
+    @stateless
     def encode_sample(
         self, sample: T_sample
     ) -> Union[T_encoded_sample, Generator[T_encoded_sample, None, None]]:
@@ -140,6 +186,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         Alternatively, this can be a generator that yields (or ignores) new samples."""
         return sample
 
+    @stateless
     def batch(self, samples: List[T_encoded_sample]) -> T_raw_batch:
         """Move a batch to a device. May raise :exc:`megatron.energon.SkipSample` to skip a batch."""
         return self._batch(samples, type(samples[0]))
@@ -150,6 +197,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         :exc:`megatron.energon.SkipSample` to skip a batch."""
         return None
 
+    @stateless
     def encode_batch(self, batch: T_raw_batch) -> Union[T_batch, Generator[T_batch, None, None]]:
         """Encode a batch of samples. May raise :exc:`megatron.energon.SkipSample` to skip a batch.
         Alternatively, this can be a generator that yields (or ignores) new batches."""
@@ -233,11 +281,17 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 dataset,
                 batch_size=batch_size,
                 batcher=self.batch,
+                batcher_stateless=getattr(self.batch, "__stateless__", False),
                 drop_last=batch_drop_last,
                 worker_config=worker_config,
             )
             if getattr(self.encode_batch, "__func__", None) is not TaskEncoder.encode_batch:
-                dataset = MapDataset(dataset, self.encode_batch, worker_config=worker_config)
+                dataset = MapDataset(
+                    dataset,
+                    self.encode_batch,
+                    worker_config=worker_config,
+                    stateless_map_fn=getattr(self.encode_batch, "__stateless__", False),
+                )
         else:
             assert (
                 getattr(self.encode_batch, "__func__", None) is TaskEncoder.encode_batch
@@ -255,7 +309,12 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             or getattr(self.build_cook_crude_sample, "__func__", None)
             is not TaskEncoder.build_cook_crude_sample
         ):
-            dataset = MapDataset(dataset, self.cook_crude_sample, worker_config=worker_config)
+            dataset = MapDataset(
+                dataset,
+                self.cook_crude_sample,
+                worker_config=worker_config,
+                stateless_map_fn=getattr(self.cook_crude_sample, "__stateless__", False),
+            )
         return dataset
 
     def build_encode_sample(
@@ -265,7 +324,12 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
     ) -> SavableDataset[T_encoded_sample]:
         """Applies the sample encoder to the dataset."""
         if getattr(self.encode_sample, "__func__", None) is not TaskEncoder.encode_sample:
-            dataset = MapDataset(dataset, self.encode_sample, worker_config=worker_config)
+            dataset = MapDataset(
+                dataset,
+                self.encode_sample,
+                worker_config=worker_config,
+                stateless_map_fn=getattr(self.encode_sample, "__stateless__", False),
+            )
         return dataset
 
     def build_train_datasets(

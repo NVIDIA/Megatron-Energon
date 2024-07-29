@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from dataclasses import dataclass
-from typing import Any, Dict, Generator, Generic, Iterator, List, Optional, Tuple, TypeVar, Union
+from typing import Any, Dict, Generator, Generic, Iterator, List, Optional, TypeVar
 
 from megatron.energon.flavors.base_dataset import SavableDataset
 from megatron.energon.worker import WorkerConfig
@@ -10,7 +10,6 @@ from megatron.energon.wrappers.base import (
     BaseSingleWrapperDataset,
     BaseSingleWrapperMergedState,
     BaseSingleWrapperState,
-    wrap_worker_sample_index_ctx,
 )
 
 T_sample = TypeVar("T_sample")
@@ -132,10 +131,6 @@ class EpochizeDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_sa
         else:
             assert isinstance(state, EpochizeMergedState)
             self._offset = state.offset
-
-    def restore_sample(self, index: Tuple[Union[str, int], ...]) -> T_sample:
-        with wrap_worker_sample_index_ctx(index[0]):
-            return self.dataset.restore_sample(index[1:])
 
     def config(self) -> Dict[str, Any]:
         return {

@@ -10,6 +10,8 @@ from megatron.energon.task_encoder.base import (
     batch_pad_stack,
     batch_stack,
     generic_batch,
+    set_global_seeds,
+    stateless,
 )
 from megatron.energon.task_encoder.loader import (
     get_train_dataset,
@@ -29,4 +31,6 @@ __all__ = [
     "get_train_dataset",
     "get_val_dataset",
     "get_val_datasets",
+    "set_global_seeds",
+    "stateless",
 ]

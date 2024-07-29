@@ -4,7 +4,7 @@
 from dataclasses import dataclass
 from typing import Any, Dict, Generic, Iterator, List, Optional, TypeVar
 
-from megatron.energon.flavors.base_dataset import SavableDataset
+from megatron.energon.flavors.base_dataset import SavableDataset, add_sample_restore_key
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import (
     BaseSingleWrapperDataset,
@@ -66,7 +66,14 @@ class RepeatDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_samp
         if self.repeats is None:
             while True:
                 self._offset[worker_idx] += 1
-                yield from wrap_worker_sample_index(self.dataset, self._sample_index, worker_idx)
+                for sample_idx, sample in wrap_worker_sample_index(
+                    self.dataset, self._sample_index, worker_idx
+                ):
+                    yield add_sample_restore_key(
+                        sample,
+                        sample_idx,
+                        src=self,
+                    )
                 if self.worker_config.should_log(level=2):
                     self.worker_config.worker_log(
                         {
@@ -79,7 +86,14 @@ class RepeatDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_samp
         else:
             for offset in range(self._offset[worker_idx], self.repeats):
                 self._offset[worker_idx] = offset + 1
-                yield from wrap_worker_sample_index(self.dataset, self._sample_index, worker_idx)
+                for sample_idx, sample in wrap_worker_sample_index(
+                    self.dataset, self._sample_index, worker_idx
+                ):
+                    yield add_sample_restore_key(
+                        sample,
+                        sample_idx,
+                        src=self,
+                    )
                 if self.worker_config.should_log(level=2):
                     self.worker_config.worker_log(
                         {

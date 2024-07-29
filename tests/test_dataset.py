@@ -8,6 +8,7 @@ import io
 import json
 import logging
 import math
+import random
 import sys
 import tempfile
 import unittest
@@ -43,6 +44,7 @@ from megatron.energon import (
 )
 from megatron.energon.dataset_config import MAIN_FOLDER_NAME, get_dataset_from_config
 from megatron.energon.flavors import BaseWebdataset
+from megatron.energon.task_encoder.base import stateless
 from megatron.energon.tools.analyze_debug import command as analyze_debug_command
 from megatron.energon.tools.lint import command as lint_command
 from megatron.energon.tools.prepare import command as prepare_command
@@ -56,6 +58,7 @@ no_worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0)
 class ExtendedCaptioningSample(CaptioningSample):
     batch_index: int
     sample_index: int
+    rand_num: int
 
 
 class TestDataset(unittest.TestCase):
@@ -881,11 +884,14 @@ class TestDataset(unittest.TestCase):
 
         class TestTaskEncoder(TaskEncoder):
 
+            @stateless(restore_seeds=True)
             def encode_sample(self, sample):
+                # print("si stack:", WorkerConfig._sample_index_stack)
                 return ExtendedCaptioningSample.extend(
                     sample,
                     batch_index=self.get_current_batch_index(),
                     sample_index=self.get_current_sample_index(),
+                    rand_num=random.randint(0, 1000),
                 )
 
         # First, test simple single main-thread loader with accessing get_current_batch_index
@@ -907,6 +913,15 @@ class TestDataset(unittest.TestCase):
 
         print("si", [batch.sample_index for batch_idx, batch in batches])
         assert all(all(si == sample_offset + batch_idx * 2 for sample_offset, si in enumerate(batch.sample_index)) for batch_idx, batch in batches)
+
+        print("rk", [batch.__restore_key__ for batch_idx, batch in batches])
+        assert loader.can_restore_sample()
+        for batch_idx, batch in batches:
+            restore_batch = loader.restore_sample(batch.__restore_key__)
+            assert np.allclose(restore_batch.image, batch.image)
+            assert restore_batch.batch_index == batch.batch_index
+            assert restore_batch.sample_index == batch.sample_index
+            assert restore_batch.rand_num == batch.rand_num
 
         # Now, test multi-worker loader with accessing get_current_batch_index
         worker_config_r0 = WorkerConfig(rank=0, world_size=2, num_workers=2)
