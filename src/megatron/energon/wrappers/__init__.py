@@ -21,6 +21,7 @@ from megatron.energon.wrappers.mix_batch_dataset import (
 from megatron.energon.wrappers.repeat_dataset import RepeatDataset
 from megatron.energon.wrappers.shuffle_buffer_dataset import ShuffleBufferDataset
 from megatron.energon.wrappers.skip import SkipSample
+from megatron.energon.wrappers.slice_batch_dataset import SliceBatchDataset
 
 __all__ = [
     "BatchDataset",
@@ -38,6 +39,7 @@ __all__ = [
     "RepeatDataset",
     "ShuffleBufferDataset",
     "SkipSample",
+    "SliceBatchDataset",
     "concat_pad",
     "generic_concat",
     "homogeneous_concat_mix",

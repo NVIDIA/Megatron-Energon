@@ -191,7 +191,6 @@ class BatchDataset(
         batch_sample = self.batcher(batch)
         if isinstance(batch_sample, Generator):
             assert inspect.isgeneratorfunction(self.batcher)
-            is_first = True
             for cur_batch_sub_idx, item in enumerate(batch_sample):
                 if cur_batch_sub_idx == batch_sub_idx:
                     return add_sample_restore_key(

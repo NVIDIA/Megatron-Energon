@@ -14,8 +14,6 @@ from megatron.energon.flavors.base_webdataset import (
     ImageDecoder,
 )
 from megatron.energon.flavors.webdataset.structs import FilteredSample
-from megatron.energon.wrappers import MapDataset
-from megatron.energon.wrappers.iter_map_dataset import IterMapDataset
 
 
 class CrudeSample(dict):
@@ -72,6 +70,8 @@ class CrudeWebdataset(DefaultGenericWebdataset[CrudeSample]):
     def _process_samples(
         self, dataset: SavableDataset[FilteredSample]
     ) -> SavableDataset[CrudeSample]:
+        from megatron.energon.wrappers import IterMapDataset, MapDataset
+
         if self.image_decode:
             # With image decoding:
             decoder = webdataset.decode(self.image_decode, handler=self._decode_error_handler)
