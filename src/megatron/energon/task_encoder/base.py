@@ -42,6 +42,7 @@ from megatron.energon.wrappers import (
     LogSampleDataset,
     MapDataset,
     ShuffleBufferDataset,
+    SliceBatchDataset,
 )
 
 T = TypeVar("T")
@@ -255,6 +256,17 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         else:
             raise ValueError("Unrecognized result type.")
 
+    def batch_slicer(self, samples: List[T_sample]) -> List[List[T_sample]]:
+        """
+        Create slices of the given samples for batching. Each slice will be batched separately.
+
+        Args:
+            samples: The samples to slice. This depends on the slice_buffer_size.
+
+        Returns: A list of sample slices, each of which will be batched separately.
+        """
+        return [samples]
+
     def build_batch(
         self,
         dataset: SavableDataset[T_encoded_sample],
@@ -268,6 +280,9 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             is not TaskEncoder.batch_group_criterion
         ):
             assert batch_size is not None, "batch_size must be set if batch_group_criterion is set"
+            assert (
+                getattr(self.batch_slicer, "__func__", None) is TaskEncoder.batch_slicer
+            ), "batch_slicer not supported if grouping"
             dataset = GroupBatchDataset(
                 dataset,
                 batch_size=batch_size,
@@ -277,14 +292,25 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 worker_config=worker_config,
             )
         elif batch_size is not None:
-            dataset = BatchDataset(
-                dataset,
-                batch_size=batch_size,
-                batcher=self.batch,
-                batcher_stateless=getattr(self.batch, "__stateless__", False),
-                drop_last=batch_drop_last,
-                worker_config=worker_config,
-            )
+            if getattr(self.batch_slicer, "__func__", None) is not TaskEncoder.batch_slicer:
+                assert not batch_drop_last, "batch_drop_last is not supported if slicer is set"
+                dataset = SliceBatchDataset(
+                    dataset,
+                    buffer_size=batch_size,
+                    slicer=self.batch_slicer,
+                    batcher=self.batch,
+                    batcher_stateless=getattr(self.batch, "__stateless__", False),
+                    worker_config=worker_config,
+                )
+            else:
+                dataset = BatchDataset(
+                    dataset,
+                    batch_size=batch_size,
+                    batcher=self.batch,
+                    batcher_stateless=getattr(self.batch, "__stateless__", False),
+                    drop_last=batch_drop_last,
+                    worker_config=worker_config,
+                )
             if getattr(self.encode_batch, "__func__", None) is not TaskEncoder.encode_batch:
                 dataset = MapDataset(
                     dataset,
@@ -296,6 +322,12 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             assert (
                 getattr(self.encode_batch, "__func__", None) is TaskEncoder.encode_batch
             ), "batch_size is not set, but encode_batch is not the default."
+            assert (
+                getattr(self.batch, "__func__", None) is TaskEncoder.batch
+            ), "batch_size is not set, but batch is not the default."
+            assert (
+                getattr(self.batch_slicer, "__func__", None) is TaskEncoder.batch_slicer
+            ), "batch_size is not set, but batch_slicer is not the default."
         return dataset
 
     def build_cook_crude_sample(
@@ -338,7 +370,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         datasets: List[Tuple[BaseCoreDataset[T_sample], float]],
         worker_config: WorkerConfig,
         batch_size: int,
-        batch_drop_last: bool,
+        batch_drop_last: bool = False,
         virtual_epoch_length: int = 0,
         shuffle_buffer_size: Optional[int] = None,
     ) -> SavableDataset[T_batch]:
@@ -388,10 +420,10 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         datasets: List[Tuple[BaseCoreDataset[T_sample], float]],
         worker_config: WorkerConfig,
         batch_size: int,
-        batch_drop_last: bool,
+        batch_drop_last: bool = False,
         limit: Optional[int] = None,
     ) -> SavableDataset[T_batch]:
-        """Combines train datasets to a single dataset."""
+        """Combines val datasets to a single dataset."""
 
         # Check if there's a CrudeWebdataset but no cookers
         for dataset, _ in datasets:
