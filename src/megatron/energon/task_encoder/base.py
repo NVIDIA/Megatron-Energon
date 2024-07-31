@@ -256,7 +256,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         else:
             raise ValueError("Unrecognized result type.")
 
-    def batch_slicer(self, samples: List[T_sample]) -> List[List[T_sample]]:
+    def slice_batch(self, samples: List[T_sample]) -> List[List[T_sample]]:
         """
         Create slices of the given samples for batching. Each slice will be batched separately.
 
@@ -281,8 +281,8 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         ):
             assert batch_size is not None, "batch_size must be set if batch_group_criterion is set"
             assert (
-                getattr(self.batch_slicer, "__func__", None) is TaskEncoder.batch_slicer
-            ), "batch_slicer not supported if grouping"
+                getattr(self.slice_batch, "__func__", None) is TaskEncoder.slice_batch
+            ), "slice_batch not supported if grouping"
             dataset = GroupBatchDataset(
                 dataset,
                 batch_size=batch_size,
@@ -292,12 +292,12 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 worker_config=worker_config,
             )
         elif batch_size is not None:
-            if getattr(self.batch_slicer, "__func__", None) is not TaskEncoder.batch_slicer:
+            if getattr(self.slice_batch, "__func__", None) is not TaskEncoder.slice_batch:
                 assert not batch_drop_last, "batch_drop_last is not supported if slicer is set"
                 dataset = SliceBatchDataset(
                     dataset,
                     buffer_size=batch_size,
-                    slicer=self.batch_slicer,
+                    slicer=self.slice_batch,
                     batcher=self.batch,
                     batcher_stateless=getattr(self.batch, "__stateless__", False),
                     worker_config=worker_config,
@@ -326,8 +326,8 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 getattr(self.batch, "__func__", None) is TaskEncoder.batch
             ), "batch_size is not set, but batch is not the default."
             assert (
-                getattr(self.batch_slicer, "__func__", None) is TaskEncoder.batch_slicer
-            ), "batch_size is not set, but batch_slicer is not the default."
+                getattr(self.slice_batch, "__func__", None) is TaskEncoder.slice_batch
+            ), "batch_size is not set, but slice_batch is not the default."
         return dataset
 
     def build_cook_crude_sample(
