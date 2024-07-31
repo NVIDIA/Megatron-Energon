@@ -18,7 +18,7 @@ from typing import (
 )
 
 from megatron.energon.errors import SYSTEM_EXCEPTIONS, FatalSampleError
-from megatron.energon.flavors.base_dataset import SavableDataset, add_sample_restore_key
+from megatron.energon.flavors.base_dataset import SavableDataset, set_sample_restore_key
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers._log_exception import log_exception
 from megatron.energon.wrappers.base import (
@@ -26,6 +26,7 @@ from megatron.energon.wrappers.base import (
     BaseSingleWrapperMergedState,
     BaseSingleWrapperState,
     SampleIndex,
+    get_sample_restore_key,
 )
 from megatron.energon.wrappers.skip import SkipSample
 
@@ -109,6 +110,7 @@ class BatchDataset(
 
     def __iter__(self) -> Iterator[T_batch]:
         batch: List[T_batch_sample] = []
+        sample_restore_keys = []
 
         def flush():
             try:
@@ -119,15 +121,17 @@ class BatchDataset(
                     for batch_sub_idx, (sample_idx, inner_batch_sample) in enumerate(
                         self._sample_index.iter_ctx(batch_sample, sample_idx)
                     ):
-                        yield add_sample_restore_key(
+                        yield set_sample_restore_key(
                             inner_batch_sample,
                             sample_idx,
                             batch_sub_idx,
+                            *sample_restore_keys,
                             src=self,
                         )
                 else:
-                    add_sample_restore_key(batch_sample, sample_idx, src=self)
+                    set_sample_restore_key(batch_sample, sample_idx, *sample_restore_keys, src=self)
                     yield batch_sample
+                sample_restore_keys.clear()
             except SkipSample:
                 pass
             except SYSTEM_EXCEPTIONS:
@@ -137,6 +141,7 @@ class BatchDataset(
 
         for sample in self.dataset:
             batch.append(sample)
+            sample_restore_keys.append(get_sample_restore_key(sample))
             if len(batch) == self.batch_size:
                 yield from flush()
                 batch = []
@@ -173,16 +178,16 @@ class BatchDataset(
 
     def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_batch:
         # We need to store multiple indices to restore a batch.
-        assert self.batcher_stateless
+        assert (
+            self.batcher_stateless
+        ), f"Batcher {self.batcher} must be stateless to restore samples"
         if inspect.isgeneratorfunction(self.batcher):
-            id, sample_idx, batch_sub_idx = index[:3]
+            id, sample_idx, batch_sub_idx, *samples_restore_keys = index
             assert id == type(self).__name__
-            index = index[3:]
         else:
-            id, sample_idx = index[:2]
+            id, sample_idx, *samples_restore_keys = index
             assert id == type(self).__name__
-            index = index[2:]
-        batch = [self.dataset.restore_sample(inner_idx) for inner_idx in index]
+        batch = [self.dataset.restore_sample(inner_idx) for inner_idx in samples_restore_keys]
         with self._sample_index.ctx(sample_idx):
             batch_sample = self.batcher(batch)
         if isinstance(batch_sample, Generator):
@@ -191,15 +196,21 @@ class BatchDataset(
                 self._sample_index.iter_ctx(batch_sample, sample_idx)
             ):
                 if cur_batch_sub_idx == batch_sub_idx:
-                    return add_sample_restore_key(
+                    return set_sample_restore_key(
                         inner_batch_sample,
                         sample_idx,
                         batch_sub_idx,
+                        *samples_restore_keys,
                         src=self,
                     )
             assert False, f"Batch sub-index {batch_sub_idx} not found in batch"
         else:
-            return add_sample_restore_key(batch_sample, sample_idx, src=self)
+            return set_sample_restore_key(
+                batch_sample,
+                sample_idx,
+                *samples_restore_keys,
+                src=self,
+            )
 
     def config(self) -> Dict[str, Any]:
         return {

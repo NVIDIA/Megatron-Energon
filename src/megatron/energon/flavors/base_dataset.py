@@ -307,8 +307,11 @@ def add_sample_restore_key(
     """Adds a key to a sample. The sample must be a valid `Sample` or dict containing
     __restore_key__, which is a tuple of keys that can be used to restore the inner sample.
     This restore key is prepended with the `key`."""
-    if isinstance(sample, Sample):
-        sample.__restore_key__ = (type(src).__name__, *key, *sample.__restore_key__)
+    if isinstance(sample, Sample) or hasattr(sample, "__restore_key__"):
+        try:
+            sample.__restore_key__ = (type(src).__name__, *key, *sample.__restore_key__)
+        except KeyError:
+            pass
     elif isinstance(sample, dict) and "__restore_key__" in sample:
         sample["__restore_key__"] = (type(src).__name__, *key, *sample["__restore_key__"])
     elif fail_otherwise:
@@ -324,8 +327,11 @@ def set_sample_restore_key(
     """Sets the restore key for a sample. The sample must be a valid `Sample` or dict containing
     __restore_key__, which is a tuple of keys that can be used to restore the inner sample.
     This restore key is prepended with the `key`."""
-    if isinstance(sample, Sample):
-        sample.__restore_key__ = (type(src).__name__, *key)
+    if isinstance(sample, Sample) or hasattr(sample, "__restore_key__"):
+        try:
+            sample.__restore_key__ = (type(src).__name__, *key)
+        except KeyError:
+            pass
     elif isinstance(sample, dict) and "__restore_key__" in sample:
         sample["__restore_key__"] = (type(src).__name__, *key)
     elif fail_otherwise:

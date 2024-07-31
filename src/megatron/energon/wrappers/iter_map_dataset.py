@@ -113,7 +113,7 @@ class IterMapDataset(
             nonlocal iter_idx, sample_restore_keys
             for entry in last_sample_wrapper:
                 iter_idx = 0
-                sample_restore_keys.append(get_sample_restore_key(entry) or ())
+                sample_restore_keys.append(get_sample_restore_key(entry))
                 yield entry
 
         ds_iter = iter(reset_idx_iter())
@@ -127,7 +127,7 @@ class IterMapDataset(
                         sample,
                         sample_idx,
                         iter_idx,
-                        tuple(sample_restore_keys),
+                        *sample_restore_keys,
                         src=self,
                     )
                     sample_restore_keys.clear()
@@ -166,8 +166,10 @@ class IterMapDataset(
         return self.stateless_iter_fn and self.dataset.can_restore_sample()
 
     def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_sample:
-        assert self.stateless_iter_fn
-        id, sample_idx, iter_idx, sample_restore_keys = index
+        assert (
+            self.stateless_iter_fn
+        ), f"Iter function {self.iter_map_fn} must be stateless to restore samples."
+        id, sample_idx, iter_idx, *sample_restore_keys = index
         assert id == type(self).__name__
         assert isinstance(iter_idx, int)
         inner_iter = iter(
@@ -187,7 +189,7 @@ class IterMapDataset(
                 sample,
                 sample_idx,
                 iter_idx,
-                sample_restore_keys,
+                *sample_restore_keys,
                 src=self,
             )
         except StopIteration:

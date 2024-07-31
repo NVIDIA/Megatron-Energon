@@ -142,7 +142,9 @@ class MapDataset(BaseSingleWrapperDataset[T_sample, T_sample_out], Generic[T_sam
         return self.stateless_map_fn and self.dataset.can_restore_sample()
 
     def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_sample_out:
-        assert self.stateless_map_fn, "MapDataset is not stateless, but restore_sample was called."
+        assert (
+            self.stateless_map_fn
+        ), f"MapDataset is not stateless, but restore_sample was called on {self.map_fn}."
         if inspect.isgeneratorfunction(self.map_fn):
             id, sample_idx, local_idx = index[:3]
             assert id == type(self).__name__

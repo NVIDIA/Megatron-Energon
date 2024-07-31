@@ -122,7 +122,9 @@ class TestDataset(unittest.TestCase):
         assert len(iter1) == 55
         assert len(iter2) == 55
         assert all(elem1.__key__ == elem2.__key__ for elem1, elem2 in zip(iter1, iter2))
-        assert all(f"{idx}" == x.text for idx, x in enumerate(get_loader(ds, worker_config=worker_config)))
+        assert all(
+            f"{idx}" == x.text for idx, x in enumerate(get_loader(ds, worker_config=worker_config))
+        )
 
         del ds
         gc.collect()

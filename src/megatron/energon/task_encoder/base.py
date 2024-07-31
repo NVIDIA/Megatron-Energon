@@ -523,6 +523,7 @@ class DefaultTaskEncoder(
         self._raw_batch_type = raw_batch_type
         self._batch_type = batch_type
 
+    @stateless
     def encode_sample(
         self, sample: T_sample
     ) -> Union[T_encoded_sample, Generator[T_encoded_sample, None, None]]:
@@ -550,6 +551,7 @@ class DefaultTaskEncoder(
         else:
             raise ValueError("Unrecognized encoded sample type.")
 
+    @stateless
     def batch(self, samples: List[T_encoded_sample]) -> T_raw_batch:
         """Batch a list of samples. The default implementation uses default batching to convert
         to _batch_type."""
@@ -565,6 +567,7 @@ class DefaultTaskEncoder(
             actions=actions,
         )
 
+    @stateless
     def encode_batch(self, batch: T_raw_batch) -> Union[T_batch, Generator[T_batch, None, None]]:
         """Encode a batch of samples. The default implementation converts to the
         _encoded_batch_type."""

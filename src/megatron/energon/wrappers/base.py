@@ -166,7 +166,7 @@ class SampleIndex:
 
 def get_sample_restore_key(sample: Any) -> Optional[Union[str, int]]:
     """Gets the restore key from an arbitrary sample."""
-    if isinstance(sample, Sample):
+    if isinstance(sample, Sample) or hasattr(sample, "__restore_key__"):
         return sample.__restore_key__
     elif isinstance(sample, dict) and "__restore_key__" in sample:
         return sample["__restore_key__"]
