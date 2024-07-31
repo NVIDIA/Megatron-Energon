@@ -14,7 +14,7 @@ from megatron.energon.flavors.base_dataset import (
 )
 from megatron.energon.rng import WorkerRng, WorkerRngMergedState, WorkerRngState
 from megatron.energon.worker import WorkerConfig
-from megatron.energon.wrappers.base import BaseWrapperDataset, wrap_worker_sample_index_ctx
+from megatron.energon.wrappers.base import BaseWrapperDataset
 
 T_sample = TypeVar("T_sample")
 
@@ -25,8 +25,6 @@ class BlendDatasetState(State):
     datasets: List[State]
     #: State of the worker rng
     rng: WorkerRngState
-    #: The indexes of the samples in the datasets
-    sample_indexes: List[int]
 
 
 @dataclass
@@ -35,8 +33,6 @@ class BlendDatasetMergedState(MergedState):
     datasets: List[MergedState]
     #: State of the worker rng
     rng: WorkerRngMergedState
-    #: The indexes of the samples in the datasets
-    sample_indexes: List[List[int]]
 
 
 class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
@@ -46,7 +42,6 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
     """
 
     dataset_weights: Tuple[Tuple[SavableDataset[T_sample], float], ...]
-    _sample_indexes: List[List[int]]
 
     _worker_rng: WorkerRng
 
@@ -67,9 +62,6 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
         self.worker_config = worker_config
         self.dataset_weights = dataset_weights
         self._worker_rng = WorkerRng(self.worker_config)
-        self._sample_indexes = [
-            [0] * len(dataset_weights) for _ in range(max(self.worker_config.num_workers, 1))
-        ]
 
     def __len__(self) -> int:
         # Gives an approximation of the number of samples. This is very incorrect (as the length
@@ -89,21 +81,15 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
         weights = torch.tensor(weights, dtype=torch.float32)
         probs = weights / weights.sum()
 
-        worker_idx = self.worker_config.rank_worker_id()
-
         while True:
             ds_idx = self._worker_rng.choice_idx(probs=probs)
-            sample_idx = self._sample_indexes[worker_idx][ds_idx]
-            self._sample_indexes[worker_idx][ds_idx] += 1
-            with wrap_worker_sample_index_ctx(sample_idx):
-                sample = next(dataset_iters[ds_idx])
-            yield add_sample_restore_key(sample, ds_idx, sample_idx, src=self)
+            sample = next(dataset_iters[ds_idx])
+            yield add_sample_restore_key(sample, ds_idx, src=self)
 
     def save_state(self) -> BlendDatasetState:
         return BlendDatasetState(
             datasets=[d.save_state() for d, _weight in self.dataset_weights],
             rng=self._worker_rng.save_state(),
-            sample_indexes=self._sample_indexes[self.worker_config.rank_worker_id()].copy(),
         )
 
     def merge_states(self, states: List[BlendDatasetState]) -> BlendDatasetMergedState:
@@ -115,9 +101,6 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
                 for ds_idx, (d, _) in enumerate(self.dataset_weights)
             ],
             rng=self._worker_rng.merge_states([None if s is None else s.rng for s in states]),
-            sample_indexes=[
-                [[0] * len(self.dataset_weights) if s is None else s.sample_indexes] for s in states
-            ],
         )
 
     def restore_state(self, state: Optional[BlendDatasetMergedState]) -> None:
@@ -125,17 +108,12 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
             for dataset, _weight in self.dataset_weights:
                 dataset.restore_state(None)
             self._worker_rng.restore_state(None)
-            self._sample_indexes = [
-                [0] * len(self.dataset_weights)
-                for _ in range(max(self.worker_config.num_workers, 1))
-            ]
         else:
             assert isinstance(state, BlendDatasetMergedState)
             assert len(state.datasets) == len(self.dataset_weights)
             for (dataset, _weight), dstate in zip(self.dataset_weights, state.datasets):
                 dataset.restore_state(dstate)
             self._worker_rng.restore_state(state.rng)
-            self._sample_indexes = state.sample_indexes
 
     def verify_worker_config(self, worker_config: WorkerConfig) -> None:
         super().verify_worker_config(worker_config)
@@ -146,17 +124,15 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
         return all(dataset.can_restore_sample() for dataset, _weight in self.dataset_weights)
 
     def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_sample:
-        id, ds_idx, sample_idx = index[:3]
+        id, ds_idx = index[:2]
         assert id == type(self).__name__
-        index = index[3:]
+        index = index[2:]
         assert isinstance(ds_idx, int)
-        with wrap_worker_sample_index_ctx(sample_idx):
-            return add_sample_restore_key(
-                self.dataset_weights[ds_idx][0].restore_sample(index),
-                ds_idx,
-                sample_idx,
-                src=self,
-            )
+        return add_sample_restore_key(
+            self.dataset_weights[ds_idx][0].restore_sample(index),
+            ds_idx,
+            src=self,
+        )
 
     def config(self) -> Dict[str, Any]:
         return {

@@ -25,8 +25,7 @@ from megatron.energon.wrappers.base import (
     BaseSingleWrapperDataset,
     BaseSingleWrapperMergedState,
     BaseSingleWrapperState,
-    wrap_worker_sample_index,
-    wrap_worker_sample_index_ctx,
+    SampleIndex,
 )
 from megatron.energon.wrappers.skip import SkipSample
 
@@ -50,7 +49,7 @@ class MapDataset(BaseSingleWrapperDataset[T_sample, T_sample_out], Generic[T_sam
     map_fn: Callable[[T_sample], Union[T_sample_out, Generator[T_sample_out, None, None]]]
     error_handler: Callable[[Exception, T_sample], None]
     stateless_map_fn: bool
-    _sample_index: List[int]
+    _sample_index: SampleIndex
 
     def __init__(
         self,
@@ -80,23 +79,23 @@ class MapDataset(BaseSingleWrapperDataset[T_sample, T_sample_out], Generic[T_sam
         self.error_handler = error_handler
         self.stateless_map_fn = stateless_map_fn
         self.worker_config = worker_config
-        self._sample_index = [0] * max(self.worker_config.num_workers, 1)
+        self._sample_index = SampleIndex(worker_config, src=self)
 
     def __len__(self):
         return len(self.dataset)
 
     def __iter__(self) -> Iterator[T_sample_out]:
-        worker_index = self.worker_config.rank_worker_id()
-        for sample_idx, sample in wrap_worker_sample_index(
-            self.dataset, self._sample_index, worker_index
-        ):
+        for sample in self.dataset:
             try:
-                mapped_sample = self.map_fn(sample)
+                with self._sample_index.ctx() as sample_idx:
+                    mapped_sample = self.map_fn(sample)
                 if isinstance(mapped_sample, Generator):
                     assert inspect.isgeneratorfunction(self.map_fn)
                     # In case of a generator, additionally store the index of the yielded samples
                     # per input sample
-                    for idx, inner_sample in enumerate(mapped_sample):
+                    for idx, (sample_idx, inner_sample) in enumerate(
+                        self._sample_index.iter_ctx(mapped_sample, sample_idx)
+                    ):
                         yield add_sample_restore_key(
                             inner_sample,
                             sample_idx,
@@ -119,23 +118,25 @@ class MapDataset(BaseSingleWrapperDataset[T_sample, T_sample_out], Generic[T_sam
     def save_state(self) -> MapState:
         return MapState.extend(
             super().save_state(),
-            sample_index=self._sample_index[self.worker_config.rank_worker_id()],
+            sample_index=self._sample_index.save_state(),
         )
 
     def merge_states(self, states: List[MapState]) -> MapMergedState:
         assert all(s is None or isinstance(s, MapState) for s in states)
         return MapMergedState.extend(
             super().merge_states(states),
-            sample_indexes=[0 if state is None else state.sample_index for state in states],
+            sample_indexes=self._sample_index.merge_states(
+                [0 if state is None else state.sample_index for state in states]
+            ),
         )
 
     def restore_state(self, state: Optional[MapMergedState]) -> None:
         super().restore_state(state)
         if state is None:
-            self._sample_index = [0] * max(self.worker_config.num_workers, 1)
+            self._sample_index.restore_state(None)
         else:
             assert isinstance(state, MapMergedState)
-            self._sample_index = state.sample_indexes
+            self._sample_index.restore_state(state.sample_indexes)
 
     def can_restore_sample(self) -> bool:
         return self.stateless_map_fn and self.dataset.can_restore_sample()
@@ -151,12 +152,14 @@ class MapDataset(BaseSingleWrapperDataset[T_sample, T_sample_out], Generic[T_sam
             id, sample_idx = index[:2]
             assert id == type(self).__name__
             index = index[2:]
-        with wrap_worker_sample_index_ctx(sample_idx):
-            inner_sample = self.dataset.restore_sample(index)
-        mapped_sample = self.map_fn(inner_sample)
+        inner_sample = self.dataset.restore_sample(index)
+        with self._sample_index.ctx(sample_idx):
+            mapped_sample = self.map_fn(inner_sample)
         if isinstance(mapped_sample, Generator):
             assert inspect.isgeneratorfunction(self.map_fn)
-            for idx, res_sample in enumerate(mapped_sample):
+            for idx, (sample_idx, res_sample) in enumerate(
+                self._sample_index.iter_ctx(mapped_sample, sample_idx)
+            ):
                 if idx == local_idx:
                     return add_sample_restore_key(res_sample, sample_idx, local_idx, src=self)
             assert (

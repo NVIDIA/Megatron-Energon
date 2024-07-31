@@ -19,15 +19,15 @@ from typing import (
 from torch.utils.data import IterableDataset
 
 from megatron.energon.errors import SYSTEM_EXCEPTIONS, FatalSampleError
-from megatron.energon.flavors.base_dataset import SavableDataset, add_sample_restore_key
+from megatron.energon.flavors.base_dataset import SavableDataset, set_sample_restore_key
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers._log_exception import log_exception
 from megatron.energon.wrappers.base import (
     BaseSingleWrapperDataset,
     BaseSingleWrapperMergedState,
     BaseSingleWrapperState,
-    wrap_worker_sample_index,
-    wrap_worker_sample_index_ctx,
+    SampleIndex,
+    get_sample_restore_key,
 )
 
 T_sample = TypeVar("T_sample")
@@ -57,7 +57,7 @@ class IterMapDataset(
     len_map_fn: Callable[[int], int]
     error_handler: Callable[[Exception, Optional[T_sample]], None]
     stateless_iter_fn: bool
-    _sample_index: List[int]
+    _sample_index: SampleIndex
 
     def __init__(
         self,
@@ -72,10 +72,6 @@ class IterMapDataset(
         """Construct a IterMapDataset.
         For saving and restoring samples, the iter_map_fn must only yield 0 or 1 sample per
         iterated sample.
-
-        TODO: Implement saving/restoring for arbitrary number of yielded samples.
-        Problem is, that this would require the inner dataset to be restored on the previous sample,
-        such that this dataset can skip the already yielded samples.
 
         Args:
             dataset: The input dataset to wrap
@@ -97,45 +93,44 @@ class IterMapDataset(
         self.error_handler = error_handler
         self.stateless_iter_fn = stateless_iter_fn
         self.worker_config = worker_config
-        self._sample_index = [0] * max(self.worker_config.num_workers, 1)
+        self._sample_index = SampleIndex(worker_config, src=self)
 
     def __len__(self):
         return self.len_map_fn(len(self.dataset))
 
     def __iter__(self) -> Iterator[T_sample_out]:
-        worker_index = self.worker_config.rank_worker_id()
         last_sample_wrapper = _LastSampleWrapper(self.dataset)
-        dataset_wrapper = wrap_worker_sample_index(
-            last_sample_wrapper,
-            self._sample_index,
-            worker_index,
-        )
         # The iter_map_fn is stateless. Thus we need to know which inner sample created the
         # outer sample, and the relative outer sample index, so we can restore it.
 
         # This is the sample index within the currently yielded sample
         iter_idx = 0
-        batch_idx = 0
+        sample_idx = 0
+        sample_restore_keys = []
 
         def reset_idx_iter() -> Generator[T_sample, None, None]:
             # Resets the inner sample index
-            nonlocal iter_idx, batch_idx
-            for batch_idx, entry in dataset_wrapper:
+            nonlocal iter_idx, sample_restore_keys
+            for entry in last_sample_wrapper:
                 iter_idx = 0
+                sample_restore_keys.append(get_sample_restore_key(entry) or ())
                 yield entry
 
         ds_iter = iter(reset_idx_iter())
-        # While True will break when the inner dataset is exhausted, but continue on exception
+
+        # While True will break when the inner dataset is exhausted, but may continue on exception
         while True:
             iter_idx = 0
             try:
-                for res_sample in self.iter_map_fn(ds_iter):
-                    yield add_sample_restore_key(
-                        res_sample,
+                for sample_idx, sample in self._sample_index.iter_ctx(self.iter_map_fn(ds_iter)):
+                    yield set_sample_restore_key(
+                        sample,
+                        sample_idx,
                         iter_idx,
-                        batch_idx,
+                        tuple(sample_restore_keys),
                         src=self,
                     )
+                    sample_restore_keys.clear()
                     iter_idx += 1
             except SYSTEM_EXCEPTIONS:
                 raise FatalSampleError.from_sample(last_sample_wrapper.last_sample)
@@ -147,44 +142,62 @@ class IterMapDataset(
     def save_state(self) -> IterMapState:
         return IterMapState.extend(
             super().save_state(),
-            sample_index=self._sample_index[self.worker_config.rank_worker_id()],
+            sample_index=self._sample_index.save_state(),
         )
 
     def merge_states(self, states: List[IterMapState]) -> IterMapMergedState:
         assert all(s is None or isinstance(s, IterMapState) for s in states)
         return IterMapMergedState.extend(
             super().merge_states(states),
-            sample_indexes=[0 if state is None else state.sample_index for state in states],
+            sample_indexes=self._sample_index.merge_states(
+                [0 if state is None else state.sample_index for state in states]
+            ),
         )
 
     def restore_state(self, state: Optional[IterMapMergedState]) -> None:
         super().restore_state(state)
         if state is None:
-            self._sample_index = [0] * max(self.worker_config.num_workers, 1)
+            self._sample_index.restore_state(None)
         else:
             assert isinstance(state, IterMapMergedState)
-            self._sample_index = state.sample_indexes
+            self._sample_index.restore_state(state.sample_indexes)
 
     def can_restore_sample(self) -> bool:
         return self.stateless_iter_fn and self.dataset.can_restore_sample()
 
     def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_sample:
         assert self.stateless_iter_fn
-        id, iter_idx, sample_idx = index[:3]
+        id, sample_idx, iter_idx, sample_restore_keys = index
         assert id == type(self).__name__
-        index = index[3:]
         assert isinstance(iter_idx, int)
-        with wrap_worker_sample_index_ctx(sample_idx):
-            inner_sample = self.dataset.restore_sample(index)
-        # Skip inner yielded samples to get the correct sample
-        for idx, sample in enumerate(self.iter_map_fn(iter([inner_sample]))):
-            if idx == iter_idx:
-                return add_sample_restore_key(
-                    sample, idx, sample_idx, fail_otherwise=True, src=self
-                )
-        raise RuntimeError(
-            "Generator did not yield enough samples, but is marked stateless/deterministic."
+        inner_iter = iter(
+            self.iter_map_fn(
+                (self.dataset.restore_sample(inner_index) for inner_index in sample_restore_keys)
+            )
         )
+        try:
+            # Skip inner yielded samples to get the correct sample
+            for skip_idx in range(iter_idx):
+                with self._sample_index.ctx(sample_idx - iter_idx + skip_idx):
+                    next(inner_iter)
+            # This is the sample to restore
+            with self._sample_index.ctx(sample_idx):
+                sample = next(inner_iter)
+            return set_sample_restore_key(
+                sample,
+                sample_idx,
+                iter_idx,
+                sample_restore_keys,
+                src=self,
+            )
+        except StopIteration:
+            raise RuntimeError(
+                "Generator did not yield enough samples, but is marked stateless/deterministic."
+            )
+        finally:
+            # Properly close if it's a generator
+            if hasattr(inner_iter, "close"):
+                inner_iter.close()
 
     def config(self) -> Dict[str, Any]:
         return {

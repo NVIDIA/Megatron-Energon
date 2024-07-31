@@ -4,13 +4,12 @@
 from dataclasses import dataclass
 from typing import Any, Dict, Generic, Iterator, List, Optional, TypeVar
 
-from megatron.energon.flavors.base_dataset import SavableDataset, add_sample_restore_key
+from megatron.energon.flavors.base_dataset import SavableDataset
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import (
     BaseSingleWrapperDataset,
     BaseSingleWrapperMergedState,
     BaseSingleWrapperState,
-    wrap_worker_sample_index,
 )
 
 T_sample = TypeVar("T_sample")
@@ -19,13 +18,11 @@ T_sample = TypeVar("T_sample")
 @dataclass
 class RepeatState(BaseSingleWrapperState):
     offset: int
-    sample_index: int
 
 
 @dataclass
 class RepeatMergedState(BaseSingleWrapperMergedState):
     offset: List[int]
-    sample_indexes: List[int]
 
 
 class RepeatDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_sample]):
@@ -34,7 +31,6 @@ class RepeatDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_samp
     repeats: Optional[int]
     worker_config: WorkerConfig
     _offset: List[int]
-    _sample_index: List[int]
 
     def __init__(
         self,
@@ -54,7 +50,6 @@ class RepeatDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_samp
         self.repeats = repeats
         self.worker_config = worker_config
         self._offset = [0] * max(self.worker_config.num_workers, 1)
-        self._sample_index = [0] * max(self.worker_config.num_workers, 1)
 
     def __len__(self):
         if self.repeats is None:
@@ -66,14 +61,8 @@ class RepeatDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_samp
         if self.repeats is None:
             while True:
                 self._offset[worker_idx] += 1
-                for sample_idx, sample in wrap_worker_sample_index(
-                    self.dataset, self._sample_index, worker_idx
-                ):
-                    yield add_sample_restore_key(
-                        sample,
-                        sample_idx,
-                        src=self,
-                    )
+                for sample in self.dataset:
+                    yield sample
                 if self.worker_config.should_log(level=2):
                     self.worker_config.worker_log(
                         {
@@ -86,14 +75,8 @@ class RepeatDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_samp
         else:
             for offset in range(self._offset[worker_idx], self.repeats):
                 self._offset[worker_idx] = offset + 1
-                for sample_idx, sample in wrap_worker_sample_index(
-                    self.dataset, self._sample_index, worker_idx
-                ):
-                    yield add_sample_restore_key(
-                        sample,
-                        sample_idx,
-                        src=self,
-                    )
+                for sample in self.dataset:
+                    yield sample
                 if self.worker_config.should_log(level=2):
                     self.worker_config.worker_log(
                         {
@@ -109,7 +92,6 @@ class RepeatDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_samp
         return RepeatState.extend(
             super().save_state(),
             offset=self._offset[self.worker_config.rank_worker_id()],
-            sample_index=self._sample_index[self.worker_config.rank_worker_id()],
         )
 
     def merge_states(self, states: List[RepeatState]) -> RepeatMergedState:
@@ -117,18 +99,15 @@ class RepeatDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_samp
         return RepeatMergedState.extend(
             super().merge_states(states),
             offset=[0 if state is None else state.offset for state in states],
-            sample_indexes=[0 if state is None else state.sample_index for state in states],
         )
 
     def restore_state(self, state: Optional[RepeatMergedState]) -> None:
         super().restore_state(state)
         if state is None:
             self._offset = [0] * max(self.worker_config.num_workers, 1)
-            self._sample_index = [0] * max(self.worker_config.num_workers, 1)
         else:
             assert isinstance(state, RepeatMergedState)
             self._offset = state.offset
-            self._sample_index = state.sample_indexes
 
     def config(self) -> Dict[str, Any]:
         return {

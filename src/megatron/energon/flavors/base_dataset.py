@@ -316,3 +316,20 @@ def add_sample_restore_key(
             "Did not yield a sample with a restore key, but is marked " "stateless/deterministic."
         )
     return sample
+
+
+def set_sample_restore_key(
+    sample: T_sample, *key: Union[int, str], src: Any, fail_otherwise: bool = False
+) -> T_sample:
+    """Sets the restore key for a sample. The sample must be a valid `Sample` or dict containing
+    __restore_key__, which is a tuple of keys that can be used to restore the inner sample.
+    This restore key is prepended with the `key`."""
+    if isinstance(sample, Sample):
+        sample.__restore_key__ = (type(src).__name__, *key)
+    elif isinstance(sample, dict) and "__restore_key__" in sample:
+        sample["__restore_key__"] = (type(src).__name__, *key)
+    elif fail_otherwise:
+        raise RuntimeError(
+            "Did not yield a sample with a restore key, but is marked " "stateless/deterministic."
+        )
+    return sample

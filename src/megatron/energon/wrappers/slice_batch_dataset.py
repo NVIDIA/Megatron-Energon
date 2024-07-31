@@ -18,16 +18,19 @@ from typing import (
 )
 
 from megatron.energon.errors import SYSTEM_EXCEPTIONS, FatalSampleError
-from megatron.energon.flavors.base_dataset import SavableDataset, add_sample_restore_key
+from megatron.energon.flavors.base_dataset import (
+    SavableDataset,
+    add_sample_restore_key,
+    set_sample_restore_key,
+)
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers._log_exception import log_exception
 from megatron.energon.wrappers.base import (
     BaseSingleWrapperDataset,
     BaseSingleWrapperMergedState,
     BaseSingleWrapperState,
+    SampleIndex,
     get_sample_restore_key,
-    wrap_worker_sample_index,
-    wrap_worker_sample_index_ctx,
 )
 from megatron.energon.wrappers.buffer import (
     SampleBufferMergedState,
@@ -43,13 +46,15 @@ T_batch_sample = TypeVar("T_batch_sample", covariant=True)
 @dataclass
 class SliceBatchState(BaseSingleWrapperState):
     buffer: SampleBufferState
-    sample_index: int
+    slicer_index: int
+    batcher_index: int
 
 
 @dataclass
 class SliceBatchMergedState(BaseSingleWrapperMergedState):
     buffer: SampleBufferMergedState
-    sample_indexes: List[int]
+    slicer_index: List[int]
+    batcher_index: List[int]
 
 
 class SliceBatchDataset(
@@ -65,7 +70,7 @@ class SliceBatchDataset(
     drop_last: bool
     error_handler: Callable[[Exception, List[T_batch_sample]], None]
     worker_config: WorkerConfig
-    _sample_index: List[int]
+    _sample_index: SampleIndex
     #: The buffer for collecting samples before slicing
     _collecting_buffer: SavableSampleBuffer
 
@@ -104,6 +109,8 @@ class SliceBatchDataset(
         self.error_handler = error_handler
         self.worker_config = worker_config
         self._collecting_buffer = SavableSampleBuffer(dataset, worker_config)
+        self._slicer_sample_index = SampleIndex(worker_config, src=self)
+        self._batcher_sample_index = SampleIndex(worker_config, src=self)
 
     def __len__(self):
         n_samples = len(self.dataset)
@@ -124,10 +131,8 @@ class SliceBatchDataset(
         )
 
     def __iter__(self) -> Iterator[T_batch]:
-        worker_index = self.worker_config.rank_worker_id()
-
         # The source dataset
-        src_iter = iter(wrap_worker_sample_index(self.dataset, self._sample_index, worker_index))
+        src_iter = iter(self.dataset)
 
         def _fill_buffer(ensure_full: bool = False):
             """Fill the collecting buffer with samples from the source dataset."""
@@ -137,24 +142,26 @@ class SliceBatchDataset(
                 step_samples = avg_samples_per_slice
             while len(self._collecting_buffer) < self.buffer_size and step_samples > 0:
                 try:
-                    sample_idx, sample = next(src_iter)
+                    sample = next(src_iter)
                 except StopIteration:
                     return False
-                self._collecting_buffer.append(sample_idx, sample)
+                self._collecting_buffer.append(sample)
                 step_samples -= 1
             return True
 
         # The active slicer
         slicer = None
+        slice_idx = 0
 
         def next_slicer():
             """Create a new slicer from the collecting buffer."""
-            nonlocal slicer
+            nonlocal slicer, slice_idx
             assert slicer is None
             if len(self._collecting_buffer) > 0:
                 samples = list(self._collecting_buffer)
                 try:
-                    slicer = iter(self.slicer(samples))
+                    with self._slicer_sample_index.ctx() as slice_idx:
+                        slicer = iter(self.slicer(samples))
                 except SkipSample:
                     slicer = iter([])
                 except SYSTEM_EXCEPTIONS:
@@ -173,7 +180,8 @@ class SliceBatchDataset(
             nonlocal cur_num_slices, avg_samples_per_slice, slicer
             assert slicer is not None
             try:
-                slice = next(slicer)
+                with self._slicer_sample_index.ctx(slice_idx):
+                    slice = next(slicer)
             except (StopIteration, SkipSample):
                 # Update the running mean for better loading speed
                 avg_samples_per_slice = (
@@ -188,19 +196,28 @@ class SliceBatchDataset(
                 self.error_handler(e, slice)
             cur_num_slices += 1
             try:
-                batch_restore_key = tuple(get_sample_restore_key(sample) or () for sample in slice)
-                batch_sample = self.batcher(slice)
-                if isinstance(batch_sample, Generator):
-                    assert inspect.isgeneratorfunction(self.batcher)
-                    for batch_sub_idx, inner_batch_sample in enumerate(batch_sample):
-                        yield add_sample_restore_key(
-                            inner_batch_sample,
+                with self._batcher_sample_index.ctx() as batch_idx:
+                    batch_restore_key = tuple(
+                        get_sample_restore_key(sample) or () for sample in slice
+                    )
+                    batch_sample = self.batcher(slice)
+                    if isinstance(batch_sample, Generator):
+                        assert inspect.isgeneratorfunction(self.batcher)
+                        for batch_sub_idx, inner_batch_sample in enumerate(batch_sample):
+                            yield set_sample_restore_key(
+                                inner_batch_sample,
+                                batch_idx,
+                                batch_restore_key,
+                                batch_sub_idx,
+                                src=self,
+                            )
+                    else:
+                        yield set_sample_restore_key(
+                            batch_sample,
+                            batch_idx,
                             batch_restore_key,
-                            batch_sub_idx,
                             src=self,
                         )
-                else:
-                    yield add_sample_restore_key(batch_sample, batch_restore_key, src=self)
             except SkipSample:
                 pass
             except SYSTEM_EXCEPTIONS:
@@ -237,7 +254,8 @@ class SliceBatchDataset(
         return SliceBatchState.extend(
             super().save_state(),
             buffer=self._collecting_buffer.save_state(),
-            sample_index=self._sample_index[self.worker_config.rank_worker_id()],
+            batcher_index=self._batcher_sample_index.save_state(),
+            slicer_index=self._slicer_sample_index.save_state(),
         )
 
     def merge_states(self, states: List[SliceBatchState]) -> SliceBatchMergedState:
@@ -247,18 +265,25 @@ class SliceBatchDataset(
             buffer=self._collecting_buffer.merge_states(
                 [None if s is None else s.buffer for s in states]
             ),
-            sample_indexes=[0 if state is None else state.sample_index for state in states],
+            batcher_index=self._batcher_sample_index.merge_states(
+                [0 if state is None else state.batcher_index for state in states]
+            ),
+            slicer_index=self._slicer_sample_index.merge_states(
+                [0 if state is None else state.slicer_index for state in states]
+            ),
         )
 
     def restore_state(self, state: Optional[SliceBatchMergedState]) -> None:
         super().restore_state(state)
         if state is None:
             self._collecting_buffer.restore_state(None)
-            self._sample_index = [0] * max(self.worker_config.num_workers, 1)
+            self._slicer_sample_index.restore_state(None)
+            self._batcher_sample_index.restore_state(None)
         else:
             assert isinstance(state, SliceBatchMergedState)
             self._collecting_buffer.restore_state(state.buffer)
-            self._sample_index = state.sample_indexes
+            self._slicer_sample_index.restore_state(state.slicer_index)
+            self._batcher_sample_index.restore_state(state.batcher_index)
 
     def can_restore_sample(self) -> bool:
         # Cannot really verify if the returned elements contain a __restore_key__.
@@ -269,31 +294,28 @@ class SliceBatchDataset(
         # We need to store multiple indices to restore a batch.
         assert self.batcher_stateless
         if inspect.isgeneratorfunction(self.batcher):
-            id, sample_idx, batch_sub_idx = index[:3]
+            id, batch_idx, batch_restore_key, batch_sub_idx = index
             assert id == type(self).__name__
-            index = index[3:]
         else:
-            id, sample_idx = index[:2]
+            id, batch_idx, batch_restore_key = index
             assert id == type(self).__name__
-            index = index[2:]
-        batch = []
-        for sample_offset, inner_idx in enumerate(index):
-            with wrap_worker_sample_index_ctx(sample_idx + sample_offset):
-                batch.append(self.dataset.restore_sample(inner_idx))
-        batch_sample = self.batcher(batch)
-        if isinstance(batch_sample, Generator):
-            assert inspect.isgeneratorfunction(self.batcher)
-            for cur_batch_sub_idx, item in enumerate(batch_sample):
-                if cur_batch_sub_idx == batch_sub_idx:
-                    return add_sample_restore_key(
-                        item,
-                        sample_idx,
-                        batch_sub_idx,
-                        src=self,
-                    )
-            assert False, f"Batch sub-index {batch_sub_idx} not found in batch"
-        else:
-            return add_sample_restore_key(batch_sample, sample_idx, src=self)
+        batch = [self.dataset.restore_sample(inner_idx) for inner_idx in batch_restore_key]
+        with self._batcher_sample_index.ctx(batch_idx):
+            batch_sample = self.batcher(batch)
+            if isinstance(batch_sample, Generator):
+                assert inspect.isgeneratorfunction(self.batcher)
+                for cur_batch_sub_idx, item in enumerate(batch_sample):
+                    if cur_batch_sub_idx == batch_sub_idx:
+                        return set_sample_restore_key(
+                            item,
+                            batch_idx,
+                            batch_restore_key,
+                            batch_sub_idx,
+                            src=self,
+                        )
+                assert False, f"Batch sub-index {batch_sub_idx} not found in batch"
+            else:
+                return set_sample_restore_key(batch_sample, batch_idx, batch_restore_key, src=self)
 
     def config(self) -> Dict[str, Any]:
         return {

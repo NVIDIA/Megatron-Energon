@@ -4,16 +4,13 @@
 from dataclasses import dataclass
 from typing import Any, Dict, Generator, Generic, Iterator, List, Optional, Tuple, TypeVar, Union
 
-from megatron.energon.flavors.base_dataset import Sample, SavableDataset, add_sample_restore_key
-from megatron.energon.flavors.crude import CrudeSample
+from megatron.energon.flavors.base_dataset import Sample, SavableDataset
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import (
     BaseSingleWrapperDataset,
     BaseSingleWrapperMergedState,
     BaseSingleWrapperState,
     get_sample_restore_key,
-    wrap_worker_sample_index,
-    wrap_worker_sample_index_ctx,
 )
 
 T_sample = TypeVar("T_sample")
@@ -65,23 +62,14 @@ class SavableSampleBuffer(BaseSingleWrapperDataset[T_sample, T_sample], Generic[
                 self._buffer[self._rank_id].append(self.restore_sample(restore_key))
         assert len(self._buffer[self._rank_id]) == len(self._restore_keys[self._rank_id])
 
-    def append(self, sample_idx: int, sample: T_sample) -> T_sample:
-        add_sample_restore_key(
-            sample,
-            sample_idx,
-            src=self,
-        )
+    def append(self, sample: T_sample) -> T_sample:
         self._buffer[self._rank_id].append(sample)
         self._restore_keys[self._rank_id].append(get_sample_restore_key(sample) or ())
         return sample
 
-    def append_iter(self, sample_index: List[int]) -> Generator[T_sample, None, None]:
-        for sample_idx, sample in wrap_worker_sample_index(
-            self.dataset,
-            sample_index,
-            self.worker_config.rank_worker_id(),
-        ):
-            yield self.append(sample_idx, sample)
+    def append_iter(self) -> Generator[T_sample, None, None]:
+        for sample in self.dataset:
+            yield self.append(sample)
 
     def pop(self, index: int) -> T_sample:
         self._restore_keys[self._rank_id].pop(index)
@@ -97,9 +85,9 @@ class SavableSampleBuffer(BaseSingleWrapperDataset[T_sample, T_sample], Generic[
         return len(self._restore_keys[self._rank_id])
 
     def save_state(self) -> SampleBufferState:
-        assert all(
-            isinstance(el, (Sample, CrudeSample)) for el in self._buffer[self._rank_id]
-        )
+        from megatron.energon.flavors.crude import CrudeSample
+
+        assert all(isinstance(el, (Sample, CrudeSample)) for el in self._buffer[self._rank_id])
         assert (
             self.dataset.can_restore_sample()
         ), "Cannot restore sample from inner dataset, cannot save buffer state efficiently."
@@ -122,9 +110,7 @@ class SavableSampleBuffer(BaseSingleWrapperDataset[T_sample, T_sample], Generic[
         super().restore_state(state)
         if state is None:
             self._buffer = [[] for _ in range(max(self.worker_config.num_workers, 1))]
-            self._restore_keys = [
-                [] for _ in range(max(self.worker_config.num_workers, 1))
-            ]
+            self._restore_keys = [[] for _ in range(max(self.worker_config.num_workers, 1))]
             self._restore_pending = False
         else:
             assert isinstance(state, SampleBufferMergedState)
@@ -144,20 +130,12 @@ class SavableSampleBuffer(BaseSingleWrapperDataset[T_sample, T_sample], Generic[
         return tuple(restore_keys), buffer
 
     def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_sample:
-        id, sample_idx = index[:2]
-        assert id == type(self).__name__
-        index = index[2:]
-        with wrap_worker_sample_index_ctx(sample_idx):
-            return add_sample_restore_key(
-                self.dataset.restore_sample(index),
-                sample_idx,
-                src=self,
-            )
+        return self.dataset.restore_sample(index)
 
     def clear(self) -> None:
         self._buffer.clear()
         self._restore_keys.clear()
-    
+
     def config(self) -> Dict[str, Any]:
         return {
             "type": type(self).__qualname__,

@@ -25,14 +25,12 @@ T_sample = TypeVar("T_sample")
 class ShuffleBufferState(BaseSingleWrapperState):
     buffer: SampleBufferState
     rng: WorkerRngState
-    sample_index: int
 
 
 @dataclass
 class ShuffleBufferMergedState(BaseSingleWrapperMergedState):
     buffer: SampleBufferMergedState
     rng: WorkerRngMergedState
-    sample_indexes: List[int]
 
 
 class ShuffleBufferDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_sample]):
@@ -43,7 +41,6 @@ class ShuffleBufferDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic
     _worker_rng: WorkerRng
 
     _active_buffer: SavableSampleBuffer[T_sample]
-    _sample_index: List[int]
 
     def __init__(
         self,
@@ -58,14 +55,13 @@ class ShuffleBufferDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic
         self.worker_config = worker_config
         self._worker_rng = WorkerRng(self.worker_config)
         self._active_buffer = SavableSampleBuffer(dataset, worker_config)
-        self._sample_index = [0] * max(self.worker_config.num_workers, 1)
 
     def __len__(self) -> int:
         return len(self.dataset)
 
     def __iter__(self) -> Iterator[T_sample]:
         self._active_buffer.worker_start()
-        it = iter(self._active_buffer.append_iter(self._sample_index))
+        it = iter(self._active_buffer.append_iter())
         while True:
             if len(self._active_buffer) >= self.size:
                 pop_idx = self._worker_rng.randbelow(len(self._active_buffer))
@@ -84,7 +80,6 @@ class ShuffleBufferDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic
             super().save_state(),
             rng=self._worker_rng.save_state(),
             buffer=self._active_buffer.save_state(),
-            sample_index=self._sample_index[self.worker_config.rank_worker_id()],
         )
 
     def merge_states(self, states: List[Optional[ShuffleBufferState]]) -> ShuffleBufferMergedState:
@@ -95,7 +90,6 @@ class ShuffleBufferDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic
             buffer=self._active_buffer.merge_states(
                 [None if s is None else s.buffer for s in states]
             ),
-            sample_indexes=[0 if state is None else state.sample_index for state in states],
         )
 
     def restore_state(self, state: Optional[ShuffleBufferMergedState]) -> None:
@@ -103,12 +97,10 @@ class ShuffleBufferDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic
         if state is None:
             self._active_buffer.restore_state(None)
             self._worker_rng.restore_state(None)
-            self._sample_index = [0] * max(self.worker_config.num_workers, 1)
         else:
             assert isinstance(state, ShuffleBufferMergedState)
             self._active_buffer.restore_state(state.buffer)
             self._worker_rng.restore_state(state.rng)
-            self._sample_index = state.sample_indexes
 
     def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_sample:
         return self._active_buffer.restore_sample(index)

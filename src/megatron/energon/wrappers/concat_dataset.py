@@ -11,11 +11,7 @@ from megatron.energon.flavors.base_dataset import (
     add_sample_restore_key,
 )
 from megatron.energon.worker import WorkerConfig
-from megatron.energon.wrappers.base import (
-    BaseWrapperDataset,
-    wrap_worker_sample_index,
-    wrap_worker_sample_index_ctx,
-)
+from megatron.energon.wrappers.base import BaseWrapperDataset
 
 T_sample = TypeVar("T_sample")
 
@@ -44,8 +40,6 @@ class ConcatDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
     """
 
     datasets: Tuple[SavableDataset[T_sample], ...]
-    # Note that this is inversed: [dataset_index][worker_index]
-    _sample_indexes: List[List[int]]
 
     def __init__(
         self,
@@ -57,34 +51,22 @@ class ConcatDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
         self.worker_config = worker_config
         self.datasets = datasets
         assert len(self) >= 0, "Datasets must be finite."
-        self._sample_indexes = [
-            [0] * max(self.worker_config.num_workers, 1) for _ in range(len(datasets))
-        ]
 
     def __len__(self):
         return sum(len(dataset) for dataset in self.datasets)
 
     def __iter__(self) -> Iterator[T_sample]:
-        worker_idx = self.worker_config.rank_worker_id()
         for ds_idx, dataset in enumerate(self.datasets):
-            for sample_idx, sample in wrap_worker_sample_index(
-                dataset,
-                self._sample_indexes[ds_idx],
-                worker_idx,
-            ):
+            for sample in dataset:
                 yield add_sample_restore_key(
                     sample,
                     ds_idx,
-                    sample_idx,
                     src=self,
                 )
 
     def save_state(self) -> ConcatState:
         return ConcatState(
             dataset_states=[dataset.save_state() for dataset in self.datasets],
-            sample_indexes=[
-                idxs[self.worker_config.rank_worker_id()] for idxs in self._sample_indexes
-            ],
         )
 
     def merge_states(self, states: List[ConcatState]) -> ConcatMergedState:
@@ -97,44 +79,31 @@ class ConcatDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
                 )
                 for ds_idx, dataset in enumerate(self.datasets)
             ],
-            sample_indexes=[
-                [
-                    0 if states[s_idx] is None else states[s_idx].dataset_states[ds_idx]
-                    for s_idx in range(len(states))
-                ]
-                for ds_idx in range(len(self.datasets))
-            ],
         )
 
     def restore_state(self, state: Optional[ConcatMergedState]) -> None:
         if state is None:
             for dataset in self.datasets:
                 dataset.restore_state(None)
-            self._sample_indexes = [
-                [0] * len(self.datasets) for _ in range(max(self.worker_config.num_workers, 1))
-            ]
         else:
             assert isinstance(state, ConcatMergedState)
             assert len(self.datasets) == len(state.dataset_states)
             for dataset, dstate in zip(self.datasets, state.dataset_states):
                 dataset.restore_state(dstate)
-            self._sample_indexes = state.sample_indexes
 
     def can_restore_sample(self) -> bool:
         return all(dataset.can_restore_sample() for dataset in self.datasets)
 
     def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_sample:
-        id, ds_idx, sample_idx = index[:3]
+        id, ds_idx = index[:2]
         assert id == type(self).__name__
-        index = index[3:]
+        index = index[2:]
         assert isinstance(ds_idx, int)
-        with wrap_worker_sample_index_ctx(sample_idx):
-            return add_sample_restore_key(
-                self.datasets[ds_idx].restore_sample(index),
-                ds_idx,
-                sample_idx,
-                src=self,
-            )
+        return add_sample_restore_key(
+            self.datasets[ds_idx].restore_sample(index),
+            ds_idx,
+            src=self,
+        )
 
     def verify_worker_config(self, worker_config: WorkerConfig) -> None:
         super().verify_worker_config(worker_config)

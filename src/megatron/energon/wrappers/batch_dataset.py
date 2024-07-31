@@ -25,8 +25,7 @@ from megatron.energon.wrappers.base import (
     BaseSingleWrapperDataset,
     BaseSingleWrapperMergedState,
     BaseSingleWrapperState,
-    wrap_worker_sample_index,
-    wrap_worker_sample_index_ctx,
+    SampleIndex,
 )
 from megatron.energon.wrappers.skip import SkipSample
 
@@ -54,7 +53,7 @@ class BatchDataset(
     drop_last: bool
     error_handler: Callable[[Exception, List[T_batch_sample]], None]
     worker_config: WorkerConfig
-    _sample_index: List[int]
+    _sample_index: SampleIndex
 
     def __init__(
         self,
@@ -88,7 +87,7 @@ class BatchDataset(
         self.drop_last = drop_last
         self.error_handler = error_handler
         self.worker_config = worker_config
-        self._sample_index = [0] * max(self.worker_config.num_workers, 1)
+        self._sample_index = SampleIndex(worker_config, src=self)
 
     def __len__(self):
         n_samples = len(self.dataset)
@@ -110,23 +109,24 @@ class BatchDataset(
 
     def __iter__(self) -> Iterator[T_batch]:
         batch: List[T_batch_sample] = []
-        worker_index = self.worker_config.rank_worker_id()
-        batch_sample_idx = 0
 
         def flush():
             try:
-                batch_sample = self.batcher(batch)
+                with self._sample_index.ctx() as sample_idx:
+                    batch_sample = self.batcher(batch)
                 if isinstance(batch_sample, Generator):
                     assert inspect.isgeneratorfunction(self.batcher)
-                    for batch_sub_idx, inner_batch_sample in enumerate(batch_sample):
+                    for batch_sub_idx, (sample_idx, inner_batch_sample) in enumerate(
+                        self._sample_index.iter_ctx(batch_sample, sample_idx)
+                    ):
                         yield add_sample_restore_key(
                             inner_batch_sample,
-                            batch_sample_idx,
+                            sample_idx,
                             batch_sub_idx,
                             src=self,
                         )
                 else:
-                    add_sample_restore_key(batch_sample, batch_sample_idx, src=self)
+                    add_sample_restore_key(batch_sample, sample_idx, src=self)
                     yield batch_sample
             except SkipSample:
                 pass
@@ -135,11 +135,7 @@ class BatchDataset(
             except Exception as e:
                 self.error_handler(e, batch)
 
-        for sample_idx, sample in wrap_worker_sample_index(
-            self.dataset, self._sample_index, worker_index
-        ):
-            if len(batch) == 0:
-                batch_sample_idx = sample_idx
+        for sample in self.dataset:
             batch.append(sample)
             if len(batch) == self.batch_size:
                 yield from flush()
@@ -150,23 +146,25 @@ class BatchDataset(
     def save_state(self) -> BatchState:
         return BatchState.extend(
             super().save_state(),
-            sample_index=self._sample_index[self.worker_config.rank_worker_id()],
+            sample_index=self._sample_index.save_state(),
         )
 
     def merge_states(self, states: List[BatchState]) -> BatchMergedState:
         assert all(s is None or isinstance(s, BatchState) for s in states)
         return BatchMergedState.extend(
             super().merge_states(states),
-            sample_indexes=[0 if state is None else state.sample_index for state in states],
+            sample_indexes=self._sample_index.merge_states(
+                [0 if state is None else state.sample_index for state in states]
+            ),
         )
 
     def restore_state(self, state: Optional[BatchMergedState]) -> None:
         super().restore_state(state)
         if state is None:
-            self._sample_index = [0] * max(self.worker_config.num_workers, 1)
+            self._sample_index.restore_state(None)
         else:
             assert isinstance(state, BatchMergedState)
-            self._sample_index = state.sample_indexes
+            self._sample_index.restore_state(state.sample_indexes)
 
     def can_restore_sample(self) -> bool:
         # Cannot really verify if the returned elements contain a __restore_key__.
@@ -184,17 +182,17 @@ class BatchDataset(
             id, sample_idx = index[:2]
             assert id == type(self).__name__
             index = index[2:]
-        batch = []
-        for sample_offset, inner_idx in enumerate(index):
-            with wrap_worker_sample_index_ctx(sample_idx + sample_offset):
-                batch.append(self.dataset.restore_sample(inner_idx))
-        batch_sample = self.batcher(batch)
+        batch = [self.dataset.restore_sample(inner_idx) for inner_idx in index]
+        with self._sample_index.ctx(sample_idx):
+            batch_sample = self.batcher(batch)
         if isinstance(batch_sample, Generator):
             assert inspect.isgeneratorfunction(self.batcher)
-            for cur_batch_sub_idx, item in enumerate(batch_sample):
+            for cur_batch_sub_idx, (sample_idx, inner_batch_sample) in enumerate(
+                self._sample_index.iter_ctx(batch_sample, sample_idx)
+            ):
                 if cur_batch_sub_idx == batch_sub_idx:
                     return add_sample_restore_key(
-                        item,
+                        inner_batch_sample,
                         sample_idx,
                         batch_sub_idx,
                         src=self,

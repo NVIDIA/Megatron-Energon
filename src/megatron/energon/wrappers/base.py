@@ -3,7 +3,7 @@
 
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Generic, Iterable, List, Optional, Tuple, TypeVar, Union
+from typing import Any, Generator, Generic, Iterable, List, Optional, Tuple, TypeVar, Union
 
 from megatron.energon.flavors.base_dataset import MergedState, Sample, SavableDataset, State
 from megatron.energon.worker import WorkerConfig
@@ -92,38 +92,76 @@ class BaseSingleWrapperDataset(
         self.dataset.verify_worker_config(worker_config)
 
 
-def wrap_worker_sample_index(
-    src: Iterable[T], index_src: List[int], index_idx: int
-) -> Iterable[Tuple[int, T]]:
-    """
-    Wraps the given iterable to push and pop the sample index for the given worker config.
-    """
-    WorkerConfig.active_worker_config.worker_push_sample_index(index_src[index_idx])
-    index_active = True
-    try:
-        for sample in src:
-            WorkerConfig.active_worker_config.worker_pop_sample_index()
-            index_active = False
-            sample_idx = index_src[index_idx]
-            index_src[index_idx] += 1
-            yield sample_idx, sample
-            WorkerConfig.active_worker_config.worker_push_sample_index(index_src[index_idx])
-            index_active = True
-    finally:
-        if index_active:
-            WorkerConfig.active_worker_config.worker_pop_sample_index()
+class SampleIndex:
+    """A simple class to hold the sample index for each worker."""
 
+    worker_config: WorkerConfig
+    _sample_index: List[int]
+    __rank: Optional[int] = None
 
-@contextmanager
-def wrap_worker_sample_index_ctx(sample_idx: int):
-    """
-    Wraps the given iterable to push and pop the sample index for the given worker config.
-    """
-    WorkerConfig.active_worker_config.worker_push_sample_index(sample_idx)
-    try:
-        yield
-    finally:
-        WorkerConfig.active_worker_config.worker_pop_sample_index()
+    actives = 0
+
+    def __init__(self, worker_config: WorkerConfig, *, src: Any) -> None:
+        self.worker_config = worker_config
+        self._sample_index = [0] * max(self.worker_config.num_workers, 1)
+        self.src = src
+
+    @property
+    def _rank(self) -> int:
+        if self.__rank is None:
+            self.__rank = self.worker_config.rank_worker_id()
+        return self.__rank
+
+    def get_next(self) -> int:
+        res = self._sample_index[self._rank]
+        self._sample_index[self._rank] += 1
+        return res
+
+    @contextmanager
+    def ctx(self, sample_idx: Optional[int] = None):
+        if sample_idx is None:
+            sample_idx = self.get_next()
+        WorkerConfig.active_worker_config.worker_push_sample_index(sample_idx)
+        # print("  " * SampleIndex.actives + f"Activated from {type(self.src).__name__}({id(self.src)}) {sample_idx} -> {WorkerConfig.active_worker_config._sample_index_stack}")
+        SampleIndex.actives += 1
+        try:
+            yield sample_idx
+        finally:
+            popped = WorkerConfig.active_worker_config.worker_pop_sample_index()
+            SampleIndex.actives -= 1
+            # print("  " * SampleIndex.actives + f"Deactivate from {type(self.src).__name__}({id(self.src)}) {sample_idx} -> {WorkerConfig.active_worker_config._sample_index_stack}")
+            assert popped == sample_idx, f"Expected {sample_idx}, got {popped}"
+
+    def iter_ctx(
+        self,
+        it: Iterable[T_sample],
+        sample_idx: Optional[int] = None,
+    ) -> Generator[Tuple[int, T_sample], None, None]:
+        it = iter(it)
+        try:
+            while True:
+                try:
+                    with self.ctx(sample_idx) as res_sample_idx:
+                        x = next(it)
+                    yield res_sample_idx, x
+                except StopIteration:
+                    break
+        finally:
+            if hasattr(it, "close"):
+                it.close()
+
+    def save_state(self) -> int:
+        return self._sample_index[self._rank]
+
+    def merge_states(self, states: List[int]) -> List[int]:
+        return states
+
+    def restore_state(self, state: Optional[List[int]]) -> None:
+        if state is None:
+            self._sample_index = [0] * max(self.worker_config.num_workers, 1)
+        else:
+            assert len(state) == len(self._sample_index)
+            self._sample_index = state
 
 
 def get_sample_restore_key(sample: Any) -> Optional[Union[str, int]]:
