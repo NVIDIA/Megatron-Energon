@@ -899,8 +899,8 @@ class TestDataset(unittest.TestCase):
                 # print("si stack:", WorkerConfig._sample_index_stack)
                 return ExtendedCaptioningSample.extend(
                     sample,
-                    batch_index=self.get_current_batch_index(),
-                    sample_index=self.get_current_sample_index(),
+                    batch_index=self.current_batch_index,
+                    sample_index=self.current_sample_index,
                     rand_num=random.randint(0, 1000),
                 )
 
@@ -1078,7 +1078,7 @@ class TestDataset(unittest.TestCase):
             def __init__(self):
                 super().__init__(raw_batch_type=CaptioningBatch)
 
-            def batch_slicer(self, samples: List) -> List[List]:
+            def slice_batch(self, samples: List) -> List[List]:
                 assert len(samples) == 21
                 return samples[:1], samples[1 : 1 + 4], samples[1 + 4 : 1 + 4 + 16]
 
@@ -1110,6 +1110,7 @@ class TestDataset(unittest.TestCase):
 
         print([batch.__key__ for batch in samples])
         print([batch.__restore_key__ for batch in samples])
+        print([len(batch.__key__) for batch in samples])
         assert [len(batch.__key__) for batch in samples] == [1, 4, 16, 1, 4, 16]
 
         restored_sample_1 = loader.restore_sample(samples[1].__restore_key__)

@@ -135,7 +135,7 @@ def stateless(
             nonlocal worker_seed
             if worker_seed is None:
                 worker_seed = WorkerConfig.active_worker_config.worker_seed()
-            seed = hash((worker_seed, self.get_current_sample_index()))
+            seed = hash((worker_seed, self.current_sample_index))
             set_global_seeds((seed & (seed >> 32)) & 0xFFFFFFFF)
             return fn(self, *args, **kwargs)
 
@@ -458,7 +458,8 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             dataset = LogSampleDataset(dataset, mode="val", worker_config=worker_config)
         return dataset
 
-    def get_current_batch_index(self) -> int:
+    @property
+    def current_batch_index(self) -> int:
         """Returns the current index for the next batch yielded from the current worker. Each batch
         on the current rank will get a strictly increasing unique number. Counting happens on each
         rank separately (i.e. each rank will get the same numbers for same batch index)."""
@@ -467,7 +468,8 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         ), "The batch_index can only be fetched within the worker, and to be usable, you must use the get_(savable_)loader methods provided from the package."
         return WorkerConfig.active_worker_config.active_worker_batch_index
 
-    def get_current_sample_index(self) -> int:
+    @property
+    def current_sample_index(self) -> int:
         """Returns the current index for the next sample yielded from the current routine (e.g.
         for `encode_sample`, `batch`, or `encode_batch`). Each routine will get a number
         representing the number of calls to that function. Across workers, this number will be
