@@ -13,6 +13,11 @@ which gets the samples of a batch and returns a new list of multiple batches. In
 never more than {py:func}`batch_size <megatron.energon.get_train_dataset>` samples are kept, so
 after each yielded batch-slice, new samples will be fetched from the inner dataset to avoid lag.
 
+It is important, to mark custom functions like `encode_sample` as `@stateless` to allow saving
+samples for slicing. If augmentations happen, it should be marked with
+`@stateless(restore_seeds=True)`, to deterministically set the seeds based on the
+`TaskEncoder.current_sample_index`.
+
 Example for padding for a large language model extending the example from the [Task Encoders](task_encoders) section:
 
 ```python
@@ -22,6 +27,12 @@ class PackingCaptioningTaskEncoder(CaptioningTaskEncoder):
     Set the batch_size of the get_(train|val)_dataset to an accordingly large number to get a
     properly sized input samples buffer with some choice.
     """
+
+    @stateless(restore_seeds=True)
+    def encode_sample(self, ...):
+        # Added `stateless` decorator to allow saving samples for slicing. Will set the seed
+        # deterministically based on the self.current_sample_index.
+        ...
 
     def slice_batch(self, samples: List[CaptioningSample]) -> List[List[CaptioningSample]]:
         # Do something intelligent here, e.g. sort by caption length and concat where possible.
