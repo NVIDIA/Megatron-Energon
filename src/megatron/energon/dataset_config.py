@@ -17,17 +17,17 @@ MAIN_FOLDER_NAME = ".nv-meta"
 
 
 def load_config(
-    path: EPath,
+    path: Union[EPath, Dict[str, Any]],
     *,
     default_type: Optional[Type[T]] = None,
     strict: bool = True,
     default_kwargs: Optional[Dict[str, Any]] = None,
 ) -> T:
     """
-    Loads a config from a file.
+    Loads a config from a file or directly from a dictionary.
 
     Args:
-        path: Path to the config to load
+        path: Path to the config to load or a dictionary containing the config.
         default_type: If set, this is the type to use if no type is specified in the config.
         strict: If true, don't allow additional attributes in the config.
         default_kwargs: Default kwargs to use, will be overridden by the config.
@@ -35,14 +35,19 @@ def load_config(
     Returns:
         The instantiated type.
     """
-    # Read the config
-    path = path.absolute()
-    with path.open() as f:
-        data: dict = yaml.safe_load(f)
+    if isinstance(path, dict):
+        data = path
+    else:
+        # Read the config from a file
+        path = path.absolute()
+        with path.open() as f:
+            data: dict = yaml.safe_load(f)
+    
     if default_kwargs is not None:
         new_data = default_kwargs.copy()
         new_data.update(data)
         data = new_data
+    
     return raw_to_instance(data, default_type, strict=strict)
 
 

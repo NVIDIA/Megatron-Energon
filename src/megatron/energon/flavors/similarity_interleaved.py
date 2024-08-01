@@ -22,7 +22,9 @@ class SimilarityInterleavedSample(Sample):
 
     #: Similarity matrix between image and text entries in the sequence
     similarity_matrix: Optional[torch.Tensor] = None
-
+    
+    #: The index within texts representing the sentence that this image is matched to
+    matched_text_indices: Optional[List[int]] = None
 
 class SimilarityInterleavedWebdataset(DefaultDecoderWebdataset[SimilarityInterleavedSample]):
     __sample_type__ = SimilarityInterleavedSample
