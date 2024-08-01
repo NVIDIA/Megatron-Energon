@@ -17,12 +17,12 @@ def load_dataset(
 ) -> DatasetLoaderInterface:
     """Loads a (meta)dataset."""
 
-    if isinstance(path,dict):
+    if isinstance(path, dict):
         return load_config(
             path,
             default_type=Metadataset,
             strict=True,
-            default_kwargs=dict(parent_path="/tmp/dict", **kwargs),
+            default_kwargs=dict(parent_path=EPath("/"), **kwargs),
         )
     path = EPath(path).absolute()
     if path.is_file():
