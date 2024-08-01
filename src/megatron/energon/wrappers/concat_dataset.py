@@ -20,16 +20,12 @@ T_sample = TypeVar("T_sample")
 class ConcatState(State):
     #: State of the inner datasets
     dataset_states: List[State]
-    #: The indexes of the samples of each dataset
-    sample_indexes: List[int]
 
 
 @dataclass
 class ConcatMergedState(MergedState):
     #: State of the inner datasets
     dataset_states: List[MergedState]
-    #: The indexes of the samples in the datasets [dataset_index][worker_index]
-    sample_indexes: List[List[int]]
 
 
 class ConcatDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
