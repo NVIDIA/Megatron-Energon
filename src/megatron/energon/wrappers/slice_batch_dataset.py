@@ -127,11 +127,11 @@ class SliceBatchDataset(
         n_samples_per_worker_floor = n_samples // num_workers
         remaining_n_sample_workers = n_samples % num_workers
         n_batches_per_worker_floor = n_samples_per_worker_floor // self.buffer_size
-        if n_samples_per_worker_floor % self.buffer_size != 0 and not self.drop_last:
+        if n_samples_per_worker_floor % self.buffer_size != 0:
             n_batches_per_worker_floor += 1
         # Correct number of batches for the workers which yield 1 more sample (to balance)
         n_batches_per_worker_ceil = (n_samples_per_worker_floor + 1) // self.buffer_size
-        if n_batches_per_worker_ceil % self.buffer_size != 0 and not self.drop_last:
+        if n_batches_per_worker_ceil % self.buffer_size != 0:
             n_batches_per_worker_ceil += 1
 
         return (
