@@ -46,6 +46,9 @@ class ConcatDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
             for sample in dataset:
                 yield self._add_sample_restore_key(sample, ds_idx)
 
+    def worker_has_samples(self) -> bool:
+        return any(dataset.worker_has_samples() for dataset in self.datasets)
+
     def save_state(self) -> ConcatState:
         return ConcatState(dataset_states=[dataset.save_state() for dataset in self.datasets])
 

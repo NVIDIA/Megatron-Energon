@@ -7,7 +7,6 @@ import logging
 import multiprocessing as mp
 import random
 import re
-import torch
 import tarfile
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -31,6 +30,7 @@ from typing import (
 )
 
 import braceexpand
+import torch
 import webdataset
 import yaml
 
@@ -85,6 +85,7 @@ ImageDecoder = Literal[
     "pilrgb",
     "pilrgba",
 ]
+
 
 @dataclasses.dataclass
 class VideoData:
@@ -424,7 +425,7 @@ class BaseWebdataset(BaseCoreDataset[T_sample], Generic[T_sample], ABC):
         # Note that the global number of workers intentionally stay the same if you
         # divide the number of ranks by N, and multiply the number of workers per rank by N.
         # This allows to reproduce the same global batches with a different number of ranks.
-        
+
         num_workers = max(1, worker_config.num_workers)
 
         total_samples = sum(shard.count for shard in shards)
@@ -435,15 +436,14 @@ class BaseWebdataset(BaseCoreDataset[T_sample], Generic[T_sample], ABC):
         # Let's look at the workers of the current local rank.
         # Each worker gets a slice of the global samples as follows:
         local_rank_worker_sample_offsets = [
-            int(
-                (num_workers * worker_config.rank + local_worker_idx)
-                * samples_per_worker
-            )
+            int((num_workers * worker_config.rank + local_worker_idx) * samples_per_worker)
             for local_worker_idx in range(num_workers + 1)
         ]
 
         return list(
-            cls._split_shards(
+            # Filter out empty shards
+            [s for s in shards if s.count > 0]
+            for shards in cls._split_shards(
                 shards,
                 local_rank_worker_sample_offsets,
                 max_samples_per_sequence=max_samples_per_sequence,
@@ -456,6 +456,9 @@ class BaseWebdataset(BaseCoreDataset[T_sample], Generic[T_sample], ABC):
 
     def __iter__(self) -> Iterator[T_sample]:
         yield from self.dataset
+
+    def worker_has_samples(self) -> bool:
+        return self.dataset.worker_has_samples()
 
     def save_state(self) -> WebdatasetState:
         return WebdatasetState(
@@ -838,7 +841,7 @@ class DefaultDecoderWebdataset(DefaultGenericWebdataset[T_sample], Generic[T_sam
         if self.ignore_decoder_errors:
             return True
         raise exc
-    
+
     def _video_decoder(self, key, data):
         """Extract the video data from default video extensions."""
         # TODO: This function could be more efficient. It will write the data to `/tmp`,
@@ -859,7 +862,8 @@ class DefaultDecoderWebdataset(DefaultGenericWebdataset[T_sample], Generic[T_sam
         decoder = webdataset.decode(
             self.image_decode,
             self._video_decoder,
-            handler=self._decode_error_handler)
+            handler=self._decode_error_handler,
+        )
         dataset = IterMapDataset(
             dataset, decoder, error_handler=self.error_handler, stateless_iter_fn=True
         )
