@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import dataclasses
+import functools
 from abc import ABC
 from dataclasses import is_dataclass
 from typing import (
@@ -30,7 +31,7 @@ from megatron.energon.flavors.base_dataset import (
 )
 from megatron.energon.flavors.crude import CrudeSample, CrudeWebdataset
 from megatron.energon.task_encoder.cooking import Cooker
-from megatron.energon.worker import WorkerConfig
+from megatron.energon.worker import WorkerConfig, set_global_seeds
 from megatron.energon.wrappers import (
     BatchDataset,
     BlendDataset,
@@ -41,6 +42,7 @@ from megatron.energon.wrappers import (
     LogSampleDataset,
     MapDataset,
     ShuffleBufferDataset,
+    SliceBatchDataset,
 )
 
 T = TypeVar("T")
@@ -100,6 +102,50 @@ def batch_list(batch: List[Any]) -> Any:
     return batch
 
 
+def stateless(
+    fn: Optional[Callable[..., T_sample]] = None, *, restore_seeds: bool = False
+) -> Callable[..., T_sample]:
+    """Decorator to mark a function of the task encoder as restorable.
+
+    Args:
+        fn: The function to decorate.
+        restore_seeds: Whether to restore the seeds for the function. I.e. the seeds are set
+            from the sample index and the worker seed, such that they can be restored when a sample
+            is restored from that function.
+
+    Usage:
+
+        @stateless
+        def encode_sample(self, sample: T_sample) -> T_encoded_sample:
+            ...
+
+
+        # Or if randomness is used (e.g. for augmentations):
+        @stateless(restore_seeds=True)
+        def encode_sample(self, sample: T_sample) -> T_encoded_sample:
+            ...
+    """
+    if fn is None:
+        return lambda f: stateless(f, restore_seeds=restore_seeds)
+    if restore_seeds:
+        worker_seed = None
+
+        @functools.wraps(fn)
+        def seed_wrapper(self, *args, **kwargs):
+            nonlocal worker_seed
+            if worker_seed is None:
+                worker_seed = WorkerConfig.active_worker_config.worker_seed()
+            seed = hash((worker_seed, self.current_sample_index))
+            set_global_seeds((seed & (seed >> 32)) & 0xFFFFFFFF)
+            return fn(self, *args, **kwargs)
+
+        setattr(seed_wrapper, "__stateless__", True)
+        return seed_wrapper
+
+    setattr(fn, "__stateless__", True)
+    return fn
+
+
 @dataclasses.dataclass
 class Batch(PinMemoryMixin):
     """Base class for a batch dataclass. Provides a default implementation for pinning memory."""
@@ -133,6 +179,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             assert isinstance(sample, Sample), "Sample must be a complete Sample or a CrudeSample"
             return sample
 
+    @stateless
     def encode_sample(
         self, sample: T_sample
     ) -> Union[T_encoded_sample, Generator[T_encoded_sample, None, None]]:
@@ -140,6 +187,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         Alternatively, this can be a generator that yields (or ignores) new samples."""
         return sample
 
+    @stateless
     def batch(self, samples: List[T_encoded_sample]) -> T_raw_batch:
         """Move a batch to a device. May raise :exc:`megatron.energon.SkipSample` to skip a batch."""
         return self._batch(samples, type(samples[0]))
@@ -150,6 +198,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         :exc:`megatron.energon.SkipSample` to skip a batch."""
         return None
 
+    @stateless
     def encode_batch(self, batch: T_raw_batch) -> Union[T_batch, Generator[T_batch, None, None]]:
         """Encode a batch of samples. May raise :exc:`megatron.energon.SkipSample` to skip a batch.
         Alternatively, this can be a generator that yields (or ignores) new batches."""
@@ -207,6 +256,17 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         else:
             raise ValueError("Unrecognized result type.")
 
+    def slice_batch(self, samples: List[T_sample]) -> List[List[T_sample]]:
+        """
+        Create slices of the given samples for batching. Each slice will be batched separately.
+
+        Args:
+            samples: The samples to slice. This depends on the slice_buffer_size.
+
+        Returns: A list of sample slices, each of which will be batched separately.
+        """
+        return [samples]
+
     def build_batch(
         self,
         dataset: SavableDataset[T_encoded_sample],
@@ -220,6 +280,9 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             is not TaskEncoder.batch_group_criterion
         ):
             assert batch_size is not None, "batch_size must be set if batch_group_criterion is set"
+            assert (
+                getattr(self.slice_batch, "__func__", None) is TaskEncoder.slice_batch
+            ), "slice_batch not supported if grouping"
             dataset = GroupBatchDataset(
                 dataset,
                 batch_size=batch_size,
@@ -229,19 +292,42 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 worker_config=worker_config,
             )
         elif batch_size is not None:
-            dataset = BatchDataset(
-                dataset,
-                batch_size=batch_size,
-                batcher=self.batch,
-                drop_last=batch_drop_last,
-                worker_config=worker_config,
-            )
+            if getattr(self.slice_batch, "__func__", None) is not TaskEncoder.slice_batch:
+                assert not batch_drop_last, "batch_drop_last is not supported if slicer is set"
+                dataset = SliceBatchDataset(
+                    dataset,
+                    buffer_size=batch_size,
+                    slicer=self.slice_batch,
+                    batcher=self.batch,
+                    batcher_stateless=getattr(self.batch, "__stateless__", False),
+                    worker_config=worker_config,
+                )
+            else:
+                dataset = BatchDataset(
+                    dataset,
+                    batch_size=batch_size,
+                    batcher=self.batch,
+                    batcher_stateless=getattr(self.batch, "__stateless__", False),
+                    drop_last=batch_drop_last,
+                    worker_config=worker_config,
+                )
             if getattr(self.encode_batch, "__func__", None) is not TaskEncoder.encode_batch:
-                dataset = MapDataset(dataset, self.encode_batch)
+                dataset = MapDataset(
+                    dataset,
+                    self.encode_batch,
+                    worker_config=worker_config,
+                    stateless_map_fn=getattr(self.encode_batch, "__stateless__", False),
+                )
         else:
             assert (
                 getattr(self.encode_batch, "__func__", None) is TaskEncoder.encode_batch
             ), "batch_size is not set, but encode_batch is not the default."
+            assert (
+                getattr(self.batch, "__func__", None) is TaskEncoder.batch
+            ), "batch_size is not set, but batch is not the default."
+            assert (
+                getattr(self.slice_batch, "__func__", None) is TaskEncoder.slice_batch
+            ), "batch_size is not set, but slice_batch is not the default."
         return dataset
 
     def build_cook_crude_sample(
@@ -255,7 +341,12 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             or getattr(self.build_cook_crude_sample, "__func__", None)
             is not TaskEncoder.build_cook_crude_sample
         ):
-            dataset = MapDataset(dataset, self.cook_crude_sample)
+            dataset = MapDataset(
+                dataset,
+                self.cook_crude_sample,
+                worker_config=worker_config,
+                stateless_map_fn=getattr(self.cook_crude_sample, "__stateless__", False),
+            )
         return dataset
 
     def build_encode_sample(
@@ -265,7 +356,12 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
     ) -> SavableDataset[T_encoded_sample]:
         """Applies the sample encoder to the dataset."""
         if getattr(self.encode_sample, "__func__", None) is not TaskEncoder.encode_sample:
-            dataset = MapDataset(dataset, self.encode_sample)
+            dataset = MapDataset(
+                dataset,
+                self.encode_sample,
+                worker_config=worker_config,
+                stateless_map_fn=getattr(self.encode_sample, "__stateless__", False),
+            )
         return dataset
 
     def build_train_datasets(
@@ -274,7 +370,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         datasets: List[Tuple[BaseCoreDataset[T_sample], float]],
         worker_config: WorkerConfig,
         batch_size: int,
-        batch_drop_last: bool,
+        batch_drop_last: bool = False,
         virtual_epoch_length: int = 0,
         shuffle_buffer_size: Optional[int] = None,
     ) -> SavableDataset[T_batch]:
@@ -324,10 +420,10 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         datasets: List[Tuple[BaseCoreDataset[T_sample], float]],
         worker_config: WorkerConfig,
         batch_size: int,
-        batch_drop_last: bool,
+        batch_drop_last: bool = False,
         limit: Optional[int] = None,
     ) -> SavableDataset[T_batch]:
-        """Combines train datasets to a single dataset."""
+        """Combines val datasets to a single dataset."""
 
         # Check if there's a CrudeWebdataset but no cookers
         for dataset, _ in datasets:
@@ -335,7 +431,10 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 assert self.cookers, "CrudeWebdataset found, but no cookers registered."
 
         if len(datasets) > 1:
-            dataset = ConcatDataset(*[dataset for dataset, _ in datasets])
+            dataset = ConcatDataset(
+                *[dataset for dataset, _ in datasets],
+                worker_config=worker_config,
+            )
         elif len(datasets) == 1:
             dataset = datasets[0][0]
         else:
@@ -359,8 +458,24 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             dataset = LogSampleDataset(dataset, mode="val", worker_config=worker_config)
         return dataset
 
-    def get_current_batch_index(self) -> int:
-        """Returns the current index for the next batch yielded from the current worker."""
+    @property
+    def current_batch_index(self) -> int:
+        """Returns the current index for the next batch yielded from the current worker. Each batch
+        on the current rank will get a strictly increasing unique number. Counting happens on each
+        rank separately (i.e. each rank will get the same numbers for same batch index)."""
+        assert (
+            WorkerConfig.active_worker_config is not None
+        ), "The batch_index can only be fetched within the worker, and to be usable, you must use the get_(savable_)loader methods provided from the package."
+        return WorkerConfig.active_worker_config.active_worker_batch_index
+
+    @property
+    def current_sample_index(self) -> int:
+        """Returns the current index for the next sample yielded from the current routine (e.g.
+        for `encode_sample`, `batch`, or `encode_batch`). Each routine will get a number
+        representing the number of calls to that function. Across workers, this number will be
+        unique, but it is not synced across workers, thus it may raise in different intervals (e.g.
+        if batching does not work the same for all batches). When restoring a sample, this number is
+        also restored and can be relied on for deterministic randomness reproduction of a sample."""
         assert (
             WorkerConfig.active_worker_config is not None
         ), "The batch_index can only be fetched within the worker, and to be usable, you must use the get_(savable_)loader methods provided from the package."
@@ -410,6 +525,7 @@ class DefaultTaskEncoder(
         self._raw_batch_type = raw_batch_type
         self._batch_type = batch_type
 
+    @stateless
     def encode_sample(
         self, sample: T_sample
     ) -> Union[T_encoded_sample, Generator[T_encoded_sample, None, None]]:
@@ -437,6 +553,7 @@ class DefaultTaskEncoder(
         else:
             raise ValueError("Unrecognized encoded sample type.")
 
+    @stateless
     def batch(self, samples: List[T_encoded_sample]) -> T_raw_batch:
         """Batch a list of samples. The default implementation uses default batching to convert
         to _batch_type."""
@@ -452,6 +569,7 @@ class DefaultTaskEncoder(
             actions=actions,
         )
 
+    @stateless
     def encode_batch(self, batch: T_raw_batch) -> Union[T_batch, Generator[T_batch, None, None]]:
         """Encode a batch of samples. The default implementation converts to the
         _encoded_batch_type."""

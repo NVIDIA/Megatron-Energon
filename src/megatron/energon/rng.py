@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from dataclasses import dataclass
-from typing import Hashable, List, Optional, TypeVar
+from typing import List, Optional, TypeVar
 
 import torch
 import torch.distributed

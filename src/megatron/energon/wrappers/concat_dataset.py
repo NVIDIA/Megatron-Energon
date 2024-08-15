@@ -4,7 +4,12 @@
 from dataclasses import dataclass
 from typing import Any, Dict, Generic, Iterator, List, Optional, Tuple, TypeVar, Union
 
-from megatron.energon.flavors.base_dataset import MergedState, SavableDataset, State
+from megatron.energon.flavors.base_dataset import (
+    MergedState,
+    SavableDataset,
+    State,
+    add_sample_restore_key,
+)
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset
 
@@ -32,9 +37,14 @@ class ConcatDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
 
     datasets: Tuple[SavableDataset[T_sample], ...]
 
-    def __init__(self, *datasets: SavableDataset[T_sample]):
+    def __init__(
+        self,
+        *datasets: SavableDataset[T_sample],
+        worker_config: WorkerConfig,
+    ):
         """Construct a concatenated dataset."""
         super().__init__()
+        self.worker_config = worker_config
         self.datasets = datasets
         assert len(self) >= 0, "Datasets must be finite."
 
@@ -44,10 +54,16 @@ class ConcatDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
     def __iter__(self) -> Iterator[T_sample]:
         for ds_idx, dataset in enumerate(self.datasets):
             for sample in dataset:
-                yield self._add_sample_restore_key(sample, ds_idx)
+                yield add_sample_restore_key(
+                    sample,
+                    ds_idx,
+                    src=self,
+                )
 
     def save_state(self) -> ConcatState:
-        return ConcatState(dataset_states=[dataset.save_state() for dataset in self.datasets])
+        return ConcatState(
+            dataset_states=[dataset.save_state() for dataset in self.datasets],
+        )
 
     def merge_states(self, states: List[ConcatState]) -> ConcatMergedState:
         assert all(s is None or isinstance(s, ConcatState) for s in states)
@@ -58,7 +74,7 @@ class ConcatDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
                     [None if s is None else s.dataset_states[ds_idx] for s in states]
                 )
                 for ds_idx, dataset in enumerate(self.datasets)
-            ]
+            ],
         )
 
     def restore_state(self, state: Optional[ConcatMergedState]) -> None:
@@ -74,10 +90,16 @@ class ConcatDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
     def can_restore_sample(self) -> bool:
         return all(dataset.can_restore_sample() for dataset in self.datasets)
 
-    def restore_sample(self, index: Tuple[Union[str, int], ...]) -> T_sample:
-        ds_idx = index[0]
+    def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_sample:
+        id, ds_idx = index[:2]
+        assert id == type(self).__name__
+        index = index[2:]
         assert isinstance(ds_idx, int)
-        return self._add_sample_restore_key(self.datasets[ds_idx].restore_sample(index[1:]), ds_idx)
+        return add_sample_restore_key(
+            self.datasets[ds_idx].restore_sample(index),
+            ds_idx,
+            src=self,
+        )
 
     def verify_worker_config(self, worker_config: WorkerConfig) -> None:
         super().verify_worker_config(worker_config)
