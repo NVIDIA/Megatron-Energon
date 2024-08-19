@@ -441,7 +441,7 @@ class BaseWebdataset(BaseCoreDataset[T_sample], Generic[T_sample], ABC):
         ]
 
         return list(
-            # Filter out empty shards
+            # Filter out any empty shards for this worker
             [s for s in shards if s.count > 0]
             for shards in cls._split_shards(
                 shards,
