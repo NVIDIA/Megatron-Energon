@@ -7,6 +7,7 @@ from typing import Any, Dict, Generic, Iterator, TypeVar
 import torch
 import torch.utils.data
 import torch.utils.data.dataloader
+from torch.distributed._shard.sharded_tensor import ShardedTensorBase
 from torch.distributed.distributed_c10d import reduce_op
 
 from megatron.energon.flavors.base_dataset import SavableDataset
@@ -36,9 +37,13 @@ def gc_init_worker(worker_id: int):
     for o in gc.get_objects():
         try:
             if o is not reduce_op:
-                if isinstance(o, torch.Tensor) and o.is_cuda:
-                    _frozen_cuda_tensors.add(o)
-                    num_tensors += 1
+                if isinstance(o, torch.Tensor):
+                    if isinstance(o, ShardedTensorBase) or o.is_cuda:
+                        # Calling .is_cuda or any hasattr on ShardedTensor will raise an error
+                        # Hence, o.is_cuda is only called if o is not a ShardedTensor (in the if above)
+
+                        _frozen_cuda_tensors.add(o)
+                        num_tensors += 1
                 elif isinstance(o, torch.utils.data.dataloader._MultiProcessingDataLoaderIter):
                     o._shutdown = True
         except ReferenceError:
