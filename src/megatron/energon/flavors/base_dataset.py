@@ -253,6 +253,12 @@ class SavableDataset(IterableDataset[T_sample], Generic[T_sample], ABC):
         """
         ...
 
+    @abstractmethod
+    def worker_has_samples(self) -> bool:
+        """Returns True if the worker's split has samples. This is used to determine if this dataset
+        yields anything."""
+        ...
+
     def verify_worker_config(self, worker_config: WorkerConfig) -> None:
         """Verify that the worker config is compatible with the dataset."""
         if hasattr(self, "worker_config"):

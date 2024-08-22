@@ -42,7 +42,7 @@ def _init_worker(seed_per_worker: List[int], worker_id: int):
     gc_init_worker(worker_id)
 
     worker_seed = seed_per_worker[worker_id]
-    
+
     torch.manual_seed(worker_seed)
     numpy.random.seed(worker_seed)
     random.seed(worker_seed)
@@ -93,6 +93,9 @@ class SimpleSavableDatasetWrapper(SavableDataset[Tuple[int, int, T]], Generic[T]
     def restore_state(self, state: MergedState):
         self.dataset.restore_state(state)
         self._state_restored = True
+
+    def worker_has_samples(self) -> bool:
+        return self.dataset.worker_has_samples()
 
     def config(self) -> Dict[str, Any]:
         return self.dataset.config()
