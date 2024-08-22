@@ -71,7 +71,14 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
             yield from dataset
 
     def __iter__(self) -> Iterator[T_sample]:
-        datasets, weights = zip(*self.dataset_weights)
+        assert self.worker_has_samples(), "Cannot blend all empty datasets"
+        datasets, weights = zip(
+            *[
+                (dataset, weight)
+                for dataset, weight in self.dataset_weights
+                if dataset.worker_has_samples()
+            ]
+        )
         dataset_iters = [self._repeat(dataset) for dataset in datasets]
         weights = torch.tensor(weights, dtype=torch.float32)
         probs = weights / weights.sum()
@@ -79,6 +86,9 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
         while True:
             ds_idx = self._worker_rng.choice_idx(probs=probs)
             yield self._add_sample_restore_key(next(dataset_iters[ds_idx]), ds_idx)
+
+    def worker_has_samples(self) -> bool:
+        return any(dataset.worker_has_samples() for dataset, _weight in self.dataset_weights)
 
     def save_state(self) -> BlendDatasetState:
         return BlendDatasetState(
