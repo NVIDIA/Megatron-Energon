@@ -63,7 +63,8 @@ class EPath:
                     # rclone paths are treated as absolute
                     # The first part of the path will be the rclone remote name
                     path = "/" + path
-                self.internal_path = PurePosixPath(path)
+
+                self.internal_path = self._resolve(path)
 
                 remote_name = self.internal_path.parts[1]
                 self.fs, self.s3_args = self.create_s3fs_from_rclone_remote(
@@ -73,6 +74,28 @@ class EPath:
                 self.num_fs_path_parts = 2  # Root and remote name
             else:
                 raise ValueError(f"Unknown protocol: {protocol}")
+
+    @staticmethod
+    def _resolve(path: Union[str, PurePosixPath]) -> PurePosixPath:
+        """Resolve a path, removing .. and . components."""
+        if isinstance(path, str):
+            path = PurePosixPath(path)
+        parts = path.parts
+        if parts[0] != "/":
+            raise ValueError("Only absolute paths are supported")
+        if ".." in parts or "." in parts:
+            new_parts = []
+            for part in parts[1:]:
+                if part == "..":
+                    if len(new_parts) == 0:
+                        raise ValueError(f"Path above root: {path}")
+                    new_parts.pop()
+                elif path == ".":
+                    pass
+                else:
+                    new_parts.append(part)
+            path = PurePosixPath("/", *new_parts)
+        return path
 
     @staticmethod
     def _split_protocol(path):
@@ -245,9 +268,9 @@ class EPath:
 
             if self.protocol == "local":
                 assert path.startswith("/"), "Local FS glob should return absolute paths"
-                new_path.internal_path = PurePosixPath(path)
+                new_path.internal_path = self._resolve(path)
             else:
-                new_path.internal_path = self._internal_fs_path / PurePosixPath(path)
+                new_path.internal_path = self._resolve(self._internal_fs_path / PurePosixPath(path))
 
             yield new_path
 
@@ -299,8 +322,8 @@ class EPath:
             return other
 
         new_path = EPath(self)
-        new_path.internal_path = self.internal_path / (
-            other if isinstance(other, str) else other.internal_path
+        new_path.internal_path = self._resolve(
+            self.internal_path / (other if isinstance(other, str) else other.internal_path)
         )
         return new_path
 
@@ -313,7 +336,7 @@ class EPath:
             return self
 
         new_path = EPath(self)
-        new_path.internal_path = other.internal_path / self.internal_path
+        new_path.internal_path = self._resolve(other.internal_path / self.internal_path)
         return new_path
 
     def __lt__(self, other: "EPath"):
