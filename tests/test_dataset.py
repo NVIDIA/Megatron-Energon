@@ -932,12 +932,45 @@ class TestDataset(unittest.TestCase):
 
         print("rk", [batch.__restore_key__ for batch_idx, batch in batches])
         assert loader.can_restore_sample()
+
+        # These need to be hard coded to detect breaking changes
+        # If a change is expected, update the values with the ones printed below
+        ref_batch_rand_nums = [
+            [661, 762],
+            [206, 470],
+            [130, 283],
+            [508, 61],
+            [625, 661],
+            [296, 376],
+            [632, 514],
+            [715, 406],
+            [555, 27],
+            [760, 36],
+            [607, 610],
+            [825, 219],
+            [564, 832],
+            [876, 512],
+            [632, 605],
+            [357, 738],
+            [40, 378],
+            [609, 444],
+            [610, 367],
+            [367, 69],
+        ]
+
+        batch_rand_nums = []
         for batch_idx, batch in batches:
             restore_batch = loader.restore_sample(batch.__restore_key__)
             assert restore_batch.batch_index == batch.batch_index
             assert restore_batch.sample_index == batch.sample_index
             assert restore_batch.rand_num == batch.rand_num
+
+            batch_rand_nums.append(restore_batch.rand_num)
             assert np.allclose(restore_batch.image, batch.image)
+
+        # For constructing the test data above:
+        print("batch_rand_nums: ", batch_rand_nums)
+        assert batch_rand_nums == ref_batch_rand_nums
 
         # Now, test multi-worker loader with accessing get_current_batch_index
         worker_config_r0 = WorkerConfig(rank=0, world_size=2, num_workers=2)

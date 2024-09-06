@@ -3,6 +3,7 @@
 
 import dataclasses
 import functools
+import hashlib
 from abc import ABC
 from dataclasses import is_dataclass
 from typing import (
@@ -31,7 +32,12 @@ from megatron.energon.flavors.base_dataset import (
 )
 from megatron.energon.flavors.crude import CrudeSample, CrudeWebdataset
 from megatron.energon.task_encoder.cooking import Cooker
-from megatron.energon.worker import WorkerConfig, set_global_seeds
+from megatron.energon.worker import (
+    WorkerConfig,
+    restore_global_rng_state,
+    save_global_rng_state,
+    set_global_seeds,
+)
 from megatron.energon.wrappers import (
     BatchDataset,
     BlendDataset,
@@ -135,9 +141,21 @@ def stateless(
             nonlocal worker_seed
             if worker_seed is None:
                 worker_seed = WorkerConfig.active_worker_config.worker_seed()
-            seed = hash((worker_seed, self.current_sample_index))
-            set_global_seeds((seed & (seed >> 32)) & 0xFFFFFFFF)
-            return fn(self, *args, **kwargs)
+
+            # Use a deterministic hash function to compute the seed
+            hash_digest = hashlib.sha1(f"{worker_seed}|{self.current_sample_index}".encode("utf-8")).digest()
+
+            # We use the first 4 bytes of the hash as the seed and fix the endianness
+            seed_value = int.from_bytes(hash_digest[:4], byteorder="big")
+
+            # Save the RNG states and set the new seed
+            rng_state = save_global_rng_state()
+            set_global_seeds(seed_value)
+            try:
+                return fn(self, *args, **kwargs)
+            finally:
+                # Restore the RNGs
+                restore_global_rng_state(rng_state)
 
         setattr(seed_wrapper, "__stateless__", True)
         return seed_wrapper

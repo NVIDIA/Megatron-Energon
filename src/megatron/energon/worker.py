@@ -264,3 +264,19 @@ def set_global_seeds(seed: int):
     torch.manual_seed(seed)
     numpy.random.seed(seed)
     random.seed(seed)
+
+
+def save_global_rng_state() -> Dict[str, Any]:
+    """Saves the global rng state for torch, numpy and random."""
+    return {
+        "torch": torch.get_rng_state(),
+        "numpy": numpy.random.get_state(),
+        "random": random.getstate(),
+    }
+
+
+def restore_global_rng_state(state: Dict[str, Any]) -> None:
+    """Restores the global rng state for torch, numpy and random."""
+    torch.set_rng_state(state["torch"])
+    numpy.random.set_state(state["numpy"])
+    random.setstate(state["random"])
