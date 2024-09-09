@@ -40,6 +40,7 @@ def get_train_dataset(
     worker_config: WorkerConfig,
     batch_size: int,
     batch_drop_last: bool = False,
+    packing_buffer_size: Optional[int] = None,
     shuffle_buffer_size: Optional[int],
     max_samples_per_sequence: Optional[int],
     virtual_epoch_length: int = 0,
@@ -91,6 +92,7 @@ def get_train_dataset(
         worker_config=worker_config,
         batch_size=batch_size,
         batch_drop_last=batch_drop_last,
+        packing_buffer_size=packing_buffer_size,
         virtual_epoch_length=virtual_epoch_length,
         shuffle_buffer_size=shuffle_buffer_size,
     )
@@ -103,6 +105,7 @@ def get_val_dataset(
     worker_config: WorkerConfig,
     batch_size: int,
     batch_drop_last: bool = False,
+    packing_buffer_size: Optional[int] = None,
     limit: Optional[int] = None,
     task_encoder: TaskEncoder[Any, Any, Any, T] = DefaultTaskEncoder(),
     **kwargs,
@@ -140,6 +143,7 @@ def get_val_dataset(
         worker_config=worker_config,
         batch_size=batch_size,
         batch_drop_last=batch_drop_last,
+        packing_buffer_size=packing_buffer_size,
         limit=limit,
     )
 

@@ -1104,16 +1104,12 @@ class TestDataset(unittest.TestCase):
             for batch_idx, batch in batches
         )
 
-    def test_batch_slicer(self):
+    def test_packing(self):
         torch.manual_seed(42)
 
         class TestTaskEncoder(DefaultTaskEncoder):
             def __init__(self):
                 super().__init__(raw_batch_type=CaptioningBatch)
-
-            def slice_batch(self, samples: List) -> List[List]:
-                assert len(samples) == 21
-                return samples[:1], samples[1 : 1 + 4], samples[1 + 4 : 1 + 4 + 16]
 
             @stateless
             def encode_sample(self, sample: CaptioningSample) -> EncodedCaptioningSample:
@@ -1124,10 +1120,26 @@ class TestDataset(unittest.TestCase):
                     caption=torch.frombuffer(sample.caption.encode(), dtype=torch.uint8),
                 )
 
+            def pre_pack(
+                self, samples: List[EncodedCaptioningSample]
+            ) -> List[List[EncodedCaptioningSample]]:
+                assert len(samples) == 21
+                return [samples[:1], samples[1 : 1 + 4], samples[1 + 4 : 1 + 4 + 16]]
+
+            @stateless
+            def final_pack(self, samples: List[EncodedCaptioningSample]) -> EncodedCaptioningSample:
+                return EncodedCaptioningSample(
+                    __key__=",".join([sample.__key__ for sample in samples]),
+                    __restore_key__=(),
+                    image=torch.stack([sample.image for sample in samples]),
+                    caption=torch.cat([sample.caption for sample in samples]),
+                )
+
         loader = get_loader(
             get_train_dataset(
                 self.dataset_path,
-                batch_size=21,
+                batch_size=2,
+                packing_buffer_size=21,
                 worker_config=no_worker_config,
                 virtual_epoch_length=6,
                 shuffle_buffer_size=None,
@@ -1144,7 +1156,22 @@ class TestDataset(unittest.TestCase):
         print([batch.__key__ for batch in samples])
         print([batch.__restore_key__ for batch in samples])
         print([len(batch.__key__) for batch in samples])
-        assert [len(batch.__key__) for batch in samples] == [1, 4, 16, 1, 4, 16]
+        print([[len(batch_key.split(",")) for batch_key in batch.__key__] for batch in samples])
+
+        # Each batch should have 2 samples
+        assert [len(batch.__key__) for batch in samples] == [
+            2,
+            2,
+            2,
+            2,
+            2,
+            2,
+        ]
+
+        # The packs of lengths 1, 4, 16 should be unrolled repeatedly across the batches of size 2
+        assert [
+            [len(batch_key.split(",")) for batch_key in batch.__key__] for batch in samples
+        ] == [[1, 4], [16, 1], [4, 16], [1, 4], [16, 1], [4, 16]]
 
         restored_sample_1 = loader.restore_sample(samples[1].__restore_key__)
         assert restored_sample_1.__key__ == samples[1].__key__
@@ -1155,7 +1182,8 @@ class TestDataset(unittest.TestCase):
         loader_r0 = get_savable_loader(
             get_train_dataset(
                 self.dataset_path,
-                batch_size=21,
+                batch_size=2,
+                packing_buffer_size=21,
                 worker_config=worker_config_r0,
                 virtual_epoch_length=8,
                 shuffle_buffer_size=None,
@@ -1168,7 +1196,9 @@ class TestDataset(unittest.TestCase):
         )
 
         samples_r0 = list(loader_r0)
-        assert [len(batch.__key__) for batch in samples_r0] == [1, 1, 4, 4, 16, 16, 1, 1]
+        assert [
+            [len(batch_key.split(",")) for batch_key in batch.__key__] for batch in samples_r0
+        ] == [[1, 4], [1, 4], [16, 1], [16, 1], [4, 16], [4, 16], [1, 4], [1, 4]]
 
         restored_sample_1 = loader_r0.restore_sample(samples_r0[1].__restore_key__)
         assert restored_sample_1.__key__ == samples_r0[1].__key__
@@ -1176,12 +1206,15 @@ class TestDataset(unittest.TestCase):
 
         rank_state_r0 = loader_r0.save_state_rank()
         samples_r0_cmp = list(loader_r0)
-        assert [len(batch.__key__) for batch in samples_r0_cmp] == [4, 4, 16, 16, 1, 1, 4, 4]
+        assert [
+            [len(batch_key.split(",")) for batch_key in batch.__key__] for batch in samples_r0_cmp
+        ] == [[16, 1], [16, 1], [4, 16], [4, 16], [1, 4], [1, 4], [16, 1], [16, 1]]
 
         loader_r0 = get_savable_loader(
             get_train_dataset(
                 self.dataset_path,
-                batch_size=21,
+                batch_size=2,
+                packing_buffer_size=21,
                 worker_config=worker_config_r0,
                 virtual_epoch_length=8,
                 shuffle_buffer_size=None,
@@ -1198,7 +1231,11 @@ class TestDataset(unittest.TestCase):
         samples_r0_restored = list(loader_r0)
         print("cmp", [batch.__key__ for batch in samples_r0_cmp])
         print("rst", [batch.__key__ for batch in samples_r0_restored])
-        assert [len(batch.__key__) for batch in samples_r0_restored] == [4, 4, 16, 16, 1, 1, 4, 4]
+        assert [
+            [len(batch_key.split(",")) for batch_key in batch.__key__]
+            for batch in samples_r0_restored
+        ] == [[16, 1], [16, 1], [4, 16], [4, 16], [1, 4], [1, 4], [16, 1], [16, 1]]
+
         assert all(s0.__key__ == s1.__key__ for s0, s1 in zip(samples_r0_cmp, samples_r0_restored))
 
     def test_debug_dataset(self):

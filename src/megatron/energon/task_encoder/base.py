@@ -47,8 +47,8 @@ from megatron.energon.wrappers import (
     LimitDataset,
     LogSampleDataset,
     MapDataset,
+    PackingDataset,
     ShuffleBufferDataset,
-    SliceBatchDataset,
 )
 
 T = TypeVar("T")
@@ -143,7 +143,9 @@ def stateless(
                 worker_seed = WorkerConfig.active_worker_config.worker_seed()
 
             # Use a deterministic hash function to compute the seed
-            hash_digest = hashlib.sha1(f"{worker_seed}|{self.current_sample_index}".encode("utf-8")).digest()
+            hash_digest = hashlib.sha1(
+                f"{worker_seed}|{self.current_sample_index}".encode("utf-8")
+            ).digest()
 
             # We use the first 4 bytes of the hash as the seed and fix the endianness
             seed_value = int.from_bytes(hash_digest[:4], byteorder="big")
@@ -274,33 +276,51 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         else:
             raise ValueError("Unrecognized result type.")
 
-    def slice_batch(self, samples: List[T_sample]) -> List[List[T_sample]]:
+    def pre_pack(self, samples: List[T_sample]) -> List[List[T_sample]]:
         """
-        Create slices of the given samples for batching. Each slice will be batched separately.
+        For packing, selects the samples to be packed together. By default, no packing is happening.
 
         Args:
-            samples: The samples to slice. This depends on the slice_buffer_size.
+            samples: The samples to pre-pack. A full buffer will be passed into the function.
 
-        Returns: A list of sample slices, each of which will be batched separately.
+        Returns: The pre-packed samples as a list of lists of samples.
         """
-        return [samples]
+        raise NotImplementedError("Packing only effective when overridden.")
+
+    def final_pack(self, samples: List[T_sample]) -> T_sample:
+        """
+        Given one set of samples to pack, returns the final packed sample. By default, no packing is happening.
+
+        Args:
+            samples: The samples to pack into a single sample
+
+        Returns: The final packed sample.
+        """
+        raise NotImplementedError("Packing only effective when overridden.")
 
     def build_batch(
         self,
         dataset: SavableDataset[T_encoded_sample],
         batch_size: Optional[int],
         batch_drop_last: bool = False,
+        packing_buffer_size: Optional[int] = None,
         worker_config: Optional[WorkerConfig] = None,
     ) -> SavableDataset[T_raw_batch]:
         """Applies the batcher to the dataset."""
+
+        pre_pack_provided = getattr(self.pre_pack, "__func__", None) is not TaskEncoder.pre_pack
+        final_pack_provided = (
+            getattr(self.final_pack, "__func__", None) is not TaskEncoder.final_pack
+        )
+
         if (
             getattr(self.batch_group_criterion, "__func__", None)
             is not TaskEncoder.batch_group_criterion
         ):
             assert batch_size is not None, "batch_size must be set if batch_group_criterion is set"
             assert (
-                getattr(self.slice_batch, "__func__", None) is TaskEncoder.slice_batch
-            ), "slice_batch not supported if grouping"
+                not pre_pack_provided and not final_pack_provided
+            ), "Packing not supported when grouping"
             dataset = GroupBatchDataset(
                 dataset,
                 batch_size=batch_size,
@@ -310,25 +330,37 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 worker_config=worker_config,
             )
         elif batch_size is not None:
-            if getattr(self.slice_batch, "__func__", None) is not TaskEncoder.slice_batch:
-                assert not batch_drop_last, "batch_drop_last is not supported if slicer is set"
-                dataset = SliceBatchDataset(
+            # Check if packing methods are provided by the user
+            pre_pack_provided = getattr(self.pre_pack, "__func__", None) is not TaskEncoder.pre_pack
+            final_pack_provided = (
+                getattr(self.final_pack, "__func__", None) is not TaskEncoder.final_pack
+            )
+
+            if pre_pack_provided or final_pack_provided:
+                assert (
+                    pre_pack_provided and final_pack_provided
+                ), "Both pre_pack and final_pack methods must be provided in the TaskEncoder"
+
+                assert packing_buffer_size is not None, "packing_buffer_size must be set"
+
+                dataset = PackingDataset(
                     dataset,
-                    buffer_size=batch_size,
-                    slicer=self.slice_batch,
-                    batcher=self.batch,
-                    batcher_stateless=getattr(self.batch, "__stateless__", False),
+                    buffer_size=packing_buffer_size,
+                    pre_packer=self.pre_pack,
+                    final_packer=self.final_pack,
+                    final_packer_stateless=getattr(self.final_pack, "__stateless__", False),
                     worker_config=worker_config,
                 )
-            else:
-                dataset = BatchDataset(
-                    dataset,
-                    batch_size=batch_size,
-                    batcher=self.batch,
-                    batcher_stateless=getattr(self.batch, "__stateless__", False),
-                    drop_last=batch_drop_last,
-                    worker_config=worker_config,
-                )
+
+            dataset = BatchDataset(
+                dataset,
+                batch_size=batch_size,
+                batcher=self.batch,
+                batcher_stateless=getattr(self.batch, "__stateless__", False),
+                drop_last=batch_drop_last,
+                worker_config=worker_config,
+            )
+
             if getattr(self.encode_batch, "__func__", None) is not TaskEncoder.encode_batch:
                 dataset = MapDataset(
                     dataset,
@@ -343,9 +375,6 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             assert (
                 getattr(self.batch, "__func__", None) is TaskEncoder.batch
             ), "batch_size is not set, but batch is not the default."
-            assert (
-                getattr(self.slice_batch, "__func__", None) is TaskEncoder.slice_batch
-            ), "batch_size is not set, but slice_batch is not the default."
         return dataset
 
     def build_cook_crude_sample(
@@ -389,6 +418,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         worker_config: WorkerConfig,
         batch_size: int,
         batch_drop_last: bool = False,
+        packing_buffer_size: Optional[int] = None,
         virtual_epoch_length: int = 0,
         shuffle_buffer_size: Optional[int] = None,
     ) -> SavableDataset[T_batch]:
@@ -420,6 +450,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             dataset,
             batch_size=batch_size,
             batch_drop_last=batch_drop_last,
+            packing_buffer_size=packing_buffer_size,
             worker_config=worker_config,
         )
         if virtual_epoch_length > 0:
@@ -439,6 +470,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         worker_config: WorkerConfig,
         batch_size: int,
         batch_drop_last: bool = False,
+        packing_buffer_size: Optional[int] = None,
         limit: Optional[int] = None,
     ) -> SavableDataset[T_batch]:
         """Combines val datasets to a single dataset."""
@@ -463,6 +495,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             dataset,
             batch_size=batch_size,
             batch_drop_last=batch_drop_last,
+            packing_buffer_size=packing_buffer_size,
             worker_config=worker_config,
         )
         if limit is not None and limit > 0:

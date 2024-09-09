@@ -3,7 +3,18 @@
 
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Generator, Generic, Iterable, List, Optional, Tuple, TypeVar, Union
+from typing import (
+    Any,
+    Generator,
+    Generic,
+    Iterable,
+    List,
+    Optional,
+    Sequence,
+    Tuple,
+    TypeVar,
+    Union,
+)
 
 from megatron.energon.flavors.base_dataset import MergedState, Sample, SavableDataset, State
 from megatron.energon.worker import WorkerConfig
@@ -62,7 +73,7 @@ class BaseSingleWrapperDataset(
         )
 
     def merge_states(
-        self, states: List[Optional[BaseSingleWrapperState]]
+        self, states: Sequence[Optional[BaseSingleWrapperState]]
     ) -> BaseSingleWrapperMergedState:
         assert all(s is None or isinstance(s, BaseSingleWrapperState) for s in states)
         assert all(s is None or s.dataset_type == type(self).__name__ for s in states)
