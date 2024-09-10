@@ -420,7 +420,6 @@ class TestDataset(unittest.TestCase):
         # - Global batch size must stay the same across runs
         # - Global batch size must be a multiple of (micro-batch size * world_size * num_workers)
         #   - Global batch size = micro-batch size * world_size * num_workers * gradient_accum_steps
-        # - The micro-batch size must stay the same across runs
         # - world_size * num_workers must stay the same across runs
         # Set the same torch.manual_seed(...) on each rank before constructing the dataset and the data loader
 
@@ -446,6 +445,14 @@ class TestDataset(unittest.TestCase):
                     WorkerConfig(rank=3, world_size=4, num_workers=1),
                 ),
                 micro_batch_size=2,
+                global_batch_size=8,
+            ),
+            dict(
+                configs=(
+                    WorkerConfig(rank=0, world_size=2, num_workers=2),
+                    WorkerConfig(rank=1, world_size=2, num_workers=2),
+                ),
+                micro_batch_size=1,  # Micro-batch 1, more accum
                 global_batch_size=8,
             ),
         ]
