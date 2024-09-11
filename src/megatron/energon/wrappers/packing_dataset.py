@@ -105,7 +105,7 @@ class PackingDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_sam
 
         Args:
             dataset: The input dataset to wrap
-            buffer_size: The desired size of the buffer for slicing. Last buffer may be smaller.
+            buffer_size: The desired size of the input buffer for pre packing. Last buffer of a dataset may be smaller.
             pre_packer: Function which selects samples from the buffer to be packed together.
                 May raise :exc:`megatron.energon.SkipSample` to skip a buffer.
             final_packer: Function which combines the selected samples into a single sample.

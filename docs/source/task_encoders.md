@@ -10,7 +10,8 @@ is as follows:
 
 - {py:func}`def encode_sample(self, sample: T_sample) -> T_encoded_sample <megatron.energon.DefaultTaskEncoder.encode_sample>`: Transform the raw data from the dataset (e.g. augment/transform images, tokenize a single sample).
 - (optionally limit the dataset size)
-- {py:meth}`def slice_batch(self, samples: List[T_encoded_sample]) -> List[List[T_encoded_sample]] <megatron.energon.TaskEncoder.slice_batch>`: Defaults to a single slice. Allows for efficient re-slicing of batches, e.g. for efficient sample packing.
+- {py:meth}`def pre_pack(self, samples: List[T_encoded_sample]) -> List[List[T_encoded_sample]] <megatron.energon.TaskEncoder.pre_pack>`: Optional. Allows for efficient sample packing.
+- {py:meth}`def final_pack(self, samples: List[T_encoded_sample]) -> T_encoded_sample] <megatron.energon.TaskEncoder.pre_pack>`: Needed if pre_pack is used. Compresses a group of samples to a single sample.
 - (samples are collected for a batch)
 - {py:meth}`def batch(self, batch: List[T_encoded_sample]) -> T_raw_batch <megatron.energon.DefaultTaskEncoder.batch>`: Collate the batch to a single sample, defaults to padded batching for tensors, lists for everything else.
 - {py:meth}`def encode_batch(self, batch_data: T_raw_batch) -> T_batch <megatron.energon.DefaultTaskEncoder.encode_batch>`: Transform the batched data (e.g. tokenize the whole batch).

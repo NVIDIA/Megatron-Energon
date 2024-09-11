@@ -54,7 +54,7 @@ class PackingCaptioningTaskEncoder(CaptioningTaskEncoder):
 
     @stateless(restore_seeds=True)
     def encode_sample(self, ...):
-        # Added `stateless` decorator to allow saving samples for slicing. Will set the seed
+        # Added `stateless` decorator to allow saving samples for packing. Will set the seed
         # deterministically based on the self.current_sample_index.
         ...
 
@@ -78,7 +78,3 @@ class PackingCaptioningTaskEncoder(CaptioningTaskEncoder):
         ...
 
 ```
-
-## Gotchas
-
-
