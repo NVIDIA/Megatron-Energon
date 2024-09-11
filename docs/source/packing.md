@@ -32,9 +32,8 @@ restore key afterwards, based on the samples that went in.
 ```
 
 ```{warning}
-To handle attention masks and tokenized inputs, you will want to operate on a differen sample type.
-Note that the `encode_sample` method is executed before packing, so this should already transform your samples
-to a type that is suitable for packing.
+To handle attention masks and tokenized inputs, you will want to operate on a different sample type.
+The `final_pack` method may return a different sample type that is expected as the input for the `batch` method.
 ```
 
 It is important, to mark custom functions like `encode_sample` and `final_pack` as `@stateless` to allow saving

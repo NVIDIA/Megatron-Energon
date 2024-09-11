@@ -36,6 +36,7 @@ from megatron.energon.wrappers.buffer import (
 from megatron.energon.wrappers.skip import SkipSample
 
 T_sample = TypeVar("T_sample")
+T_batch_sample = TypeVar("T_batch_sample")
 
 
 @dataclass
@@ -56,13 +57,15 @@ class PackingMergedState(BaseSingleWrapperMergedState):
     final_packing_index: List[int]
 
 
-class PackingDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_sample]):
+class PackingDataset(
+    BaseSingleWrapperDataset[T_sample, T_batch_sample], Generic[T_sample, T_batch_sample]
+):
     """This dataset wrapper transforms samples of a dataset into chunks/packs of samples, which are
     then combined into a batch."""
 
     buffer_size: int
     pre_packer: Callable[[List[T_sample]], List[List[T_sample]]]
-    final_packer: Callable[[List[T_sample]], T_sample]
+    final_packer: Callable[[List[T_sample]], T_batch_sample]
     final_packer_stateless: bool
     error_handler: Callable[[Exception, List[T_sample]], None]
     worker_config: WorkerConfig
@@ -91,7 +94,7 @@ class PackingDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_sam
         dataset: SavableDataset[T_sample],
         buffer_size: int,
         pre_packer: Callable[[List[T_sample]], List[List[T_sample]]],
-        final_packer: Callable[[List[T_sample]], T_sample],
+        final_packer: Callable[[List[T_sample]], T_batch_sample],
         *,
         final_packer_stateless: bool = False,
         error_handler: Callable[[Exception, List[T_sample]], None] = log_exception,
