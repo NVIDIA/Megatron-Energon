@@ -113,6 +113,9 @@ class LimitDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_sampl
         if self.reset_after_epoch:
             self.dataset.restore_state(None)
 
+    def worker_has_samples(self) -> bool:
+        return super().worker_has_samples() and self.length > 0
+
     def save_state(self) -> LimitState:
         return LimitState.extend(
             super().save_state(),

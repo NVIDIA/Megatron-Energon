@@ -131,6 +131,9 @@ class SimpleSavableDatasetWrapper(SavableDataset[Tuple[int, int, T]], Generic[T]
         finally:
             self.worker_config.worker_deactivate()
 
+    def worker_has_samples(self) -> bool:
+        return self.dataset.worker_has_samples()
+
     def config(self) -> Dict[str, Any]:
         return self.dataset.config()
 

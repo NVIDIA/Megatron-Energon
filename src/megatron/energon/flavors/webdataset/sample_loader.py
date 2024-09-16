@@ -588,7 +588,12 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
                 break
 
     def __len__(self) -> int:
-        return sum(shard.count for shard in self.shards)
+        return sum(shard.count for worker_shards in self.shards for shard in worker_shards)
+
+    def worker_has_samples(self) -> bool:
+        self.worker_config.assert_worker()
+        worker_shards = self.shards[self.worker_config.rank_worker_id()]
+        return any(shard.count > 0 for shard in worker_shards)
 
     def __iter__(self) -> Iterator[FilteredSample]:
         self.worker_config.assert_worker()

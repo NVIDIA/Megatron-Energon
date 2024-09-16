@@ -441,7 +441,9 @@ class BaseWebdataset(BaseCoreDataset[T_sample], Generic[T_sample], ABC):
         ]
 
         return list(
-            cls._split_shards(
+            # Filter out any empty shards for this worker
+            [s for s in shards if s.count > 0]
+            for shards in cls._split_shards(
                 shards,
                 local_rank_worker_sample_offsets,
                 max_samples_per_sequence=max_samples_per_sequence,
@@ -454,6 +456,9 @@ class BaseWebdataset(BaseCoreDataset[T_sample], Generic[T_sample], ABC):
 
     def __iter__(self) -> Iterator[T_sample]:
         yield from self.dataset
+
+    def worker_has_samples(self) -> bool:
+        return self.dataset.worker_has_samples()
 
     def save_state(self) -> WebdatasetState:
         return WebdatasetState(

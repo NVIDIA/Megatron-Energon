@@ -4,11 +4,9 @@
 """This module tests the EPath class, our custom version of pathlib.Path"""
 
 import logging
-import os
 import struct
 import sys
 import unittest
-from typing import Any, Tuple
 
 from megatron.energon.epathlib import EPath
 from megatron.energon.epathlib.rclone_config import ConfigEntry
@@ -89,6 +87,33 @@ class TestEPath(unittest.TestCase):
         # Test globbing with a pattern
         p = EPath("/tmp").glob("epathtestfile_[0-3].bin")
         assert len(list(p)) == 4
+
+    def test_s3_path_resolution(self):
+        """Test s3 path resolution"""
+        config_override = {
+            "s3": ConfigEntry(
+                name="s3",
+                type="s3",
+                provider="s3",
+                access_key_id="dummy",
+                secret_access_key="dummy",
+                region="dummy",
+                endpoint="https://localhost",
+            )
+        }
+
+        # Test globbing
+        p = EPath("rclone://s3/tmp/path/subpath.txt", config_override=config_override)
+        assert str(p) == "rclone://s3/tmp/path/subpath.txt", str(p)
+
+        p2 = p / ".." / "subpath2.txt"
+        assert str(p2) == "rclone://s3/tmp/path/subpath2.txt", str(p2)
+
+        p3 = EPath("rclone://s3/tmp/path/.././subpath.txt", config_override=config_override)
+        assert str(p3) == "rclone://s3/tmp/subpath.txt", str(p3)
+
+        p4 = p3.parent / "../bla/bla/bla/../../../no/../subpath2.txt"
+        assert str(p4) == "rclone://s3/subpath2.txt", str(p4)
 
 
 if __name__ == "__main__":
