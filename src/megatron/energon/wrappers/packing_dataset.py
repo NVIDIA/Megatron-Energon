@@ -233,22 +233,33 @@ class PackingDataset(
                 self.error_handler(e, pack)
 
         # Main loop:
-        while True:
-            # Fill a portion of the buffer
-            if not self._fill_reading_buffer(src_iter):
-                # Break out of the main loop when the source is exhausted.
-                # But yield the remaining packs first.
-                if len(self._reading_buffer) > 0:
-                    next_pre_pack()
-                break
+        stopping = False
+        while not stopping:
 
-            # Create new pre packs if necessary
-            if len(pre_packing_lengths) == 0:
+            pre_pack_round = 0
+            while len(pre_packing_lengths) == 0:
+                # Fill a portion of the buffer
+                if not self._fill_reading_buffer(src_iter):
+                    # Break out of both loops when the source is exhausted.
+                    # But yield the remaining packs first.
+                    if len(self._reading_buffer) > 0:
+                        next_pre_pack()
+                    stopping = True
+                    break
+
                 assert len(self._pre_packing_buffer) == 0
                 assert len(self._reading_buffer) == self.buffer_size
+
                 next_pre_pack()
 
-            yield from next_final_pack()
+                pre_pack_round += 1
+                if pre_pack_round > 10:
+                    raise RuntimeError("Pre packer did not yield any packs after 10 rounds.")
+
+            if not stopping:
+                yield from next_final_pack()
+            else:
+                break
 
         # Yield the remaining packs, flushing the collecting buffer
         while len(pre_packing_lengths) > 0:
