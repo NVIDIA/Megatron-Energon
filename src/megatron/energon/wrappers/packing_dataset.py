@@ -186,6 +186,7 @@ class PackingDataset(
                     raise FatalSampleError.from_sample(samples)
                 except Exception as e:
                     self.error_handler(e, samples)
+                    pre_packs = []
 
                 # Put the pre-packed samples into the pre_packing_buffer
                 # They will be flattened here to avoid nested buffers

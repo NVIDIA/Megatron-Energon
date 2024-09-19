@@ -135,12 +135,14 @@ class SampleIndex:
     def ctx(self, sample_idx: Optional[int] = None):
         if sample_idx is None:
             sample_idx = self.get_next()
+        assert WorkerConfig.active_worker_config is not None
         WorkerConfig.active_worker_config.worker_push_sample_index(sample_idx)
         # print("  " * SampleIndex.actives + f"Activated from {type(self.src).__name__}({id(self.src)}) {sample_idx} -> {WorkerConfig.active_worker_config._sample_index_stack}")
         SampleIndex.actives += 1
         try:
             yield sample_idx
         finally:
+            assert WorkerConfig.active_worker_config is not None
             popped = WorkerConfig.active_worker_config.worker_pop_sample_index()
             SampleIndex.actives -= 1
             # print("  " * SampleIndex.actives + f"Deactivate from {type(self.src).__name__}({id(self.src)}) {sample_idx} -> {WorkerConfig.active_worker_config._sample_index_stack}")
