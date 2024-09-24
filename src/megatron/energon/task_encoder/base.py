@@ -4,6 +4,7 @@
 import dataclasses
 import functools
 import hashlib
+import inspect
 from abc import ABC
 from dataclasses import is_dataclass
 from typing import (
@@ -154,7 +155,11 @@ def stateless(
             rng_state = save_global_rng_state()
             set_global_seeds(seed_value)
             try:
-                return fn(self, *args, **kwargs)
+                if inspect.isgeneratorfunction(fn):
+                    # Preserve the generator
+                    yield from fn(self, *args, **kwargs)
+                else:
+                    return fn(self, *args, **kwargs)
             finally:
                 # Restore the RNGs
                 restore_global_rng_state(rng_state)

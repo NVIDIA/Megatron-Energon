@@ -117,7 +117,7 @@ class BatchDataset(
                 with self._sample_index.ctx() as sample_idx:
                     batch_sample = self.batcher(batch)
                 if isinstance(batch_sample, Generator):
-                    assert inspect.isgeneratorfunction(self.batcher)
+                    assert inspect.isgeneratorfunction(self.batcher), f"Generator in {self.map_fn} but not marked as such."
                     for batch_sub_idx, (sample_idx, inner_batch_sample) in enumerate(
                         self._sample_index.iter_ctx(batch_sample, sample_idx)
                     ):
@@ -191,7 +191,7 @@ class BatchDataset(
         with self._sample_index.ctx(sample_idx):
             batch_sample = self.batcher(batch)
         if isinstance(batch_sample, Generator):
-            assert inspect.isgeneratorfunction(self.batcher)
+            assert inspect.isgeneratorfunction(self.batcher), f"Generator in {self.map_fn} but not marked as such."
             for cur_batch_sub_idx, (sample_idx, inner_batch_sample) in enumerate(
                 self._sample_index.iter_ctx(batch_sample, sample_idx)
             ):

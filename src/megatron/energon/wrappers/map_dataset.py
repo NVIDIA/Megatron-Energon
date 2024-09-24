@@ -90,7 +90,7 @@ class MapDataset(BaseSingleWrapperDataset[T_sample, T_sample_out], Generic[T_sam
                 with self._sample_index.ctx() as sample_idx:
                     mapped_sample = self.map_fn(sample)
                 if isinstance(mapped_sample, Generator):
-                    assert inspect.isgeneratorfunction(self.map_fn)
+                    assert inspect.isgeneratorfunction(self.map_fn), f"Generator in {self.map_fn} but not marked as such."
                     # In case of a generator, additionally store the index of the yielded samples
                     # per input sample
                     for idx, (sample_idx, inner_sample) in enumerate(
@@ -158,7 +158,7 @@ class MapDataset(BaseSingleWrapperDataset[T_sample, T_sample_out], Generic[T_sam
         with self._sample_index.ctx(sample_idx):
             mapped_sample = self.map_fn(inner_sample)
         if isinstance(mapped_sample, Generator):
-            assert inspect.isgeneratorfunction(self.map_fn)
+            assert inspect.isgeneratorfunction(self.map_fn), f"Generator in {self.map_fn} but not marked as such."
             for idx, (sample_idx, res_sample) in enumerate(
                 self._sample_index.iter_ctx(mapped_sample, sample_idx)
             ):
