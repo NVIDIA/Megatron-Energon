@@ -138,6 +138,63 @@ def stateless(
         worker_seed = None
 
         @functools.wraps(fn)
+        def seed_wrapper_generator(self, *args, **kwargs):
+            nonlocal worker_seed
+            if worker_seed is None:
+                worker_seed = WorkerConfig.active_worker_config.worker_seed()
+
+            # Use a deterministic hash function to compute the seed
+            hash_digest = hashlib.sha1(
+                f"{worker_seed}|{self.current_sample_index}".encode("utf-8")
+            ).digest()
+
+            # We use the first 4 bytes of the hash as the seed and fix the endianness
+            inner_seed_value = int.from_bytes(hash_digest[:4], byteorder="big")
+
+            # Save the RNG states and set the new seed
+            outer_rng_state = save_global_rng_state()
+                    
+            # Before constructing the generator and before the first
+            # iteration, set inner RNG based on computed seed
+            set_global_seeds(inner_seed_value)
+            
+            it = iter(fn)
+            
+            inner_rand_state = None
+
+            while True:
+                
+                if inner_rand_state is not None:
+                    # Restore inner random state before calling the generator
+                    # This will not be done on the first iteration
+                    restore_global_rng_state(inner_rand_state)
+                
+                try:
+                    # Now call the generator. This will yield the sample
+                    # But note it may also throw an exception or a StopIteration
+                    sample = next(it)
+                    
+                    # Save inner random state after calling the generator
+                    inner_rand_state = save_global_rng_state()
+                except StopIteration:
+                    # We're stopping here, but the outer random state
+                    # will be restored before returning (in finally below)
+                    break
+                finally:                                            
+                    # Restore outer rand state before yielding or when an exception was raised
+                    restore_global_rng_state(outer_rng_state)
+                
+                # Now yield the sample.
+                # This will give control back to the caller who may
+                # change the random state.
+                yield sample
+                
+                # Save outer random state after yielding
+                outer_rng_state = save_global_rng_state()
+        
+                
+
+        @functools.wraps(fn)
         def seed_wrapper(self, *args, **kwargs):
             nonlocal worker_seed
             if worker_seed is None:
@@ -155,17 +212,17 @@ def stateless(
             rng_state = save_global_rng_state()
             set_global_seeds(seed_value)
             try:
-                if inspect.isgeneratorfunction(fn):
-                    # Preserve the generator
-                    yield from fn(self, *args, **kwargs)
-                else:
-                    return fn(self, *args, **kwargs)
+                return fn(self, *args, **kwargs)
             finally:
                 # Restore the RNGs
                 restore_global_rng_state(rng_state)
 
-        setattr(seed_wrapper, "__stateless__", True)
-        return seed_wrapper
+        if inspect.isgeneratorfunction(fn):
+            setattr(seed_wrapper_generator, "__stateless__", True)
+            return seed_wrapper_generator
+        else:
+            setattr(seed_wrapper, "__stateless__", True)
+            return seed_wrapper
 
     setattr(fn, "__stateless__", True)
     return fn
