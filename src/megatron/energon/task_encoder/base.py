@@ -3,7 +3,6 @@
 
 import dataclasses
 import functools
-import hashlib
 import inspect
 from abc import ABC
 from dataclasses import is_dataclass
@@ -139,20 +138,13 @@ def stateless(
             if worker_seed is None:
                 worker_seed = WorkerConfig.active_worker_config.worker_seed()
 
-            # Use a deterministic hash function to compute the seed
-            hash_digest = hashlib.sha1(
-                f"{worker_seed}|{self.current_sample_index}".encode("utf-8")
-            ).digest()
-
-            # We use the first 4 bytes of the hash as the seed and fix the endianness
-            inner_seed_value = int.from_bytes(hash_digest[:4], byteorder="big")
-
             # Save the RNG states and set the new seed
             outer_rng_state = SystemRng.save_state()
 
             # Before constructing the generator and before the first
-            # iteration, set inner RNG based on computed seed
-            SystemRng.seed(inner_seed_value)
+            # iteration, set inner RNG based on seed computed
+            # from worker_seed and current sample index
+            SystemRng.seed_args(worker_seed, self.current_sample_index)
 
             it = iter(fn)
 
@@ -194,17 +186,11 @@ def stateless(
             if worker_seed is None:
                 worker_seed = WorkerConfig.active_worker_config.worker_seed()
 
-            # Use a deterministic hash function to compute the seed
-            hash_digest = hashlib.sha1(
-                f"{worker_seed}|{self.current_sample_index}".encode("utf-8")
-            ).digest()
-
-            # We use the first 4 bytes of the hash as the seed and fix the endianness
-            seed_value = int.from_bytes(hash_digest[:4], byteorder="big")
-
             # Save the RNG states and set the new seed
             rng_state = SystemRng.save_state()
-            SystemRng.seed(seed_value)
+
+            SystemRng.seed_args(worker_seed, self.current_sample_index)
+
             try:
                 return fn(self, *args, **kwargs)
             finally:

@@ -1,6 +1,7 @@
 # Copyright (c) 2024, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+import hashlib
 import random
 from dataclasses import dataclass
 from typing import Any, List, Optional, TypeVar
@@ -162,3 +163,21 @@ class SystemRng:
         torch.set_rng_state(state.torch)
         numpy.random.set_state(state.numpy)
         random.setstate(state.random)
+
+    @staticmethod
+    def get_seed_from_args(*args: Any) -> int:
+        """Deterministically generates a seed from the given arguments.
+        The str() representation of each arg is used."""
+
+        # Use a deterministic hash function to compute the seed
+        hash_digest = hashlib.sha1("|".join([str(obj) for obj in args]).encode("utf-8")).digest()
+
+        # We use the first 4 bytes of the hash as the seed and fix the endianness
+        seed_value = int.from_bytes(hash_digest[:4], byteorder="big")
+
+        return seed_value
+
+    @staticmethod
+    def seed_args(*args: Any) -> None:
+        """Seeds the global random generators deterministically from the given arguments."""
+        SystemRng.seed(SystemRng.get_seed_from_args(*args))
