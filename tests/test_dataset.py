@@ -1120,14 +1120,16 @@ class TestDataset(unittest.TestCase):
                     caption=torch.frombuffer(sample.caption.encode(), dtype=torch.uint8),
                 )
 
-            def pre_pack(
+            def select_samples_to_pack(
                 self, samples: List[EncodedCaptioningSample]
             ) -> List[List[EncodedCaptioningSample]]:
                 assert len(samples) == 21
                 return [samples[:1], samples[1 : 1 + 4], samples[1 + 4 : 1 + 4 + 16]]
 
             @stateless
-            def final_pack(self, samples: List[EncodedCaptioningSample]) -> EncodedCaptioningSample:
+            def pack_selected_samples(
+                self, samples: List[EncodedCaptioningSample]
+            ) -> EncodedCaptioningSample:
                 return EncodedCaptioningSample(
                     __key__=",".join([sample.__key__ for sample in samples]),
                     __restore_key__=(),

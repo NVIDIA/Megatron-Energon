@@ -119,6 +119,9 @@ class PackingDataset(
             worker_config: Configuration for the workers.
         """
         super().__init__(dataset)
+
+        assert buffer_size > 0, "Packing buffer size must be greater than 0."
+
         self.buffer_size = buffer_size
         self.pre_packer = pre_packer
         self.final_packer = final_packer
@@ -207,7 +210,9 @@ class PackingDataset(
                 with self._final_packing_sample_index.ctx() as pack_idx:
                     final_packed_sample = self.final_packer(pack)
                 if isinstance(final_packed_sample, Generator):
-                    assert inspect.isgeneratorfunction(self.final_packer), f"Generator in {self.map_fn} but not marked as such."
+                    assert inspect.isgeneratorfunction(
+                        self.final_packer
+                    ), f"Generator in {self.map_fn} but not marked as such."
                     for pack_sub_idx, (pack_idx, inner_batch_sample) in enumerate(
                         self._final_packing_sample_index.iter_ctx(final_packed_sample, pack_idx)
                     ):
@@ -332,7 +337,9 @@ class PackingDataset(
         with self._final_packing_sample_index.ctx(pack_idx):
             final_pack = self.final_packer(batch)
         if isinstance(final_pack, Generator):
-            assert inspect.isgeneratorfunction(self.final_packer), f"Generator in {self.map_fn} but not marked as such."
+            assert inspect.isgeneratorfunction(
+                self.final_packer
+            ), f"Generator in {self.map_fn} but not marked as such."
             for cur_batch_sub_idx, (pack_idx, inner_batch_sample) in enumerate(
                 self._final_packing_sample_index.iter_ctx(final_pack, pack_idx)
             ):

@@ -318,9 +318,11 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         else:
             raise ValueError("Unrecognized result type.")
 
-    def pre_pack(self, samples: List[T_sample]) -> List[List[T_sample]]:
+    def select_samples_to_pack(self, samples: List[T_sample]) -> List[List[T_sample]]:
         """
-        For packing, selects the samples to be packed together. By default, no packing is happening.
+        For packing, selects the samples to be packed together.
+        Packing is only active when packing_buffer_size is set.
+        Internally this stage is called "pre_packing".
 
         Args:
             samples: The samples to pre-pack. A full buffer will be passed into the function.
@@ -329,9 +331,11 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         """
         raise NotImplementedError("Packing only effective when overridden.")
 
-    def final_pack(self, samples: List[T_sample]) -> T_sample:
+    def pack_selected_samples(self, samples: List[T_sample]) -> T_sample:
         """
-        Given one set of samples to pack, returns the final packed sample. By default, no packing is happening.
+        Given one set of samples to pack, returns the final packed sample.
+        Packing is only active when packing_buffer_size is set.
+        Internally this stage is called "final_packing".
 
         Args:
             samples: The samples to pack into a single sample
@@ -368,23 +372,27 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             # No grouping is active
 
             if packing_buffer_size is not None:
-                pre_pack_provided = (
-                    getattr(self.pre_pack, "__func__", None) is not TaskEncoder.pre_pack
+                select_samples_to_pack_provided = (
+                    getattr(self.select_samples_to_pack, "__func__", None)
+                    is not TaskEncoder.select_samples_to_pack
                 )
-                final_pack_provided = (
-                    getattr(self.final_pack, "__func__", None) is not TaskEncoder.final_pack
+                pack_selected_samples_provided = (
+                    getattr(self.pack_selected_samples, "__func__", None)
+                    is not TaskEncoder.pack_selected_samples
                 )
 
                 assert (
-                    pre_pack_provided and final_pack_provided
-                ), "Both pre_pack and final_pack methods must be provided in the TaskEncoder when using packing_buffer_size"
+                    select_samples_to_pack_provided and pack_selected_samples_provided
+                ), "Both select_samples_to_pack and pack_selected_samples methods must be provided in the TaskEncoder when using packing_buffer_size"
 
                 dataset = PackingDataset(
                     dataset,
                     buffer_size=packing_buffer_size,
-                    pre_packer=self.pre_pack,
-                    final_packer=self.final_pack,
-                    final_packer_stateless=getattr(self.final_pack, "__stateless__", False),
+                    pre_packer=self.select_samples_to_pack,
+                    final_packer=self.pack_selected_samples,
+                    final_packer_stateless=getattr(
+                        self.pack_selected_samples, "__stateless__", False
+                    ),
                     worker_config=worker_config,
                 )
 
