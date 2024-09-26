@@ -1,9 +1,11 @@
 # Copyright (c) 2024, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+import random
 from dataclasses import dataclass
-from typing import List, Optional, TypeVar
+from typing import Any, List, Optional, TypeVar
 
+import numpy
 import torch
 import torch.distributed
 import torch.utils.data
@@ -112,3 +114,51 @@ class WorkerRng:
         else:
             assert isinstance(state, WorkerRngMergedState)
             self._restore_states = state.rng
+
+
+@dataclass
+class SystemRngState:
+    """The state of the global random generators.
+
+    Note that the data types of the internal RNG states are implementation details of the
+    respective libraries and may change in the future.
+
+    Python does not even specify the type in their docs. Hence we will allow arbitrary types,
+    because all that matters is that we can save and restore them. We will not use the data
+    anywhere else.
+    """
+
+    torch: Any  # Currently `torch.Tensor`
+    numpy: Any  # Currently `dict[str, Any] | tuple[str, NDArray[uint32], int, int, float]`
+    random: Any  # Currently a nested tuple
+
+    def __repr__(self):
+        return f"SystemRngState(torch={self.torch[:3] + b'...'}, numpy={self.numpy!r}, random={self.random!r})"
+
+
+class SystemRng:
+    """A class to seed, save or restore the global random generators.
+    This affects torch, numpy and the standard library random module."""
+
+    @staticmethod
+    def seed(seed: int) -> None:
+        """Seeds the global random generators."""
+        torch.manual_seed(seed)
+        numpy.random.seed(seed)
+        random.seed(seed)
+
+    @staticmethod
+    def save_state() -> SystemRngState:
+        """Saves the global rng state for torch, numpy and random."""
+        return SystemRngState(
+            torch=torch.get_rng_state(),
+            numpy=numpy.random.get_state(),
+            random=random.getstate(),
+        )
+
+    @staticmethod
+    def restore_state(state: SystemRngState) -> None:
+        """Restores the global rng state for torch, numpy and random."""
+        torch.set_rng_state(state.torch)
+        numpy.random.set_state(state.numpy)
+        random.setstate(state.random)

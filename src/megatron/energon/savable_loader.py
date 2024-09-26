@@ -25,7 +25,8 @@ from megatron.energon.flavors.base_dataset import (
     State,
     add_sample_restore_key,
 )
-from megatron.energon.worker import WorkerConfig, set_global_seeds
+from megatron.energon.rng import SystemRng
+from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseSingleWrapperMergedState, BaseSingleWrapperState
 from megatron.energon.wrappers.gc_dataset import GcDataset, gc_init_worker
 from megatron.energon.wrappers.log_sample_dataset import default_get_keys
@@ -44,7 +45,7 @@ def _init_worker(seed_per_worker: List[int], worker_id: int):
 
     worker_seed = seed_per_worker[worker_id]
 
-    set_global_seeds(worker_seed)
+    SystemRng.seed(worker_seed)
 
     EPath.prepare_forked_process()
 

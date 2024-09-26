@@ -32,13 +32,9 @@ from megatron.energon.flavors.base_dataset import (
     SavableDataset,
 )
 from megatron.energon.flavors.crude import CrudeSample, CrudeWebdataset
+from megatron.energon.rng import SystemRng
 from megatron.energon.task_encoder.cooking import Cooker
-from megatron.energon.worker import (
-    WorkerConfig,
-    restore_global_rng_state,
-    save_global_rng_state,
-    set_global_seeds,
-)
+from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers import (
     BatchDataset,
     BlendDataset,
@@ -152,47 +148,45 @@ def stateless(
             inner_seed_value = int.from_bytes(hash_digest[:4], byteorder="big")
 
             # Save the RNG states and set the new seed
-            outer_rng_state = save_global_rng_state()
-                    
+            outer_rng_state = SystemRng.save_state()
+
             # Before constructing the generator and before the first
             # iteration, set inner RNG based on computed seed
-            set_global_seeds(inner_seed_value)
-            
+            SystemRng.seed(inner_seed_value)
+
             it = iter(fn)
-            
+
             inner_rand_state = None
 
             while True:
-                
+
                 if inner_rand_state is not None:
                     # Restore inner random state before calling the generator
                     # This will not be done on the first iteration
-                    restore_global_rng_state(inner_rand_state)
-                
+                    SystemRng.restore_state(inner_rand_state)
+
                 try:
                     # Now call the generator. This will yield the sample
                     # But note it may also throw an exception or a StopIteration
                     sample = next(it)
-                    
+
                     # Save inner random state after calling the generator
-                    inner_rand_state = save_global_rng_state()
+                    inner_rand_state = SystemRng.save_state()
                 except StopIteration:
                     # We're stopping here, but the outer random state
                     # will be restored before returning (in finally below)
                     break
-                finally:                                            
+                finally:
                     # Restore outer rand state before yielding or when an exception was raised
-                    restore_global_rng_state(outer_rng_state)
-                
+                    SystemRng.restore_state(outer_rng_state)
+
                 # Now yield the sample.
                 # This will give control back to the caller who may
                 # change the random state.
                 yield sample
-                
+
                 # Save outer random state after yielding
-                outer_rng_state = save_global_rng_state()
-        
-                
+                outer_rng_state = SystemRng.save_state()
 
         @functools.wraps(fn)
         def seed_wrapper(self, *args, **kwargs):
@@ -209,13 +203,13 @@ def stateless(
             seed_value = int.from_bytes(hash_digest[:4], byteorder="big")
 
             # Save the RNG states and set the new seed
-            rng_state = save_global_rng_state()
-            set_global_seeds(seed_value)
+            rng_state = SystemRng.save_state()
+            SystemRng.seed(seed_value)
             try:
                 return fn(self, *args, **kwargs)
             finally:
                 # Restore the RNGs
-                restore_global_rng_state(rng_state)
+                SystemRng.restore_state(rng_state)
 
         if inspect.isgeneratorfunction(fn):
             setattr(seed_wrapper_generator, "__stateless__", True)
