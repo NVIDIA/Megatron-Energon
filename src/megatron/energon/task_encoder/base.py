@@ -350,19 +350,12 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
     ) -> SavableDataset[T_raw_batch]:
         """Applies the batcher to the dataset."""
 
-        pre_pack_provided = getattr(self.pre_pack, "__func__", None) is not TaskEncoder.pre_pack
-        final_pack_provided = (
-            getattr(self.final_pack, "__func__", None) is not TaskEncoder.final_pack
-        )
-
         if (
             getattr(self.batch_group_criterion, "__func__", None)
             is not TaskEncoder.batch_group_criterion
         ):
             assert batch_size is not None, "batch_size must be set if batch_group_criterion is set"
-            assert (
-                not pre_pack_provided and not final_pack_provided
-            ), "Packing not supported when grouping"
+            assert packing_buffer_size is None, "Packing not supported when grouping"
             dataset = GroupBatchDataset(
                 dataset,
                 batch_size=batch_size,
@@ -371,19 +364,20 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 drop_last=batch_drop_last,
                 worker_config=worker_config,
             )
-        elif batch_size is not None:
-            # Check if packing methods are provided by the user
-            pre_pack_provided = getattr(self.pre_pack, "__func__", None) is not TaskEncoder.pre_pack
-            final_pack_provided = (
-                getattr(self.final_pack, "__func__", None) is not TaskEncoder.final_pack
-            )
+        else:
+            # No grouping is active
 
-            if pre_pack_provided or final_pack_provided:
+            if packing_buffer_size is not None:
+                pre_pack_provided = (
+                    getattr(self.pre_pack, "__func__", None) is not TaskEncoder.pre_pack
+                )
+                final_pack_provided = (
+                    getattr(self.final_pack, "__func__", None) is not TaskEncoder.final_pack
+                )
+
                 assert (
                     pre_pack_provided and final_pack_provided
-                ), "Both pre_pack and final_pack methods must be provided in the TaskEncoder"
-
-                assert packing_buffer_size is not None, "packing_buffer_size must be set"
+                ), "Both pre_pack and final_pack methods must be provided in the TaskEncoder when using packing_buffer_size"
 
                 dataset = PackingDataset(
                     dataset,
@@ -394,29 +388,31 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                     worker_config=worker_config,
                 )
 
-            dataset = BatchDataset(
-                dataset,
-                batch_size=batch_size,
-                batcher=self.batch,
-                batcher_stateless=getattr(self.batch, "__stateless__", False),
-                drop_last=batch_drop_last,
-                worker_config=worker_config,
-            )
-
-            if getattr(self.encode_batch, "__func__", None) is not TaskEncoder.encode_batch:
-                dataset = MapDataset(
+            if batch_size is not None:
+                dataset = BatchDataset(
                     dataset,
-                    self.encode_batch,
+                    batch_size=batch_size,
+                    batcher=self.batch,
+                    batcher_stateless=getattr(self.batch, "__stateless__", False),
+                    drop_last=batch_drop_last,
                     worker_config=worker_config,
-                    stateless_map_fn=getattr(self.encode_batch, "__stateless__", False),
                 )
-        else:
-            assert (
-                getattr(self.encode_batch, "__func__", None) is TaskEncoder.encode_batch
-            ), "batch_size is not set, but encode_batch is not the default."
-            assert (
-                getattr(self.batch, "__func__", None) is TaskEncoder.batch
-            ), "batch_size is not set, but batch is not the default."
+
+                if getattr(self.encode_batch, "__func__", None) is not TaskEncoder.encode_batch:
+                    dataset = MapDataset(
+                        dataset,
+                        self.encode_batch,
+                        worker_config=worker_config,
+                        stateless_map_fn=getattr(self.encode_batch, "__stateless__", False),
+                    )
+            else:
+                assert (
+                    getattr(self.encode_batch, "__func__", None) is TaskEncoder.encode_batch
+                ), "batch_size is not set, but encode_batch is not the default."
+                assert (
+                    getattr(self.batch, "__func__", None) is TaskEncoder.batch
+                ), "batch_size is not set, but batch is not the default."
+
         return dataset
 
     def build_cook_crude_sample(
