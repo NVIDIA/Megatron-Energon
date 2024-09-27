@@ -131,6 +131,10 @@ class SampleIndex:
         self._sample_index[self._rank] += 1
         return res
 
+    @property
+    def current_idx(self) -> int:
+        return self._sample_index[self._rank]
+
     @contextmanager
     def ctx(self, sample_idx: Optional[int] = None):
         if sample_idx is None:

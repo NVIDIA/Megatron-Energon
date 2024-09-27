@@ -1104,6 +1104,251 @@ class TestDataset(unittest.TestCase):
             for batch_idx, batch in batches
         )
 
+    def test_current_batch_index_generator(self):
+        # Tests if the get_current_batch_index works properly
+        torch.manual_seed(42)
+
+        class TestTaskEncoder(TaskEncoder):
+
+            @stateless(restore_seeds=True)
+            def encode_sample(self, sample):
+                # print("si stack:", WorkerConfig._sample_index_stack)
+                yield ExtendedCaptioningSample.extend(
+                    sample,
+                    batch_index=self.current_batch_index,
+                    sample_index=self.current_sample_index,
+                    rand_num=random.randint(0, 1000) + 0,
+                )
+
+                yield ExtendedCaptioningSample.extend(
+                    sample,
+                    batch_index=self.current_batch_index,
+                    sample_index=self.current_sample_index,
+                    rand_num=random.randint(0, 1000) + 1000,
+                )
+
+        # First, test simple single main-thread loader with accessing get_current_batch_index
+        loader = get_loader(
+            get_train_dataset(
+                self.dataset_path,
+                batch_size=3,
+                task_encoder=TestTaskEncoder(),
+                worker_config=no_worker_config,
+                shuffle_buffer_size=20,
+                max_samples_per_sequence=10,
+            ),
+            worker_config=no_worker_config,
+        )
+
+        batches = list(zip(range(20), loader))
+        print("bi", [batch.batch_index for batch_idx, batch in batches])
+        assert all(all(bi == batch_idx for bi in batch.batch_index) for batch_idx, batch in batches)
+
+        print("si", [batch.sample_index for batch_idx, batch in batches])
+        assert all(
+            all(
+                si == (sample_offset + batch_idx * 3) // 2
+                for sample_offset, si in enumerate(batch.sample_index)
+            )
+            for batch_idx, batch in batches
+        )
+
+        print("rk", [batch.__restore_key__ for batch_idx, batch in batches])
+        assert loader.can_restore_sample()
+
+        # These need to be hard coded to detect breaking changes
+        # If a change is expected, update the values with the ones printed below
+        ref_batch_rand_nums = [
+            [661, 1747, 762],
+            [1171, 206, 1921],
+            [470, 1705, 130],
+            [1722, 283, 1990],
+            [508, 1041, 61],
+            [1102, 625, 1559],
+            [661, 1512, 296],
+            [1866, 376, 1345],
+            [632, 1176, 514],
+            [1652, 715, 1702],
+            [406, 1552, 555],
+            [1303, 27, 1520],
+            [760, 1380, 36],
+            [1869, 607, 1292],
+            [610, 1084, 825],
+            [1113, 219, 1102],
+            [564, 1695, 832],
+            [1612, 876, 2000],
+            [512, 1308, 632],
+            [1425, 605, 1931],
+        ]
+
+        batch_rand_nums = []
+        for batch_idx, batch in batches:
+            restore_batch = loader.restore_sample(batch.__restore_key__)
+            assert restore_batch.batch_index == batch.batch_index
+            assert restore_batch.sample_index == batch.sample_index
+            assert restore_batch.rand_num == batch.rand_num
+
+            batch_rand_nums.append(restore_batch.rand_num)
+            assert np.allclose(restore_batch.image, batch.image)
+
+        # For constructing the test data above:
+        print("batch_rand_nums: ", batch_rand_nums)
+        assert batch_rand_nums == ref_batch_rand_nums
+
+        # Now, test multi-worker loader with accessing get_current_batch_index
+        worker_config_r0 = WorkerConfig(rank=0, world_size=2, num_workers=2)
+        worker_config_r1 = WorkerConfig(rank=1, world_size=2, num_workers=2)
+
+        loader = get_loader(
+            get_train_dataset(
+                self.dataset_path,
+                batch_size=3,
+                task_encoder=TestTaskEncoder(),
+                worker_config=worker_config_r0,
+                shuffle_buffer_size=20,
+                max_samples_per_sequence=10,
+            ),
+            worker_config=worker_config_r0,
+        )
+        loader_r1 = get_loader(
+            get_train_dataset(
+                self.dataset_path,
+                batch_size=3,
+                task_encoder=TestTaskEncoder(),
+                worker_config=worker_config_r1,
+                shuffle_buffer_size=20,
+                max_samples_per_sequence=10,
+            ),
+            worker_config=worker_config_r1,
+        )
+
+        batches = list(zip(range(20), loader))
+        print("bir0", [batch.batch_index for batch_idx, batch in batches])
+        assert all(all(bi == batch_idx for bi in batch.batch_index) for batch_idx, batch in batches)
+
+        print("sir0", [batch.sample_index for batch_idx, batch in batches])
+        # [[0, 0, 2], [1, 1, 3], [2, 4, 4], [3, 5, 5], [6, 6, 8], [7, 7, 9], [8, 10, 10], [9, 11, 11], [12, 12, 14], [13, 13, 15], [14, 16, 16], [15, 17, 17], [18, 18, 20], [19, 19, 21], [20, 22, 22], [21, 23, 23], [24, 24, 26], [25, 25, 27], [26, 28, 28], [27, 29, 29]]
+        assert all(
+            all(
+                si == batch_idx + (batch_idx // 4 + ((batch_idx // 2 % 2) + sample_offset) // 2) * 2
+                for sample_offset, si in enumerate(batch.sample_index)
+            )
+            for batch_idx, batch in batches
+        )
+
+        batches_r1 = list(zip(range(20), loader_r1))
+        print("bir0", [batch.batch_index for batch_idx, batch in batches_r1])
+        print("sir1", [batch.sample_index for batch_idx, batch in batches_r1])
+        assert all(
+            all(bi == batch_idx for bi in batch.batch_index) for batch_idx, batch in batches_r1
+        )
+        assert all(
+            all(
+                si == batch_idx + (batch_idx // 4 + ((batch_idx // 2 % 2) + sample_offset) // 2) * 2
+                for sample_offset, si in enumerate(batch.sample_index)
+            )
+            for batch_idx, batch in batches_r1
+        )
+
+        # Now, test multi-worker loader with accessing get_current_batch_index and save/restore state
+        loader = get_savable_loader(
+            get_train_dataset(
+                self.dataset_path,
+                batch_size=3,
+                task_encoder=TestTaskEncoder(),
+                worker_config=worker_config_r0,
+                shuffle_buffer_size=20,
+                max_samples_per_sequence=10,
+            ),
+            worker_config=worker_config_r0,
+        )
+        loader_r1 = get_savable_loader(
+            get_train_dataset(
+                self.dataset_path,
+                batch_size=3,
+                task_encoder=TestTaskEncoder(),
+                worker_config=worker_config_r1,
+                shuffle_buffer_size=20,
+                max_samples_per_sequence=10,
+            ),
+            worker_config=worker_config_r1,
+        )
+
+        batches = list(zip(range(20), loader))
+        print("bi:", [batch.batch_index for batch_idx, batch in batches])
+        print("si:", [batch.sample_index for batch_idx, batch in batches])
+        assert all(all(bi == batch_idx for bi in batch.batch_index) for batch_idx, batch in batches)
+        assert all(
+            all(
+                si == batch_idx + (batch_idx // 4 + ((batch_idx // 2 % 2) + sample_offset) // 2) * 2
+                for sample_offset, si in enumerate(batch.sample_index)
+            )
+            for batch_idx, batch in batches
+        )
+
+        batches_r1 = list(zip(range(20), loader_r1))
+        print([batch.batch_index for batch_idx, batch in batches_r1])
+        assert all(
+            all(bi == batch_idx for bi in batch.batch_index) for batch_idx, batch in batches_r1
+        )
+        assert all(
+            all(
+                si == batch_idx + (batch_idx // 4 + ((batch_idx // 2 % 2) + sample_offset) // 2) * 2
+                for sample_offset, si in enumerate(batch.sample_index)
+            )
+            for batch_idx, batch in batches_r1
+        )
+
+        # Save and restore state
+        state = loader.save_state_rank()
+
+        # Iter next 20 from the loader
+        cmp_batches = list(zip(range(20, 40), loader))
+        print("bi:", [batch.batch_index for batch_idx, batch in cmp_batches])
+        print("si:", [batch.sample_index for batch_idx, batch in cmp_batches])
+        print("rnd:", [batch.rand_num for batch_idx, batch in cmp_batches])
+        assert all(
+            all(bi == batch_idx for bi in batch.batch_index) for batch_idx, batch in cmp_batches
+        )
+        assert all(
+            all(
+                si == batch_idx + (batch_idx // 4 + ((batch_idx // 2 % 2) + sample_offset) // 2) * 2
+                for sample_offset, si in enumerate(batch.sample_index)
+            )
+            for batch_idx, batch in cmp_batches
+        )
+
+        # Restore state and check if the batch index is restored correctly
+        loader = get_savable_loader(
+            get_train_dataset(
+                self.dataset_path,
+                batch_size=3,
+                task_encoder=TestTaskEncoder(),
+                worker_config=worker_config_r0,
+                shuffle_buffer_size=20,
+                max_samples_per_sequence=10,
+            ),
+            worker_config=worker_config_r0,
+        )
+        loader.restore_state_rank(state)
+
+        batches = list(zip(range(20, 40), loader))
+        print("bi:", [batch.batch_index for batch_idx, batch in batches])
+        print("si:", [batch.sample_index for batch_idx, batch in batches])
+        print("rnd:", [batch.rand_num for batch_idx, batch in batches])
+        assert all(all(bi == batch_idx for bi in batch.batch_index) for batch_idx, batch in batches)
+        assert all(
+            all(
+                si == batch_idx + (batch_idx // 4 + ((batch_idx // 2 % 2) + sample_offset) // 2) * 2
+                for sample_offset, si in enumerate(batch.sample_index)
+            )
+            for batch_idx, batch in batches
+        )
+        assert all(
+            all(b1s == b2s for b1s, b2s in zip(b1.rand_num, b2.rand_num))
+            for b1, b2 in (batches, cmp_batches)
+        )
+
     def test_packing(self):
         torch.manual_seed(42)
 

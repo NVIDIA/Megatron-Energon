@@ -26,6 +26,7 @@ from megatron.energon.wrappers.base import (
     BaseSingleWrapperMergedState,
     BaseSingleWrapperState,
     SampleIndex,
+    get_sample_restore_key,
 )
 from megatron.energon.wrappers.skip import SkipSample
 
@@ -43,6 +44,18 @@ class MapMergedState(BaseSingleWrapperMergedState):
     sample_indexes: List[int]
 
 
+@dataclass
+class MapGeneratorState(MapState):
+    generator_sample_key: Any
+    generator_offset: int
+
+
+@dataclass
+class MapGeneratorMergedState(MapMergedState):
+    generator_sample_keys: List[Any]
+    generator_offsets: List[int]
+
+
 class MapDataset(BaseSingleWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T_sample_out]):
     """This dataset wrapper applies a custom function to transform each sample."""
 
@@ -50,6 +63,8 @@ class MapDataset(BaseSingleWrapperDataset[T_sample, T_sample_out], Generic[T_sam
     error_handler: Callable[[Exception, T_sample], None]
     stateless_map_fn: bool
     _sample_index: SampleIndex
+    _generator_sample_keys: List[Optional[Any]]
+    _generator_offsets: List[Optional[int]]
 
     def __init__(
         self,
@@ -80,28 +95,65 @@ class MapDataset(BaseSingleWrapperDataset[T_sample, T_sample_out], Generic[T_sam
         self.stateless_map_fn = stateless_map_fn
         self.worker_config = worker_config
         self._sample_index = SampleIndex(worker_config, src=self)
+        self._generator_sample_keys = [None] * max(self.worker_config.num_workers, 1)
+        self._generator_offsets = [None] * max(self.worker_config.num_workers, 1)
 
     def __len__(self):
         return len(self.dataset)
 
     def __iter__(self) -> Iterator[T_sample_out]:
+        worker_id = self.worker_config.rank_worker_id()
+        if self._generator_sample_keys[worker_id] is not None:
+            assert self._generator_offsets[worker_id] is not None
+            sample = self.dataset.restore_sample(self._generator_sample_keys[worker_id])
+            # Do not increment the sample index, use previous index
+            with self._sample_index.ctx(self._sample_index.current_idx) as sample_idx:
+                mapped_sample = self.map_fn(sample)
+            assert isinstance(mapped_sample, Generator)
+            assert inspect.isgeneratorfunction(
+                self.map_fn
+            ), f"Generator in {self.map_fn} but not marked as such."
+            target_offset = self._generator_offsets[worker_id]
+            self._generator_offsets[worker_id] = 0
+            for idx, (sample_idx, inner_sample) in enumerate(
+                self._sample_index.iter_ctx(mapped_sample, sample_idx)
+            ):
+                # Skip other samples
+                if idx >= target_offset:
+                    self._generator_offsets[worker_id] = idx + 1
+                    yield add_sample_restore_key(
+                        inner_sample,
+                        sample_idx,
+                        idx,
+                        src=self,
+                    )
+            self._generator_sample_keys[worker_id] = None
+            self._generator_offsets[worker_id] = None
+
         for sample in self.dataset:
             try:
                 with self._sample_index.ctx() as sample_idx:
                     mapped_sample = self.map_fn(sample)
                 if isinstance(mapped_sample, Generator):
-                    assert inspect.isgeneratorfunction(self.map_fn), f"Generator in {self.map_fn} but not marked as such."
+                    assert inspect.isgeneratorfunction(
+                        self.map_fn
+                    ), f"Generator in {self.map_fn} but not marked as such."
+                    self._generator_sample_keys[worker_id] = get_sample_restore_key(sample)
+                    self._generator_offsets[worker_id] = 0
                     # In case of a generator, additionally store the index of the yielded samples
                     # per input sample
                     for idx, (sample_idx, inner_sample) in enumerate(
                         self._sample_index.iter_ctx(mapped_sample, sample_idx)
                     ):
+                        self._generator_offsets[worker_id] = idx + 1
                         yield add_sample_restore_key(
                             inner_sample,
                             sample_idx,
                             idx,
                             src=self,
                         )
+                    self._generator_sample_keys[worker_id] = None
+                    self._generator_offsets[worker_id] = None
                 else:
                     yield add_sample_restore_key(
                         mapped_sample,
@@ -116,27 +168,57 @@ class MapDataset(BaseSingleWrapperDataset[T_sample, T_sample_out], Generic[T_sam
                 self.error_handler(e, sample)
 
     def save_state(self) -> MapState:
-        return MapState.extend(
+        state = MapState.extend(
             super().save_state(),
             sample_index=self._sample_index.save_state(),
         )
+        if self._generator_offsets[self.worker_config.rank_worker_id()] is not None:
+            state = MapGeneratorState.extend(
+                state,
+                generator_sample_key=self._generator_sample_keys[
+                    self.worker_config.rank_worker_id()
+                ],
+                generator_offset=self._generator_offsets[self.worker_config.rank_worker_id()],
+            )
+        return state
 
     def merge_states(self, states: List[MapState]) -> MapMergedState:
         assert all(s is None or isinstance(s, MapState) for s in states)
-        return MapMergedState.extend(
+        state = MapMergedState.extend(
             super().merge_states(states),
             sample_indexes=self._sample_index.merge_states(
                 [0 if state is None else state.sample_index for state in states]
             ),
         )
+        if any(isinstance(s, MapGeneratorState) for s in states):
+            state = MapGeneratorMergedState.extend(
+                state,
+                generator_sample_keys=[
+                    state.generator_sample_key if isinstance(state, MapGeneratorState) else None
+                    for state in states
+                ],
+                generator_offsets=[
+                    state.generator_offset if isinstance(state, MapGeneratorState) else None
+                    for state in states
+                ],
+            )
+        return state
 
     def restore_state(self, state: Optional[MapMergedState]) -> None:
         super().restore_state(state)
         if state is None:
             self._sample_index.restore_state(None)
+            self._generator_sample_keys = [None] * max(self.worker_config.num_workers, 1)
+            self._generator_offsets = [None] * max(self.worker_config.num_workers, 1)
         else:
             assert isinstance(state, MapMergedState)
             self._sample_index.restore_state(state.sample_indexes)
+            if isinstance(state, MapGeneratorMergedState):
+                self._generator_sample_keys = state.generator_sample_keys
+                self._generator_offsets = state.generator_offsets
+            else:
+                self._generator_sample_keys = [None] * max(self.worker_config.num_workers, 1)
+                self._generator_offsets = [None] * max(self.worker_config.num_workers, 1)
 
     def can_restore_sample(self) -> bool:
         return self.stateless_map_fn and self.dataset.can_restore_sample()
@@ -158,7 +240,9 @@ class MapDataset(BaseSingleWrapperDataset[T_sample, T_sample_out], Generic[T_sam
         with self._sample_index.ctx(sample_idx):
             mapped_sample = self.map_fn(inner_sample)
         if isinstance(mapped_sample, Generator):
-            assert inspect.isgeneratorfunction(self.map_fn), f"Generator in {self.map_fn} but not marked as such."
+            assert inspect.isgeneratorfunction(
+                self.map_fn
+            ), f"Generator in {self.map_fn} but not marked as such."
             for idx, (sample_idx, res_sample) in enumerate(
                 self._sample_index.iter_ctx(mapped_sample, sample_idx)
             ):

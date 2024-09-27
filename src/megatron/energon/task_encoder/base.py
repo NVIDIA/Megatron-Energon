@@ -146,7 +146,7 @@ def stateless(
             # from worker_seed and current sample index
             SystemRng.seed_args(worker_seed, self.current_sample_index)
 
-            it = iter(fn)
+            it = iter(fn(self, *args, **kwargs))
 
             inner_rand_state = None
 
