@@ -1346,7 +1346,7 @@ class TestDataset(unittest.TestCase):
         )
         assert all(
             all(b1s == b2s for b1s, b2s in zip(b1.rand_num, b2.rand_num))
-            for b1, b2 in (batches, cmp_batches)
+            for (_b1idx, b1), (_b2idx, b2) in zip(batches, cmp_batches)
         )
 
     def test_packing(self):
