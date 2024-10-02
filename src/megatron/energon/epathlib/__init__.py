@@ -3,4 +3,4 @@
 
 from megatron.energon.epathlib.epath import EPath
 
-all = ["EPath"]
+__all__ = ["EPath"]
