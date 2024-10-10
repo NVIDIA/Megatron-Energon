@@ -259,12 +259,14 @@ class BatchDataset(
         # Cannot really verify if the returned elements contain a __restore_key__.
         # If the user wants to use this, well...
         return self.batcher_stateless and self.dataset.can_restore_sample()
+    
+    def assert_can_restore(self) -> None:
+        assert self.batcher_stateless, f"Batcher {self.batcher} must be stateless to restore samples"
+        self.dataset.assert_can_restore()
 
     def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_batch:
         # We need to store multiple indices to restore a batch.
-        assert (
-            self.batcher_stateless
-        ), f"Batcher {self.batcher} must be stateless to restore samples"
+        self.assert_can_restore()
         if inspect.isgeneratorfunction(self.batcher):
             id, sample_idx, batch_sub_idx, *samples_restore_keys = index
             assert id == type(self).__name__

@@ -622,6 +622,9 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
 
     def can_restore_sample(self) -> bool:
         return True
+    
+    def assert_can_restore(self) -> None:
+        pass
 
     def restore_sample(self, key: Tuple[Union[str, int, tuple], ...]) -> FilteredSample:
         id, shard_name, tar_byte_offset = key

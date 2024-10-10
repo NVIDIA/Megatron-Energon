@@ -94,6 +94,9 @@ class BaseSingleWrapperDataset(
 
     def can_restore_sample(self) -> bool:
         return self.dataset.can_restore_sample()
+    
+    def assert_can_restore(self) -> None:
+        self.dataset.assert_can_restore()
 
     def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_sample_out:
         return self.dataset.restore_sample(index)

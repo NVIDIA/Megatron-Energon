@@ -321,12 +321,14 @@ class PackingDataset(
         # Cannot really verify if the returned elements contain a __restore_key__.
         # If the user wants to use this, well...
         return self.final_packer_stateless and self.dataset.can_restore_sample()
+    
+    def assert_can_restore(self):
+        assert self.final_packer_stateless, f"Final packer {self.final_packer} must be stateless to restore samples."
+        self.dataset.assert_can_restore()
 
     def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_sample:
         # We need to store multiple indices to restore a batch.
-        assert (
-            self.final_packer_stateless
-        ), f"Final packer {self.final_packer} must be stateless to restore samples."
+        self.assert_can_restore()
         if inspect.isgeneratorfunction(self.final_packer):
             id, pack_idx, pack_sub_idx, *pack_restore_keys = index
             assert id == type(self).__name__

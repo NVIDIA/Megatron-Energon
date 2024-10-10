@@ -283,6 +283,10 @@ class SavableDataset(IterableDataset[T_sample], Generic[T_sample], ABC):
     def can_restore_sample(self) -> bool:
         """Returns True if the dataset can restore a sample from a key."""
         return False
+        
+    def assert_can_restore(self) -> None:
+        """Asserts that the dataset can restore a sample from a key."""
+        assert self.can_restore_sample(), "This dataset cannot restore samples."
 
     def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_sample:
         """
