@@ -356,7 +356,7 @@ class EPath:
             return str(self.relpath)
 
     def __repr__(self) -> str:
-        return f"EPath({str(self)})"
+        return f"EPath({str(self)!r})"
 
     def __hash__(self):
         return hash((self.internal_path, self.protocol))

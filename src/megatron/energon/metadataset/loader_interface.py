@@ -17,7 +17,7 @@ class DatasetLoaderInterface(ABC):
         *,
         training: bool,
         split_part: Union[Literal["train", "val", "test"], str],
-        worker_config: Optional[WorkerConfig] = None,
+        worker_config: WorkerConfig,
         subflavor: Optional[str] = None,
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: int = 1,
@@ -30,7 +30,7 @@ class DatasetLoaderInterface(ABC):
         Args:
             training: If true, apply training randomization.
             split_part: Default split part to use.
-            worker_config: Worker configuration to use. Defaults to `global_worker_config`.
+            worker_config: Worker configuration to use.
             subflavor: Set the default subflavor for all datasets.
             subflavors: Set the default subflavors for all datasets.
             shuffle_over_epochs_multiplier: Multiply the inner datasets

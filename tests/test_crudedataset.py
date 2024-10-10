@@ -7,7 +7,6 @@ import logging
 import pickle
 import sys
 import tempfile
-import time
 import unittest
 import warnings
 from dataclasses import dataclass
@@ -19,19 +18,17 @@ import webdataset as wds
 
 from megatron.energon import (
     Batch,
-    CrudeSample,
+    Cooker,
     DefaultTaskEncoder,
     TextSample,
     WorkerConfig,
-    get_loader,
+    basic_sample_keys,
     get_savable_loader,
     get_train_dataset,
-    get_val_dataset,
-    load_dataset,
+    stateless,
 )
 from megatron.energon.dataset_config import MAIN_FOLDER_NAME
 from megatron.energon.flavors.webdataset.structs import reraise_exception
-from megatron.energon.task_encoder.cooking import Cooker, basic_sample_keys
 
 
 @dataclass
@@ -68,6 +65,13 @@ class MyTaskEncoder(DefaultTaskEncoder[TextSample, TextSample, TextBatch, TextBa
             __keys__=[sample.__key__ for sample in samples],
             txts=[sample.text for sample in samples],
         )
+    
+    def select_samples_to_pack(self, samples):
+        return [[sample] for sample in samples]
+    
+    @stateless
+    def pack_selected_samples(self, samples):
+        return samples[0]
 
 
 class TestDataset(unittest.TestCase):
@@ -219,6 +223,61 @@ class TestDataset(unittest.TestCase):
                     assert txt == f"<{key_int}|{key_int}>"
 
                 print(key, txt)
+
+    def test_loader(self):
+        torch.manual_seed(42)
+        worker_config = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=2,
+        )
+
+        loader = get_savable_loader(
+            get_train_dataset(
+                self.mds_path,
+                batch_size=2,
+                worker_config=worker_config,
+                task_encoder=MyTaskEncoder(),
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                packing_buffer_size=2,
+            ),
+            worker_config=worker_config,
+            checkpoint_every_sec=0,
+            checkpoint_every_min_n_samples=1,
+            n_checkpoints=4,
+        )
+        samples = [s.__keys__ for idx, s in zip(range(100), loader)]
+
+        print(samples)
+
+        state = loader.save_state_rank()
+
+        samples_after = [s.__keys__ for idx, s in zip(range(100, 200), loader)]
+        print(samples_after)
+
+        loader = get_savable_loader(
+            get_train_dataset(
+                self.mds_path,
+                batch_size=2,
+                worker_config=worker_config,
+                task_encoder=MyTaskEncoder(),
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                packing_buffer_size=2,
+            ),
+            worker_config=worker_config,
+            checkpoint_every_sec=0,
+            checkpoint_every_min_n_samples=1,
+            n_checkpoints=4,
+        )
+
+        loader.restore_state_rank(state)
+
+        samples_restored = [s.__keys__ for idx, s in zip(range(100, 200), loader)]
+        print(samples_restored)
+
+        assert all([a == b for a, b in zip(samples_after, samples_restored)])
 
 
 if __name__ == "__main__":

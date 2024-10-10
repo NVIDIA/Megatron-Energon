@@ -114,8 +114,8 @@ class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
     #: Uniquely identifies each sample in the dataset.
     __key__: str
     #: Key for restoring the sample. This is used to restore the sample from a checkpoint. It
-    # should be a tuple of strings and integers, which can be used to index the dataset.
-    __restore_key__: Tuple[Union[str, int], ...]
+    # should be a (nested) tuple of strings and integers, which can be used to index the dataset.
+    __restore_key__: Tuple[Union[str, int, tuple], ...]
 
     #: A dataset may define a subflavor to distinguish between samples of the same sample type.
     __subflavor__: Optional[str]
@@ -283,25 +283,12 @@ class SavableDataset(IterableDataset[T_sample], Generic[T_sample], ABC):
     def can_restore_sample(self) -> bool:
         """Returns True if the dataset can restore a sample from a key."""
         return False
+        
+    def assert_can_restore(self) -> None:
+        """Asserts that the dataset can restore a sample from a key."""
+        assert self.can_restore_sample(), "This dataset cannot restore samples."
 
-    def _add_sample_restore_key(
-        self, sample: T_sample, key: Union[int, str], fail_otherwise: bool = False
-    ) -> T_sample:
-        """Adds a key to a sample. The sample must be a valid `Sample` or dict containing
-        __restore_key__, which is a tuple of keys that can be used to restore the inner sample.
-        This restore key is prepended with the `key`."""
-        if isinstance(sample, Sample):
-            sample.__restore_key__ = (key, *sample.__restore_key__)
-        elif isinstance(sample, dict) and "__restore_key__" in sample:
-            sample["__restore_key__"] = (key, *sample["__restore_key__"])
-        elif fail_otherwise:
-            raise RuntimeError(
-                "Did not yield a sample with a restore key, but is marked "
-                "stateless/deterministic."
-            )
-        return sample
-
-    def restore_sample(self, index: Tuple[Union[str, int], ...]) -> T_sample:
+    def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_sample:
         """
         Generic key type, because it might be either an integer (for a core dataset), or something
         more complex (e.g. for blended datasets).
@@ -322,3 +309,43 @@ class BaseCoreDataset(SavableDataset[T_sample], Generic[T_sample], ABC):
 
     subflavor: Optional[str]
     subflavors: Dict[str, Any]
+
+
+def add_sample_restore_key(
+    sample: T_sample, *key: Union[int, str], src: Any, fail_otherwise: bool = False
+) -> T_sample:
+    """Adds a key to a sample. The sample must be a valid `Sample` or dict containing
+    __restore_key__, which is a tuple of keys that can be used to restore the inner sample.
+    This restore key is prepended with the `key`."""
+    if isinstance(sample, Sample) or hasattr(sample, "__restore_key__"):
+        try:
+            sample.__restore_key__ = (type(src).__name__, *key, *sample.__restore_key__)
+        except KeyError:
+            pass
+    elif isinstance(sample, dict) and "__restore_key__" in sample:
+        sample["__restore_key__"] = (type(src).__name__, *key, *sample["__restore_key__"])
+    elif fail_otherwise:
+        raise RuntimeError(
+            "Did not yield a sample with a restore key, but is marked " "stateless/deterministic."
+        )
+    return sample
+
+
+def set_sample_restore_key(
+    sample: T_sample, *key: Union[int, str], src: Any, fail_otherwise: bool = False
+) -> T_sample:
+    """Sets the restore key for a sample. The sample must be a valid `Sample` or dict containing
+    __restore_key__, which is a tuple of keys that can be used to restore the inner sample.
+    This restore key is prepended with the `key`."""
+    if isinstance(sample, Sample) or hasattr(sample, "__restore_key__"):
+        try:
+            sample.__restore_key__ = (type(src).__name__, *key)
+        except KeyError:
+            pass
+    elif isinstance(sample, dict) and "__restore_key__" in sample:
+        sample["__restore_key__"] = (type(src).__name__, *key)
+    elif fail_otherwise:
+        raise RuntimeError(
+            "Did not yield a sample with a restore key, but is marked " "stateless/deterministic."
+        )
+    return sample
