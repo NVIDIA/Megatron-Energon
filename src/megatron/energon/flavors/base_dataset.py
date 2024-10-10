@@ -301,7 +301,7 @@ class BaseCoreDataset(SavableDataset[T_sample], Generic[T_sample], ABC):
     """Base type for an inner dataset loaded from a .nv-meta folder."""
 
     __sample_type__: Type[T_sample] = cast(Type[T_sample], None)
-    path: EPath
+    paths: List[EPath]
 
     subflavor: Optional[str]
     subflavors: Dict[str, Any]

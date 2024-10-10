@@ -1,11 +1,24 @@
 # Copyright (c) 2024, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+import contextlib
 import dataclasses
 import tarfile
 import warnings
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Generator, Iterator, List, Optional, Set, Tuple, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Generator,
+    Iterator,
+    List,
+    Literal,
+    Optional,
+    Set,
+    Tuple,
+    Union,
+)
 
 import torch
 
@@ -44,10 +57,10 @@ class SampleLoaderState(State):
     rng: WorkerRngState
     #: Pending shards are the shards which have not yet been opened, but should be processed
     # in the current "epoch"
-    pending_shards: Optional[List[ShardInfo]]
+    pending_shards: Optional[List[List[ShardInfo]]]
     #: The active shards are the currently opened shards. May contain `None`, if there are fewer
     # shards available (i.e. pending_shards empty) than parallel shard iterators requested.
-    active_shards: Optional[List[Optional[ShardState]]]
+    active_shards: Optional[List[Optional[List[ShardState]]]]
     #: The total number of samples retrieved, it's just a monotonically increasing counter
     sample_count: int
     #: Number of epochs this dataset has been iterated over
@@ -62,10 +75,10 @@ class SampleLoaderMergedState(MergedState):
     rng: WorkerRngMergedState
     #: Pending shards are the shards which have not yet been opened, but should be processed
     # in the current "epoch"
-    pending_shards: List[Optional[List[ShardInfo]]]
+    pending_shards: List[Optional[List[List[ShardInfo]]]]
     #: The active shards are the currently opened shards. May contain `None`, if there are fewer
     # shards available (i.e. pending_shards empty) than parallel shard iterators requested.
-    active_shards: List[Optional[List[Optional[ShardState]]]]
+    active_shards: List[Optional[List[Optional[List[ShardState]]]]]
     #: The total number of samples retrieved, it's just a monotonically increasing counter
     sample_count: List[int]
     #: Number of epochs this dataset has been iterated over
@@ -74,22 +87,254 @@ class SampleLoaderMergedState(MergedState):
     epoch_sample_count: List[int]
 
 
-class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
-    """Internal class for loading samples from webdataset shards"""
+class SingleShardReader:
+    """
+    Reads a single shard, possibly resuming from a saved state. The reader keeps track of the
+    current offset and byte offset in the shard and yields one sample at a time calling the
+    `read_next` function. Optionally reads sample columns from extra column shards.
+    """
 
-    #: All shards for all workers `shards[worker_idx][shard_idx]`
-    shards: List[List[ShardInfo]]
-    #: All shards for all workers accessible by name and offset
-    # `shards[worker_idx][(shard_name, offset)]`, created lazily
-    _shards_by_key: Optional[List[Dict[Tuple[str, int], ShardInfo]]] = None
-    #: Paths to shards for all workers by name `shards[worker_idx][shard_name]`, created lazily
-    _shard_paths_by_name: Optional[Dict[str, EPath]] = None
+    # Internal empty iterator, will always raise StopIteration on next
+    _EMPTY_ITER = iter(())
+
     #: The data parallel worker config
     worker_config: WorkerConfig
     # Sample keys to ignore
     exclude: Set[str]
-    # File extensions to load (or None to load all)
-    extensions: Optional[Set[str]]
+    # State of the shard to load
+    shard_state: ShardState
+    # Filter out wds files.
+    part_filter: Optional[Callable[[str], bool]]
+    # Error handler
+    handler: Callable[[Exception, str], None]
+
+    # The internal state variables
+    _ctx: contextlib.ExitStack
+    _tar_file: tarfile.TarFile
+    _stream: Iterator[tarfile.TarInfo]
+    _cur_tarinfo: Optional[tarfile.TarInfo] = None
+
+    def __init__(
+        self,
+        worker_config: WorkerConfig,
+        exclude: Set[str],
+        shard_state: ShardState,
+        part_filter: Optional[Callable[[str], bool]],
+        handler: Callable[[Exception, str], None],
+    ):
+        self.worker_config = worker_config
+        self.exclude = exclude
+        self.shard_state = shard_state
+        self.part_filter = part_filter
+        self.handler = handler
+
+        shard = self.shard_state.shard
+        if shard.byte_offset is None:
+            shard.byte_offset = get_itar_byte_offset(shard.path, shard.offset)
+        if shard.byte_size is None:
+            shard.byte_size = (
+                get_itar_byte_offset(shard.path, shard.offset + shard.count) - shard.byte_offset
+            )
+
+        # If the shard is not empty, the absolute byte offset must be smaller than the shard size
+        assert self.shard_state.byte_offset <= shard.byte_size
+
+        # Given the shard offset (e.g. sub-shard) and the relative byte offset from the stored state, compute the absolute byte offset
+        self._absolute_offset = shard.offset + self.shard_state.offset
+        self._absolute_byte_offset = shard.byte_offset + self.shard_state.byte_offset
+        self._sub_tar_byte_size = shard.byte_size - self.shard_state.byte_offset
+        self._orig_shard_state_byte_offset = self.shard_state.byte_offset
+
+        if worker_config.should_log(level=2):
+            worker_config.worker_log(
+                {
+                    "t": "WebdatasetSampleLoaderDataset._shard_iter",
+                    "r": worker_config.rank,
+                    "w": worker_config.rank_worker_id(),
+                    "shard": {
+                        "name": shard_state.shard.name,
+                        "path": str(shard_state.shard.path),
+                        "offset": shard_state.shard.offset,
+                        "count": shard_state.shard.count,
+                    },
+                    "offset": shard_state.offset,
+                }
+            )
+
+        self._ctx = contextlib.ExitStack()
+        if self.shard_state.byte_offset == shard.byte_size:
+            # Empty shard, return immediately (cannot be handled by the open_itar function)
+            self._stream = self._EMPTY_ITER
+        else:
+            self._tar_file = self._ctx.enter_context(
+                open_itar(
+                    shard.path,
+                    byte_offset=self._absolute_byte_offset,
+                    byte_size=self._sub_tar_byte_size,
+                )
+            )
+            self._stream = iter(self._tar_file)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if self._stream and hasattr(self._stream, "close"):
+            self._stream.close()
+        self._ctx.close()
+
+    def _next_tarinfo(self) -> None:
+        """Internally loads the nest tar entry metadata. Or raises StopIteration."""
+        while True:
+            try:
+                self._cur_tarinfo = next(self._stream)
+            except StopIteration:
+                self._cur_base_name = self._cur_ext = self._cur_key = self._cur_tarinfo = None
+                raise
+            fname = self._cur_tarinfo.name
+            if not self._cur_tarinfo.isreg():
+                continue
+            if fname is None:
+                continue
+            if skip_meta_re.match(fname):
+                continue
+
+            # Get base_name and extension if available
+            m = split_name_re.match(fname)
+            if not m:
+                continue
+            self._cur_base_name, self._cur_ext = m.groups()
+
+            self._cur_key = f"{self.shard_state.shard.name}/{self._cur_base_name}"
+            if self._cur_key in self.exclude:
+                continue
+            return
+
+    def read_next(self, for_key: Optional[str] = None) -> Union[FilteredSample, dict]:
+        """Gets the next sample, or raises StopIteration if exhausted."""
+        if self._cur_tarinfo is None:
+            self._next_tarinfo()
+
+        if for_key is None:
+            group = dict(
+                __key__=self._cur_key,
+                __shard__=self.shard_state.shard.name,
+                __restore_key__=(
+                    "Webdataset",
+                    self.shard_state.shard.name,
+                    self.shard_state.offset,
+                ),
+            )
+            group_key = self._cur_base_name
+        else:
+            group_key = for_key
+            group = {}
+        while True:
+            try:
+                if (group_key != self._cur_base_name) and (len(group) > 3 or for_key is not None):
+                    # Either the group has content, it it's only for a specific key
+                    next_sample_offset_in_sub_tar = self._cur_tarinfo.offset
+                    # NOTE: The next_sample_offset_in_sub_tar (tarinfo.offset) is relative to
+                    # absolute_byte_offset, since open_itar crops a part out of the file.
+                    # But we want to compute the offset relative to shard.byte_offset
+                    self.shard_state.byte_offset = (
+                        next_sample_offset_in_sub_tar + self._orig_shard_state_byte_offset
+                    )
+                    assert self.shard_state.byte_offset <= self.shard_state.shard.byte_size
+                    self.shard_state.offset += 1
+
+                    if self.worker_config.should_log(level=3):
+                        self.worker_config.worker_log(
+                            {
+                                "t": "WebdatasetSampleLoaderDataset._shard_iter.yield",
+                                "r": self.worker_config.rank,
+                                "w": self.worker_config.rank_worker_id(),
+                                "shard": {
+                                    "name": self.shard_state.shard.name,
+                                    "path": str(self.shard_state.shard.path),
+                                    "offset": self.shard_state.shard.offset,
+                                    "count": self.shard_state.shard.count,
+                                },
+                                "offset": self.shard_state.offset,
+                                "key": group_key,
+                            }
+                        )
+
+                    return group
+
+                if self.part_filter is None or self.part_filter(self._cur_ext):
+                    group[self._cur_ext] = self._tar_file.extractfile(self._cur_tarinfo).read()
+            except SYSTEM_EXCEPTIONS:
+                raise FatalSampleError.from_sample_key(self._cur_key)
+            except Exception as e:
+                self.handler(e, self._cur_key)
+
+            try:
+                self._next_tarinfo()
+            except StopIteration:
+                break
+
+        if len(group) > 3 or for_key is not None:
+            # shard_state.byte_offset = (absolute_tar_begin_offset - shard_info.byte_offset)
+            # Next state
+            next_sample_offset_in_sub_tar = self.shard_state.shard.byte_size - (
+                self._absolute_byte_offset - self.shard_state.shard.byte_offset
+            )
+            # NOTE: The next_sample_offset_in_sub_tar (tarinfo.offset) is relative to
+            # absolute_byte_offset, since open_itar crops a part out of the file.
+            # But we want to compute the offset relative to shard.byte_offset
+            self.shard_state.byte_offset = (
+                next_sample_offset_in_sub_tar + self._orig_shard_state_byte_offset
+            )
+            assert self.shard_state.byte_offset <= self.shard_state.shard.byte_size
+            self.shard_state.offset += 1
+
+            if self.worker_config.should_log(level=3):
+                self.worker_config.worker_log(
+                    {
+                        "t": "WebdatasetSampleLoaderDataset._shard_iter.yield",
+                        "r": self.worker_config.rank,
+                        "w": self.worker_config.rank_worker_id(),
+                        "shard": {
+                            "name": self.shard_state.shard.name,
+                            "path": str(self.shard_state.shard.path),
+                            "offset": self.shard_state.shard.offset,
+                            "count": self.shard_state.shard.count,
+                        },
+                        "offset": self.shard_state.offset,
+                        "key": group_key,
+                    }
+                )
+
+            if (
+                self.shard_state.offset != self.shard_state.shard.count
+                or self.shard_state.byte_offset != self.shard_state.shard.byte_size
+            ):
+                warnings.warn(
+                    f"shard_state.offset({self.shard_state.offset}) != shard.count({self.shard_state.shard.count}) or "
+                    f"shard_state.byte_offset({self.shard_state.byte_offset}) != shard.byte_size({self.shard_state.shard.byte_size})"
+                    f"; this indicates an internal bug. Shard might not have been iterated completely, samples may be missing."
+                )
+
+            return group
+        else:
+            raise StopIteration()
+
+
+class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
+    """Internal class for loading samples from webdataset shards"""
+
+    #: All shards for all workers `shards[worker_idx][shard_idx][merge_idx]`
+    shards: List[List[List[ShardInfo]]]
+    #: All shards for all workers accessible by name and offset
+    # `shards[worker_idx][(shard_name, offset)]`, created lazily
+    _shards_by_key: Optional[List[Dict[Tuple[str, int], List[ShardInfo]]]] = None
+    #: Paths to shards for all workers by name `shards[worker_idx][shard_name]`, created lazily
+    _shard_paths_by_name: Optional[Dict[str, List[EPath]]] = None
+    #: The data parallel worker config
+    worker_config: WorkerConfig
+    # Sample keys to ignore
+    exclude: Set[str]
 
     # If true, loop the shards
     loop: bool
@@ -107,10 +352,10 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
     _worker_rng: WorkerRng
     #: Pending shards are the shards which have not yet been opened, but should be processed
     # in the current "epoch"
-    _pending_shards: List[List[ShardInfo]]
+    _pending_shards: List[List[List[ShardInfo]]]
     #: The active shards are the currently opened shards. May contain `None`, if there are fewer
     # shards available (i.e. pending_shards empty) than parallel shard iterators requested.
-    _active_shards_state: List[Optional[List[Optional[ShardState]]]]
+    _active_shards_state: List[Optional[List[Optional[List[ShardState]]]]]
     #: The total number of samples retrieved, it's just a monotonically increasing counter
     _sample_count: List[int]
     #: Number of epochs this dataset has been iterated over
@@ -120,7 +365,8 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
 
     def __init__(
         self,
-        rank_shards: List[List[ShardInfo]],
+        shard_parent: EPath,
+        rank_shards: List[List[List[ShardInfo]]],
         *,
         worker_config: WorkerConfig,
         exclude: Set[str],
@@ -128,13 +374,16 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
         loop: bool = False,
         shuffle_over_epochs: Optional[int] = None,
         parallel_shard_iters: int = 1,
+        dataset_join_method: Literal["inner_match", "inner", "left"] = "inner_match",
         handler: Callable[[Exception, str], None] = reraise_exception,
     ):
         """
         The webdataset loader. Iterates over the shard infos and yields the samples.
 
         Args:
-            rank_shards: The shards to iterate over for each worker of the current rank.
+            shard_parent: Parent absolute path to the shards.
+            rank_shards: The shards to iterate over for each worker of the current rank for each
+                merged dataset.
             worker_config: The worker configuration.
             exclude: A set of strings of the form "<shard name>" or "<shard name>/<sample index>" to
                 exclude from iteration.
@@ -149,9 +398,11 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
             parallel_shard_iters: If > 1, samples are randomly drawn from parallel shard iterators.
                 This will not impact performance, but increase randomness. If = 1, the shards are
                 iterated in order.
+            dataset_join_method: The method to join datasets. One of 'inner_match', 'inner', 'left'.
             handler: Exception handler. Args: (exception, key).
         """
         super().__init__()
+        self.shard_parent = shard_parent
         self.shards = rank_shards
         self.worker_config = worker_config
         self.exclude = exclude
@@ -159,6 +410,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
         self.loop = loop
         self.shuffle_over_epochs = shuffle_over_epochs
         self.parallel_shard_iters = parallel_shard_iters
+        self.dataset_join_method = dataset_join_method
         self.handler = handler
         self._worker_rng = WorkerRng(worker_config)
         self._pending_shards = [[] for _ in range(len(self.shards))]
@@ -170,22 +422,73 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
         assert self.parallel_shard_iters >= 1
 
     @property
-    def shards_by_key(self) -> List[Dict[Tuple[str, int], ShardInfo]]:
+    def shards_by_key(self) -> List[Dict[Tuple[str, int], List[ShardInfo]]]:
         if self._shards_by_key is None:
             self._shards_by_key = [
-                {(shard.name, shard.offset): shard for shard in shards} for shards in self.shards
+                {(subshards[0].name, subshards[0].offset): subshards for subshards in worker_shards}
+                for worker_shards in self.shards
             ]
         return self._shards_by_key
 
     @property
-    def shard_path_map(self) -> Dict[str, EPath]:
+    def shard_path_map(self) -> Dict[str, List[EPath]]:
         if self._shard_paths_by_name is None:
             self._shard_paths_by_name = {
-                shard.name: shard.path for shards in self.shards for shard in shards
+                shard[0].name: [s.path for s in shard] for shards in self.shards for shard in shards
             }
         return self._shard_paths_by_name
 
-    def _shards_once(self, shards: List[ShardInfo]) -> List[ShardInfo]:
+    def _read_multicolumn_shard(
+        self,
+        shard_states: List[ShardState],
+    ) -> Generator[FilteredSample, None, None]:
+        """
+        Reads samples, possibly from multiple column shards, resuming from a saved state if needed.
+        The first shard is assumed to be the primary shard (giving the keys of the samples), while the
+        other shards are the extra column shards, possibly overwriting columns.
+        """
+        ctx = contextlib.ExitStack()
+        readers = [
+            ctx.enter_context(
+                SingleShardReader(
+                    self.worker_config,
+                    self.exclude,
+                    shard_state,
+                    self.part_filter,
+                    self.handler,
+                )
+            )
+            for shard_state in shard_states
+        ]
+        with ctx:
+            while True:
+                try:
+                    group = readers[0].read_next()
+                    for reader in readers[1:]:
+                        reader.read_next(group["__key__"])
+                        group.update()
+                except StopIteration:
+                    # Expecting all column readers to raise StopIteration as well
+                    for reader in readers[1:]:
+                        try:
+                            reader.read_next()
+                        except StopIteration:
+                            pass
+                        else:
+                            raise FatalSampleError.from_sample_key(
+                                f"{reader.shard_state.shard.name}"
+                            ) from ValueError(
+                                "Extra column shard exhausted when primary shard is exhausted"
+                            )
+                    break
+                except SYSTEM_EXCEPTIONS:
+                    raise FatalSampleError.from_sample_key(f"{readers[0].shard_state.shard.path}")
+                except Exception as e:
+                    self.handler(e, readers[0].shard_state.shard.name)
+                else:
+                    yield group
+
+    def _shards_once(self, shards: List[List[ShardInfo]]) -> List[List[ShardInfo]]:
         """Possibly (re)shuffles the shards using the random generator."""
         if self.shuffle_over_epochs is None:
             # No shuffling
@@ -204,181 +507,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
         else:
             raise ValueError(f"Invalid shuffle_over_epochs: {self.shuffle_over_epochs}")
 
-    def _filter_files(self, fname: str, shard_name: str) -> bool:
-        """Filter function for webdataset for excluding files from the shards."""
-        if shard_name in self.exclude:
-            return False
-
-        # Get base_name and extension if available
-        m = split_name_re.match(fname)
-        if not m:
-            return False
-        base_name, ext = m.groups()
-
-        if f"{shard_name}/{base_name}" in self.exclude:
-            return False
-        if self.part_filter is not None and not self.part_filter(ext):
-            return False
-        return True
-
-    def _tarfile_sample_iter(
-        self,
-        tar_file: tarfile.TarFile,
-        shard_info: ShardInfo,
-        absolute_tar_begin_byte_offset: int,
-    ) -> Generator[Tuple[FilteredSample, int], None, None]:
-        group: Optional[FilteredSample] = None
-        last_group_key: Optional[str] = None
-        key: str = f"{shard_info.name}/UNKNOWN"
-
-        for tarinfo in tar_file:
-            try:
-                fname = tarinfo.name
-                if not tarinfo.isreg():
-                    continue
-                if fname is None:
-                    continue
-                if skip_meta_re.match(fname):
-                    continue
-
-                # Get base_name and extension if available
-                m = split_name_re.match(fname)
-                if not m:
-                    continue
-                base_name, ext = m.groups()
-
-                key = f"{shard_info.name}/{base_name}"
-
-                if last_group_key != base_name:
-                    if group is not None:
-                        yield group, tarinfo.offset
-
-                    group = dict(
-                        __key__=key,
-                        __shard__=shard_info.name,
-                        __restore_key__=(
-                            "Webdataset",
-                            shard_info.name,
-                            tarinfo.offset + absolute_tar_begin_byte_offset,
-                        ),
-                    )
-                    last_group_key = base_name
-
-                if self.part_filter is None or self.part_filter(ext):
-                    group[ext] = tar_file.extractfile(tarinfo).read()
-            except SYSTEM_EXCEPTIONS:
-                raise FatalSampleError.from_sample_key(key)
-            except Exception as e:
-                self.handler(e, key)
-
-        if group is not None:
-            # shard_state.byte_offset = (absolute_tar_begin_offset - shard_info.byte_offset)
-            yield group, shard_info.byte_size - (
-                absolute_tar_begin_byte_offset - shard_info.byte_offset
-            )
-        else:
-            return
-
-    def _shard_iter(self, shard_state: ShardState) -> Generator[FilteredSample, None, None]:
-        """Iterates the samples in a shard (potentially resuming from a saved state)."""
-        # print(
-        #     f"Shard iter for shard {shard_state.shard.name} [{shard_state.shard.offset} +{shard_state.byte_offset}b, {shard_state.shard.offset + shard_state.shard.count} -{shard_state.byte_offset}b) starting"
-        # )
-        if self.worker_config.should_log(level=2):
-            self.worker_config.worker_log(
-                {
-                    "t": "WebdatasetSampleLoaderDataset._shard_iter",
-                    "r": self.worker_config.rank,
-                    "w": self.worker_config.rank_worker_id(),
-                    "shard": {
-                        "name": shard_state.shard.name,
-                        "path": str(shard_state.shard.path),
-                        "offset": shard_state.shard.offset,
-                        "count": shard_state.shard.count,
-                    },
-                    "offset": shard_state.offset,
-                }
-            )
-
-        shard = shard_state.shard
-        if shard.byte_offset is None:
-            shard.byte_offset = get_itar_byte_offset(shard.path, shard.offset)
-        if shard.byte_size is None:
-            shard.byte_size = (
-                get_itar_byte_offset(shard.path, shard.offset + shard.count) - shard.byte_offset
-            )
-
-        if shard_state.byte_offset == shard.byte_size:
-            # Empty shard, return immediately (cannot be handled by the open_itar function)
-            return
-
-        # If the shard is not empty, the absolute byte offset must be smaller than the shard size
-        assert shard_state.byte_offset < shard.byte_size
-
-        # Given the shard offset (e.g. sub-shard) and the relative byte offset from the stored state, compute the absolute byte offset
-        absolute_byte_offset = shard.byte_offset + shard_state.byte_offset
-        sub_tar_byte_size = shard.byte_size - shard_state.byte_offset
-        orig_shard_state_byte_offset = shard_state.byte_offset
-
-        try:
-            # Open the shard and resume where it was last stopped
-
-            with open_itar(
-                shard.path,
-                byte_offset=absolute_byte_offset,
-                byte_size=sub_tar_byte_size,
-            ) as it:
-                for group, next_sample_offset_in_sub_tar in self._tarfile_sample_iter(
-                    it, shard, absolute_byte_offset
-                ):
-                    if self.worker_config.should_log(level=3):
-                        self.worker_config.worker_log(
-                            {
-                                "t": "WebdatasetSampleLoaderDataset._shard_iter.yield",
-                                "r": self.worker_config.rank,
-                                "w": self.worker_config.rank_worker_id(),
-                                "shard": {
-                                    "name": shard_state.shard.name,
-                                    "path": str(shard_state.shard.path),
-                                    "offset": shard_state.shard.offset,
-                                    "count": shard_state.shard.count,
-                                },
-                                "offset": shard_state.offset,
-                                "key": group["__key__"],
-                            }
-                        )
-
-                    # Next state
-                    # NOTE: The next_sample_offset_in_sub_tar (tarinfo.offset) is relative to
-                    # absolute_byte_offset, since open_itar crops a part out of the file.
-                    # But we want to compute the offset relative to shard.byte_offset
-                    shard_state.byte_offset = (
-                        next_sample_offset_in_sub_tar + orig_shard_state_byte_offset
-                    )
-                    assert shard_state.byte_offset <= shard.byte_size
-                    # print(f"Yield {group['__key__']} @next: {key} @{shard_state.byte_offset}b")
-
-                    shard_state.offset += 1
-                    if group["__key__"] in self.exclude:
-                        continue
-                    yield group
-
-                # Set to end of subtar
-                if shard_state.offset != shard.count or shard_state.byte_offset != shard.byte_size:
-                    warnings.warn(
-                        f"shard_state.offset({shard_state.offset}) != shard.count({shard.count}) or "
-                        f"shard_state.byte_offset({shard_state.byte_offset}) != shard.byte_size({shard.byte_size})"
-                        f"; this indicates an internal bug. Shard might not have been interated completely, samples may be missing."
-                    )
-                # assert shard_state.offset == shard.count
-                # assert shard_state.byte_offset == shard.byte_size
-        except SYSTEM_EXCEPTIONS:
-            raise FatalSampleError.from_sample_key(f"{shard.path}")
-        except Exception as e:
-            self.handler(e, shard.name)
-        # print(f"Shard iter for shard {shard.name} [{shard.offset}, {shard.count}) done")
-
-    def _shards_iter(self, shards: List[ShardInfo]) -> Generator[FilteredSample, None, None]:
+    def _shards_iter(self, shards: List[List[ShardInfo]]) -> Generator[FilteredSample, None, None]:
         """Iterates the samples in a list of shards, possibly looping over them indefinitely,
         possibly reshuffling the shards every loop, possibly using multiple parallel iterators over
         the shards."""
@@ -389,8 +518,8 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
                 self._active_shards_state[i] = [None] * self.parallel_shard_iters
                 self._pending_shards[i] = []
         shards_probs = torch.empty(self.parallel_shard_iters, dtype=torch.float32)
-        shard_iters: List[Optional[Generator[FilteredSample, None, None]]]
-        active_shards: List[Optional[ShardState]]
+        shard_iters: List[Optional[Generator[FilteredSample, None, None]]] = []
+        active_shards: List[Optional[List[ShardState]]]
         while True:
             shards_probs[:] = 0
             shard_iters = []
@@ -403,12 +532,12 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
                 # Restore the state
                 active_shards = self._active_shards_state[worker_idx]
                 assert len(active_shards) == self.parallel_shard_iters
-                for shard_state in active_shards:
-                    if shard_state is None:
+                for shard_states in active_shards:
+                    if shard_states is None:
                         shard_iters.append(None)
                     else:
-                        shards_probs[len(shard_iters)] = shard_state.shard.count
-                        shard_iters.append(self._shard_iter(shard_state))
+                        shards_probs[len(shard_iters)] = shard_states[0].shard.count
+                        shard_iters.append(self._read_multicolumn_shard(shard_states))
 
                 if self.worker_config.should_log(level=1):
                     self.worker_config.worker_log(
@@ -417,29 +546,35 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
                             "r": self.worker_config.rank,
                             "w": self.worker_config.rank_worker_id(),
                             "shards": [
-                                {
-                                    "name": shard.name,
-                                    "path": str(shard.path),
-                                    "offset": shard.offset,
-                                    "count": shard.count,
-                                }
-                                for shard in shards_order
+                                [
+                                    {
+                                        "name": subshard.name,
+                                        "path": str(subshard.path),
+                                        "offset": subshard.offset,
+                                        "count": subshard.count,
+                                    }
+                                    for subshard in subshards
+                                ]
+                                for subshards in shards_order
                             ],
                             "active_shards": [
                                 (
                                     None
-                                    if shard_state is None
-                                    else {
-                                        "shard": {
-                                            "name": shard_state.shard.name,
-                                            "path": str(shard_state.shard.path),
-                                            "offset": shard_state.shard.offset,
-                                            "count": shard_state.shard.count,
-                                        },
-                                        "offset": shard_state.offset,
-                                    }
+                                    if subshard_states is None
+                                    else [
+                                        {
+                                            "shard": {
+                                                "name": subshard_state.shard.name,
+                                                "path": str(subshard_state.shard.path),
+                                                "offset": subshard_state.shard.offset,
+                                                "count": subshard_state.shard.count,
+                                            },
+                                            "offset": subshard_state.offset,
+                                        }
+                                        for subshard_state in subshard_states
+                                    ]
                                 )
-                                for shard_state in active_shards
+                                for subshard_states in active_shards
                             ],
                             "count": self._sample_count[worker_idx],
                             "epoch": self._epoch_count[worker_idx],
@@ -460,13 +595,16 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
                             "r": self.worker_config.rank,
                             "w": self.worker_config.rank_worker_id(),
                             "shards": [
-                                {
-                                    "name": shard.name,
-                                    "path": str(shard.path),
-                                    "offset": shard.offset,
-                                    "count": shard.count,
-                                }
-                                for shard in shards_order
+                                [
+                                    {
+                                        "name": shard.name,
+                                        "path": str(shard.path),
+                                        "offset": shard.offset,
+                                        "count": shard.count,
+                                    }
+                                    for shard in subshards
+                                ]
+                                for subshards in shards_order
                             ],
                             "count": self._sample_count[worker_idx],
                             "epoch": self._epoch_count[worker_idx],
@@ -480,11 +618,13 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
                 active_shards = []
                 # Fill up the shard iterators
                 while len(shards_order) > 0 and len(shard_iters) < self.parallel_shard_iters:
-                    shard = shards_order.pop()
-                    shard_state = ShardState(shard=shard, byte_offset=0, offset=0)
-                    shards_probs[len(shard_iters)] = shard.count
-                    shard_iters.append(self._shard_iter(shard_state))
-                    active_shards.append(shard_state)
+                    subshards = shards_order.pop()
+                    shard_states = [
+                        ShardState(shard=shard, byte_offset=0, offset=0) for shard in subshards
+                    ]
+                    shards_probs[len(shard_iters)] = subshards[0].count
+                    shard_iters.append(self._read_multicolumn_shard(shard_states))
+                    active_shards.append(shard_states)
                 # Fill up the shard iterators with None
                 for _ in range(len(shard_iters), self.parallel_shard_iters):
                     shard_iters.append(None)
@@ -517,16 +657,16 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
                     if len(shards_order) > 0 or self.shuffle_over_epochs == -1:
                         if len(shards_order) > 0:
                             # Take the next shard (without replacement)
-                            shard = shards_order.pop()
+                            subshards = shards_order.pop()
                         else:
                             # Randomly select a new shard directly (with replacement)
-                            shard = self.shards[worker_idx][
-                                self._worker_rng.randbelow(len(self.shards[worker_idx]))
-                            ]
-                        shard_state = ShardState(shard=shard, byte_offset=0, offset=0)
-                        shard_iters[rm_idx] = self._shard_iter(shard_state)
-                        shards_probs[rm_idx] = shard.count
-                        active_shards[rm_idx] = shard_state
+                            subshards = shards[self._worker_rng.randbelow(len(shards))]
+                        shard_states = [
+                            ShardState(shard=shard, byte_offset=0, offset=0) for shard in subshards
+                        ]
+                        shard_iters[rm_idx] = self._read_multicolumn_shard(shard_states)
+                        shards_probs[rm_idx] = subshards[0].count
+                        active_shards[rm_idx] = shard_states
                         # print(
                         #     f"Shard iter for {self.worker_config.rank}:{self.worker_config.rank_worker_id()} exhausted, taking next shard {shard.name} [{shard.offset}, {shard.offset + shard.count}), {len(shards_order)} shards left, probs={shards_probs}"
                         # )
@@ -588,12 +728,14 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
                 break
 
     def __len__(self) -> int:
-        return sum(shard.count for worker_shards in self.shards for shard in worker_shards)
+        return sum(
+            subshards[0].count for worker_shards in self.shards for subshards in worker_shards
+        )
 
     def worker_has_samples(self) -> bool:
         self.worker_config.assert_worker()
         worker_shards = self.shards[self.worker_config.rank_worker_id()]
-        return any(shard.count > 0 for shard in worker_shards)
+        return any(subshard[0].count > 0 for subshard in worker_shards)
 
     def __iter__(self) -> Iterator[FilteredSample]:
         self.worker_config.assert_worker()
@@ -606,8 +748,11 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
                     "r": self.worker_config.rank,
                     "w": self.worker_config.rank_worker_id(),
                     "shard_range": [
-                        f"{shard.name}[{shard.offset}, {shard.offset+shard.count})"
-                        for shard in worker_shards
+                        [
+                            f"{shard.name}[{shard.offset}, {shard.offset+shard.count})"
+                            for shard in subshards
+                        ]
+                        for subshards in worker_shards
                     ],
                     "parallel_shard_iters": self.parallel_shard_iters,
                     "shuffle_over_epochs": self.shuffle_over_epochs,
@@ -624,26 +769,30 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
         return True
 
     def restore_sample(self, key: Tuple[Union[str, int, tuple], ...]) -> FilteredSample:
-        id, shard_name, tar_byte_offset = key
+        id, shard_name, tar_offset = key
         assert id == "Webdataset"
-        shard_path = self.shard_path_map[shard_name]
+        shard_paths = self.shard_path_map[shard_name]
 
-        sample_shard_info = ShardInfo(
-            name=shard_name,
-            path=shard_path,
-            offset=0,
-            count=1,
-            byte_offset=tar_byte_offset,
-            # Just a dummy value
-            byte_size=0,
-        )
+        sample_shard_infos = [
+            ShardState(
+                shard=ShardInfo(
+                    name=shard_name,
+                    path=shard_path,
+                    offset=tar_offset,
+                    count=1,
+                    byte_offset=None,
+                    byte_size=None,
+                ),
+                offset=0,
+                byte_offset=0,
+            )
+            for shard_path in shard_paths
+        ]
 
-        # Open the shard and extract the sample
-        with open_itar(shard_path, byte_offset=tar_byte_offset) as tar_file:
-            gen = self._tarfile_sample_iter(tar_file, sample_shard_info, tar_byte_offset)
-            sample, _ = next(gen)
-            gen.close()
-            return sample
+        gen = self._read_multicolumn_shard(sample_shard_infos)
+        sample = next(gen)
+        gen.close()
+        return sample
 
     def save_state(self) -> SampleLoaderState:
         self.worker_config.assert_worker()
@@ -659,29 +808,35 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
                     "epoch": self._epoch_count[worker_idx],
                     "epoch_count": self._epoch_sample_count[worker_idx],
                     "pending_shards": [
-                        {
-                            "name": shard.name,
-                            "path": str(shard.path),
-                            "offset": shard.offset,
-                            "count": shard.count,
-                        }
-                        for shard in self._pending_shards[worker_idx]
+                        [
+                            {
+                                "name": subshard.name,
+                                "path": str(subshard.path),
+                                "offset": subshard.offset,
+                                "count": subshard.count,
+                            }
+                            for subshard in subshards
+                        ]
+                        for subshards in self._pending_shards[worker_idx]
                     ],
                     "active_shards": [
                         (
                             None
-                            if shard_state is None
-                            else {
-                                "shard": {
-                                    "name": shard_state.shard.name,
-                                    "path": str(shard_state.shard.path),
-                                    "offset": shard_state.shard.offset,
-                                    "count": shard_state.shard.count,
-                                },
-                                "offset": shard_state.offset,
-                            }
+                            if subshard_states is None
+                            else [
+                                {
+                                    "shard": {
+                                        "name": shard_state.shard.name,
+                                        "path": str(shard_state.shard.path),
+                                        "offset": shard_state.shard.offset,
+                                        "count": shard_state.shard.count,
+                                    },
+                                    "offset": shard_state.offset,
+                                }
+                                for shard_state in subshard_states
+                            ]
                         )
-                        for shard_state in self._active_shards_state[worker_idx]
+                        for subshard_states in self._active_shards_state[worker_idx]
                     ],
                 }
             )
@@ -689,8 +844,12 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
             rng=self._worker_rng.save_state(),
             pending_shards=list(self._pending_shards[worker_idx]),
             active_shards=[
-                None if active_shard is None else dataclasses.replace(active_shard)
-                for active_shard in self._active_shards_state[worker_idx]
+                (
+                    None
+                    if active_subshards is None
+                    else [dataclasses.replace(subshard) for subshard in active_subshards]
+                )
+                for active_subshards in self._active_shards_state[worker_idx]
             ],
             sample_count=self._sample_count[worker_idx],
             epoch_count=self._epoch_count[worker_idx],
@@ -712,20 +871,21 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
         )
 
     def _restore_find_shard(
-        self, shard_data: ShardInfo, shards_by_key: Dict[Tuple[str, int], ShardInfo]
-    ) -> ShardInfo:
-        shard = shards_by_key[(shard_data.name, shard_data.offset)]
-        if shard != shard_data:
-            raise ValueError(
-                f"Shard {shard_data!r} not found in {self.shards!r}, states differ, not recoverable"
-            )
-        # Copy over the byte size and offset. Saves some loading time,
-        # especially for restoring lots of random samples :)
-        if shard_data.byte_offset is not None and shard.byte_offset is None:
-            shard.byte_offset = shard_data.byte_offset
-        if shard_data.byte_size is not None and shard.byte_size is None:
-            shard.byte_size = shard_data.byte_size
-        return shard
+        self, subshards_data: List[ShardInfo], shards_by_key: Dict[Tuple[str, int], List[ShardInfo]]
+    ) -> List[ShardInfo]:
+        subshards = shards_by_key[(subshards_data[0].name, subshards_data[0].offset)]
+        for subshard_data, subshard in zip(subshards_data, subshards):
+            if subshard != subshard_data:
+                raise ValueError(
+                    f"Shard {subshard_data!r} not found in {self.shards!r}, states differ, not recoverable"
+                )
+            # Copy over the byte size and offset. Saves some loading time,
+            # especially for restoring lots of random samples :)
+            if subshard_data.byte_offset is not None and subshard.byte_offset is None:
+                subshard.byte_offset = subshard_data.byte_offset
+            if subshard_data.byte_size is not None and subshard.byte_size is None:
+                subshard.byte_size = subshard_data.byte_size
+        return subshards
 
     def restore_state(self, state: Optional[SampleLoaderMergedState]) -> None:
         if self.worker_config.should_log(level=3):
@@ -755,22 +915,38 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
             assert len(state.pending_shards) == len(self.shards)
             assert len(state.active_shards) == len(self.shards)
             self._pending_shards = [
-                [self._restore_find_shard(shard, shards_by_key) for shard in pending_shards]
+                (
+                    [self._restore_find_shard(shard, shards_by_key) for shard in pending_shards]
+                    if pending_shards is not None
+                    else []
+                )
                 for pending_shards, shards_by_key in zip(state.pending_shards, self.shards_by_key)
             ]
             self._active_shards_state = [
-                [
-                    (
-                        None
-                        if shard_state is None
-                        else ShardState(
-                            shard=self._restore_find_shard(shard_state.shard, shards_by_key),
-                            offset=shard_state.offset,
-                            byte_offset=shard_state.byte_offset,
+                (
+                    [
+                        (
+                            None
+                            if subshard_states is None
+                            else [
+                                ShardState(
+                                    shard=subshard,
+                                    offset=subshard_state.offset,
+                                    byte_offset=subshard_state.byte_offset,
+                                )
+                                for subshard, subshard_state in zip(
+                                    self._restore_find_shard(
+                                        [s.shard for s in subshard_states], shards_by_key
+                                    ),
+                                    subshard_states,
+                                )
+                            ]
                         )
-                    )
-                    for shard_state in active_shard_states
-                ]
+                        for subshard_states in active_shard_states
+                    ]
+                    if active_shard_states is not None
+                    else None
+                )
                 for active_shard_states, shards_by_key in zip(
                     state.active_shards, self.shards_by_key
                 )
@@ -784,15 +960,18 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
             "type": type(self).__qualname__,
             "shards": [
                 [
-                    {
-                        "name": shard.name,
-                        "path": str(shard.path),
-                        "offset": shard.offset,
-                        "count": shard.count,
-                        "byte_offset": shard.byte_offset,
-                        "byte_size": shard.byte_size,
-                    }
-                    for shard in shards
+                    [
+                        {
+                            "name": subshard.name,
+                            "path": str(subshard.path),
+                            "offset": subshard.offset,
+                            "count": subshard.count,
+                            "byte_offset": subshard.byte_offset,
+                            "byte_size": subshard.byte_size,
+                        }
+                        for subshard in subshards
+                    ]
+                    for subshards in shards
                 ]
                 for shards in self.shards
             ],

@@ -23,6 +23,7 @@ from typing import (
     List,
     Literal,
     Optional,
+    Sequence,
     Set,
     Tuple,
     TypeVar,
@@ -112,23 +113,23 @@ class BaseWebdataset(BaseCoreDataset[T_sample], Generic[T_sample], ABC):
     Base class for all webdataset loaders. Applies proper sharding across workers.
     """
 
-    path: EPath
+    paths: List[EPath]
     training: bool
     worker_config: WorkerConfig
     info: WebdatasetInfo
     split_config: WebdatasetSplits
     extension_fn: Optional[Callable[[str], bool]]
 
-    shards: List[ShardInfo]
+    shards: List[List[ShardInfo]]
     dataset: SavableDataset[T_sample]
-    rank_shards: List[List[ShardInfo]]
+    rank_shards: List[List[List[ShardInfo]]]
 
     class EmptyDatasetError(Exception):
         """Raised when a dataset is empty."""
 
     def __init__(
         self,
-        path: EPath,
+        paths: Union[EPath, List[EPath]],
         *,
         split_part: str,
         training: bool,
@@ -139,13 +140,14 @@ class BaseWebdataset(BaseCoreDataset[T_sample], Generic[T_sample], ABC):
         info_config: str = ".info.yaml",
         split_config: str = "split.yaml",
         part_filter: Optional[Callable[[str], bool]] = None,
+        dataset_join_method: Literal["inner_match", "inner", "left"] = "inner_match",
         handler: Callable[[Exception, Optional[str]], None] = reraise_exception,
     ):
         """
         Constructs the webdataset loader.
 
         Args:
-            path: Root path to the dataset for relative path resolution.
+            paths: Root path(s) to the dataset.
             split_part: Which part to load (e.g. 'train', 'val', 'test').
             training: If true, apply shuffling and loop the dataset.
             worker_config: Configuration for the workers.
@@ -162,40 +164,79 @@ class BaseWebdataset(BaseCoreDataset[T_sample], Generic[T_sample], ABC):
             info_config: Config file to use for sample metadata.
             split_config: Config file to use for shard split definitions.
             part_filter: (internal) Function for filtering tar files by dict keys
+            dataset_join_method: If multiple paths are specified, how to join the samples.
+                inner: keep only samples that are in all paths
+                inner_match: like inner, but raise if a sample doesn't match in all paths
+                left: keep all samples from the first path, optionally joining with the other
             handler: Exception handler. Args: (exception, key).
         """
         assert self.__sample_type__ is not None, f"Class {type(self)} must define __sample_type__"
-        self.path = path
+        if isinstance(paths, str) or not isinstance(paths, Sequence):
+            paths = [paths]
+        self.paths = paths
         self.training = training
         self.worker_config = worker_config
         self.handler = handler
-        self.info = raw_to_typed(
-            yaml.safe_load((path / MAIN_FOLDER_NAME / info_config).read_text()), WebdatasetInfo
-        )
-        self.split_config = raw_to_typed(
-            yaml.safe_load((path / MAIN_FOLDER_NAME / split_config).read_text()), WebdatasetSplits
-        )
-        assert split_part in self.split_config.split_parts, f"Invalid split part: {split_part!r}"
-        self.shards = [
-            ShardInfo(
-                name=name,
-                path=path / name,
-                offset=0,
-                count=self.info.shard_counts[name],
+        infos = [
+            raw_to_typed(
+                yaml.safe_load((path / MAIN_FOLDER_NAME / info_config).read_text()), WebdatasetInfo
             )
-            for name in self.split_config.split_parts[split_part]
-            for name in braceexpand.braceexpand(name)
+            for path in self.paths
+        ]
+        split_configs = [
+            raw_to_typed(
+                yaml.safe_load((path / MAIN_FOLDER_NAME / split_config).read_text()),
+                WebdatasetSplits,
+            )
+            for path in self.paths
+        ]
+        assert all(
+            split_part in split_config.split_parts for split_config in split_configs
+        ), f"Invalid split part: {split_part!r}"
+        split_excludes = [
+            {
+                excluded
+                for excluded in split_config.exclude
+                for excluded in braceexpand.braceexpand(excluded)
+            }
+            for split_config in split_configs
+        ]
+        split_part_files = [
+            [
+                name
+                for name in split_config.split_parts[split_part]
+                for name in braceexpand.braceexpand(name)
+                if name not in excludes
+            ]
+            for split_config, excludes in zip(split_configs, split_excludes)
+        ]
+        sample_excludes = [
+            {excluded for excluded in sample_exclude if "/" in excluded}
+            for sample_exclude in split_excludes
+        ]
+        assert all(
+            sample_exclude == sample_excludes[0] for sample_exclude in sample_excludes[1:]
+        ), f"Sample excludes must be the same for all paths"
+        sample_exclude = sample_excludes[0]
+        assert all(
+            len(files) == len(split_part_files[0]) for files in split_part_files[1:]
+        ), f"Number of split parts must be the same for all paths"
+        # split_part_files transposed
+        split_file_parts = zip(*split_part_files)
+        self.shards = [
+            [
+                ShardInfo(
+                    name=name,
+                    path=path / name,
+                    offset=0,
+                    count=info.shard_counts[name],
+                )
+                for name, info, path in zip(names, infos, self.paths)
+            ]
+            for names in split_file_parts
         ]
         if len(self.shards) == 0:
             raise BaseWebdataset.EmptyDatasetError(f"No shards found in split part {split_part!r}")
-
-        exclude = {
-            excluded
-            for excluded in self.split_config.exclude
-            for excluded in braceexpand.braceexpand(excluded)
-        }
-        total_shard_list = [shard for shard in self.shards if shard.name not in exclude]
-        assert len(total_shard_list) > 0, f"No shards left after filtering."
 
         if parallel_shard_iters is None:
             if training:
@@ -205,40 +246,45 @@ class BaseWebdataset(BaseCoreDataset[T_sample], Generic[T_sample], ABC):
                 parallel_shard_iters = 1
 
         self.rank_shards = self._shard_workers(
-            total_shard_list,
+            self.shards,
             self.worker_config,
             max_samples_per_sequence=max_samples_per_sequence,
         )
 
-        self.rank_total = sum(shard.count for shards in self.rank_shards for shard in shards)
-        for idx, shards in enumerate(self.rank_shards):
+        self.rank_total = sum(
+            subshard[0].count for shards in self.rank_shards for subshard in shards
+        )
+        for rank_idx, shards in enumerate(self.rank_shards):
             shards_text = ", ".join(
-                f"{shard.name}[{shard.offset}, {shard.offset+shard.count})" for shard in shards[:3]
+                f"{subshard[0].name}[{subshard[0].offset}, {subshard[0].offset+subshard[0].count})"
+                for subshard in shards[:3]
             )
             if len(shards) > 6:
                 shards_text += f", ...<{len(shards) - 6}>, " + ", ".join(
-                    f"{shard.name}[{shard.offset}, {shard.offset+shard.count})"
-                    for shard in shards[-3:]
+                    f"{subshards[0].name}[{subshards[0].offset}, {subshards[0].offset+subshards[0].count})"
+                    for subshards in shards[-3:]
                 )
             elif len(shards) > 3:
                 shards_text += ", " + ", ".join(
-                    f"{shard.name}[{shard.offset}, {shard.offset+shard.count})"
-                    for shard in shards[3:]
+                    f"{subshards[0].name}[{subshards[0].offset}, {subshards[0].offset+subshards[0].count})"
+                    for subshards in shards[3:]
                 )
             print(
-                f"rank={self.worker_config.rank}, worker={idx}: shard_range="
+                f"rank={self.worker_config.rank}, worker={rank_idx}: shard_range="
                 f"[{shards_text}] "
-                f"sum(count)={sum(s.count for s in shards)}"
+                f"sum(count)={sum(subshards[0].count for subshards in shards)}"
             )
 
         dataset = WebdatasetSampleLoaderDataset(
+            shard_parent=self.paths[0],
             rank_shards=self.rank_shards,
             worker_config=self.worker_config,
             part_filter=part_filter,
-            exclude=exclude,
+            exclude=sample_exclude,
             loop=training,
             shuffle_over_epochs=shuffle_over_epochs if training else None,
             parallel_shard_iters=parallel_shard_iters,
+            dataset_join_method=dataset_join_method,
             handler=self.sample_error_handler,
         )
         self.dataset = self._process_samples(dataset)
@@ -272,11 +318,11 @@ class BaseWebdataset(BaseCoreDataset[T_sample], Generic[T_sample], ABC):
 
     @staticmethod
     def _split_shard(
-        shard: ShardInfo,
+        subshards: List[ShardInfo],
         start_offset: int,
         end_offset: int,
         max_samples_per_sequence: Optional[int],
-    ) -> List[ShardInfo]:
+    ) -> List[List[ShardInfo]]:
         if (
             max_samples_per_sequence is not None
             and end_offset - start_offset > max_samples_per_sequence * 1.5
@@ -290,30 +336,39 @@ class BaseWebdataset(BaseCoreDataset[T_sample], Generic[T_sample], ABC):
                 start_offset + int(slice * samples_per_sequence) for slice in range(slice_count + 1)
             ]
             return [
-                dataclasses.replace(
-                    shard,
-                    offset=offsets[idx],
-                    count=offsets[idx + 1] - offsets[idx],
-                    byte_offset=None,
-                    byte_size=None,
-                )
+                [
+                    dataclasses.replace(
+                        shard,
+                        offset=offsets[idx],
+                        count=offsets[idx + 1] - offsets[idx],
+                        byte_offset=None,
+                        byte_size=None,
+                    )
+                    for shard in subshards
+                ]
                 for idx in range(slice_count)
             ]
         else:
             return [
-                dataclasses.replace(
-                    shard,
-                    offset=start_offset,
-                    count=end_offset - start_offset,
-                    byte_offset=None,
-                    byte_size=None,
-                )
+                [
+                    dataclasses.replace(
+                        shard,
+                        offset=start_offset,
+                        count=end_offset - start_offset,
+                        byte_offset=None,
+                        byte_size=None,
+                    )
+                    for shard in subshards
+                ]
             ]
 
     @staticmethod
     def _split_shards(
-        shards: List[ShardInfo], offsets: List[int], *, max_samples_per_sequence: Optional[int]
-    ) -> Generator[List[ShardInfo], None, None]:
+        shards: List[List[ShardInfo]],
+        offsets: List[int],
+        *,
+        max_samples_per_sequence: Optional[int],
+    ) -> Generator[List[List[ShardInfo]], None, None]:
         """
         Splits the shards into multiple lists based on the offsets. The first offset is the start
         of the first shard emitted, the last offset is the end of the last shard emitted.
@@ -332,10 +387,10 @@ class BaseWebdataset(BaseCoreDataset[T_sample], Generic[T_sample], ABC):
         cum_count = 0
 
         # Find shard idx for start
-        for start_index, start_shard in enumerate(shards):
-            if cum_count + start_shard.count < offsets[0]:
+        for start_index, start_subshards in enumerate(shards):
+            if cum_count + start_subshards[0].count < offsets[0]:
                 # The shard is before the offset -> go to next shard
-                cum_count += start_shard.count
+                cum_count += start_subshards[0].count
                 continue
             else:
                 # The shard contains the offset
@@ -346,10 +401,10 @@ class BaseWebdataset(BaseCoreDataset[T_sample], Generic[T_sample], ABC):
 
         for offset in offsets[1:]:
             # Find shard idx for end
-            for end_index, end_shard in enumerate(shards[start_index:], start=start_index):
-                if cum_count + end_shard.count < offset:
+            for end_index, end_subshards in enumerate(shards[start_index:], start=start_index):
+                if cum_count + end_subshards[0].count < offset:
                     # The shard is before the offset -> go to next shard
-                    cum_count += end_shard.count
+                    cum_count += end_subshards[0].count
                     continue
                 else:
                     # The shard contains the offset
@@ -359,7 +414,7 @@ class BaseWebdataset(BaseCoreDataset[T_sample], Generic[T_sample], ABC):
                 raise ValueError("Invalid shard distribution")
             if start_index == end_index:
                 yield BaseWebdataset._split_shard(
-                    start_shard,
+                    start_subshards,
                     start_offset=start_offset,
                     end_offset=end_offset,
                     max_samples_per_sequence=max_samples_per_sequence,
@@ -369,45 +424,45 @@ class BaseWebdataset(BaseCoreDataset[T_sample], Generic[T_sample], ABC):
                 yield (
                     (
                         BaseWebdataset._split_shard(
-                            start_shard,
+                            start_subshards,
                             start_offset=start_offset,
-                            end_offset=start_shard.count,
+                            end_offset=start_subshards[0].count,
                             max_samples_per_sequence=max_samples_per_sequence,
                         )
-                        if start_shard.count > start_offset
+                        if start_subshards[0].count > start_offset
                         else []
                     )
                     + sum(
                         (
                             BaseWebdataset._split_shard(
-                                shard,
-                                start_offset=shard.offset,
-                                end_offset=shard.count,
+                                subshards,
+                                start_offset=subshards[0].offset,
+                                end_offset=subshards[0].count,
                                 max_samples_per_sequence=max_samples_per_sequence,
                             )
-                            for shard in shards[start_index + 1 : end_index]
+                            for subshards in shards[start_index + 1 : end_index]
                         ),
                         start=[],
                     )
                     + BaseWebdataset._split_shard(
-                        end_shard,
-                        start_offset=end_shard.offset,
+                        end_subshards,
+                        start_offset=end_subshards[0].offset,
                         end_offset=end_offset,
                         max_samples_per_sequence=max_samples_per_sequence,
                     )
                 )
             start_index = end_index
-            start_shard = end_shard
+            start_subshards = end_subshards
             start_offset = end_offset
 
     @classmethod
     def _shard_workers(
         cls,
-        shards: List[ShardInfo],
+        shards: List[List[ShardInfo]],
         worker_config: WorkerConfig,
         *,
         max_samples_per_sequence: Optional[int],
-    ) -> List[List[ShardInfo]]:
+    ) -> List[List[List[ShardInfo]]]:
         """
         Creates subshards (ShardInfo) for each worker of the current rank.
         For that, the total number of samples is split into the number of global workers across all
@@ -428,7 +483,7 @@ class BaseWebdataset(BaseCoreDataset[T_sample], Generic[T_sample], ABC):
 
         num_workers = max(1, worker_config.num_workers)
 
-        total_samples = sum(shard.count for shard in shards)
+        total_samples = sum(subshards[0].count for subshards in shards)
         global_workers = num_workers * worker_config.world_size
 
         samples_per_worker = total_samples / global_workers
@@ -442,7 +497,7 @@ class BaseWebdataset(BaseCoreDataset[T_sample], Generic[T_sample], ABC):
 
         return list(
             # Filter out any empty shards for this worker
-            [s for s in shards if s.count > 0]
+            [subshards for subshards in shards if subshards[0].count > 0]
             for shards in cls._split_shards(
                 shards,
                 local_rank_worker_sample_offsets,
@@ -508,6 +563,7 @@ class BaseWebdataset(BaseCoreDataset[T_sample], Generic[T_sample], ABC):
         try:
             # Note: Write to .tmp file first, then remove .tmp extension, to make sure only complete
             # files are used.
+            tar: tarfile.TarFile
             with shard_info.path.open("rb") as f:
                 with tarfile.open(fileobj=f, mode="r:*") as tar, TarIndexWriter(
                     shard_info.path
@@ -515,6 +571,7 @@ class BaseWebdataset(BaseCoreDataset[T_sample], Generic[T_sample], ABC):
                     count = 0
                     parts = set()
                     last_base_name = None
+                    member: tarfile.TarInfo
                     for member in tar:
                         if not member.isreg():
                             continue
@@ -555,9 +612,11 @@ class BaseWebdataset(BaseCoreDataset[T_sample], Generic[T_sample], ABC):
         """
         path = EPath(path)
         with path.open("rb") as f:
+            tar: tarfile.TarFile
             with tarfile.open(fileobj=f, mode="r:*") as tar:
                 last_base_name = None
                 sample = {}
+                member: tarfile.TarInfo
                 for member in tar:
                     if not member.isreg():
                         continue
@@ -594,7 +653,7 @@ class BaseWebdataset(BaseCoreDataset[T_sample], Generic[T_sample], ABC):
         info_config: str = ".info.yaml",
         split_config: str = "split.yaml",
         shuffle_seed: Optional[int] = 42,
-        progress_fn: Callable[[List, int], Iterable] = (lambda x, l: x),
+        progress_fn: Callable[[List[T], int], Iterable[T]] = (lambda x, l: x),
         workers: int = 32,
         tar_index_only: bool = False,
     ) -> Set[str]:
@@ -622,7 +681,7 @@ class BaseWebdataset(BaseCoreDataset[T_sample], Generic[T_sample], ABC):
 
         found_parts = set()
         paths = [path for path in paths for path in braceexpand.braceexpand(path)]
-        shards = []
+        shards: List[ShardInfo] = []
 
         assert parent_path.is_absolute(), f"Parent path must be absolute: {parent_path}"
 
@@ -634,6 +693,8 @@ class BaseWebdataset(BaseCoreDataset[T_sample], Generic[T_sample], ABC):
         )
 
         with mp.Pool(workers) as pool:
+            shard_info: ShardInfo
+            cur_parts: Set[str]
             for shard_info, cur_parts in progress_fn(pool.imap(process_tar, paths), len(paths)):
                 if shard_info.count == 0:
                     # This shard failed to load. Skip it.
@@ -704,13 +765,13 @@ class BaseWebdataset(BaseCoreDataset[T_sample], Generic[T_sample], ABC):
         return {
             "type": type(self).__qualname__,
             "training": self.training,
-            "path": str(self.path),
+            "paths": [str(path) for path in self.paths],
             "worker_config": self.worker_config.config(),
             "dataset": self.dataset.config(),
         }
 
     def __str__(self):
-        return f"{type(self).__name__}(path={self.path}, dataset={self.dataset})"
+        return f"{type(self).__name__}(paths={self.paths}, dataset={self.dataset})"
 
 
 class DefaultGenericWebdataset(BaseWebdataset[T_sample], Generic[T_sample]):
