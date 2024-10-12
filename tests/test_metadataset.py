@@ -262,7 +262,7 @@ class TestDataset(unittest.TestCase):
             training=False, split_part="train", worker_config=worker_config
         )
         assert [weight for _raw_dataset, weight in raw_datasets] == [0.4, 0.4, 0.1, 0.1]
-        assert [raw_dataset.path.name for raw_dataset, _weight in raw_datasets] == [
+        assert [raw_dataset.paths[0].name for raw_dataset, _weight in raw_datasets] == [
             "ds1",
             "ds2",
             "ds1",
@@ -546,6 +546,7 @@ class TestDataset(unittest.TestCase):
                     "type": "BatchDataset",
                     "batch_size": 10,
                     "batcher": "megatron.energon.task_encoder.base.DefaultTaskEncoder.batch",
+                    "batcher_stateless": True,
                     "drop_last": False,
                     "error_handler": "megatron.energon.wrappers._log_exception.log_exception",
                     "worker_config": wrk_cfg,
@@ -557,7 +558,7 @@ class TestDataset(unittest.TestCase):
                                 (
                                     {
                                         "type": "TextWebdataset",
-                                        "path": str(self.dataset_path / "ds1"),
+                                        "paths": [str(self.dataset_path / "ds1")],
                                         "training": True,
                                         "worker_config": wrk_cfg,
                                         "dataset": {
@@ -568,72 +569,84 @@ class TestDataset(unittest.TestCase):
                                                     "type": "WebdatasetSampleLoaderDataset",
                                                     "shards": [
                                                         [
-                                                            {
-                                                                "name": "parts/data-0.tar",
-                                                                "path": str(
-                                                                    self.dataset_path
-                                                                    / "ds1/parts/data-0.tar"
-                                                                ),
-                                                                "offset": 0,
-                                                                "count": 10,
-                                                                "byte_offset": 0,
-                                                                "byte_size": 20480,
-                                                            },
-                                                            {
-                                                                "name": "parts/data-1.tar",
-                                                                "path": str(
-                                                                    self.dataset_path
-                                                                    / "ds1/parts/data-1.tar"
-                                                                ),
-                                                                "offset": 0,
-                                                                "count": 10,
-                                                                "byte_offset": 0,
-                                                                "byte_size": 20480,
-                                                            },
-                                                            {
-                                                                "name": "parts/data-2.tar",
-                                                                "path": str(
-                                                                    self.dataset_path
-                                                                    / "ds1/parts/data-2.tar"
-                                                                ),
-                                                                "offset": 0,
-                                                                "count": 10,
-                                                                "byte_offset": 0,
-                                                                "byte_size": 20480,
-                                                            },
-                                                            {
-                                                                "name": "parts/data-3.tar",
-                                                                "path": str(
-                                                                    self.dataset_path
-                                                                    / "ds1/parts/data-3.tar"
-                                                                ),
-                                                                "offset": 0,
-                                                                "count": 10,
-                                                                "byte_offset": 0,
-                                                                "byte_size": 20480,
-                                                            },
-                                                            {
-                                                                "name": "parts/data-4.tar",
-                                                                "path": str(
-                                                                    self.dataset_path
-                                                                    / "ds1/parts/data-4.tar"
-                                                                ),
-                                                                "offset": 0,
-                                                                "count": 10,
-                                                                "byte_offset": 0,
-                                                                "byte_size": 20480,
-                                                            },
-                                                            {
-                                                                "name": "parts/data-5.tar",
-                                                                "path": str(
-                                                                    self.dataset_path
-                                                                    / "ds1/parts/data-5.tar"
-                                                                ),
-                                                                "offset": 0,
-                                                                "count": 5,
-                                                                "byte_offset": 0,
-                                                                "byte_size": 10240,
-                                                            },
+                                                            [
+                                                                {
+                                                                    "name": "parts/data-0.tar",
+                                                                    "path": str(
+                                                                        self.dataset_path
+                                                                        / "ds1/parts/data-0.tar"
+                                                                    ),
+                                                                    "offset": 0,
+                                                                    "count": 10,
+                                                                    "byte_offset": 0,
+                                                                    "byte_size": 20480,
+                                                                }
+                                                            ],
+                                                            [
+                                                                {
+                                                                    "name": "parts/data-1.tar",
+                                                                    "path": str(
+                                                                        self.dataset_path
+                                                                        / "ds1/parts/data-1.tar"
+                                                                    ),
+                                                                    "offset": 0,
+                                                                    "count": 10,
+                                                                    "byte_offset": 0,
+                                                                    "byte_size": 20480,
+                                                                }
+                                                            ],
+                                                            [
+                                                                {
+                                                                    "name": "parts/data-2.tar",
+                                                                    "path": str(
+                                                                        self.dataset_path
+                                                                        / "ds1/parts/data-2.tar"
+                                                                    ),
+                                                                    "offset": 0,
+                                                                    "count": 10,
+                                                                    "byte_offset": 0,
+                                                                    "byte_size": 20480,
+                                                                }
+                                                            ],
+                                                            [
+                                                                {
+                                                                    "name": "parts/data-3.tar",
+                                                                    "path": str(
+                                                                        self.dataset_path
+                                                                        / "ds1/parts/data-3.tar"
+                                                                    ),
+                                                                    "offset": 0,
+                                                                    "count": 10,
+                                                                    "byte_offset": 0,
+                                                                    "byte_size": 20480,
+                                                                }
+                                                            ],
+                                                            [
+                                                                {
+                                                                    "name": "parts/data-4.tar",
+                                                                    "path": str(
+                                                                        self.dataset_path
+                                                                        / "ds1/parts/data-4.tar"
+                                                                    ),
+                                                                    "offset": 0,
+                                                                    "count": 10,
+                                                                    "byte_offset": 0,
+                                                                    "byte_size": 20480,
+                                                                }
+                                                            ],
+                                                            [
+                                                                {
+                                                                    "name": "parts/data-5.tar",
+                                                                    "path": str(
+                                                                        self.dataset_path
+                                                                        / "ds1/parts/data-5.tar"
+                                                                    ),
+                                                                    "offset": 0,
+                                                                    "count": 5,
+                                                                    "byte_offset": 0,
+                                                                    "byte_size": 10240,
+                                                                }
+                                                            ],
                                                         ]
                                                     ],
                                                     "worker_config": wrk_cfg,
@@ -664,7 +677,7 @@ class TestDataset(unittest.TestCase):
                                 (
                                     {
                                         "type": "TextWebdataset",
-                                        "path": str(self.dataset_path / "ds2"),
+                                        "paths": [str(self.dataset_path / "ds2")],
                                         "training": True,
                                         "worker_config": wrk_cfg,
                                         "dataset": {
@@ -675,72 +688,84 @@ class TestDataset(unittest.TestCase):
                                                     "type": "WebdatasetSampleLoaderDataset",
                                                     "shards": [
                                                         [
-                                                            {
-                                                                "name": "parts/data-0.tar",
-                                                                "path": str(
-                                                                    self.dataset_path
-                                                                    / "ds2/parts/data-0.tar"
-                                                                ),
-                                                                "offset": 0,
-                                                                "count": 10,
-                                                                "byte_offset": 0,
-                                                                "byte_size": 20480,
-                                                            },
-                                                            {
-                                                                "name": "parts/data-1.tar",
-                                                                "path": str(
-                                                                    self.dataset_path
-                                                                    / "ds2/parts/data-1.tar"
-                                                                ),
-                                                                "offset": 0,
-                                                                "count": 10,
-                                                                "byte_offset": 0,
-                                                                "byte_size": 20480,
-                                                            },
-                                                            {
-                                                                "name": "parts/data-2.tar",
-                                                                "path": str(
-                                                                    self.dataset_path
-                                                                    / "ds2/parts/data-2.tar"
-                                                                ),
-                                                                "offset": 0,
-                                                                "count": 10,
-                                                                "byte_offset": 0,
-                                                                "byte_size": 20480,
-                                                            },
-                                                            {
-                                                                "name": "parts/data-3.tar",
-                                                                "path": str(
-                                                                    self.dataset_path
-                                                                    / "ds2/parts/data-3.tar"
-                                                                ),
-                                                                "offset": 0,
-                                                                "count": 10,
-                                                                "byte_offset": 0,
-                                                                "byte_size": 20480,
-                                                            },
-                                                            {
-                                                                "name": "parts/data-4.tar",
-                                                                "path": str(
-                                                                    self.dataset_path
-                                                                    / "ds2/parts/data-4.tar"
-                                                                ),
-                                                                "offset": 0,
-                                                                "count": 10,
-                                                                "byte_offset": 0,
-                                                                "byte_size": 20480,
-                                                            },
-                                                            {
-                                                                "name": "parts/data-5.tar",
-                                                                "path": str(
-                                                                    self.dataset_path
-                                                                    / "ds2/parts/data-5.tar"
-                                                                ),
-                                                                "offset": 0,
-                                                                "count": 5,
-                                                                "byte_offset": 0,
-                                                                "byte_size": 10240,
-                                                            },
+                                                            [
+                                                                {
+                                                                    "name": "parts/data-0.tar",
+                                                                    "path": str(
+                                                                        self.dataset_path
+                                                                        / "ds2/parts/data-0.tar"
+                                                                    ),
+                                                                    "offset": 0,
+                                                                    "count": 10,
+                                                                    "byte_offset": 0,
+                                                                    "byte_size": 20480,
+                                                                }
+                                                            ],
+                                                            [
+                                                                {
+                                                                    "name": "parts/data-1.tar",
+                                                                    "path": str(
+                                                                        self.dataset_path
+                                                                        / "ds2/parts/data-1.tar"
+                                                                    ),
+                                                                    "offset": 0,
+                                                                    "count": 10,
+                                                                    "byte_offset": 0,
+                                                                    "byte_size": 20480,
+                                                                }
+                                                            ],
+                                                            [
+                                                                {
+                                                                    "name": "parts/data-2.tar",
+                                                                    "path": str(
+                                                                        self.dataset_path
+                                                                        / "ds2/parts/data-2.tar"
+                                                                    ),
+                                                                    "offset": 0,
+                                                                    "count": 10,
+                                                                    "byte_offset": 0,
+                                                                    "byte_size": 20480,
+                                                                }
+                                                            ],
+                                                            [
+                                                                {
+                                                                    "name": "parts/data-3.tar",
+                                                                    "path": str(
+                                                                        self.dataset_path
+                                                                        / "ds2/parts/data-3.tar"
+                                                                    ),
+                                                                    "offset": 0,
+                                                                    "count": 10,
+                                                                    "byte_offset": 0,
+                                                                    "byte_size": 20480,
+                                                                }
+                                                            ],
+                                                            [
+                                                                {
+                                                                    "name": "parts/data-4.tar",
+                                                                    "path": str(
+                                                                        self.dataset_path
+                                                                        / "ds2/parts/data-4.tar"
+                                                                    ),
+                                                                    "offset": 0,
+                                                                    "count": 10,
+                                                                    "byte_offset": 0,
+                                                                    "byte_size": 20480,
+                                                                }
+                                                            ],
+                                                            [
+                                                                {
+                                                                    "name": "parts/data-5.tar",
+                                                                    "path": str(
+                                                                        self.dataset_path
+                                                                        / "ds2/parts/data-5.tar"
+                                                                    ),
+                                                                    "offset": 0,
+                                                                    "count": 5,
+                                                                    "byte_offset": 0,
+                                                                    "byte_size": 10240,
+                                                                }
+                                                            ],
                                                         ]
                                                     ],
                                                     "worker_config": wrk_cfg,
