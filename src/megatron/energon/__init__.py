@@ -26,11 +26,11 @@ from megatron.energon.flavors import (
     SimilarityInterleavedWebdataset,
     TextSample,
     TextWebdataset,
+    VidQASample,
+    VidQAWebdataset,
     VQAOCRWebdataset,
     VQASample,
     VQAWebdataset,
-    VidQASample,
-    VidQAWebdataset
 )
 from megatron.energon.loader import get_loader, get_savable_loader
 from megatron.energon.metadataset import (
@@ -52,6 +52,7 @@ from megatron.energon.task_encoder import (
     get_train_dataset,
     get_val_dataset,
     get_val_datasets,
+    stateless,
 )
 from megatron.energon.task_encoder.cooking import Cooker, basic_sample_keys
 from megatron.energon.worker import WorkerConfig
@@ -68,6 +69,7 @@ from megatron.energon.wrappers import (
     LogSampleDataset,
     MapDataset,
     MixBatchDataset,
+    PackingDataset,
     RepeatDataset,
     ShuffleBufferDataset,
     SkipSample,
@@ -122,14 +124,15 @@ __all__ = [
     "SimilarityInterleavedWebdataset",
     "ShuffleBufferDataset",
     "SkipSample",
+    "PackingDataset",
     "TaskEncoder",
     "TextSample",
     "TextWebdataset",
+    "VidQASample",
+    "VidQAWebdataset",
     "VQASample",
     "VQAWebdataset",
     "VQAOCRWebdataset",
-    "VidQASample",
-    "VidQAWebdataset",
     "WorkerConfig",
     "basic_sample_keys",
     "batch_list",
@@ -145,4 +148,5 @@ __all__ = [
     "get_val_datasets",
     "homogeneous_concat_mix",
     "load_dataset",
+    "stateless",
 ]

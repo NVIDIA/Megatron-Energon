@@ -2,22 +2,10 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from dataclasses import dataclass
-from typing import (
-    Any,
-    Callable,
-    Dict,
-    Generic,
-    Iterator,
-    List,
-    Literal,
-    Optional,
-    Tuple,
-    TypeVar,
-    Union,
-)
+from typing import Any, Callable, Dict, Generic, Iterator, List, Literal, Optional, TypeVar
 
 from megatron.energon.flavors.base_dataset import SavableDataset
-from megatron.energon.worker import WorkerConfig, global_worker_config
+from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import (
     BaseSingleWrapperDataset,
     BaseSingleWrapperMergedState,
@@ -86,7 +74,7 @@ class LogSampleDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_s
         self,
         dataset: SavableDataset[T_sample],
         mode: Literal["train", "val"],
-        worker_config: Optional[WorkerConfig] = None,
+        worker_config: WorkerConfig,
         get_keys_fn: Callable[[T_sample], Optional[List[str]]] = default_get_keys,
     ):
         """Construct the log sample dataset, which logs every yielded sample to the debug logs.
@@ -97,7 +85,7 @@ class LogSampleDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_s
         super().__init__(dataset)
         self.get_keys_fn = get_keys_fn
         self.mode = mode
-        self.worker_config = worker_config or global_worker_config
+        self.worker_config = worker_config
         self._step = [0] * max(self.worker_config.num_workers, 1)
 
     def __len__(self):

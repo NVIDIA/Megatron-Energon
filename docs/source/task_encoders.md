@@ -10,6 +10,8 @@ is as follows:
 
 - {py:func}`def encode_sample(self, sample: T_sample) -> T_encoded_sample <megatron.energon.DefaultTaskEncoder.encode_sample>`: Transform the raw data from the dataset (e.g. augment/transform images, tokenize a single sample).
 - (optionally limit the dataset size)
+- {py:meth}`def select_samples_to_pack(self, samples: List[T_encoded_sample]) -> List[List[T_encoded_sample]] <megatron.energon.TaskEncoder.select_samples_to_pack>`: Optional. Allows for efficient sample packing.
+- {py:meth}`def pack_selected_samples(self, samples: List[T_encoded_sample]) -> T_batch_sample] <megatron.energon.TaskEncoder.pack_selected_samples>`: Required if select_samples_to_pack is used. Compresses a group of samples to a single sample.
 - (samples are collected for a batch)
 - {py:meth}`def batch(self, batch: List[T_encoded_sample]) -> T_raw_batch <megatron.energon.DefaultTaskEncoder.batch>`: Collate the batch to a single sample, defaults to padded batching for tensors, lists for everything else.
 - {py:meth}`def encode_batch(self, batch_data: T_raw_batch) -> T_batch <megatron.energon.DefaultTaskEncoder.encode_batch>`: Transform the batched data (e.g. tokenize the whole batch).

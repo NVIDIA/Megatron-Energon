@@ -8,7 +8,6 @@ from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import BaseCoreDataset, SavableDataset
 from megatron.energon.metadataset import load_dataset
 from megatron.energon.task_encoder.base import DefaultTaskEncoder, TaskEncoder, WorkerConfig
-from megatron.energon.worker import global_worker_config
 
 T = TypeVar("T", covariant=True)
 
@@ -38,9 +37,10 @@ def get_train_dataset(
     path: Union[str, EPath, Path],
     *,
     split_part: Union[Literal["train"], str] = "train",
-    worker_config: Optional[WorkerConfig] = None,
+    worker_config: WorkerConfig,
     batch_size: int,
     batch_drop_last: bool = False,
+    packing_buffer_size: Optional[int] = None,
     shuffle_buffer_size: Optional[int],
     max_samples_per_sequence: Optional[int],
     virtual_epoch_length: int = 0,
@@ -62,7 +62,7 @@ def get_train_dataset(
     Args:
         path: Path to the dataset.
         split_part: Default split part to use.
-        worker_config: Worker configuration to use. Defaults to `global_worker_config`.
+        worker_config: Worker configuration to use.
         batch_size: Size of a batch
         batch_drop_last: If true, drop the last batch if it is smaller than `batch_size`.
         shuffle_buffer_size: Size of the sample shuffle buffer (before task encoding).
@@ -78,8 +78,6 @@ def get_train_dataset(
         The dataloader.
     """
 
-    if worker_config is None:
-        worker_config = global_worker_config
     loader = load_dataset(path, **_split_kwargs(kwargs))
     datasets = loader.get_datasets(
         training=True,
@@ -94,6 +92,7 @@ def get_train_dataset(
         worker_config=worker_config,
         batch_size=batch_size,
         batch_drop_last=batch_drop_last,
+        packing_buffer_size=packing_buffer_size,
         virtual_epoch_length=virtual_epoch_length,
         shuffle_buffer_size=shuffle_buffer_size,
     )
@@ -103,9 +102,10 @@ def get_val_dataset(
     path: Union[str, EPath, Path],
     *,
     split_part: Union[Literal["val", "test"], str] = "val",
-    worker_config: Optional[WorkerConfig] = None,
+    worker_config: WorkerConfig,
     batch_size: int,
     batch_drop_last: bool = False,
+    packing_buffer_size: Optional[int] = None,
     limit: Optional[int] = None,
     task_encoder: TaskEncoder[Any, Any, Any, T] = DefaultTaskEncoder(),
     **kwargs,
@@ -124,7 +124,7 @@ def get_val_dataset(
     Args:
         path: Path to the dataset.
         split_part: Default split part to use.
-        worker_config: Worker configuration to use. Defaults to `global_worker_config`.
+        worker_config: Worker configuration to use.
         batch_size: Size of a batch
         batch_drop_last: If true, drop the last batch if it is smaller than `batch_size`.
         limit: If set, limit the number of batches loaded from the dataset to this.
@@ -134,9 +134,6 @@ def get_val_dataset(
     Returns:
         The loaded dataset.
     """
-
-    if worker_config is None:
-        worker_config = global_worker_config
     loader = load_dataset(path, **_split_kwargs(kwargs))
     datasets = loader.get_datasets(
         training=False, split_part=split_part, worker_config=worker_config, **kwargs
@@ -146,6 +143,7 @@ def get_val_dataset(
         worker_config=worker_config,
         batch_size=batch_size,
         batch_drop_last=batch_drop_last,
+        packing_buffer_size=packing_buffer_size,
         limit=limit,
     )
 
@@ -154,9 +152,10 @@ def get_val_datasets(
     path: Union[str, EPath, Path],
     *,
     split_part: Union[Literal["val", "test"], str] = "val",
-    worker_config: Optional[WorkerConfig] = None,
+    worker_config: WorkerConfig,
     batch_size: int,
     batch_drop_last: bool = False,
+    packing_buffer_size: Optional[int] = None,
     limit: Optional[int] = None,
     task_encoder: TaskEncoder[Any, Any, Any, T] = DefaultTaskEncoder(),
     **kwargs,
@@ -175,7 +174,7 @@ def get_val_datasets(
     Args:
         path: Path to the dataset.
         split_part: Default split part to use.
-        worker_config: Worker configuration to use. Defaults to `global_worker_config`.
+        worker_config: Worker configuration to use.
         batch_size: Size of a batch
         batch_drop_last: If true, drop the last batch if it is smaller than `batch_size`.
         limit: If set, limit the number of batches loaded from the dataset to this.
@@ -185,9 +184,6 @@ def get_val_datasets(
     Returns:
         The loaded val datasets, with the source datasets.
     """
-
-    if worker_config is None:
-        worker_config = global_worker_config
     loader = load_dataset(path, **_split_kwargs(kwargs))
     datasets = loader.get_datasets(
         training=False, split_part=split_part, worker_config=worker_config, **kwargs
@@ -199,6 +195,7 @@ def get_val_datasets(
                 worker_config=worker_config,
                 batch_size=batch_size,
                 batch_drop_last=batch_drop_last,
+                packing_buffer_size=packing_buffer_size,
                 limit=limit,
             ),
             dataset,

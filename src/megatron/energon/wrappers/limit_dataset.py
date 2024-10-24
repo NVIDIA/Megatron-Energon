@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Generic, Iterator, List, Optional, TypeVar
 
 from megatron.energon.flavors.base_dataset import SavableDataset
-from megatron.energon.worker import WorkerConfig, global_worker_config
+from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import (
     BaseSingleWrapperDataset,
     BaseSingleWrapperMergedState,
@@ -38,8 +38,9 @@ class LimitDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_sampl
         self,
         dataset: SavableDataset[T_sample],
         length: int,
+        *,
         reset_after_epoch: bool = False,
-        worker_config: Optional[WorkerConfig] = None,
+        worker_config: WorkerConfig,
     ):
         """
         Limits the length of the dataset.
@@ -48,12 +49,12 @@ class LimitDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_sampl
             dataset: The dataset to limit
             length: The length to limit to
             reset_after_epoch: If true, reset the underlying dataset after one epoch.
-            worker_config: Configuration for the workers. Defaults to `global_worker_config`.
+            worker_config: Configuration for the workers.
         """
         super().__init__(dataset)
         self.length = length
         self.reset_after_epoch = reset_after_epoch
-        self.worker_config = worker_config or global_worker_config
+        self.worker_config = worker_config
         self._current_offset = [0] * max(self.worker_config.num_workers, 1)
 
     def __len__(self) -> int:
