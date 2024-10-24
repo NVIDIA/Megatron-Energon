@@ -42,12 +42,12 @@ def load_config(
         path = path.absolute()
         with path.open() as f:
             data: dict = yaml.safe_load(f)
-    
+
     if default_kwargs is not None:
         new_data = default_kwargs.copy()
         new_data.update(data)
         data = new_data
-    
+
     return raw_to_instance(data, default_type, strict=strict)
 
 

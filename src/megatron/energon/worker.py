@@ -4,18 +4,19 @@
 import hashlib
 import json
 import multiprocessing
+import random
 from dataclasses import dataclass
-from typing import Any, ClassVar, Dict, Optional, TextIO
+from typing import Any, ClassVar, Dict, List, Optional, TextIO, TypeVar
 
+import numpy
 import torch.distributed
 import torch.utils.data
 
 from megatron.energon.epathlib import EPath
 
-__all__ = (
-    "WorkerConfig",
-    "global_worker_config",
-)
+__all__ = ("WorkerConfig",)
+
+T = TypeVar("T")
 
 
 @dataclass(eq=False)
@@ -66,33 +67,66 @@ class WorkerConfig:
     _worker_debug_file_worker_id: Optional[int] = None
 
     #: The current sample index within the current iterating worker
-    _sample_index: ClassVar[Optional[int]] = None
+    _sample_index_stack: ClassVar[Optional[List[int]]] = None
     #: The current worker config within the current iterating worker
     active_worker_config: ClassVar[Optional["WorkerConfig"]] = None
 
-    def worker_activate(self, sample_index: int):
+    #: The global rank override for the worker. Required for restoring samples.
+    _worker_override_global_rank: ClassVar[Optional[List[int]]] = None
+
+    def worker_activate(self, sample_index: int, override_global_rank: Optional[int] = None):
         """Activates the worker config for the current worker and sets it as actively iterating.
         Must be called before next() call on the datasets."""
-        WorkerConfig._sample_index = sample_index
+        assert WorkerConfig.active_worker_config is None
+        WorkerConfig._sample_index_stack = [sample_index]
         WorkerConfig.active_worker_config = self
+        WorkerConfig._worker_override_global_rank = override_global_rank
+
+    def worker_push_sample_index(self, sample_index: int):
+        """Pushes a new sample index to the sample index stack. Should be set by wrapping datasets
+        before calling inners."""
+        assert WorkerConfig.active_worker_config is not None
+        WorkerConfig._sample_index_stack.append(sample_index)
+
+    def worker_pop_sample_index(self):
+        """Pushes a new sample index to the sample index stack. Should be set by wrapping datasets
+        before calling inners."""
+        assert WorkerConfig.active_worker_config is not None
+        return WorkerConfig._sample_index_stack.pop()
 
     def worker_deactivate(self):
         """Deactivates the worker config for the current worker and deactivates it for iterating.
         Must be called after next() call on the datasets."""
-        WorkerConfig._sample_index = None
-        WorkerConfig.active_worker_config = None
+        if WorkerConfig.active_worker_config is not None:
+            assert (
+                len(WorkerConfig._sample_index_stack) == 1
+            ), f"Sample index stack not empty: {WorkerConfig._sample_index_stack}"
+            WorkerConfig._sample_index_stack = None
+            WorkerConfig.active_worker_config = None
+            WorkerConfig._worker_override_global_rank = None
 
     @property
     def active_worker_sample_index(self) -> int:
         """Returns the current sample index for the actively iterating worker."""
         # Internal sample index is for the local worker. If using multiple workers per rank, this
         # must be multiplied by the number of workers and offset by the local worker index.
-        return WorkerConfig._sample_index * max(self.num_workers, 1) + self.rank_worker_id()
+        return (
+            WorkerConfig._sample_index_stack[-1] * max(self.num_workers, 1) + self.rank_worker_id()
+        )
+
+    @property
+    def active_worker_batch_index(self) -> int:
+        """Returns the current batch index for the actively iterating worker."""
+        # Internal batch index is for the local worker. If using multiple workers per rank, this
+        # must be multiplied by the number of workers and offset by the local worker index.
+        return (
+            WorkerConfig._sample_index_stack[0] * max(self.num_workers, 1) + self.rank_worker_id()
+        )
 
     def __eq__(self, other):
         """Do not compare everything to check for equal config"""
         if not isinstance(other, WorkerConfig):
-            return NotImplemented
+            return NotImplementedError()
         return all(
             [
                 self.rank == other.rank,
@@ -121,9 +155,13 @@ class WorkerConfig:
 
     def rank_worker_id(self) -> int:
         """Returns the self worker id within the current rank."""
+        if self._worker_override_global_rank:
+            assert self.worker_id_offset == 0
+            return self._worker_override_global_rank % self.num_workers
         worker_info = torch.utils.data.get_worker_info()
         if worker_info is None:
             return self.worker_id_offset
+        assert worker_info.num_workers == self.num_workers
         return (
             worker_info.id + worker_info.num_workers - self.worker_id_offset
         ) % worker_info.num_workers
@@ -149,6 +187,9 @@ class WorkerConfig:
             override_local_worker_id (int, optional): The local worker id to override. None means
                 the current worker, which is the default.
         """
+        if self._worker_override_global_rank is not None:
+            assert override_local_worker_id is None
+            return self._worker_override_global_rank
 
         if override_local_worker_id is not None:
             return self.rank * self.num_workers + override_local_worker_id
@@ -216,7 +257,3 @@ class WorkerConfig:
                 self._worker_debug_file_worker_id = worker_id
             self._worker_debug_file.write(json.dumps(data) + "\n")
             self._worker_debug_file.flush()
-
-
-#: The global worker config instance used if not overridden.
-global_worker_config = WorkerConfig.default_worker_config(num_workers=0)

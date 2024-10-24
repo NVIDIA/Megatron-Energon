@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from dataclasses import dataclass
-from typing import Any, Dict, Generic, Iterator, List, Optional, Tuple, TypeVar, Union
+from typing import Any, Dict, Generic, Iterator, List, Optional, TypeVar
 
 from megatron.energon.flavors.base_dataset import SavableDataset
-from megatron.energon.worker import WorkerConfig, global_worker_config
+from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import (
     BaseSingleWrapperDataset,
     BaseSingleWrapperMergedState,
@@ -35,19 +35,20 @@ class RepeatDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_samp
     def __init__(
         self,
         dataset: SavableDataset[T_sample],
+        *,
         repeats: Optional[int] = None,
-        worker_config: Optional[WorkerConfig] = None,
+        worker_config: WorkerConfig,
     ):
         """Construct a RepeatDataset.
 
         Args:
             dataset: The input dataset to repeat.
             repeats: Number of repeats, `None` for infinitely
-            worker_config: Configuration for the workers. Defaults to `global_worker_config`.
+            worker_config: Configuration for the workers.
         """
         super().__init__(dataset)
         self.repeats = repeats
-        self.worker_config = worker_config or global_worker_config
+        self.worker_config = worker_config
         self._offset = [0] * max(self.worker_config.num_workers, 1)
 
     def __len__(self):
@@ -61,7 +62,8 @@ class RepeatDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_samp
             assert self.dataset.worker_has_samples(), "Cannot repeat empty dataset infinitely"
             while True:
                 self._offset[worker_idx] += 1
-                yield from self.dataset
+                for sample in self.dataset:
+                    yield sample
                 if self.worker_config.should_log(level=2):
                     self.worker_config.worker_log(
                         {
@@ -74,7 +76,8 @@ class RepeatDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_samp
         else:
             for offset in range(self._offset[worker_idx], self.repeats):
                 self._offset[worker_idx] = offset + 1
-                yield from self.dataset
+                for sample in self.dataset:
+                    yield sample
                 if self.worker_config.should_log(level=2):
                     self.worker_config.worker_log(
                         {

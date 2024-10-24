@@ -5,7 +5,7 @@ import dataclasses
 import tarfile
 import warnings
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Generator, Iterator, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, Generator, Iterator, List, Optional, Set, Tuple, Union
 
 import torch
 
@@ -16,7 +16,7 @@ from megatron.energon.flavors.webdataset.config import skip_meta_re, split_name_
 from megatron.energon.flavors.webdataset.itar import get_itar_byte_offset, open_itar
 from megatron.energon.flavors.webdataset.structs import FilteredSample, ShardInfo, reraise_exception
 from megatron.energon.rng import WorkerRng, WorkerRngMergedState, WorkerRngState
-from megatron.energon.worker import WorkerConfig, global_worker_config
+from megatron.energon.worker import WorkerConfig
 
 
 @dataclass
@@ -121,6 +121,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
     def __init__(
         self,
         rank_shards: List[List[ShardInfo]],
+        *,
         worker_config: WorkerConfig,
         exclude: Set[str],
         part_filter: Optional[Callable[[str], bool]] = None,
@@ -152,7 +153,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
         """
         super().__init__()
         self.shards = rank_shards
-        self.worker_config = worker_config or global_worker_config
+        self.worker_config = worker_config
         self.exclude = exclude
         self.part_filter = part_filter
         self.loop = loop
@@ -256,6 +257,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
                         __key__=key,
                         __shard__=shard_info.name,
                         __restore_key__=(
+                            "Webdataset",
                             shard_info.name,
                             tarinfo.offset + absolute_tar_begin_byte_offset,
                         ),
@@ -620,9 +622,13 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
 
     def can_restore_sample(self) -> bool:
         return True
+    
+    def assert_can_restore(self) -> None:
+        pass
 
-    def restore_sample(self, key: Tuple[str, int]) -> FilteredSample:
-        shard_name, tar_byte_offset = key
+    def restore_sample(self, key: Tuple[Union[str, int, tuple], ...]) -> FilteredSample:
+        id, shard_name, tar_byte_offset = key
+        assert id == "Webdataset"
         shard_path = self.shard_path_map[shard_name]
 
         sample_shard_info = ShardInfo(

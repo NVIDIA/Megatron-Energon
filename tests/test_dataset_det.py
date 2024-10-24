@@ -18,7 +18,6 @@ import webdataset as wds
 from megatron.energon import TextSample, WorkerConfig, get_loader, get_train_dataset
 from megatron.energon.dataset_config import MAIN_FOLDER_NAME, get_dataset_from_config
 from megatron.energon.loader import get_savable_loader
-from megatron.energon.task_encoder.loader import get_val_dataset
 
 
 def _norng_state(state):
@@ -118,12 +117,14 @@ class TestDataset(unittest.TestCase):
         # Check len operator
         assert len(ds) == 55
         # Check if iterating returns the same
-        iter1 = list(ds)
-        iter2 = list(ds)
+        iter1 = list(get_loader(ds, worker_config=worker_config))
+        iter2 = list(get_loader(ds, worker_config=worker_config))
         assert len(iter1) == 55
         assert len(iter2) == 55
         assert all(elem1.__key__ == elem2.__key__ for elem1, elem2 in zip(iter1, iter2))
-        assert all(f"{idx}" == x.text for idx, x in enumerate(ds))
+        assert all(
+            f"{idx}" == x.text for idx, x in enumerate(get_loader(ds, worker_config=worker_config))
+        )
 
         del ds
         gc.collect()
@@ -420,7 +421,6 @@ class TestDataset(unittest.TestCase):
         # - Global batch size must stay the same across runs
         # - Global batch size must be a multiple of (micro-batch size * world_size * num_workers)
         #   - Global batch size = micro-batch size * world_size * num_workers * gradient_accum_steps
-        # - The micro-batch size must stay the same across runs
         # - world_size * num_workers must stay the same across runs
         # Set the same torch.manual_seed(...) on each rank before constructing the dataset and the data loader
 
@@ -446,6 +446,14 @@ class TestDataset(unittest.TestCase):
                     WorkerConfig(rank=3, world_size=4, num_workers=1),
                 ),
                 micro_batch_size=2,
+                global_batch_size=8,
+            ),
+            dict(
+                configs=(
+                    WorkerConfig(rank=0, world_size=2, num_workers=2),
+                    WorkerConfig(rank=1, world_size=2, num_workers=2),
+                ),
+                micro_batch_size=1,  # Micro-batch 1, more accum
                 global_batch_size=8,
             ),
         ]

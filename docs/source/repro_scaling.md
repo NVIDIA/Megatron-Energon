@@ -10,7 +10,6 @@ Since version 2.0.0, Megatron Energon supports this behavior if a few constraint
 * The global batch size must stay the same across runs
 * The global batch size must be a multiple of `micro-batch size * world_size * num_workers`
   * The multiple of that is the number of gradient accumulation steps in your training
-* The micro-batch size must stay the same across runs
 * The product `world_size * num_workers` must stay the same across runs, such that the global number of workers stays the same
 * You need to set the same `torch.manual_seed(...)` on each rank before constructing the dataset and the data loader
 
