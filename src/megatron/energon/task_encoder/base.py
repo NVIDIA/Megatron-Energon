@@ -228,6 +228,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
 
     cookers: Sequence[Cooker] = ()
 
+    @stateless
     def cook_crude_sample(self, sample: Union[T_sample, CrudeSample]) -> T_sample:
         if isinstance(sample, CrudeSample):
             for cooker in self.cookers:

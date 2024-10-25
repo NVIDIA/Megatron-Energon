@@ -757,6 +757,9 @@ class BaseWebdataset(BaseCoreDataset[T_sample], Generic[T_sample], ABC):
 
     def can_restore_sample(self) -> bool:
         return True
+    
+    def assert_can_restore(self):
+        pass
 
     def restore_sample(self, key: Tuple[Union[str, int, tuple], ...]) -> T_sample:
         return self.dataset.restore_sample(key)

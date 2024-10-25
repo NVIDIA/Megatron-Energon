@@ -132,6 +132,10 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
 
     def can_restore_sample(self) -> bool:
         return all(dataset.can_restore_sample() for dataset, _weight in self.dataset_weights)
+    
+    def assert_can_restore(self) -> None:
+        for dataset, _weight in self.dataset_weights:
+            dataset.assert_can_restore()
 
     def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_sample:
         id, ds_idx = index[:2]

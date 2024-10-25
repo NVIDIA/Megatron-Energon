@@ -103,9 +103,7 @@ class SavableSampleBuffer(BaseSingleWrapperDataset[T_sample, T_sample], Generic[
         return len(self._restore_keys[self._rank_id])
 
     def save_state(self) -> SampleBufferState:
-        assert (
-            self.dataset.can_restore_sample()
-        ), "Cannot restore sample from inner dataset, cannot save buffer state efficiently."
+        self.dataset.assert_can_restore()
         return SampleBufferState.extend(
             super().save_state(),
             buffer=list(self._restore_keys[self._rank_id]),
