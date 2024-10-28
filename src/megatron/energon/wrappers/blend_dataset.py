@@ -48,7 +48,7 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
     def __init__(
         self,
         *dataset_weights: Tuple[SavableDataset[T_sample], float],
-        worker_config: Optional[WorkerConfig] = None,
+        worker_config: WorkerConfig,
     ):
         """Construct a BlendDataset.
 
@@ -132,7 +132,7 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
 
     def can_restore_sample(self) -> bool:
         return all(dataset.can_restore_sample() for dataset, _weight in self.dataset_weights)
-    
+
     def assert_can_restore(self) -> None:
         for dataset, _weight in self.dataset_weights:
             dataset.assert_can_restore()

@@ -15,6 +15,7 @@ from typing import (
     List,
     Literal,
     Optional,
+    Sequence,
     Set,
     Tuple,
     Union,
@@ -111,7 +112,7 @@ class SingleShardReader:
     # The internal state variables
     _ctx: contextlib.ExitStack
     _tar_file: tarfile.TarFile
-    _stream: Iterator[tarfile.TarInfo]
+    _stream: Iterator[tarfile.TarInfo] = _EMPTY_ITER
     _cur_tarinfo: Optional[tarfile.TarInfo] = None
 
     def __init__(
@@ -128,7 +129,12 @@ class SingleShardReader:
         self.part_filter = part_filter
         self.handler = handler
 
-        shard = self.shard_state.shard
+        if shard_state.offset == shard_state.shard.count:
+            # Empty shard, return immediately
+            self._ctx = contextlib.ExitStack()
+            return
+
+        shard = shard_state.shard
         if shard.byte_offset is None:
             shard.byte_offset = get_itar_byte_offset(shard.path, shard.offset)
         if shard.byte_size is None:
@@ -162,10 +168,8 @@ class SingleShardReader:
             )
 
         self._ctx = contextlib.ExitStack()
-        if self.shard_state.byte_offset == shard.byte_size:
-            # Empty shard, return immediately (cannot be handled by the open_itar function)
-            self._stream = self._EMPTY_ITER
-        else:
+        if self.shard_state.byte_offset < shard.byte_size:
+            # Non-empty shard (empty cannot be handled by the open_itar function)
             self._tar_file = self._ctx.enter_context(
                 open_itar(
                     shard.path,
@@ -210,25 +214,24 @@ class SingleShardReader:
                 continue
             return
 
-    def read_next(self, for_key: Optional[str] = None) -> Union[FilteredSample, dict]:
+    def read_next(self, for_key: Optional[str] = None) -> FilteredSample:
         """Gets the next sample, or raises StopIteration if exhausted."""
         if self._cur_tarinfo is None:
             self._next_tarinfo()
 
         if for_key is None:
-            group = dict(
-                __key__=self._cur_key,
-                __shard__=self.shard_state.shard.name,
-                __restore_key__=(
-                    "Webdataset",
-                    self.shard_state.shard.name,
-                    self.shard_state.offset,
-                ),
-            )
             group_key = self._cur_base_name
         else:
             group_key = for_key
-            group = {}
+        group: FilteredSample = dict(
+            __key__=self._cur_key,
+            __shard__=self.shard_state.shard.name,
+            __restore_key__=(
+                "Webdataset",
+                self.shard_state.shard.name,
+                self.shard_state.offset,
+            ),
+        )
         while True:
             try:
                 if (group_key != self._cur_base_name) and (len(group) > 3 or for_key is not None):
@@ -321,14 +324,14 @@ class SingleShardReader:
             raise StopIteration()
 
 
-class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
+class WebdatasetSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample], ...]]):
     """Internal class for loading samples from webdataset shards"""
 
     #: All shards for all workers `shards[worker_idx][shard_idx][merge_idx]`
-    shards: List[List[List[ShardInfo]]]
+    shards: List[List[Sequence[ShardInfo]]]
     #: All shards for all workers accessible by name and offset
     # `shards[worker_idx][(shard_name, offset)]`, created lazily
-    _shards_by_key: Optional[List[Dict[Tuple[str, int], List[ShardInfo]]]] = None
+    _shards_by_key: Optional[List[Dict[Tuple[str, int], Sequence[ShardInfo]]]] = None
     #: Paths to shards for all workers by name `shards[worker_idx][shard_name]`, created lazily
     _shard_paths_by_name: Optional[Dict[str, List[EPath]]] = None
     #: The data parallel worker config
@@ -345,6 +348,14 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
     shuffle_over_epochs: Optional[int]
     # Number of parallel iterators to be opened simultaneously (and random sample between them)
     parallel_shard_iters: int
+    # The method to join datasets. One of 'inner_match', 'inner', 'left'.
+    # inner_match: Both data sources must exactly match, otherwise an exception is raised for a non-
+    #     matching sample.
+    # inner: The primary dataset is iterated and the other datasets are merged via key. If there is
+    #     no match of the extra datasets, skip the sample.
+    # left: The primary dataset is iterated and the other datasets are merged via key. If there is
+    #     no match of the extra datasets, the sample is still yielded without the missing column.
+    dataset_join_method: Literal["inner_match", "inner", "left"]
     # Error handler
     handler: Callable[[Exception, str], None]
 
@@ -352,7 +363,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
     _worker_rng: WorkerRng
     #: Pending shards are the shards which have not yet been opened, but should be processed
     # in the current "epoch"
-    _pending_shards: List[List[List[ShardInfo]]]
+    _pending_shards: List[List[Sequence[ShardInfo]]]
     #: The active shards are the currently opened shards. May contain `None`, if there are fewer
     # shards available (i.e. pending_shards empty) than parallel shard iterators requested.
     _active_shards_state: List[Optional[List[Optional[List[ShardState]]]]]
@@ -365,8 +376,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
 
     def __init__(
         self,
-        shard_parent: EPath,
-        rank_shards: List[List[List[ShardInfo]]],
+        rank_shards: List[List[Sequence[ShardInfo]]],
         *,
         worker_config: WorkerConfig,
         exclude: Set[str],
@@ -381,7 +391,6 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
         The webdataset loader. Iterates over the shard infos and yields the samples.
 
         Args:
-            shard_parent: Parent absolute path to the shards.
             rank_shards: The shards to iterate over for each worker of the current rank for each
                 merged dataset.
             worker_config: The worker configuration.
@@ -402,7 +411,6 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
             handler: Exception handler. Args: (exception, key).
         """
         super().__init__()
-        self.shard_parent = shard_parent
         self.shards = rank_shards
         self.worker_config = worker_config
         self.exclude = exclude
@@ -422,7 +430,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
         assert self.parallel_shard_iters >= 1
 
     @property
-    def shards_by_key(self) -> List[Dict[Tuple[str, int], List[ShardInfo]]]:
+    def shards_by_key(self) -> List[Dict[Tuple[str, int], Sequence[ShardInfo]]]:
         if self._shards_by_key is None:
             self._shards_by_key = [
                 {(subshards[0].name, subshards[0].offset): subshards for subshards in worker_shards}
@@ -441,7 +449,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
     def _read_multicolumn_shard(
         self,
         shard_states: List[ShardState],
-    ) -> Generator[FilteredSample, None, None]:
+    ) -> Generator[Tuple[Optional[FilteredSample], ...], None, None]:
         """
         Reads samples, possibly from multiple column shards, resuming from a saved state if needed.
         The first shard is assumed to be the primary shard (giving the keys of the samples), while the
@@ -460,13 +468,11 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
             )
             for shard_state in shard_states
         ]
+        groups = [None] * len(readers)
         with ctx:
             while True:
                 try:
-                    group = readers[0].read_next()
-                    for reader in readers[1:]:
-                        reader.read_next(group["__key__"])
-                        group.update()
+                    groups[0] = readers[0].read_next()
                 except StopIteration:
                     # Expecting all column readers to raise StopIteration as well
                     for reader in readers[1:]:
@@ -486,9 +492,30 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
                 except Exception as e:
                     self.handler(e, readers[0].shard_state.shard.name)
                 else:
-                    yield group
+                    for idx, reader in enumerate(readers[1:], 1):
+                        try:
+                            groups[idx] = reader.read_next(groups[0]["__key__"])
+                        except StopIteration:
+                            if self.dataset_join_method == "inner_match":
+                                raise FatalSampleError.from_sample_key(
+                                    f"{reader.shard_state.shard.name}"
+                                ) from ValueError(
+                                    "Extra column shard exhausted when primary shard is exhausted"
+                                )
+                            elif self.dataset_join_method == "inner":
+                                continue
+                            elif self.dataset_join_method == "left":
+                                groups[idx] = None
+                            continue
+                        except SYSTEM_EXCEPTIONS:
+                            raise FatalSampleError.from_sample_key(
+                                f"{reader.shard_state.shard.path}"
+                            )
+                        except Exception as e:
+                            self.handler(e, reader.shard_state.shard.name)
+                    yield tuple(groups)
 
-    def _shards_once(self, shards: List[List[ShardInfo]]) -> List[List[ShardInfo]]:
+    def _shards_once(self, shards: List[Sequence[ShardInfo]]) -> List[Sequence[ShardInfo]]:
         """Possibly (re)shuffles the shards using the random generator."""
         if self.shuffle_over_epochs is None:
             # No shuffling
@@ -507,7 +534,9 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
         else:
             raise ValueError(f"Invalid shuffle_over_epochs: {self.shuffle_over_epochs}")
 
-    def _shards_iter(self, shards: List[List[ShardInfo]]) -> Generator[FilteredSample, None, None]:
+    def _shards_iter(
+        self, shards: List[Sequence[ShardInfo]]
+    ) -> Generator[Tuple[Optional[FilteredSample], ...], None, None]:
         """Iterates the samples in a list of shards, possibly looping over them indefinitely,
         possibly reshuffling the shards every loop, possibly using multiple parallel iterators over
         the shards."""
@@ -518,7 +547,9 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
                 self._active_shards_state[i] = [None] * self.parallel_shard_iters
                 self._pending_shards[i] = []
         shards_probs = torch.empty(self.parallel_shard_iters, dtype=torch.float32)
-        shard_iters: List[Optional[Generator[FilteredSample, None, None]]] = []
+        shard_iters: List[Optional[Generator[Tuple[Optional[FilteredSample], ...], None, None]]] = (
+            []
+        )
         active_shards: List[Optional[List[ShardState]]]
         while True:
             shards_probs[:] = 0
@@ -650,7 +681,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
                     # Take a random shard iterator
                     shard_iter = self._worker_rng.choice(shard_iters, probs=shards_probs)
                 try:
-                    sample: FilteredSample = next(shard_iter)
+                    sample: Tuple[Optional[FilteredSample], ...] = next(shard_iter)
                 except StopIteration:
                     # Iterator exhausted -> take next / remove from list
                     rm_idx = shard_iters.index(shard_iter)
@@ -699,8 +730,8 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
                                 "t": "WebdatasetSampleLoaderDataset._shards_iter.yield",
                                 "r": self.worker_config.rank,
                                 "w": self.worker_config.rank_worker_id(),
-                                "key": sample["__key__"],
-                                "shard": sample["__shard__"],
+                                "key": sample[0]["__key__"],
+                                "shard": sample[0]["__shard__"],
                                 "count": self._sample_count[worker_idx],
                                 "epoch": self._epoch_count[worker_idx],
                                 "epoch_count": self._epoch_sample_count[worker_idx],
@@ -737,7 +768,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
         worker_shards = self.shards[self.worker_config.rank_worker_id()]
         return any(subshard[0].count > 0 for subshard in worker_shards)
 
-    def __iter__(self) -> Iterator[FilteredSample]:
+    def __iter__(self) -> Iterator[Tuple[Optional[FilteredSample], ...]]:
         self.worker_config.assert_worker()
         worker_shards = self.shards[self.worker_config.rank_worker_id()]
 
@@ -767,29 +798,33 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
 
     def can_restore_sample(self) -> bool:
         return True
-    
+
     def assert_can_restore(self) -> None:
         pass
 
-    def restore_sample(self, key: Tuple[Union[str, int, tuple], ...]) -> FilteredSample:
-        id, shard_name, tar_offset = key
+    def restore_sample(
+        self, key: Tuple[Union[str, int, tuple], ...]
+    ) -> Tuple[Optional[FilteredSample], ...]:
+        # Key is: ("Webdataset", shard_name, shard_offset, shard_name2, shard_offset2, ...)
+        # The key is joined in the dataset's typed joining (i.e. load_sample of MergedWebdataset).
+        id, *shard_data = key
         assert id == "Webdataset"
-        shard_paths = self.shard_path_map[shard_name]
+        shard_paths = self.shard_path_map[shard_data[0]]
 
         sample_shard_infos = [
             ShardState(
                 shard=ShardInfo(
-                    name=shard_name,
+                    name=name,
                     path=shard_path,
-                    offset=tar_offset,
-                    count=1,
+                    offset=max(offset, 0),
+                    count=1 if offset >= 0 else 0,
                     byte_offset=None,
                     byte_size=None,
                 ),
                 offset=0,
                 byte_offset=0,
             )
-            for shard_path in shard_paths
+            for shard_path, name, offset in zip(shard_paths, shard_data[::2], shard_data[1::2])
         ]
 
         gen = self._read_multicolumn_shard(sample_shard_infos)
@@ -845,7 +880,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
             )
         return SampleLoaderState(
             rng=self._worker_rng.save_state(),
-            pending_shards=list(self._pending_shards[worker_idx]),
+            pending_shards=list(list(s) for s in self._pending_shards[worker_idx]),
             active_shards=[
                 (
                     None
@@ -874,9 +909,12 @@ class WebdatasetSampleLoaderDataset(SavableDataset[FilteredSample]):
         )
 
     def _restore_find_shard(
-        self, subshards_data: List[ShardInfo], shards_by_key: Dict[Tuple[str, int], List[ShardInfo]]
-    ) -> List[ShardInfo]:
+        self,
+        subshards_data: Sequence[ShardInfo],
+        shards_by_key: Dict[Tuple[str, int], Sequence[ShardInfo]],
+    ) -> Sequence[ShardInfo]:
         subshards = shards_by_key[(subshards_data[0].name, subshards_data[0].offset)]
+        # TODO: Change the saving and actually save every shard info separately
         for subshard_data, subshard in zip(subshards_data, subshards):
             if subshard != subshard_data:
                 raise ValueError(

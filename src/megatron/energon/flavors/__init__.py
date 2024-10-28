@@ -6,6 +6,7 @@ from megatron.energon.flavors.base_webdataset import (
     BaseWebdataset,
     DefaultDecoderWebdataset,
     DefaultGenericWebdataset,
+    MergedWebdataset,
     VideoData,
 )
 from megatron.energon.flavors.captioning import CaptioningSample, CaptioningWebdataset
@@ -42,6 +43,7 @@ __all__ = [
     "ImageWebdataset",
     "InterleavedSample",
     "InterleavedWebdataset",
+    "MergedWebdataset",
     "MultiChoiceVQASample",
     "MultiChoiceVQAWebdataset",
     "OCRSample",

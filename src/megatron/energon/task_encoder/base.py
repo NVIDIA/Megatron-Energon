@@ -348,10 +348,11 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
     def build_batch(
         self,
         dataset: SavableDataset[T_encoded_sample],
+        *,
         batch_size: Optional[int],
         batch_drop_last: bool = False,
         packing_buffer_size: Optional[int] = None,
-        worker_config: Optional[WorkerConfig] = None,
+        worker_config: WorkerConfig,
     ) -> SavableDataset[T_raw_batch]:
         """Applies the batcher to the dataset."""
 
@@ -427,6 +428,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
     def build_cook_crude_sample(
         self,
         dataset: SavableDataset[Union[T_sample, dict]],
+        *,
         worker_config: WorkerConfig,
     ) -> SavableDataset[T_sample]:
         """Applies the sample cooker to the dataset if we have cookers registered."""
@@ -446,6 +448,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
     def build_encode_sample(
         self,
         dataset: SavableDataset[T_sample],
+        *,
         worker_config: WorkerConfig,
     ) -> SavableDataset[T_encoded_sample]:
         """Applies the sample encoder to the dataset."""

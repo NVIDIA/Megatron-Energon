@@ -56,7 +56,7 @@ class GroupBatchDataset(
     batcher: Callable[[List[T_batch_sample]], T_batch]
     drop_last: bool
     error_handler: Callable[[Exception, List[T_batch_sample]], None]
-    worker_config: Optional[WorkerConfig]
+    worker_config: WorkerConfig
     n_groups: int
 
     _state_batches: List[Optional[Dict[Hashable, List[T_batch_sample]]]]

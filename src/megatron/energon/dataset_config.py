@@ -63,7 +63,7 @@ def get_dataset_from_config(
     training: bool = True,
     subflavor: Optional[str] = None,
     subflavors: Optional[Dict[str, Any]] = None,
-    worker_config: Optional[WorkerConfig] = None,
+    worker_config: WorkerConfig,
     sample_type: Optional[Type[T_sample]] = None,
     **kwargs,
 ) -> BaseCoreDataset[T_sample]:
@@ -86,10 +86,10 @@ def get_dataset_from_config(
         The instantiated dataset
     """
     path = EPath(path).absolute()
-    if not (path / MAIN_FOLDER_NAME).is_dir():
+    if not (path / MAIN_FOLDER_NAME / ".info.yaml").is_file():
         raise ValueError(
-            f"Path {path} does not contain a {MAIN_FOLDER_NAME} folder. Did you forget to prepare "
-            f"the dataset? Please check the documentation for an introduction to dataset "
+            f"Path {path} does not contain a {MAIN_FOLDER_NAME}/.info.yaml file. Did you forget to "
+            f"prepare the dataset? Please check the documentation for an introduction to dataset "
             f"preparation."
         )
     dataset = load_config(

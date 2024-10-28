@@ -122,6 +122,43 @@ class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
     #: A dataset may define a subflavors to distinguish between samples of the same sample type.
     __subflavors__: Optional[Dict[str, Any]]
 
+    @classmethod
+    def from_joined(
+        cls: Type[T_sample], *args: "Optional[Sample]", **kwargs: "Optional[Sample]"
+    ) -> T_sample:
+        """
+        Creates a sample from joined samples. The samples are either passed as positional arguments
+        or as keyword arguments. The first sample is the primary sample, which is used to initialize
+        the key and subflavors. In the default implementation, the joined samples' fields will be
+        joined together, such that latter joined samples will update the fields last (i.e. take
+        precedence), except for the key and subflavors. The restore key is later set externally.
+
+        Args:
+            args: The samples to join (either this or kwargs is specified).
+            kwargs: The samples to join.
+
+        Returns:
+            The joined constructed sample.
+        """
+        excluded_fields = set(field.name for field in dataclasses.fields(Sample))
+        init_args = {}
+        if len(kwargs) > 0:
+            args = args + tuple(kwargs.values())
+        if len(args) > 0:
+            primary = args[0]
+            assert primary is not None, "Primary sample must not be None."
+            fields = dataclasses.fields(primary)
+            for field in fields:
+                init_args[field.name] = getattr(primary, field.name)
+            for arg in args:
+                if arg is None:
+                    continue
+                fields = dataclasses.fields(arg)
+                for field in fields:
+                    if field.name not in excluded_fields:
+                        init_args[field.name] = getattr(arg, field.name)
+        return cls(**init_args)
+
 
 @dataclass
 class State(ABC, ExtendableDataclassMixin):
@@ -283,7 +320,7 @@ class SavableDataset(IterableDataset[T_sample], Generic[T_sample], ABC):
     def can_restore_sample(self) -> bool:
         """Returns True if the dataset can restore a sample from a key."""
         return False
-        
+
     def assert_can_restore(self) -> None:
         """Asserts that the dataset can restore a sample from a key."""
         assert self.can_restore_sample(), "This dataset cannot restore samples."

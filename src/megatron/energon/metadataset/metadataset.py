@@ -2,19 +2,50 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Type, Union
 
-from megatron.energon.dataset_config import load_config
+from megatron.energon.dataset_config import MAIN_FOLDER_NAME, load_config
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.base_dataset import BaseCoreDataset
+from megatron.energon.flavors.base_dataset import BaseCoreDataset, Sample
 from megatron.energon.metadataset.dataset_loader import DatasetLoader
+from megatron.energon.metadataset.join_dataset_loader import JoinDatasetLoader
 from megatron.energon.metadataset.loader_interface import DatasetLoaderInterface
 from megatron.energon.worker import WorkerConfig
 
 
 @dataclass
-class DatasetReference:
+class JoinDatasetReference:
     path: Union[str, EPath]
+
+    split_part: Optional[str] = None
+    subflavor: Optional[str] = None
+    subflavors: Optional[Dict[str, Any]] = None
+    shuffle_over_epochs_multiplier: int = 1
+    dataset_config: str = "dataset.yaml"
+    split_config: str = "split.yaml"
+
+    def prepare(self, parent_path: EPath) -> DatasetLoader:
+        self.path = parent_path.absolute() / self.path
+        if (self.path / MAIN_FOLDER_NAME / ".info.yaml").is_file():
+            return DatasetLoader(
+                path=self.path,
+                split_part=self.split_part,
+                subflavor=self.subflavor,
+                subflavors=self.subflavors,
+                shuffle_over_epochs_multiplier=self.shuffle_over_epochs_multiplier,
+                dataset_config=self.dataset_config,
+                split_config=self.split_config,
+            )
+        else:
+            raise FileNotFoundError(self.path)
+
+
+@dataclass
+class DatasetReference:
+    path: Optional[Union[str, EPath]] = None
+    join: Optional[List[JoinDatasetReference]] = None
+    join_method: Literal["inner_match", "inner", "left"] = "inner_match"
+    join_type: Optional[Type[Sample]] = None
     split_part: Optional[str] = None
     subflavor: Optional[str] = None
     subflavors: Optional[Dict[str, Any]] = None
@@ -24,37 +55,61 @@ class DatasetReference:
 
     weight: float = 1.0
 
-    _dataset: Optional[Union["Metadataset", DatasetLoader]] = None
+    _dataset: Optional[DatasetLoaderInterface] = None
 
     def prepare(self, parent_path: EPath):
-        self.path = parent_path.absolute() / self.path
-        if self.path.is_file():
-            assert self.dataset_config == "dataset.yaml", "Must not set dataset_config"
-            assert self.split_config == "split.yaml", "Must not set split_config"
-            self._dataset = load_config(
-                self.path,
-                default_type=Metadataset,
-                strict=True,
-                default_kwargs=dict(parent_path=self.path.parent),
-            )
-        elif self.path.is_dir():
-            self._dataset = DatasetLoader(
-                path=self.path,
+        assert (self.path is None) != (self.join is None), "Must set path or join key"
+        if self.path is not None:
+            assert self.join is None
+            assert self.join_type is None, "Must not set join_type for single datasets"
+            assert self.join_method == "inner_match", "Must not set join_method for single datasets"
+            self.path = parent_path.absolute() / self.path
+            if self.path.is_file():
+                assert self.dataset_config == "dataset.yaml", "Must not set dataset_config"
+                assert self.split_config == "split.yaml", "Must not set split_config"
+                self._dataset = load_config(
+                    self.path,
+                    default_type=Metadataset,
+                    strict=True,
+                    default_kwargs=dict(parent_path=self.path.parent),
+                )
+            elif (self.path / MAIN_FOLDER_NAME / ".info.yaml").is_file():
+                self._dataset = DatasetLoader(
+                    path=self.path,
+                    split_part=self.split_part,
+                    subflavor=self.subflavor,
+                    subflavors=self.subflavors,
+                    shuffle_over_epochs_multiplier=self.shuffle_over_epochs_multiplier,
+                    dataset_config=self.dataset_config,
+                    split_config=self.split_config,
+                )
+            else:
+                raise FileNotFoundError(self.path)
+        else:
+            assert self.join is not None
+            assert self.join_type is not None, "Must set join_type for joining datasets"
+            assert (
+                self.dataset_config == "dataset.yaml"
+            ), "Cannot set dataset_config for joining datasets"
+            inner_loaders = [join.prepare(parent_path) for join in self.join]
+            self._dataset = JoinDatasetLoader(
+                datasets=inner_loaders,
+                join_method=self.join_method,
+                join_type=self.join_type,
                 split_part=self.split_part,
                 subflavor=self.subflavor,
                 subflavors=self.subflavors,
-                dataset_config=self.dataset_config,
+                shuffle_over_epochs_multiplier=self.shuffle_over_epochs_multiplier,
                 split_config=self.split_config,
+                weight=self.weight,
             )
-        else:
-            raise FileNotFoundError(self.path)
 
     def get_datasets(
         self,
         *,
         training: bool,
         split_part: Union[Literal["train", "val", "test"], str],
-        worker_config: Optional[WorkerConfig] = None,
+        worker_config: WorkerConfig,
         subflavor: Optional[str] = None,
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: int = 1,
@@ -62,6 +117,7 @@ class DatasetReference:
     ) -> List[Tuple[BaseCoreDataset, float]]:
         if self.subflavors is not None:
             subflavors = {**self.subflavors, **(subflavors or {})}
+        assert self._dataset is not None
         return self._dataset.get_datasets(
             training=training,
             split_part=self.split_part or split_part,
@@ -90,7 +146,7 @@ class MetadatasetMixer:
         *,
         training: bool,
         split_part: Union[Literal["train", "val", "test"], str],
-        worker_config: Optional[WorkerConfig] = None,
+        worker_config: WorkerConfig,
         subflavor: Optional[str] = None,
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: int = 1,
@@ -134,7 +190,7 @@ class Metadataset(DatasetLoaderInterface):
         *,
         training: bool,
         split_part: Union[Literal["train", "val", "test"], str],
-        worker_config: Optional[WorkerConfig] = None,
+        worker_config: WorkerConfig,
         subflavor: Optional[str] = None,
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: int = 1,
