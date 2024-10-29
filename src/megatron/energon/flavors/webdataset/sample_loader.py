@@ -229,7 +229,7 @@ class SingleShardReader:
             __restore_key__=(
                 "Webdataset",
                 self.shard_state.shard.name,
-                self.shard_state.offset,
+                self.shard_state.offset + self.shard_state.shard.offset,
             ),
         )
         while True:
@@ -809,7 +809,9 @@ class WebdatasetSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample
         # The key is joined in the dataset's typed joining (i.e. load_sample of MergedWebdataset).
         id, *shard_data = key
         assert id == "Webdataset"
+        assert isinstance(shard_data[0], str)
         shard_paths = self.shard_path_map[shard_data[0]]
+        assert len(shard_paths) * 2 == len(shard_data), "Key does not match joined datasets"
 
         sample_shard_infos = [
             ShardState(
@@ -835,7 +837,6 @@ class WebdatasetSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample
     def save_state(self) -> SampleLoaderState:
         self.worker_config.assert_worker()
         worker_idx = self.worker_config.rank_worker_id()
-        assert len(self._active_shards_state[worker_idx]) == self.parallel_shard_iters
         if self.worker_config.should_log(level=3):
             self.worker_config.worker_log(
                 {
@@ -857,38 +858,46 @@ class WebdatasetSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample
                         ]
                         for subshards in self._pending_shards[worker_idx]
                     ],
-                    "active_shards": [
-                        (
-                            None
-                            if subshard_states is None
-                            else [
-                                {
-                                    "shard": {
-                                        "name": shard_state.shard.name,
-                                        "path": str(shard_state.shard.path),
-                                        "offset": shard_state.shard.offset,
-                                        "count": shard_state.shard.count,
-                                    },
-                                    "offset": shard_state.offset,
-                                }
-                                for shard_state in subshard_states
-                            ]
-                        )
-                        for subshard_states in self._active_shards_state[worker_idx]
-                    ],
+                    "active_shards": (
+                        None
+                        if self._active_shards_state[worker_idx] is None
+                        else [
+                            (
+                                None
+                                if subshard_states is None
+                                else [
+                                    {
+                                        "shard": {
+                                            "name": shard_state.shard.name,
+                                            "path": str(shard_state.shard.path),
+                                            "offset": shard_state.shard.offset,
+                                            "count": shard_state.shard.count,
+                                        },
+                                        "offset": shard_state.offset,
+                                    }
+                                    for shard_state in subshard_states
+                                ]
+                            )
+                            for subshard_states in self._active_shards_state[worker_idx]
+                        ]
+                    ),
                 }
             )
         return SampleLoaderState(
             rng=self._worker_rng.save_state(),
             pending_shards=list(list(s) for s in self._pending_shards[worker_idx]),
-            active_shards=[
-                (
-                    None
-                    if active_subshards is None
-                    else [dataclasses.replace(subshard) for subshard in active_subshards]
-                )
-                for active_subshards in self._active_shards_state[worker_idx]
-            ],
+            active_shards=(
+                None
+                if self._active_shards_state[worker_idx] is None
+                else [
+                    (
+                        None
+                        if active_subshards is None
+                        else [dataclasses.replace(subshard) for subshard in active_subshards]
+                    )
+                    for active_subshards in self._active_shards_state[worker_idx]
+                ]
+            ),
             sample_count=self._sample_count[worker_idx],
             epoch_count=self._epoch_count[worker_idx],
             epoch_sample_count=self._epoch_sample_count[worker_idx],
@@ -914,7 +923,6 @@ class WebdatasetSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample
         shards_by_key: Dict[Tuple[str, int], Sequence[ShardInfo]],
     ) -> Sequence[ShardInfo]:
         subshards = shards_by_key[(subshards_data[0].name, subshards_data[0].offset)]
-        # TODO: Change the saving and actually save every shard info separately
         for subshard_data, subshard in zip(subshards_data, subshards):
             if subshard != subshard_data:
                 raise ValueError(

@@ -589,12 +589,50 @@ class Sharder:
         )
 
 
-class InnerWebdataset(
-    BaseCoreDataset[T_sample], WebdatasetPreparator, Sharder, Generic[T_sample], ABC
+class ErrorHandler:
+    handler: Callable[[Exception, Optional[str]], None] = reraise_exception
+
+    def sample_error_handler(self, e: Exception, sample_key: Optional[str]):
+        if isinstance(e, SYSTEM_EXCEPTIONS):
+            raise FatalSampleError(f"Error in sample {sample_key!r}: {e}") from e
+
+        self.handler(e, sample_key)
+
+    def error_handler(
+        self,
+        e: Exception,
+        sample: Union[
+            T_sample,
+            dict,
+            FilteredSample,
+            None,
+            Tuple[Union[T_sample, dict, FilteredSample, None], ...],
+        ],
+    ):
+        if isinstance(sample, dict):
+            key = sample.get("__key__")
+        elif isinstance(sample, list):
+            if isinstance(sample[0], dict):
+                key = ",".join("None" if s is None else s.get("__key__") for s in sample)
+            elif isinstance(sample[0], Sample):
+                key = ",".join("None" if s is None else s.__key__ for s in sample)
+            else:
+                key = None
+        elif isinstance(sample, Sample):
+            key = sample.__key__
+        else:
+            key = None
+        self.sample_error_handler(e, key)
+
+
+class BaseWebdataset(
+    BaseCoreDataset[T_sample], WebdatasetPreparator, Sharder, ErrorHandler, Generic[T_sample], ABC
 ):
     """
     Base class for all webdataset loaders. Applies proper sharding across workers.
     """
+
+    path: EPath
 
     training: bool
     worker_config: WorkerConfig
@@ -605,14 +643,16 @@ class InnerWebdataset(
 
     def __init__(
         self,
+        path: EPath,
         *,
-        shards: List[ShardInfo],
-        sample_excludes: Set[str],
+        split_part: str,
         training: bool,
         worker_config: WorkerConfig,
         shuffle_over_epochs: int = 1,
         parallel_shard_iters: Optional[int] = None,
         max_samples_per_sequence: Optional[int] = None,
+        info_config: str = ".info.yaml",
+        split_config: str = "split.yaml",
         part_filter: Optional[Callable[[str], bool]] = None,
         handler: Callable[[Exception, Optional[str]], None] = reraise_exception,
         _is_composed: bool = False,
@@ -621,8 +661,8 @@ class InnerWebdataset(
         Constructs the webdataset loader.
 
         Args:
-            shards: The shard slices to load. Indexed by `shards[shard]`.
-            sample_exclude: Set of sample keys to exclude.
+            path: Path to the dataset.
+            split_part: Which part to load (e.g. 'train', 'val', 'test').
             training: If true, apply shuffling and loop the dataset.
             worker_config: Configuration for the workers.
             shuffle_over_epochs: Only effective if training=True.
@@ -635,13 +675,20 @@ class InnerWebdataset(
             parallel_shard_iters: Number of parallel opened shards per worker, shuffling between.
             max_samples_per_sequence: Maximum number of samples per sequence (=how many samples
                     will be sequentially iterated).
+            info_config: Config file to use for sample metadata.
+            split_config: Config file to use for shard split definitions.
             part_filter: (internal) Function for filtering tar files by dict keys
             handler: Exception handler. Args: (exception, key).
             _is_composed: Internal flag, specifying if this is part of a merged dataset, thus
                 should not load the dataset and shard the ranks.
         """
         assert self.__sample_type__ is not None, f"Class {type(self)} must define __sample_type__"
-        self.shards = shards
+        wds_meta = WebdatasetMeta.from_config(
+            path=path, split_part=split_part, info_config=info_config, split_config=split_config
+        )
+        self.path = path
+        self.paths = [path]
+        self.shards = wds_meta.shards
         self.training = training
         self.worker_config = worker_config
         self.handler = handler
@@ -669,12 +716,12 @@ class InnerWebdataset(
                     f"{subshard[0].name}[{subshard[0].offset}, {subshard[0].offset+subshard[0].count})"
                     for subshard in inner_shards[:3]
                 )
-                if len(shards) > 6:
-                    shards_text += f", ...<{len(shards) - 6}>, " + ", ".join(
+                if len(self.shards) > 6:
+                    shards_text += f", ...<{len(self.shards) - 6}>, " + ", ".join(
                         f"{subshards[0].name}[{subshards[0].offset}, {subshards[0].offset+subshards[0].count})"
                         for subshards in inner_shards[-3:]
                     )
-                elif len(shards) > 3:
+                elif len(self.shards) > 3:
                     shards_text += ", " + ", ".join(
                         f"{subshards[0].name}[{subshards[0].offset}, {subshards[0].offset+subshards[0].count})"
                         for subshards in inner_shards[3:]
@@ -689,7 +736,7 @@ class InnerWebdataset(
                 rank_shards=self.rank_shards,
                 worker_config=self.worker_config,
                 part_filter=part_filter,
-                exclude=sample_excludes,
+                exclude=wds_meta.sample_excludes,
                 loop=training,
                 shuffle_over_epochs=shuffle_over_epochs if training else None,
                 parallel_shard_iters=parallel_shard_iters,
@@ -697,39 +744,32 @@ class InnerWebdataset(
             )
             self.dataset = self._process_samples(dataset)
         else:
-            self.sample_excludes = sample_excludes
+            self.sample_excludes = wds_meta.sample_excludes
             self.shuffle_over_epochs = shuffle_over_epochs
             self.parallel_shard_iters = parallel_shard_iters
             self.max_samples_per_sequence = max_samples_per_sequence
             self.part_filter = part_filter
 
-    def sample_error_handler(self, e: Exception, sample_key: str):
-        if isinstance(e, SYSTEM_EXCEPTIONS):
-            raise FatalSampleError(f"Error in sample {sample_key!r}: {e}") from e
-
-        self.handler(e, sample_key)
-
-    def error_handler(self, e: Exception, sample: Union[T_sample, List[T_sample], dict]):
-        if isinstance(sample, dict):
-            key = sample.get("__key__")
-        elif isinstance(sample, list):
-            if isinstance(sample[0], dict):
-                key = ",".join(s.get("__key__") for s in sample)
-            elif isinstance(sample[0], Sample):
-                key = ",".join(s.__key__ for s in sample)
-            else:
-                key = None
-        elif isinstance(sample, Sample):
-            key = sample.__key__
-        else:
-            key = None
-        self.sample_error_handler(e, key)
-
-    @abstractmethod
     def _process_samples(
         self, dataset: SavableDataset[Tuple[Optional[FilteredSample], ...]]
     ) -> SavableDataset[T_sample]:
         """Internally loads the sample."""
+        return MapDataset(
+            dataset,
+            self._load_sample_raw,
+            error_handler=self.error_handler,
+            stateless_map_fn=True,
+            worker_config=self.worker_config,
+        )
+
+    def _load_sample_raw(self, sample: Tuple[Optional[FilteredSample], ...]) -> T_sample:
+        # Just a wrapper for the inner tuple. Tuple should be of length 1.
+        assert len(sample) == 1 and sample[0] is not None
+        return self.load_sample(sample[0])
+
+    @abstractmethod
+    def load_sample(self, raw_data: FilteredSample) -> T_sample:
+        """Loads the sample from the dataset."""
         ...
 
     def __len__(self):
@@ -775,85 +815,13 @@ class InnerWebdataset(
         return {
             "type": type(self).__qualname__,
             "training": self.training,
-            "paths": [str(path) for path in self.paths],
+            "path": str(self.path),
             "worker_config": self.worker_config.config(),
             "dataset": self.dataset.config(),
         }
 
     def __str__(self):
-        return f"{type(self).__name__}(paths={self.paths}, dataset={self.dataset})"
-
-
-class BaseWebdataset(InnerWebdataset[T_sample], Generic[T_sample], ABC):
-    """
-    Base class for all webdataset loaders. Applies proper sharding across workers.
-    """
-
-    path: EPath
-
-    def __init__(
-        self,
-        path: EPath,
-        *,
-        split_part: str,
-        training: bool,
-        worker_config: WorkerConfig,
-        shuffle_over_epochs: int = 1,
-        parallel_shard_iters: Optional[int] = None,
-        max_samples_per_sequence: Optional[int] = None,
-        info_config: str = ".info.yaml",
-        split_config: str = "split.yaml",
-        part_filter: Optional[Callable[[str], bool]] = None,
-        handler: Callable[[Exception, Optional[str]], None] = reraise_exception,
-        _is_composed: bool = False,
-    ):
-        """
-        Constructs the webdataset loader.
-
-        Args:
-            path: Root path to the dataset.
-            split_part: Which part to load (e.g. 'train', 'val', 'test').
-            training: If true, apply shuffling and loop the dataset.
-            worker_config: Configuration for the workers.
-            shuffle_over_epochs: Only effective if training=True.
-                How many epochs to shuffle over if training.
-                If = 1, every sample is seen exactly once per epoch.
-                If > 1, samples (or rather shard slices) are shuffled within this number of epochs
-                (i.e. randomly selected without replacement).
-                If -1, the shards are effectively shuffle over infinite epochs (i.e. shard slices
-                are drawn with replacement).
-            parallel_shard_iters: Number of parallel opened shards per worker, shuffling between.
-            max_samples_per_sequence: Maximum number of samples per sequence (=how many samples
-                    will be sequentially iterated).
-            info_config: Config file to use for sample metadata.
-            split_config: Config file to use for shard split definitions.
-            part_filter: (internal) Function for filtering tar files by dict keys
-            handler: Exception handler. Args: (exception, key).
-            _is_composed: Internal flag, specifying if this is part of a merged dataset, thus
-                should not load the dataset and shard the ranks.
-        """
-        assert self.__sample_type__ is not None, f"Class {type(self)} must define __sample_type__"
-        self.path = path
-        wds_meta = WebdatasetMeta.from_config(
-            path=path, split_part=split_part, info_config=info_config, split_config=split_config
-        )
-        super().__init__(
-            shards=wds_meta.shards,
-            sample_excludes=wds_meta.sample_excludes,
-            training=training,
-            worker_config=worker_config,
-            shuffle_over_epochs=shuffle_over_epochs,
-            parallel_shard_iters=parallel_shard_iters,
-            max_samples_per_sequence=max_samples_per_sequence,
-            part_filter=part_filter,
-            handler=handler,
-            _is_composed=_is_composed,
-        )
-
-    @abstractmethod
-    def load_sample(self, raw_data: FilteredSample) -> T_sample:
-        """Loads the sample from the dataset."""
-        ...
+        return f"{type(self).__name__}(path={self.path}, dataset={self.dataset})"
 
 
 class DefaultGenericWebdataset(BaseWebdataset[T_sample], Generic[T_sample]):
@@ -874,6 +842,19 @@ class DefaultGenericWebdataset(BaseWebdataset[T_sample], Generic[T_sample]):
         part_filter: Optional[Union[str, List[str], Callable[[str], bool]]] = None,
         **kwargs,
     ):
+        """
+        Constructs the default load, which uses the webdataset decoder to decode the sample.
+
+        Args:
+            subflavor: Deprecated. Subflavor to set for all loaded samples.
+            subflavors: Subflavors dictionary to set for all loaded samples.
+            field_map: Mapping from the webdataset fields to the sample fields.
+            sample_loader: Function to load the sample from the webdataset fields. May be a string
+                in order to load a function from a module, or a callable directly.
+            part_filter: Filter for the parts to load. May be a string in order to load a function
+                from a module, or a callable directly.
+            **kwargs: Args passed to parent constructor.
+        """
         assert (field_map is None) != (
             sample_loader is None
         ), "Either field_map or sample_loader must be provided."
@@ -931,22 +912,6 @@ class DefaultGenericWebdataset(BaseWebdataset[T_sample], Generic[T_sample]):
         self.subflavor = subflavor
         self.subflavors = subflavors or {}
 
-    def _process_samples(
-        self, dataset: SavableDataset[Tuple[Optional[FilteredSample], ...]]
-    ) -> SavableDataset[T_sample]:
-        return MapDataset(
-            dataset,
-            self._load_sample_raw,
-            error_handler=self.error_handler,
-            stateless_map_fn=True,
-            worker_config=self.worker_config,
-        )
-
-    def _load_sample_raw(self, sample: Tuple[Optional[FilteredSample], ...]) -> T_sample:
-        # Just a wrapper for the inner tuple. Tuple should be of length 1.
-        assert len(sample) == 1 and sample[0] is not None
-        return self.load_sample(*sample)
-
     def load_sample(self, sample: FilteredSample) -> T_sample:
         return self.__sample_type__(**self._sample_loader(sample))
 
@@ -970,10 +935,14 @@ class DefaultDecoderWebdataset(DefaultGenericWebdataset[T_sample], Generic[T_sam
     #: If true, ignore errors when decoding.
     ignore_decoder_errors: bool
 
+    # The webdataset decoder function, if to be applied
+    _decoder: Optional[Callable[[FilteredSample], FilteredSample]]
+
     def __init__(
         self,
         path: EPath,
         *,
+        auto_decode: bool = True,
         image_decode: ImageDecoder = "torchrgb",
         ignore_decoder_errors: bool = False,
         **kwargs,
@@ -983,6 +952,7 @@ class DefaultDecoderWebdataset(DefaultGenericWebdataset[T_sample], Generic[T_sam
 
         Args:
             path: Path to the dataset (passed to parent)
+            auto_decode: If true, use the default webdataset sample decoder.
             image_decode: This defines the decoding results.
             ignore_decoder_errors: If true, ignore errors when decoding.
             **kwargs: Args passed to parent constructor
@@ -991,12 +961,15 @@ class DefaultDecoderWebdataset(DefaultGenericWebdataset[T_sample], Generic[T_sam
         self.ignore_decoder_errors = ignore_decoder_errors
         super().__init__(path, **kwargs)
 
-        self._decoder = webdataset.autodecode.Decoder(
-            [
-                webdataset.autodecode.imagehandler(self.image_decode),
-                self._video_decoder,
-            ]
-        )
+        if auto_decode:
+            self._decoder = webdataset.autodecode.Decoder(
+                [
+                    webdataset.autodecode.imagehandler(self.image_decode),
+                    self._video_decoder,
+                ]
+            )
+        else:
+            self._decoder = None
 
     def _decode_error_handler(self, exc: Exception) -> bool:
         if self.ignore_decoder_errors:
@@ -1019,7 +992,8 @@ class DefaultDecoderWebdataset(DefaultGenericWebdataset[T_sample], Generic[T_sam
         return None
 
     def load_sample(self, sample: FilteredSample) -> T_sample:
-        sample = self._decoder(sample)
+        if self._decoder is not None:
+            sample = self._decoder(sample)
         return super().load_sample(sample)
 
     # def _process_samples(self, dataset: SavableDataset[Tuple[Optional[FilteredSample], ...]]) -> SavableDataset[T_sample]:
@@ -1049,19 +1023,21 @@ class DefaultDecoderWebdataset(DefaultGenericWebdataset[T_sample], Generic[T_sam
         }
 
 
-class MergedWebdataset(BaseCoreDataset[T_sample], Sharder, Generic[T_sample], ABC):
+class MergedWebdataset(BaseCoreDataset[T_sample], Sharder, ErrorHandler, Generic[T_sample], ABC):
     """
     Base class for all webdataset loaders. Applies proper sharding across workers.
     """
 
     _sample_merger: Callable[[Callable[..., T_sample], Tuple[Optional[Sample], ...]], T_sample]
 
-    paths: List[EPath]
     training: bool
     worker_config: WorkerConfig
 
     shards: List[Sequence[ShardInfo]]
     part_datasets: SavableDataset[T_sample]
+
+    inner_datasets: List[BaseWebdataset]
+    inner_dataset_keys: Optional[List[str]]
 
     def __init__(
         self,
@@ -1081,8 +1057,7 @@ class MergedWebdataset(BaseCoreDataset[T_sample], Sharder, Generic[T_sample], AB
         Constructs the webdataset loader.
 
         Args:
-            paths: Root paths to the joined datasets.
-            split_part: Which part to load (e.g. 'train', 'val', 'test').
+            inner_dataset: The inner datasets. Must be loaded internally with `_is_composed=True`.
             training: If true, apply shuffling and loop the dataset.
             worker_config: Configuration for the workers.
             shuffle_over_epochs: Only effective if training=True.
@@ -1095,8 +1070,6 @@ class MergedWebdataset(BaseCoreDataset[T_sample], Sharder, Generic[T_sample], AB
             parallel_shard_iters: Number of parallel opened shards per worker, shuffling between.
             max_samples_per_sequence: Maximum number of samples per sequence (=how many samples
                     will be sequentially iterated).
-            info_config: Config file to use for sample metadata.
-            split_config: Config file to use for shard split definitions.
             part_filter: (internal) Function for filtering tar files by dict keys
             join_method: How to join the samples.
                 inner: keep only samples that are in all paths
@@ -1109,12 +1082,14 @@ class MergedWebdataset(BaseCoreDataset[T_sample], Sharder, Generic[T_sample], AB
         assert self.__sample_type__ is not None, f"Class {type(self)} must define __sample_type__"
         if isinstance(inner_datasets, dict):
             inner_keys = list(inner_datasets.keys())
+            self.inner_dataset_keys = inner_keys
             self._sample_merger = lambda composer, samples: composer(
                 **dict(zip(inner_keys, samples))
             )
             inner_datasets = list(inner_datasets.values())
         else:
             self._sample_merger = lambda composer, samples: composer(*samples)
+            self.inner_dataset_keys = None
         assert all(
             not hasattr(d, "dataset") for d in inner_datasets
         ), "Inner dataset was not instantiated with _is_composed=True"
@@ -1182,27 +1157,9 @@ class MergedWebdataset(BaseCoreDataset[T_sample], Sharder, Generic[T_sample], AB
         )
         self.dataset = self._process_samples(dataset)
 
-    def sample_error_handler(self, e: Exception, sample_key: str):
-        if isinstance(e, SYSTEM_EXCEPTIONS):
-            raise FatalSampleError(f"Error in sample {sample_key!r}: {e}") from e
-
-        self.handler(e, sample_key)
-
-    def error_handler(self, e: Exception, sample: Union[T_sample, List[T_sample], dict]):
-        if isinstance(sample, dict):
-            key = sample.get("__key__")
-        elif isinstance(sample, list):
-            if isinstance(sample[0], dict):
-                key = ",".join(s.get("__key__") for s in sample)
-            elif isinstance(sample[0], Sample):
-                key = ",".join(s.__key__ for s in sample)
-            else:
-                key = None
-        elif isinstance(sample, Sample):
-            key = sample.__key__
-        else:
-            key = None
-        self.sample_error_handler(e, key)
+    @property
+    def paths(self) -> List[EPath]:
+        return [dataset.path for dataset in self.inner_datasets]
 
     def _process_samples(
         self, dataset: SavableDataset[Tuple[Optional[FilteredSample], ...]]
@@ -1286,9 +1243,7 @@ class MergedWebdataset(BaseCoreDataset[T_sample], Sharder, Generic[T_sample], AB
         return {
             "type": type(self).__qualname__,
             "training": self.training,
-            "paths": [str(path) for path in self.paths],
-            "worker_config": self.worker_config.config(),
-            "dataset": self.dataset.config(),
+            "inner_datasets": [dataset.config() for dataset in self.inner_datasets],
         }
 
     def __str__(self):

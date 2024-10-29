@@ -885,8 +885,6 @@ class TestDataset(unittest.TestCase):
         samples_wrk2 = [[batch.__key__ for batch in loader] for _ in range(10)]
         print(samples)
         assert all(samples_wrk2[0] == one_ep_samples for one_ep_samples in samples_wrk2)
-        # TODO: This should be the same.
-        # assert samples_wrk2 == samples
 
     def test_current_batch_index(self):
         # Tests if the get_current_batch_index works properly
@@ -930,6 +928,7 @@ class TestDataset(unittest.TestCase):
             for batch_idx, batch in batches
         )
 
+        print("pk", [batch.__key__ for batch_idx, batch in batches])
         print("rk", [batch.__restore_key__ for batch_idx, batch in batches])
         assert loader.can_restore_sample()
 
@@ -961,6 +960,7 @@ class TestDataset(unittest.TestCase):
         batch_rand_nums = []
         for batch_idx, batch in batches:
             restore_batch = loader.restore_sample(batch.__restore_key__)
+            assert restore_batch.__key__ == batch.__key__
             assert restore_batch.batch_index == batch.batch_index
             assert restore_batch.sample_index == batch.sample_index
             assert restore_batch.rand_num == batch.rand_num
