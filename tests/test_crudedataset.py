@@ -65,10 +65,10 @@ class MyTaskEncoder(DefaultTaskEncoder[TextSample, TextSample, TextBatch, TextBa
             __keys__=[sample.__key__ for sample in samples],
             txts=[sample.text for sample in samples],
         )
-    
+
     def select_samples_to_pack(self, samples):
         return [[sample] for sample in samples]
-    
+
     @stateless
     def pack_selected_samples(self, samples):
         return samples[0]

@@ -4,11 +4,7 @@
 from dataclasses import dataclass
 from typing import Any, Dict, List, Literal, Optional, Tuple, Type, Union
 
-from megatron.energon.dataset_config import get_dataset_from_config
-from megatron.energon.epathlib import EPath
-from megatron.energon.flavors import BaseCoreDataset, MergedWebdataset
-from megatron.energon.flavors.base_dataset import Sample
-from megatron.energon.flavors.base_webdataset import BaseWebdataset
+from megatron.energon.flavors import BaseCoreDataset, BaseWebdataset, MergedWebdataset, Sample
 from megatron.energon.metadataset.dataset_loader import DatasetLoader
 from megatron.energon.metadataset.loader_interface import DatasetLoaderInterface
 from megatron.energon.worker import WorkerConfig

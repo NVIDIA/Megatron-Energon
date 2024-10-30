@@ -2,13 +2,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from megatron.energon.flavors.base_dataset import BaseCoreDataset, Sample, SavableDataset
-from megatron.energon.flavors.base_webdataset import (
-    BaseWebdataset,
-    DefaultDecoderWebdataset,
-    DefaultGenericWebdataset,
-    MergedWebdataset,
-    VideoData,
-)
 from megatron.energon.flavors.captioning import CaptioningSample, CaptioningWebdataset
 from megatron.energon.flavors.crude import CrudeSample, CrudeWebdataset
 from megatron.energon.flavors.image import ImageSample, ImageWebdataset
@@ -27,6 +20,13 @@ from megatron.energon.flavors.text import TextSample, TextWebdataset
 from megatron.energon.flavors.vid_qa import VidQASample, VidQAWebdataset
 from megatron.energon.flavors.vqa import VQASample, VQAWebdataset
 from megatron.energon.flavors.vqa_and_ocr import VQAOCRWebdataset
+from megatron.energon.flavors.webdataset import (
+    BaseWebdataset,
+    DefaultDecoderWebdataset,
+    DefaultGenericWebdataset,
+    MergedWebdataset,
+    VideoData,
+)
 
 __all__ = [
     "BaseCoreDataset",

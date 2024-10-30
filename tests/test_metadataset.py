@@ -3,30 +3,30 @@
 
 """This module defines tests for meta datasets."""
 
-from dataclasses import dataclass
 import gc
 import logging
 import sys
 import tempfile
 import time
-from typing import Iterable
 import unittest
 import warnings
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Iterable
 
 import torch
 import webdataset as wds
 
 from megatron.energon import (
+    Sample,
+    TextSample,
     WorkerConfig,
     get_loader,
     get_savable_loader,
     get_train_dataset,
     get_val_dataset,
     load_dataset,
-    Sample,
-    TextSample,
 )
 from megatron.energon.dataset_config import MAIN_FOLDER_NAME
 
@@ -56,7 +56,7 @@ class TestJoinedSample(Sample):
     text2: torch.Tensor
 
     @staticmethod
-    def from_joined(ds1: TextSample, ds2: TextSample) -> 'TestJoinedSample':
+    def from_joined(ds1: TextSample, ds2: TextSample) -> "TestJoinedSample":
         return ds1.to_joined(
             TestJoinedSample,
             text1=ds1.text,
@@ -1177,7 +1177,7 @@ class TestDataset(unittest.TestCase):
             n_checkpoints=5,
         )
 
-        data = list(zip(range(2*55), train_loader))
+        data = list(zip(range(2 * 55), train_loader))
         txt1_order = [data.text1[0] for idx, data in data]
         txt2_order = [data.text2[0] for idx, data in data]
         key_order = [data.__key__[0] for idx, data in data]

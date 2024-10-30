@@ -4,7 +4,7 @@
 from typing import Any, Callable, Dict, List, Optional, Union
 
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.base_webdataset import DefaultDecoderWebdataset, ImageDecoder
+from megatron.energon.flavors.webdataset import DefaultDecoderWebdataset, ImageDecoder
 
 
 class CrudeSample(dict):

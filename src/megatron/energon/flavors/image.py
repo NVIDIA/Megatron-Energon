@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import torch
 
 from megatron.energon.flavors.base_dataset import Sample
-from megatron.energon.flavors.base_webdataset import DefaultDecoderWebdataset
+from megatron.energon.flavors.webdataset import DefaultDecoderWebdataset
 
 
 @dataclass

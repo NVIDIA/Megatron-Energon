@@ -14,8 +14,7 @@ import yaml
 
 from megatron.energon.dataset_config import MAIN_FOLDER_NAME
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.base_webdataset import BaseWebdataset
-from megatron.energon.flavors.crude import CrudeWebdataset
+from megatron.energon.flavors import BaseWebdataset, CrudeWebdataset
 
 
 def type_str(tp: Type) -> str:
