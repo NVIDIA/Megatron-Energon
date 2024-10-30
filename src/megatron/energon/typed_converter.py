@@ -73,7 +73,16 @@ def raw_to_instance(kwargs: dict, inst_type: Type[TType], strict: bool = True) -
     kwargs = kwargs.copy()
     module_name = kwargs.pop("__module__", None)
     class_name = kwargs.pop("__class__", None)
+    # Check if this is a type of Type[...] or just a class. Type[...] will return the class instead
+    # of instantiating it.
+    is_type = typing.get_origin(inst_type) is type
+    if is_type:
+        inst_type = typing.get_args(inst_type)[0]
     if module_name is None or class_name is None:
+        if is_type:
+            raise ValueError(
+                f"Expected __module__ and __class__ for Type[{inst_type}], got {kwargs}"
+            )
         cls = inst_type
     else:
         try:
@@ -86,15 +95,25 @@ def raw_to_instance(kwargs: dict, inst_type: Type[TType], strict: bool = True) -
                 raise
 
         cls = typing.cast(Type[TType], getattr(module, class_name))
-        if isinstance(cls, type):
-            assert _check_instance_type(cls, inst_type), f"Expected {inst_type}, got {cls}"
-        elif not callable(cls):
-            raise ValueError(f"Expected a class or a callable, got {cls}")
-    inst = safe_call_function(kwargs, cls, strict=strict, allow_imports=True)
-    if not isinstance(cls, type):
-        assert _check_instance_type(
-            type(inst), inst_type
-        ), f"Expected {inst_type}, got {type(inst)}"
+        if is_type:
+            if isinstance(cls, type):
+                assert issubclass(cls, inst_type), f"Expected {inst_type}, got {cls}"
+            elif not callable(cls):
+                raise ValueError(f"Expected a class or a callable, got {cls}")
+        else:
+            if isinstance(cls, type):
+                assert _check_instance_type(cls, inst_type), f"Expected {inst_type}, got {cls}"
+            elif not callable(cls):
+                raise ValueError(f"Expected a class or a callable, got {cls}")
+    if is_type:
+        inst = cls
+        assert issubclass(inst, inst_type), f"Expected {inst_type}, got {inst}"
+    else:
+        inst = safe_call_function(kwargs, cls, strict=strict, allow_imports=True)
+        if not isinstance(cls, type):
+            assert _check_instance_type(
+                type(inst), inst_type
+            ), f"Expected {inst_type}, got {type(inst)}"
     return inst
 
 

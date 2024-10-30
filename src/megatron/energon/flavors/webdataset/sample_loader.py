@@ -107,13 +107,16 @@ class SingleShardReader:
     # Filter out wds files.
     part_filter: Optional[Callable[[str], bool]]
     # Error handler
-    handler: Callable[[Exception, str], None]
+    handler: Callable[[Exception, Optional[str]], None]
 
     # The internal state variables
     _ctx: contextlib.ExitStack
     _tar_file: tarfile.TarFile
     _stream: Iterator[tarfile.TarInfo] = _EMPTY_ITER
     _cur_tarinfo: Optional[tarfile.TarInfo] = None
+    _cur_base_name: Optional[str] = None
+    _cur_ext: Optional[str] = None
+    _cur_key: Optional[str] = None
 
     def __init__(
         self,
@@ -121,7 +124,7 @@ class SingleShardReader:
         exclude: Set[str],
         shard_state: ShardState,
         part_filter: Optional[Callable[[str], bool]],
-        handler: Callable[[Exception, str], None],
+        handler: Callable[[Exception, Optional[str]], None],
     ):
         self.worker_config = worker_config
         self.exclude = exclude
@@ -214,15 +217,21 @@ class SingleShardReader:
                 continue
             return
 
-    def read_next(self, for_key: Optional[str] = None) -> FilteredSample:
+    def read_next(
+        self, for_group_name: Optional[str] = None, must_match: bool = False
+    ) -> Tuple[str, FilteredSample]:
         """Gets the next sample, or raises StopIteration if exhausted."""
         if self._cur_tarinfo is None:
             self._next_tarinfo()
+        assert self._cur_tarinfo is not None
 
-        if for_key is None:
-            group_key = self._cur_base_name
+        if for_group_name is None:
+            group_name = self._cur_base_name
         else:
-            group_key = for_key
+            group_name = for_group_name
+            assert (
+                not must_match or group_name == self._cur_base_name
+            ), f"Sample key mismatch: {group_name} != {self._cur_base_name}"
         group: FilteredSample = dict(
             __key__=self._cur_key,
             __shard__=self.shard_state.shard.name,
@@ -234,7 +243,7 @@ class SingleShardReader:
         )
         while True:
             try:
-                if (group_key != self._cur_base_name) and (len(group) > 3 or for_key is not None):
+                if group_name != self._cur_base_name:
                     # Either the group has content, it it's only for a specific key
                     next_sample_offset_in_sub_tar = self._cur_tarinfo.offset
                     # NOTE: The next_sample_offset_in_sub_tar (tarinfo.offset) is relative to
@@ -259,11 +268,11 @@ class SingleShardReader:
                                     "count": self.shard_state.shard.count,
                                 },
                                 "offset": self.shard_state.offset,
-                                "key": group_key,
+                                "group_name": group_name,
                             }
                         )
 
-                    return group
+                    return group_name, group
 
                 if self.part_filter is None or self.part_filter(self._cur_ext):
                     group[self._cur_ext] = self._tar_file.extractfile(self._cur_tarinfo).read()
@@ -274,54 +283,52 @@ class SingleShardReader:
 
             try:
                 self._next_tarinfo()
+                assert self._cur_tarinfo is not None
             except StopIteration:
                 break
 
-        if len(group) > 3 or for_key is not None:
-            # shard_state.byte_offset = (absolute_tar_begin_offset - shard_info.byte_offset)
-            # Next state
-            next_sample_offset_in_sub_tar = self.shard_state.shard.byte_size - (
-                self._absolute_byte_offset - self.shard_state.shard.byte_offset
+        # shard_state.byte_offset = (absolute_tar_begin_offset - shard_info.byte_offset)
+        # Next state
+        next_sample_offset_in_sub_tar = self.shard_state.shard.byte_size - (
+            self._absolute_byte_offset - self.shard_state.shard.byte_offset
+        )
+        # NOTE: The next_sample_offset_in_sub_tar (tarinfo.offset) is relative to
+        # absolute_byte_offset, since open_itar crops a part out of the file.
+        # But we want to compute the offset relative to shard.byte_offset
+        self.shard_state.byte_offset = (
+            next_sample_offset_in_sub_tar + self._orig_shard_state_byte_offset
+        )
+        assert self.shard_state.byte_offset <= self.shard_state.shard.byte_size
+        self.shard_state.offset += 1
+
+        if self.worker_config.should_log(level=3):
+            self.worker_config.worker_log(
+                {
+                    "t": "WebdatasetSampleLoaderDataset._shard_iter.yield",
+                    "r": self.worker_config.rank,
+                    "w": self.worker_config.rank_worker_id(),
+                    "shard": {
+                        "name": self.shard_state.shard.name,
+                        "path": str(self.shard_state.shard.path),
+                        "offset": self.shard_state.shard.offset,
+                        "count": self.shard_state.shard.count,
+                    },
+                    "offset": self.shard_state.offset,
+                    "group_name": group_name,
+                }
             )
-            # NOTE: The next_sample_offset_in_sub_tar (tarinfo.offset) is relative to
-            # absolute_byte_offset, since open_itar crops a part out of the file.
-            # But we want to compute the offset relative to shard.byte_offset
-            self.shard_state.byte_offset = (
-                next_sample_offset_in_sub_tar + self._orig_shard_state_byte_offset
+
+        if (
+            self.shard_state.offset != self.shard_state.shard.count
+            or self.shard_state.byte_offset != self.shard_state.shard.byte_size
+        ):
+            warnings.warn(
+                f"shard_state.offset({self.shard_state.offset}) != shard.count({self.shard_state.shard.count}) or "
+                f"shard_state.byte_offset({self.shard_state.byte_offset}) != shard.byte_size({self.shard_state.shard.byte_size})"
+                f"; this indicates an internal bug. Shard might not have been iterated completely, samples may be missing."
             )
-            assert self.shard_state.byte_offset <= self.shard_state.shard.byte_size
-            self.shard_state.offset += 1
 
-            if self.worker_config.should_log(level=3):
-                self.worker_config.worker_log(
-                    {
-                        "t": "WebdatasetSampleLoaderDataset._shard_iter.yield",
-                        "r": self.worker_config.rank,
-                        "w": self.worker_config.rank_worker_id(),
-                        "shard": {
-                            "name": self.shard_state.shard.name,
-                            "path": str(self.shard_state.shard.path),
-                            "offset": self.shard_state.shard.offset,
-                            "count": self.shard_state.shard.count,
-                        },
-                        "offset": self.shard_state.offset,
-                        "key": group_key,
-                    }
-                )
-
-            if (
-                self.shard_state.offset != self.shard_state.shard.count
-                or self.shard_state.byte_offset != self.shard_state.shard.byte_size
-            ):
-                warnings.warn(
-                    f"shard_state.offset({self.shard_state.offset}) != shard.count({self.shard_state.shard.count}) or "
-                    f"shard_state.byte_offset({self.shard_state.byte_offset}) != shard.byte_size({self.shard_state.shard.byte_size})"
-                    f"; this indicates an internal bug. Shard might not have been iterated completely, samples may be missing."
-                )
-
-            return group
-        else:
-            raise StopIteration()
+        return group_name, group
 
 
 class WebdatasetSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample], ...]]):
@@ -357,7 +364,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample
     #     no match of the extra datasets, the sample is still yielded without the missing column.
     dataset_join_method: Literal["inner_match", "inner", "left"]
     # Error handler
-    handler: Callable[[Exception, str], None]
+    handler: Callable[[Exception, Optional[str]], None]
 
     # Worker's random generator
     _worker_rng: WorkerRng
@@ -384,8 +391,8 @@ class WebdatasetSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample
         loop: bool = False,
         shuffle_over_epochs: Optional[int] = None,
         parallel_shard_iters: int = 1,
-        dataset_join_method: Literal["inner_match", "inner", "left"] = "inner_match",
-        handler: Callable[[Exception, str], None] = reraise_exception,
+        dataset_join_method: Literal["inner_match"] = "inner_match",
+        handler: Callable[[Exception, Optional[str]], None] = reraise_exception,
     ):
         """
         The webdataset loader. Iterates over the shard infos and yields the samples.
@@ -407,7 +414,8 @@ class WebdatasetSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample
             parallel_shard_iters: If > 1, samples are randomly drawn from parallel shard iterators.
                 This will not impact performance, but increase randomness. If = 1, the shards are
                 iterated in order.
-            dataset_join_method: The method to join datasets. One of 'inner_match', 'inner', 'left'.
+            dataset_join_method: The method to join datasets. One of 'inner_match'. Further modes
+                may come in the future if needed.
             handler: Exception handler. Args: (exception, key).
         """
         super().__init__()
@@ -468,11 +476,11 @@ class WebdatasetSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample
             )
             for shard_state in shard_states
         ]
-        groups = [None] * len(readers)
+        groups: List[Optional[FilteredSample]] = [None] * len(readers)
         with ctx:
             while True:
                 try:
-                    groups[0] = readers[0].read_next()
+                    group_name, groups[0] = readers[0].read_next()
                 except StopIteration:
                     # Expecting all column readers to raise StopIteration as well
                     for reader in readers[1:]:
@@ -494,7 +502,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample
                 else:
                     for idx, reader in enumerate(readers[1:], 1):
                         try:
-                            groups[idx] = reader.read_next(groups[0]["__key__"])
+                            _, groups[idx] = reader.read_next(group_name, must_match=True)
                         except StopIteration:
                             if self.dataset_join_method == "inner_match":
                                 raise FatalSampleError.from_sample_key(
@@ -502,10 +510,10 @@ class WebdatasetSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample
                                 ) from ValueError(
                                     "Extra column shard exhausted when primary shard is exhausted"
                                 )
-                            elif self.dataset_join_method == "inner":
-                                continue
-                            elif self.dataset_join_method == "left":
-                                groups[idx] = None
+                            else:
+                                assert (
+                                    False
+                                ), f"join method {self.dataset_join_method} not implemented"
                             continue
                         except SYSTEM_EXCEPTIONS:
                             raise FatalSampleError.from_sample_key(

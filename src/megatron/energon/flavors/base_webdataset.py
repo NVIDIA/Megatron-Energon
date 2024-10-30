@@ -1049,7 +1049,7 @@ class MergedWebdataset(BaseCoreDataset[T_sample], Sharder, ErrorHandler, Generic
         parallel_shard_iters: Optional[int] = None,
         max_samples_per_sequence: Optional[int] = None,
         part_filter: Optional[Callable[[str], bool]] = None,
-        join_method: Literal["inner_match", "inner", "left"] = "inner_match",
+        join_method: Literal["inner_match"] = "inner_match",
         join_type: Type[T_sample],
         handler: Callable[[Exception, Optional[str]], None] = reraise_exception,
     ):
@@ -1072,9 +1072,8 @@ class MergedWebdataset(BaseCoreDataset[T_sample], Sharder, ErrorHandler, Generic
                     will be sequentially iterated).
             part_filter: (internal) Function for filtering tar files by dict keys
             join_method: How to join the samples.
-                inner: keep only samples that are in all paths
-                inner_match: like inner, but raise if a sample doesn't match in all paths
-                left: keep all samples from the first path, optionally joining with the other
+                inner_match: All samples must match 1:1 of the merged datasets.
+                This might be extended to further modes in the future, but those will require a new index, which
             join_type: Type of the joined samples.
             handler: Exception handler. Args: (exception, key).
         """
@@ -1104,6 +1103,15 @@ class MergedWebdataset(BaseCoreDataset[T_sample], Sharder, ErrorHandler, Generic
         assert all(
             sample_exclude == dataset.sample_excludes for dataset in inner_datasets[1:]
         ), f"Sample excludes must be the same for all paths"
+
+        if join_method == "inner_match":
+            assert all(
+                shard1.count == shard2.count
+                for dataset in inner_datasets[1:]
+                for shard1, shard2 in zip(dataset.shards, inner_datasets[0].shards)
+            ), "For inner_match, all shards must have the same count"
+        else:
+            assert False, f"Invalid join method {join_method}"
 
         self.shards = list(zip(*(dataset.shards for dataset in inner_datasets)))
 

@@ -18,7 +18,7 @@ from megatron.energon.worker import WorkerConfig
 class JoinDatasetLoader(DatasetLoaderInterface):
     """Loads a joined dataset from a path."""
 
-    datasets: List[DatasetLoader]
+    datasets: Union[List[DatasetLoader], Dict[str, DatasetLoader]]
     join_type: Type[Sample]
     join_method: Literal["inner_match", "inner", "left"] = "inner_match"
 
@@ -66,23 +66,44 @@ class JoinDatasetLoader(DatasetLoaderInterface):
             subflavor = self.subflavor
         if self.subflavors is not None:
             subflavors = {**self.subflavors, **(subflavors or {})}
-        inner_datasets = [
-            dataset.get_dataset(
-                training=training,
-                split_part=split_part,
-                worker_config=worker_config,
-                subflavor=subflavor,
-                subflavors=subflavors,
-                shuffle_over_epochs=shuffle_over_epochs,
-                split_config=split_config,
-                _is_composed=True,
-                **kwargs,
-            )
-            for dataset in self.datasets
-        ]
-        assert all(
-            isinstance(d, BaseWebdataset) for d in inner_datasets
-        ), "Can only merge webdatasets efficiently"
+        if isinstance(self.datasets, list):
+            inner_datasets = [
+                dataset.get_dataset(
+                    training=training,
+                    split_part=split_part,
+                    worker_config=worker_config,
+                    subflavor=subflavor,
+                    subflavors=subflavors,
+                    shuffle_over_epochs=shuffle_over_epochs,
+                    split_config=split_config,
+                    _is_composed=True,
+                    **kwargs,
+                )
+                for dataset in self.datasets
+            ]
+            assert all(
+                isinstance(d, BaseWebdataset) for d in inner_datasets
+            ), "Can only merge webdatasets efficiently"
+        elif isinstance(self.datasets, dict):
+            inner_datasets = {
+                key: dataset.get_dataset(
+                    training=training,
+                    split_part=split_part,
+                    worker_config=worker_config,
+                    subflavor=subflavor,
+                    subflavors=subflavors,
+                    shuffle_over_epochs=shuffle_over_epochs,
+                    split_config=split_config,
+                    _is_composed=True,
+                    **kwargs,
+                )
+                for key, dataset in self.datasets.items()
+            }
+            assert all(
+                isinstance(d, BaseWebdataset) for d in inner_datasets.values()
+            ), "Can only merge webdatasets efficiently"
+        else:
+            raise ValueError("Invalid join type")
         return MergedWebdataset(
             inner_datasets=inner_datasets,
             training=training,

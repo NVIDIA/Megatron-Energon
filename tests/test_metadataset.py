@@ -3,11 +3,13 @@
 
 """This module defines tests for meta datasets."""
 
+from dataclasses import dataclass
 import gc
 import logging
 import sys
 import tempfile
 import time
+from typing import Iterable
 import unittest
 import warnings
 from collections import Counter
@@ -23,6 +25,8 @@ from megatron.energon import (
     get_train_dataset,
     get_val_dataset,
     load_dataset,
+    Sample,
+    TextSample,
 )
 from megatron.energon.dataset_config import MAIN_FOLDER_NAME
 
@@ -46,6 +50,20 @@ def _norng_state(state):
         return state
 
 
+@dataclass
+class TestJoinedSample(Sample):
+    text1: torch.Tensor
+    text2: torch.Tensor
+
+    @staticmethod
+    def from_joined(ds1: TextSample, ds2: TextSample) -> 'TestJoinedSample':
+        return ds1.to_joined(
+            TestJoinedSample,
+            text1=ds1.text,
+            text2=ds2.text,
+        )
+
+
 class TestDataset(unittest.TestCase):
     # Set up the test fixture
     def setUp(self):
@@ -63,8 +81,9 @@ class TestDataset(unittest.TestCase):
         (self.dataset_path / "ds2").mkdir(exist_ok=True, parents=True)
 
         # Create a small dummy captioning dataset
-        self.create_text_test_dataset(self.dataset_path / "ds1", 0)
-        self.create_text_test_dataset(self.dataset_path / "ds2", 100)
+        self.create_text_test_dataset(self.dataset_path / "ds1", range(55), range(55))
+        self.create_text_test_dataset(self.dataset_path / "ds2", range(100, 155), range(100, 155))
+        self.create_text_test_dataset(self.dataset_path / "ds3", range(200, 255), range(0, 55))
 
         self.mds_path = self.dataset_path / "metadataset.yaml"
         with open(self.mds_path, "w") as f:
@@ -132,7 +151,7 @@ class TestDataset(unittest.TestCase):
         self.temp_dir.cleanup()
 
     @staticmethod
-    def create_text_test_dataset(path: Path, offset: int):
+    def create_text_test_dataset(path: Path, txt_range: Iterable[int], key_range: Iterable[int]):
         """Creates a small dummy test dataset for testing purposes."""
 
         # Create num_samples unique captions
@@ -140,12 +159,12 @@ class TestDataset(unittest.TestCase):
 
         # Initialize the ShardWriter
         with wds.ShardWriter(f"{path}/parts/data-%d.tar", maxcount=10) as shard_writer:
-            for idx in range(55):
+            for key, txt in zip(key_range, txt_range):
                 # Write individual files to shards
                 shard_writer.write(
                     {
-                        "__key__": f"{idx + offset:06d}",
-                        "txt": f"{idx + offset}".encode(),
+                        "__key__": f"{key:06d}",
+                        "txt": f"{txt}".encode(),
                     },
                 )
             total_shards = shard_writer.shard
@@ -1099,6 +1118,120 @@ class TestDataset(unittest.TestCase):
             # Delete all locals, otherwise loaders might be kept alive
             locals().clear()
             gc.collect()
+
+    def test_joined_metadataset(self):
+        torch.manual_seed(42)
+        worker_config = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=0,
+            seed_offset=42,
+        )
+
+        # Create a joined dataset configuration
+        joined_mds_path = self.dataset_path / "joined_metadataset.yaml"
+        with open(joined_mds_path, "w") as f:
+            f.write(
+                "\n".join(
+                    [
+                        "__module__: megatron.energon",
+                        "__class__: Metadataset",
+                        "splits:",
+                        "  train:",
+                        "    datasets:",
+                        "      - weight: 1",
+                        "        join:",
+                        "          ds1:",
+                        "            path: ds1",
+                        "            subflavors:",
+                        "              source1: ds1",
+                        "              number: 43",
+                        "          ds2:",
+                        "            path: ds3",
+                        "            subflavors:",
+                        "              source2: ds3",
+                        "              number: 44",
+                        "        join_type:",
+                        f"          __module__: {TestJoinedSample.__module__}",
+                        f"          __class__: {TestJoinedSample.__name__}",
+                    ]
+                )
+            )
+
+        # Train mode dataset
+        train_dataset = get_train_dataset(
+            joined_mds_path,
+            worker_config=worker_config,
+            batch_size=1,
+            shuffle_buffer_size=None,
+            max_samples_per_sequence=None,
+        )
+        print(len(train_dataset))
+        assert len(train_dataset) == 55
+
+        train_loader = get_savable_loader(
+            train_dataset,
+            worker_config=worker_config,
+            checkpoint_every_sec=0,
+            checkpoint_every_min_n_samples=1,
+            n_checkpoints=5,
+        )
+
+        data = list(zip(range(2*55), train_loader))
+        txt1_order = [data.text1[0] for idx, data in data]
+        txt2_order = [data.text2[0] for idx, data in data]
+        key_order = [data.__key__[0] for idx, data in data]
+        # ds1 has 55 samples, key range 0:55, txt range 0:55
+        # ds3 has 28 samples, key range 0:55, txt range 200:255
+        # Joining results in: 0:55
+        print("txt1:", txt1_order)
+        # Joining results in: 200:255
+        print("txt2:", txt2_order)
+        # Joining results in: 0:55
+        print("key:", key_order)
+        # Check matching
+        assert all(int(txt1) + 200 == int(txt2) for txt1, txt2 in zip(txt1_order, txt2_order))
+        # Check frequency
+        assert set(txt1_order) == set(str(i) for i in range(0, 55))
+        assert set(txt2_order) == set(str(i) for i in range(200, 255))
+        # Every item must occurr 2 times (2*55).
+        assert Counter(txt1_order).most_common(1)[0][1] == 2
+
+        state = train_loader.save_state_rank()
+
+        # Iterate 60 more items
+        data = list(zip(range(60), train_loader))
+        txt1_order = [data.text1 for idx, data in data]
+        txt2_order = [data.text2 for idx, data in data]
+        key_order = [data.__key__ for idx, data in data]
+
+        # Restore state
+        train_loader = get_savable_loader(
+            get_train_dataset(
+                joined_mds_path,
+                worker_config=worker_config,
+                batch_size=1,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+            ),
+            worker_config=worker_config,
+            checkpoint_every_sec=0,
+            checkpoint_every_min_n_samples=1,
+            n_checkpoints=5,
+        )
+
+        train_loader.restore_state_rank(state)
+
+        # Iterate 360 more items
+        data = list(zip(range(60), train_loader))
+        txt1_order_rest = [data.text1 for idx, data in data]
+        txt2_order_rest = [data.text2 for idx, data in data]
+        key_order_rest = [data.__key__ for idx, data in data]
+
+        # Verify matching
+        assert txt1_order == txt1_order_rest
+        assert txt2_order == txt2_order_rest
+        assert key_order == key_order_rest
 
 
 if __name__ == "__main__":

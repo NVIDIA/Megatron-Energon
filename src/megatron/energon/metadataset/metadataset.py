@@ -43,7 +43,7 @@ class JoinDatasetReference:
 @dataclass
 class DatasetReference:
     path: Optional[Union[str, EPath]] = None
-    join: Optional[List[JoinDatasetReference]] = None
+    join: Union[List[JoinDatasetReference], Dict[str, JoinDatasetReference], None] = None
     join_method: Literal["inner_match", "inner", "left"] = "inner_match"
     join_type: Optional[Type[Sample]] = None
     split_part: Optional[str] = None
@@ -91,7 +91,12 @@ class DatasetReference:
             assert (
                 self.dataset_config == "dataset.yaml"
             ), "Cannot set dataset_config for joining datasets"
-            inner_loaders = [join.prepare(parent_path) for join in self.join]
+            if isinstance(self.join, list):
+                inner_loaders = [join.prepare(parent_path) for join in self.join]
+            elif isinstance(self.join, dict):
+                inner_loaders = {key: join.prepare(parent_path) for key, join in self.join.items()}
+            else:
+                raise ValueError("Invalid join type")
             self._dataset = JoinDatasetLoader(
                 datasets=inner_loaders,
                 join_method=self.join_method,
