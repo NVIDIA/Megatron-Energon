@@ -1,7 +1,6 @@
 # Copyright (c) 2024, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-import dataclasses
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Type, Union
 
@@ -16,8 +15,6 @@ from megatron.energon.worker import WorkerConfig
 
 @dataclass
 class DatasetReference(DatasetLoaderInterface):
-    _: dataclasses.KW_ONLY
-
     path: Union[str, EPath]
 
     split_part: Optional[str] = None
@@ -109,8 +106,6 @@ class JoinDatasetReference(DatasetReference):
 
 @dataclass
 class MetadatasetJoin(DatasetLoaderInterface):
-    _: dataclasses.KW_ONLY
-
     join: Union[List[JoinDatasetReference], Dict[str, JoinDatasetReference]]
     joiner: Union[Type[Sample], Callable[..., Sample]]
     join_method: Literal["inner_match", "inner", "left"] = "inner_match"
@@ -172,26 +167,22 @@ class MetadatasetJoin(DatasetLoaderInterface):
 
 @dataclass
 class MixWeightMixin:
-    _: dataclasses.KW_ONLY
-
     weight: float = 1.0
 
 
 @dataclass
-class MixDatasetReference(DatasetReference, MixWeightMixin):
+class MixDatasetReference(MixWeightMixin, DatasetReference):
     pass
 
 
 @dataclass
-class MixJoinDatasetReference(MetadatasetJoin, MixWeightMixin):
+class MixJoinDatasetReference(MixWeightMixin, MetadatasetJoin):
     pass
 
 
 @dataclass
 class MetadatasetMix(DatasetLoaderInterface):
     """Mixer for datasets."""
-
-    _: dataclasses.KW_ONLY
 
     mix: List[Union[MixDatasetReference, MixJoinDatasetReference]]
 
@@ -229,8 +220,6 @@ class MetadatasetMix(DatasetLoaderInterface):
 
 @dataclass
 class MetadatasetV2(DatasetLoaderInterface):
-    _: dataclasses.KW_ONLY
-
     parent_path: Union[EPath, str]
     splits: Dict[str, Union[MetadatasetMix, MetadatasetJoin, DatasetReference]]
 
