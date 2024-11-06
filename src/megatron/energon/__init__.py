@@ -38,6 +38,7 @@ from megatron.energon.metadataset import (
     DatasetLoader,
     DatasetLoaderInterface,
     Metadataset,
+    MetadatasetV2,
     load_dataset,
 )
 from megatron.energon.savable_loader import SavableDataLoader
@@ -113,6 +114,7 @@ __all__ = [
     "MapDataset",
     "JoinedWebdataset",
     "Metadataset",
+    "MetadatasetV2",
     "MixBatchDataset",
     "MultiChoiceVQASample",
     "MultiChoiceVQAWebdataset",

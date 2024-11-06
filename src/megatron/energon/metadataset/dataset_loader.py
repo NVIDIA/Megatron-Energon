@@ -23,8 +23,6 @@ class DatasetLoader(DatasetLoaderInterface):
     dataset_config: str = "dataset.yaml"
     split_config: str = "split.yaml"
 
-    weight: float = 1.0
-
     def get_dataset(
         self,
         *,

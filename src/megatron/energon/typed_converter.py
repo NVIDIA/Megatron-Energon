@@ -246,7 +246,7 @@ def raw_to_typed(  # noqa: C901
             if raw_data is None:
                 return None
         best_inner_error: Optional[JsonValueError] = None
-        multiple_matching = False
+        inner_exceptions = []
         for subtype in union_types:
             try:
                 return raw_to_typed(
@@ -258,22 +258,29 @@ def raw_to_typed(  # noqa: C901
                     _stage + (1,),
                 )
             except JsonValueError as err:
-                if best_inner_error is None or err.stage > best_inner_error.stage:
+                if best_inner_error is None or len(err.stage) > len(best_inner_error.stage):
                     best_inner_error = err
-                    multiple_matching = False
-                elif err.stage == best_inner_error.stage:
-                    multiple_matching = True
+                    inner_exceptions.clear()
+                    inner_exceptions.append(err)
+                elif len(err.stage) == len(best_inner_error.stage):
+                    inner_exceptions.append(err)
                 continue
-        if best_inner_error is None or multiple_matching:
+        if len(inner_exceptions) > 0:
+            cur_exc = inner_exceptions[0]
+            for next_exc in inner_exceptions[1:]:
+                try:
+                    raise next_exc from cur_exc
+                except JsonValueError as e:
+                    cur_exc = e
+            raise cur_exc
+        else:
             raise JsonValueError(
-                f"Expected {type_name} at {_path}, got {raw_data!r}",
+                f"Expected {inst_type} at {_path}, got {raw_data!r}",
                 inst_type,
                 raw_data,
                 _path,
                 _stage,
             )
-        else:
-            raise best_inner_error
     elif (
         isinstance(inst_type, type)
         and issubclass(inst_type, tuple)

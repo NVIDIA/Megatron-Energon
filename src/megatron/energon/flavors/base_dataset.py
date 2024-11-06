@@ -148,23 +148,26 @@ class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
         cls: Type[T_sample], *args: "Optional[Sample]", **kwargs: "Optional[Sample]"
     ) -> T_sample:
         """
-        Creates a sample from joined samples. The samples are either passed as positional arguments
-        or as keyword arguments. The first sample is the primary sample, which is used to initialize
-        the key and subflavors. In the default implementation, the joined samples' fields will be
-        joined together, such that latter joined samples will update the fields last (i.e. take
-        precedence), except for the key and subflavors. The restore key is later set externally.
+        Creates a sample from joined samples. The samples are either passed as positional arguments or as keyword
+        arguments. The first sample is the primary sample, which is used to initialize the key and subflavors.
+
+        In the default implementation, the joined samples' fields will be joined together, such that latter joined
+        samples will update the fields last (i.e. take precedence), except for the key and subflavors. The restore key
+        is later set externally.
 
         Args:
             args: The samples to join (either this or kwargs is specified).
-            kwargs: The samples to join.
+            kwargs: The samples to join (either this or args is specified). Not supported for the default
+                implementation. Overwriting implementations may use this.
 
         Returns:
             The joined constructed sample.
         """
+        assert (
+            len(kwargs) == 0
+        ), "Please specify joined datasets as list for the default joiner. Keyword arguments are confusing, because keys are ignored."
         excluded_fields = set(field.name for field in dataclasses.fields(Sample))
         init_args = {}
-        if len(kwargs) > 0:
-            args = args + tuple(kwargs.values())
         if len(args) > 0:
             primary = args[0]
             assert primary is not None, "Primary sample must not be None."

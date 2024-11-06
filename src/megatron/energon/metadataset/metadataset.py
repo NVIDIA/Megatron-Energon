@@ -106,7 +106,6 @@ class DatasetReference:
                 subflavors=self.subflavors,
                 shuffle_over_epochs_multiplier=self.shuffle_over_epochs_multiplier,
                 split_config=self.split_config,
-                weight=self.weight,
             )
 
     def get_datasets(

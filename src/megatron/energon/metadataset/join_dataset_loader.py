@@ -24,8 +24,6 @@ class JoinDatasetLoader(DatasetLoaderInterface):
     subflavors: Optional[Dict[str, Any]] = None
     shuffle_over_epochs_multiplier: int = 1
 
-    weight: float = 1.0
-
     def get_dataset(
         self,
         *,
