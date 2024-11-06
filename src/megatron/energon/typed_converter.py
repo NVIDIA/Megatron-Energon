@@ -76,8 +76,11 @@ def raw_to_instance(kwargs: dict, inst_type: Type[TType], strict: bool = True) -
     # Check if this is a type of Type[...] or just a class. Type[...] will return the class instead
     # of instantiating it.
     is_type = typing.get_origin(inst_type) is type
+    is_callable = typing.get_origin(inst_type) is typing.get_origin(Callable)
     if is_type:
         inst_type = typing.get_args(inst_type)[0]
+    elif is_callable:
+        inst_type = typing.get_origin(inst_type)
     if module_name is None or class_name is None:
         if is_type:
             raise ValueError(
@@ -100,6 +103,9 @@ def raw_to_instance(kwargs: dict, inst_type: Type[TType], strict: bool = True) -
                 assert issubclass(cls, inst_type), f"Expected {inst_type}, got {cls}"
             elif not callable(cls):
                 raise ValueError(f"Expected a class or a callable, got {cls}")
+        elif is_callable:
+            if not callable(cls):
+                raise ValueError(f"Expected a callable, got {cls}")
         else:
             if isinstance(cls, type):
                 assert _check_instance_type(cls, inst_type), f"Expected {inst_type}, got {cls}"
@@ -108,6 +114,8 @@ def raw_to_instance(kwargs: dict, inst_type: Type[TType], strict: bool = True) -
     if is_type:
         inst = cls
         assert issubclass(inst, inst_type), f"Expected {inst_type}, got {inst}"
+    elif is_callable:
+        inst = cls
     else:
         inst = safe_call_function(kwargs, cls, strict=strict, allow_imports=True)
         if not isinstance(cls, type):

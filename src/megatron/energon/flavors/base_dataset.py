@@ -122,20 +122,24 @@ class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
     #: A dataset may define a subflavors to distinguish between samples of the same sample type.
     __subflavors__: Optional[Dict[str, Any]]
 
-    def to_joined(self, type: Type[T_sample], **kwargs) -> T_sample:
+    @classmethod
+    def derive_from(cls: Type[T_sample], base_sample: "Sample", **kwargs) -> T_sample:
         """
-        Uses the base fields of `Sample` from this sample (i.e. __key__, __restore_key__, __subflavor__, __subflavors__)
-        and creates a new sample with the kwargs as fields. This is useful for joining samples from different datasets.
+        Uses the base fields of `Sample` from base_sample (i.e. __key__, __restore_key__, __subflavor__, __subflavors__)
+        and creates a new sample with the kwargs as fields. This is useful for creating new samples, while keeping the
+        metadata of the base sample.
 
         Args:
-            type: The type of the joined sample.
-            kwargs: The fields of the joined sample.
+            base_sample: The base sample to copy the base fields / metadata from.
+            kwargs: The fields of the new sample.
 
         Returns:
-            The joined sample.
+            The new sample.
         """
-        return type(
-            **{field.name: getattr(self, field.name) for field in dataclasses.fields(Sample)},
+        return cls(
+            **{
+                field.name: getattr(base_sample, field.name) for field in dataclasses.fields(Sample)
+            },
             **kwargs,
         )
 

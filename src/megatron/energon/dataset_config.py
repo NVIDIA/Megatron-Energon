@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional, Type, TypeVar, Union
 import yaml
 
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors import BaseCoreDataset, Sample
+from megatron.energon.flavors import BaseCoreDataset
 from megatron.energon.typed_converter import raw_to_instance
 from megatron.energon.worker import WorkerConfig
 

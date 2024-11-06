@@ -57,11 +57,15 @@ class TestJoinedSample(Sample):
 
     @staticmethod
     def from_joined(ds1: TextSample, ds2: TextSample) -> "TestJoinedSample":
-        return ds1.to_joined(
-            TestJoinedSample,
+        return TestJoinedSample.derive_from(
+            ds1,
             text1=ds1.text,
             text2=ds2.text,
         )
+
+
+def test_joiner(text1: TextSample, text2: TextSample) -> TestJoinedSample:
+    return TestJoinedSample.derive_from(text1, text1=f"j{text1.text}", text2=f"j{text2.text}")
 
 
 class TestDataset(unittest.TestCase):
@@ -1232,6 +1236,89 @@ class TestDataset(unittest.TestCase):
         assert txt1_order == txt1_order_rest
         assert txt2_order == txt2_order_rest
         assert key_order == key_order_rest
+
+    def test_joined_metadataset_joiner(self):
+        torch.manual_seed(42)
+        worker_config = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=0,
+            seed_offset=42,
+        )
+
+        # Create a joined dataset configuration
+        joined_mds_path = self.dataset_path / "joined_metadataset_joiner.yaml"
+        with open(joined_mds_path, "w") as f:
+            f.write(
+                "\n".join(
+                    [
+                        "__module__: megatron.energon",
+                        "__class__: Metadataset",
+                        "splits:",
+                        "  train:",
+                        "    datasets:",
+                        "      - weight: 1",
+                        "        join:",
+                        "          text1:",
+                        "            path: ds1",
+                        "            subflavors:",
+                        "              source1: ds1",
+                        "              number: 43",
+                        "          text2:",
+                        "            path: ds3",
+                        "            subflavors:",
+                        "              source2: ds3",
+                        "              number: 44",
+                        "        join_type:",
+                        f"          __module__: {TestJoinedSample.__module__}",
+                        f"          __class__: {TestJoinedSample.__name__}",
+                        "        joiner:",
+                        f"          __module__: {test_joiner.__module__}",
+                        f"          __class__: {test_joiner.__name__}",
+                    ]
+                )
+            )
+
+        # Train mode dataset
+        train_dataset = get_train_dataset(
+            joined_mds_path,
+            worker_config=worker_config,
+            batch_size=1,
+            shuffle_buffer_size=None,
+            max_samples_per_sequence=None,
+        )
+        print(len(train_dataset))
+        assert len(train_dataset) == 55
+
+        train_loader = get_savable_loader(
+            train_dataset,
+            worker_config=worker_config,
+            checkpoint_every_sec=0,
+            checkpoint_every_min_n_samples=1,
+            n_checkpoints=5,
+        )
+
+        data = list(zip(range(2 * 55), train_loader))
+        txt1_order = [data.text1[0] for idx, data in data]
+        txt2_order = [data.text2[0] for idx, data in data]
+        key_order = [data.__key__[0] for idx, data in data]
+        # ds1 has 55 samples, key range 0:55, txt range 0:55
+        # ds3 has 28 samples, key range 0:55, txt range 200:255
+        # Joining results in: 0:55, with prefix "j"
+        print("txt1:", txt1_order)
+        # Joining results in: 200:255, with prefix "j"
+        print("txt2:", txt2_order)
+        # Joining results in: 0:55
+        print("key:", key_order)
+        # Check matching
+        assert all(
+            int(txt1[1:]) + 200 == int(txt2[1:]) for txt1, txt2 in zip(txt1_order, txt2_order)
+        )
+        # Check frequency
+        assert set(txt1_order) == set(f"j{i}" for i in range(0, 55))
+        assert set(txt2_order) == set(f"j{i}" for i in range(200, 255))
+        # Every item must occurr 2 times (2*55).
+        assert Counter(txt1_order).most_common(1)[0][1] == 2
 
 
 if __name__ == "__main__":

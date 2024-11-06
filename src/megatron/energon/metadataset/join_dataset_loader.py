@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Literal, Optional, Tuple, Type, Union
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Type, Union
 
-from megatron.energon.flavors import BaseCoreDataset, BaseWebdataset, MergedWebdataset, Sample
+from megatron.energon.flavors import BaseCoreDataset, BaseWebdataset, JoinedWebdataset, Sample
 from megatron.energon.metadataset.dataset_loader import DatasetLoader
 from megatron.energon.metadataset.loader_interface import DatasetLoaderInterface
 from megatron.energon.worker import WorkerConfig
@@ -17,6 +17,7 @@ class JoinDatasetLoader(DatasetLoaderInterface):
     datasets: Union[List[DatasetLoader], Dict[str, DatasetLoader]]
     join_type: Type[Sample]
     join_method: Literal["inner_match", "inner", "left"] = "inner_match"
+    joiner: Optional[Callable[..., Sample]] = None
 
     split_part: Optional[str] = None
     split_config: Optional[str] = None
@@ -100,13 +101,14 @@ class JoinDatasetLoader(DatasetLoaderInterface):
             ), "Can only merge webdatasets efficiently"
         else:
             raise ValueError("Invalid join type")
-        return MergedWebdataset(
+        return JoinedWebdataset(
             inner_datasets=inner_datasets,
             training=training,
             worker_config=worker_config,
             shuffle_over_epochs=shuffle_over_epochs,
             join_method=self.join_method,
             join_type=self.join_type,
+            joiner=self.joiner,
             **kwargs,
         )
 

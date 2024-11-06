@@ -1,3 +1,6 @@
+# Copyright (c) 2024, NVIDIA CORPORATION.
+# SPDX-License-Identifier: BSD-3-Clause
+
 from abc import ABC
 from typing import (
     Any,
@@ -37,14 +40,14 @@ from megatron.energon.wrappers.map_dataset import MapDataset
 T_sample = TypeVar("T_sample", covariant=True)
 
 
-class MergedWebdataset(
+class JoinedWebdataset(
     BaseCoreDataset[T_sample], Sharder, ErrorHandler[T_sample], Generic[T_sample], ABC
 ):
     """
-    Base class for all webdataset loaders. Applies proper sharding across workers.
+    Base class for all webdataset loaders. Applies proper sharding across workers. Can join multiple datasets.
     """
 
-    _sample_merger: Callable[[Callable[..., T_sample], Tuple[Optional[Sample], ...]], T_sample]
+    _sample_joiner: Callable[..., T_sample]
 
     training: bool
     worker_config: WorkerConfig
@@ -67,13 +70,17 @@ class MergedWebdataset(
         part_filter: Optional[Callable[[str], bool]] = None,
         join_method: Literal["inner_match"] = "inner_match",
         join_type: Type[T_sample],
+        joiner: Optional[Callable[..., T_sample]] = None,
         handler: Callable[[Exception, Optional[str]], None] = reraise_exception,
     ):
         """
-        Constructs the webdataset loader.
+        Constructs the loader for a joined webdataset. The samples from the inner datasets are joined into a single
+        sample using the joiner function.
 
         Args:
             inner_dataset: The inner datasets. Must be loaded internally with `_is_composed=True`.
+                Either a list (*args for joiner) or a dict (**kwargs for joiner) of datasets,
+                where the samples will be passed to the joiner function as *args or **kwargs.
             training: If true, apply shuffling and loop the dataset.
             worker_config: Configuration for the workers.
             shuffle_over_epochs: Only effective if training=True.
@@ -87,27 +94,32 @@ class MergedWebdataset(
             max_samples_per_sequence: Maximum number of samples per sequence (=how many samples
                     will be sequentially iterated).
             part_filter: (internal) Function for filtering tar files by dict keys
-            join_method: How to join the samples.
+            join_method: How to join the samples from the datasets.
                 inner_match: All samples must match 1:1 of the merged datasets.
                 This might be extended to further modes in the future, but those will require a new index, which
             join_type: Type of the joined samples.
+            joiner: Function to join the samples. If None, use the sample type joiner.
             handler: Exception handler. Args: (exception, key).
         """
         self.__sample_type__ = join_type
-        assert self.__sample_type__ is not None, f"Class {type(self)} must define __sample_type__"
-        if isinstance(inner_datasets, dict):
-            inner_keys = list(inner_datasets.keys())
-            self.inner_dataset_keys = inner_keys
-            self._sample_merger = lambda composer, samples: composer(
-                **dict(zip(inner_keys, samples))
-            )
-            inner_datasets = list(inner_datasets.values())
-        else:
-            self._sample_merger = lambda composer, samples: composer(*samples)
-            self.inner_dataset_keys = None
+        assert self.__sample_type__ is not None, "Must pass valid join_type"
         assert all(
             not hasattr(d, "dataset") for d in inner_datasets
         ), "Inner dataset was not instantiated with _is_composed=True"
+        if joiner is None:
+            assert issubclass(
+                self.__sample_type__, Sample
+            ), "Merged dataset must be of (sub)type Sample, if no joiner is given"
+            joiner = self.__sample_type__.from_joined
+        if isinstance(inner_datasets, dict):
+            inner_keys = list(inner_datasets.keys())
+            self.inner_dataset_keys = inner_keys
+            # Wrap the joiner to pass the samples as kwargs
+            self._sample_joiner = lambda *samples: joiner(**dict(zip(inner_keys, samples)))
+            inner_datasets = list(inner_datasets.values())
+        else:
+            self._sample_joiner = joiner
+            self.inner_dataset_keys = None
         self.inner_datasets = inner_datasets
         self.training = training
         self.worker_config = worker_config
@@ -125,7 +137,7 @@ class MergedWebdataset(
                 shard1.count == shard2.count
                 for dataset in inner_datasets[1:]
                 for shard1, shard2 in zip(dataset.shards, inner_datasets[0].shards)
-            ), "For inner_match, all shards must have the same count"
+            ), "When joining datasets with the 'inner_match' method, all shards must have the same count"
         else:
             assert False, f"Invalid join method {join_method}"
 
@@ -216,9 +228,8 @@ class MergedWebdataset(
             for dataset, sample in zip(self.inner_datasets, samples)
         )
         # Then combine the loaded smaples into the final type
-        assert issubclass(self.__sample_type__, Sample), "Merged dataset must be of type Sample"
         return set_sample_restore_key(
-            self._sample_merger(self.__sample_type__.from_joined, loaded_samples),
+            self._sample_joiner(*loaded_samples),
             *restore_key,
             src=self,
             fail_otherwise=True,

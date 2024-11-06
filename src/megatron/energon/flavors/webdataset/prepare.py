@@ -1,3 +1,6 @@
+# Copyright (c) 2024, NVIDIA CORPORATION.
+# SPDX-License-Identifier: BSD-3-Clause
+
 import functools
 import logging
 import multiprocessing as mp

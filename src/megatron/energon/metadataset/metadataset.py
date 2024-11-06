@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Literal, Optional, Tuple, Type, Union
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Type, Union
 
 from megatron.energon.dataset_config import MAIN_FOLDER_NAME, load_config
 from megatron.energon.epathlib import EPath
@@ -46,6 +46,7 @@ class DatasetReference:
     join: Union[List[JoinDatasetReference], Dict[str, JoinDatasetReference], None] = None
     join_method: Literal["inner_match", "inner", "left"] = "inner_match"
     join_type: Optional[Type[Sample]] = None
+    joiner: Optional[Callable[..., Sample]] = None
     split_part: Optional[str] = None
     subflavor: Optional[str] = None
     subflavors: Optional[Dict[str, Any]] = None
@@ -63,6 +64,7 @@ class DatasetReference:
             assert self.join is None
             assert self.join_type is None, "Must not set join_type for single datasets"
             assert self.join_method == "inner_match", "Must not set join_method for single datasets"
+            assert self.joiner is None, "Must not set joiner for single datasets"
             self.path = parent_path.absolute() / self.path
             if self.path.is_file():
                 assert self.dataset_config == "dataset.yaml", "Must not set dataset_config"
@@ -101,6 +103,7 @@ class DatasetReference:
                 datasets=inner_loaders,
                 join_method=self.join_method,
                 join_type=self.join_type,
+                joiner=self.joiner,
                 split_part=self.split_part,
                 subflavor=self.subflavor,
                 subflavors=self.subflavors,

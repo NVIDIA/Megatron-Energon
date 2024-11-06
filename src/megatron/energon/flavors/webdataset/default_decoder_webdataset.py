@@ -1,3 +1,6 @@
+# Copyright (c) 2024, NVIDIA CORPORATION.
+# SPDX-License-Identifier: BSD-3-Clause
+
 from typing import Any, Callable, Dict, Generic, Literal, Optional, TypeVar
 
 import webdataset

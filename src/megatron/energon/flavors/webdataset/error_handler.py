@@ -1,3 +1,6 @@
+# Copyright (c) 2024, NVIDIA CORPORATION.
+# SPDX-License-Identifier: BSD-3-Clause
+
 from typing import Callable, Generic, Optional, Tuple, TypeVar, Union
 
 from megatron.energon.errors import SYSTEM_EXCEPTIONS, FatalSampleError

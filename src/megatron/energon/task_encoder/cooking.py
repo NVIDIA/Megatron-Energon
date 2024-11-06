@@ -1,6 +1,7 @@
 # Copyright (c) 2024, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+import dataclasses
 from dataclasses import dataclass
 from typing import Callable, Optional
 
@@ -53,4 +54,8 @@ def basic_sample_keys(crude_sample: dict) -> dict:
     """A convenience helper to extract the basic keys from a crude sample,
     which you will always need to forward to the cooked sample."""
 
-    return {k: v for k, v in crude_sample.items() if k in Sample.__dataclass_fields__.keys()}
+    return {
+        field.name: crude_sample[field.name]
+        for field in dataclasses.fields(Sample)
+        if field.name in crude_sample
+    }

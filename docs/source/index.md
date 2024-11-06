@@ -57,6 +57,7 @@ maxdepth: 2
 advanced_dataformat
 repro_scaling
 packing
+joining_datasets
 ```
 
 

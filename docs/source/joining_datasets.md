@@ -1,4 +1,4 @@
-# Adding Columns to Metadataset
+# Joining Datasets / Adding Columns to Metadataset
 
 This document explains how to use the feature to add columns in a Metadataset using the `megatron.energon` module.
 
@@ -69,8 +69,8 @@ class JoinedSample(Sample):
 
         @staticmethod
         def from_joined(ds1: TextSample, ds2: TextSample) -> "JoinedSample":
-                return ds1.to_joined(
-                        JoinedSample,
+                return JoinedSample.derive_from(
+                        ds1,
                         text1=ds1.text,
                         text2=ds2.text,
                 )
@@ -106,6 +106,6 @@ ds2
 ├── shard1.idx
 ```
 
-In this example, `ds1/shard1.tar` and `ds1/shard1.tar` contain files with the same names. When adding columns, the files from both datasets are merged based on their keys, which must be in the same order. Each dataset must be prepared (i.e. .nv-meta created).
+In this example, `ds1/shard1.tar` and `ds1/shard1.tar` contain files with the same names. When adding columns, the files from both datasets are joined based on their keys, which must be in the same order. Each dataset must be prepared (i.e. .nv-meta created).
 
 By following these examples, you can configure and extend your Metadataset to include additional columns and custom join types.
