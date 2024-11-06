@@ -58,70 +58,106 @@ def _check_instance_type(cls, inst_type: Type) -> bool:
         return not issubclass(inst_type, type) or issubclass(cls, inst_type)
 
 
-def raw_to_instance(kwargs: dict, inst_type: Type[TType], strict: bool = True) -> TType:
+def raw_to_instance(
+    kwargs: dict,
+    inst_type: Type[TType],
+    strict: bool = True,
+    _path: str = "root",
+    _stage: Tuple[int, ...] = (),
+) -> TType:
     """
-    Try to import and instantiate a class from a dict with "__module__" and "__class__" keys.
+    Try to import and instantiate a class from a dict with "__module__" and "__class__"/"__function__" keys.
 
     Args:
         kwargs: The dict to parse
         inst_type: Expected return type, used if type is not specified in the kwargs
         strict: If true, don't allow additional attributes
+        _path: (internal for recursive call) The path to the object being converted from the root
+        _stage: (internal for recursive call) Numbers representing the position of the current
+            object being converted from the root
 
     Returns:
         Instantiated class
     """
     kwargs = kwargs.copy()
     module_name = kwargs.pop("__module__", None)
-    class_name = kwargs.pop("__class__", None)
     # Check if this is a type of Type[...] or just a class. Type[...] will return the class instead
     # of instantiating it.
     is_type = typing.get_origin(inst_type) is type
     is_callable = typing.get_origin(inst_type) is typing.get_origin(Callable)
     if is_type:
         inst_type = typing.get_args(inst_type)[0]
-    elif is_callable:
-        inst_type = typing.get_origin(inst_type)
-    if module_name is None or class_name is None:
-        if is_type:
-            raise ValueError(
-                f"Expected __module__ and __class__ for Type[{inst_type}], got {kwargs}"
+        object_name = kwargs.pop("__class__", None)
+        if module_name is None or object_name is None:
+            raise JsonValueError(
+                f"Expected __module__ and __class__ for Type[{inst_type}], got {kwargs}",
+                inst_type,
+                (module_name, object_name),
+                _path,
+                _stage,
             )
+    elif is_callable:
+        object_name = kwargs.pop("__function__", None)
+        if module_name is None or object_name is None:
+            raise JsonValueError(
+                f"Expected __module__ and __function__ for {inst_type}, got {kwargs}",
+                inst_type,
+                (module_name, object_name),
+                _path,
+                _stage,
+            )
+    else:
+        if "__class__" in kwargs:
+            object_name = kwargs.pop("__class__", None)
+            is_instanciating_class = True
+            is_calling_function = False
+        elif "__function__" in kwargs:
+            object_name = kwargs.pop("__function__", None)
+            is_instanciating_class = False
+            is_calling_function = True
+    if module_name is None or object_name is None:
         cls = inst_type
     else:
         try:
             module = importlib.import_module(module_name)
         except ModuleNotFoundError:
             try_energon_module = importlib.import_module("megatron.energon", package=None)
-            if hasattr(try_energon_module, class_name):
+            if hasattr(try_energon_module, object_name):
                 module = try_energon_module
             else:
                 raise
 
-        cls = typing.cast(Type[TType], getattr(module, class_name))
+        cls = typing.cast(Type[TType], getattr(module, object_name))
         if is_type:
-            if isinstance(cls, type):
-                assert issubclass(cls, inst_type), f"Expected {inst_type}, got {cls}"
-            elif not callable(cls):
-                raise ValueError(f"Expected a class or a callable, got {cls}")
+            if isinstance(inst_type, type) and (
+                not isinstance(cls, type) or not issubclass(cls, inst_type)
+            ):
+                raise JsonValueError(
+                    f"Expected Type[{inst_type}], got {cls}", inst_type, cls, _path, _stage
+                )
         elif is_callable:
             if not callable(cls):
-                raise ValueError(f"Expected a callable, got {cls}")
+                raise JsonValueError(
+                    f"Expected a callable, got {cls}", inst_type, cls, _path, _stage
+                )
+        elif is_instanciating_class:
+            if not isinstance(cls, type) or not _check_instance_type(cls, inst_type):
+                raise JsonValueError(
+                    f"Expected {inst_type}, got {cls}", inst_type, cls, _path, _stage
+                )
         else:
-            if isinstance(cls, type):
-                assert _check_instance_type(cls, inst_type), f"Expected {inst_type}, got {cls}"
-            elif not callable(cls):
-                raise ValueError(f"Expected a class or a callable, got {cls}")
-    if is_type:
-        inst = cls
-        assert issubclass(inst, inst_type), f"Expected {inst_type}, got {inst}"
-    elif is_callable:
+            assert is_calling_function
+            if not callable(cls):
+                raise JsonValueError(
+                    f"Expected {inst_type}, got {cls}", inst_type, cls, _path, _stage
+                )
+    if is_type or is_callable:
         inst = cls
     else:
         inst = safe_call_function(kwargs, cls, strict=strict, allow_imports=True)
-        if not isinstance(cls, type):
-            assert _check_instance_type(
-                type(inst), inst_type
-            ), f"Expected {inst_type}, got {type(inst)}"
+        assert not isinstance(cls, type) or _check_instance_type(
+            type(inst), inst_type
+        ), f"Expected {inst_type}, got {cls}"
     return inst
 
 
@@ -149,7 +185,7 @@ def raw_to_typed(  # noqa: C901
         raw_data: The raw (e.g. json) data to be made as `inst_type`
         inst_type: The type to return
         strict: If true, don't allow additional attributes
-        allow_imports: If true, parse '__module__' and '__class__' attributes to allow explicit
+        allow_imports: If true, parse '__module__' and '__class__/__function__' attributes to allow explicit
             instantiation of types
         _path: (internal for recursive call) The path to the object being converted from the root
         _stage: (internal for recursive call) Numbers representing the position of the current
@@ -185,9 +221,9 @@ def raw_to_typed(  # noqa: C901
             allow_imports
             and isinstance(raw_data, dict)
             and "__module__" in raw_data
-            and "__class__" in raw_data
+            and ("__class__" in raw_data or "__function__" in raw_data)
         ):
-            return raw_to_instance(raw_data, inst_type, strict=strict)
+            return raw_to_instance(raw_data, inst_type, strict=strict, _path=_path, _stage=_stage)
         # Any
         return raw_data
     elif typing.get_origin(inst_type) is Literal:
@@ -462,9 +498,9 @@ def raw_to_typed(  # noqa: C901
         allow_imports
         and isinstance(raw_data, dict)
         and "__module__" in raw_data
-        and "__class__" in raw_data
+        and ("__class__" in raw_data or "__function__" in raw_data)
     ):
-        return raw_to_instance(raw_data, inst_type, strict=strict)
+        return raw_to_instance(raw_data, inst_type, strict=strict, _path=_path, _stage=_stage)
     else:
         return raw_data
 
@@ -491,7 +527,7 @@ def safe_call_function(
         raw_data: The raw (e.g. json) data to be made as `inst_type`
         fn: The function to call with the converted data
         strict: If true, don't allow additional attributes
-        allow_imports: If true, allow instantiating objects by specifying __module__ and __class__.
+        allow_imports: If true, allow instantiating objects by specifying __module__ and __class__/__function__.
 
     Returns:
         The return value of `fn`
@@ -672,7 +708,7 @@ def override(  # noqa: C901
         overrides: The overrides to apply
         strict: If true, no additional keys are allowed
         inst_type: If given, validate against this base type instead of the type of `value`.
-        allow_imports: If true, allow instantiating types with dicts of __module__ and __class__.
+        allow_imports: If true, allow instantiating types with dicts of __module__ and __class__/__function__.
         _path: Internal: The path to the current value.
         _stage: Internal: The current stage of the override.
 

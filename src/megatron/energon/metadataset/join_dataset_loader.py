@@ -15,9 +15,8 @@ class JoinDatasetLoader(DatasetLoaderInterface):
     """Loads a joined dataset from a path."""
 
     datasets: Union[List[DatasetLoader], Dict[str, DatasetLoader]]
-    join_type: Type[Sample]
+    joiner: Union[Type[Sample], Callable[..., Sample]]
     join_method: Literal["inner_match", "inner", "left"] = "inner_match"
-    joiner: Optional[Callable[..., Sample]] = None
 
     split_part: Optional[str] = None
     split_config: Optional[str] = None
@@ -107,7 +106,6 @@ class JoinDatasetLoader(DatasetLoaderInterface):
             worker_config=worker_config,
             shuffle_over_epochs=shuffle_over_epochs,
             join_method=self.join_method,
-            join_type=self.join_type,
             joiner=self.joiner,
             **kwargs,
         )

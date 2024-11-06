@@ -69,8 +69,7 @@ class JoinedWebdataset(
         max_samples_per_sequence: Optional[int] = None,
         part_filter: Optional[Callable[[str], bool]] = None,
         join_method: Literal["inner_match"] = "inner_match",
-        join_type: Type[T_sample],
-        joiner: Optional[Callable[..., T_sample]] = None,
+        joiner: Union[Type[T_sample], Callable[..., T_sample]],
         handler: Callable[[Exception, Optional[str]], None] = reraise_exception,
     ):
         """
@@ -97,20 +96,18 @@ class JoinedWebdataset(
             join_method: How to join the samples from the datasets.
                 inner_match: All samples must match 1:1 of the merged datasets.
                 This might be extended to further modes in the future, but those will require a new index, which
-            join_type: Type of the joined samples.
-            joiner: Function to join the samples. If None, use the sample type joiner.
+            joiner: Type of the joined samples.
             handler: Exception handler. Args: (exception, key).
         """
-        self.__sample_type__ = join_type
-        assert self.__sample_type__ is not None, "Must pass valid join_type"
+        self.__sample_type__ = joiner
+        assert self.__sample_type__ is not None, "Must pass valid joiner"
         assert all(
             not hasattr(d, "dataset") for d in inner_datasets
         ), "Inner dataset was not instantiated with _is_composed=True"
-        if joiner is None:
-            assert issubclass(
-                self.__sample_type__, Sample
-            ), "Merged dataset must be of (sub)type Sample, if no joiner is given"
-            joiner = self.__sample_type__.from_joined
+        if isinstance(joiner, type) and issubclass(joiner, Sample):
+            joiner = joiner.from_joined
+        else:
+            assert callable(joiner), f"Joiner {joiner} must be a callable or a Sample subclass"
         if isinstance(inner_datasets, dict):
             inner_keys = list(inner_datasets.keys())
             self.inner_dataset_keys = inner_keys

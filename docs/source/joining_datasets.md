@@ -18,7 +18,7 @@ splits:
                 join:
                     - path: ds1
                     - path: ds2
-                join_type:
+                joiner:
                     __module__: megatron.energon
                     __class__: CaptioningSample
 ```
@@ -43,7 +43,7 @@ splits:
                         subflavors: # If needed, will be merged(overriding) with parent subflavor
                             ds2_extra: 2
                         split_config: split.yaml  # Sets this for all joined datasets
-                join_type:
+                joiner:
                     __module__: my_module
                     __class__: JoinedSample # Type should implement from_joined(ds1, ds2)
                 split_config: split.yaml  # Sets this for all joined datasets

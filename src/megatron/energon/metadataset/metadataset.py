@@ -45,8 +45,7 @@ class DatasetReference:
     path: Optional[Union[str, EPath]] = None
     join: Union[List[JoinDatasetReference], Dict[str, JoinDatasetReference], None] = None
     join_method: Literal["inner_match", "inner", "left"] = "inner_match"
-    join_type: Optional[Type[Sample]] = None
-    joiner: Optional[Callable[..., Sample]] = None
+    joiner: Optional[Union[Type[Sample], Callable[..., Sample]]] = None
     split_part: Optional[str] = None
     subflavor: Optional[str] = None
     subflavors: Optional[Dict[str, Any]] = None
@@ -62,9 +61,8 @@ class DatasetReference:
         assert (self.path is None) != (self.join is None), "Must set path or join key"
         if self.path is not None:
             assert self.join is None
-            assert self.join_type is None, "Must not set join_type for single datasets"
-            assert self.join_method == "inner_match", "Must not set join_method for single datasets"
             assert self.joiner is None, "Must not set joiner for single datasets"
+            assert self.join_method == "inner_match", "Must not set join_method for single datasets"
             self.path = parent_path.absolute() / self.path
             if self.path.is_file():
                 assert self.dataset_config == "dataset.yaml", "Must not set dataset_config"
@@ -89,7 +87,7 @@ class DatasetReference:
                 raise FileNotFoundError(self.path)
         else:
             assert self.join is not None
-            assert self.join_type is not None, "Must set join_type for joining datasets"
+            assert self.joiner is not None, "Must set joiner for joining datasets"
             assert (
                 self.dataset_config == "dataset.yaml"
             ), "Cannot set dataset_config for joining datasets"
@@ -102,7 +100,6 @@ class DatasetReference:
             self._dataset = JoinDatasetLoader(
                 datasets=inner_loaders,
                 join_method=self.join_method,
-                join_type=self.join_type,
                 joiner=self.joiner,
                 split_part=self.split_part,
                 subflavor=self.subflavor,

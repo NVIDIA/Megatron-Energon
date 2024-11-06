@@ -1155,7 +1155,7 @@ class TestDataset(unittest.TestCase):
                         "            subflavors:",
                         "              source2: ds3",
                         "              number: 44",
-                        "        join_type:",
+                        "        joiner:",
                         f"          __module__: {TestJoinedSample.__module__}",
                         f"          __class__: {TestJoinedSample.__name__}",
                     ]
@@ -1269,12 +1269,9 @@ class TestDataset(unittest.TestCase):
                         "            subflavors:",
                         "              source2: ds3",
                         "              number: 44",
-                        "        join_type:",
-                        f"          __module__: {TestJoinedSample.__module__}",
-                        f"          __class__: {TestJoinedSample.__name__}",
                         "        joiner:",
                         f"          __module__: {test_joiner.__module__}",
-                        f"          __class__: {test_joiner.__name__}",
+                        f"          __function__: {test_joiner.__name__}",
                     ]
                 )
             )
