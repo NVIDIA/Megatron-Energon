@@ -62,6 +62,7 @@ class MapDataset(BaseSingleWrapperDataset[T_sample, T_sample_out], Generic[T_sam
     map_fn: Callable[[T_sample], Union[T_sample_out, Generator[T_sample_out, None, None]]]
     error_handler: Callable[[Exception, T_sample], None]
     stateless_map_fn: bool
+    map_fn_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]]
     _sample_index: SampleIndex
     _generator_sample_keys: List[Optional[Any]]
     _generator_offsets: List[Optional[int]]
@@ -73,6 +74,7 @@ class MapDataset(BaseSingleWrapperDataset[T_sample, T_sample_out], Generic[T_sam
         *,
         error_handler: Callable[[Exception, T_sample], None] = log_exception,
         stateless_map_fn: bool = False,
+        map_fn_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]] = None,
         worker_config: WorkerConfig,
     ):
         """Construct a MapDataset.
@@ -88,11 +90,15 @@ class MapDataset(BaseSingleWrapperDataset[T_sample, T_sample_out], Generic[T_sam
             error_handler: Handler for errors. Defaults to logging and ignoring the exception.
             stateless_map_fn: If true, the map_fn is deterministic and stateless
                 (thus key for random access can propagate to inner dataset). Defaults to False.
+            map_fn_config: Configuration for the map_fn function. If callable, it should return the
+                configuration. Defaults to None.
+            worker_config: Worker configuration.
         """
         super().__init__(dataset)
         self.map_fn = map_fn
         self.error_handler = error_handler
         self.stateless_map_fn = stateless_map_fn
+        self.map_fn_config = map_fn_config
         self.worker_config = worker_config
         self._sample_index = SampleIndex(worker_config, src=self)
         self._generator_sample_keys = [None] * max(self.worker_config.num_workers, 1)
@@ -222,9 +228,11 @@ class MapDataset(BaseSingleWrapperDataset[T_sample, T_sample_out], Generic[T_sam
 
     def can_restore_sample(self) -> bool:
         return self.stateless_map_fn and self.dataset.can_restore_sample()
-    
+
     def assert_can_restore(self) -> None:
-        assert self.stateless_map_fn, f"MapDataset can only restore samples if map_fn {self.map_fn} is stateless."
+        assert (
+            self.stateless_map_fn
+        ), f"MapDataset can only restore samples if map_fn {self.map_fn} is stateless."
         self.dataset.assert_can_restore()
 
     def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_sample_out:
@@ -261,6 +269,16 @@ class MapDataset(BaseSingleWrapperDataset[T_sample, T_sample_out], Generic[T_sam
             "type": type(self).__qualname__,
             "dataset": self.dataset.config(),
             "map_fn": self._function_config(self.map_fn),
+            **(
+                {
+                    "map_fn_config": (
+                        self.map_fn_config() if callable(self.map_fn_config) else self.map_fn_config
+                    )
+                }
+                if self.map_fn_config
+                else {}
+            ),
+            "map_fn_stateless": self.stateless_map_fn,
         }
 
     def __str__(self):

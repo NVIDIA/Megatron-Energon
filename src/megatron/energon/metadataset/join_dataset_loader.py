@@ -4,7 +4,12 @@
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Type, Union
 
-from megatron.energon.flavors import BaseCoreDataset, BaseWebdataset, JoinedWebdataset, Sample
+from megatron.energon.flavors import (
+    BaseCoreDatasetFactory,
+    BaseWebdatasetFactory,
+    JoinedWebdatasetFactory,
+    Sample,
+)
 from megatron.energon.metadataset.dataset_loader import DatasetLoader
 from megatron.energon.metadataset.loader_interface import DatasetLoaderInterface
 from megatron.energon.worker import WorkerConfig
@@ -35,7 +40,7 @@ class JoinDatasetLoader(DatasetLoaderInterface):
         shuffle_over_epochs: int = 1,
         split_config: Optional[str] = None,
         **kwargs,
-    ) -> BaseCoreDataset:
+    ) -> BaseCoreDatasetFactory:
         """
         Args:
             training: If true, apply training randomization.
@@ -70,13 +75,12 @@ class JoinDatasetLoader(DatasetLoaderInterface):
                     subflavors=subflavors,
                     shuffle_over_epochs=shuffle_over_epochs,
                     split_config=split_config,
-                    _is_composed=True,
                     **kwargs,
                 )
                 for dataset in self.datasets
             ]
             assert all(
-                isinstance(d, BaseWebdataset) for d in inner_datasets
+                isinstance(d, BaseWebdatasetFactory) for d in inner_datasets
             ), "Can only merge webdatasets efficiently"
         elif isinstance(self.datasets, dict):
             inner_datasets = {
@@ -88,17 +92,16 @@ class JoinDatasetLoader(DatasetLoaderInterface):
                     subflavors=subflavors,
                     shuffle_over_epochs=shuffle_over_epochs,
                     split_config=split_config,
-                    _is_composed=True,
                     **kwargs,
                 )
                 for key, dataset in self.datasets.items()
             }
             assert all(
-                isinstance(d, BaseWebdataset) for d in inner_datasets.values()
+                isinstance(d, BaseWebdatasetFactory) for d in inner_datasets.values()
             ), "Can only merge webdatasets efficiently"
         else:
             raise ValueError("Invalid join type")
-        return JoinedWebdataset(
+        return JoinedWebdatasetFactory(
             inner_datasets=inner_datasets,
             training=training,
             worker_config=worker_config,
@@ -118,7 +121,7 @@ class JoinDatasetLoader(DatasetLoaderInterface):
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: int = 1,
         **kwargs,
-    ) -> List[Tuple[BaseCoreDataset, float]]:
+    ) -> List[Tuple[BaseCoreDatasetFactory, float]]:
         return [
             (
                 self.get_dataset(

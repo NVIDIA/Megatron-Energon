@@ -6,7 +6,8 @@ from typing import Any, Callable, Dict, Generic, List, Optional, TypeVar, Union
 
 from megatron.energon.dataset_config import MAIN_FOLDER_NAME
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.webdataset.base_webdataset import BaseWebdataset
+from megatron.energon.flavors.base_dataset import SavableDataset
+from megatron.energon.flavors.webdataset.base_webdataset import BaseWebdatasetFactory
 from megatron.energon.flavors.webdataset.field_access import field_access, split_field_access
 from megatron.energon.flavors.webdataset.structs import FilteredSample
 from megatron.energon.module_loader import ModuleLoader
@@ -14,7 +15,7 @@ from megatron.energon.module_loader import ModuleLoader
 T_sample = TypeVar("T_sample", covariant=True)
 
 
-class DefaultGenericWebdataset(BaseWebdataset[T_sample], Generic[T_sample]):
+class DefaultGenericWebdatasetFactory(BaseWebdatasetFactory[T_sample], Generic[T_sample]):
     """
     Default implementation of Webdataset for generic samples and the generic config interface.
     """
@@ -106,9 +107,9 @@ class DefaultGenericWebdataset(BaseWebdataset[T_sample], Generic[T_sample]):
         return self.__sample_type__(**self._sample_loader(sample))
 
     def config(self) -> Dict[str, Any]:
-        return {
+        return dict(
             **super().config(),
-            "subflavor": self.subflavor,
-            "subflavors": self.subflavors,
-            "sample_loader": self._function_config(self._sample_loader),
-        }
+            subflavor=self.subflavor,
+            subflavors=self.subflavors,
+            sample_loader=SavableDataset._function_config(self._sample_loader),
+        )

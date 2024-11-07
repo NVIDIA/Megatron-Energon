@@ -158,7 +158,7 @@ class EPath:
         if hasattr(fsspec, "asyn"):
             fsspec.asyn.iothread[0] = None  # type: ignore
             fsspec.asyn.loop[0] = None  # type: ignore
-        
+
         s3fs.S3FileSystem.clear_instance_cache()
 
     def fork_guard(self):

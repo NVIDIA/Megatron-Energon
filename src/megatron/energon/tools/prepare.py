@@ -14,7 +14,7 @@ import yaml
 
 from megatron.energon.dataset_config import MAIN_FOLDER_NAME
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors import BaseWebdataset, CrudeWebdataset
+from megatron.energon.flavors import BaseWebdatasetFactory, CrudeWebdataset
 
 
 def type_str(tp: Type) -> str:
@@ -203,7 +203,7 @@ def command(
         def progress_fn(els, length=None):
             return els
 
-    found_types = BaseWebdataset.prepare_dataset(
+    found_types = BaseWebdatasetFactory.prepare_dataset(
         path,
         all_tars,
         split_parts_ratio=split_parts_ratio,
@@ -219,7 +219,7 @@ def command(
 
     # Print json of first two samples
     for sample_idx, data in enumerate(
-        BaseWebdataset.iter_dataset_content(path / all_tars[0], ("json",))
+        BaseWebdatasetFactory.iter_dataset_content(path / all_tars[0], ("json",))
     ):
         print(f"Sample {sample_idx}, keys:")
         for key in data.keys():
@@ -247,7 +247,7 @@ def command(
         for name, cls in inspect.getmembers(data_import):
             if (
                 isinstance(cls, type)
-                and issubclass(cls, BaseWebdataset)
+                and issubclass(cls, BaseWebdatasetFactory)
                 and getattr(cls, "__sample_type__", None) is not None
             ):
                 all_classes.append(cls)
@@ -266,7 +266,7 @@ def command(
                 continue
 
         # Ask user to enter field_map
-        assert issubclass(cls, BaseWebdataset)
+        assert issubclass(cls, BaseWebdatasetFactory)
 
         sample_type_source = inspect.getsource(cls.__sample_type__)
         click.echo("The dataset you selected uses the following sample type:\n")

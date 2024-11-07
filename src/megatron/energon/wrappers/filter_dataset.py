@@ -31,13 +31,16 @@ class FilterDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_samp
     filtered samples."""
 
     filter_fn: Callable[[T_sample], bool]
+    filter_fn_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]]
     worker_config: WorkerConfig
     _sample_index: SampleIndex
 
     def __init__(
         self,
         dataset: SavableDataset[T_sample],
+        *,
         filter_fn: Callable[[T_sample], bool],
+        filter_fn_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]] = None,
         worker_config: WorkerConfig,
     ):
         """Construct a MapDataset.
@@ -46,10 +49,13 @@ class FilterDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_samp
             dataset: The input dataset to wrap
             filter_fn: The function to apply to each sample. If it returns `True`, the sample is
                accepted.
+            filter_fn_config: Configuration for the filter function. If callable, it should return the
+                configuration. Defaults to None.
             worker_config: Configuration for the workers.
         """
         super().__init__(dataset)
         self.filter_fn = filter_fn
+        self.filter_fn_config = filter_fn_config
         self.worker_config = worker_config
         self._sample_index = SampleIndex(worker_config, src=self)
 
@@ -94,6 +100,17 @@ class FilterDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_samp
             "type": type(self).__qualname__,
             "dataset": self.dataset.config(),
             "filter_fn": self._function_config(self.filter_fn),
+            **(
+                {
+                    "filter_fn_config": (
+                        self.filter_fn_config()
+                        if callable(self.filter_fn_config)
+                        else self.filter_fn_config
+                    )
+                }
+                if self.filter_fn_config
+                else {}
+            ),
         }
 
     def __str__(self):

@@ -7,7 +7,9 @@ import webdataset
 
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.webdataset.base_webdataset import T_sample
-from megatron.energon.flavors.webdataset.default_generic_webdataset import DefaultGenericWebdataset
+from megatron.energon.flavors.webdataset.default_generic_webdataset import (
+    DefaultGenericWebdatasetFactory,
+)
 from megatron.energon.flavors.webdataset.structs import FilteredSample
 from megatron.energon.flavors.webdataset.video_data import VideoData
 
@@ -34,7 +36,7 @@ ImageDecoder = Literal[
 ]
 
 
-class DefaultDecoderWebdataset(DefaultGenericWebdataset[T_sample], Generic[T_sample]):
+class DefaultDecoderWebdatasetFactory(DefaultGenericWebdatasetFactory[T_sample], Generic[T_sample]):
     """
     Basic class for any dataset which contains images and / or videos. Applies default wds loading logic for all
     known extensions.
@@ -106,28 +108,9 @@ class DefaultDecoderWebdataset(DefaultGenericWebdataset[T_sample], Generic[T_sam
             sample = self._decoder(sample)
         return super().load_sample(sample)
 
-    # def _process_samples(self, dataset: SavableDataset[Tuple[Optional[FilteredSample], ...]]) -> SavableDataset[T_sample]:
-    #     f = webdataset.autodecode.Decoder([
-    #         webdataset.autodecode.imagehandler(self.image_decode),
-    #         self._video_decoder,
-    #     ])
-
-    #     # Un/Wraps the tuple for the decoder
-    #     def decoder_fn(sample: Tuple[Optional[FilteredSample], ...]) -> Tuple[Optional[FilteredSample], ...]:
-    #         return f(*sample),
-
-    #     dataset = MapDataset(
-    #         dataset,
-    #         decoder_fn,
-    #         error_handler=self.error_handler,
-    #         stateless_map_fn=True,
-    #         worker_config=self.worker_config,
-    #     )
-    #     return super()._process_samples(dataset)
-
     def config(self) -> Dict[str, Any]:
-        return {
+        return dict(
             **super().config(),
-            "image_decode": self.image_decode,
-            "ignore_decoder_errors": self.ignore_decoder_errors,
-        }
+            image_decode=self.image_decode,
+            ignore_decoder_errors=self.ignore_decoder_errors,
+        )

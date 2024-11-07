@@ -43,7 +43,7 @@ from megatron.energon import (
     homogeneous_concat_mix,
 )
 from megatron.energon.dataset_config import MAIN_FOLDER_NAME, get_dataset_from_config
-from megatron.energon.flavors import BaseWebdataset
+from megatron.energon.flavors import BaseWebdatasetFactory
 from megatron.energon.task_encoder.base import stateless
 from megatron.energon.tools.analyze_debug import command as analyze_debug_command
 from megatron.energon.tools.lint import command as lint_command
@@ -162,7 +162,7 @@ class TestDataset(unittest.TestCase):
                 )
             total_shards = shard_writer.shard
 
-        BaseWebdataset.prepare_dataset(
+        BaseWebdatasetFactory.prepare_dataset(
             path,
             [f"parts/data-{{0..{total_shards-1}}}.tar"],
             split_parts_ratio=[("train", 1.0)],
@@ -285,7 +285,7 @@ class TestDataset(unittest.TestCase):
         )
 
         ds = MapDataset(
-            ds,
+            ds.build(),
             lambda x: CaptioningSample(
                 __key__=x.__key__,
                 __restore_key__=x.__restore_key__,
@@ -381,7 +381,7 @@ class TestDataset(unittest.TestCase):
             sample_type=CaptioningSample,
         )
         captions = set(sample["caption"] for sample in self.samples)
-        for sample in get_loader(ds, worker_config=no_worker_config):
+        for sample in get_loader(ds.build(), worker_config=no_worker_config):
             captions.remove(sample.caption)
         assert len(captions) == 0
 
@@ -395,7 +395,7 @@ class TestDataset(unittest.TestCase):
             sample_type=CaptioningSample,
         )
         captions = set(sample["caption"] for sample in self.samples)
-        for sample in get_loader(ds, worker_config=no_worker_config):
+        for sample in get_loader(ds.build(), worker_config=no_worker_config):
             assert sample.caption[:4] == "<SL>"
             captions.remove(sample.caption[4:])
         assert len(captions) == 0
@@ -413,7 +413,7 @@ class TestDataset(unittest.TestCase):
         keys = set(
             f"<SL>parts/data-{idx // 30:d}.tar/{idx:06d}" for idx in range(len(self.samples))
         )
-        for sample in get_loader(ds, worker_config=no_worker_config):
+        for sample in get_loader(ds.build(), worker_config=no_worker_config):
             assert sample.caption[:4] == "<SL>"
             captions.remove(sample.caption[4:])
             keys.remove(sample.__key__)
@@ -430,7 +430,7 @@ class TestDataset(unittest.TestCase):
             sample_type=CaptioningSample,
         )
 
-        keys = [entry.__key__ for entry in get_loader(ds, worker_config=no_worker_config)]
+        keys = [entry.__key__ for entry in get_loader(ds.build(), worker_config=no_worker_config)]
         assert keys == [
             f"parts/data-1.tar/{i:06d}" for i in list(range(30, 35)) + list(range(40, 50))
         ]

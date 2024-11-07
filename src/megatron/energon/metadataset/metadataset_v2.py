@@ -6,7 +6,7 @@ from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Type, Un
 
 from megatron.energon.dataset_config import MAIN_FOLDER_NAME, load_config
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.base_dataset import BaseCoreDataset, Sample
+from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory, Sample
 from megatron.energon.metadataset.dataset_loader import DatasetLoader
 from megatron.energon.metadataset.join_dataset_loader import JoinDatasetLoader
 from megatron.energon.metadataset.loader_interface import DatasetLoaderInterface
@@ -60,7 +60,7 @@ class DatasetReference(DatasetLoaderInterface):
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: int = 1,
         **kwargs,
-    ) -> List[Tuple[BaseCoreDataset, float]]:
+    ) -> List[Tuple[BaseCoreDatasetFactory, float]]:
         if self.subflavors is not None:
             subflavors = {**self.subflavors, **(subflavors or {})}
         assert self._dataset is not None
@@ -98,7 +98,7 @@ class JoinDatasetReference(DatasetReference):
     def get_datasets(
         self,
         **kwargs,
-    ) -> List[Tuple[BaseCoreDataset, float]]:
+    ) -> List[Tuple[BaseCoreDatasetFactory, float]]:
         assert (
             False
         ), "JoinDatasetReference should not be used directly, but only by MetadatasetJoin"
@@ -152,7 +152,7 @@ class MetadatasetJoin(DatasetLoaderInterface):
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: int = 1,
         **kwargs,
-    ) -> List[Tuple[BaseCoreDataset, float]]:
+    ) -> List[Tuple[BaseCoreDatasetFactory, float]]:
         assert self._dataset is not None, "Not prepared."
         return self._dataset.get_datasets(
             training=training,
@@ -201,7 +201,7 @@ class MetadatasetMix(DatasetLoaderInterface):
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: int = 1,
         **kwargs,
-    ) -> List[Tuple[BaseCoreDataset, float]]:
+    ) -> List[Tuple[BaseCoreDatasetFactory, float]]:
         sum_weight = sum(dataset.weight for dataset in self.mix)
         return [
             (loaded_dataset, weight * dataset.weight / sum_weight)
@@ -240,7 +240,7 @@ class MetadatasetV2(DatasetLoaderInterface):
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: int = 1,
         **kwargs,
-    ) -> List[Tuple[BaseCoreDataset, float]]:
+    ) -> List[Tuple[BaseCoreDatasetFactory, float]]:
         return self.splits[split_part].get_datasets(
             training=training,
             split_part=split_part,

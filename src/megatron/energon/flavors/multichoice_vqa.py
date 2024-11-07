@@ -7,7 +7,7 @@ from typing import List, Optional
 import torch
 
 from megatron.energon.flavors.base_dataset import Sample
-from megatron.energon.flavors.webdataset import DefaultDecoderWebdataset
+from megatron.energon.flavors.webdataset import DefaultDecoderWebdatasetFactory
 
 
 @dataclass
@@ -25,5 +25,5 @@ class MultiChoiceVQASample(Sample):
     correct_choice_idx: int = 0
 
 
-class MultiChoiceVQAWebdataset(DefaultDecoderWebdataset[MultiChoiceVQASample]):
+class MultiChoiceVQAWebdataset(DefaultDecoderWebdatasetFactory[MultiChoiceVQASample]):
     __sample_type__ = MultiChoiceVQASample

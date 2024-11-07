@@ -25,7 +25,7 @@ from typing import (
 import torch
 
 from megatron.energon.flavors.base_dataset import (
-    BaseCoreDataset,
+    BaseCoreDatasetFactory,
     PinMemoryMixin,
     Sample,
     SavableDataset,
@@ -206,6 +206,11 @@ def stateless(
 
     setattr(fn, "__stateless__", True)
     return fn
+
+
+def get_stateless(fn: Callable[..., T_sample]) -> bool:
+    """Get whether a function is stateless."""
+    return getattr(fn, "__stateless__", False)
 
 
 @dataclasses.dataclass
@@ -392,9 +397,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                     buffer_size=packing_buffer_size,
                     pre_packer=self.select_samples_to_pack,
                     final_packer=self.pack_selected_samples,
-                    final_packer_stateless=getattr(
-                        self.pack_selected_samples, "__stateless__", False
-                    ),
+                    final_packer_stateless=get_stateless(self.pack_selected_samples),
                     worker_config=worker_config,
                 )
 
@@ -403,7 +406,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                     dataset,
                     batch_size=batch_size,
                     batcher=self.batch,
-                    batcher_stateless=getattr(self.batch, "__stateless__", False),
+                    batcher_stateless=get_stateless(self.batch),
                     drop_last=batch_drop_last,
                     worker_config=worker_config,
                 )
@@ -413,7 +416,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                         dataset,
                         self.encode_batch,
                         worker_config=worker_config,
-                        stateless_map_fn=getattr(self.encode_batch, "__stateless__", False),
+                        stateless_map_fn=get_stateless(self.encode_batch),
                     )
             else:
                 assert (
@@ -441,7 +444,18 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 dataset,
                 self.cook_crude_sample,
                 worker_config=worker_config,
-                stateless_map_fn=getattr(self.cook_crude_sample, "__stateless__", False),
+                stateless_map_fn=get_stateless(self.cook_crude_sample),
+                map_fn_config=dict(
+                    cookers=[
+                        dict(
+                            cook=SavableDataset._function_config(cooker.cook),
+                            is_subflavor=cooker.is_subflavor,
+                            has_subflavors=cooker.has_subflavors,
+                            condition=cooker.condition,
+                        )
+                        for cooker in self.cookers
+                    ]
+                ),
             )
         return dataset
 
@@ -457,14 +471,14 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 dataset,
                 self.encode_sample,
                 worker_config=worker_config,
-                stateless_map_fn=getattr(self.encode_sample, "__stateless__", False),
+                stateless_map_fn=get_stateless(self.encode_sample),
             )
         return dataset
 
     def build_train_datasets(
         self,
         *,
-        datasets: List[Tuple[BaseCoreDataset[T_sample], float]],
+        datasets: List[Tuple[BaseCoreDatasetFactory[T_sample], float]],
         worker_config: WorkerConfig,
         batch_size: int,
         batch_drop_last: bool = False,
@@ -481,11 +495,11 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
 
         if len(datasets) > 1:
             dataset = BlendDataset(
-                *datasets,
+                *[(dataset.build(), weight) for dataset, weight in datasets],
                 worker_config=worker_config,
             )
         elif len(datasets) == 1:
-            dataset = datasets[0][0]
+            dataset = datasets[0][0].build()
         else:
             raise ValueError("No datasets given.")
         if shuffle_buffer_size is not None and shuffle_buffer_size > 1:
@@ -516,7 +530,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
     def build_val_datasets(
         self,
         *,
-        datasets: List[Tuple[BaseCoreDataset[T_sample], float]],
+        datasets: List[Tuple[BaseCoreDatasetFactory[T_sample], float]],
         worker_config: WorkerConfig,
         batch_size: int,
         batch_drop_last: bool = False,
@@ -532,11 +546,11 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
 
         if len(datasets) > 1:
             dataset = ConcatDataset(
-                *[dataset for dataset, _ in datasets],
+                *[dataset.build() for dataset, _ in datasets],
                 worker_config=worker_config,
             )
         elif len(datasets) == 1:
-            dataset = datasets[0][0]
+            dataset = datasets[0][0].build()
         else:
             raise ValueError("No datasets given.")
         dataset = self.build_cook_crude_sample(dataset, worker_config=worker_config)

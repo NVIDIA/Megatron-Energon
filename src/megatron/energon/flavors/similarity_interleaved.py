@@ -7,7 +7,7 @@ from typing import List, Optional
 import torch
 
 from megatron.energon.flavors.base_dataset import Sample
-from megatron.energon.flavors.webdataset import DefaultDecoderWebdataset
+from megatron.energon.flavors.webdataset import DefaultDecoderWebdatasetFactory
 
 
 @dataclass
@@ -27,5 +27,5 @@ class SimilarityInterleavedSample(Sample):
     matched_text_indices: Optional[List[int]] = None
 
 
-class SimilarityInterleavedWebdataset(DefaultDecoderWebdataset[SimilarityInterleavedSample]):
+class SimilarityInterleavedWebdataset(DefaultDecoderWebdatasetFactory[SimilarityInterleavedSample]):
     __sample_type__ = SimilarityInterleavedSample

@@ -4,14 +4,14 @@
 from typing import Any, Callable, Dict, List, Optional, Union
 
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.webdataset import DefaultDecoderWebdataset, ImageDecoder
+from megatron.energon.flavors.webdataset import DefaultDecoderWebdatasetFactory, ImageDecoder
 
 
 class CrudeSample(dict):
     """Generic sample type to be processed later."""
 
 
-class CrudeWebdataset(DefaultDecoderWebdataset[CrudeSample]):
+class CrudeWebdataset(DefaultDecoderWebdatasetFactory[CrudeSample]):
     """The CrudeWebdataset is used to load crude / raw samples and
     decode them in the user code using so-called cookers.
 

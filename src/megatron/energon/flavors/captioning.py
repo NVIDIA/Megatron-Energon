@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import torch
 
 from megatron.energon.flavors.base_dataset import Sample
-from megatron.energon.flavors.webdataset import DefaultDecoderWebdataset
+from megatron.energon.flavors.webdataset import DefaultDecoderWebdatasetFactory
 
 
 @dataclass
@@ -20,5 +20,5 @@ class CaptioningSample(Sample):
     caption: str
 
 
-class CaptioningWebdataset(DefaultDecoderWebdataset[CaptioningSample]):
+class CaptioningWebdataset(DefaultDecoderWebdatasetFactory[CaptioningSample]):
     __sample_type__ = CaptioningSample

@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional, Type, TypeVar, Union
 import yaml
 
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors import BaseCoreDataset
+from megatron.energon.flavors import BaseCoreDatasetFactory
 from megatron.energon.typed_converter import raw_to_instance
 from megatron.energon.worker import WorkerConfig
 
@@ -66,7 +66,7 @@ def get_dataset_from_config(
     worker_config: WorkerConfig,
     sample_type: Optional[Type[T_sample]] = None,
     **kwargs,
-) -> BaseCoreDataset[T_sample]:
+) -> BaseCoreDatasetFactory[T_sample]:
     """
     Gets a dataset from a config path.
 
@@ -92,7 +92,7 @@ def get_dataset_from_config(
             f"prepare the dataset? Please check the documentation for an introduction to dataset "
             f"preparation."
         )
-    dataset = load_config(
+    dataset: BaseCoreDatasetFactory[T_sample] = load_config(
         path / MAIN_FOLDER_NAME / dataset_config,
         default_kwargs=dict(
             path=path,

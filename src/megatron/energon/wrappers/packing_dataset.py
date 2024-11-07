@@ -67,6 +67,7 @@ class PackingDataset(
     pre_packer: Callable[[List[T_sample]], List[List[T_sample]]]
     final_packer: Callable[[List[T_sample]], T_batch_sample]
     final_packer_stateless: bool
+    packer_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]]
     error_handler: Callable[[Exception, List[T_sample]], None]
     worker_config: WorkerConfig
 
@@ -97,6 +98,7 @@ class PackingDataset(
         final_packer: Callable[[List[T_sample]], T_batch_sample],
         *,
         final_packer_stateless: bool = False,
+        packer_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]] = None,
         error_handler: Callable[[Exception, List[T_sample]], None] = log_exception,
         worker_config: WorkerConfig,
     ):
@@ -114,6 +116,8 @@ class PackingDataset(
             final_packer: Function which combines the selected samples into a single sample.
             final_packer_stateless: If True, the final_packer is stateless, thus samples can be
                 stored/restored.
+            packer_config: Configuration for the (pre|final)_packer functions. If callable, it should return the
+                configuration. Defaults to None.
             error_handler: Function which handles exceptions raised by the batcher. The default
                 implementation logs the exception.
             worker_config: Configuration for the workers.
@@ -126,6 +130,7 @@ class PackingDataset(
         self.pre_packer = pre_packer
         self.final_packer = final_packer
         self.final_packer_stateless = final_packer_stateless
+        self.packer_config = packer_config
         self.error_handler = error_handler
         self.worker_config = worker_config
         self._reading_buffer = SavableSampleBuffer(dataset, worker_config)
@@ -321,9 +326,11 @@ class PackingDataset(
         # Cannot really verify if the returned elements contain a __restore_key__.
         # If the user wants to use this, well...
         return self.final_packer_stateless and self.dataset.can_restore_sample()
-    
+
     def assert_can_restore(self):
-        assert self.final_packer_stateless, f"Final packer {self.final_packer} must be stateless to restore samples."
+        assert (
+            self.final_packer_stateless
+        ), f"Final packer {self.final_packer} must be stateless to restore samples."
         self.dataset.assert_can_restore()
 
     def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_sample:
@@ -364,6 +371,15 @@ class PackingDataset(
             "pre_packer": self._function_config(self.pre_packer),
             "final_packer": self._function_config(self.final_packer),
             "final_packer_stateless": self.final_packer_stateless,
+            **(
+                {
+                    "packer_config": (
+                        self.packer_config() if callable(self.packer_config) else self.packer_config
+                    )
+                }
+                if self.packer_config
+                else {}
+            ),
             "error_handler": self._function_config(self.error_handler),
             "worker_config": self.worker_config.config(),
             "dataset": self.dataset.config(),

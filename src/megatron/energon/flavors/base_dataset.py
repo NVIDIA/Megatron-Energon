@@ -362,7 +362,7 @@ class SavableDataset(IterableDataset[T_sample], Generic[T_sample], ABC):
         )
 
 
-class BaseCoreDataset(SavableDataset[T_sample], Generic[T_sample], ABC):
+class BaseCoreDatasetFactory(Generic[T_sample], ABC):
     """Base type for an inner dataset loaded from a .nv-meta folder."""
 
     __sample_type__: Type[T_sample] = cast(Type[T_sample], None)
@@ -370,6 +370,9 @@ class BaseCoreDataset(SavableDataset[T_sample], Generic[T_sample], ABC):
 
     subflavor: Optional[str]
     subflavors: Dict[str, Any]
+
+    @abstractmethod
+    def build(self) -> SavableDataset[T_sample]: ...
 
 
 def add_sample_restore_key(
@@ -387,7 +390,7 @@ def add_sample_restore_key(
         sample["__restore_key__"] = (type(src).__name__, *key, *sample["__restore_key__"])
     elif fail_otherwise:
         raise RuntimeError(
-            "Did not yield a sample with a restore key, but is marked " "stateless/deterministic."
+            "Did not yield a sample with a restore key, but is marked stateless/deterministic."
         )
     return sample
 
@@ -407,6 +410,6 @@ def set_sample_restore_key(
         sample["__restore_key__"] = (type(src).__name__, *key)
     elif fail_otherwise:
         raise RuntimeError(
-            "Did not yield a sample with a restore key, but is marked " "stateless/deterministic."
+            "Did not yield a sample with a restore key, but is marked stateless/deterministic."
         )
     return sample

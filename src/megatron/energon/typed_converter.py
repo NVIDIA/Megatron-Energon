@@ -109,11 +109,11 @@ def raw_to_instance(
     else:
         if "__class__" in kwargs:
             object_name = kwargs.pop("__class__", None)
-            is_instanciating_class = True
+            is_instantiating_class = True
             is_calling_function = False
         elif "__function__" in kwargs:
             object_name = kwargs.pop("__function__", None)
-            is_instanciating_class = False
+            is_instantiating_class = False
             is_calling_function = True
     if module_name is None or object_name is None:
         cls = inst_type
@@ -140,7 +140,7 @@ def raw_to_instance(
                 raise JsonValueError(
                     f"Expected a callable, got {cls}", inst_type, cls, _path, _stage
                 )
-        elif is_instanciating_class:
+        elif is_instantiating_class:
             if not isinstance(cls, type) or not _check_instance_type(cls, inst_type):
                 raise JsonValueError(
                     f"Expected {inst_type}, got {cls}", inst_type, cls, _path, _stage

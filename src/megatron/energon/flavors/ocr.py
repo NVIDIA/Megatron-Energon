@@ -7,7 +7,7 @@ from typing import List, Optional, Union
 import torch
 
 from megatron.energon.flavors.base_dataset import Sample
-from megatron.energon.flavors.webdataset import DefaultDecoderWebdataset
+from megatron.energon.flavors.webdataset import DefaultDecoderWebdatasetFactory
 
 
 @dataclass
@@ -38,5 +38,5 @@ class OCRSample(Sample):
     chars_text: Optional[List[str]] = None
 
 
-class OCRWebdataset(DefaultDecoderWebdataset[OCRSample]):
+class OCRWebdataset(DefaultDecoderWebdatasetFactory[OCRSample]):
     __sample_type__ = OCRSample

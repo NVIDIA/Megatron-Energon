@@ -4,7 +4,7 @@
 from dataclasses import dataclass
 
 from megatron.energon.flavors.base_dataset import Sample
-from megatron.energon.flavors.webdataset import DefaultDecoderWebdataset
+from megatron.energon.flavors.webdataset import DefaultDecoderWebdatasetFactory
 
 
 @dataclass
@@ -15,5 +15,5 @@ class TextSample(Sample):
     text: str
 
 
-class TextWebdataset(DefaultDecoderWebdataset[TextSample]):
+class TextWebdataset(DefaultDecoderWebdatasetFactory[TextSample]):
     __sample_type__ = TextSample

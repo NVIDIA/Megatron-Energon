@@ -1,7 +1,7 @@
 # Copyright (c) 2024, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from megatron.energon.flavors.base_dataset import BaseCoreDataset, Sample, SavableDataset
+from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory, Sample, SavableDataset
 from megatron.energon.flavors.captioning import CaptioningSample, CaptioningWebdataset
 from megatron.energon.flavors.crude import CrudeSample, CrudeWebdataset
 from megatron.energon.flavors.image import ImageSample, ImageWebdataset
@@ -21,29 +21,29 @@ from megatron.energon.flavors.vid_qa import VidQASample, VidQAWebdataset
 from megatron.energon.flavors.vqa import VQASample, VQAWebdataset
 from megatron.energon.flavors.vqa_and_ocr import VQAOCRWebdataset
 from megatron.energon.flavors.webdataset import (
-    BaseWebdataset,
-    DefaultDecoderWebdataset,
-    DefaultGenericWebdataset,
-    JoinedWebdataset,
+    BaseWebdatasetFactory,
+    DefaultDecoderWebdatasetFactory,
+    DefaultGenericWebdatasetFactory,
+    JoinedWebdatasetFactory,
     VideoData,
 )
 
 __all__ = [
-    "BaseCoreDataset",
-    "BaseWebdataset",
+    "BaseCoreDatasetFactory",
+    "BaseWebdatasetFactory",
     "CaptioningSample",
     "CaptioningWebdataset",
     "CrudeSample",
     "CrudeWebdataset",
-    "DefaultGenericWebdataset",
-    "DefaultDecoderWebdataset",
+    "DefaultGenericWebdatasetFactory",
+    "DefaultDecoderWebdatasetFactory",
     "ImageClassificationSample",
     "ImageClassificationWebdataset",
     "ImageSample",
     "ImageWebdataset",
     "InterleavedSample",
     "InterleavedWebdataset",
-    "JoinedWebdataset",
+    "JoinedWebdatasetFactory",
     "MultiChoiceVQASample",
     "MultiChoiceVQAWebdataset",
     "OCRSample",
