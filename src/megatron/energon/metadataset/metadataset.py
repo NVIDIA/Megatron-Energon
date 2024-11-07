@@ -14,38 +14,8 @@ from megatron.energon.worker import WorkerConfig
 
 
 @dataclass
-class JoinDatasetReference:
-    path: Union[str, EPath]
-
-    split_part: Optional[str] = None
-    subflavor: Optional[str] = None
-    subflavors: Optional[Dict[str, Any]] = None
-    shuffle_over_epochs_multiplier: int = 1
-    dataset_config: str = "dataset.yaml"
-    split_config: str = "split.yaml"
-
-    def prepare(self, parent_path: EPath) -> DatasetLoader:
-        self.path = parent_path.absolute() / self.path
-        if (self.path / MAIN_FOLDER_NAME / ".info.yaml").is_file():
-            return DatasetLoader(
-                path=self.path,
-                split_part=self.split_part,
-                subflavor=self.subflavor,
-                subflavors=self.subflavors,
-                shuffle_over_epochs_multiplier=self.shuffle_over_epochs_multiplier,
-                dataset_config=self.dataset_config,
-                split_config=self.split_config,
-            )
-        else:
-            raise FileNotFoundError(self.path)
-
-
-@dataclass
 class DatasetReference:
-    path: Optional[Union[str, EPath]] = None
-    join: Union[List[JoinDatasetReference], Dict[str, JoinDatasetReference], None] = None
-    join_method: Literal["inner_match", "inner", "left"] = "inner_match"
-    joiner: Optional[Union[Type[Sample], Callable[..., Sample]]] = None
+    path: Union[str, EPath]
     split_part: Optional[str] = None
     subflavor: Optional[str] = None
     subflavors: Optional[Dict[str, Any]] = None
@@ -58,55 +28,28 @@ class DatasetReference:
     _dataset: Optional[DatasetLoaderInterface] = None
 
     def prepare(self, parent_path: EPath):
-        assert (self.path is None) != (self.join is None), "Must set path or join key"
-        if self.path is not None:
-            assert self.join is None
-            assert self.joiner is None, "Must not set joiner for single datasets"
-            assert self.join_method == "inner_match", "Must not set join_method for single datasets"
-            self.path = parent_path.absolute() / self.path
-            if self.path.is_file():
-                assert self.dataset_config == "dataset.yaml", "Must not set dataset_config"
-                assert self.split_config == "split.yaml", "Must not set split_config"
-                self._dataset = load_config(
-                    self.path,
-                    default_type=Metadataset,
-                    strict=True,
-                    default_kwargs=dict(parent_path=self.path.parent),
-                )
-            elif (self.path / MAIN_FOLDER_NAME / ".info.yaml").is_file():
-                self._dataset = DatasetLoader(
-                    path=self.path,
-                    split_part=self.split_part,
-                    subflavor=self.subflavor,
-                    subflavors=self.subflavors,
-                    shuffle_over_epochs_multiplier=self.shuffle_over_epochs_multiplier,
-                    dataset_config=self.dataset_config,
-                    split_config=self.split_config,
-                )
-            else:
-                raise FileNotFoundError(self.path)
-        else:
-            assert self.join is not None
-            assert self.joiner is not None, "Must set joiner for joining datasets"
-            assert (
-                self.dataset_config == "dataset.yaml"
-            ), "Cannot set dataset_config for joining datasets"
-            if isinstance(self.join, list):
-                inner_loaders = [join.prepare(parent_path) for join in self.join]
-            elif isinstance(self.join, dict):
-                inner_loaders = {key: join.prepare(parent_path) for key, join in self.join.items()}
-            else:
-                raise ValueError("Invalid join type")
-            self._dataset = JoinDatasetLoader(
-                datasets=inner_loaders,
-                join_method=self.join_method,
-                joiner=self.joiner,
+        self.path = parent_path.absolute() / self.path
+        if self.path.is_file():
+            assert self.dataset_config == "dataset.yaml", "Must not set dataset_config"
+            assert self.split_config == "split.yaml", "Must not set split_config"
+            self._dataset = load_config(
+                self.path,
+                default_type=Metadataset,
+                strict=True,
+                default_kwargs=dict(parent_path=self.path.parent),
+            )
+        elif (self.path / MAIN_FOLDER_NAME / ".info.yaml").is_file():
+            self._dataset = DatasetLoader(
+                path=self.path,
                 split_part=self.split_part,
                 subflavor=self.subflavor,
                 subflavors=self.subflavors,
                 shuffle_over_epochs_multiplier=self.shuffle_over_epochs_multiplier,
+                dataset_config=self.dataset_config,
                 split_config=self.split_config,
             )
+        else:
+            raise FileNotFoundError(self.path)
 
     def get_datasets(
         self,
