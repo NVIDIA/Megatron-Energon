@@ -12,9 +12,9 @@ from typing import Any, List, Optional, Type
 import click
 import yaml
 
-from megatron.energon.dataset_config import MAIN_FOLDER_NAME
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import BaseWebdatasetFactory, CrudeWebdataset
+from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 
 
 def type_str(tp: Type) -> str:

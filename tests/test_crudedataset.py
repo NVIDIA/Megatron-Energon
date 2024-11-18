@@ -27,7 +27,7 @@ from megatron.energon import (
     get_train_dataset,
     stateless,
 )
-from megatron.energon.dataset_config import MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 from megatron.energon.flavors.webdataset.structs import reraise_exception
 
 

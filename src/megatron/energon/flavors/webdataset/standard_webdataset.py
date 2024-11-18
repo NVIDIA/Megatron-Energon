@@ -4,7 +4,6 @@
 from typing import Generic, Type, TypeVar
 
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.webdataset.base_webdataset import T_sample
 from megatron.energon.flavors.webdataset.default_decoder_webdataset import (
     DefaultDecoderWebdatasetFactory,
 )

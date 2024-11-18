@@ -10,8 +10,9 @@ import click
 import torch
 
 from megatron.energon import Sample
-from megatron.energon.dataset_config import MAIN_FOLDER_NAME, load_config
+from megatron.energon.dataset_config import load_config
 from megatron.energon.epathlib import EPath
+from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 
 
 def to_str(value: Any, indent: str) -> str:

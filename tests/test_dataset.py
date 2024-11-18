@@ -42,8 +42,9 @@ from megatron.energon import (
     get_val_dataset,
     homogeneous_concat_mix,
 )
-from megatron.energon.dataset_config import MAIN_FOLDER_NAME, get_dataset_from_config
+from megatron.energon.dataset_config import get_dataset_from_config
 from megatron.energon.flavors import BaseWebdatasetFactory
+from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 from megatron.energon.task_encoder.base import stateless
 from megatron.energon.tools.analyze_debug import command as analyze_debug_command
 from megatron.energon.tools.lint import command as lint_command
@@ -172,8 +173,9 @@ class TestDataset(unittest.TestCase):
             f.write(
                 "\n".join(
                     [
-                        "__module__: megatron.energon",
-                        "__class__: CaptioningWebdataset",
+                        "sample_type:",
+                        "  __module__: megatron.energon",
+                        "  __class__: CaptioningWebdataset",
                         "field_map:",
                         "  image: png",
                         "  caption: txt",

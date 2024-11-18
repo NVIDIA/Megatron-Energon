@@ -4,9 +4,10 @@
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Type, Union
 
-from megatron.energon.dataset_config import MAIN_FOLDER_NAME, load_config
+from megatron.energon.dataset_config import load_config
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory, Sample
+from megatron.energon.flavors import BaseCoreDatasetFactory, Sample
+from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 from megatron.energon.metadataset.dataset_loader import DatasetLoader
 from megatron.energon.metadataset.join_dataset_loader import JoinDatasetLoader
 from megatron.energon.metadataset.loader_interface import DatasetLoaderInterface

@@ -25,7 +25,7 @@ from megatron.energon import (
     get_train_dataset,
     load_dataset,
 )
-from megatron.energon.dataset_config import MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 
 
 def _norng_state(state):

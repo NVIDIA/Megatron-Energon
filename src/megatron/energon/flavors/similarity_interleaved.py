@@ -38,7 +38,7 @@ class SimilarityInterleavedWebdataset(DefaultDecoderWebdatasetFactory[Similarity
             f"To convert, update your {path}/.nv-meta/dataset.yaml to:\n"
             f"# remove top-level __module__ and __class__\n"
             f"sample_type:\n"
-            f"  __module__: {self.__sample_type__.__module__}\n"
+            f"  __module__: megatron.energon\n"
             f"  __class__: {self.__sample_type__.__name__}\n"
             f"# Keep the remaining content",
             DeprecationWarning,

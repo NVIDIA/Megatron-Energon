@@ -26,9 +26,8 @@ from typing import (
 import braceexpand
 import yaml
 
-from megatron.energon.dataset_config import MAIN_FOLDER_NAME
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.webdataset.config import skip_meta_re, split_name_re
+from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME, skip_meta_re, split_name_re
 from megatron.energon.flavors.webdataset.itar import TarIndexWriter
 from megatron.energon.flavors.webdataset.structs import ShardInfo, WebdatasetInfo, WebdatasetSplits
 from megatron.energon.typed_converter import to_json_object

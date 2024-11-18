@@ -8,9 +8,9 @@ from typing import Type
 import click
 import yaml
 
-from megatron.energon.dataset_config import MAIN_FOLDER_NAME
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory, Sample
+from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 
 fmt = """
 * <dataset-name>: `{path}` ({samples_count:,} samples, {samples_size} in {shards_count} shards)

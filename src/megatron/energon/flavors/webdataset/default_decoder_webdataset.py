@@ -6,7 +6,6 @@ from typing import Any, Callable, Dict, Generic, Literal, Optional, TypeVar
 import webdataset
 
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.webdataset.base_webdataset import T_sample
 from megatron.energon.flavors.webdataset.default_generic_webdataset import (
     DefaultGenericWebdatasetFactory,
 )

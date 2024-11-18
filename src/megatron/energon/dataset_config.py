@@ -8,12 +8,11 @@ import yaml
 
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import BaseCoreDatasetFactory, StandardWebdatasetFactory
+from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 from megatron.energon.typed_converter import raw_to_instance
 from megatron.energon.worker import WorkerConfig
 
 T = TypeVar("T")
-
-MAIN_FOLDER_NAME = ".nv-meta"
 
 
 def load_config(
