@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional, Type, TypeVar, Union
 import yaml
 
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors import BaseCoreDatasetFactory
+from megatron.energon.flavors import BaseCoreDatasetFactory, StandardWebdatasetFactory
 from megatron.energon.typed_converter import raw_to_instance
 from megatron.energon.worker import WorkerConfig
 
@@ -19,7 +19,7 @@ MAIN_FOLDER_NAME = ".nv-meta"
 def load_config(
     path: Union[EPath, Dict[str, Any]],
     *,
-    default_type: Optional[Type[T]] = None,
+    default_type: Type[T],
     strict: bool = True,
     default_kwargs: Optional[Dict[str, Any]] = None,
 ) -> T:
@@ -103,6 +103,7 @@ def get_dataset_from_config(
             worker_config=worker_config,
             **kwargs,
         ),
+        default_type=StandardWebdatasetFactory,
     )
     if dataset.subflavors is None:
         dataset.subflavors = subflavors

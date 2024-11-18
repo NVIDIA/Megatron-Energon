@@ -24,8 +24,12 @@ from megatron.energon.flavors.webdataset import (
     BaseWebdatasetFactory,
     DefaultDecoderWebdatasetFactory,
     DefaultGenericWebdatasetFactory,
+    EmptyDatasetError,
+    ImageDecoder,
     JoinedWebdatasetFactory,
+    StandardWebdatasetFactory,
     VideoData,
+    WebdatasetMeta,
 )
 
 __all__ = [
@@ -37,8 +41,10 @@ __all__ = [
     "CrudeWebdataset",
     "DefaultGenericWebdatasetFactory",
     "DefaultDecoderWebdatasetFactory",
+    "EmptyDatasetError",
     "ImageClassificationSample",
     "ImageClassificationWebdataset",
+    "ImageDecoder",
     "ImageSample",
     "ImageWebdataset",
     "InterleavedSample",
@@ -52,6 +58,7 @@ __all__ = [
     "SavableDataset",
     "SimilarityInterleavedSample",
     "SimilarityInterleavedWebdataset",
+    "StandardWebdatasetFactory",
     "TextSample",
     "TextWebdataset",
     "VQASample",
@@ -60,4 +67,5 @@ __all__ = [
     "VideoData",
     "VidQASample",
     "VidQAWebdataset",
+    "WebdatasetMeta",
 ]
