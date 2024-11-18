@@ -13,6 +13,7 @@ from megatron.energon import Sample, StandardWebdatasetFactory
 from megatron.energon.dataset_config import load_config
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset.empty_dataset_error import EmptyDatasetError
 from megatron.energon.loader import get_loader
 from megatron.energon.worker import WorkerConfig
 
@@ -111,16 +112,20 @@ def command(path: EPath, split_parts: str, config: str):
     worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0)
 
     for split_part in split_parts.split(","):
-        dataset = load_config(
-            EPath(path) / MAIN_FOLDER_NAME / config,
-            default_kwargs=dict(
-                path=path,
-                split_part=split_part,
-                training=False,
-                worker_config=worker_config,
-            ),
-            default_type=StandardWebdatasetFactory,
-        )
+        try:
+            dataset = load_config(
+                EPath(path) / MAIN_FOLDER_NAME / config,
+                default_kwargs=dict(
+                    path=path,
+                    split_part=split_part,
+                    training=False,
+                    worker_config=worker_config,
+                ),
+                default_type=StandardWebdatasetFactory,
+            )
+        except EmptyDatasetError:
+            click.echo(f"Dataset {split_part} is empty. Skipping.")
+            continue
 
         try:
             for idx, sample in enumerate(get_loader(dataset.build(), worker_config=worker_config)):
