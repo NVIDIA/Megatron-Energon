@@ -56,7 +56,6 @@ class BaseWebdatasetFactory(
     worker_config: WorkerConfig
 
     shards: List[ShardInfo]
-    dataset: SavableDataset[T_sample]
     rank_shards: List[List[Sequence[ShardInfo]]]
 
     def __init__(

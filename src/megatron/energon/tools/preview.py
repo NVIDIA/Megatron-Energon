@@ -9,10 +9,12 @@ from typing import Any
 import click
 import torch
 
-from megatron.energon import Sample
+from megatron.energon import Sample, StandardWebdatasetFactory
 from megatron.energon.dataset_config import load_config
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
+from megatron.energon.loader import get_loader
+from megatron.energon.worker import WorkerConfig
 
 
 def to_str(value: Any, indent: str) -> str:
@@ -85,6 +87,8 @@ def to_str(value: Any, indent: str) -> str:
 def pprint(idx: int, sample: Sample):
     click.echo(f"Sample {idx}")
     for field in dataclasses.fields(sample):
+        if field.name in ("__restore_key__", "__subflavor__", "__subflavors__"):
+            continue
         click.echo(f" - {field.name} ({field.type}): {to_str(getattr(sample, field.name), '')}")
 
 
@@ -104,20 +108,26 @@ def command(path: EPath, split_parts: str, config: str):
 
     path = path.absolute()
 
+    worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0)
+
     for split_part in split_parts.split(","):
         dataset = load_config(
             EPath(path) / MAIN_FOLDER_NAME / config,
-            default_kwargs={
-                "path": path,
-                "split_part": split_part,
-                "training": False,
-            },
+            default_kwargs=dict(
+                path=path,
+                split_part=split_part,
+                training=False,
+                worker_config=worker_config,
+            ),
+            default_type=StandardWebdatasetFactory,
         )
 
         try:
-            for idx, sample in enumerate(dataset):
+            for idx, sample in enumerate(get_loader(dataset.build(), worker_config=worker_config)):
                 pprint(idx, sample)
                 click.confirm("Continue?", abort=True)
+        except click.Abort:
+            click.echo("Exiting Preview")
         except BaseException:
             traceback.print_exc()
             raise click.ClickException("Validation failed with errors, see logs for details.")

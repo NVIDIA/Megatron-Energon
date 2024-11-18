@@ -4,6 +4,7 @@
 from typing import Generic, Type, TypeVar
 
 from megatron.energon.epathlib import EPath
+from megatron.energon.flavors.base_dataset import Sample
 from megatron.energon.flavors.webdataset.default_decoder_webdataset import (
     DefaultDecoderWebdatasetFactory,
 )
@@ -57,4 +58,7 @@ class StandardWebdatasetFactory(DefaultDecoderWebdatasetFactory[T_sample], Gener
             handler: Exception handler. Args: (exception, key).
         """
         self.__sample_type__ = sample_type
+        assert issubclass(
+            sample_type, Sample
+        ), f"sample_type must be subclass of megatron.energon.Sample, got {sample_type.__qualname__}"
         super().__init__(path, **kwargs)
