@@ -47,10 +47,10 @@ from megatron.energon.flavors import BaseWebdatasetFactory
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 from megatron.energon.task_encoder.base import stateless
 from megatron.energon.tools.analyze_debug import command as analyze_debug_command
+from megatron.energon.tools.info import command as info_command
 from megatron.energon.tools.lint import command as lint_command
 from megatron.energon.tools.prepare import command as prepare_command
 from megatron.energon.tools.preview import command as preview_command
-from megatron.energon.tools.info import command as info_command
 
 DATASET_SIZE = 50
 
@@ -1598,6 +1598,11 @@ class TestDataset(unittest.TestCase):
             [str(self.dataset_path)],
             catch_exceptions=False,
         )
+        print(result.stdout)
+        assert "50 samples" in result.stdout
+        assert "2 shards" in result.stdout
+        assert str(self.dataset_path) in result.stdout
+        assert "train" in result.stdout
         assert result.exit_code == 0, "Preview failed, see output"
 
 

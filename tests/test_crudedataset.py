@@ -52,7 +52,7 @@ def cook_other(sample: dict) -> TextSample:
     )
 
 
-class MyTaskEncoder(DefaultTaskEncoder[TextSample, TextSample, TextBatch, TextBatch]):
+class CookingTaskEncoder(DefaultTaskEncoder[TextSample, TextSample, TextBatch, TextBatch]):
     """A simple task encoder for captioning."""
 
     cookers = [
@@ -195,7 +195,7 @@ class TestDataset(unittest.TestCase):
             self.mds_path,
             worker_config=worker_config,
             batch_size=3,
-            task_encoder=MyTaskEncoder(),
+            task_encoder=CookingTaskEncoder(),
             shuffle_buffer_size=None,
             max_samples_per_sequence=None,
             handler=reraise_exception,
@@ -237,7 +237,7 @@ class TestDataset(unittest.TestCase):
                 self.mds_path,
                 batch_size=2,
                 worker_config=worker_config,
-                task_encoder=MyTaskEncoder(),
+                task_encoder=CookingTaskEncoder(),
                 shuffle_buffer_size=None,
                 max_samples_per_sequence=None,
                 packing_buffer_size=2,
@@ -261,7 +261,7 @@ class TestDataset(unittest.TestCase):
                 self.mds_path,
                 batch_size=2,
                 worker_config=worker_config,
-                task_encoder=MyTaskEncoder(),
+                task_encoder=CookingTaskEncoder(),
                 shuffle_buffer_size=None,
                 max_samples_per_sequence=None,
                 packing_buffer_size=2,

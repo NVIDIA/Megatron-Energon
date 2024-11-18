@@ -102,9 +102,9 @@ def pprint(idx: int, sample: Sample):
     "--split-parts", default="train,val,test", help="The splits to verify", show_default=True
 )
 @click.option(
-    "--config", default="dataset.yaml", help="Dataset config file name", show_default=True
+    "--dataset-config", default="dataset.yaml", help="Dataset config file name", show_default=True
 )
-def command(path: EPath, split_parts: str, config: str):
+def command(path: EPath, split_parts: str, dataset_config: str):
     """Views the contents of a dataset on the console."""
 
     path = path.absolute()
@@ -114,7 +114,7 @@ def command(path: EPath, split_parts: str, config: str):
     for split_part in split_parts.split(","):
         try:
             dataset = load_config(
-                EPath(path) / MAIN_FOLDER_NAME / config,
+                EPath(path) / MAIN_FOLDER_NAME / dataset_config,
                 default_kwargs=dict(
                     path=path,
                     split_part=split_part,
