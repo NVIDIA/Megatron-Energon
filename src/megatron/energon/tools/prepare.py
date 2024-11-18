@@ -254,7 +254,7 @@ def command(
                 all_classes.append(cls)
 
         all_classes.append(
-            ("crude sample (plain dict)", CrudeSampleDummy)
+            ("Crude sample (plain dict for cooking)", CrudeSampleDummy)
         )  # Tuple is (Printed name, resulting class)
 
         # Print all classes and ask user to pick one
