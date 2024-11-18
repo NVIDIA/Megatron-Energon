@@ -653,7 +653,7 @@ class TestDataset(unittest.TestCase):
                                         },
                                         "map_fn": "megatron.energon.flavors.webdataset.base_webdataset.BaseWebdatasetFactory._load_sample_raw",
                                         "map_fn_config": {
-                                            "type": "TextWebdataset",
+                                            "type": "StandardWebdatasetFactory",
                                             "training": True,
                                             "path": str(self.dataset_path / "ds1"),
                                             "shuffle_over_epochs": 6,
@@ -769,7 +769,7 @@ class TestDataset(unittest.TestCase):
                                         },
                                         "map_fn": "megatron.energon.flavors.webdataset.base_webdataset.BaseWebdatasetFactory._load_sample_raw",
                                         "map_fn_config": {
-                                            "type": "TextWebdataset",
+                                            "type": "StandardWebdatasetFactory",
                                             "training": True,
                                             "path": str(self.dataset_path / "ds2"),
                                             "shuffle_over_epochs": 2,
