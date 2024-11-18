@@ -78,8 +78,8 @@ class DatasetReference:
 
 
 @dataclass
-class MetadatasetMixer:
-    """Internal mixer for the dataset."""
+class MetadatasetBlender:
+    """Internal blending of the dataset."""
 
     datasets: List[DatasetReference]
 
@@ -118,12 +118,12 @@ class MetadatasetMixer:
 class Metadataset(DatasetLoaderInterface):
     """Main entry for metadataset."""
 
-    _splits: Dict[str, MetadatasetMixer]
+    _splits: Dict[str, MetadatasetBlender]
 
     def __init__(
         self,
         parent_path: Union[EPath, str],
-        splits: Dict[str, MetadatasetMixer],
+        splits: Dict[str, MetadatasetBlender],
     ):
         """Create the metadataset"""
         parent_path = EPath(parent_path).absolute()

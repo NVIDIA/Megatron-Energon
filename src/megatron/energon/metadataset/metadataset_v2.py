@@ -166,29 +166,29 @@ class MetadatasetJoin(DatasetLoaderInterface):
 
 
 @dataclass
-class MixWeightMixin:
+class BlendWeightMixin:
     weight: float = 1.0
 
 
 @dataclass
-class MixDatasetReference(MixWeightMixin, DatasetReference):
+class BlendDatasetReference(BlendWeightMixin, DatasetReference):
     pass
 
 
 @dataclass
-class MixJoinDatasetReference(MixWeightMixin, MetadatasetJoin):
+class BlendJoinDatasetReference(BlendWeightMixin, MetadatasetJoin):
     pass
 
 
 @dataclass
-class MetadatasetMix(DatasetLoaderInterface):
-    """Mixer for datasets."""
+class MetadatasetBlend(DatasetLoaderInterface):
+    """Blending of datasets."""
 
-    mix: List[Union[MixDatasetReference, MixJoinDatasetReference]]
+    blend: List[Union[BlendDatasetReference, BlendJoinDatasetReference]]
 
     def prepare(self, parent_path: EPath):
         parent_path = parent_path.absolute()
-        for dataset in self.mix:
+        for dataset in self.blend:
             dataset.prepare(parent_path)
 
     def get_datasets(
@@ -202,10 +202,10 @@ class MetadatasetMix(DatasetLoaderInterface):
         shuffle_over_epochs_multiplier: int = 1,
         **kwargs,
     ) -> List[Tuple[BaseCoreDatasetFactory, float]]:
-        sum_weight = sum(dataset.weight for dataset in self.mix)
+        sum_weight = sum(dataset.weight for dataset in self.blend)
         return [
             (loaded_dataset, weight * dataset.weight / sum_weight)
-            for dataset in self.mix
+            for dataset in self.blend
             for loaded_dataset, weight in dataset.get_datasets(
                 training=training,
                 split_part=split_part,
@@ -221,7 +221,7 @@ class MetadatasetMix(DatasetLoaderInterface):
 @dataclass
 class MetadatasetV2(DatasetLoaderInterface):
     parent_path: Union[EPath, str]
-    splits: Dict[str, Union[MetadatasetMix, MetadatasetJoin, DatasetReference]]
+    splits: Dict[str, Union[MetadatasetBlend, MetadatasetJoin, DatasetReference]]
 
     def __post_init__(self):
         """Post-initialization to fix paths."""

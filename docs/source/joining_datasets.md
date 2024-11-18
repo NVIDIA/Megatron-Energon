@@ -31,7 +31,7 @@ __module__: megatron.energon
 __class__: MetadatasetV2
 splits:
   train:
-    mix:
+    blend:
       - weight: 1
         join:
           - path: ds1
