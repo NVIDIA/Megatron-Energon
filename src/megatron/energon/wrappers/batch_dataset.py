@@ -77,6 +77,7 @@ class BatchDataset(
         batcher: Callable[[List[T_batch_sample]], T_batch],
         *,
         batcher_stateless: bool = False,
+        batcher_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]] = None,
         drop_last: bool = False,
         error_handler: Callable[[Exception, List[T_batch_sample]], None] = log_exception,
         worker_config: WorkerConfig,
@@ -90,6 +91,8 @@ class BatchDataset(
                 :exc:`megatron.energon.SkipSample` to skip a sample.
             batcher_stateless: If True, the batcher is stateless, thus samples can be stored/
                 restored.
+            batcher_config: Configuration for the batcher function. If callable, it should return the
+                configuration. Defaults to None.
             drop_last: If True, the last batch is dropped if it is smaller than the batch size.
             error_handler: Function which handles exceptions raised by the batcher. The default
                 implementation logs the exception.
@@ -99,6 +102,7 @@ class BatchDataset(
         self.batch_size = batch_size
         self.batcher = batcher
         self.batcher_stateless = batcher_stateless
+        self.batcher_config = batcher_config
         self.drop_last = drop_last
         self.error_handler = error_handler
         self.worker_config = worker_config
@@ -259,9 +263,11 @@ class BatchDataset(
         # Cannot really verify if the returned elements contain a __restore_key__.
         # If the user wants to use this, well...
         return self.batcher_stateless and self.dataset.can_restore_sample()
-    
+
     def assert_can_restore(self) -> None:
-        assert self.batcher_stateless, f"Batcher {self.batcher} must be stateless to restore samples"
+        assert (
+            self.batcher_stateless
+        ), f"Batcher {self.batcher} must be stateless to restore samples"
         self.dataset.assert_can_restore()
 
     def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_batch:
@@ -305,6 +311,17 @@ class BatchDataset(
             "type": type(self).__qualname__,
             "batch_size": self.batch_size,
             "batcher": self._function_config(self.batcher),
+            **(
+                {
+                    "batcher_config": (
+                        self.batcher_config()
+                        if callable(self.batcher_config)
+                        else self.batcher_config
+                    )
+                }
+                if self.batcher_config
+                else {}
+            ),
             "batcher_stateless": self.batcher_stateless,
             "drop_last": self.drop_last,
             "error_handler": self._function_config(self.error_handler),

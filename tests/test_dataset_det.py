@@ -82,9 +82,9 @@ class TestDataset(unittest.TestCase):
                     shard_writer.next_stream()
             total_shards = shard_writer.shard
 
-        from megatron.energon.flavors import BaseWebdataset
+        from megatron.energon.flavors import BaseWebdatasetFactory
 
-        BaseWebdataset.prepare_dataset(
+        BaseWebdatasetFactory.prepare_dataset(
             path,
             [f"parts/data-{{0..{total_shards-1}}}.tar"],
             split_parts_ratio=[("train", 1.0)],
@@ -112,7 +112,7 @@ class TestDataset(unittest.TestCase):
             training=False,
             sample_type=TextSample,
             worker_config=worker_config,
-        )
+        ).build()
 
         # Check len operator
         assert len(ds) == 55
@@ -142,7 +142,7 @@ class TestDataset(unittest.TestCase):
             sample_type=TextSample,
             worker_config=worker_config,
         )
-        loader5 = get_loader(ds3, worker_config=worker_config)
+        loader5 = get_loader(ds3.build(), worker_config=worker_config)
         order9 = [data.text for idx, data in zip(range(55), loader5)]
         print(order9)
         print(Counter(order9))

@@ -1,20 +1,16 @@
 # Copyright (c) 2024, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+from importlib import import_module
 from io import StringIO
 from typing import Type
-import click
-from importlib import import_module
-
-from megatron.energon.dataset_config import MAIN_FOLDER_NAME
-from megatron.energon.epathlib import EPath
-
-
 
 import click
 import yaml
 
-from megatron.energon.flavors.base_dataset import BaseCoreDataset, Sample
+from megatron.energon.dataset_config import MAIN_FOLDER_NAME
+from megatron.energon.epathlib import EPath
+from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory, Sample
 
 fmt = """
 * <dataset-name>: `{path}` ({samples_count:,} samples, {samples_size} in {shards_count} shards)
@@ -62,7 +58,7 @@ def command(
     samples_count = sum(info_config["shard_counts"].values())
     strmodule = ds_config["__module__"].replace("nvgpt4.data", "megatron.energon")
     module = import_module(strmodule)
-    cls: Type[BaseCoreDataset] = getattr(module, ds_config["__class__"])
+    cls: Type[BaseCoreDatasetFactory] = getattr(module, ds_config["__class__"])
     class_name = cls.__name__
     class_fullname = cls.__qualname__
     sample_type: Type[Sample] = cls.__sample_type__
@@ -94,10 +90,7 @@ def command(
             path=str(path),
             samples_count=samples_count,
             samples_size=fmt_size(
-                sum(
-                    (path / split_name).size()
-                    for split_name in info_config["shard_counts"].keys()
-                )
+                sum((path / split_name).size() for split_name in info_config["shard_counts"].keys())
             ),
             shards_count=len(info_config["shard_counts"]),
             class_name=class_name,

@@ -10,13 +10,13 @@ Simple format of the `metadataset.yaml` config files:
 ```yaml
 # Outer object must be a `Metadataset`
 __module__: megatron.energon
-__class__: Metadataset
+__class__: MetadatasetV2
 splits:
   # Split defines the train/val/test subsets composition 
   train:
     # This can be any `MetadatasetBase` class. E.g. a `DatasetMetadataset`, or a `MixMetadataset`.
     # Mix the following datasets
-    datasets:
+    blend:
       - weight: 5
         path: ./coco
       - weight: 2
@@ -25,12 +25,10 @@ splits:
         path: ./coyo
   val:
     # Only use coco-val for val
-    datasets:
-      - path: ./coco
+    path: ./coco
   test:
     # Only use coyo-test for test
-    datasets:
-      - path: ./coyo
+    path: ./coyo
 ```
 
 
@@ -55,13 +53,13 @@ Advanced format of the `metadataset.yaml` config files:
 ```yaml
 # Outer object must be a `Metadataset`
 __module__: megatron.energon
-__class__: Metadataset
+__class__: MetadatasetV2
 splits:
   # Split defines the train/val/test subsets composition 
   train:
     # This can be any `MetadatasetBase` class. E.g. a `DatasetMetadataset`, or a `MixMetadataset`.
-    # Mix the following datasets
-    datasets:
+    # Blend the following datasets
+    blend:
       - weight: 5
         path: ./coco
         # Set the __subflavor__ property of the coco samples
@@ -88,20 +86,18 @@ splits:
   # For val and test, MixDataset will actually concatenate the datasets
   val:
     # Only use coco val for val
-    datasets:
-      - path: ./coco
-        subflavor: small_images
-        subflavors:
-          augmentation_type: small_images
-          text_length: short
+    path: ./coco
+    subflavor: small_images
+    subflavors:
+      augmentation_type: small_images
+      text_length: short
   test:
-    datasets:
-      - path: ./coyo
+    path: ./coyo
 ```
 
-## Customizing mixing
+## Customized Blending
 
-The Task-Encoder allows to customize the mixing of datasets given their accumulated mixing weights:
+The Task-Encoder allows to customize the blend of datasets given their accumulated blending weights:
 
 ```py
 
@@ -127,7 +123,7 @@ class CaptioningTaskEncoder(
             *datasets,
             worker_config=worker_config,
         )
-        # Build batches from mixed samples
+        # Build batches from blended samples
         dataset = self.build_batch(
             dataset,
             batch_size=batch_size,
@@ -148,7 +144,7 @@ class CaptioningTaskEncoder(
 
 ## Classes
 * {py:class}`DatasetLoaderInterface <megatron.energon.DatasetLoaderInterface>`: Common interface for dataset loaders. Provides methods for constructing/loading the actual train- or val-mode dataset.
-  * {py:class}`Metadataset <megatron.energon.Metadataset>`: The metadataset loader using the yaml example above. Mixes datasets for train-mode, and concatenates for val-mode.
+  * {py:class}`MetadatasetV2 <megatron.energon.MetadatasetV2>`: The metadataset loader using the yaml example above. Blends datasets for train-mode, and concatenates for val-mode.
   * {py:class}`DatasetLoader <megatron.energon.DatasetLoader>`: The dataset loader using a dataprepped folder (containing `.nv-meta` folder).
 
 ## Functions

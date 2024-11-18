@@ -518,8 +518,8 @@ class LoaderLogIter:
     @staticmethod
     def _find_config_modality(config: dict) -> Literal["train", "val"]:
         assert isinstance(config, dict)
-        if "training" in config:
-            return "train" if config["training"] else "val"
+        if "map_fn_config" in config and "training" in config["map_fn_config"]:
+            return "train" if config["map_fn_config"]["training"] else "val"
         elif "dataset" in config:
             return LoaderLogIter._find_config_modality(config["dataset"])
         elif "dataset_weights" in config:
@@ -531,8 +531,10 @@ class LoaderLogIter:
     @staticmethod
     def _find_config_path(config: dict) -> str:
         assert isinstance(config, dict)
-        if "path" in config:
-            return config["path"]
+        if "map_fn_config" in config and "path" in config["map_fn_config"]:
+            return config["map_fn_config"]["path"]
+        elif "map_fn_config" in config and "paths" in config["map_fn_config"]:
+            return config["map_fn_config"]["paths"][0]
         elif "dataset" in config:
             return LoaderLogIter._find_config_path(config["dataset"])
         elif "dataset_weights" in config:

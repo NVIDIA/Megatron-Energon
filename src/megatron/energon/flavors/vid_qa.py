@@ -7,7 +7,7 @@ from typing import List, Optional
 import torch
 
 from megatron.energon.flavors.base_dataset import Sample
-from megatron.energon.flavors.base_webdataset import DefaultDecoderWebdataset, VideoData
+from megatron.energon.flavors.webdataset import DefaultDecoderWebdatasetFactory, VideoData
 
 
 @dataclass
@@ -24,5 +24,5 @@ class VidQASample(Sample):
     answer_weights: Optional[torch.Tensor] = None
 
 
-class VidQAWebdataset(DefaultDecoderWebdataset[VidQASample]):
+class VidQAWebdataset(DefaultDecoderWebdatasetFactory[VidQASample]):
     __sample_type__ = VidQASample

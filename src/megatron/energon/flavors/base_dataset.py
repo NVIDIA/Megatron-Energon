@@ -122,6 +122,67 @@ class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
     #: A dataset may define a subflavors to distinguish between samples of the same sample type.
     __subflavors__: Optional[Dict[str, Any]]
 
+    @classmethod
+    def derive_from(cls: Type[T_sample], base_sample: "Sample", **kwargs) -> T_sample:
+        """
+        Uses the base fields of `Sample` from base_sample (i.e. __key__, __restore_key__, __subflavor__, __subflavors__)
+        and creates a new sample with the kwargs as fields. This is useful for creating new samples, while keeping the
+        metadata of the base sample.
+
+        Args:
+            base_sample: The base sample to copy the base fields / metadata from.
+            kwargs: The fields of the new sample.
+
+        Returns:
+            The new sample.
+        """
+        return cls(
+            **{
+                field.name: getattr(base_sample, field.name) for field in dataclasses.fields(Sample)
+            },
+            **kwargs,
+        )
+
+    @classmethod
+    def from_joined(
+        cls: Type[T_sample], *args: "Optional[Sample]", **kwargs: "Optional[Sample]"
+    ) -> T_sample:
+        """
+        Creates a sample from joined samples. The samples are either passed as positional arguments or as keyword
+        arguments. The first sample is the primary sample, which is used to initialize the key and subflavors.
+
+        In the default implementation, the joined samples' fields will be joined together, such that latter joined
+        samples will update the fields last (i.e. take precedence), except for the key and subflavors. The restore key
+        is later set externally.
+
+        Args:
+            args: The samples to join (either this or kwargs is specified).
+            kwargs: The samples to join (either this or args is specified). Not supported for the default
+                implementation. Overwriting implementations may use this.
+
+        Returns:
+            The joined constructed sample.
+        """
+        assert (
+            len(kwargs) == 0
+        ), "Please specify joined datasets as list for the default joiner. Keyword arguments are confusing, because keys are ignored."
+        excluded_fields = set(field.name for field in dataclasses.fields(Sample))
+        init_args = {}
+        if len(args) > 0:
+            primary = args[0]
+            assert primary is not None, "Primary sample must not be None."
+            fields = dataclasses.fields(primary)
+            for field in fields:
+                init_args[field.name] = getattr(primary, field.name)
+            for arg in args:
+                if arg is None:
+                    continue
+                fields = dataclasses.fields(arg)
+                for field in fields:
+                    if field.name not in excluded_fields:
+                        init_args[field.name] = getattr(arg, field.name)
+        return cls(**init_args)
+
 
 @dataclass
 class State(ABC, ExtendableDataclassMixin):
@@ -283,7 +344,7 @@ class SavableDataset(IterableDataset[T_sample], Generic[T_sample], ABC):
     def can_restore_sample(self) -> bool:
         """Returns True if the dataset can restore a sample from a key."""
         return False
-        
+
     def assert_can_restore(self) -> None:
         """Asserts that the dataset can restore a sample from a key."""
         assert self.can_restore_sample(), "This dataset cannot restore samples."
@@ -301,14 +362,17 @@ class SavableDataset(IterableDataset[T_sample], Generic[T_sample], ABC):
         )
 
 
-class BaseCoreDataset(SavableDataset[T_sample], Generic[T_sample], ABC):
+class BaseCoreDatasetFactory(Generic[T_sample], ABC):
     """Base type for an inner dataset loaded from a .nv-meta folder."""
 
     __sample_type__: Type[T_sample] = cast(Type[T_sample], None)
-    path: EPath
+    paths: List[EPath]
 
     subflavor: Optional[str]
     subflavors: Dict[str, Any]
+
+    @abstractmethod
+    def build(self) -> SavableDataset[T_sample]: ...
 
 
 def add_sample_restore_key(
@@ -326,7 +390,7 @@ def add_sample_restore_key(
         sample["__restore_key__"] = (type(src).__name__, *key, *sample["__restore_key__"])
     elif fail_otherwise:
         raise RuntimeError(
-            "Did not yield a sample with a restore key, but is marked " "stateless/deterministic."
+            "Did not yield a sample with a restore key, but is marked stateless/deterministic."
         )
     return sample
 
@@ -346,6 +410,6 @@ def set_sample_restore_key(
         sample["__restore_key__"] = (type(src).__name__, *key)
     elif fail_otherwise:
         raise RuntimeError(
-            "Did not yield a sample with a restore key, but is marked " "stateless/deterministic."
+            "Did not yield a sample with a restore key, but is marked stateless/deterministic."
         )
     return sample

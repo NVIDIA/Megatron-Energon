@@ -7,7 +7,7 @@ from typing import List, Optional
 import torch
 
 from megatron.energon.flavors.base_dataset import Sample
-from megatron.energon.flavors.base_webdataset import DefaultDecoderWebdataset
+from megatron.energon.flavors.webdataset import DefaultDecoderWebdatasetFactory
 
 
 @dataclass
@@ -32,5 +32,5 @@ class VQAOCRSample(Sample):
     words_text: Optional[List[str]] = None
 
 
-class VQAOCRWebdataset(DefaultDecoderWebdataset[VQAOCRSample]):
+class VQAOCRWebdataset(DefaultDecoderWebdatasetFactory[VQAOCRSample]):
     __sample_type__ = VQAOCRSample

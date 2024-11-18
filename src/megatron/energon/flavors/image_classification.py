@@ -7,7 +7,7 @@ from typing import Optional
 import torch
 
 from megatron.energon.flavors.base_dataset import Sample
-from megatron.energon.flavors.base_webdataset import DefaultDecoderWebdataset
+from megatron.energon.flavors.webdataset import DefaultDecoderWebdatasetFactory
 
 
 @dataclass
@@ -22,6 +22,6 @@ class ImageClassificationSample(Sample):
     label_name: Optional[str] = None
 
 
-class ImageClassificationWebdataset(DefaultDecoderWebdataset[ImageClassificationSample]):
+class ImageClassificationWebdataset(DefaultDecoderWebdatasetFactory[ImageClassificationSample]):
     __sample_type__ = ImageClassificationSample
     type = ImageClassificationSample

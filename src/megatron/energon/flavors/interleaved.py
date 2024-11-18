@@ -7,7 +7,7 @@ from typing import List, Union
 import torch
 
 from megatron.energon.flavors.base_dataset import Sample
-from megatron.energon.flavors.base_webdataset import DefaultDecoderWebdataset
+from megatron.energon.flavors.webdataset import DefaultDecoderWebdatasetFactory
 
 
 @dataclass
@@ -18,5 +18,5 @@ class InterleavedSample(Sample):
     sequence: List[Union[torch.Tensor, str]]
 
 
-class InterleavedWebdataset(DefaultDecoderWebdataset[InterleavedSample]):
+class InterleavedWebdataset(DefaultDecoderWebdatasetFactory[InterleavedSample]):
     __sample_type__ = InterleavedSample

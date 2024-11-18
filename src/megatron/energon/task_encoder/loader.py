@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, List, Literal, Optional, Tuple, TypeVar, Union
 
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors import BaseCoreDataset, SavableDataset
+from megatron.energon.flavors import BaseCoreDatasetFactory, SavableDataset
 from megatron.energon.metadataset import load_dataset
 from megatron.energon.task_encoder.base import DefaultTaskEncoder, TaskEncoder, WorkerConfig
 
@@ -159,7 +159,7 @@ def get_val_datasets(
     limit: Optional[int] = None,
     task_encoder: TaskEncoder[Any, Any, Any, T] = DefaultTaskEncoder(),
     **kwargs,
-) -> List[Tuple[SavableDataset[T], BaseCoreDataset]]:
+) -> List[Tuple[SavableDataset[T], BaseCoreDatasetFactory]]:
     """
     Get the validation/test dataset with sensible defaults. See `get_dataset` for more details.
 

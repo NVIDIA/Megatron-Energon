@@ -43,7 +43,7 @@ from megatron.energon import (
     homogeneous_concat_mix,
 )
 from megatron.energon.dataset_config import MAIN_FOLDER_NAME, get_dataset_from_config
-from megatron.energon.flavors import BaseWebdataset
+from megatron.energon.flavors import BaseWebdatasetFactory
 from megatron.energon.task_encoder.base import stateless
 from megatron.energon.tools.analyze_debug import command as analyze_debug_command
 from megatron.energon.tools.lint import command as lint_command
@@ -162,7 +162,7 @@ class TestDataset(unittest.TestCase):
                 )
             total_shards = shard_writer.shard
 
-        BaseWebdataset.prepare_dataset(
+        BaseWebdatasetFactory.prepare_dataset(
             path,
             [f"parts/data-{{0..{total_shards-1}}}.tar"],
             split_parts_ratio=[("train", 1.0)],
@@ -285,7 +285,7 @@ class TestDataset(unittest.TestCase):
         )
 
         ds = MapDataset(
-            ds,
+            ds.build(),
             lambda x: CaptioningSample(
                 __key__=x.__key__,
                 __restore_key__=x.__restore_key__,
@@ -381,7 +381,7 @@ class TestDataset(unittest.TestCase):
             sample_type=CaptioningSample,
         )
         captions = set(sample["caption"] for sample in self.samples)
-        for sample in get_loader(ds, worker_config=no_worker_config):
+        for sample in get_loader(ds.build(), worker_config=no_worker_config):
             captions.remove(sample.caption)
         assert len(captions) == 0
 
@@ -395,7 +395,7 @@ class TestDataset(unittest.TestCase):
             sample_type=CaptioningSample,
         )
         captions = set(sample["caption"] for sample in self.samples)
-        for sample in get_loader(ds, worker_config=no_worker_config):
+        for sample in get_loader(ds.build(), worker_config=no_worker_config):
             assert sample.caption[:4] == "<SL>"
             captions.remove(sample.caption[4:])
         assert len(captions) == 0
@@ -413,7 +413,7 @@ class TestDataset(unittest.TestCase):
         keys = set(
             f"<SL>parts/data-{idx // 30:d}.tar/{idx:06d}" for idx in range(len(self.samples))
         )
-        for sample in get_loader(ds, worker_config=no_worker_config):
+        for sample in get_loader(ds.build(), worker_config=no_worker_config):
             assert sample.caption[:4] == "<SL>"
             captions.remove(sample.caption[4:])
             keys.remove(sample.__key__)
@@ -430,7 +430,7 @@ class TestDataset(unittest.TestCase):
             sample_type=CaptioningSample,
         )
 
-        keys = [entry.__key__ for entry in get_loader(ds, worker_config=no_worker_config)]
+        keys = [entry.__key__ for entry in get_loader(ds.build(), worker_config=no_worker_config)]
         assert keys == [
             f"parts/data-1.tar/{i:06d}" for i in list(range(30, 35)) + list(range(40, 50))
         ]
@@ -885,8 +885,6 @@ class TestDataset(unittest.TestCase):
         samples_wrk2 = [[batch.__key__ for batch in loader] for _ in range(10)]
         print(samples)
         assert all(samples_wrk2[0] == one_ep_samples for one_ep_samples in samples_wrk2)
-        # TODO: This should be the same.
-        # assert samples_wrk2 == samples
 
     def test_current_batch_index(self):
         # Tests if the get_current_batch_index works properly
@@ -930,6 +928,7 @@ class TestDataset(unittest.TestCase):
             for batch_idx, batch in batches
         )
 
+        print("pk", [batch.__key__ for batch_idx, batch in batches])
         print("rk", [batch.__restore_key__ for batch_idx, batch in batches])
         assert loader.can_restore_sample()
 
@@ -961,6 +960,7 @@ class TestDataset(unittest.TestCase):
         batch_rand_nums = []
         for batch_idx, batch in batches:
             restore_batch = loader.restore_sample(batch.__restore_key__)
+            assert restore_batch.__key__ == batch.__key__
             assert restore_batch.batch_index == batch.batch_index
             assert restore_batch.sample_index == batch.sample_index
             assert restore_batch.rand_num == batch.rand_num

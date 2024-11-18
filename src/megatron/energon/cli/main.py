@@ -6,10 +6,10 @@
 import click
 
 from megatron.energon.tools.analyze_debug import command as analyze_debug_command
+from megatron.energon.tools.info import command as info_command
 from megatron.energon.tools.lint import command as lint_command
 from megatron.energon.tools.prepare import command as prepare_command
 from megatron.energon.tools.preview import command as preview_command
-from megatron.energon.tools.info import command as info_command
 
 
 @click.group(context_settings=dict(help_option_names=["-h", "--help"]), invoke_without_command=True)

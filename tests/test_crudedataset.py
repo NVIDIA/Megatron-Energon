@@ -65,10 +65,10 @@ class MyTaskEncoder(DefaultTaskEncoder[TextSample, TextSample, TextBatch, TextBa
             __keys__=[sample.__key__ for sample in samples],
             txts=[sample.text for sample in samples],
         )
-    
+
     def select_samples_to_pack(self, samples):
         return [[sample] for sample in samples]
-    
+
     @stateless
     def pack_selected_samples(self, samples):
         return samples[0]
@@ -159,9 +159,9 @@ class TestDataset(unittest.TestCase):
                 )
             total_shards = shard_writer.shard
 
-        from megatron.energon.flavors import BaseWebdataset
+        from megatron.energon.flavors import BaseWebdatasetFactory
 
-        BaseWebdataset.prepare_dataset(
+        BaseWebdatasetFactory.prepare_dataset(
             path,
             [f"parts/data-{{0..{total_shards-1}}}.tar"],
             split_parts_ratio=[("train", 1.0)],

@@ -27,7 +27,7 @@ SPDX-License-Identifier: BSD-3-Clause -->
   * Typically, gradients are accumulated across ranks. Thus, the distribution should approximately match the given weights for a high total number of ranks (like at least 8 ranks).
   * If this behaviour is not desired, but mixing should happen within batches, the {py:class}`MixBatchDataset <megatron.energon.MixBatchDataset>` can be used instead.
 * The {py:class}`GroupBatchDataset <megatron.energon.GroupBatchDataset>` will only yield as soon as a full batch of one group was collected.
-  This could potentially lead to corner cases, such as that rare groups are filled very slowly (or even only with a single example).
+  This could potentially lead to corner cases, such as that rare groups are filled very slowly (or even only with a single example). Currently, this is not used, thus it is not tested very well.
   * Still, statistically, this should be fine over lots of samples, even if there is one unbalanced group, as it will eventually yield nevertheless.
 
 ## Types
@@ -41,21 +41,16 @@ These are the available dataset types for the `dataset.yaml`.
 
 Type hierarchy:
 * ({py:class}`torch.data.IterableDataset`: All datasets implement the torch {py:class}`IterableDataset <torch.data.IterableDataset>` interface)
-  * ({py:class}`BaseCoreDataset <megatron.energon.BaseCoreDataset>`: Base class for all datasets.)
-    * ({py:class}`BaseWebdataset <megatron.energon.BaseWebdataset>`: For more customizable webdataset based datasets.)
-      * {py:class}`DefaultGenericWebdataset <megatron.energon.DefaultGenericWebdataset>`: Webdataset based dataset consisting of sharded .tar files.
-        * {py:class}`DefaultImageWebdataset <megatron.energon.DefaultImageWebdataset>`: On top of the {py:class}`DefaultGenericWebdataset <megatron.energon.DefaultGenericWebdataset>`, loads all images.
+  * ({py:class}`BaseCoreDataset <megatron.energon.BaseCoreDataset>`: Base class for all dataset types.)
+    * ({py:class}`BaseWebdataset <megatron.energon.BaseWebdataset>`: Webdataset based dataset consisting of sharded .tar files, basic flexible implementation.)
+      * {py:class}`DefaultGenericWebdataset <megatron.energon.DefaultGenericWebdataset>`: Adds the sample loader / field map and also subflavors.
+        * {py:class}`DefaultDecoderWebdataset <megatron.energon.DefaultDecoderWebdataset>`: On top of the {py:class}`DefaultGenericWebdataset <megatron.energon.DefaultGenericWebdataset>`, loads all known types, such as images or json or pkl types.
           * {py:class}`CaptioningWebdataset <megatron.energon.CaptioningWebdataset>`: Yields {py:class}`CaptioningSample <megatron.energon.CaptioningSample>` from webdataset format
           * {py:class}`ImageWebdataset <megatron.energon.ImageWebdataset>`: Yields {py:class}`ImageSample <megatron.energon.ImageSample>` from webdataset format
           * {py:class}`OCRWebdataset <megatron.energon.OCRWebdataset>`: Yields {py:class}`OCRSample <megatron.energon.OCRSample>` from webdataset format
           * {py:class}`VQAWebdataset <megatron.energon.VQAWebdataset>`: Yields {py:class}`VQASample <megatron.energon.VQASample>` from webdataset format
-    * {py:class}`BaseIndexedDataset <megatron.energon.BaseIndexedDataset>`: TorchNet IndexedDataset/MMapIndexedDataset dataset, consisting of .bin/.idx file(s).
-      * {py:class}`CaptioningIndexedDataset <megatron.energon.CaptioningIndexedDataset>`: Yields {py:class}`CaptioningSample <megatron.energon.CaptioningSample>` from TorchNet IndexedDataset format
-      * {py:class}`ImageIndexedDataset <megatron.energon.ImageIndexedDataset>`: Yields {py:class}`ImageSample <megatron.energon.ImageSample>` from TorchNet IndexedDataset format
-      * {py:class}`TextIndexedDataset <megatron.energon.TextIndexedDataset>`: Yields {py:class}`TextSample <megatron.energon.TextSample>` from TorchNet IndexedDataset format
 
 From the above, you will want to use the innermost (non-abstract) classes for your `dataset.yaml`.
-Hence, if you have a captioning dataset stored in the `.idx/.bin` format that megatron uses, you need `CaptioningIndexedDataset`.
 For an ocr dataset stored as a webdataset, you will use `OCRWebdataset`.
 
 ### Sample Types
