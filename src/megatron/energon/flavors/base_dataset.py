@@ -363,8 +363,8 @@ class SavableDataset(IterableDataset[T_sample], Generic[T_sample], ABC):
 
 
 class BaseCoreDatasetFactory(Generic[T_sample], ABC):
-    """Base type for an inner dataset sample loader. This is a factory, such that the dataset can be used to construct
-    a sample loader, or for use in a joined dataset."""
+    """Base type for an inner dataset sample loader. This factory can be used to construct a sample loader, or for
+    joining in a joined dataset."""
 
     __sample_type__: Type[T_sample] = cast(Type[T_sample], None)
     paths: List[EPath]
