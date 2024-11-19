@@ -147,29 +147,27 @@ Hence, we can
 
 ## Tutorial 3
 
-A typical usecase is to mix multiple datasets of the same (or similar type) together.
-For example, you may want to mix the COCO dataset with the COYO dataset.
+A typical usecase is to blend multiple datasets of the same (or similar type) together.
+For example, you may want to blend the COCO dataset with the COYO dataset.
 The easiest way to do this, is to use the metadataset pattern:
 
 `coyo-coco-dataset.yaml`:
 ```yaml
 __module__: megatron.energon
-__class__: Metadataset
+__class__: MetadatasetV2
 splits:
-  # Train dataset, the datasets will be mixed according to their weights 
+  # Train dataset, the datasets will be blended according to their weights 
   train:
-    datasets:
+    blend:
       - weight: 5
         path: ./coco
       - weight: 2
         path: ./coyo
   # For val and test, datasets will be concatenated
   val:
-    datasets:
-      - path: ./coco
+    path: ./coco
   test:
-    datasets:
-      - path: ./coyo
+    path: ./coyo
 ```
 
 Usage in your loader, simply use {py:func}`get_train_dataset <megatron.energon.get_train_dataset>`:

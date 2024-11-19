@@ -27,7 +27,7 @@ from megatron.energon import (
     get_train_dataset,
     stateless,
 )
-from megatron.energon.dataset_config import MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 from megatron.energon.flavors.webdataset.structs import reraise_exception
 
 
@@ -52,7 +52,7 @@ def cook_other(sample: dict) -> TextSample:
     )
 
 
-class MyTaskEncoder(DefaultTaskEncoder[TextSample, TextSample, TextBatch, TextBatch]):
+class CookingTaskEncoder(DefaultTaskEncoder[TextSample, TextSample, TextBatch, TextBatch]):
     """A simple task encoder for captioning."""
 
     cookers = [
@@ -65,10 +65,10 @@ class MyTaskEncoder(DefaultTaskEncoder[TextSample, TextSample, TextBatch, TextBa
             __keys__=[sample.__key__ for sample in samples],
             txts=[sample.text for sample in samples],
         )
-    
+
     def select_samples_to_pack(self, samples):
         return [[sample] for sample in samples]
-    
+
     @stateless
     def pack_selected_samples(self, samples):
         return samples[0]
@@ -159,9 +159,9 @@ class TestDataset(unittest.TestCase):
                 )
             total_shards = shard_writer.shard
 
-        from megatron.energon.flavors import BaseWebdataset
+        from megatron.energon.flavors import BaseWebdatasetFactory
 
-        BaseWebdataset.prepare_dataset(
+        BaseWebdatasetFactory.prepare_dataset(
             path,
             [f"parts/data-{{0..{total_shards-1}}}.tar"],
             split_parts_ratio=[("train", 1.0)],
@@ -195,7 +195,7 @@ class TestDataset(unittest.TestCase):
             self.mds_path,
             worker_config=worker_config,
             batch_size=3,
-            task_encoder=MyTaskEncoder(),
+            task_encoder=CookingTaskEncoder(),
             shuffle_buffer_size=None,
             max_samples_per_sequence=None,
             handler=reraise_exception,
@@ -237,7 +237,7 @@ class TestDataset(unittest.TestCase):
                 self.mds_path,
                 batch_size=2,
                 worker_config=worker_config,
-                task_encoder=MyTaskEncoder(),
+                task_encoder=CookingTaskEncoder(),
                 shuffle_buffer_size=None,
                 max_samples_per_sequence=None,
                 packing_buffer_size=2,
@@ -261,7 +261,7 @@ class TestDataset(unittest.TestCase):
                 self.mds_path,
                 batch_size=2,
                 worker_config=worker_config,
-                task_encoder=MyTaskEncoder(),
+                task_encoder=CookingTaskEncoder(),
                 shuffle_buffer_size=None,
                 max_samples_per_sequence=None,
                 packing_buffer_size=2,

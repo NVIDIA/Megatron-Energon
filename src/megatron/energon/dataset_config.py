@@ -7,19 +7,18 @@ from typing import Any, Dict, Optional, Type, TypeVar, Union
 import yaml
 
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors import BaseCoreDataset, Sample
+from megatron.energon.flavors import BaseCoreDatasetFactory, StandardWebdatasetFactory
+from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 from megatron.energon.typed_converter import raw_to_instance
 from megatron.energon.worker import WorkerConfig
 
 T = TypeVar("T")
 
-MAIN_FOLDER_NAME = ".nv-meta"
-
 
 def load_config(
     path: Union[EPath, Dict[str, Any]],
     *,
-    default_type: Optional[Type[T]] = None,
+    default_type: Type[T],
     strict: bool = True,
     default_kwargs: Optional[Dict[str, Any]] = None,
 ) -> T:
@@ -63,10 +62,10 @@ def get_dataset_from_config(
     training: bool = True,
     subflavor: Optional[str] = None,
     subflavors: Optional[Dict[str, Any]] = None,
-    worker_config: Optional[WorkerConfig] = None,
+    worker_config: WorkerConfig,
     sample_type: Optional[Type[T_sample]] = None,
     **kwargs,
-) -> BaseCoreDataset[T_sample]:
+) -> BaseCoreDatasetFactory[T_sample]:
     """
     Gets a dataset from a config path.
 
@@ -86,13 +85,13 @@ def get_dataset_from_config(
         The instantiated dataset
     """
     path = EPath(path).absolute()
-    if not (path / MAIN_FOLDER_NAME).is_dir():
+    if not (path / MAIN_FOLDER_NAME / ".info.yaml").is_file():
         raise ValueError(
-            f"Path {path} does not contain a {MAIN_FOLDER_NAME} folder. Did you forget to prepare "
-            f"the dataset? Please check the documentation for an introduction to dataset "
+            f"Path {path} does not contain a {MAIN_FOLDER_NAME}/.info.yaml file. Did you forget to "
+            f"prepare the dataset? Please check the documentation for an introduction to dataset "
             f"preparation."
         )
-    dataset = load_config(
+    dataset: BaseCoreDatasetFactory[T_sample] = load_config(
         path / MAIN_FOLDER_NAME / dataset_config,
         default_kwargs=dict(
             path=path,
@@ -103,6 +102,7 @@ def get_dataset_from_config(
             worker_config=worker_config,
             **kwargs,
         ),
+        default_type=StandardWebdatasetFactory,
     )
     if dataset.subflavors is None:
         dataset.subflavors = subflavors

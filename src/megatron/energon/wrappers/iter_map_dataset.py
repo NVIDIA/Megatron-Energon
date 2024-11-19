@@ -57,6 +57,7 @@ class IterMapDataset(
     len_map_fn: Callable[[int], int]
     error_handler: Callable[[Exception, Optional[T_sample]], None]
     stateless_iter_fn: bool
+    iter_map_fn_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]]
     _sample_index: SampleIndex
 
     def __init__(
@@ -67,6 +68,7 @@ class IterMapDataset(
         len_map_fn: Callable[[int], int] = lambda x: x,
         error_handler: Callable[[Exception, Optional[T_sample]], None] = log_exception,
         stateless_iter_fn: bool = False,
+        iter_map_fn_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]] = None,
         worker_config: WorkerConfig,
     ):
         """Construct a IterMapDataset.
@@ -85,6 +87,8 @@ class IterMapDataset(
                 (it does not aggregate samples (thus key for random access can propagate to inner
                 dataset), yielding zero or multiple samples per fetched sample is fine).
                 Defaults to False.
+            iter_map_fn_config: Configuration for the iter_map_fn function. If callable, it should return the
+                configuration. Defaults to None.
             worker_config: Configuration for the workers.
         """
         super().__init__(dataset)
@@ -92,6 +96,7 @@ class IterMapDataset(
         self.len_map_fn = len_map_fn
         self.error_handler = error_handler
         self.stateless_iter_fn = stateless_iter_fn
+        self.iter_map_fn_config = iter_map_fn_config
         self.worker_config = worker_config
         self._sample_index = SampleIndex(worker_config, src=self)
 
@@ -164,9 +169,11 @@ class IterMapDataset(
 
     def can_restore_sample(self) -> bool:
         return self.stateless_iter_fn and self.dataset.can_restore_sample()
-    
+
     def assert_can_restore(self) -> None:
-        assert self.stateless_iter_fn, "IterMapDataset can only restore samples if iter_map_fn is stateless."
+        assert (
+            self.stateless_iter_fn
+        ), "IterMapDataset can only restore samples if iter_map_fn is stateless."
         self.dataset.assert_can_restore()
 
     def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_sample:
@@ -208,6 +215,17 @@ class IterMapDataset(
             "type": type(self).__qualname__,
             "dataset": self.dataset.config(),
             "iter_map_fn": self._function_config(self.iter_map_fn),
+            **(
+                {
+                    "iter_map_fn_config": (
+                        self.iter_map_fn_config()
+                        if callable(self.iter_map_fn_config)
+                        else self.iter_map_fn_config
+                    )
+                }
+                if self.iter_map_fn_config
+                else {}
+            ),
             "len_map_fn": self._function_config(self.len_map_fn),
             "error_handler": self._function_config(self.error_handler),
         }

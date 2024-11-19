@@ -11,8 +11,9 @@ Instead of using a `field_map` in your `dataset.yaml`, you can also create custo
 
 Here's an example for your updated `dataset.yaml`:
 ```yaml
-__class__: OCRWebdataset
-__module__: megatron.energon
+sample_type:
+  __module__: megatron.energon
+  __class__: OCRSample
 sample_loader: sample_loader.py:sample_loader
 part_filter: sample_loader.py:part_filter
 ```
@@ -61,17 +62,18 @@ In this case, you can feed the data in its "crude" or "raw" form into your code 
 Let's try it. If you already have an existing energon-compliant data set, you may want to create a copy of your `dataset.yaml` specifically for this use case and keep the original:
 
 Original `dataset.yaml`:
-```
-__class__: OCRWebdataset
-__module__: megatron.energon
+```yaml
+sample_type:
+  __module__: megatron.energon
+  __class__: OCRSample
 sample_loader: sample_loader.py:sample_loader
 part_filter: sample_loader.py:part_filter
 ```
 
 New `crude.yaml` next to it:
-```
-__class__: CrudeWebdataset
+```yaml
 __module__: megatron.energon
+__class__: CrudeWebdataset
 subflavors:
   example_crude_selector: foobar
 ```

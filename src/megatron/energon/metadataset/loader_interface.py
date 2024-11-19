@@ -4,7 +4,7 @@
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
-from megatron.energon.flavors.base_dataset import BaseCoreDataset
+from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory
 from megatron.energon.worker import WorkerConfig
 
 
@@ -22,7 +22,7 @@ class DatasetLoaderInterface(ABC):
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: int = 1,
         **kwargs,
-    ) -> List[Tuple[BaseCoreDataset, float]]:
+    ) -> List[Tuple[BaseCoreDatasetFactory, float]]:
         """
         Calls :func:`megatron.energon.dataset_config.get_dataset_from_config` (loads the raw dataset)
         for all innermost datasets and resolves their relative weights to absolute weights.
