@@ -14,8 +14,8 @@ T_sample = TypeVar("T_sample", covariant=True)
 
 class StandardWebdatasetFactory(DefaultDecoderWebdatasetFactory[T_sample], Generic[T_sample]):
     """
-    Basic class for any dataset which contains images and / or videos. Applies default wds loading logic for all
-    known extensions. Requires the sample type to be set.
+    This dataset sample loader factory uses the sample type e.g. given from a dataset.yaml, and applies the default
+    loading logic, which includes decoding images, videos and containers.
     """
 
     def __init__(
@@ -26,7 +26,7 @@ class StandardWebdatasetFactory(DefaultDecoderWebdatasetFactory[T_sample], Gener
         **kwargs,
     ):
         """
-        Decoder dataset.
+        Factory for the standard webdataset sample loader.
 
         Args:
             path: Path to the dataset (passed to parent)

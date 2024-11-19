@@ -47,7 +47,7 @@ class BaseWebdatasetFactory(
     ABC,
 ):
     """
-    Base class for all webdataset loaders. Applies proper sharding across workers.
+    Base class for all webdataset sample loader factories. Applies proper sharding across workers.
     """
 
     path: EPath
@@ -74,7 +74,7 @@ class BaseWebdatasetFactory(
         handler: Callable[[Exception, Optional[str]], None] = reraise_exception,
     ):
         """
-        Constructs the webdataset loader.
+        Base factory for the webdataset sample loader.
 
         Args:
             path: Path to the dataset.

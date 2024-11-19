@@ -37,8 +37,8 @@ ImageDecoder = Literal[
 
 class DefaultDecoderWebdatasetFactory(DefaultGenericWebdatasetFactory[T_sample], Generic[T_sample]):
     """
-    Basic class for any dataset which contains images and / or videos. Applies default wds loading logic for all
-    known extensions.
+    Extends the default webdataset loading with decoding of contained files, such as images, videos or nested
+    containers.
     """
 
     #: Image decoding result type
@@ -59,7 +59,7 @@ class DefaultDecoderWebdatasetFactory(DefaultGenericWebdatasetFactory[T_sample],
         **kwargs,
     ):
         """
-        Decoder dataset.
+        Factory for the webdataset sample loader including the decoder.
 
         Args:
             path: Path to the dataset (passed to parent)
