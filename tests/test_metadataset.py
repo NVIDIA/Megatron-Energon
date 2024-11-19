@@ -11,7 +11,6 @@ import time
 import unittest
 import warnings
 from collections import Counter
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
@@ -19,8 +18,6 @@ import torch
 import webdataset as wds
 
 from megatron.energon import (
-    Sample,
-    TextSample,
     WorkerConfig,
     get_loader,
     get_savable_loader,
@@ -28,7 +25,7 @@ from megatron.energon import (
     get_val_dataset,
     load_dataset,
 )
-from megatron.energon.dataset_config import MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 
 
 def _norng_state(state):
@@ -168,8 +165,9 @@ class TestDataset(unittest.TestCase):
             f.write(
                 "\n".join(
                     [
-                        "__module__: megatron.energon",
-                        "__class__: TextWebdataset",
+                        "sample_type:",
+                        "  __module__: megatron.energon",
+                        "  __class__: TextSample",
                         "field_map:",
                         "  text: txt",
                         "subflavors:",
@@ -655,7 +653,7 @@ class TestDataset(unittest.TestCase):
                                         },
                                         "map_fn": "megatron.energon.flavors.webdataset.base_webdataset.BaseWebdatasetFactory._load_sample_raw",
                                         "map_fn_config": {
-                                            "type": "TextWebdataset",
+                                            "type": "StandardWebdatasetFactory",
                                             "training": True,
                                             "path": str(self.dataset_path / "ds1"),
                                             "shuffle_over_epochs": 6,
@@ -771,7 +769,7 @@ class TestDataset(unittest.TestCase):
                                         },
                                         "map_fn": "megatron.energon.flavors.webdataset.base_webdataset.BaseWebdatasetFactory._load_sample_raw",
                                         "map_fn_config": {
-                                            "type": "TextWebdataset",
+                                            "type": "StandardWebdatasetFactory",
                                             "training": True,
                                             "path": str(self.dataset_path / "ds2"),
                                             "shuffle_over_epochs": 2,

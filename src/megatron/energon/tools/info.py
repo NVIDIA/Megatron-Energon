@@ -8,14 +8,14 @@ from typing import Type
 import click
 import yaml
 
-from megatron.energon.dataset_config import MAIN_FOLDER_NAME
+import megatron.energon
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory, Sample
+from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory
+from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 
 fmt = """
-* <dataset-name>: `{path}` ({samples_count:,} samples, {samples_size} in {shards_count} shards)
-  * Type: {{py:class}}`{class_name} <{class_name}>`
-  * Sample Type: {{py:class}}`{sample_name} <{sample_name}>`
+* {dataset_name}: `{path}` ({samples_count:,} samples, {samples_size} in {shards_count} shards)
+  * Sample Type: {{py:class}}`{sample_name} <{sample_fullname}>`
   * Default Splits:
 {splits_str}
 """
@@ -56,14 +56,18 @@ def command(
     info_config = yaml.safe_load(StringIO((path / MAIN_FOLDER_NAME / ".info.yaml").read_text()))
     split_config = yaml.safe_load(StringIO((path / MAIN_FOLDER_NAME / split_config).read_text()))
     samples_count = sum(info_config["shard_counts"].values())
-    strmodule = ds_config["__module__"].replace("nvgpt4.data", "megatron.energon")
-    module = import_module(strmodule)
-    cls: Type[BaseCoreDatasetFactory] = getattr(module, ds_config["__class__"])
-    class_name = cls.__name__
-    class_fullname = cls.__qualname__
-    sample_type: Type[Sample] = cls.__sample_type__
-    sample_name = sample_type.__name__
-    sample_fullname = sample_type.__qualname__
+    dict_sample_type = ds_config["sample_type"]
+    sample_module = import_module(dict_sample_type["__module__"])
+
+    sample_cls: Type[BaseCoreDatasetFactory] = getattr(sample_module, dict_sample_type["__class__"])
+    sample_module = sample_cls.__module__
+    if (
+        sample_module.startswith("megatron.energon")
+        and getattr(megatron.energon, dict_sample_type["__class__"], None) == sample_cls
+    ):
+        sample_module = "megatron.energon"
+    sample_name = sample_cls.__name__
+    sample_fullname = sample_module + "." + sample_name
 
     def srt_key(pair):
         try:
@@ -87,14 +91,13 @@ def command(
     )
     print(
         fmt.format(
+            dataset_name=path.name,
             path=str(path),
             samples_count=samples_count,
             samples_size=fmt_size(
                 sum((path / split_name).size() for split_name in info_config["shard_counts"].keys())
             ),
             shards_count=len(info_config["shard_counts"]),
-            class_name=class_name,
-            class_fullname=class_fullname,
             sample_name=sample_name,
             sample_fullname=sample_fullname,
             splits_str=splits_str,

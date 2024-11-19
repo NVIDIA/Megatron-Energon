@@ -9,9 +9,13 @@ from typing import Any
 import click
 import torch
 
-from megatron.energon import Sample
-from megatron.energon.dataset_config import MAIN_FOLDER_NAME, load_config
+from megatron.energon import Sample, StandardWebdatasetFactory
+from megatron.energon.dataset_config import load_config
 from megatron.energon.epathlib import EPath
+from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset.empty_dataset_error import EmptyDatasetError
+from megatron.energon.loader import get_loader
+from megatron.energon.worker import WorkerConfig
 
 
 def to_str(value: Any, indent: str) -> str:
@@ -84,6 +88,8 @@ def to_str(value: Any, indent: str) -> str:
 def pprint(idx: int, sample: Sample):
     click.echo(f"Sample {idx}")
     for field in dataclasses.fields(sample):
+        if field.name in ("__restore_key__", "__subflavor__", "__subflavors__"):
+            continue
         click.echo(f" - {field.name} ({field.type}): {to_str(getattr(sample, field.name), '')}")
 
 
@@ -96,27 +102,37 @@ def pprint(idx: int, sample: Sample):
     "--split-parts", default="train,val,test", help="The splits to verify", show_default=True
 )
 @click.option(
-    "--config", default="dataset.yaml", help="Dataset config file name", show_default=True
+    "--dataset-config", default="dataset.yaml", help="Dataset config file name", show_default=True
 )
-def command(path: EPath, split_parts: str, config: str):
+def command(path: EPath, split_parts: str, dataset_config: str):
     """Views the contents of a dataset on the console."""
 
     path = path.absolute()
 
+    worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0)
+
     for split_part in split_parts.split(","):
-        dataset = load_config(
-            EPath(path) / MAIN_FOLDER_NAME / config,
-            default_kwargs={
-                "path": path,
-                "split_part": split_part,
-                "training": False,
-            },
-        )
+        try:
+            dataset = load_config(
+                EPath(path) / MAIN_FOLDER_NAME / dataset_config,
+                default_kwargs=dict(
+                    path=path,
+                    split_part=split_part,
+                    training=False,
+                    worker_config=worker_config,
+                ),
+                default_type=StandardWebdatasetFactory,
+            )
+        except EmptyDatasetError:
+            click.echo(f"Dataset {split_part} is empty. Skipping.")
+            continue
 
         try:
-            for idx, sample in enumerate(dataset):
+            for idx, sample in enumerate(get_loader(dataset.build(), worker_config=worker_config)):
                 pprint(idx, sample)
                 click.confirm("Continue?", abort=True)
+        except click.Abort:
+            click.echo("Exiting Preview")
         except BaseException:
             traceback.print_exc()
             raise click.ClickException("Validation failed with errors, see logs for details.")

@@ -12,9 +12,14 @@ from typing import Any, List, Optional, Type
 import click
 import yaml
 
-from megatron.energon.dataset_config import MAIN_FOLDER_NAME
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import BaseWebdatasetFactory, CrudeWebdataset
+from megatron.energon.flavors.base_dataset import Sample
+from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
+
+
+class CrudeSampleDummy:
+    pass
 
 
 def type_str(tp: Type) -> str:
@@ -245,17 +250,20 @@ def command(
 
         all_classes = []
         for name, cls in inspect.getmembers(data_import):
-            if (
-                isinstance(cls, type)
-                and issubclass(cls, BaseWebdatasetFactory)
-                and getattr(cls, "__sample_type__", None) is not None
-            ):
+            if isinstance(cls, type) and issubclass(cls, Sample):
                 all_classes.append(cls)
 
+        all_classes.append(
+            ("Crude sample (plain dict for cooking)", CrudeSampleDummy)
+        )  # Tuple is (Printed name, resulting class)
+
         # Print all classes and ask user to pick one
-        click.echo("The following dataset classes are available:")
+        click.echo("The following sample types are available:")
         for i, cls in enumerate(all_classes):
-            click.echo(f"{i}. {cls.__name__}")
+            if isinstance(cls, tuple):
+                click.echo(f"{i}. {cls[0]}")
+            else:
+                click.echo(f"{i}. {cls.__name__}")
         while True:
             choice = click.prompt("Please enter a number to choose a class", type=int)
             try:
@@ -265,19 +273,22 @@ def command(
                 click.echo("Invalid choice. Please try again.")
                 continue
 
-        # Ask user to enter field_map
-        assert issubclass(cls, BaseWebdatasetFactory)
+        if isinstance(cls, tuple):
+            cls = cls[1]
 
-        sample_type_source = inspect.getsource(cls.__sample_type__)
-        click.echo("The dataset you selected uses the following sample type:\n")
+        # Ask user to enter field_map
+        sample_type_source = inspect.getsource(cls)
+        click.echo("The sample type you selected:\n")
         click.echo(sample_type_source)
 
         dataset_definition = {
-            "__module__": "megatron.energon",
-            "__class__": cls.__name__,
+            "sample_type": {
+                "__module__": "megatron.energon",
+                "__class__": cls.__name__,
+            }
         }
 
-        if cls == CrudeWebdataset:
+        if cls == CrudeSampleDummy:
             click.echo(
                 "CrudeWebdataset does not need a field map. You will need to provide a `Cooker` for your dataset samples in your `TaskEncoder`."
             )
@@ -307,7 +318,7 @@ def command(
                 click.echo(f"Please enter the field_map for {cls.__name__}:")
 
                 dataset_definition["field_map"] = field_map = {}
-                for field in dataclasses.fields(cls.__sample_type__):
+                for field in dataclasses.fields(cls):
                     if field.name in (
                         "__key__",
                         "__restore_key__",
@@ -356,7 +367,7 @@ def command(
                     with (path / MAIN_FOLDER_NAME / "sample_loader.py").open("w") as f:
                         f.write(
                             sample_loader_template(
-                                dataclasses.fields(cls.__sample_type__),
+                                dataclasses.fields(cls),
                                 parts=template_part_types,
                             )
                         )
@@ -369,7 +380,7 @@ def command(
 
         # Write the dataset.yaml file
         with (path / MAIN_FOLDER_NAME / "dataset.yaml").open("w") as f:
-            yaml.dump(dataset_definition, f)
+            yaml.dump(dataset_definition, f, sort_keys=False)
     else:
         click.echo("You will have to add a dataset.yaml manually.")
 

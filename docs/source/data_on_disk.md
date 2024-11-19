@@ -31,8 +31,9 @@ If you want to create such a file, you should consider using the [CLI preparatio
 
 Here's an example:
 ```yaml
-__class__: CaptioningWebdataset
-__module__: megatron.energon
+sample_type:
+  __module__: megatron.energon
+  __class__: CaptioningSample
 field_map:
   image: jpg
   caption: txt

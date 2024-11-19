@@ -4,10 +4,10 @@
 import dataclasses
 from typing import Any, Callable, Dict, Generic, List, Optional, TypeVar, Union
 
-from megatron.energon.dataset_config import MAIN_FOLDER_NAME
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.base_dataset import SavableDataset
 from megatron.energon.flavors.webdataset.base_webdataset import BaseWebdatasetFactory
+from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
 from megatron.energon.flavors.webdataset.field_access import field_access, split_field_access
 from megatron.energon.flavors.webdataset.structs import FilteredSample
 from megatron.energon.module_loader import ModuleLoader
@@ -17,7 +17,7 @@ T_sample = TypeVar("T_sample", covariant=True)
 
 class DefaultGenericWebdatasetFactory(BaseWebdatasetFactory[T_sample], Generic[T_sample]):
     """
-    Default implementation of Webdataset for generic samples and the generic config interface.
+    Default implementation of webdataset for generic samples and the generic config interface for use with dataset.yaml.
     """
 
     _sample_loader: Callable[[Dict[str, Any]], Dict[str, Any]]
@@ -34,7 +34,7 @@ class DefaultGenericWebdatasetFactory(BaseWebdatasetFactory[T_sample], Generic[T
         **kwargs,
     ):
         """
-        Constructs the default load, which uses the webdataset decoder to decode the sample.
+        Factory for the webdataset sample loader and basic configuration options.
 
         Args:
             subflavor: Deprecated. Subflavor to set for all loaded samples.

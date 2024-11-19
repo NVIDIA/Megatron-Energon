@@ -16,7 +16,8 @@ import torch
 import webdataset as wds
 
 from megatron.energon import TextSample, WorkerConfig, get_loader, get_train_dataset
-from megatron.energon.dataset_config import MAIN_FOLDER_NAME, get_dataset_from_config
+from megatron.energon.dataset_config import get_dataset_from_config
+from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 from megatron.energon.loader import get_savable_loader
 
 
@@ -95,8 +96,9 @@ class TestDataset(unittest.TestCase):
             f.write(
                 "\n".join(
                     [
-                        "__module__: megatron.energon",
-                        "__class__: TextWebdataset",
+                        "sample_type:",
+                        "  __module__: megatron.energon",
+                        "  __class__: TextSample",
                         "field_map:",
                         "  text: txt",
                     ]

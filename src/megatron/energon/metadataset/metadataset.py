@@ -2,13 +2,13 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Type, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
-from megatron.energon.dataset_config import MAIN_FOLDER_NAME, load_config
+from megatron.energon.dataset_config import load_config
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory, Sample
+from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory
+from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 from megatron.energon.metadataset.dataset_loader import DatasetLoader
-from megatron.energon.metadataset.join_dataset_loader import JoinDatasetLoader
 from megatron.energon.metadataset.loader_interface import DatasetLoaderInterface
 from megatron.energon.worker import WorkerConfig
 
