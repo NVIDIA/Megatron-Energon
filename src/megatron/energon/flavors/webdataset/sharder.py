@@ -157,6 +157,7 @@ class Sharder:
         worker_config: WorkerConfig,
         *,
         max_samples_per_sequence: Optional[int],
+        rotation_offset: int = 0,
     ) -> List[List[Sequence[ShardInfo]]]:
         """
         Creates subshards (ShardInfo) for each worker of the current rank.
@@ -189,6 +190,16 @@ class Sharder:
             int((num_workers * worker_config.rank + local_worker_idx) * samples_per_worker)
             for local_worker_idx in range(num_workers + 1)
         ]
+
+        # Note that the first workers will get a bit more samples if the total number of samples
+        # is not divisible by the number of workers (which is usually the case).
+        # We will now rotate the offsets, to continue filling the workers, where the previous dataset left off.
+        local_rank_worker_sample_offsets = (
+            local_rank_worker_sample_offsets[rotation_offset:]
+            + local_rank_worker_sample_offsets[:rotation_offset]
+        )
+
+        first_worker_with_less_samples = (total_samples + rotation_offset) % global_workers
 
         return list(
             # Filter out any empty shards for this worker

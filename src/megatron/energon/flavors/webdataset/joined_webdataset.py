@@ -144,7 +144,10 @@ class JoinedWebdatasetFactory(
         self.join_method = join_method
         self.handler = handler
 
-    def build(self) -> SavableDataset[T_sample]:
+    def __len__(self) -> int:
+        return sum(shard.count for shard in self.inner_datasets[0].shards)
+
+    def build(self, worker_rotation_offset: int = 0) -> SavableDataset[T_sample]:
         if self.parallel_shard_iters is None:
             if self.training:
                 # 16 seems to be a good choice since we don't want too many file handles open
@@ -158,6 +161,7 @@ class JoinedWebdatasetFactory(
             self.shards,
             self.worker_config,
             max_samples_per_sequence=self.max_samples_per_sequence,
+            rotation_offset=worker_rotation_offset,
         )
 
         for rank_idx, shards in enumerate(rank_shards):

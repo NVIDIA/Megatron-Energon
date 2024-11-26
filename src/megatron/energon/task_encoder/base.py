@@ -494,8 +494,29 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 assert self.cookers, "CrudeWebdataset found, but no cookers registered."
 
         if len(datasets) > 1:
+
+            dataset_lengths = [len(d[0]) for d in datasets]
+            num_workers = max(1, worker_config.num_workers)
+            global_workers = num_workers * worker_config.world_size
+
+            # The worker offset for each dataset is the cumsum of the dataset lengths, but modulo the
+            # global number of workers.
+
+            worker_offsets = [
+                sum(dataset_lengths[:i]) % global_workers for i in range(len(datasets))
+            ]
+
+            built_datasets = []
+            for (dataset, weight), worker_offset in zip(datasets, worker_offsets):
+                built_datasets.append(
+                    (
+                        dataset.build(worker_rotation_offset=worker_offset),
+                        weight,
+                    )
+                )
+
             dataset = BlendDataset(
-                *[(dataset.build(), weight) for dataset, weight in datasets],
+                *built_datasets,
                 worker_config=worker_config,
             )
         elif len(datasets) == 1:
