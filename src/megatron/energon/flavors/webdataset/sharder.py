@@ -182,24 +182,47 @@ class Sharder:
         total_samples = sum(subshards[0].count for subshards in shards)
         global_workers = num_workers * worker_config.world_size
 
-        samples_per_worker = total_samples / global_workers
+        min_samples_per_worker = int(total_samples / global_workers)
+        num_workers_with_more_samples = total_samples % global_workers
 
-        # Let's look at the workers of the current local rank.
-        # Each worker gets a slice of the global samples as follows:
-        local_rank_worker_sample_offsets = [
-            int((num_workers * worker_config.rank + local_worker_idx) * samples_per_worker)
-            for local_worker_idx in range(num_workers + 1)
-        ]
+        # Compute the number of samples of all workers on previous ranks
+        num_prev_workers = num_workers * worker_config.rank
+        cur_offset = 0
 
-        # Note that the first workers will get a bit more samples if the total number of samples
-        # is not divisible by the number of workers (which is usually the case).
-        # We will now rotate the offsets, to continue filling the workers, where the previous dataset left off.
-        local_rank_worker_sample_offsets = (
-            local_rank_worker_sample_offsets[rotation_offset:]
-            + local_rank_worker_sample_offsets[:rotation_offset]
-        )
+        # We are now populating the local_rank_worker_sample_offsets list with the sample offsets
+        # for each worker on the current rank.
+        # We are iterating all global workers, but only consider the workers on the current rank.
+        # Actually, there is a closed form solution for this, but it is much easier to understand
+        # with this loop and we're only doing this once.
 
-        first_worker_with_less_samples = (total_samples + rotation_offset) % global_workers
+        # Here's an example for 2 ranks and 3 workers per rank:
+        # Total number of samples: 10
+        # Global workers: 6 (2 ranks * 3 workers)
+        # Minimum samples per worker: 10 // 6 = 1
+        # Workers with more samples: 10 % 6 = 4
+        # So the nuber of samples per global worker could be [2, 2, 2, 2, 1, 1]
+        # The corresponding global sample offsets would be [0, 2, 4, 6, 8, 9, 10]
+        # The local sample offsets for rank 0 would be [0, 2, 4, 6] and for rank 1 [6, 8, 9, 10]
+
+        # If we rotate the whole thing using rotation_offset=1, we get [1, 2, 2, 2, 2, 1] samples per worker
+        # and as global offsets we get [0, 1, 3, 5, 7, 9, 10]
+
+        local_rank_worker_sample_offsets = []
+        for global_worker_idx in range(global_workers):
+            if global_worker_idx >= num_prev_workers:
+                local_rank_worker_sample_offsets.append(cur_offset)
+
+            if global_worker_idx >= num_prev_workers + num_workers + 1:
+                break
+
+            if (
+                global_worker_idx - rotation_offset + global_workers
+            ) % global_workers < num_workers_with_more_samples:
+                # This worker gets one more sample
+                cur_offset += min_samples_per_worker + 1
+            else:
+                # This worker gets the minimum number of samples
+                cur_offset += min_samples_per_worker
 
         return list(
             # Filter out any empty shards for this worker
