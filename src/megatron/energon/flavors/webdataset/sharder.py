@@ -208,7 +208,7 @@ class Sharder:
         # and as global offsets we get [0, 1, 3, 5, 7, 9, 10]
 
         local_rank_worker_sample_offsets = []
-        for global_worker_idx in range(global_workers):
+        for global_worker_idx in range(global_workers + 1):
             if global_worker_idx >= num_prev_workers:
                 local_rank_worker_sample_offsets.append(cur_offset)
 
