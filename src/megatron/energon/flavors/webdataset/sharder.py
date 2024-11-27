@@ -212,7 +212,7 @@ class Sharder:
             if global_worker_idx >= num_prev_workers:
                 local_rank_worker_sample_offsets.append(cur_offset)
 
-            if global_worker_idx >= num_prev_workers + num_workers + 1:
+            if global_worker_idx >= num_prev_workers + num_workers:
                 break
 
             if (
