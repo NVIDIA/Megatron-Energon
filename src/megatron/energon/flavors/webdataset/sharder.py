@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import dataclasses
-from typing import Generator, List, Optional, Sequence
+from itertools import zip_longest
+from typing import List, Optional, Sequence, Union
 
 from megatron.energon.flavors.webdataset.structs import ShardInfo
 from megatron.energon.worker import WorkerConfig
@@ -148,6 +149,37 @@ class Sharder:
             )
 
     @classmethod
+    def _magic_sequence(cls, length_or_indices: Union[int, List[int]]) -> List[int]:
+        """This function creates sequence of indices for interleaving.
+        The sequence is created by a divide and interleave algorithm to ensure
+        a balanced distribution across ranks. For lengths of power of two,
+        the sequence corresponds to the reversed binary representation of the
+        indices.
+
+        For exapmle for 16 indices, the sequence is:
+        [0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7, 15]
+        """
+
+        if isinstance(length_or_indices, int):
+            indices = list(range(length_or_indices))
+        else:
+            indices = length_or_indices
+
+        if len(indices) <= 2:
+            return indices
+        mid = len(indices) // 2
+        left = indices[:mid]
+        right = indices[mid:]
+
+        left_result = cls._magic_sequence(left)
+        right_result = cls._magic_sequence(right)
+
+        # Interleave the results
+        zipped = zip_longest(left_result, right_result)
+        result = [item for sublist in zipped for item in sublist if item is not None]
+        return result
+
+    @classmethod
     def shard_workers(
         cls,
         shards: List[Sequence[ShardInfo]],
@@ -208,16 +240,23 @@ class Sharder:
 
         # Now we extract the local rank's worker ranges but in a strided way
         # for better balance across ranks.
-        # I.e. If the global worker sample start/ends are [(0, 2), (2, 4), (4, 6), (6, 8), (8, 9), (9, 10)]
-        # and we have 2 ranks and 3 workers per rank, we get:
-        # Rank 0: [(0, 2), (4, 6), (8, 9)]
-        # Rank 1: [(2, 4), (6, 8), (9, 10)]
-        # The reason for the striding is, because the first ranges are typically larger (by 1) than the
-        # last ones, and we want to balance that out across ranks.
+        # We cannot have this striding depend on the number of ranks, because
+        # we want reproducible results when changing the number of ranks.
+        # Hence we use a magic sequence to interleave the global worker indices.
+
+        worker_magic_seq = cls._magic_sequence(global_workers)
+        # The worker_magic_seq is the order in which workers shall be assigned samples.
+        # We need to reverse this mapping to get the local worker indices.
+
+        rev_map = [-1] * len(worker_magic_seq)
+        for i, x in enumerate(worker_magic_seq):
+            rev_map[x] = i
 
         local_worker_sample_start_ends = [
-            global_worker_sample_start_ends[i]
-            for i in range(worker_config.rank, global_workers, worker_config.world_size)
+            global_worker_sample_start_ends[rev_map[idx]]
+            for idx in range(
+                worker_config.rank * num_workers, (worker_config.rank + 1) * num_workers
+            )
         ]
 
         assert (

@@ -580,7 +580,7 @@ class TestDataset(unittest.TestCase):
         assert len(val_dataset) == 8
         assert len(val_loader) == 8
         assert len(list(val_loader)) == 8
-        assert [len(entry.__key__) for entry in val_loader] == [11, 11, 11, 11, 2, 2, 1, 1]
+        assert [len(entry.__key__) for entry in val_loader] == [11, 11, 11, 11, 2, 1, 2, 1]
         assert sum(len(entry.__key__) for entry in val_loader) == 50
 
     def test_multirank_dataset(self):
