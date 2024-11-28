@@ -60,18 +60,20 @@ class Sharder:
     def _split_shards(
         cls,
         shards: List[Sequence[ShardInfo]],
-        offsets: List[int],
+        start: int,
+        end: int,
         *,
         max_samples_per_sequence: Optional[int],
-    ) -> Generator[List[Sequence[ShardInfo]], None, None]:
+    ) -> List[Sequence[ShardInfo]]:
         """
-        Splits the shards into multiple lists based on the offsets. The first offset is the start
+        Splits the shards into multiple lists based on the start/end sample offsets.
         of the first shard emitted, the last offset is the end of the last shard emitted.
         (i.e. number of shards emitted is `len(offsets) - 1`)
 
         Args:
             shards: The source shards
-            offsets: The offsets to samples to get shards for (must be strictly increasing)
+            start: The index of the first sample to include
+            end: The index of the end sample (not included)
             max_samples_per_sequence: Maximum number of samples per sequence (=how many samples
                   will be sequential).
 
@@ -83,72 +85,68 @@ class Sharder:
 
         # Find shard idx for start
         for start_index, start_subshards in enumerate(shards):
-            if cum_count + start_subshards[0].count < offsets[0]:
+            if cum_count + start_subshards[0].count < start:
                 # The shard is before the offset -> go to next shard
                 cum_count += start_subshards[0].count
                 continue
             else:
                 # The shard contains the offset
-                start_offset = offsets[0] - cum_count
+                start_offset = start - cum_count
                 break
         else:
             raise ValueError("Invalid shard distribution")
 
-        for offset in offsets[1:]:
-            # Find shard idx for end
-            for end_index, end_subshards in enumerate(shards[start_index:], start=start_index):
-                if cum_count + end_subshards[0].count < offset:
-                    # The shard is before the offset -> go to next shard
-                    cum_count += end_subshards[0].count
-                    continue
-                else:
-                    # The shard contains the offset
-                    end_offset = offset - cum_count
-                    break
+        # Find shard idx for end
+        for end_index, end_subshards in enumerate(shards[start_index:], start=start_index):
+            if cum_count + end_subshards[0].count < end:
+                # The shard is before the offset -> go to next shard
+                cum_count += end_subshards[0].count
+                continue
             else:
-                raise ValueError("Invalid shard distribution")
-            if start_index == end_index:
-                yield cls._split_shard(
-                    start_subshards,
-                    start_offset=start_offset,
+                # The shard contains the offset
+                end_offset = end - cum_count
+                break
+        else:
+            raise ValueError("Invalid shard distribution")
+        if start_index == end_index:
+            return cls._split_shard(
+                start_subshards,
+                start_offset=start_offset,
+                end_offset=end_offset,
+                max_samples_per_sequence=max_samples_per_sequence,
+            )
+        else:
+            # Middle is the original shards, start and end get an offset/length
+            return (
+                (
+                    cls._split_shard(
+                        start_subshards,
+                        start_offset=start_offset,
+                        end_offset=start_subshards[0].count,
+                        max_samples_per_sequence=max_samples_per_sequence,
+                    )
+                    if start_subshards[0].count > start_offset
+                    else []
+                )
+                + sum(
+                    (
+                        cls._split_shard(
+                            subshards,
+                            start_offset=subshards[0].offset,
+                            end_offset=subshards[0].count,
+                            max_samples_per_sequence=max_samples_per_sequence,
+                        )
+                        for subshards in shards[start_index + 1 : end_index]
+                    ),
+                    start=[],
+                )
+                + cls._split_shard(
+                    end_subshards,
+                    start_offset=end_subshards[0].offset,
                     end_offset=end_offset,
                     max_samples_per_sequence=max_samples_per_sequence,
                 )
-            else:
-                # Middle is the original shards, start and end get an offset/length
-                yield (
-                    (
-                        cls._split_shard(
-                            start_subshards,
-                            start_offset=start_offset,
-                            end_offset=start_subshards[0].count,
-                            max_samples_per_sequence=max_samples_per_sequence,
-                        )
-                        if start_subshards[0].count > start_offset
-                        else []
-                    )
-                    + sum(
-                        (
-                            cls._split_shard(
-                                subshards,
-                                start_offset=subshards[0].offset,
-                                end_offset=subshards[0].count,
-                                max_samples_per_sequence=max_samples_per_sequence,
-                            )
-                            for subshards in shards[start_index + 1 : end_index]
-                        ),
-                        start=[],
-                    )
-                    + cls._split_shard(
-                        end_subshards,
-                        start_offset=end_subshards[0].offset,
-                        end_offset=end_offset,
-                        max_samples_per_sequence=max_samples_per_sequence,
-                    )
-                )
-            start_index = end_index
-            start_subshards = end_subshards
-            start_offset = end_offset
+            )
 
     @classmethod
     def shard_workers(
@@ -173,7 +171,7 @@ class Sharder:
         """
 
         # We split the total number of samples into the number of global workers across all ranks.
-        # Note that the global number of workers intentionally stay the same if you
+        # Note that the global number of workers intentionally stays the same if you
         # divide the number of ranks by N, and multiply the number of workers per rank by N.
         # This allows to reproduce the same global batches with a different number of ranks.
 
@@ -185,36 +183,14 @@ class Sharder:
         min_samples_per_worker = int(total_samples / global_workers)
         num_workers_with_more_samples = total_samples % global_workers
 
-        # Compute the number of samples of all workers on previous ranks
-        num_prev_workers = num_workers * worker_config.rank
+        # We are going to compute the samples assigned to each worker on the current rank.
+        # First we compute the global worker sample assignments (rotated by the rotation offset).
+        # Then we extract the local worker sample assignments for the current rank.
+
+        # Let's compute it globally for all workers first
+        global_worker_sample_start_ends = []
         cur_offset = 0
-
-        # We are now populating the local_rank_worker_sample_offsets list with the sample offsets
-        # for each worker on the current rank.
-        # We are iterating all global workers, but only consider the workers on the current rank.
-        # Actually, there is a closed form solution for this, but it is much easier to understand
-        # with this loop and we're only doing this once.
-
-        # Here's an example for 2 ranks and 3 workers per rank:
-        # Total number of samples: 10
-        # Global workers: 6 (2 ranks * 3 workers)
-        # Minimum samples per worker: 10 // 6 = 1
-        # Workers with more samples: 10 % 6 = 4
-        # So the nuber of samples per global worker could be [2, 2, 2, 2, 1, 1]
-        # The corresponding global sample offsets would be [0, 2, 4, 6, 8, 9, 10]
-        # The local sample offsets for rank 0 would be [0, 2, 4, 6] and for rank 1 [6, 8, 9, 10]
-
-        # If we rotate the whole thing using rotation_offset=1, we get [1, 2, 2, 2, 2, 1] samples per worker
-        # and as global offsets we get [0, 1, 3, 5, 7, 9, 10]
-
-        local_rank_worker_sample_offsets = []
-        for global_worker_idx in range(global_workers + 1):
-            if global_worker_idx >= num_prev_workers:
-                local_rank_worker_sample_offsets.append(cur_offset)
-
-            if global_worker_idx >= num_prev_workers + num_workers:
-                break
-
+        for global_worker_idx in range(global_workers):
             if (
                 global_worker_idx - rotation_offset + global_workers
             ) % global_workers < num_workers_with_more_samples:
@@ -224,12 +200,44 @@ class Sharder:
                 # This worker gets the minimum number of samples
                 cur_offset += min_samples_per_worker
 
-        return list(
-            # Filter out any empty shards for this worker
-            [subshards for subshards in shards if subshards[0].count > 0]
-            for shards in cls._split_shards(
+            if len(global_worker_sample_start_ends) == 0:
+                global_worker_sample_start_ends.append((0, cur_offset))
+            else:
+                global_worker_sample_start_ends.append(
+                    (global_worker_sample_start_ends[-1][1], cur_offset)
+                )
+
+        # Now we extract the local rank's worker ranges but in a strided way
+        # for better balance across ranks.
+        # I.e. If the global worker sample start/ends are [(0, 2), (2, 4), (4, 6), (6, 8), (8, 9), (9, 10)]
+        # and we have 2 ranks and 3 workers per rank, we get:
+        # Rank 0: [(0, 2), (4, 6), (8, 9)]
+        # Rank 1: [(2, 4), (6, 8), (9, 10)]
+        # The reason for the striding is, because the first ranges are typically larger (by 1) than the
+        # last ones, and we want to balance that out across ranks.
+
+        local_worker_sample_start_ends = [
+            global_worker_sample_start_ends[i]
+            for i in range(worker_config.rank, global_workers, worker_config.world_size)
+        ]
+
+        assert (
+            len(local_worker_sample_start_ends) == num_workers
+        ), "If this fails, there's a bug in the code above."
+
+        # Now we can split the shards
+        final_worker_shards = []
+        for start, end in local_worker_sample_start_ends:
+            cur_shards = cls._split_shards(
                 shards,
-                local_rank_worker_sample_offsets,
+                start,
+                end,
                 max_samples_per_sequence=max_samples_per_sequence,
             )
-        )
+
+            # Filter out any empty shards for this worker
+            final_worker_shards.append(
+                [subshards for subshards in cur_shards if subshards[0].count > 0]
+            )
+
+        return final_worker_shards

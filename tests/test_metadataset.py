@@ -462,21 +462,24 @@ class TestDataset(unittest.TestCase):
             # Check the sample assignnent is balanced across all global workers
             if num_workers == 6:
                 assert list(samples_per_global_worker.values()) == [
-                    19,
-                    19,
-                    19,
+                    19,  # rank 0
                     19,
                     18,
                     18,
                     18,
                     18,
+                    19,  # rank 1
+                    19,
                     18,
                     18,
                     18,
                     18,
                 ]
             elif num_workers == 30:
-                assert list(samples_per_global_worker.values()) == [4] * 40 + [3] * 20
+                assert (
+                    list(samples_per_global_worker.values())
+                    == [4] * 20 + [3] * 10 + [4] * 20 + [3] * 10
+                )
 
     def test_save_restore_state_train(self):
         torch.manual_seed(42)
