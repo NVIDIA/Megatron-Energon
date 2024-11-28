@@ -67,8 +67,7 @@ class Sharder:
     ) -> List[Sequence[ShardInfo]]:
         """
         Splits the shards into multiple lists based on the start/end sample offsets.
-        of the first shard emitted, the last offset is the end of the last shard emitted.
-        (i.e. number of shards emitted is `len(offsets) - 1`)
+        The splitting is done across shard boundaries and multiple shards can be returned.
 
         Args:
             shards: The source shards
