@@ -150,13 +150,13 @@ class Sharder:
 
     @classmethod
     def _magic_sequence(cls, length_or_indices: Union[int, List[int]]) -> List[int]:
-        """This function creates sequence of indices for interleaving.
-        The sequence is created by a divide and interleave algorithm to ensure
-        a balanced distribution across ranks. For lengths of power of two,
+        """This function creates a permutation of given length.
+        The sequence is created by a recursive divide and interleave algorithm
+        to ensure a balanced distribution across ranks. For lengths of power of two,
         the sequence corresponds to the reversed binary representation of the
         indices.
 
-        For exapmle for 16 indices, the sequence is:
+        For example for 16 indices, the sequence is:
         [0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7, 15]
         """
 
@@ -190,7 +190,7 @@ class Sharder:
     ) -> List[List[Sequence[ShardInfo]]]:
         """
         Creates subshards (ShardInfo) for each worker of the current rank.
-        For that, the total number of samples is split into the number of global workers across all
+        For that, the number of global samples is split across the number of global workers across all
         ranks. Then each worker gets a slice of the global samples.
 
         Args:
@@ -242,11 +242,16 @@ class Sharder:
         # for better balance across ranks.
         # We cannot have this striding depend on the number of ranks, because
         # we want reproducible results when changing the number of ranks.
-        # Hence we use a magic sequence to interleave the global worker indices.
+        # Hence we use a magic sequence to mix the global worker indices in a
+        # balanced way.
 
         worker_magic_seq = cls._magic_sequence(global_workers)
-        # The worker_magic_seq is the order in which workers shall be assigned samples.
-        # We need to reverse this mapping to get the local worker indices.
+        # The worker_magic_seq is the order in which any remainder samples shall
+        # be assigned to workers.
+        # That means, the x-axis (array index) is the remainder sample index
+        # and the y-axis (value) is the global worker index.
+        # We need to reverse this mapping so we can extract the samples needed
+        # for the local rank workers.
 
         rev_map = [-1] * len(worker_magic_seq)
         for i, x in enumerate(worker_magic_seq):
