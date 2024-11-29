@@ -149,15 +149,35 @@ class Sharder:
             )
 
     @classmethod
-    def _magic_sequence(cls, length_or_indices: Union[int, List[int]]) -> List[int]:
+    def _generalized_bit_reversal(cls, length_or_indices: Union[int, List[int]]) -> List[int]:
         """This function creates a permutation of given length.
         The sequence is created by a recursive divide and interleave algorithm
-        to ensure a balanced distribution across ranks. For lengths of power of two,
-        the sequence corresponds to the reversed binary representation of the
-        indices.
+        to ensure a balanced distribution across ranks.
+        It corresponds to a generalized bit reversal permutation, which - for lengths
+        of power of two - is the reversed binary representation of the original indices.
 
         For example for 16 indices, the sequence is:
-        [0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7, 15]
+            [0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7, 15]
+
+        Visual illustration:
+            Step|0|1|2|3|4|5|6|7|8|9|A|B|C|D|E|F|
+                |-------------------------------|
+               0|X| | | | | | | | | | | | | | | |
+               1|X| | | | | | | |X| | | | | | | |
+               2|X| | | |X| | | |X| | | | | | | |
+               3|X| | | |X| | | |X| | | |X| | | |
+               4|X| |X| |X| | | |X| | | |X| | | |
+               5|X| |X| |X| | | |X| |X| |X| | | |
+               6|X| |X| |X| |X| |X| |X| |X| | | |
+               7|X| |X| |X| |X| |X| |X| |X| |X| |
+               8|X|X|X| |X| |X| |X| |X| |X| |X| |
+               9|X|X|X| |X| |X| |X|X|X| |X| |X| |
+              10|X|X|X| |X|X|X| |X|X|X| |X| |X| |
+              11|X|X|X| |X|X|X| |X|X|X| |X|X|X| |
+              12|X|X|X|X|X|X|X| |X|X|X| |X|X|X| |
+              13|X|X|X|X|X|X|X| |X|X|X|X|X|X|X| |
+              14|X|X|X|X|X|X|X|X|X|X|X|X|X|X|X| |
+              15|X|X|X|X|X|X|X|X|X|X|X|X|X|X|X|X|
         """
 
         if isinstance(length_or_indices, int):
@@ -171,8 +191,8 @@ class Sharder:
         left = indices[:mid]
         right = indices[mid:]
 
-        left_result = cls._magic_sequence(left)
-        right_result = cls._magic_sequence(right)
+        left_result = cls._generalized_bit_reversal(left)
+        right_result = cls._generalized_bit_reversal(right)
 
         # Interleave the results
         zipped = zip_longest(left_result, right_result)
@@ -242,19 +262,19 @@ class Sharder:
         # for better balance across ranks.
         # We cannot have this striding depend on the number of ranks, because
         # we want reproducible results when changing the number of ranks.
-        # Hence we use a magic sequence to mix the global worker indices in a
-        # balanced way.
+        # Hence we use a bit reversal sequence to mix the global worker indices
+        # in a balanced way.
 
-        worker_magic_seq = cls._magic_sequence(global_workers)
-        # The worker_magic_seq is the order in which any remainder samples shall
+        worker_bitrev_seq = cls._generalized_bit_reversal(global_workers)
+        # The worker_bitrev_seq is the order in which any remainder samples shall
         # be assigned to workers.
         # That means, the x-axis (array index) is the remainder sample index
         # and the y-axis (value) is the global worker index.
         # We need to reverse this mapping so we can extract the samples needed
         # for the local rank workers.
 
-        rev_map = [-1] * len(worker_magic_seq)
-        for i, x in enumerate(worker_magic_seq):
+        rev_map = [-1] * len(worker_bitrev_seq)
+        for i, x in enumerate(worker_bitrev_seq):
             rev_map[x] = i
 
         local_worker_sample_start_ends = [

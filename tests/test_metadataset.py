@@ -476,7 +476,8 @@ class TestDataset(unittest.TestCase):
                     18,
                 ]
             elif num_workers == 30:
-                # This should match the pattern of the first 40 items of a magic sequence of length 60
+                # This should match the pattern of the first 40 items of a generalized bit
+                # reversal sequence of length 60.
                 # Given 4 * 55 = 220 samples modulo 60 workers, is 40 remaining samples
                 assert list(samples_per_global_worker.values()) == [
                     4,
