@@ -5,6 +5,7 @@
 
 import gc
 import logging
+import random
 import sys
 import tempfile
 import unittest
@@ -15,10 +16,17 @@ from pathlib import Path
 import torch
 import webdataset as wds
 
-from megatron.energon import TextSample, WorkerConfig, get_loader, get_train_dataset
+from megatron.energon import (
+    DefaultTaskEncoder,
+    TextSample,
+    WorkerConfig,
+    get_loader,
+    get_train_dataset,
+)
 from megatron.energon.dataset_config import get_dataset_from_config
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 from megatron.energon.loader import get_savable_loader
+from megatron.energon.task_encoder.base import stateless
 
 
 def _norng_state(state):
@@ -223,6 +231,61 @@ class TestDataset(unittest.TestCase):
         locals().clear()
         gc.collect()
 
+    def test_determinism_taskencoder(self):
+
+        class TestTaskEncoder(DefaultTaskEncoder):
+            @stateless(restore_seeds=True)
+            def encode_sample(self, sample: TextSample) -> TextSample:
+                rand_str = f"_{torch.randint(0, 1000, (1,)).item()}_{random.randint(0, 1000)}"
+                return TextSample(
+                    __key__=sample.__key__,
+                    __restore_key__=sample.__restore_key__,
+                    __subflavor__=sample.__subflavor__,
+                    __subflavors__=sample.__subflavors__,
+                    text=sample.text + rand_str,
+                )
+
+        for num_workers in [0, 1]:
+            worker_config1 = WorkerConfig(rank=0, world_size=1, num_workers=num_workers)
+
+            # This seed is used by the dataset to shuffle the data
+            torch.manual_seed(42)
+            ds1a = get_train_dataset(
+                self.dataset_path,
+                split_part="train",
+                sample_type=TextSample,
+                worker_config=worker_config1,
+                batch_size=1,
+                shuffle_buffer_size=42,
+                max_samples_per_sequence=2,
+                task_encoder=TestTaskEncoder(),
+            )
+
+            torch.manual_seed(44)
+            ds1b = get_train_dataset(
+                self.dataset_path,
+                split_part="train",
+                sample_type=TextSample,
+                worker_config=worker_config1,
+                batch_size=1,
+                shuffle_buffer_size=42,
+                max_samples_per_sequence=2,
+                task_encoder=TestTaskEncoder(),
+            )
+
+            # Fork the dataset twice
+            loader1a = get_loader(ds1a, worker_config=worker_config1)
+            loader1b = get_loader(ds1b, worker_config=worker_config1)
+
+            order1a = [data.text[0] for idx, data in zip(range(55 * 20), loader1a)]
+            order1b = [data.text[0] for idx, data in zip(range(55 * 20), loader1b)]
+
+            assert order1a == order1b
+
+        # Delete all locals, otherwise loaders might be kept alive
+        locals().clear()
+        gc.collect()
+
     def test_restore_state(self):
         worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0)
 
@@ -265,7 +328,7 @@ class TestDataset(unittest.TestCase):
         print("state0", state_0)
         print("state1", state_1)
 
-        torch.manual_seed(42)
+        torch.manual_seed(213)
         loader = get_savable_loader(
             get_train_dataset(
                 self.dataset_path,
@@ -290,7 +353,7 @@ class TestDataset(unittest.TestCase):
         # print("order5", order_5)
         assert order_2 == order_5
 
-        torch.manual_seed(42)
+        torch.manual_seed(145)
         loader = get_savable_loader(
             get_train_dataset(
                 self.dataset_path,
