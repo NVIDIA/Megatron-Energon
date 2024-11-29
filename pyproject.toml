@@ -42,6 +42,7 @@ dev = [
   "myst-parser",
   "sphinx-rtd-theme",
   "sphinx-click",
+  "sphinx-autodoc2",
 ]
 transforms = [
   "torchvision",  # Needed for megatron.energon.transforms

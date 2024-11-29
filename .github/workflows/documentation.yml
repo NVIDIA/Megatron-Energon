@@ -29,7 +29,7 @@ jobs:
         uses: actions/configure-pages@v5
       - name: Install dependencies
         run: |
-          pip install -U sphinx-rtd-theme sphinx sphinxcontrib-napoleon myst-parser sphinx-click
+          pip install -U sphinx-rtd-theme sphinx sphinxcontrib-napoleon myst-parser sphinx-click sphinx-autodoc2
       - name: Sphinx build
         run: |
           sphinx-build -b html docs/source _site
