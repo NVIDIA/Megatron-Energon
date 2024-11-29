@@ -26,6 +26,7 @@ from megatron.energon import (
 from megatron.energon.dataset_config import get_dataset_from_config
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 from megatron.energon.loader import get_savable_loader
+from megatron.energon.task_encoder.base import stateless
 
 
 def _norng_state(state):
@@ -233,6 +234,7 @@ class TestDataset(unittest.TestCase):
     def test_determinism_taskencoder(self):
 
         class TestTaskEncoder(DefaultTaskEncoder):
+            @stateless(restore_seeds=True)
             def encode_sample(self, sample: TextSample) -> TextSample:
                 rand_str = f"_{torch.randint(0, 1000, (1,)).item()}_{random.randint(0, 1000)}"
                 return TextSample(
@@ -244,7 +246,7 @@ class TestDataset(unittest.TestCase):
                 )
 
         for num_workers in [0, 1]:
-            worker_config1 = WorkerConfig(rank=0, world_size=0, num_workers=num_workers)
+            worker_config1 = WorkerConfig(rank=0, world_size=1, num_workers=num_workers)
 
             # This seed is used by the dataset to shuffle the data
             torch.manual_seed(42)
@@ -258,6 +260,7 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=2,
                 task_encoder=TestTaskEncoder(),
             )
+
             torch.manual_seed(44)
             ds1b = get_train_dataset(
                 self.dataset_path,
