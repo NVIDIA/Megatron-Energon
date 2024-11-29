@@ -348,7 +348,7 @@ class PackingDataset(
         if isinstance(final_pack, Generator):
             assert inspect.isgeneratorfunction(
                 self.final_packer
-            ), f"Generator in {self.map_fn} but not marked as such."
+            ), f"Generator in {self.final_packer} but not marked as such."
             for cur_batch_sub_idx, (pack_idx, inner_batch_sample) in enumerate(
                 self._final_packing_sample_index.iter_ctx(final_pack, pack_idx)
             ):

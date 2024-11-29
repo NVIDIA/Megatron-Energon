@@ -1510,6 +1510,25 @@ class TestDataset(unittest.TestCase):
                 else:
                     assert False
 
+        worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0)
+        loader = get_savable_loader(
+            get_train_dataset(
+                self.dataset_path,
+                batch_size=None,
+                worker_config=worker_config,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                task_encoder=GroupingTaskEncoder(),
+            ),
+            worker_config=worker_config,
+            checkpoint_every_min_n_samples=1,
+            checkpoint_every_sec=0,
+            n_checkpoints=4,
+        )
+        batches = list(zip(range(40), loader))
+        print([batch.__key__ for idx, batch in batches])
+        assert all(all(key == batch.caption[0] for key in batch.caption) for idx, batch in batches)
+
         worker_config_r0 = WorkerConfig(rank=0, world_size=2, num_workers=2)
 
         loader_r0 = get_savable_loader(
