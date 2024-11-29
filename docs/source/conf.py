@@ -55,7 +55,16 @@ extensions = [
 ]
 
 # Autodoc
-autodoc_mock_imports = ["braceexpand", "fsspec", "torch", "webdataset", "tqdm", "numpy", "PIL"]
+autodoc_mock_imports = [
+    "braceexpand",
+    "fsspec",
+    "torch",
+    "webdataset",
+    "tqdm",
+    "numpy",
+    "PIL",
+    "s3fs",
+]
 autodoc_typehints = "description"
 autodoc_typehints_format = "short"
 
