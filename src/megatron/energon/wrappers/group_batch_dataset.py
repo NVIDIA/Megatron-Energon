@@ -74,7 +74,6 @@ class GroupBatchMergedState(BaseSingleWrapperMergedState):
 
 @dataclass
 class Bucket(Generic[T_batch_sample]):
-    key: Hashable
     batch_size: int
 
     samples: SavableSampleBuffer[T_batch_sample]
@@ -83,8 +82,9 @@ class Bucket(Generic[T_batch_sample]):
 class GroupBatchDataset(
     BaseSingleWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_sample, T_batch]
 ):
-    """This dataset wrapper transforms a dataset of samples into a dataset of batches, grouped
-    by some criterion. The length returned is the number of inner samples.
+    """This dataset wrapper transforms a dataset of samples into a dataset of batches, grouped by some criterion.
+    The length is not correct, as this function can not predict the number of batches as there is no fixed batch size,
+    instead it returns the inner dataset size.
     An example use case is: Image-Text samples, which are to be grouped by the image size into three
     size categories (e.g. 128x128, 256x256, 512x512) for efficient augmentation and batching.
     """
@@ -117,7 +117,7 @@ class GroupBatchDataset(
         Args:
             dataset: The input dataset to wrap
             default_batch_size: Default batch size to use if not specified by the bucket function.
-            bucket: Function which determines the bucket of a sample.
+            sample_group_key: Function which determines the bucket of a sample.
             batcher: Function which combines separate samples into a single object. May raise
                 :exc:`megatron.energon.SkipSample` to skip a sample.
             drop_last: If True, the last batch is dropped if it is smaller than the batch size.
@@ -196,12 +196,10 @@ class GroupBatchDataset(
             bucket = buckets.get(bucket_key)
             if bucket is None:
                 buckets[bucket_key] = bucket = Bucket(
-                    key=bucket_key,
                     batch_size=batch_size,
                     samples=SavableSampleBuffer(self.dataset, self.worker_config),
                 )
             else:
-                assert bucket.key == bucket_key
                 assert (
                     bucket.batch_size == batch_size
                 ), f"Got different batch size for group {bucket_key}: {bucket.batch_size} != {batch_size}."
@@ -266,7 +264,6 @@ class GroupBatchDataset(
                 else:
                     for bucket_state in buckets_state:
                         buckets[bucket_state.key] = Bucket(
-                            key=bucket_state.key,
                             batch_size=bucket_state.batch_size,
                             samples=SavableSampleBuffer(self.dataset, self.worker_config),
                         )
