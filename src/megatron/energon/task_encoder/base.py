@@ -117,16 +117,19 @@ def stateless(
 
     Usage:
 
+    .. code-block:: python
+
         @stateless
         def encode_sample(self, sample: T_sample) -> T_encoded_sample:
             ...
-
 
         # Or if randomness is used (e.g. for augmentations):
         @stateless(restore_seeds=True)
         def encode_sample(self, sample: T_sample) -> T_encoded_sample:
             ...
+
     """
+
     if fn is None:
         return lambda f: stateless(f, restore_seeds=restore_seeds)
     if restore_seeds:

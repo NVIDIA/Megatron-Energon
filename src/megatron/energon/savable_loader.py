@@ -610,14 +610,18 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
     When restoring, the dataloader and dataset must be instantiated with the exactly same
     parameters.
 
-    ## How this works (for no worker processes)
+    How this works (for no worker processes)
+    ----------------------------------------
+
     1. The state of the dataset is saved using :meth:`megatron.energon.SavableDataset.save_state`
     2. (for compatibility) The state of the dataset is converted to using inner arrays using
        :meth:`megatron.energon.SavableDataset.merge_states`.
     3. The state can be restored using :meth:`megatron.energon.SavableDataset.restore_state` given the
        previously saved (and merged) state.
 
-    ## How this works (for worker processes)
+    How this works (for worker processes)
+    -------------------------------------
+
     - First issue is, that worker processes work with internal queues between processes to pass
       loaded samples to the main process (also to perform collating). This means that the whole
       state of the dataset is not directly accessible from the main process.
@@ -645,6 +649,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
        before a worker is started, such that all workers initially receive the same state array.
        The worker firstly sets the worker index offset, then uses its (shifted) own index to get its
        required state from the merged state array.
+
     """
 
     #: The worker config
