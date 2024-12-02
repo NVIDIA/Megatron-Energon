@@ -26,6 +26,7 @@ from megatron.energon import (
     load_dataset,
 )
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
+from megatron.energon.wrappers.blend_dataset import BlendDataset
 
 
 def _norng_state(state):
@@ -417,6 +418,129 @@ class TestDataset(unittest.TestCase):
         assert len(val_order1) == 110
         print(Counter(val_order1))
         assert all(v == 1 for v in Counter(val_order1).values())
+
+    def test_worker_sample_balance(self):
+        torch.manual_seed(42)
+
+        for num_workers in [6, 30]:
+            samples_per_global_worker = Counter()
+
+            for rank in range(2):
+                wc = WorkerConfig(
+                    rank=rank,
+                    world_size=2,
+                    num_workers=num_workers,
+                )
+
+                train_dataset = get_train_dataset(
+                    self.nested_mds_path,
+                    worker_config=wc,
+                    batch_size=1,
+                    shuffle_buffer_size=None,
+                    max_samples_per_sequence=None,
+                )
+
+                blend_dataset = train_dataset.dataset.dataset.dataset
+                assert isinstance(blend_dataset, BlendDataset)
+
+                ds_weights = blend_dataset.dataset_weights
+                assert len(ds_weights) == 4  # 4 datasets
+
+                # We are now going to count the number of samples that was assigned to each
+                # globally unique worker. This corresponds to the shard_ranges that energon
+                # prints out when the dataset is built.
+
+                for ds, w in ds_weights:
+                    ds_shards = ds.dataset.shards
+                    assert len(ds_shards) == num_workers
+
+                    for worker_idx, shards in enumerate(ds_shards):
+                        samples_per_global_worker[(rank, worker_idx)] += sum(
+                            [shard[0].count for shard in shards]
+                        )
+
+            # Check the sample assignnent is balanced across all global workers
+            if num_workers == 6:
+                assert list(samples_per_global_worker.values()) == [
+                    19,  # rank 0
+                    18,
+                    18,
+                    19,
+                    18,
+                    18,
+                    19,  # rank 1
+                    18,
+                    18,
+                    19,
+                    18,
+                    18,
+                ]
+            elif num_workers == 30:
+                # This should match the pattern of the first 40 items of a generalized bit
+                # reversal sequence of length 60.
+                # Given 4 * 55 = 220 samples modulo 60 workers, is 40 remaining samples
+                assert list(samples_per_global_worker.values()) == [
+                    4,
+                    4,
+                    4,
+                    4,
+                    3,
+                    4,
+                    3,
+                    4,
+                    4,
+                    4,
+                    3,
+                    4,
+                    3,
+                    4,
+                    3,
+                    4,
+                    4,
+                    4,
+                    4,
+                    3,
+                    4,
+                    3,
+                    4,
+                    4,
+                    4,
+                    3,
+                    4,
+                    3,
+                    4,
+                    3,
+                    4,
+                    4,
+                    4,
+                    4,
+                    3,
+                    4,
+                    3,
+                    4,
+                    4,
+                    4,
+                    3,
+                    4,
+                    3,
+                    4,
+                    3,
+                    4,
+                    4,
+                    4,
+                    4,
+                    3,
+                    4,
+                    3,
+                    4,
+                    4,
+                    4,
+                    3,
+                    4,
+                    3,
+                    4,
+                    3,
+                ]
 
     def test_save_restore_state_train(self):
         torch.manual_seed(42)

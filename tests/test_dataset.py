@@ -580,7 +580,7 @@ class TestDataset(unittest.TestCase):
         assert len(val_dataset) == 8
         assert len(val_loader) == 8
         assert len(list(val_loader)) == 8
-        assert [len(entry.__key__) for entry in val_loader] == [11, 11, 11, 11, 1, 2, 1, 2]
+        assert [len(entry.__key__) for entry in val_loader] == [11, 11, 11, 11, 2, 1, 2, 1]
         assert sum(len(entry.__key__) for entry in val_loader) == 50
 
     def test_multirank_dataset(self):
@@ -625,7 +625,7 @@ class TestDataset(unittest.TestCase):
         assert len(list(val_loader0b11)) == 4
         keys0b11 = set(key for entry in val_loader0b11 for key in entry.__key__)
         print([len(entry.__key__) for entry in val_loader0b11])
-        assert [len(entry.__key__) for entry in val_loader0b11] == [11, 11, 1, 2]
+        assert [len(entry.__key__) for entry in val_loader0b11] == [11, 11, 2, 1]
         assert len(keys0b11) == 25
 
         assert keys0b11 == keys0
@@ -652,7 +652,7 @@ class TestDataset(unittest.TestCase):
         assert len(list(val_loader1b11)) == 4
         keys1b11 = set(key for entry in val_loader1b11 for key in entry.__key__)
         print([len(entry.__key__) for entry in val_loader1b11])
-        assert [len(entry.__key__) for entry in val_loader1b11] == [11, 11, 1, 2]
+        assert [len(entry.__key__) for entry in val_loader1b11] == [11, 11, 2, 1]
         assert len(keys1b11) == 25
         assert keys1b11.isdisjoint(keys0b11)
 
