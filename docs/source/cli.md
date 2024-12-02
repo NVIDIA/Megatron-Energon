@@ -21,7 +21,7 @@ Below, you can see the available sub-commands under `energon`.
 
 
 ```{eval-rst}
-.. click:: megatron.energon.cli.main:data_command
+.. click:: megatron.energon.cli.main:main
    :prog: energon
    :nested: short
 ```

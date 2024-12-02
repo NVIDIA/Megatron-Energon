@@ -1,22 +1,16 @@
 <!--- Copyright (c) 2024, NVIDIA CORPORATION.
 SPDX-License-Identifier: BSD-3-Clause -->
 
+(data-preparation)=
 # Data Preparation
 
 The aim of data preparation is to convert your data to a format that the energon loader can understand and iterate.
 The outcome will be a webdataset with some extra information stored in a folder called `.nv-meta`. See [](data_on_disk) for details about this format and how to adapt the meta information to your needs.
 
 For data preparation, we provide a few helper functions to get you started quickly. There are a few cases to consider:
-- [Data Preparation](#data-preparation)
-  - [Webdataset format](#webdataset-format)
-    - [Compatible format](#compatible-format)
-      - [Example 1: No presplit shards, captioning webdataset](#example-1-no-presplit-shards-captioning-webdataset)
-      - [Example 2: Presplit shards by prefix](#example-2-presplit-shards-by-prefix)
-      - [Example 3: Presplit shards by folder](#example-3-presplit-shards-by-folder)
-    - [Special format](#special-format)
-  - [Convert to webdataset](#convert-to-webdataset)
-    - [Webdataset Format](#webdataset-format-1)
-    - [Build using Python](#build-using-python)
+```{contents}
+:depth: 4
+```
 
 (wds-format)=
 ## Webdataset format
@@ -41,7 +35,7 @@ With the default webdataset loading semantic, the images (in this case the `jpg`
 are loaded automatically if specified in the `field_map`. The dataset preparation wizard will ask you for the mapping
 of those fields.
 
-The shards may be pre-split or not split beforehand. Exemplary structures and [dataset preparation commands](cli#energon_data_prepare):
+The shards may be pre-split or not split beforehand. Exemplary structures and [dataset preparation commands](#energon_data_prepare):
 
 #### Example 1: No presplit shards, captioning webdataset
 ```text
@@ -113,7 +107,7 @@ In those cases you have two options:
 2. Using a `CrudeWebdataset`
     * For more intricate conversions, you can use a CrudeWebdataset that will pass your samples in a raw form into your TaskEncoder where you can then convert them based on the subflavor for example. For more details see [](crude-data).
 
-Even for these specific wds formats, you would start preparing your data using the [dataset preparation command](cli#energon_data_prepare), but you will need to define a custom sample loader or select `CrudeWebdataset` in the dataprep wizard. 
+Even for these specific wds formats, you would start preparing your data using the [dataset preparation command](#energon_data_prepare), but you will need to define a custom sample loader or select `CrudeWebdataset` in the dataprep wizard. 
 
 Example for a special format (e.g. ocr dataset) for which we will use a custom `sample_loader.py`:
 

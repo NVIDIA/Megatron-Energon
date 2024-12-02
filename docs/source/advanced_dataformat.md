@@ -114,7 +114,7 @@ Probably you noticed the {py:meth}`basic_sample_keys <megatron.energon.task_enco
 
 In a real use-case you will want to do a lot more here and we recommend keeping the cook methods in separate files and importing them where you define your TaskEncoder.
 
-### Other Filters for Cookers
+## Other Filters for Cookers
 
 You can filter using the `subflavors` as above, you can also filter using the deprecated single `subflavor` like this:
 
