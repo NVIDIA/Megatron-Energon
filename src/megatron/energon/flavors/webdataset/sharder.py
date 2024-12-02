@@ -235,60 +235,62 @@ class Sharder:
         num_workers_with_more_samples = total_samples % global_workers
 
         # We are going to compute the samples assigned to each worker on the current rank.
-        # First we compute the global worker sample assignments (rotated by the rotation offset).
-        # Then we extract the local worker sample assignments for the current rank.
+        # This is done in multiple steps.
+        # Some of these steps could be collapsed into one, but we keep them separate for clarity:
+        # 1. Compute the number of samples per global worker (rotated by rotation_offset,
+        #    typically given by previous datasets).
+        # 2. Permute the nuber of samples per global worker by a generalized bit reversal sequence
+        # 3. Given the sample counts, compute the start and end indices for each global worker
+        # 4. Extract the local worker sample assignments for the current rank.
+        # 5. Split the shards based on the start and end indices.
 
-        # Let's compute it globally for all workers first
-        global_worker_sample_start_ends = []
-        cur_offset = 0
+        # 1. Let's compute it globally for all workers first
+        num_samples_per_global_worker = []
         for global_worker_idx in range(global_workers):
             if (
                 global_worker_idx - rotation_offset + global_workers
             ) % global_workers < num_workers_with_more_samples:
                 # This worker gets one more sample
-                cur_offset += min_samples_per_worker + 1
+                num_samples_per_global_worker.append(min_samples_per_worker + 1)
             else:
                 # This worker gets the minimum number of samples
-                cur_offset += min_samples_per_worker
+                num_samples_per_global_worker.append(min_samples_per_worker)
 
-            if len(global_worker_sample_start_ends) == 0:
-                global_worker_sample_start_ends.append((0, cur_offset))
-            else:
-                global_worker_sample_start_ends.append(
-                    (global_worker_sample_start_ends[-1][1], cur_offset)
-                )
-
-        # Now we extract the local rank's worker ranges but in a strided way
-        # for better balance across ranks.
-        # We cannot have this striding depend on the number of ranks, because
-        # we want reproducible results when changing the number of ranks.
-        # Hence we use a bit reversal sequence to mix the global worker indices
-        # in a balanced way.
-
+        # 2. Permute the number of samples per global worker
         worker_bitrev_seq = cls._generalized_bit_reversal(global_workers)
+
         # The worker_bitrev_seq is the order in which any remainder samples shall
         # be assigned to workers.
         # That means, the x-axis (array index) is the remainder sample index
         # and the y-axis (value) is the global worker index.
-        # We need to reverse this mapping so we can extract the samples needed
-        # for the local rank workers.
+        # So we map the y (value) to the old global worker index from the linear sequence.
 
-        rev_map = [-1] * len(worker_bitrev_seq)
-        for i, x in enumerate(worker_bitrev_seq):
-            rev_map[x] = i
+        new_num_samples_per_global_worker = [-1] * global_workers
+        for old_worker_idx, new_worker_idx in enumerate(worker_bitrev_seq):
+            new_num_samples_per_global_worker[new_worker_idx] = num_samples_per_global_worker[
+                old_worker_idx
+            ]
 
-        local_worker_sample_start_ends = [
-            global_worker_sample_start_ends[rev_map[idx]]
-            for idx in range(
-                worker_config.rank * num_workers, (worker_config.rank + 1) * num_workers
-            )
+        num_samples_per_global_worker = new_num_samples_per_global_worker
+
+        # 3. Compute the global worker sample start and end indices
+        global_worker_sample_start_ends = []
+        cur_offset = 0
+        for global_worker_idx in range(global_workers):
+            next_offset = cur_offset + num_samples_per_global_worker[global_worker_idx]
+            global_worker_sample_start_ends.append((cur_offset, next_offset))
+            cur_offset = next_offset
+
+        # 4. Now we extract the local rank's worker ranges
+        local_worker_sample_start_ends = global_worker_sample_start_ends[
+            worker_config.rank * num_workers : (worker_config.rank + 1) * num_workers
         ]
 
         assert (
             len(local_worker_sample_start_ends) == num_workers
         ), "If this fails, there's a bug in the code above."
 
-        # Now we can split the shards
+        # 5. Now we can split the shards
         final_worker_shards = []
         for start, end in local_worker_sample_start_ends:
             cur_shards = cls._split_shards(

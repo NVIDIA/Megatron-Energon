@@ -376,7 +376,9 @@ class BaseCoreDatasetFactory(Generic[T_sample], ABC):
     def build(self, worker_rotation_offset: int = 0) -> SavableDataset[T_sample]: ...
 
     @abstractmethod
-    def __len__(self) -> int: ...
+    def __len__(self) -> int:
+        """Returns the length of the dataset across all ranks."""
+        ...
 
 
 def add_sample_restore_key(
