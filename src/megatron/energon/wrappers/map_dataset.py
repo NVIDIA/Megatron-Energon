@@ -94,12 +94,11 @@ class MapDataset(BaseSingleWrapperDataset[T_sample, T_sample_out], Generic[T_sam
                 configuration. Defaults to None.
             worker_config: Worker configuration.
         """
-        super().__init__(dataset)
+        super().__init__(dataset, worker_config=worker_config)
         self.map_fn = map_fn
         self.error_handler = error_handler
         self.stateless_map_fn = stateless_map_fn
         self.map_fn_config = map_fn_config
-        self.worker_config = worker_config
         self._sample_index = SampleIndex(worker_config, src=self)
         self._generator_sample_keys = [None] * max(self.worker_config.num_workers, 1)
         self._generator_offsets = [None] * max(self.worker_config.num_workers, 1)

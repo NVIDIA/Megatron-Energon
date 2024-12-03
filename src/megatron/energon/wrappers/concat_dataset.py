@@ -43,8 +43,7 @@ class ConcatDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
         worker_config: WorkerConfig,
     ):
         """Construct a concatenated dataset."""
-        super().__init__()
-        self.worker_config = worker_config
+        super().__init__(worker_config=worker_config)
         self.datasets = datasets
         assert len(self) >= 0, "Datasets must be finite."
 

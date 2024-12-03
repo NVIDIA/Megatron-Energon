@@ -67,6 +67,6 @@ def get_loader(
     """
     dataset.verify_worker_config(worker_config)
     return BasicDataLoader(
-        GcDataset(dataset),
+        GcDataset(dataset, worker_config=worker_config),
         worker_config=worker_config,
     )

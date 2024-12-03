@@ -32,7 +32,6 @@ class FilterDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_samp
 
     filter_fn: Callable[[T_sample], bool]
     filter_fn_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]]
-    worker_config: WorkerConfig
     _sample_index: SampleIndex
 
     def __init__(
@@ -53,10 +52,9 @@ class FilterDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_samp
                 configuration. Defaults to None.
             worker_config: Configuration for the workers.
         """
-        super().__init__(dataset)
+        super().__init__(dataset, worker_config=worker_config)
         self.filter_fn = filter_fn
         self.filter_fn_config = filter_fn_config
-        self.worker_config = worker_config
         self._sample_index = SampleIndex(worker_config, src=self)
 
     def __len__(self):

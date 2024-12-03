@@ -17,11 +17,19 @@ You can then load the dataset like this:
 ```python
 from megatron.energon import get_train_dataset
 
+simple_worker_config = WorkerConfig(rank=0, world_size=1, num_workers=2)
+
 ds = get_train_dataset(
     '/my/dataset/path',
     batch_size=1,
     shuffle_buffer_size=100,
     max_samples_per_sequence=100,
+    worker_config=simple_worker_config,
+)
+
+loader = get_loader(
+    ds,
+    worker_config=simple_worker_config,
 )
 
 for batch in ds:
@@ -33,8 +41,10 @@ for batch in ds:
 At first, we call {py:meth}`get_train_dataset <megatron.energon.get_train_dataset>` (click to see signature).
 The method will check what kind of dataset is on disk and instantiate the correct class for it.
 
+A worker configuration is always needed to specify how the work is distributed across multiple ranks and workers.
+In this simple example, we use only a single rank with two worker processes.
 
-This method will return a {py:class}`torch.data.IterableDataset` which we can iterate in a for-loop to get batches.
+The dataset should not be iterated directly, but used with a loader which handles the worker processes.
 The batches will contain samples of the sample type specified in the [task encoder](task_encoders.md).
 
 ```{admonition} Good to know

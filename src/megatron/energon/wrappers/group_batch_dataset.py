@@ -56,7 +56,6 @@ class GroupBatchDataset(
     batcher: Callable[[List[T_batch_sample]], T_batch]
     drop_last: bool
     error_handler: Callable[[Exception, List[T_batch_sample]], None]
-    worker_config: WorkerConfig
     n_groups: int
 
     _state_batches: List[Optional[Dict[Hashable, List[T_batch_sample]]]]
@@ -87,13 +86,12 @@ class GroupBatchDataset(
             n_groups: Number of different groups. If not set properly, `len` might be less than the
                 actual number of samples yielded.
         """
-        super().__init__(dataset)
+        super().__init__(dataset, worker_config=worker_config)
         self.batch_size = batch_size
         self.group_criterion = group_criterion
         self.batcher = batcher
         self.drop_last = drop_last
         self.error_handler = error_handler
-        self.worker_config = worker_config
         self.n_groups = n_groups
         self._state_batches = [{} for _ in range(max(self.worker_config.num_workers, 1))]
 

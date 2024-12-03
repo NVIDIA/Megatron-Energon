@@ -62,8 +62,8 @@ class BaseSingleWrapperDataset(
 
     dataset: SavableDataset[T_sample_in]
 
-    def __init__(self, dataset: SavableDataset[T_sample_in]):
-        super().__init__()
+    def __init__(self, dataset: SavableDataset[T_sample_in], worker_config: WorkerConfig):
+        super().__init__(worker_config=worker_config)
         assert isinstance(dataset, SavableDataset)
         self.dataset = dataset
 

@@ -65,13 +65,12 @@ class SimpleSavableDatasetWrapper(SavableDataset[Tuple[int, int, T]], Generic[T]
     not intended to be used directly."""
 
     dataset: SavableDataset[T]
-    worker_config: WorkerConfig
     _state_restored: bool = False
     _sample_indexes: List[int]
 
     def __init__(self, dataset: SavableDataset[T], worker_config: WorkerConfig):
+        super().__init__(worker_config=worker_config)
         self.dataset = dataset
-        self.worker_config = worker_config
         self._sample_index = [0] * max(self.worker_config.num_workers, 1)
 
     def __len__(self):
@@ -683,7 +682,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
         self,
         dataset: SavableDataset[T],
         *,
-        worker_config: WorkerConfig,
+        worker_config: Optional[WorkerConfig] = None,
         checkpoint_every_sec: float = 60,
         checkpoint_every_min_n_samples: Optional[int] = None,
         n_checkpoints: int = 2,
@@ -1043,7 +1042,7 @@ class BasicDataLoader(DataLoader[T], Generic[T]):
         self,
         dataset: SavableDataset[T],
         *,
-        worker_config: WorkerConfig,
+        worker_config: Optional[WorkerConfig] = None,
     ):
         """
         Create the dataloader supporting saving and restoring the state.

@@ -34,12 +34,10 @@ class SavableSampleBuffer(BaseSingleWrapperDataset[T_sample, T_sample], Generic[
 
     _restore_pending: bool = False
 
-    worker_config: WorkerConfig
     __rank_id: Optional[int] = None
 
     def __init__(self, dataset: SavableDataset[T_sample], worker_config: WorkerConfig):
-        super().__init__(dataset)
-        self.worker_config = worker_config
+        super().__init__(dataset, worker_config=worker_config)
         self._buffer = [[] for _ in range(max(worker_config.num_workers, 1))]
         self._restore_keys = [[] for _ in range(max(worker_config.num_workers, 1))]
 

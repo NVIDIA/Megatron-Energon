@@ -37,7 +37,6 @@ class ShuffleBufferDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic
     """Shuffle buffer for the dataset."""
 
     size: int
-    worker_config: WorkerConfig
     _worker_rng: WorkerRng
 
     _active_buffer: SavableSampleBuffer[T_sample]
@@ -50,9 +49,8 @@ class ShuffleBufferDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic
         worker_config: WorkerConfig,
     ):
         """Create a shuffle buffer for the dataset."""
-        super().__init__(dataset)
+        super().__init__(dataset, worker_config=worker_config)
         self.size = size
-        self.worker_config = worker_config
         self._worker_rng = WorkerRng(self.worker_config)
         self._active_buffer = SavableSampleBuffer(dataset, worker_config)
 
