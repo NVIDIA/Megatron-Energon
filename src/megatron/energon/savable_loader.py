@@ -682,7 +682,6 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
         self,
         dataset: SavableDataset[T],
         *,
-        worker_config: Optional[WorkerConfig] = None,
         checkpoint_every_sec: float = 60,
         checkpoint_every_min_n_samples: Optional[int] = None,
         n_checkpoints: int = 2,
@@ -702,10 +701,10 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
             n_checkpoints: The number of checkpoints to keep in memory. Only applies if using
                 workers.
         """
-        self.worker_config = worker_config
+        self.worker_config = dataset.worker_config
         self.id = self.next_id()
 
-        dataset = GcDataset(dataset)
+        dataset = GcDataset(dataset, worker_config=self.worker_config)
 
         self.cmd_queues = [multiprocessing.Queue() for _ in range(self.worker_config.num_workers)]
         self.result_queues = [
@@ -1041,8 +1040,6 @@ class BasicDataLoader(DataLoader[T], Generic[T]):
     def __init__(
         self,
         dataset: SavableDataset[T],
-        *,
-        worker_config: Optional[WorkerConfig] = None,
     ):
         """
         Create the dataloader supporting saving and restoring the state.
@@ -1054,12 +1051,12 @@ class BasicDataLoader(DataLoader[T], Generic[T]):
                It may take the same duration to restore a checkpoint, but introduces additional
                overhead during reading data from the dataset, so this should be chosen accordingly.
         """
-        self.worker_config = worker_config
+        self.worker_config = dataset.worker_config
 
         self.id = SavableDataLoader.next_id()
 
-        dataset = GcDataset(dataset)
-        dataset = SimpleSavableDatasetWrapper(dataset, self.worker_config)
+        dataset = GcDataset(dataset, worker_config=self.worker_config)
+        dataset = SimpleSavableDatasetWrapper(dataset, worker_config=self.worker_config)
 
         self._worker_sample_counters = [0] * max(self.worker_config.num_workers, 1)
 

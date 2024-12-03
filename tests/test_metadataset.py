@@ -199,7 +199,7 @@ class TestDataset(unittest.TestCase):
         print(len(train_dataset))
         assert len(train_dataset) == 11
 
-        train_loader1 = get_loader(train_dataset, worker_config=worker_config)
+        train_loader1 = get_loader(train_dataset)
 
         train_order1 = [
             text for idx, data in zip(range(55 * 10), train_loader1) for text in data.text
@@ -230,7 +230,7 @@ class TestDataset(unittest.TestCase):
         print(len(train_dataset))
         assert len(train_dataset) == 11
 
-        train_loader1 = get_loader(train_dataset, worker_config=worker_config)
+        train_loader1 = get_loader(train_dataset)
 
         train_order1 = [
             text for idx, data in zip(range(55 * 10), train_loader1) for text in data.text
@@ -245,7 +245,7 @@ class TestDataset(unittest.TestCase):
         print(len(val_dataset))
         assert len(val_dataset) == 11
 
-        val_loader1 = get_loader(val_dataset, worker_config=worker_config)
+        val_loader1 = get_loader(val_dataset)
 
         val_order1 = [text for data in val_loader1 for text in data.text]
         assert len(val_order1) == 110
@@ -317,7 +317,7 @@ class TestDataset(unittest.TestCase):
         print(len(train_dataset))
         assert len(train_dataset) == 22
 
-        train_loader1 = get_loader(train_dataset, worker_config=worker_config)
+        train_loader1 = get_loader(train_dataset)
 
         train_order1 = [
             text for idx, data in zip(range(55 * 10), train_loader1) for text in data.text
@@ -397,7 +397,7 @@ class TestDataset(unittest.TestCase):
         print(len(train_dataset))
         assert len(train_dataset) == 11
 
-        train_loader1 = get_loader(train_dataset, worker_config=worker_config)
+        train_loader1 = get_loader(train_dataset)
 
         train_order1 = [
             text for idx, data in zip(range(55 * 10), train_loader1) for text in data.text
@@ -412,7 +412,7 @@ class TestDataset(unittest.TestCase):
         print(len(val_dataset))
         assert len(val_dataset) == 11
 
-        val_loader1 = get_loader(val_dataset, worker_config=worker_config)
+        val_loader1 = get_loader(val_dataset)
 
         val_order1 = [text for data in val_loader1 for text in data.text]
         assert len(val_order1) == 110
@@ -1216,7 +1216,7 @@ class TestDataset(unittest.TestCase):
                     shuffle_buffer_size=None,
                     max_samples_per_sequence=None,
                 )
-                loader = get_loader(ds, worker_config=rank_config)
+                loader = get_loader(ds)
 
                 subflavors = [data.__subflavor__[0] for idx, data in zip(range(25), loader)]
 

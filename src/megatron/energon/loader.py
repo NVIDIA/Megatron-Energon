@@ -54,7 +54,6 @@ def get_savable_loader(
 
     return SavableDataLoader(
         dataset,
-        worker_config=dataset.worker_config,
         checkpoint_every_sec=checkpoint_every_sec,
         checkpoint_every_min_n_samples=checkpoint_every_min_n_samples,
         n_checkpoints=n_checkpoints,
@@ -88,7 +87,4 @@ def get_loader(
     else:
         dataset.verify_worker_config()
 
-    return BasicDataLoader(
-        GcDataset(dataset, worker_config=dataset.worker_config),
-        worker_config=worker_config,
-    )
+    return BasicDataLoader(GcDataset(dataset, worker_config=dataset.worker_config))

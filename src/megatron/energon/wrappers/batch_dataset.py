@@ -3,7 +3,6 @@
 
 import inspect
 from dataclasses import dataclass
-from tkinter import W
 from typing import (
     Any,
     Callable,

@@ -86,10 +86,7 @@ train_ds = get_train_dataset(
     worker_config=simple_worker_config,
 )
 
-train_loader = get_loader(
-    train_ds,
-    worker_config=simple_worker_config,
-)
+train_loader = get_loader(train_ds)
 
 for batch in train_loader:
     # Do something with batch

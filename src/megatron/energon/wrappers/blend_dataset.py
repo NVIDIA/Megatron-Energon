@@ -126,7 +126,7 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
                 dataset.restore_state(dstate)
             self._worker_rng.restore_state(state.rng)
 
-    def verify_worker_config(self, worker_config: WorkerConfig) -> None:
+    def verify_worker_config(self, worker_config: Optional[WorkerConfig] = None) -> None:
         super().verify_worker_config(worker_config)
         for dataset, _weight in self.dataset_weights:
             dataset.verify_worker_config(worker_config)
