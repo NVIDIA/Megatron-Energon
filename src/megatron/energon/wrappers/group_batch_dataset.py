@@ -102,7 +102,7 @@ class GroupBatchDataset(
     def __init__(
         self,
         dataset: SavableDataset[T_batch_sample],
-        default_batch_size: Optional[int],
+        fixed_batch_size: Optional[int],
         sample_group_key: Callable[[T_batch_sample], Tuple[Hashable, Optional[int]]],
         batcher: Callable[[List[T_batch_sample]], T_batch],
         *,
@@ -116,7 +116,7 @@ class GroupBatchDataset(
 
         Args:
             dataset: The input dataset to wrap
-            default_batch_size: Default batch size to use if not specified by the bucket function.
+            fixed_batch_size: Fixed batch size to use for all buckets. If None, the batch size is determined by the sample_group_key function.
             sample_group_key: Function which determines the bucket of a sample.
             batcher: Function which combines separate samples into a single object. May raise
                 :exc:`megatron.energon.SkipSample` to skip a sample.
@@ -125,7 +125,7 @@ class GroupBatchDataset(
             worker_config: Configuration for the workers.
         """
         super().__init__(dataset)
-        self.default_batch_size = default_batch_size
+        self.fixed_batch_size = fixed_batch_size
         self.sample_group_key = sample_group_key
         self.batcher = batcher
         self.batcher_stateless = batcher_stateless
@@ -181,11 +181,12 @@ class GroupBatchDataset(
             try:
                 with self._group_key_sample_index.ctx():
                     bucket_key, batch_size = self.sample_group_key(sample)
-                if batch_size is None:
-                    assert (
-                        self.default_batch_size is not None
-                    ), f"Got None batch size for group {bucket_key}, but no default batch size is set."
-                    batch_size = self.default_batch_size
+                    assert (batch_size is None) != (self.fixed_batch_size is None), (
+                        f"A sample in group for key {bucket_key} returned batch size {batch_size}, but fixed "
+                        f"batch size is set to {self.fixed_batch_size}. One of the two should be None."
+                    )
+                    if self.fixed_batch_size is not None:
+                        batch_size = self.fixed_batch_size
             except SkipSample:
                 continue
             except SYSTEM_EXCEPTIONS:

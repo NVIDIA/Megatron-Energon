@@ -3,10 +3,11 @@ SPDX-License-Identifier: BSD-3-Clause -->
 
 # Grouping
 
-While [packing](packing) joins multiple samples into one sample, grouping allows for rule-based batching of samples into
-one batch on the fly.
+Grouping allows for rule-based batching of samples into one batch on the fly. 
 
-That means, while packing is done in addition to batching (it's done before), grouping replaces standard batching.
+Note how this is different from [packing](packing) which is done *in addition* to batching (it's done before batching) and
+joins multiple samples into one.
+On the other hand grouping *replaces* standard batching.
 
 ## Example use cases
 
@@ -18,26 +19,44 @@ That means, while packing is done in addition to batching (it's done before), gr
 To use grouping, you need to define the method `batch_group_criterion` in your custom task encoder.
 This method gets a sample and returns a hashable value that will be used to cluster/group the samples
 and it also returns the batch size for that group.
+
 Samples with the same batch group criterion will be batched together. Once enough samples for one group
 have been collected (reached the batch size for that group), they will be batched and pushed down the pipeline
 to the next processing step.
 
-Here's and example task encoder that batches samples based on the file name in their sample key.
+Here's an example task encoder that batches samples based on their image aspect ratios:
 
 ```python
-class GroupingTaskEncoder(
-    TaskEncoder[CaptioningSample, CaptioningSample, CaptioningSample, CaptioningSample]
-):
-    @stateless
-    def encode_sample(self, sample: CaptioningSample) -> CaptioningSample:
-        sample.caption = sample.__key__.split("/")[-2]
-        return sample
+class GroupingTaskEncoder(DefaultTaskEncoder):
+    def batch_group_criterion(self, sample: CaptioningSample) -> Tuple[Hashable, Optional[int]]:
+        aspect_ratio = sample.image.shape[2] / sample.image.shape[1]
 
-    def batch_group_criterion(self, sample: CaptioningSample) -> Tuple[Hashable, int]:
-        if sample.caption == "data-0.tar":
-            return "shard1", 4
-        elif sample.caption == "data-1.tar":
-            return "shard2", 8
+        # Bin aspect ratios into 3 groups
+        if aspect_ratio < 0.8:
+            return "portrait", 8
+        elif aspect_ratio < 1.2:
+            return "square", 8
         else:
-            assert False
+            return "landscape", 8
 ```
+
+In the example, the aspect ratio is sorted into one of three bins and a string is used as the grouping key.
+The batch size used here is always 8.
+
+Here is another example where each batch contains only images with the exact same size.
+Note how the image shape itself is used as the grouping key.
+
+```python
+class GroupingTaskEncoder(DefaultTaskEncoder):
+    def batch_group_criterion(self, sample: CaptioningSample) -> Tuple[Hashable, Optional[int]]:
+        batch_size = 4 if sample.image.shape[1] < 512 else 2
+        return sample.image.shape, batch_size
+```
+
+For images with a height of less than 512 pixels, the batch size will be 4, for larger images it's reduced to 2.
+
+
+## Fixed global batch size
+
+Instead of specifying the batch size for each group individually, you can also specify the batch size as usually when calling
+`get_train_dataset`. The `batch_group_criterion` method should then return `None` for the batch_size.

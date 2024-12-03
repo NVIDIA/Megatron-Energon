@@ -396,12 +396,9 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             getattr(self.batch_group_criterion, "__func__", None)
             is not TaskEncoder.batch_group_criterion
         ):
-            assert (
-                batch_size is None
-            ), "batch_size must not be set if batch_group_criterion is defined"
             dataset = GroupBatchDataset(
                 dataset,
-                default_batch_size=batch_size,
+                fixed_batch_size=batch_size,
                 sample_group_key=self.batch_group_criterion,
                 batcher=self.batch,
                 drop_last=batch_drop_last,
