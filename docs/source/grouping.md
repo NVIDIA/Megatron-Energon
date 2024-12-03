@@ -3,11 +3,10 @@ SPDX-License-Identifier: BSD-3-Clause -->
 
 # Grouping
 
-Grouping allows for rule-based batching of samples into one batch on the fly. 
+Grouping allows for rule-based batching of samples into one batch on the fly.
 
-Note how this is different from [packing](packing) which is done *in addition* to batching (it's done before batching) and
-joins multiple samples into one.
-On the other hand grouping *replaces* standard batching.
+Note how this is different from [packing](packing) which joins multiple samples into one (and is done before batching).
+On the other hand, grouping is an alternative to standard batching.
 
 ## Example use cases
 
