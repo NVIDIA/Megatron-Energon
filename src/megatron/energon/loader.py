@@ -16,7 +16,7 @@ T = TypeVar("T")
 def get_savable_loader(
     dataset: SavableDataset[T],
     *,
-    worker_config: WorkerConfig,
+    worker_config: Optional[WorkerConfig] = None,
     checkpoint_every_sec: float = 60,
     checkpoint_every_min_n_samples: Optional[int] = None,
     n_checkpoints: int = 2,
@@ -40,10 +40,21 @@ def get_savable_loader(
         The instantiated :class:`megatron.energon.SavableDataLoader`, yielding batches from the dataset,
         allowing to save the state of the dataset.
     """
-    dataset.verify_worker_config(worker_config)
+    if worker_config is not None:
+        import warnings
+
+        warnings.warn(
+            "Passing a worker_config to get_savable_loader() is not needed anymore and is deprecated.",
+            DeprecationWarning,
+        )
+
+        dataset.verify_worker_config(worker_config)
+    else:
+        dataset.verify_worker_config()
+
     return SavableDataLoader(
         dataset,
-        worker_config=worker_config,
+        worker_config=dataset.worker_config,
         checkpoint_every_sec=checkpoint_every_sec,
         checkpoint_every_min_n_samples=checkpoint_every_min_n_samples,
         n_checkpoints=n_checkpoints,
@@ -53,7 +64,7 @@ def get_savable_loader(
 def get_loader(
     dataset: SavableDataset[T],
     *,
-    worker_config: WorkerConfig,
+    worker_config: Optional[WorkerConfig] = None,
 ) -> BasicDataLoader[T]:
     """
     Get a dataloader for the given dataset.
@@ -65,8 +76,19 @@ def get_loader(
     Returns:
         The instantiated :class:`torch.data.DataLoader`, yielding batches from the dataset.
     """
-    dataset.verify_worker_config(worker_config)
+    if worker_config is not None:
+        import warnings
+
+        warnings.warn(
+            "Passing a worker_config to get_loader() is not needed anymore and is deprecated.",
+            DeprecationWarning,
+        )
+
+        dataset.verify_worker_config(worker_config)
+    else:
+        dataset.verify_worker_config()
+
     return BasicDataLoader(
-        GcDataset(dataset, worker_config=worker_config),
+        GcDataset(dataset, worker_config=dataset.worker_config),
         worker_config=worker_config,
     )

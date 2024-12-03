@@ -327,10 +327,13 @@ class SavableDataset(IterableDataset[T_sample], Generic[T_sample], ABC):
         yields anything."""
         ...
 
-    def verify_worker_config(self, worker_config: WorkerConfig) -> None:
+    def verify_worker_config(self, worker_config: Optional[WorkerConfig] = None) -> None:
         """Verify that the worker config is compatible with the dataset."""
         assert hasattr(self, "worker_config"), "Dataset does not have a worker config."
-        assert self.worker_config == worker_config, "Worker config is not consistent."
+        if worker_config is not None:
+            assert self.worker_config == worker_config, "Worker config is not consistent."
+        else:
+            assert self.worker_config is not None, "Worker config is not set."
 
     @staticmethod
     def _function_config(fn: Callable) -> str:
