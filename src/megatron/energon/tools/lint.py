@@ -104,7 +104,7 @@ def command(path: EPath, split_parts: str, dataset_config: str, split_config: st
             continue
 
         try:
-            for _ in tqdm.tqdm(get_loader(dataset, worker_config=worker_config)):
+            for _ in tqdm.tqdm(get_loader(dataset)):
                 pass
         except InterruptedError:
             raise

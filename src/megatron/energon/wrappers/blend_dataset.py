@@ -58,8 +58,9 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
                 given probabilities.
             worker_config: Configuration for the workers.
         """
-        super().__init__()
-        self.worker_config = worker_config
+        datasets = [dataset for dataset, _weight in dataset_weights]
+        super().__init__(datasets, worker_config=worker_config)
+
         self.dataset_weights = dataset_weights
         self._worker_rng = WorkerRng(self.worker_config)
 
@@ -126,11 +127,6 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
             for (dataset, _weight), dstate in zip(self.dataset_weights, state.datasets):
                 dataset.restore_state(dstate)
             self._worker_rng.restore_state(state.rng)
-
-    def verify_worker_config(self, worker_config: WorkerConfig) -> None:
-        super().verify_worker_config(worker_config)
-        for dataset, _weight in self.dataset_weights:
-            dataset.verify_worker_config(worker_config)
 
     def can_restore_sample(self) -> bool:
         return all(dataset.can_restore_sample() for dataset, _weight in self.dataset_weights)

@@ -85,8 +85,6 @@ class WebdatasetSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample
     _shards_by_key: Optional[List[Dict[Tuple[str, int], Sequence[ShardInfo]]]] = None
     #: Paths to shards for all workers by name `shards[worker_idx][shard_name]`, created lazily
     _shard_paths_by_name: Optional[Dict[str, List[EPath]]] = None
-    #: The data parallel worker config
-    worker_config: WorkerConfig
     # Sample keys to ignore
     exclude: Set[str]
 
@@ -162,9 +160,8 @@ class WebdatasetSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample
                 may come in the future if needed.
             handler: Exception handler. Args: (exception, key).
         """
-        super().__init__()
+        super().__init__(worker_config=worker_config)
         self.shards = rank_shards
-        self.worker_config = worker_config
         self.exclude = exclude
         self.part_filter = part_filter
         self.loop = loop

@@ -33,7 +33,6 @@ class EpochizeDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_sa
     """
 
     length: int
-    worker_config: WorkerConfig
     _active_iter: Optional[Iterator[T_sample]]
 
     def __init__(
@@ -52,9 +51,8 @@ class EpochizeDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_sa
                 if exhausted.
             worker_config: Configuration for the workers.
         """
-        super().__init__(dataset)
+        super().__init__(dataset, worker_config=worker_config)
         self.length = length
-        self.worker_config = worker_config
         self._offset = [0] * max(self.worker_config.num_workers, 1)
         self._active_iter = None
 

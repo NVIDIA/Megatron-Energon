@@ -29,7 +29,6 @@ class RepeatDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_samp
     """This dataset repeats the inner dataset infinitely or a specific number of repeats."""
 
     repeats: Optional[int]
-    worker_config: WorkerConfig
     _offset: List[int]
 
     def __init__(
@@ -46,9 +45,8 @@ class RepeatDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_samp
             repeats: Number of repeats, `None` for infinitely
             worker_config: Configuration for the workers.
         """
-        super().__init__(dataset)
+        super().__init__(dataset, worker_config=worker_config)
         self.repeats = repeats
-        self.worker_config = worker_config
         self._offset = [0] * max(self.worker_config.num_workers, 1)
 
     def __len__(self):

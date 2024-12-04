@@ -110,7 +110,8 @@ class MixBatchDataset(BaseSingleWrapperDataset[T_batch_in, T_batch], Generic[T_b
                 batch_size=batch_size,
                 batcher=batch_mix_fn,
                 worker_config=worker_config,
-            )
+            ),
+            worker_config=worker_config,
         )
 
     def __len__(self) -> int:

@@ -306,7 +306,7 @@ class TestDataset(unittest.TestCase):
         )
 
         def get_ld(ds):
-            return get_loader(ds, worker_config=no_worker_config)
+            return get_loader(ds)
 
         # Check len operator
         assert len(ds) == 50
@@ -389,7 +389,7 @@ class TestDataset(unittest.TestCase):
             sample_type=CaptioningSample,
         )
         captions = set(sample["caption"] for sample in self.samples)
-        for sample in get_loader(ds.build(), worker_config=no_worker_config):
+        for sample in get_loader(ds.build()):
             captions.remove(sample.caption)
         assert len(captions) == 0
 
@@ -403,7 +403,7 @@ class TestDataset(unittest.TestCase):
             sample_type=CaptioningSample,
         )
         captions = set(sample["caption"] for sample in self.samples)
-        for sample in get_loader(ds.build(), worker_config=no_worker_config):
+        for sample in get_loader(ds.build()):
             assert sample.caption[:4] == "<SL>"
             captions.remove(sample.caption[4:])
         assert len(captions) == 0
@@ -421,7 +421,7 @@ class TestDataset(unittest.TestCase):
         keys = set(
             f"<SL>parts/data-{idx // 30:d}.tar/{idx:06d}" for idx in range(len(self.samples))
         )
-        for sample in get_loader(ds.build(), worker_config=no_worker_config):
+        for sample in get_loader(ds.build()):
             assert sample.caption[:4] == "<SL>"
             captions.remove(sample.caption[4:])
             keys.remove(sample.__key__)
@@ -438,7 +438,7 @@ class TestDataset(unittest.TestCase):
             sample_type=CaptioningSample,
         )
 
-        keys = [entry.__key__ for entry in get_loader(ds.build(), worker_config=no_worker_config)]
+        keys = [entry.__key__ for entry in get_loader(ds.build())]
         assert keys == [
             f"parts/data-1.tar/{i:06d}" for i in list(range(30, 35)) + list(range(40, 50))
         ]
@@ -468,8 +468,7 @@ class TestDataset(unittest.TestCase):
                 shuffle_buffer_size=None,
                 max_samples_per_sequence=None,
                 task_encoder=TestTaskEncoder(),
-            ),
-            worker_config=no_worker_config,
+            )
         )
 
         assert len(loader) == 2
@@ -498,8 +497,7 @@ class TestDataset(unittest.TestCase):
                 batch_size=10,
                 worker_config=no_worker_config,
                 task_encoder=TestTaskEncoder(),
-            ),
-            worker_config=no_worker_config,
+            )
         )
         assert len(loader2) == 5
         # The order in the split is shuffled this way
@@ -517,8 +515,7 @@ class TestDataset(unittest.TestCase):
                 worker_config=no_worker_config,
                 shuffle_buffer_size=None,
                 max_samples_per_sequence=None,
-            ),
-            worker_config=no_worker_config,
+            )
         )
 
         val_loader = get_loader(
@@ -527,8 +524,7 @@ class TestDataset(unittest.TestCase):
                 split_part="train",
                 batch_size=10,
                 worker_config=no_worker_config,
-            ),
-            worker_config=no_worker_config,
+            )
         )
 
         n_samples = 0
@@ -555,10 +551,7 @@ class TestDataset(unittest.TestCase):
             shuffle_buffer_size=None,
             max_samples_per_sequence=None,
         )
-        train_loader = get_loader(
-            train_dataset,
-            worker_config=worker_config,
-        )
+        train_loader = get_loader(train_dataset)
 
         assert len(train_dataset) == 12
         assert len(train_loader) == 12
@@ -567,14 +560,14 @@ class TestDataset(unittest.TestCase):
         val_dataset = get_val_dataset(
             self.dataset_path, split_part="train", batch_size=1, worker_config=no_worker_config
         )
-        val_loader = get_loader(val_dataset, worker_config=no_worker_config)
+        val_loader = get_loader(val_dataset)
         assert len(val_loader) == 50
         assert len(list(val_loader)) == 50
 
         val_dataset = get_val_dataset(
             self.dataset_path, split_part="train", batch_size=11, worker_config=worker_config
         )
-        val_loader = get_loader(val_dataset, worker_config=worker_config)
+        val_loader = get_loader(val_dataset)
 
         # n samples: ceil(50 / 11) // 4 * 4
         assert len(val_dataset) == 8
@@ -597,10 +590,7 @@ class TestDataset(unittest.TestCase):
             shuffle_buffer_size=None,
             max_samples_per_sequence=None,
         )
-        train_loader = get_loader(
-            train_dataset,
-            worker_config=worker_config_r0,
-        )
+        train_loader = get_loader(train_dataset)
 
         assert len(train_dataset) == 12
         assert len(train_loader) == 12
@@ -609,7 +599,7 @@ class TestDataset(unittest.TestCase):
         val_dataset0 = get_val_dataset(
             self.dataset_path, split_part="train", batch_size=1, worker_config=worker_config_r0
         )
-        val_loader0 = get_loader(val_dataset0, worker_config=worker_config_r0)
+        val_loader0 = get_loader(val_dataset0)
         print(len(val_loader0))
         assert len(val_loader0) == 25
         keys0 = set(key for entry in val_loader0 for key in entry.__key__)
@@ -618,7 +608,7 @@ class TestDataset(unittest.TestCase):
         val_dataset0b11 = get_val_dataset(
             self.dataset_path, split_part="train", batch_size=11, worker_config=worker_config_r0
         )
-        val_loader0b11 = get_loader(val_dataset0b11, worker_config=worker_config_r0)
+        val_loader0b11 = get_loader(val_dataset0b11)
 
         assert len(val_dataset0b11) == 4
         assert len(val_loader0b11) == 4
@@ -633,7 +623,7 @@ class TestDataset(unittest.TestCase):
         val_dataset1 = get_val_dataset(
             self.dataset_path, split_part="train", batch_size=1, worker_config=worker_config_r1
         )
-        val_loader1 = get_loader(val_dataset1, worker_config=worker_config_r1)
+        val_loader1 = get_loader(val_dataset1)
         print(len(val_loader1))
         assert len(val_loader1) == 25
         keys1 = set(key for entry in val_loader1 for key in entry.__key__)
@@ -645,7 +635,7 @@ class TestDataset(unittest.TestCase):
         val_dataset1b11 = get_val_dataset(
             self.dataset_path, split_part="train", batch_size=11, worker_config=worker_config_r1
         )
-        val_loader1b11 = get_loader(val_dataset1b11, worker_config=worker_config_r1)
+        val_loader1b11 = get_loader(val_dataset1b11)
 
         assert len(val_dataset1b11) == 4
         assert len(val_loader1b11) == 4
@@ -692,8 +682,7 @@ class TestDataset(unittest.TestCase):
                     weight=0.8,
                     target_data_class=WeightedCaptioningBatch,
                 ),
-            ),
-            worker_config=no_worker_config,
+            )
         )
 
         for data in loader:
@@ -725,8 +714,7 @@ class TestDataset(unittest.TestCase):
                     8,
                 ),
                 worker_config=no_worker_config,
-            ),
-            worker_config=no_worker_config,
+            )
         )
 
         bs_hist = {10: 0, 20: 0}
@@ -781,8 +769,7 @@ class TestDataset(unittest.TestCase):
                 batch_size=10,
                 batch_mix_fn=homogeneous_concat_mix,
                 worker_config=no_worker_config,
-            ),
-            worker_config=no_worker_config,
+            )
         )
 
         source_hist = {0: 0, 1: 0}
@@ -842,8 +829,7 @@ class TestDataset(unittest.TestCase):
                 ),
                 batch_size=10,
                 worker_config=no_worker_config,
-            ),
-            worker_config=no_worker_config,
+            )
         )
 
         source_hist = {0: 0, 1: 0}
@@ -865,8 +851,7 @@ class TestDataset(unittest.TestCase):
                 batch_size=2,
                 worker_config=no_worker_config,
                 limit=3,
-            ),
-            worker_config=no_worker_config,
+            )
         )
 
         assert len(loader) == 3
@@ -884,8 +869,7 @@ class TestDataset(unittest.TestCase):
                 batch_size=2,
                 worker_config=worker_config,
                 limit=3,
-            ),
-            worker_config=worker_config,
+            )
         )
 
         assert len(loader) == 3
@@ -919,8 +903,7 @@ class TestDataset(unittest.TestCase):
                 worker_config=no_worker_config,
                 shuffle_buffer_size=20,
                 max_samples_per_sequence=10,
-            ),
-            worker_config=no_worker_config,
+            )
         )
 
         batches = list(zip(range(20), loader))
@@ -992,8 +975,7 @@ class TestDataset(unittest.TestCase):
                 worker_config=worker_config_r0,
                 shuffle_buffer_size=20,
                 max_samples_per_sequence=10,
-            ),
-            worker_config=worker_config_r0,
+            )
         )
         loader_r1 = get_loader(
             get_train_dataset(
@@ -1003,8 +985,7 @@ class TestDataset(unittest.TestCase):
                 worker_config=worker_config_r1,
                 shuffle_buffer_size=20,
                 max_samples_per_sequence=10,
-            ),
-            worker_config=worker_config_r1,
+            )
         )
 
         batches = list(zip(range(20), loader))
@@ -1044,8 +1025,7 @@ class TestDataset(unittest.TestCase):
                 worker_config=worker_config_r0,
                 shuffle_buffer_size=20,
                 max_samples_per_sequence=10,
-            ),
-            worker_config=worker_config_r0,
+            )
         )
         loader_r1 = get_savable_loader(
             get_train_dataset(
@@ -1055,8 +1035,7 @@ class TestDataset(unittest.TestCase):
                 worker_config=worker_config_r1,
                 shuffle_buffer_size=20,
                 max_samples_per_sequence=10,
-            ),
-            worker_config=worker_config_r1,
+            )
         )
 
         batches = list(zip(range(20), loader))
@@ -1095,8 +1074,7 @@ class TestDataset(unittest.TestCase):
                 worker_config=worker_config_r0,
                 shuffle_buffer_size=20,
                 max_samples_per_sequence=10,
-            ),
-            worker_config=worker_config_r0,
+            )
         )
         loader.restore_state_rank(state)
 
@@ -1144,8 +1122,7 @@ class TestDataset(unittest.TestCase):
                 worker_config=no_worker_config,
                 shuffle_buffer_size=20,
                 max_samples_per_sequence=10,
-            ),
-            worker_config=no_worker_config,
+            )
         )
 
         batches = list(zip(range(20), loader))
@@ -1215,8 +1192,7 @@ class TestDataset(unittest.TestCase):
                 worker_config=worker_config_r0,
                 shuffle_buffer_size=20,
                 max_samples_per_sequence=10,
-            ),
-            worker_config=worker_config_r0,
+            )
         )
         loader_r1 = get_loader(
             get_train_dataset(
@@ -1226,8 +1202,7 @@ class TestDataset(unittest.TestCase):
                 worker_config=worker_config_r1,
                 shuffle_buffer_size=20,
                 max_samples_per_sequence=10,
-            ),
-            worker_config=worker_config_r1,
+            )
         )
 
         batches = list(zip(range(20), loader))
@@ -1400,8 +1375,7 @@ class TestDataset(unittest.TestCase):
                 shuffle_buffer_size=None,
                 max_samples_per_sequence=None,
                 task_encoder=TestTaskEncoder(),
-            ),
-            worker_config=no_worker_config,
+            )
         )
 
         assert len(loader) == 6
@@ -1520,7 +1494,6 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
                 task_encoder=GroupingTaskEncoder(),
             ),
-            worker_config=worker_config,
             checkpoint_every_min_n_samples=1,
             checkpoint_every_sec=0,
             n_checkpoints=4,
@@ -1540,7 +1513,6 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
                 task_encoder=GroupingTaskEncoder(),
             ),
-            worker_config=worker_config_r0,
             checkpoint_every_min_n_samples=1,
             checkpoint_every_sec=0,
             n_checkpoints=4,
@@ -1566,7 +1538,6 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
                 task_encoder=GroupingTaskEncoder(),
             ),
-            worker_config=worker_config_r0,
             checkpoint_every_min_n_samples=1,
             checkpoint_every_sec=0,
             n_checkpoints=4,

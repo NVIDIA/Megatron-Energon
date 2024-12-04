@@ -94,7 +94,6 @@ class GroupBatchDataset(
     batcher: Callable[[List[T_batch_sample]], T_batch]
     drop_last: bool
     error_handler: Callable[[Exception, List[T_batch_sample]], None]
-    worker_config: WorkerConfig
     _group_key_sample_index: SampleIndex
     _batch_sample_index: SampleIndex
     _buckets: List[Dict[Hashable, Bucket[T_batch_sample]]]
@@ -124,7 +123,7 @@ class GroupBatchDataset(
             error_handler: Handler for errors. Defaults to logging and ignoring the exception.
             worker_config: Configuration for the workers.
         """
-        super().__init__(dataset)
+        super().__init__(dataset, worker_config=worker_config)
         self.fixed_batch_size = fixed_batch_size
         self.sample_group_key = sample_group_key
         self.batcher = batcher
@@ -132,7 +131,6 @@ class GroupBatchDataset(
         self.batcher_config = batcher_config
         self.drop_last = drop_last
         self.error_handler = error_handler
-        self.worker_config = worker_config
         self._group_key_sample_index = SampleIndex(worker_config, src=self)
         self._batch_sample_index = SampleIndex(worker_config, src=self)
         self._buckets = [{} for _ in range(max(self.worker_config.num_workers, 1))]
@@ -198,7 +196,7 @@ class GroupBatchDataset(
             if bucket is None:
                 buckets[bucket_key] = bucket = Bucket(
                     batch_size=batch_size,
-                    samples=SavableSampleBuffer(self.dataset, self.worker_config),
+                    samples=SavableSampleBuffer(self.dataset, worker_config=self.worker_config),
                 )
             else:
                 assert (
@@ -266,7 +264,9 @@ class GroupBatchDataset(
                     for bucket_state in buckets_state:
                         buckets[bucket_state.key] = Bucket(
                             batch_size=bucket_state.batch_size,
-                            samples=SavableSampleBuffer(self.dataset, self.worker_config),
+                            samples=SavableSampleBuffer(
+                                self.dataset, worker_config=self.worker_config
+                            ),
                         )
                         buckets[bucket_state.key].samples.restore_state(
                             SampleBufferMergedState(

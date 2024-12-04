@@ -277,6 +277,11 @@ class SavableDataset(IterableDataset[T_sample], Generic[T_sample], ABC):
 
     """
 
+    worker_config: WorkerConfig
+
+    def __init__(self, worker_config: WorkerConfig):
+        self.worker_config = worker_config
+
     @abstractmethod
     def __len__(self) -> int: ...
 
@@ -321,11 +326,6 @@ class SavableDataset(IterableDataset[T_sample], Generic[T_sample], ABC):
         """Returns True if the worker's split has samples. This is used to determine if this dataset
         yields anything."""
         ...
-
-    def verify_worker_config(self, worker_config: WorkerConfig) -> None:
-        """Verify that the worker config is compatible with the dataset."""
-        if hasattr(self, "worker_config"):
-            assert self.worker_config == worker_config, "Worker config is not consistent."
 
     @staticmethod
     def _function_config(fn: Callable) -> str:

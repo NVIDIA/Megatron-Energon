@@ -127,14 +127,12 @@ class TestDataset(unittest.TestCase):
         # Check len operator
         assert len(ds) == 55
         # Check if iterating returns the same
-        iter1 = list(get_loader(ds, worker_config=worker_config))
-        iter2 = list(get_loader(ds, worker_config=worker_config))
+        iter1 = list(get_loader(ds))
+        iter2 = list(get_loader(ds))
         assert len(iter1) == 55
         assert len(iter2) == 55
         assert all(elem1.__key__ == elem2.__key__ for elem1, elem2 in zip(iter1, iter2))
-        assert all(
-            f"{idx}" == x.text for idx, x in enumerate(get_loader(ds, worker_config=worker_config))
-        )
+        assert all(f"{idx}" == x.text for idx, x in enumerate(get_loader(ds)))
 
         del ds
         gc.collect()
@@ -152,7 +150,7 @@ class TestDataset(unittest.TestCase):
             sample_type=TextSample,
             worker_config=worker_config,
         )
-        loader5 = get_loader(ds3.build(), worker_config=worker_config)
+        loader5 = get_loader(ds3.build())
         order9 = [data.text for idx, data in zip(range(55), loader5)]
         print(order9)
         print(Counter(order9))
@@ -203,8 +201,8 @@ class TestDataset(unittest.TestCase):
         )
 
         # Fork the dataset twice
-        loader1 = get_loader(ds1, worker_config=worker_config2)
-        loader2 = get_loader(ds1, worker_config=worker_config2)
+        loader1 = get_loader(ds1)
+        loader2 = get_loader(ds1)
 
         order4 = [data.text[0] for idx, data in zip(range(55 * 20), loader1)]
         order5 = [data.text[0] for idx, data in zip(range(55 * 20), loader1)]
@@ -217,11 +215,11 @@ class TestDataset(unittest.TestCase):
         assert order4 != order5
         assert order4 == order6
 
-        loader3 = get_loader(ds1b, worker_config=worker_config2b)
+        loader3 = get_loader(ds1b)
         order7 = [data.text[0] for idx, data in zip(range(55 * 20), loader3)]
         assert order6 != order7
 
-        loader4 = get_loader(ds3, worker_config=worker_config4)
+        loader4 = get_loader(ds3)
         order8 = [data.text[0] for idx, data in zip(range(55 * 100), loader4)]
         assert order6 != order8[: len(order6)]
         print(Counter(order8))
@@ -274,8 +272,8 @@ class TestDataset(unittest.TestCase):
             )
 
             # Fork the dataset twice
-            loader1a = get_loader(ds1a, worker_config=worker_config1)
-            loader1b = get_loader(ds1b, worker_config=worker_config1)
+            loader1a = get_loader(ds1a)
+            loader1b = get_loader(ds1b)
 
             order1a = [data.text[0] for idx, data in zip(range(55 * 20), loader1a)]
             order1b = [data.text[0] for idx, data in zip(range(55 * 20), loader1b)]
@@ -549,7 +547,7 @@ class TestDataset(unittest.TestCase):
                     shuffle_buffer_size=42,
                     max_samples_per_sequence=2,
                 )
-                loader = get_loader(ds, worker_config=rank_config)
+                loader = get_loader(ds)
 
                 micro_batches = [
                     data.text

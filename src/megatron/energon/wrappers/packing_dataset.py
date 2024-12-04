@@ -69,7 +69,6 @@ class PackingDataset(
     final_packer_stateless: bool
     packer_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]]
     error_handler: Callable[[Exception, List[T_sample]], None]
-    worker_config: WorkerConfig
 
     #: The buffer for collecting the samples that shall be packed.
     _reading_buffer: SavableSampleBuffer
@@ -122,7 +121,7 @@ class PackingDataset(
                 implementation logs the exception.
             worker_config: Configuration for the workers.
         """
-        super().__init__(dataset)
+        super().__init__(dataset, worker_config=worker_config)
 
         assert buffer_size > 0, "Packing buffer size must be greater than 0."
 
@@ -132,9 +131,8 @@ class PackingDataset(
         self.final_packer_stateless = final_packer_stateless
         self.packer_config = packer_config
         self.error_handler = error_handler
-        self.worker_config = worker_config
-        self._reading_buffer = SavableSampleBuffer(dataset, worker_config)
-        self._pre_packing_buffer = SavableSampleBuffer(dataset, worker_config)
+        self._reading_buffer = SavableSampleBuffer(dataset, worker_config=worker_config)
+        self._pre_packing_buffer = SavableSampleBuffer(dataset, worker_config=worker_config)
         self._pre_packing_lengths = [[] for _ in range(max(worker_config.num_workers, 1))]
         self._pre_packing_sample_index = SampleIndex(worker_config, src=self)
         self._final_packing_sample_index = SampleIndex(worker_config, src=self)
