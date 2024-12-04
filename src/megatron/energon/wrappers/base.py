@@ -105,10 +105,6 @@ class BaseSingleWrapperDataset(
     def worker_has_samples(self) -> bool:
         return self.dataset.worker_has_samples()
 
-    def verify_worker_config(self, worker_config: Optional[WorkerConfig] = None) -> None:
-        super().verify_worker_config(worker_config)
-        self.dataset.verify_worker_config(worker_config)
-
 
 class SampleIndex:
     """A simple class to hold the sample index for each worker."""

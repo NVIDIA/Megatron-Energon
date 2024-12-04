@@ -107,11 +107,6 @@ class ConcatDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
             src=self,
         )
 
-    def verify_worker_config(self, worker_config: Optional[WorkerConfig] = None) -> None:
-        super().verify_worker_config(worker_config)
-        for dataset in self.datasets:
-            dataset.verify_worker_config(worker_config)
-
     def config(self) -> Dict[str, Any]:
         return {
             "type": type(self).__qualname__,

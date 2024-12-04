@@ -27,7 +27,7 @@ def get_savable_loader(
 
     Args:
         dataset: The dataset to create a loader for.
-        worker_config: The worker config. Set the same value to the `get(_val|_train)_dataset` call.
+        worker_config: Deprecated. Please pass this to the dataset instead.
         checkpoint_every_sec: This is the time in seconds after which an internal checkpoint is
             saved. It may take the same duration to restore a checkpoint, but introduces additional
             overhead during reading data from the dataset, so this should be chosen accordingly.
@@ -44,13 +44,9 @@ def get_savable_loader(
         import warnings
 
         warnings.warn(
-            "Passing a worker_config to get_savable_loader() is not needed anymore and is deprecated.",
+            "Passing a worker_config to get_savable_loader() is deprecated and will have no effect.",
             DeprecationWarning,
         )
-
-        dataset.verify_worker_config(worker_config)
-    else:
-        dataset.verify_worker_config()
 
     return SavableDataLoader(
         dataset,
@@ -70,7 +66,7 @@ def get_loader(
 
     Args:
         dataset: The dataset to create a loader for.
-        worker_config: The worker config. Set the same value to the `get(_val|_train)_dataset` call.
+        worker_config: Deprecated. Please pass this to the dataset instead.
 
     Returns:
         The instantiated :class:`torch.data.DataLoader`, yielding batches from the dataset.
@@ -79,12 +75,8 @@ def get_loader(
         import warnings
 
         warnings.warn(
-            "Passing a worker_config to get_loader() is not needed anymore and is deprecated.",
+            "Passing a worker_config to get_loader() is deprecated and will have no effect.",
             DeprecationWarning,
         )
-
-        dataset.verify_worker_config(worker_config)
-    else:
-        dataset.verify_worker_config()
 
     return BasicDataLoader(GcDataset(dataset, worker_config=dataset.worker_config))
