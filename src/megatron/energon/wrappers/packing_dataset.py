@@ -162,7 +162,7 @@ class PackingDataset(
                 return False
         return True
 
-    def __iter__(self) -> Iterator[T_sample]:
+    def __iter__(self) -> Iterator[T_batch_sample]:
         worker_idx = self.worker_config.rank_worker_id()
         pre_packing_lengths = self._pre_packing_lengths[worker_idx]
         # The source dataset
@@ -202,7 +202,7 @@ class PackingDataset(
                     self._pre_packing_buffer.extend(pre_pack)
                     pre_packing_lengths.append(len(pre_pack))
 
-        def next_final_pack():
+        def next_final_pack() -> Generator[T_batch_sample, None, None]:
             """Yield the next packs from the buffer. The final packer is called on the fly."""
 
             pack = list(self._pre_packing_buffer[: pre_packing_lengths[0]])
@@ -215,7 +215,7 @@ class PackingDataset(
                 if isinstance(final_packed_sample, Generator):
                     assert inspect.isgeneratorfunction(
                         self.final_packer
-                    ), f"Generator in {self.map_fn} but not marked as such."
+                    ), f"Generator in {self.final_packer} but not marked as such."
                     for pack_sub_idx, (pack_idx, inner_batch_sample) in enumerate(
                         self._final_packing_sample_index.iter_ctx(final_packed_sample, pack_idx)
                     ):
@@ -346,7 +346,7 @@ class PackingDataset(
         if isinstance(final_pack, Generator):
             assert inspect.isgeneratorfunction(
                 self.final_packer
-            ), f"Generator in {self.map_fn} but not marked as such."
+            ), f"Generator in {self.final_packer} but not marked as such."
             for cur_batch_sub_idx, (pack_idx, inner_batch_sample) in enumerate(
                 self._final_packing_sample_index.iter_ctx(final_pack, pack_idx)
             ):

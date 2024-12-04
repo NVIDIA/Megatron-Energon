@@ -15,7 +15,7 @@ import unittest
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Tuple, Type, Union
+from typing import Any, Dict, Hashable, List, Tuple, Type, Union
 
 import numpy as np
 import torch
@@ -1466,6 +1466,102 @@ class TestDataset(unittest.TestCase):
         ] == [[16, 1], [16, 1], [4, 16], [4, 16], [1, 4], [1, 4], [16, 1], [16, 1]]
 
         assert all(s0.__key__ == s1.__key__ for s0, s1 in zip(samples_r0_cmp, samples_r0_restored))
+
+    def test_group_batch(self):
+        class GroupingTaskEncoder(
+            TaskEncoder[CaptioningSample, CaptioningSample, CaptioningSample, CaptioningSample]
+        ):
+            @stateless
+            def encode_sample(self, sample: CaptioningSample) -> CaptioningSample:
+                sample.caption = sample.__key__.split("/")[-2]
+                return sample
+
+            def batch_group_criterion(self, sample: CaptioningSample) -> Tuple[Hashable, int]:
+                if sample.caption == "data-0.tar":
+                    return "shard1", 4
+                elif sample.caption == "data-1.tar":
+                    return "shard2", 8
+                else:
+                    assert False
+
+        worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0)
+        loader = get_savable_loader(
+            get_train_dataset(
+                self.dataset_path,
+                batch_size=None,
+                worker_config=worker_config,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                task_encoder=GroupingTaskEncoder(),
+            ),
+            worker_config=worker_config,
+            checkpoint_every_min_n_samples=1,
+            checkpoint_every_sec=0,
+            n_checkpoints=4,
+        )
+        batches = list(zip(range(40), loader))
+        print([batch.__key__ for idx, batch in batches])
+        assert all(all(key == batch.caption[0] for key in batch.caption) for idx, batch in batches)
+
+        worker_config_r0 = WorkerConfig(rank=0, world_size=2, num_workers=2)
+
+        loader_r0 = get_savable_loader(
+            get_train_dataset(
+                self.dataset_path,
+                batch_size=None,
+                worker_config=worker_config_r0,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                task_encoder=GroupingTaskEncoder(),
+            ),
+            worker_config=worker_config_r0,
+            checkpoint_every_min_n_samples=1,
+            checkpoint_every_sec=0,
+            n_checkpoints=4,
+        )
+
+        batches = list(zip(range(40), loader_r0))
+
+        print([batch.__key__ for idx, batch in batches])
+
+        assert all(all(key == batch.caption[0] for key in batch.caption) for idx, batch in batches)
+
+        state = loader_r0.save_state_rank()
+
+        cmp_samples = list(zip(range(40, 80), loader_r0))
+        print([batch.__key__ for idx, batch in cmp_samples])
+
+        loader_r0 = get_savable_loader(
+            get_train_dataset(
+                self.dataset_path,
+                batch_size=None,
+                worker_config=worker_config_r0,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                task_encoder=GroupingTaskEncoder(),
+            ),
+            worker_config=worker_config_r0,
+            checkpoint_every_min_n_samples=1,
+            checkpoint_every_sec=0,
+            n_checkpoints=4,
+        )
+        loader_r0.restore_state_rank(state)
+
+        cmp_samples_rest = list(zip(range(40, 80), loader_r0))
+        print([batch.__key__ for idx, batch in cmp_samples_rest])
+
+        assert len(cmp_samples) == len(cmp_samples_rest)
+        assert all(
+            len(cmp_sample.caption) == len(cmp_sample_rest.caption)
+            for (idx, cmp_sample), (idx, cmp_sample_rest) in zip(cmp_samples, cmp_samples_rest)
+        )
+        assert all(
+            all(
+                cmp_cap == cmp_cap_rest
+                for cmp_cap, cmp_cap_rest in zip(cmp_sample.caption, cmp_sample_rest.caption)
+            )
+            for (idx, cmp_sample), (idx, cmp_sample_rest) in zip(cmp_samples, cmp_samples_rest)
+        )
 
     def test_debug_dataset(self):
         torch.manual_seed(42)

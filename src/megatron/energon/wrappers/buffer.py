@@ -2,31 +2,38 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from dataclasses import dataclass
-from typing import Any, Dict, Generator, Generic, Iterator, List, Optional, Tuple, TypeVar, Union
-
-from megatron.energon.flavors.base_dataset import SavableDataset
-from megatron.energon.worker import WorkerConfig
-from megatron.energon.wrappers.base import (
-    BaseSingleWrapperDataset,
-    BaseSingleWrapperMergedState,
-    BaseSingleWrapperState,
-    get_sample_restore_key,
+from typing import (
+    Any,
+    Dict,
+    Generator,
+    Generic,
+    Iterator,
+    List,
+    Optional,
+    Sequence,
+    Tuple,
+    TypeVar,
+    Union,
 )
+
+from megatron.energon.flavors.base_dataset import MergedState, SavableDataset, State
+from megatron.energon.worker import WorkerConfig
+from megatron.energon.wrappers.base import BaseWrapperDataset, get_sample_restore_key
 
 T_sample = TypeVar("T_sample")
 
 
 @dataclass
-class SampleBufferState(BaseSingleWrapperState):
+class SampleBufferState(State):
     buffer: List[Tuple[Union[str, int], ...]]
 
 
 @dataclass
-class SampleBufferMergedState(BaseSingleWrapperMergedState):
+class SampleBufferMergedState(MergedState):
     buffer: List[List[Tuple[Union[str, int], ...]]]
 
 
-class SavableSampleBuffer(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_sample]):
+class SavableSampleBuffer(BaseWrapperDataset[T_sample], Generic[T_sample]):
     """A buffer of samples, savable."""
 
     _buffer: List[List[T_sample]]
@@ -38,6 +45,7 @@ class SavableSampleBuffer(BaseSingleWrapperDataset[T_sample, T_sample], Generic[
 
     def __init__(self, dataset: SavableDataset[T_sample], worker_config: WorkerConfig):
         super().__init__(dataset, worker_config=worker_config)
+        self.dataset = dataset
         self._buffer = [[] for _ in range(max(worker_config.num_workers, 1))]
         self._restore_keys = [[] for _ in range(max(worker_config.num_workers, 1))]
 
@@ -66,11 +74,14 @@ class SavableSampleBuffer(BaseSingleWrapperDataset[T_sample, T_sample], Generic[
         self._restore_keys[self._rank_id].append(get_sample_restore_key(sample))
         return sample
 
-    def extend(self, samples: List[T_sample]) -> None:
+    def extend(self, samples: List[T_sample], restore_keys: Optional[Sequence[Any]] = None) -> None:
         self._buffer[self._rank_id].extend(samples)
-        self._restore_keys[self._rank_id].extend(
-            get_sample_restore_key(sample) for sample in samples
-        )
+        if restore_keys is None:
+            self._restore_keys[self._rank_id].extend(
+                get_sample_restore_key(sample) for sample in samples
+            )
+        else:
+            self._restore_keys[self._rank_id].extend(restore_keys)
 
     def append_iter(self) -> Generator[T_sample, None, None]:
         for sample in self.dataset:
@@ -79,6 +90,13 @@ class SavableSampleBuffer(BaseSingleWrapperDataset[T_sample, T_sample], Generic[
     def pop(self, index: int) -> T_sample:
         self._restore_keys[self._rank_id].pop(index)
         return self._buffer[self._rank_id].pop(index)
+
+    def flush(self) -> Tuple[List[T_sample], Tuple[Any, ...]]:
+        buffer = list(self._buffer[self._rank_id])
+        restore_key = tuple(self._restore_keys[self._rank_id])
+        self._buffer[self._rank_id].clear()
+        self._restore_keys[self._rank_id].clear()
+        return buffer, restore_key
 
     def __iter__(self) -> Iterator[T_sample]:
         return iter(self._buffer[self._rank_id])
@@ -102,20 +120,17 @@ class SavableSampleBuffer(BaseSingleWrapperDataset[T_sample, T_sample], Generic[
 
     def save_state(self) -> SampleBufferState:
         self.dataset.assert_can_restore()
-        return SampleBufferState.extend(
-            super().save_state(),
+        return SampleBufferState(
             buffer=list(self._restore_keys[self._rank_id]),
         )
 
     def merge_states(self, states: List[Optional[SampleBufferState]]) -> SampleBufferMergedState:
         assert all(s is None or isinstance(s, SampleBufferState) for s in states)
-        return SampleBufferMergedState.extend(
-            super().merge_states(states),
+        return SampleBufferMergedState(
             buffer=[[] if s is None else s.buffer for s in states],
         )
 
     def restore_state(self, state: Optional[SampleBufferMergedState]) -> None:
-        super().restore_state(state)
         if state is None:
             self._buffer = [[] for _ in range(max(self.worker_config.num_workers, 1))]
             self._restore_keys = [[] for _ in range(max(self.worker_config.num_workers, 1))]
@@ -143,6 +158,9 @@ class SavableSampleBuffer(BaseSingleWrapperDataset[T_sample, T_sample], Generic[
 
     def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_sample:
         return self.dataset.restore_sample(index)
+
+    def worker_has_samples(self) -> bool:
+        return self.dataset.worker_has_samples()
 
     def clear(self) -> None:
         self._buffer[self._rank_id].clear()

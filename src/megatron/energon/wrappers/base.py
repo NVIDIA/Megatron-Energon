@@ -20,9 +20,9 @@ from megatron.energon.flavors.base_dataset import MergedState, Sample, SavableDa
 from megatron.energon.worker import WorkerConfig
 
 T = TypeVar("T")
-T_sample = TypeVar("T_sample")
-T_sample_out = TypeVar("T_sample_out")
-T_sample_in = TypeVar("T_sample_in")
+T_sample = TypeVar("T_sample", covariant=True)
+T_sample_out = TypeVar("T_sample_out", covariant=True)
+T_sample_in = TypeVar("T_sample_in", covariant=True)
 
 
 @dataclass
