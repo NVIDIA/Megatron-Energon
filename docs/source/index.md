@@ -45,7 +45,6 @@ basics_flow
 basics_dataconcepts
 task_encoders
 metadatasets
-blending_datasets
 ```
 
 
@@ -58,6 +57,7 @@ advanced_dataformat
 repro_scaling
 packing
 joining_datasets
+blending_datasets
 ```
 
 

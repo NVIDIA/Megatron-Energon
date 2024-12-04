@@ -27,10 +27,7 @@ ds = get_train_dataset(
     worker_config=simple_worker_config,
 )
 
-loader = get_loader(
-    ds,
-    worker_config=simple_worker_config,
-)
+loader = get_loader(ds)
 
 for batch in ds:
     # Do something with batch
@@ -56,8 +53,9 @@ It will not transform the data. For batching it will use common sense magic to p
 _Wait. Why does the dataset create batches? Shouldn't the dataloader do that?_
 
 Energon will create batches at dataset level.
-This way, each batch will contain samples from only one dataset, later you can [blend](blending_datasets) batches
-from different datasets together before feeding those into the dataloader.
+Internally, most of the cool things that energon can do (such as blending datasets together, [sequence packing](packing), etc.)
+are dataset wrappers. Even the process of batching is such a wrapper and the default {py:meth}`get_train_dataset <megatron.energon.get_train_dataset>`
+function will construct a suitable combination of all these based on the arguments you pass to that function.
 Check out the [](basics_flow) section to see the steps in which the data is processed.
 
 _Why must `shuffle_buffer_size` and `max_samples_per_sequence` be set explicitly?_
@@ -73,16 +71,21 @@ Let's be a bit more concrete and try out the above code with a real dataset.
 We are going to print the first batch and stop.
 
 ```python
-from megatron.energon import get_train_dataset
+from megatron.energon import get_train_dataset, get_loader
+
+simple_worker_config = WorkerConfig(rank=0, world_size=1, num_workers=2)
 
 ds = get_train_dataset(
     '/path/to/your/dataset',
     batch_size=1,
     shuffle_buffer_size=100,
     max_samples_per_sequence=100,
+    worker_config=simple_worker_config,
 )
 
-for batch in ds:
+loader = get_loader(ds)
+
+for batch in loader:
     print(batch)
     break
 ```
@@ -122,21 +125,28 @@ Awesome, it returns a {py:class}`CaptioningSample <megatron.energon.CaptioningSa
 - `image`: The image as a tensor of shape `(1, 3, 267, 400)` (RGB image in a batch of size 1)
 - `caption`: A list of strings (here just one since batch size is one) 
 
+Let's also talk about the {py:class}`WorkerConfig <megatron.energon.WorkerConfig>`. As energon is made for distributed training,
+you always need to provide a worker config to the dataset so specify how many ranks and workers there are and which rank you're currently on.
+For this simple tutorial, we don't really distribute the work, so we use only a single rank with 2 workers.
+
 ## Tutorial 2
 
 Actually, we would like to use a `batch_size` of more than one, let's go with 2 for now.
 
 ```python
-from megatron.energon import get_train_dataset
+from megatron.energon import get_train_dataset, get_loader
 
-ds = get_train_dataset(
+simple_worker_config = WorkerConfig(rank=0, world_size=1, num_workers=2)
+
+loader = get_loader(get_train_dataset(
     '/path/to/your/dataset',
     batch_size=2,
     shuffle_buffer_size=100,
     max_samples_per_sequence=100,
-)
+    worker_config=simple_worker_config,
+))
 
-for batch in ds:
+for batch in loader:
     print(batch)
     break
 ```
@@ -182,16 +192,19 @@ splits:
 
 Usage in your loader, simply use {py:func}`get_train_dataset <megatron.energon.get_train_dataset>`:
 ```python
-from megatron.energon import get_train_dataset
+from megatron.energon import get_train_dataset, get_loader
 
-ds = get_train_dataset(
+simple_worker_config = WorkerConfig(rank=0, world_size=1, num_workers=2)
+
+loader = get_loader(get_train_dataset(
     'coyo-coco-dataset.yaml',
     batch_size=4,
     shuffle_buffer_size=100,
     max_samples_per_sequence=100,
-)
+    worker_config=simple_worker_config,
+))
 
-for batch in ds:
+for batch in loader:
     print(batch)
     break
 
@@ -202,30 +215,29 @@ For these and other details, check out the [](metadatasets) section.
 
 ## Tutorial 4
 
-For multi-GPU support, properly set the worker config. Either by passing in the worker config, or by
-setting the global worker config. Defaults to 4 workers, if not set explicitly.
+For multi-GPU support, we simply adapt the worker config:
 
 ```python
 from megatron.energon import get_train_dataset, get_loader, WorkerConfig
+import torch.distributed as dist
 
-# Or set the fields `rank` and `world_size` manually
-worker_config = WorkerConfig.default_worker_config(num_workers=4)
+worker_config = WorkerConfig(
+    rank=dist.get_rank(),
+    world_size=dist.get_world_size(),
+    num_workers=2,
+)
 
-ds = get_train_dataset(
+loader = get_loader(get_train_dataset(
     'coyo-coco-dataset.yaml',
     batch_size=4,
     shuffle_buffer_size=100,
     max_samples_per_sequence=100,
     worker_config=worker_config,
-)
-
-# Or use default pytorch loader with the same num_workers
-loader = get_loader(ds, worker_config=worker_config)
+))
 
 for batch in loader:
     print(batch)
     break
-
 ```
 
 ## Tutorial 5
@@ -235,20 +247,19 @@ For saving and restoring the state (e.g. for autoresume), the loader must be ins
 ```python
 from megatron.energon import get_train_dataset, get_savable_loader, WorkerConfig
 
-# Or set the fields `rank` and `world_size` manually
-worker_config = WorkerConfig.default_worker_config(num_workers=4)
+simple_worker_config = WorkerConfig(rank=0, world_size=1, num_workers=2)
 
 ds = get_train_dataset(
     'coyo-coco-dataset.yaml',
     batch_size=4,
     shuffle_buffer_size=100,
     max_samples_per_sequence=100,
-    worker_config=worker_config,
+    worker_config=simple_worker_config,
 )
 
-# Must use the savable loader, cannot use default torch loader. This provides methods to save
+# Must use the savable loader here. This provides methods to save
 # and load the state of the data loader
-loader = get_savable_loader(ds, worker_config=worker_config)
+loader = get_savable_loader(ds)
 
 for i, batch in zip(range(10), loader):
     print(batch)
@@ -267,10 +278,8 @@ ds = get_train_dataset(
     batch_size=4,
     shuffle_buffer_size=100,
     max_samples_per_sequence=100,
-    worker_config=worker_config,
+    worker_config=simple_worker_config,
 )
-loader = get_savable_loader(ds, worker_config=worker_config)
+loader = get_savable_loader(ds)
 loader.restore_state(state)
-
-
 ```
