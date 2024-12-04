@@ -72,6 +72,7 @@ class GcDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_sample])
     def __init__(
         self,
         dataset: SavableDataset[T_sample],
+        *,
         worker_config: WorkerConfig,
         every_n_iter: int = 1,
         freeze: bool = False,
