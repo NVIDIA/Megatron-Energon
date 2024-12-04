@@ -41,12 +41,18 @@ def get_savable_loader(
         allowing to save the state of the dataset.
     """
     if worker_config is not None:
-        import warnings
+        if worker_config != dataset.worker_config:
+            raise AssertionError(
+                "The worker_config passed to get_savable_loader() does not match the one of the dataset. "
+                "Also note, it is deprecated to pass one to get_savable_loader() and it will have no effect."
+            )
+        else:
+            import warnings
 
-        warnings.warn(
-            "Passing a worker_config to get_savable_loader() is deprecated and will have no effect.",
-            DeprecationWarning,
-        )
+            warnings.warn(
+                "Passing a worker_config to get_savable_loader() is deprecated and will have no effect.",
+                DeprecationWarning,
+            )
 
     return SavableDataLoader(
         dataset,
@@ -72,11 +78,17 @@ def get_loader(
         The instantiated :class:`torch.data.DataLoader`, yielding batches from the dataset.
     """
     if worker_config is not None:
-        import warnings
+        if worker_config != dataset.worker_config:
+            raise AssertionError(
+                "The worker_config passed to get_loader() does not match the one of the dataset. "
+                "Also note, it is deprecated to pass one to get_loader() and it will have no effect."
+            )
+        else:
+            import warnings
 
-        warnings.warn(
-            "Passing a worker_config to get_loader() is deprecated and will have no effect.",
-            DeprecationWarning,
-        )
+            warnings.warn(
+                "Passing a worker_config to get_loader() is deprecated and will have no effect.",
+                DeprecationWarning,
+            )
 
     return BasicDataLoader(GcDataset(dataset, worker_config=dataset.worker_config))
