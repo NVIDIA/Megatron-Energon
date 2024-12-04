@@ -38,7 +38,7 @@ def get_train_dataset(
     *,
     split_part: Union[Literal["train"], str] = "train",
     worker_config: WorkerConfig,
-    batch_size: int,
+    batch_size: Optional[int],
     batch_drop_last: bool = False,
     packing_buffer_size: Optional[int] = None,
     shuffle_buffer_size: Optional[int],
@@ -63,7 +63,7 @@ def get_train_dataset(
         path: Path to the dataset.
         split_part: Default split part to use.
         worker_config: Worker configuration to use.
-        batch_size: Size of a batch
+        batch_size: Size of a batch. If None, do not batch
         batch_drop_last: If true, drop the last batch if it is smaller than `batch_size`.
         shuffle_buffer_size: Size of the sample shuffle buffer (before task encoding).
         max_samples_per_sequence: If set, limit the number of samples per sample-sequence to this.

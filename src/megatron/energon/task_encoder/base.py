@@ -263,11 +263,16 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         """Move a batch to a device. May raise :exc:`megatron.energon.SkipSample` to skip a batch."""
         return self._batch(samples, type(samples[0]))
 
-    def batch_group_criterion(self, sample: T_encoded_sample) -> Hashable:
-        """Return a group criterion for the sample. Default implementation does not group
-        (effectively, it returns a single value (`None`), thus only one group is used). May raise
-        :exc:`megatron.energon.SkipSample` to skip a batch."""
-        return None
+    def batch_group_criterion(self, sample: T_encoded_sample) -> Tuple[Hashable, Optional[int]]:
+        """
+        Return a group criterion for the sample. Default implementation does not group
+        (effectively, it returns a single value `(None, None)`, thus only one group is used).
+        Returns the key of the bucket to put this sample into, and the size of the bucket (=batch size).
+        The bucket size must always be the same for the same bucket key.
+
+        May raise :exc:`megatron.energon.SkipSample` to skip a batch.
+        """
+        return None, None
 
     @stateless
     def encode_batch(self, batch: T_raw_batch) -> Union[T_batch, Generator[T_batch, None, None]]:
@@ -364,45 +369,43 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
     ) -> SavableDataset[T_raw_batch]:
         """Applies the batcher to the dataset."""
 
+        if packing_buffer_size is not None:
+            select_samples_to_pack_provided = (
+                getattr(self.select_samples_to_pack, "__func__", None)
+                is not TaskEncoder.select_samples_to_pack
+            )
+            pack_selected_samples_provided = (
+                getattr(self.pack_selected_samples, "__func__", None)
+                is not TaskEncoder.pack_selected_samples
+            )
+
+            assert (
+                select_samples_to_pack_provided and pack_selected_samples_provided
+            ), "Both select_samples_to_pack and pack_selected_samples methods must be provided in the TaskEncoder when using packing_buffer_size"
+
+            dataset = PackingDataset(
+                dataset,
+                buffer_size=packing_buffer_size,
+                pre_packer=self.select_samples_to_pack,
+                final_packer=self.pack_selected_samples,
+                final_packer_stateless=get_stateless(self.pack_selected_samples),
+                worker_config=worker_config,
+            )
+
         if (
             getattr(self.batch_group_criterion, "__func__", None)
             is not TaskEncoder.batch_group_criterion
         ):
-            assert batch_size is not None, "batch_size must be set if batch_group_criterion is set"
-            assert packing_buffer_size is None, "Packing not supported when grouping"
             dataset = GroupBatchDataset(
                 dataset,
-                batch_size=batch_size,
-                group_criterion=self.batch_group_criterion,
+                fixed_batch_size=batch_size,
+                sample_group_key=self.batch_group_criterion,
                 batcher=self.batch,
                 drop_last=batch_drop_last,
                 worker_config=worker_config,
             )
         else:
             # No grouping is active
-
-            if packing_buffer_size is not None:
-                select_samples_to_pack_provided = (
-                    getattr(self.select_samples_to_pack, "__func__", None)
-                    is not TaskEncoder.select_samples_to_pack
-                )
-                pack_selected_samples_provided = (
-                    getattr(self.pack_selected_samples, "__func__", None)
-                    is not TaskEncoder.pack_selected_samples
-                )
-
-                assert (
-                    select_samples_to_pack_provided and pack_selected_samples_provided
-                ), "Both select_samples_to_pack and pack_selected_samples methods must be provided in the TaskEncoder when using packing_buffer_size"
-
-                dataset = PackingDataset(
-                    dataset,
-                    buffer_size=packing_buffer_size,
-                    pre_packer=self.select_samples_to_pack,
-                    final_packer=self.pack_selected_samples,
-                    final_packer_stateless=get_stateless(self.pack_selected_samples),
-                    worker_config=worker_config,
-                )
 
             if batch_size is not None:
                 dataset = BatchDataset(
@@ -483,7 +486,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         *,
         datasets: List[Tuple[BaseCoreDatasetFactory[T_sample], float]],
         worker_config: WorkerConfig,
-        batch_size: int,
+        batch_size: Optional[int],
         batch_drop_last: bool = False,
         packing_buffer_size: Optional[int] = None,
         virtual_epoch_length: int = 0,
@@ -751,9 +754,6 @@ class AugmentTaskEncoder(
 
     def batch(self, samples: List[T_encoded_sample]) -> T_raw_batch:
         return self._task_encoder.batch(samples)
-
-    def batch_group_criterion(self, sample: T_encoded_sample) -> Hashable:
-        return self._task_encoder.batch_group_criterion(sample)
 
     def encode_batch(self, batch_data: T_raw_batch) -> T_batch:
         return self._task_encoder.encode_batch(batch_data)
