@@ -17,14 +17,12 @@ You can then load the dataset like this:
 ```python
 from megatron.energon import get_train_dataset
 
-simple_worker_config = WorkerConfig(rank=0, world_size=1, num_workers=2)
-
 ds = get_train_dataset(
     '/my/dataset/path',
     batch_size=1,
     shuffle_buffer_size=100,
     max_samples_per_sequence=100,
-    worker_config=simple_worker_config,
+    worker_config=WorkerConfig.default_worker_config(),
 )
 
 loader = get_loader(ds)
@@ -73,14 +71,12 @@ We are going to print the first batch and stop.
 ```python
 from megatron.energon import get_train_dataset, get_loader
 
-simple_worker_config = WorkerConfig(rank=0, world_size=1, num_workers=2)
-
 ds = get_train_dataset(
     '/path/to/your/dataset',
     batch_size=1,
     shuffle_buffer_size=100,
     max_samples_per_sequence=100,
-    worker_config=simple_worker_config,
+    worker_config=WorkerConfig.default_worker_config(),
 )
 
 loader = get_loader(ds)
@@ -136,14 +132,12 @@ Actually, we would like to use a `batch_size` of more than one, let's go with 2 
 ```python
 from megatron.energon import get_train_dataset, get_loader
 
-simple_worker_config = WorkerConfig(rank=0, world_size=1, num_workers=2)
-
 loader = get_loader(get_train_dataset(
     '/path/to/your/dataset',
     batch_size=2,
     shuffle_buffer_size=100,
     max_samples_per_sequence=100,
-    worker_config=simple_worker_config,
+    worker_config=WorkerConfig.default_worker_config(),
 ))
 
 for batch in loader:
@@ -194,14 +188,12 @@ Usage in your loader, simply use {py:func}`get_train_dataset <megatron.energon.g
 ```python
 from megatron.energon import get_train_dataset, get_loader
 
-simple_worker_config = WorkerConfig(rank=0, world_size=1, num_workers=2)
-
 loader = get_loader(get_train_dataset(
     'coyo-coco-dataset.yaml',
     batch_size=4,
     shuffle_buffer_size=100,
     max_samples_per_sequence=100,
-    worker_config=simple_worker_config,
+    worker_config=WorkerConfig.default_worker_config(),
 ))
 
 for batch in loader:
@@ -215,15 +207,21 @@ For these and other details, check out the [](metadatasets) section.
 
 ## Tutorial 4
 
-For multi-GPU support, we simply adapt the worker config:
+For multi-GPU support, you may need to adapt the worker config.
+So far we have only used the default worker config, which you can get by calling {py:func}`WorkerConfig.default_worker_config() <megatron.energon.WorkerConfig.default_worker_config>`.
+This default config tries to infer your multi-GPU setup by using `torch.distributed`, which is fine in most cases.
+If you are not using any distributed setup, the default config will work, too. In that case, it assumes a single local rank.
+
+However, if you have a more complex multi-node setup and other non-data-parallel stragies, you may need to set it up yourself. 
+The following example shows how it could be set.
 
 ```python
 from megatron.energon import get_train_dataset, get_loader, WorkerConfig
 import torch.distributed as dist
 
 worker_config = WorkerConfig(
-    rank=dist.get_rank(),
-    world_size=dist.get_world_size(),
+    rank=SET_YOUR_GLOBAL_DATA_RANK_HERE,
+    world_size=SET_YOUR_GLOBAL_WORLD_SIZE_HERE,
     num_workers=2,
 )
 
@@ -247,14 +245,12 @@ For saving and restoring the state (e.g. for autoresume), the loader must be ins
 ```python
 from megatron.energon import get_train_dataset, get_savable_loader, WorkerConfig
 
-simple_worker_config = WorkerConfig(rank=0, world_size=1, num_workers=2)
-
 ds = get_train_dataset(
     'coyo-coco-dataset.yaml',
     batch_size=4,
     shuffle_buffer_size=100,
     max_samples_per_sequence=100,
-    worker_config=simple_worker_config,
+    worker_config=WorkerConfig.default_worker_config(),
 )
 
 # Must use the savable loader here. This provides methods to save
@@ -278,7 +274,7 @@ ds = get_train_dataset(
     batch_size=4,
     shuffle_buffer_size=100,
     max_samples_per_sequence=100,
-    worker_config=simple_worker_config,
+    worker_config=WorkerConfig.default_worker_config(),
 )
 loader = get_savable_loader(ds)
 loader.restore_state(state)

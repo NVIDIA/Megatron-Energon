@@ -139,7 +139,9 @@ class WorkerConfig:
     def default_worker_config(
         num_workers: int = 4, data_parallel_group: Optional[torch.distributed.ProcessGroup] = None
     ) -> "WorkerConfig":
-        """Returns the default worker config using torch distributed."""
+        """Returns the default worker config using torch distributed if available.
+        If torch distributed is not available, a single local rank is assumed."""
+
         if torch.distributed.is_available() and torch.distributed.is_initialized():
             rank = torch.distributed.get_rank(data_parallel_group)
             world_size = torch.distributed.get_world_size(data_parallel_group)
