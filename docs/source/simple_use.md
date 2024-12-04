@@ -29,7 +29,7 @@ ds = get_train_dataset(
 
 loader = get_loader(ds)
 
-for batch in ds:
+for batch in loader:
     # Do something with batch
     # Infer, gradient step, ...
     pass
