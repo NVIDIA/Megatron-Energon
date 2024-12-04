@@ -53,6 +53,23 @@ class BaseWrapperDataset(SavableDataset[T_sample], Generic[T_sample]):
     shuffling samples or applying custom functions to the data. Some wrappers only modify the
     length of the dataset or how it's repeated."""
 
+    def __init__(
+        self,
+        dataset: Union[SavableDataset, Iterable[SavableDataset]],
+        *,
+        worker_config: WorkerConfig,
+    ):
+        super().__init__(worker_config=worker_config)
+
+        if isinstance(dataset, SavableDataset):
+            dataset = [dataset]
+
+        for d in dataset:
+            # Check that the dataset worker configs are the same as the wrapper worker config
+            assert (
+                d.worker_config == self.worker_config
+            ), "Dataset and wrapper worker configs must match."
+
 
 class BaseSingleWrapperDataset(
     BaseWrapperDataset[T_sample_out], Generic[T_sample_in, T_sample_out]
@@ -63,7 +80,7 @@ class BaseSingleWrapperDataset(
     dataset: SavableDataset[T_sample_in]
 
     def __init__(self, dataset: SavableDataset[T_sample_in], *, worker_config: WorkerConfig):
-        super().__init__(worker_config=worker_config)
+        super().__init__(dataset, worker_config=worker_config)
         assert isinstance(dataset, SavableDataset)
         self.dataset = dataset
 

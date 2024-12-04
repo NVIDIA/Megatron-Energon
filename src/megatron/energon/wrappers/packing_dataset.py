@@ -131,8 +131,8 @@ class PackingDataset(
         self.final_packer_stateless = final_packer_stateless
         self.packer_config = packer_config
         self.error_handler = error_handler
-        self._reading_buffer = SavableSampleBuffer(dataset, worker_config)
-        self._pre_packing_buffer = SavableSampleBuffer(dataset, worker_config)
+        self._reading_buffer = SavableSampleBuffer(dataset, worker_config=worker_config)
+        self._pre_packing_buffer = SavableSampleBuffer(dataset, worker_config=worker_config)
         self._pre_packing_lengths = [[] for _ in range(max(worker_config.num_workers, 1))]
         self._pre_packing_sample_index = SampleIndex(worker_config, src=self)
         self._final_packing_sample_index = SampleIndex(worker_config, src=self)

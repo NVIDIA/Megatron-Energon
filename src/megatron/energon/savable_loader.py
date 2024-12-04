@@ -73,6 +73,11 @@ class SimpleSavableDatasetWrapper(SavableDataset[Tuple[int, int, T]], Generic[T]
         self.dataset = dataset
         self._sample_index = [0] * max(self.worker_config.num_workers, 1)
 
+        # Check that the dataset worker config is the same as the wrapper worker config
+        assert (
+            self.dataset.worker_config == self.worker_config
+        ), "Dataset and wrapper worker configs must match."
+
     def __len__(self):
         return len(self.dataset)
 

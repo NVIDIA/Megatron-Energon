@@ -196,7 +196,7 @@ class GroupBatchDataset(
             if bucket is None:
                 buckets[bucket_key] = bucket = Bucket(
                     batch_size=batch_size,
-                    samples=SavableSampleBuffer(self.dataset, self.worker_config),
+                    samples=SavableSampleBuffer(self.dataset, worker_config=self.worker_config),
                 )
             else:
                 assert (
@@ -264,7 +264,9 @@ class GroupBatchDataset(
                     for bucket_state in buckets_state:
                         buckets[bucket_state.key] = Bucket(
                             batch_size=bucket_state.batch_size,
-                            samples=SavableSampleBuffer(self.dataset, self.worker_config),
+                            samples=SavableSampleBuffer(
+                                self.dataset, worker_config=self.worker_config
+                            ),
                         )
                         buckets[bucket_state.key].samples.restore_state(
                             SampleBufferMergedState(

@@ -58,7 +58,9 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
                 given probabilities.
             worker_config: Configuration for the workers.
         """
-        super().__init__(worker_config=worker_config)
+        datasets = [dataset for dataset, _weight in dataset_weights]
+        super().__init__(datasets, worker_config=worker_config)
+
         self.dataset_weights = dataset_weights
         self._worker_rng = WorkerRng(self.worker_config)
 

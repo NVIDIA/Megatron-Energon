@@ -52,7 +52,7 @@ class ShuffleBufferDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic
         super().__init__(dataset, worker_config=worker_config)
         self.size = size
         self._worker_rng = WorkerRng(self.worker_config)
-        self._active_buffer = SavableSampleBuffer(dataset, worker_config)
+        self._active_buffer = SavableSampleBuffer(dataset, worker_config=worker_config)
 
     def __len__(self) -> int:
         return len(self.dataset)
