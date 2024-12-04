@@ -72,7 +72,7 @@ To get started, pick a [WebDataset](https://github.com/webdataset/webdataset)-co
 Once done, try to load it from your Python program:
 
 ```python
-from megatron.energon import get_train_dataset, get_loader
+from megatron.energon import get_train_dataset, get_loader, WorkerConfig
 
 
 simple_worker_config = WorkerConfig(rank=0, world_size=1, num_workers=2)

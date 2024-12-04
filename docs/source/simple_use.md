@@ -15,7 +15,7 @@ You can also store your dataset inside an S3-compatible object store and load it
 
 You can then load the dataset like this:
 ```python
-from megatron.energon import get_train_dataset
+from megatron.energon import get_train_dataset, get_loader, WorkerConfig
 
 ds = get_train_dataset(
     '/my/dataset/path',
@@ -69,7 +69,7 @@ Let's be a bit more concrete and try out the above code with a real dataset.
 We are going to print the first batch and stop.
 
 ```python
-from megatron.energon import get_train_dataset, get_loader
+from megatron.energon import get_train_dataset, get_loader, WorkerConfig
 
 ds = get_train_dataset(
     '/path/to/your/dataset',
@@ -130,7 +130,7 @@ For this simple tutorial, we don't really distribute the work, so we use only a 
 Actually, we would like to use a `batch_size` of more than one, let's go with 2 for now.
 
 ```python
-from megatron.energon import get_train_dataset, get_loader
+from megatron.energon import get_train_dataset, get_loader, WorkerConfig
 
 loader = get_loader(get_train_dataset(
     '/path/to/your/dataset',
@@ -186,7 +186,7 @@ splits:
 
 Usage in your loader, simply use {py:func}`get_train_dataset <megatron.energon.get_train_dataset>`:
 ```python
-from megatron.energon import get_train_dataset, get_loader
+from megatron.energon import get_train_dataset, get_loader, WorkerConfig
 
 loader = get_loader(get_train_dataset(
     'coyo-coco-dataset.yaml',
