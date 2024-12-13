@@ -203,6 +203,59 @@ class Sharder:
         return result
 
     @classmethod
+    def shard_workers_in_order(
+        cls,
+        shards: List[Sequence[ShardInfo]],
+        worker_config: WorkerConfig,
+    ) -> List[List[Sequence[ShardInfo]]]:
+        """
+        Creates subshards (ShardInfo) for each worker of the current rank in a way that the order
+        of the samples is preserved. Essentially this corresponds to assigning each worker
+        a contiguous slice of the samples, but then transposing the assignment, because
+        workers are iterated round-robin style.
+
+        Args:
+            shards: The shards to split
+            worker_config: The config for the current rank and workers
+
+        Returns:
+            The shards for the current rank and all workers
+        """
+
+        # We split the total number of samples into the number of global workers across all ranks.
+
+        num_workers = max(1, worker_config.num_workers)
+
+        total_samples = sum(subshards[0].count for subshards in shards)
+
+        # Iterate through each individual sample and assign it to a worker
+        # in a round-robin fashion.
+        # Call _split_shards for each sample.
+
+        result = []
+        for worker_idx in range(num_workers):
+            worker_offset = worker_config.rank * num_workers + worker_idx
+
+            worker_shards = []
+            for sample_idx in range(worker_offset, total_samples, num_workers):
+                split_shards_result = next(
+                    iter(
+                        cls._split_shards(
+                            shards,
+                            [sample_idx, sample_idx + 1],
+                            max_samples_per_sequence=1,
+                        )
+                    )
+                )
+                from pprint import pprint
+
+                worker_shards.extend(split_shards_result)
+            # worker_shards = [subshards for subshards in worker_shards if subshards[0].count > 0]
+            result.append(worker_shards)
+
+        return result
+
+    @classmethod
     def shard_workers(
         cls,
         shards: List[Sequence[ShardInfo]],

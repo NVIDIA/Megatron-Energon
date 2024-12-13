@@ -115,7 +115,17 @@ class BaseWebdatasetFactory(
     def __len__(self) -> int:
         return sum(shard.count for shard in self.shards)
 
-    def build(self, worker_rotation_offset: int = 0) -> SavableDataset[T_sample]:
+    def build(
+        self, worker_rotation_offset: int = 0, in_order: bool = False
+    ) -> SavableDataset[T_sample]:
+        """Builds the dataset.
+
+        Args:
+            worker_rotation_offset: When loading multiple datasets, this offset shifts the
+                sample-to-worker assignment to balance it.
+            in_order: If True, samples are assigned to workers so that they will be iterated in order.
+        """
+
         if self.parallel_shard_iters is None:
             if self.training:
                 # 16 seems to be a good choice since we don't want too many file handles open
@@ -125,23 +135,29 @@ class BaseWebdatasetFactory(
         else:
             parallel_shard_iters = self.parallel_shard_iters
 
-        rank_shards = self.shard_workers(
-            [(shard,) for shard in self.shards],
-            self.worker_config,
-            max_samples_per_sequence=self.max_samples_per_sequence,
-            rotation_offset=worker_rotation_offset,
-        )
+        if in_order:
+            rank_shards = self.shard_workers_in_order(
+                [(shard,) for shard in self.shards],
+                self.worker_config,
+            )
+        else:
+            rank_shards = self.shard_workers(
+                [(shard,) for shard in self.shards],
+                self.worker_config,
+                max_samples_per_sequence=self.max_samples_per_sequence,
+                rotation_offset=worker_rotation_offset,
+            )
         for rank_idx, inner_shards in enumerate(rank_shards):
             shards_text = ", ".join(
                 f"{subshard[0].name}[{subshard[0].offset}, {subshard[0].offset+subshard[0].count})"
                 for subshard in inner_shards[:3]
             )
-            if len(self.shards) > 6:
-                shards_text += f", ...<{len(self.shards) - 6}>, " + ", ".join(
+            if len(inner_shards) > 6:
+                shards_text += f", ...<{len(inner_shards) - 6}>, " + ", ".join(
                     f"{subshards[0].name}[{subshards[0].offset}, {subshards[0].offset+subshards[0].count})"
                     for subshards in inner_shards[-3:]
                 )
-            elif len(self.shards) > 3:
+            elif len(inner_shards) > 3:
                 shards_text += ", " + ", ".join(
                     f"{subshards[0].name}[{subshards[0].offset}, {subshards[0].offset+subshards[0].count})"
                     for subshards in inner_shards[3:]

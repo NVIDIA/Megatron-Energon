@@ -375,7 +375,9 @@ class BaseCoreDatasetFactory(Generic[T_sample], ABC):
     subflavors: Dict[str, Any]
 
     @abstractmethod
-    def build(self, worker_rotation_offset: int = 0) -> SavableDataset[T_sample]: ...
+    def build(
+        self, worker_rotation_offset: int = 0, in_order: bool = False
+    ) -> SavableDataset[T_sample]: ...
 
     @abstractmethod
     def __len__(self) -> int:

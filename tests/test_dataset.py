@@ -1672,6 +1672,41 @@ class TestDataset(unittest.TestCase):
         assert "train" in result.stdout
         assert result.exit_code == 0, "Preview failed, see output"
 
+    def test_in_order(self):
+        # Load as val_dataset with in_order=True
+
+        for num_workers in [-2, 1, 2, 5]:
+            in_order = num_workers >= 0
+            num_workers = abs(num_workers)
+
+            print(f"Testing in_order with num_workers={num_workers} (in_order={in_order})")
+            wc = WorkerConfig(rank=0, world_size=1, num_workers=num_workers)
+            loader = get_loader(
+                get_val_dataset(
+                    self.dataset_path,
+                    split_part="train",
+                    batch_size=1,
+                    worker_config=wc,
+                    in_order=in_order,
+                )
+            )
+
+            # Given that each key ends with /0000XX, extract the number for the first 10 samples and assert it's increasing
+
+            keys = [batch.__key__[0] for batch, _ in zip(loader, range(20))]
+            print(keys)
+            numbers = [int(key.split("/")[-1]) for key in keys]
+            print(numbers)
+
+            if in_order:
+                assert numbers == list(range(30, 50))
+            else:
+                assert numbers != list(range(30, 50))
+
 
 if __name__ == "__main__":
-    unittest.main()
+    # unittest.main()
+    test = TestDataset()
+    test.setUp()
+    test.test_in_order()
+    test.tearDown()

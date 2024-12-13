@@ -563,6 +563,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         batch_drop_last: bool = False,
         packing_buffer_size: Optional[int] = None,
         limit: Optional[int] = None,
+        in_order: bool = False,
     ) -> SavableDataset[T_batch]:
         """Combines val datasets to a single dataset."""
 
@@ -573,11 +574,11 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
 
         if len(datasets) > 1:
             dataset = ConcatDataset(
-                *[dataset.build() for dataset, _ in datasets],
+                *[dataset.build(in_order=in_order) for dataset, _ in datasets],
                 worker_config=worker_config,
             )
         elif len(datasets) == 1:
-            dataset = datasets[0][0].build()
+            dataset = datasets[0][0].build(in_order=in_order)
         else:
             raise ValueError("No datasets given.")
         dataset = self.build_cook_crude_sample(dataset, worker_config=worker_config)

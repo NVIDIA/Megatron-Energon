@@ -108,6 +108,7 @@ def get_val_dataset(
     packing_buffer_size: Optional[int] = None,
     limit: Optional[int] = None,
     task_encoder: TaskEncoder[Any, Any, Any, T] = DefaultTaskEncoder(),
+    in_order: bool = False,
     **kwargs,
 ) -> SavableDataset[T]:
     """
@@ -145,6 +146,7 @@ def get_val_dataset(
         batch_drop_last=batch_drop_last,
         packing_buffer_size=packing_buffer_size,
         limit=limit,
+        in_order=in_order,
     )
 
 
@@ -158,6 +160,7 @@ def get_val_datasets(
     packing_buffer_size: Optional[int] = None,
     limit: Optional[int] = None,
     task_encoder: TaskEncoder[Any, Any, Any, T] = DefaultTaskEncoder(),
+    in_order: bool = False,
     **kwargs,
 ) -> List[Tuple[SavableDataset[T], BaseCoreDatasetFactory]]:
     """
@@ -197,6 +200,7 @@ def get_val_datasets(
                 batch_drop_last=batch_drop_last,
                 packing_buffer_size=packing_buffer_size,
                 limit=limit,
+                in_order=in_order,
             ),
             dataset,
         )
