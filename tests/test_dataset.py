@@ -1705,8 +1705,4 @@ class TestDataset(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    # unittest.main()
-    test = TestDataset()
-    test.setUp()
-    test.test_in_order()
-    test.tearDown()
+    unittest.main()
