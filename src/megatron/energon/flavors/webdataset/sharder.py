@@ -247,10 +247,9 @@ class Sharder:
                         )
                     )
                 )
-                from pprint import pprint
 
                 worker_shards.extend(split_shards_result)
-            # worker_shards = [subshards for subshards in worker_shards if subshards[0].count > 0]
+            worker_shards = [subshards for subshards in worker_shards if subshards[0].count > 0]
             result.append(worker_shards)
 
         return result

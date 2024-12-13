@@ -1673,20 +1673,15 @@ class TestDataset(unittest.TestCase):
         assert result.exit_code == 0, "Preview failed, see output"
 
     def test_in_order(self):
-        # Load as val_dataset with in_order=True
 
-        for num_workers in [-2, 1, 2, 5]:
-            in_order = num_workers >= 0
-            num_workers = abs(num_workers)
-
-            print(f"Testing in_order with num_workers={num_workers} (in_order={in_order})")
-            wc = WorkerConfig(rank=0, world_size=1, num_workers=num_workers)
+        def run_test(num_workers: int, in_order: bool):
+            worker_config = WorkerConfig(rank=0, world_size=1, num_workers=num_workers)
             loader = get_loader(
                 get_val_dataset(
                     self.dataset_path,
                     split_part="train",
                     batch_size=1,
-                    worker_config=wc,
+                    worker_config=worker_config,
                     in_order=in_order,
                 )
             )
@@ -1702,6 +1697,10 @@ class TestDataset(unittest.TestCase):
                 assert numbers == list(range(30, 50))
             else:
                 assert numbers != list(range(30, 50))
+
+        # Run different variants of the test
+        for num_workers, in_order in [(2, False), (1, True), (2, True), (5, True)]:
+            run_test(num_workers, in_order)
 
 
 if __name__ == "__main__":
