@@ -5,39 +5,92 @@ SPDX-License-Identifier: BSD-3-Clause -->
 # Data Preparation
 
 The aim of data preparation is to convert your data to a format that the energon loader can understand and iterate.
-The outcome will be a webdataset with some extra information stored in a folder called `.nv-meta`. See [](data_on_disk) for details about this format and how to adapt the meta information to your needs.
+The outcome will be a [WebDataset](https://github.com/webdataset/webdataset) with some extra information stored in a folder called `.nv-meta`.
+Below in [](data-on-disk) we explain the details about this format.
 
-For data preparation, we provide a few helper functions to get you started quickly. There are a few cases to consider:
-```{contents}
-:depth: 4
-```
+These are the typical steps to get your data ready:
+
+1. Create a normal [WebDataset](https://github.com/webdataset/webdataset) from your data
+2. Run our preparation tool `energon prepare` to convert to an energon-compatible format
 
 (wds-format)=
-## Webdataset format
+## Step 1: Creating a WebDataset
 
-If you already have a dataset in webdataset format, you're lucky: It should work out-of-the-box.
+Example for a WebDataset (e.g. image captioning dataset):
 
-(wds-format-compatible)=
-### Compatible format
-
-Example for a compatible format (e.g. captioning dataset):
-```text
-shard_000.tar
-├── samples/sample_0000.jpg
-├── samples/sample_0000.txt
-├── samples/sample_0000.json
-├── samples/sample_0001.jpg
-├── samples/sample_0001.txt
-├── samples/sample_0001.json
+```
+shards
+├── shard_0000.tar
+│   ├── sample_0000.jpg
+│   ├── sample_0000.txt
+│   ├── sample_0000.detail.json
+│   ├── sample_0001.jpg
+│   ├── sample_0001.txt
+│   └── sample_0001.detail.json
+├── shard_0001.tar
+│   ├── sample_0002.jpg
+│   ├── sample_0002.txt
+│   ├── sample_0002.detail.json
+│   ├── sample_0003.jpg
+│   ├── sample_0003.txt
+│   └── sample_0003.detail.json
 └── ...
 ```
-With the default webdataset loading semantic, the images (in this case the `jpg` part), text (`txt`) and json
-are loaded automatically if specified in the `field_map`. The dataset preparation wizard will ask you for the mapping
-of those fields.
 
-The shards may be pre-split or not split beforehand. Exemplary structures and [dataset preparation commands](#energon_data_prepare):
+In the example you can see two shards (i.e. tar files) with multiple samples. Each group of files with the same basename makes one sample.
+So `sample_0000.jpg`, `sample_0000.txt` and `sample_0000.detail.json` are three parts that belong to the first sample.
 
-#### Example 1: No presplit shards, captioning webdataset
+Note that each sample may have a different number of parts, for example some samples may have more images than others.
+In this case, they should still have the same basename, for example `sample_0000.img1.jpg` and `sample_0000.img2.jpg`.
+
+The order of samples in the tar file is important. Samples with the same base name (~before the first dot of the filename) must follow each other.
+The base name is used to group the samples, i.e. in the example `sample_0000` is the first group name, with the part types `jpg`, `txt`, `detail.json`.
+
+The default behavior of energon is to parse the contents by extensions (e.g. ending on `.json` will automatically use `json.loads`, `.png` will load the image).
+
+### Building a WebDataset using Python
+The easiest way to construct a WebDataset from existing data (e.g. from another torch dataset or a folder with files) is to use the ShardWriter from the webdataset library:
+
+```py
+import webdataset as wds
+
+
+if __name__ == '__main__':
+    # Wherever your dataset comes from
+    my_dataset = ...
+  
+    with wds.ShardWriter("parts/data-%d.tar", maxcount=10000) as shard_writer:
+        for key, data in my_dataset:
+            sample = {
+                "__key__": key,
+                "png": data['image'],
+            }
+            shard_writer.write(sample)
+```
+
+
+## Step 2: Preparing the Dataset
+
+Once you have a WebDataset ready, you will want to prepare it for use with Energon.
+This means adding additional meta data files next to the data.
+This step does *not* change or copy the contents of your tar files.
+
+Just run the `energon prepare /path/to/dataset` command, which will interactively walk you through the process.
+
+The command will
+
+* Search for all `*.tar` files in the given folder
+* Index them so samples can be accessed randomly
+* Ask you how you want to split the data into train/val/test paritions
+* Ask you how to decode the data (field map or sample_loader.py)
+* store all this information in a subfolder `.nv-meta/`, see details [below](data-on-disk).
+
+### Splitting the dataset into train/val/test
+
+The first thing that the `energon prepare` assistant will ask you, is how you want to split the data by ratios.
+However, if you have a pre-determined split, you can also pass that to energon. See the examples below.
+
+#### Example 1: Let energon do the split
 ```text
 shards
 ├── shard_0000.tar
@@ -91,23 +144,106 @@ Commandline:
 > energon prepare --split-parts 'train:shards/train/.*' --split-parts 'val:shards/val/.*' ./
 ```
 
-(wds-format-special)=
-### Special format
-Sometimes, your data will not be easily represented as a `field_map` explained above. 
-For example, your data may contain
+### Sample Types
 
-* structured data like nested boxes for each sample
-* custom binary formats
-* xml / html / pickle etc.
+After the split is set up, the assistant will ask you which sample type you want to use.
+We provide a set of common sample types such as for image captioning or visual question answering, they are listed below.
 
-In those cases you have two options:
+If none of these fits, you may need to set up your own new sample type.
+Here are your options:
 
-1. Creating a custom `sample_loader.py` in the `.nv-meta` folder
-    * This will typically do the job and is preferred if you only have to do some small conversions.
-2. Using a `CrudeWebdataset`
-    * For more intricate conversions, you can use a CrudeWebdataset that will pass your samples in a raw form into your TaskEncoder where you can then convert them based on the subflavor for example. For more details see [](crude-data).
+* You have a new type sample which is rather common but not in our list below
+  * Please add your type to energon and create a pull request so we can add it
+* Your sample type is experimental or used temporarily only
+  * You can add the sample type class in your code repository and create the `dataset.yaml` manually, referring to your class with `__class__`
 
-Even for these specific wds formats, you would start preparing your data using the [dataset preparation command](#energon_data_prepare), but you will need to define a custom sample loader or select `CrudeWebdataset` in the dataprep wizard. 
+#### Available Sample Types
+
+These are the possible integrated types you can currently choose from:
+
+* {py:class}`Sample <megatron.energon.Sample>`: Base dataclass for samples from source webdatasets.
+  * Attributes:
+    * {py:attr}`__key__: str <megatron.energon.Sample.__key__>`: Unique identifier of the sample within the dataset. Useful for backtracking the source of a single sample.
+    * {py:attr}`__key__: str <megatron.energon.Sample.__restore_key__>`: Structured key of the sample, which can be used to regenerate the sample without storing the whole sample.
+    * {py:attr}`__subflavor__: str <megatron.energon.Sample.__subflavor__>`: Deprecated.
+    * {py:attr}`__subflavors__: dict[str, Any] | None <megatron.energon.Sample.__subflavors__>`: Represents the subflavors (i.e. custom dict data) set for the source dataset (typically in the metadataset).
+  * {py:class}`CaptioningSample <megatron.energon.CaptioningSample>`: Represents a sample for captioning
+    * Attributes:
+      * {py:attr}`image: torch.Tensor <megatron.energon.CaptioningSample.image>`: The input image tensor
+      * {py:attr}`caption: str <megatron.energon.CaptioningSample.caption>`: The target caption string
+  * {py:class}`ImageSample <megatron.energon.ImageSample>`: Represents a sample which only contains an image (e.g. for reconstruction)
+    * Attributes:
+      * {py:attr}`image: torch.Tensor <megatron.energon.ImageSample.image>`: The image tensor
+  * {py:class}`ImageClassificationSample <megatron.energon.ImageClassificationSample>`: Represents a sample which contains an image with a caption
+    * Attributes:
+      * {py:attr}`image: torch.Tensor <megatron.energon.ImageClassificationSample.image>`: The image tensor
+      * {py:attr}`label: int | None <megatron.energon.ImageClassificationSample.label>`: The label of the sample, as integral representation
+      * {py:attr}`label_name: str | None <megatron.energon.ImageClassificationSample.label_name>`: The label of the sample 
+  * {py:class}`InterleavedSample <megatron.energon.InterleavedSample>`: Represents a sample which contains interleaved media, such as image and text.
+    * Attributes:
+      * {py:attr}`sequence: list[torch.Tensor | str] <megatron.energon.InterleavedSample.sequence>`: The interleaved media (either a torch.Tensor or string for text)
+  * {py:class}`MultiChoiceVQASample <megatron.energon.MultiChoiceVQASample>`: Represents a sample for visual question answering, with a choice of answers and one correct answer.
+    * Attributes:
+      * {py:attr}`image: torch.Tensor <megatron.energon.MultiChoiceVQASample.image>`: The input image tensor
+      * {py:attr}`context: str <megatron.energon.MultiChoiceVQASample.context>`: The context/question for the image
+      * {py:attr}`choices: List[str] | None <megatron.energon.MultiChoiceVQASample.choices>`: The candidate answers
+      * {py:attr}`correct_choice_idx: int | None <megatron.energon.MultiChoiceVQASample.correct_choice_idx>`: The index of the correct answer
+  * {py:class}`OCRSample <megatron.energon.OCRSample>`: Sample type for optical character recognition.
+    * Attributes:
+      * {py:attr}`image: str <megatron.energon.OCRSample.image>`: The input image
+      * {py:attr}`text: str <megatron.energon.OCRSample.text>`: The text string for the whole image
+      * {py:attr}`block_boxes: torch.Tensor | None <megatron.energon.OCRSample.block_boxes>`: The bounding boxes of the block in the image float(N, 4|5<x,y,w,h,confidence>)
+      * {py:attr}`block_classes: torch.Tensor | list[str] | None <megatron.energon.OCRSample.block_classes>`: The classes of th blocks
+      * {py:attr}`block_text: torch.Tensor | None <megatron.energon.OCRSample.block_text>`: The text content of the blocks
+      * {py:attr}`lines_boxes: torch.Tensor | None <megatron.energon.OCRSample.lines_boxes>`: The bounding boxes of the text lines
+      * {py:attr}`lines_text: list[str] | None <megatron.energon.OCRSample.lines_text>`: The text content of the text lines
+      * {py:attr}`words_boxes: torch.Tensor | None <megatron.energon.OCRSample.words_boxes>`: The bounding boxes of the text words
+      * {py:attr}`words_text: list[str] | None <megatron.energon.OCRSample.words_text>`: The text content of the text words
+      * {py:attr}`chars_boxes: torch.Tensor | None <megatron.energon.OCRSample.chars_boxes>`: The bounding boxes of the text characters
+      * {py:attr}`chars_text: list[str] | None <megatron.energon.OCRSample.chars_text>`: The text content of the text characters
+  * {py:class}`TextSample <megatron.energon.TextSample>`: Represents a sample which only contains a text string (e.g. for text generation)
+    * Attributes:
+      * {py:attr}`text: str <megatron.energon.TextSample.text>`: The text string
+  * {py:class}`VidQASample <megatron.energon.VidQASample>`: Represents a sample which contains a video and a question with answer.
+    * Attributes:
+      * {py:attr}`video: VideoData <megatron.energon.VidQASample.image>`: The input image tensor
+      * {py:attr}`context: str <megatron.energon.VQASample.context>`: The context/question
+      * {py:attr}`answers: list[str] | None <megatron.energon.VQASample.answer>`: The answer string
+      * {py:attr}`answer_weights: torch.Tensor | None <megatron.energon.VQASample.answer_weights>`: Weights for possibly multiple answers
+  * {py:class}`VQASample <megatron.energon.VQASample>`: Represents a sample which contains an image, a question/context and an answer
+    * Attributes:
+      * {py:attr}`image: torch.Tensor <megatron.energon.VQASample.image>`: The input image tensor
+      * {py:attr}`context: str <megatron.energon.VQASample.context>`: The context/question
+      * {py:attr}`answers: list[str] | None <megatron.energon.VQASample.answer>`: The answer string
+      * {py:attr}`answer_weights: torch.Tensor | None <megatron.energon.VQASample.answer_weights>`: Weights for possibly multiple answers
+  * {py:class}`VQAOCRSample <megatron.energon.VQAOCRSample>`: Sample type for question answering related to optical character recognition.
+    * Attributes:
+      * {py:attr}`image: str <megatron.energon.VQAOCRSample.image>`: The input image
+      * {py:attr}`context: str <megatron.energon.VQAOCRSample.text>`: The context/question
+      * {py:attr}`text: str <megatron.energon.VQAOCRSample.text>`: The text contained in the image
+      * {py:attr}`answers: list[str] | None <megatron.energon.VQAOCRSample.answer>`: The answer string
+      * {py:attr}`answer_weights: torch.Tensor | None <megatron.energon.VQAOCRSample.answer_weights>`: Weights for possibly multiple answers
+      * {py:attr}`words_boxes: torch.Tensor | None <megatron.energon.VQAOCRSample.words_boxes>`: The bounding boxes of the text words
+      * {py:attr}`words_text: list[str] | None <megatron.energon.VQAOCRSample.words_text>`: The text content of the text words
+
+
+### Sample Loading
+
+There are multiple options for how to convert the data stored in the tar files to an instance of one of the sample types above.
+
+After choosing the sample type, `energon prepare` will ask if you want to use a "simple field map" or a "sample loader".
+There is a also a third method called "CrudeWebdataset".
+
+#### Field Map
+
+If your data consists of simple text, json and images that can be decoded by the standard [webdataset auto decoder](https://rom1504.github.io/webdataset/api/webdataset/autodecode.html),
+and they map directly to the attributes of your chosen sample type from the list above, use a "field map".
+The field map stores which file extension in the webdataset shall be mapped to which attribute of the sample class.
+
+#### Sample Loader
+
+If your data needs some custom decoding code to compute the sample attributes from the data in the tar, you should use a custom sample loader.
+The code shall only contain the dataset-specific decoding, no project-specific decoding.
 
 Example for a special format (e.g. ocr dataset) for which we will use a custom `sample_loader.py`:
 
@@ -191,64 +327,114 @@ def part_filter(part: str) -> bool:
 
 For more information please also read [](custom-sample-loader).
 
-(convert-to-wds)=
-## Convert to webdataset
+(wds-format-special)=
+### Special format
+Sometimes, your data will not be easily represented as a `field_map` explained above. 
+For example, your data may contain
 
-### Webdataset Format
+* structured data like nested boxes for each sample
+* custom binary formats
+* xml / html / pickle etc.
+
+In those cases you have two options:
+
+1. Creating a custom `sample_loader.py` in the `.nv-meta` folder as explained above.
+    * This will typically do the job and is preferred if you only have to do some small conversions.
+2. Using a `CrudeWebdataset`
+    * For more intricate conversions, you can use a CrudeWebdataset that will pass your samples in a raw form into your TaskEncoder where you can then convert them based on the subflavor for example. For more details see [](crude-data).
+
+Even for these specific wds formats, you would start preparing your data using the [dataset preparation command](#energon_data_prepare), but you will need to define a custom sample loader or select `CrudeWebdataset` in the dataprep wizard. 
+
+(data-on-disk)=
+## Dataset Format on Disk
+
+The energon library supports loading large multi-modal datasets from disk.
+To load the dataset, it must comply with the format described in this section.
+
+A valid energon dataset must contain an `.nv-meta` folder with certain files as shown below.
+
 ```
-shards
-├── shard_0000.tar
-│   ├── sample_0000.jpg
-│   ├── sample_0000.txt
-│   ├── sample_0000.detail.json
-│   ├── sample_0001.jpg
-│   ├── sample_0001.txt
-│   └── sample_0001.detail.json
-├── shard_0001.tar
-│   ├── sample_0002.jpg
-│   ├── sample_0002.txt
-│   ├── sample_0002.detail.json
-│   ├── sample_0003.jpg
-│   ├── sample_0003.txt
-│   └── sample_0003.detail.json
-└── ...
+my_dataset
+├── .nv-meta
+│   ├── dataset.yaml
+│   ├── split.yaml
+│   └── .info.yaml
+├── shards
+│   ├── shard_000.tar
+│   ├── shard_001.tar
+│   ├── ...
 ```
-The order of samples in the tar file is important. Samples with the same base name (~before the first dot of the filename) must follow each other.
-The base name is used to group the samples, i.e. in the example `sample_0000` is the first group name, with the part types `jpg`, `txt`, `detail.json`.
-If the default `webdataset` decoder is used, files are automatically parsed by extensions (e.g. ending on `.json` will automatically use `json.loads`, `.png` will load the image).
-Each sample is yielded as a `dict`. Here that would be:
-```py
-{
-    '__key__': 'sample_0000',
-    'jpg': torch.Tensor(...),
-    'txt': '...',
-    'detail.json': {'key': 'value', 'key2': 'value2', ...},
-}
-{
-    '__key__': 'sample_0001',
-    'jpg': torch.Tensor(...),
-    'txt': '...',
-    'detail.json': {'key': 'value', 'key2': 'value2', ...},
-}
+
+Note that the `shards` folder is just an example. The shards and their folder can be named differently. 
+It does not even need to be a webdataset. [Other formats](#flavors_details) are supported, but the `.nv-meta` structure
+is always the same.
+
+### Files in `.nv-meta`
+#### dataset.yaml 
+The `dataset.yaml` contains the dataset definition, i.e. the dataset class to use as loader, optional decoders.
+If you want to create such a file, you should consider using the [CLI preparation tool](energon_data_prepare).
+
+Here's an example:
+```yaml
+sample_type:
+  __module__: megatron.energon
+  __class__: CaptioningSample
+field_map:
+  image: jpg
+  caption: txt
+```
+
+The `__class__` and `__module__` values help the library construct the correct object.
+The `field_map` specifies how the fields from each webdataset sample are mapped to the members of the sample dataclass.
+
+In this example, the dataclass is
+```python
+@dataclass
+class CaptioningSample(Sample):
+    image: torch.Tensor
+    caption: str
+```
+
+In some scenarios, you might need a more advanced way to map samples into the dataclass.
+In that case, please check out [this page](advanced_dataformat).
+
+#### split.yaml
+This file contains the splits (i.e. train, val, test), each a list of the shards for each split.
+It can also contain a "denylist" to exclude certain samples or shards from training.
+Example:
+
+```yaml
+exclude: []
+split_parts:
+  train:
+  - shards/shard_000.tar
+  - shards/shard_001.tar
+  val:
+  - shards/shard_002.tar
+  test:
+  - shards/shard_003.tar
+```
+
+To exclude certain shards or samples, you need to add those to the `exclude` list as follows:
+
+```yaml
+exclude:
+  - shards/shard_004.tar
+  - shards/shard_001.tar/000032
+  - shards/shard_001.tar/000032
+split_parts:
 ...
 ```
+The above code excludes the entire shard `004` and two samples from the shard `001`.
 
-### Build using Python
-```py
-import webdataset as wds
+#### .info.yaml
+The hidden info file is auto-generated and contains statistics about each shard.
 
-
-if __name__ == '__main__':
-    # Wherever your dataset comes from
-    my_dataset = ...
-  
-    with wds.ShardWriter("parts/data-%d.tar", maxcount=10000) as shard_writer:
-        for key, data in my_dataset:
-            sample = {
-                "__key__": key,
-                "png": data['image'],
-            }
-            shard_writer.write(sample)
+Example:
+```yaml
+shard_counts:
+  shards/000.tar: 1223
+  shards/001.tar: 1420
+  shards/002.tar: 1418
+  shards/003.tar: 1358
 ```
-
-

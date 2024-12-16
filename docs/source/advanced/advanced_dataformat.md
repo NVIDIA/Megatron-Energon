@@ -4,7 +4,7 @@ SPDX-License-Identifier: BSD-3-Clause -->
 (custom-sample-loader)=
 # Custom Sample Loader
 
-As discussed in [](data_on_disk), you can specify how samples are loaded from disk and mapped to
+As discussed in [](/basic/data_prep), you can specify how samples are loaded from disk and mapped to
 the sample dataclass in memory.
 
 Instead of using a `field_map` in your `dataset.yaml`, you can also create custom python code for sample loading.

@@ -31,7 +31,6 @@ maxdepth: 2
 ---
 basic/quickstart
 basic/data_prep
-basic/data_on_disk
 basic/basics_flow
 basic/task_encoders
 basic/metadatasets
