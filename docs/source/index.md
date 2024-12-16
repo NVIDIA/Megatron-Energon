@@ -5,7 +5,9 @@ SPDX-License-Identifier: BSD-3-Clause -->
 
 This is the documentation of Megatron's multi-modal data loader "Energon".
 
-We recommend getting started in the [Introduction](introduction) section, which introduces this package and contains a few code snippets to get you started quickly.
+We recommend getting started in the [Introduction](intro/introduction) section, which introduces this package and contains a few code snippets to get you started quickly.
+
+**TODO!**
 
 To better understand the underlying concepts, please read the [Basic Concepts](basics_dataconcepts) section.
 
@@ -17,34 +19,22 @@ caption: Introduction
 maxdepth: 2
 ---
 
-introduction
-installation
+intro/introduction
+intro/installation
 ```
 
 
 ```{toctree}
 ---
-caption: Usage
+caption: Basic Usage
 maxdepth: 2
 ---
-simple_use
-faq
-cli
-data_prep
-remote_dataset
-```
-
-
-```{toctree}
----
-caption: Basic Concepts
-maxdepth: 2
----
-data_on_disk
-basics_flow
-basics_dataconcepts
-task_encoders
-metadatasets
+basic/quickstart
+basic/data_prep
+basic/data_on_disk
+basic/basics_flow
+basic/task_encoders
+basic/metadatasets
 ```
 
 
@@ -53,23 +43,32 @@ metadatasets
 caption: Advanced Usage
 maxdepth: 2
 ---
-advanced_dataformat
-repro_scaling
-packing
-grouping
-joining_datasets
-blending_datasets
+advanced/remote_dataset
+advanced/advanced_dataformat
+advanced/repro_scaling
+advanced/packing
+advanced/grouping
+advanced/joining_datasets
+advanced/blending_datasets
 ```
 
 
 ```{toctree}
 ---
-caption: Developer's Manual
+caption: API
 maxdepth: 2
 ---
+api/modules
+api/cli
+```
 
-contrib_guidelines
-modules
+
+```{toctree}
+---
+caption: Internals
+maxdepth: 2
+---
+internals/contrib_guidelines
 ```
 
 # Indices and tables

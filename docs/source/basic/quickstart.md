@@ -1,12 +1,12 @@
 <!--- Copyright (c) 2024, NVIDIA CORPORATION.
 SPDX-License-Identifier: BSD-3-Clause -->
 
-# Simple Library Usage
+# Quickstart
 
 You can use Megatron Energon to load datasets in the energon dataset format. This format is essentially [WebDataset](https://github.com/webdataset/webdataset) with some meta data added.
 
 For a moment let's assume you already have prepared a dataset in the needed format, and it's stored on
-disk at `/my/dataset/path`.
+disk at `/my/dataset/path`. If you want to create a dataset now, check out [](data_prep).
 
 ```{admonition} Good to know
 :class: tip
