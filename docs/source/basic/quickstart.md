@@ -63,7 +63,25 @@ A value of 100 for both settings for image datasets seems to work well (i.e. bal
 Setting the sequence length to a very small size compared to the number of samples in the dataset will result in more random access, thus slowing down dataloading, so the recommendation is to set it to a high enough value.
 At the same time, a high value reduces the shuffling randomness, which requires a larger shuffle buffer size to compensate for that (i.e. higher memory footprint and longer state restore times).
 
-## Tutorial 1
+## Tutorial 1: Preparing the Dataset
+
+For running any tutorials, you'll need your data structured as webdataset. For more details and more options check out [][data_prep].
+
+For example, in your folder containing the tar files, run
+```sh
+energon prepare ./
+# Exemplary answers to interactive questions:
+Ratio: 8,1,1
+Dataset class: CaptioningWebdataset
+Field map: Yes
+  image: jpg
+  caption: txt  # if txt contains the caption
+# or
+  caption: json[caption]  # if .json contains {"caption": "My nice image"}
+```
+
+
+## Tutorial 2: Loading a Dataset
 
 Let's be a bit more concrete and try out the above code with a real dataset.
 We are going to print the first batch and stop.
@@ -73,7 +91,7 @@ from megatron.energon import get_train_dataset, get_loader, WorkerConfig
 
 ds = get_train_dataset(
     '/path/to/your/dataset',
-    batch_size=1,
+    batch_size=None,
     shuffle_buffer_size=100,
     max_samples_per_sequence=100,
     worker_config=WorkerConfig.default_worker_config(),
@@ -89,7 +107,7 @@ for batch in loader:
 This prints
 
 ```text
-CaptioningSample(__key__=['part_00123/00403.tar/004030195'], image=tensor([[[[0.4549, 0.4784, 0.5059,  ..., 0.8392, 0.8275, 0.7961],
+CaptioningSample(__key__='part_00123/00403.tar/004030195', image=tensor([[[0.4549, 0.4784, 0.5059,  ..., 0.8392, 0.8275, 0.7961],
           [0.4549, 0.4784, 0.5020,  ..., 0.6431, 0.6275, 0.5882],
           [0.4510, 0.4706, 0.4941,  ..., 0.6235, 0.6353, 0.6078],
           ...,
@@ -111,7 +129,7 @@ CaptioningSample(__key__=['part_00123/00403.tar/004030195'], image=tensor([[[[0.
           ...,
           [0.2667, 0.2392, 0.2706,  ..., 0.6510, 0.6000, 0.6235],
           [0.2863, 0.2549, 0.2863,  ..., 0.6235, 0.5765, 0.6039],
-          [0.3020, 0.2745, 0.3020,  ..., 0.6235, 0.5882, 0.6157]]]]), caption=['Cello Renting vs. Buying: Which is Right for You?'])
+          [0.3020, 0.2745, 0.3020,  ..., 0.6235, 0.5882, 0.6157]]]), caption='Cello Renting vs. Buying: Which is Right for You?')
 ```
 
 Awesome, it returns a {py:class}`CaptioningSample <megatron.energon.CaptioningSample>` with the attributes
@@ -125,7 +143,7 @@ Let's also talk about the {py:class}`WorkerConfig <megatron.energon.WorkerConfig
 you always need to provide a worker config to the dataset so specify how many ranks and workers there are and which rank you're currently on.
 For this simple tutorial, we don't really distribute the work, so we use only a single rank with 2 workers.
 
-## Tutorial 2
+## Tutorial 3: Batch Size
 
 Actually, we would like to use a `batch_size` of more than one, let's go with 2 for now.
 
@@ -159,7 +177,7 @@ Hence, we can
 - either use an existing task encoder
 - or define a custom one (see [](task_encoders))
 
-## Tutorial 3
+## Tutorial 3: Blending using Metadataset
 
 A typical usecase is to blend multiple datasets of the same (or similar type) together.
 For example, you may want to blend the COCO dataset with the COYO dataset.
@@ -205,7 +223,7 @@ for batch in loader:
 If you need to handle samples from different datasets differently in your pipeline, you will want to use `subflavors`.
 For these and other details, check out the [](metadatasets) section.
 
-## Tutorial 4
+## Tutorial 4: Distributed Loading
 
 For multi-GPU support, you may need to adapt the worker config.
 So far we have only used the default worker config, which you can get by calling {py:func}`WorkerConfig.default_worker_config() <megatron.energon.WorkerConfig.default_worker_config>`.
@@ -238,7 +256,7 @@ for batch in loader:
     break
 ```
 
-## Tutorial 5
+## Tutorial 5: Saving and Restoring
 
 For saving and restoring the state (e.g. for autoresume), the loader must be instantiated with the savable loader.
 
@@ -279,3 +297,7 @@ ds = get_train_dataset(
 loader = get_savable_loader(ds)
 loader.restore_state(state)
 ```
+
+## More Features
+
+Check out the topics in Advanced Usage for details on specific features.
