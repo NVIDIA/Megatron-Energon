@@ -72,10 +72,6 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
             sum(len(dataset) * weight / total for dataset, weight in self.dataset_weights)
         ) * len(self.dataset_weights)
 
-    def _repeat(self, dataset: SavableDataset[T_sample]) -> Generator[T_sample, None, None]:
-        while True:
-            yield from dataset
-
     def __iter__(self) -> Iterator[T_sample]:
         assert self.worker_has_samples(), "Cannot blend all empty datasets"
         datasets, weights = zip(
@@ -85,13 +81,24 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
                 if dataset.worker_has_samples()
             ]
         )
-        dataset_iters = [self._repeat(dataset) for dataset in datasets]
+        dataset_iters = [iter(dataset) for dataset in datasets]
         weights = torch.tensor(weights, dtype=torch.float32)
         probs = weights / weights.sum()
+        assert torch.all(probs > 0), "Negative weights are not allowed"
 
         while True:
             ds_idx = self._worker_rng.choice_idx(probs=probs)
-            sample = next(dataset_iters[ds_idx])
+            if dataset_iters[ds_idx] is None:
+                if all(dataset_iter is None for dataset_iter in dataset_iters):
+                    break
+                continue
+            try:
+                sample = next(dataset_iters[ds_idx])
+            except StopIteration:
+                dataset_iters[ds_idx] = None
+                probs[ds_idx] = 0
+                if all(dataset_iter is None for dataset_iter in dataset_iters):
+                    break
             yield add_sample_restore_key(sample, ds_idx, src=self)
 
     def worker_has_samples(self) -> bool:

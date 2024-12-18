@@ -9,7 +9,7 @@ from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 from megatron.energon.metadataset.dataset_loader import DatasetLoader
-from megatron.energon.metadataset.loader_interface import DatasetLoaderInterface
+from megatron.energon.metadataset.loader_interface import DatasetBlendMode, DatasetLoaderInterface
 from megatron.energon.worker import WorkerConfig
 
 
@@ -61,7 +61,7 @@ class DatasetReference:
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: int = 1,
         **kwargs,
-    ) -> List[Tuple[BaseCoreDatasetFactory, float]]:
+    ) -> Tuple[DatasetBlendMode, List[Tuple[BaseCoreDatasetFactory, Union[float, int, None]]]]:
         if self.subflavors is not None:
             subflavors = {**self.subflavors, **(subflavors or {})}
         assert self._dataset is not None
@@ -98,12 +98,11 @@ class MetadatasetBlender:
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: int = 1,
         **kwargs,
-    ) -> List[Tuple[BaseCoreDatasetFactory, float]]:
+    ) -> Tuple[DatasetBlendMode, List[Tuple[BaseCoreDatasetFactory, Union[float, int, None]]]]:
         sum_weight = sum(dataset.weight for dataset in self.datasets)
-        return [
-            (loaded_dataset, weight * dataset.weight / sum_weight)
-            for dataset in self.datasets
-            for loaded_dataset, weight in dataset.get_datasets(
+        datasets = []
+        for dataset in self.datasets:
+            inner_blend_mode, inner_datasets = dataset.get_datasets(
                 training=training,
                 split_part=split_part,
                 worker_config=worker_config,
@@ -112,7 +111,18 @@ class MetadatasetBlender:
                 shuffle_over_epochs_multiplier=shuffle_over_epochs_multiplier,
                 **kwargs,
             )
-        ]
+            if inner_blend_mode not in (DatasetBlendMode.NONE, DatasetBlendMode.DATASET_WEIGHT):
+                raise ValueError(
+                    "Can only blend datasets which are of the same blend mode. Cannot mix blend with blend_epochized."
+                )
+            for loaded_dataset, weight in inner_datasets:
+                if inner_blend_mode == DatasetBlendMode.DATASET_WEIGHT:
+                    assert isinstance(weight, float)
+                else:
+                    assert weight is None
+                    weight = 1.0
+                datasets.append((loaded_dataset, weight * dataset.weight / sum_weight))
+        return DatasetBlendMode.DATASET_WEIGHT, datasets
 
 
 class Metadataset(DatasetLoaderInterface):
@@ -142,7 +152,7 @@ class Metadataset(DatasetLoaderInterface):
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: int = 1,
         **kwargs,
-    ) -> List[Tuple[BaseCoreDatasetFactory, float]]:
+    ) -> Tuple[DatasetBlendMode, List[Tuple[BaseCoreDatasetFactory, Union[float, int, None]]]]:
         return self._splits[split_part].get_datasets(
             training=training,
             split_part=split_part,

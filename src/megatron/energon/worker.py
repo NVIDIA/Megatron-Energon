@@ -51,9 +51,6 @@ class WorkerConfig:
     # 2. The worker_config passed to the data loader initialization, is used to set the seed for the
     #    torch, numpy and random libraries. This does not affect the dataset shuffling, but only the
     #    user code (e.g. code in TaskEncoder).
-    # Typically, you will not have to worry about this, and just use the same worker_config for both.
-    # However, if you need to, you can pass two different worker_configs to the dataset and the
-    # data loader.
     seed_offset: int = 0
 
     #: The path to the debug file for the current worker. Should contain "{worker_id}" and "{pid}"

@@ -31,6 +31,7 @@ from megatron.energon.flavors.base_dataset import (
     SavableDataset,
 )
 from megatron.energon.flavors.crude import CrudeSample, CrudeWebdataset
+from megatron.energon.metadataset.loader_interface import DatasetBlendMode
 from megatron.energon.rng import SystemRng
 from megatron.energon.task_encoder.cooking import Cooker
 from megatron.energon.worker import WorkerConfig
@@ -46,6 +47,7 @@ from megatron.energon.wrappers import (
     PackingDataset,
     ShuffleBufferDataset,
 )
+from megatron.energon.wrappers.repeat_dataset import RepeatDataset
 
 T = TypeVar("T")
 V = TypeVar("V")
@@ -484,13 +486,15 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
     def build_train_datasets(
         self,
         *,
-        datasets: List[Tuple[BaseCoreDatasetFactory[T_sample], float]],
+        datasets: List[Tuple[BaseCoreDatasetFactory[T_sample], Union[float, int, None]]],
         worker_config: WorkerConfig,
         batch_size: Optional[int],
         batch_drop_last: bool = False,
         packing_buffer_size: Optional[int] = None,
         virtual_epoch_length: int = 0,
         shuffle_buffer_size: Optional[int] = None,
+        blend_mode: DatasetBlendMode = DatasetBlendMode.NONE,
+        repeat: bool = True,
     ) -> SavableDataset[T_batch]:
         """Combines train datasets to a single dataset."""
 
@@ -499,34 +503,60 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             if isinstance(dataset, CrudeWebdataset):
                 assert self.cookers, "CrudeWebdataset found, but no cookers registered."
 
-        if len(datasets) > 1:
+        global_workers = max(1, worker_config.num_workers) * worker_config.world_size
+        rotation_lengths = [len(dataset) for dataset, _ in datasets]
+        for i in range(1, len(rotation_lengths)):
+            rotation_lengths[i] += rotation_lengths[i - 1]
+        worker_rotation_offsets = [
+            rotation_length % global_workers for rotation_length in [0] + rotation_lengths[:-1]
+        ]
 
-            dataset_lengths = [len(d[0]) for d in datasets]
-            num_workers = max(1, worker_config.num_workers)
-            global_workers = num_workers * worker_config.world_size
-
-            # The worker offset for each dataset is the cumsum of the dataset lengths, but modulo the
-            # global number of workers.
-
-            worker_offsets = [
-                sum(dataset_lengths[:i]) % global_workers for i in range(len(datasets))
+        if repeat:
+            inner_datasets = [
+                (
+                    RepeatDataset(
+                        dataset.build(worker_rotation_offset=worker_rotation_offset),
+                        worker_config=worker_config,
+                    ),
+                    1.0 if weight is None else float(weight),
+                )
+                for (dataset, weight), worker_rotation_offset in zip(
+                    datasets, worker_rotation_offsets
+                )
+            ]
+        else:
+            assert blend_mode in (
+                DatasetBlendMode.NONE,
+                DatasetBlendMode.SAMPLE_REPETITIONS,
+            ) and all(
+                isinstance(repetitions, int) for _dataset, repetitions in datasets
+            ), "If repeat is False, the datasets must be repeated with integer weights."
+            inner_datasets = [
+                (
+                    (
+                        dataset.build(worker_rotation_offset=worker_rotation_offset)
+                        if repetition is None or repetition == 1
+                        else RepeatDataset(
+                            dataset.build(worker_rotation_offset=worker_rotation_offset),
+                            worker_config=worker_config,
+                        )
+                    ),
+                    len(dataset) * (1 if repetition is None else int(repetition)),
+                )
+                for (dataset, repetition), worker_rotation_offset in zip(
+                    datasets, worker_rotation_offsets
+                )
             ]
 
-            built_datasets = []
-            for (dataset, weight), worker_offset in zip(datasets, worker_offsets):
-                built_datasets.append(
-                    (
-                        dataset.build(worker_rotation_offset=worker_offset),
-                        weight,
-                    )
-                )
-
+        if len(inner_datasets) > 1:
+            # The worker offset for each dataset is the cumsum of the dataset lengths, but modulo the
+            # global number of workers.
             dataset = BlendDataset(
-                *built_datasets,
+                *inner_datasets,
                 worker_config=worker_config,
             )
         elif len(datasets) == 1:
-            dataset = datasets[0][0].build()
+            dataset = inner_datasets[0][0]
         else:
             raise ValueError("No datasets given.")
         if shuffle_buffer_size is not None and shuffle_buffer_size > 1:
@@ -557,7 +587,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
     def build_val_datasets(
         self,
         *,
-        datasets: List[Tuple[BaseCoreDatasetFactory[T_sample], float]],
+        datasets: List[BaseCoreDatasetFactory[T_sample]],
         worker_config: WorkerConfig,
         batch_size: int,
         batch_drop_last: bool = False,
@@ -567,17 +597,17 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         """Combines val datasets to a single dataset."""
 
         # Check if there's a CrudeWebdataset but no cookers
-        for dataset, _ in datasets:
+        for dataset in datasets:
             if isinstance(dataset, CrudeWebdataset):
                 assert self.cookers, "CrudeWebdataset found, but no cookers registered."
 
         if len(datasets) > 1:
             dataset = ConcatDataset(
-                *[dataset.build() for dataset, _ in datasets],
+                *[dataset.build() for dataset in datasets],
                 worker_config=worker_config,
             )
         elif len(datasets) == 1:
-            dataset = datasets[0][0].build()
+            dataset = datasets[0].build()
         else:
             raise ValueError("No datasets given.")
         dataset = self.build_cook_crude_sample(dataset, worker_config=worker_config)

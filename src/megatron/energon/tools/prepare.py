@@ -13,7 +13,7 @@ import click
 import yaml
 
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors import BaseWebdatasetFactory, CrudeWebdataset
+from megatron.energon.flavors import BaseWebdatasetFactory
 from megatron.energon.flavors.base_dataset import Sample
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 

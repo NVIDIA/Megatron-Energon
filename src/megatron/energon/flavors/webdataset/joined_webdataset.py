@@ -190,7 +190,6 @@ class JoinedWebdatasetFactory(
             worker_config=self.worker_config,
             part_filter=self.part_filter,
             exclude=self.sample_exclude,
-            loop=self.training,
             shuffle_over_epochs=self.shuffle_over_epochs if self.training else None,
             parallel_shard_iters=parallel_shard_iters,
             dataset_join_method=self.join_method,
