@@ -169,6 +169,7 @@ class TestDataset(unittest.TestCase):
             path,
             [f"parts/data-{{0..{total_shards-1}}}.tar"],
             split_parts_ratio=[("train", 1.0)],
+            # shuffle_seed=None,
         )
 
         with open(path / MAIN_FOLDER_NAME / "dataset.yaml", "w") as f:
@@ -1674,33 +1675,61 @@ class TestDataset(unittest.TestCase):
 
     def test_in_order(self):
 
-        def run_test(num_workers: int, in_order: bool):
-            worker_config = WorkerConfig(rank=0, world_size=1, num_workers=num_workers)
-            loader = get_loader(
-                get_val_dataset(
-                    self.dataset_path,
-                    split_part="train",
-                    batch_size=1,
-                    worker_config=worker_config,
-                    in_order=in_order,
-                )
+        global_order = list(range(30, 50)) + list(range(0, 30))
+
+        def run_test(num_workers: int, world_size: int, in_order: bool):
+            print(
+                f"Testing for {num_workers} workers, {world_size} world size, in_order={in_order}"
             )
+            all_keys = None
+            all_numbers = None
+            for rank in range(world_size):
+                print(f"  Running for rank {rank}")
+                worker_config = WorkerConfig(
+                    rank=rank, world_size=world_size, num_workers=num_workers
+                )
+                loader = get_loader(
+                    get_val_dataset(
+                        self.dataset_path,
+                        split_part="train",
+                        batch_size=1,
+                        worker_config=worker_config,
+                        in_order=in_order,
+                    )
+                )
 
-            # Given that each key ends with /0000XX, extract the number for the first 10 samples and assert it's increasing
+                # Given that each key ends with /0000XX, extract the number for the first 10 samples and assert it's increasing
 
-            keys = [batch.__key__[0] for batch, _ in zip(loader, range(20))]
-            print(keys)
-            numbers = [int(key.split("/")[-1]) for key in keys]
-            print(numbers)
+                keys = [batch.__key__[0] for batch, _ in zip(loader, range(20))]
+                print("keys:", keys)
+                if all_keys is None:
+                    all_keys = [[key] for key in keys]
+                else:
+                    for all_keys_, key in zip(all_keys, keys):
+                        all_keys_.append(key)
+                numbers = [int(key.split("/")[-1]) for key in keys]
+                print("numbers:", numbers)
+                if all_numbers is None:
+                    all_numbers = [[number] for number in numbers]
+                else:
+                    for all_numbers_, number in zip(all_numbers, numbers):
+                        all_numbers_.append(number)
+            print("All Numbers:", all_numbers)
 
             if in_order:
-                assert numbers == list(range(30, 50))
+                assert [n for an in all_numbers for n in an] == global_order[: world_size * 20]
             else:
-                assert numbers != list(range(30, 50))
+                assert [n for an in all_numbers for n in an] != global_order[: world_size * 20]
 
         # Run different variants of the test
-        for num_workers, in_order in [(2, False), (1, True), (2, True), (5, True)]:
-            run_test(num_workers, in_order)
+        for num_workers, world_size, in_order in [
+            (2, 2, False),
+            (1, 1, True),
+            (2, 1, True),
+            (1, 2, True),
+            (5, 3, True),
+        ]:
+            run_test(num_workers, world_size, in_order)
 
 
 if __name__ == "__main__":

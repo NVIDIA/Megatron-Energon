@@ -226,7 +226,9 @@ class Sharder:
 
         num_workers = max(1, worker_config.num_workers)
 
-        total_samples = sum(subshards[0].count for subshards in shards)
+        global_total_samples = sum(subshards[0].count for subshards in shards)
+
+        global_num_workers = num_workers * worker_config.world_size
 
         # Iterate through each individual sample and assign it to a worker
         # in a round-robin fashion.
@@ -234,10 +236,15 @@ class Sharder:
 
         result = []
         for worker_idx in range(num_workers):
-            worker_offset = worker_config.rank * num_workers + worker_idx
+            # Rank0Worker0 -> Sample0, Rank1Worker0 -> Sample1, Rank2Worker0 -> Sample2, ...
+            # Rank0Worker1 -> Sample0+worldsize, Rank1Worker0 -> Sample1+worldsize, Rank2Worker0 -> Sample2+worldsize, ...
+            # Rank0WorkerW -> Sample0+worldsize*W, Rank1Worker0 -> Sample1+worldsize*W, Rank2Worker0 -> Sample2+worldsize*W, ...
+            # Rank0Worker0 -> Sample0+(worldsize*num_workers), Rank1Worker0 -> Sample1+(worldsize*num_workers), Rank2Worker0 -> Sample2+(worldsize*num_workers), ...
+
+            sample_offset = worker_idx * worker_config.world_size + worker_config.rank
 
             worker_shards = []
-            for sample_idx in range(worker_offset, total_samples, num_workers):
+            for sample_idx in range(sample_offset, global_total_samples, global_num_workers):
                 split_shards_result = next(
                     iter(
                         cls._split_shards(
