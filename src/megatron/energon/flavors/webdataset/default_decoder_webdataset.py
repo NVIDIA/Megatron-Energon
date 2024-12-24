@@ -3,9 +3,11 @@
 
 from typing import Any, Callable, Dict, Generic, Literal, Optional, TypeVar
 
+import re
 import webdataset
 
 from megatron.energon.epathlib import EPath
+from megatron.energon.flavors.webdataset.decode_video_frames import decode_video_frames
 from megatron.energon.flavors.webdataset.default_generic_webdataset import (
     DefaultGenericWebdatasetFactory,
 )
@@ -88,12 +90,19 @@ class DefaultDecoderWebdatasetFactory(DefaultGenericWebdatasetFactory[T_sample],
         raise exc
 
     def _video_decoder(self, key, data):
-        """Extract the video data from default video extensions."""
-        # TODO: This function could be more efficient. It will write the data to `/tmp`,
-        # then load it using `torchvision.io.video.read_video` which uses `av.open` from pyav.
-        # pyav allows providing a file-like object, but torchvision does not expose that interface.
-        # (https://github.com/pytorch/vision/issues/8438)
-        video = webdataset.torch_video(key, data)
+        """
+        Extract the video data from default video extensions.
+
+        Args:
+            key: video file extension
+            data: raw video bytes
+        """
+        extension = re.sub(r".*[.]", "", key)
+        # TODO(jbarker): we should add a debug log here
+        if extension not in "mov mp4 webm mkv".split():
+            return None
+        # TODO(jbarker): make the magic numbers configurable
+        video = decode_video_frames(data, 64, (224, 224))
         if video is not None:
             return VideoData(
                 frames=video[0].permute((0, 3, 1, 2)),
