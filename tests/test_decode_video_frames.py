@@ -80,7 +80,7 @@ class TestVideoDecode(unittest.TestCase):
             return mae <= tolerance
 
         # we allow small numerical differences due to different resize implementations
-        assert are_resized_frames_close(video_tensor, strided_resized_baseline_tensor), \
+        assert are_resized_frames_close(video_tensor, strided_resized_baseline_tensor, tolerance=0.01), \
             "Energon decoded video does not match baseline"
 
 if __name__ == "__main__":
