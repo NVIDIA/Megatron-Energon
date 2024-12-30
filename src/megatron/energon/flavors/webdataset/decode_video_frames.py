@@ -24,7 +24,8 @@ def ts_to_frame(ts: int, average_rate: Fraction, time_base: Fraction) -> int:
 def get_frame_batch(
     video_file: io.BytesIO,
     frame_indices: Collection[int],
-    out_frame_size: tuple,
+    out_frame_size: tuple = None,
+    decode_audio: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor, dict]:
     """Gets a batch of frames at the given indices from a video file."""
     seeker: Fastseek = Fastseek(video_file)
@@ -80,12 +81,15 @@ def get_frame_batch(
                     <= target_pts + (average_frame_duration / 2)
                     <= frame.pts + average_frame_duration
                 ):
-                    frame = frame.reformat(
-                        width=out_frame_size[0],
-                        height=out_frame_size[1],
-                        format="rgb24",
-                        interpolation="BILINEAR",
-                    )
+                    if out_frame_size is not None:
+                        frame = frame.reformat(
+                            width=out_frame_size[0],
+                            height=out_frame_size[1],
+                            format="rgb24",
+                            interpolation="BILINEAR",
+                        )
+                    else:
+                        frame = frame.reformat(format="rgb24")
                     frames.append(torch.from_numpy(frame.to_ndarray()))
                     break
 
@@ -93,11 +97,12 @@ def get_frame_batch(
 
         # Decode all audio frames (or just a subset if you prefer)
         audio_frames = []
-        audio_iterator = input_container.decode(audio=0)
-        for audio_frame in audio_iterator:
-            # Convert audio frame to a NumPy array (shape: channels x samples)
-            audio_nd = audio_frame.to_ndarray()
-            audio_frames.append(torch.from_numpy(audio_nd))
+        if decode_audio:
+            audio_iterator = input_container.decode(audio=0)
+            for audio_frame in audio_iterator:
+                # Convert audio frame to a NumPy array (shape: channels x samples)
+                audio_nd = audio_frame.to_ndarray()
+                audio_frames.append(torch.from_numpy(audio_nd))
 
     # Stack video frames along dim=0 => [batch_size, channels, height, width]
     video_tensor = torch.stack(frames)
@@ -113,7 +118,7 @@ def get_frame_batch(
     return video_tensor, audio_tensor, metadata
 
 
-def decode_video_frames(data: bytes, frames: int, out_frame_size: tuple):
+def decode_video_frames(data: bytes, num_frames: int = -1, out_frame_size: tuple = None, decode_audio: bool = False):
 
     byte_stream = io.BytesIO(data)
 
@@ -125,7 +130,10 @@ def decode_video_frames(data: bytes, frames: int, out_frame_size: tuple):
                 [p for p in input_container.demux(video=0) if p.pts is not None]
             )
 
-    frame_indices = np.linspace(0, frame_count - 1, frames, dtype=int).tolist()
-    video_tensor, audio_tensor, metadata = get_frame_batch(byte_stream, frame_indices, out_frame_size)
+    if num_frames == -1:
+        num_frames = frame_count
+
+    frame_indices = np.linspace(0, frame_count - 1, num_frames, dtype=int).tolist()
+    video_tensor, audio_tensor, metadata = get_frame_batch(byte_stream, frame_indices, out_frame_size, decode_audio)
 
     return video_tensor, audio_tensor, metadata
