@@ -173,7 +173,6 @@ def get_audio_batch(
 
             # Decode audio frames for the duration of the clip
             decoded_samples = []
-            current_time = start_time
             for audio_frame in input_container.decode(audio=0):
                 # Check if we've gone past the end of the clip
                 frame_start_time = audio_frame.pts * audio_frame.time_base
@@ -186,9 +185,6 @@ def get_audio_batch(
                 # Append only the samples that fall within the clip's range
                 for channel_data in audio_nd:
                     decoded_samples.append(channel_data)
-
-                # Update current time (not strictly necessary but can help debugging)
-                current_time += audio_nd.shape[1] / sampling_rate
 
             # Combine samples and append to clips list
             if decoded_samples:
@@ -207,12 +203,11 @@ def get_clip_indices(sampling_rate, total_samples, num_clips, clip_duration_sec)
     clip_samples = int(clip_duration_sec * sampling_rate)
 
     if num_clips == 1:
-        # Single clip, center it
-        start = (total_samples - clip_samples) // 2
-        return [np.arange(start, start + clip_samples)]
+        # Single clip
+        return [np.arange(0, clip_samples)]
 
-    # Spacing between clip centers
-    spacing = (total_samples - clip_samples) / (num_clips - 1)
+    # Spacing between clip starts
+    spacing = total_samples / num_clips
 
     # Calculate start indices for each clip
     start_indices = [int(i * spacing) for i in range(num_clips)]
@@ -228,12 +223,8 @@ def decode_audio_samples(data: bytes, num_clips: int = 1, clip_duration: int = 1
     byte_stream = io.BytesIO(data)
 
     with av.open(byte_stream) as input_container:
-        if input_container.streams.audio[0].frames != 0:
-            sample_count = input_container.streams.audio[0].frames
-            sampling_rate = input_container.streams.audio[0].rate
-        else:  # Need to count
-            sampling_rate = input_container.streams.audio[0].rate
-            sample_count = input_container.streams.audio[0].duration * sampling_rate
+        sample_count = input_container.streams.audio[0].duration
+        sampling_rate = input_container.streams.audio[0].rate
 
     if num_clips == -1:
         num_clips = 1
