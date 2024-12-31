@@ -7,7 +7,7 @@ import re
 import webdataset
 
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.webdataset.decode_video_frames import decode_video_frames
+from megatron.energon.flavors.webdataset.decode_av_frames import decode_video_frames, decode_audio_samples
 from megatron.energon.flavors.webdataset.default_generic_webdataset import (
     DefaultGenericWebdatasetFactory,
 )
@@ -91,23 +91,36 @@ class DefaultDecoderWebdatasetFactory(DefaultGenericWebdatasetFactory[T_sample],
 
     def _video_decoder(self, key, data):
         """
-        Extract the video data from default video extensions.
+        Extract the video or audio data from default media extensions.
 
         Args:
-            key: video file extension
-            data: raw video bytes
+            key: media file extension
+            data: raw media bytes
         """
         extension = re.sub(r".*[.]", "", key)
         # TODO(jbarker): we should add a debug log here
-        if extension not in "mov mp4 webm mkv".split():
+        if extension in "mov mp4 webm mkv".split():
+            # TODO(jbarker): make the magic numbers configurable
+            media = decode_video_frames(
+                data,
+                num_frames=64,
+                out_frame_size=(224, 224),
+                decode_audio=False
+            )
+        elif extension in "flac mp3".split():
+            # TODO(jbarker): make the magic numbers configurable
+            media = decode_audio_samples(
+                data,
+                num_clips=5,
+                clip_duration=1,
+            )
+        else:
             return None
-        # TODO(jbarker): make the magic numbers configurable
-        video = decode_video_frames(data, 64, (224, 224))
-        if video is not None:
+        if media is not None:
             return VideoData(
-                frames=video[0].permute((0, 3, 1, 2)),
-                aframes=video[1],
-                info=video[2],
+                frames=media[0].permute((0, 3, 1, 2)),
+                aframes=media[1],
+                info=media[2],
             )
         return None
 
