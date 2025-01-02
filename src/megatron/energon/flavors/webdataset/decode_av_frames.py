@@ -141,60 +141,64 @@ def decode_video_frames(data: bytes, num_frames: int = -1, out_frame_size: tuple
 
 def get_audio_batch(
     audio_file: io.BytesIO,
-    clip_indices: Collection[Collection[int]]
-) -> tuple[torch.Tensor, torch.Tensor, dict]:
+    clip_indices: list[list[int]],
+    target_rate: int = 16000
+) -> tuple[torch.Tensor, dict]:
     """
-    Gets a batch of audio_samples at the given indices from an audio file.
-
-    Indices can be a list of lists of individual samples, i.e. multiple individual clips of audio
+    Gets a batch of audio samples at the given indices from an audio file,
+    resampled to target_rate. Indices correspond to the original sample rate.
     """
-    audio_file.seek(
-        0
-    )  # Reset the audio stream so that pyav can read the entire container
+    audio_file.seek(0)
 
     with av.open(audio_file) as input_container:
-        # Grab audio stream
         audio_stream = input_container.streams.audio[0]
+        orig_rate = audio_stream.sample_rate
+        duration_per_sample = 1 / orig_rate
+        metadata = {"audio_fps": orig_rate}
 
-        # Collect metadata
-        sampling_rate = audio_stream.sample_rate or 0
-        metadata = {"audio_fps": sampling_rate}
+        # Initialize resampler to convert each frame to target_rate
+        resampler = av.audio.resampler.AudioResampler(
+            format=audio_stream.format,
+            layout=audio_stream.layout,
+            rate=target_rate
+        )
 
         clips = []
-        duration_per_sample = 1 / sampling_rate
 
         for indices in clip_indices:
-            # Get the start and end times of the clip in seconds
             start_time = indices[0] * duration_per_sample
             end_time = indices[-1] * duration_per_sample
 
-            # Seek to the start time
+            # Seek near start time (convert to microseconds per PyAV docs)
             input_container.seek(int(start_time * av.time_base))
 
-            # Decode audio frames for the duration of the clip
             decoded_samples = []
-            for audio_frame in input_container.decode(audio=0):
-                # Check if we've gone past the end of the clip
-                frame_start_time = audio_frame.pts * audio_frame.time_base
-                if frame_start_time >= end_time:
+            for frame in input_container.decode(audio=0):
+                frame_start = frame.pts * frame.time_base
+                # Stop decoding if we've passed the end
+                if frame_start >= end_time:
                     break
 
-                # Convert audio frame to a NumPy array (shape: channels x samples)
-                audio_nd = audio_frame.to_ndarray()
+                # Resample this frame to target_rate
+                resampled_frame = resampler.resample(frame)[0]
+                frame_nd = resampled_frame.to_ndarray()  # (channels, samples)
+                decoded_samples.append(frame_nd)
 
-                # Append only the samples that fall within the clip's range
-                for channel_data in audio_nd:
-                    decoded_samples.append(channel_data)
-
-            # Combine samples and append to clips list
             if decoded_samples:
-                clip_tensor = torch.from_numpy(np.concatenate(decoded_samples, axis=-1))
-                if len(indices) > 2:
-                    clips.append(clip_tensor[:len(indices)])  # Trim to exact number of samples in clip
-                else:
-                    clips.append(clip_tensor)
+                # Combine all channels/samples into one array
+                clip_all = np.concatenate(decoded_samples, axis=-1)  # (channels, total_samples)
 
-        # Stack all clips into a batched tensor
+                # Figure out how many samples in the target rate we want
+                clip_duration_s = (indices[-1] - indices[0] + 1) / orig_rate
+                needed_samples = int(round(clip_duration_s * target_rate))
+
+                # Trim or pad as needed
+                clip_all = clip_all[0, :needed_samples]
+
+                # Convert to torch
+                clip_tensor = torch.from_numpy(clip_all)
+                clips.append(clip_tensor)
+
         return torch.stack(clips), metadata
 
 
@@ -207,7 +211,7 @@ def get_clip_indices(sampling_rate, total_samples, num_clips, clip_duration_sec)
         return [np.arange(0, clip_samples)]
 
     # Spacing between clip starts
-    spacing = total_samples / num_clips
+    spacing = total_samples // num_clips
 
     # Calculate start indices for each clip
     start_indices = [int(i * spacing) for i in range(num_clips)]
@@ -232,6 +236,6 @@ def decode_audio_samples(data: bytes, num_clips: int = 1, clip_duration: int = 1
     else:
         clip_indices = get_clip_indices(sampling_rate, sample_count, num_clips, clip_duration)
 
-    audio_tensor, metadata = get_audio_batch(byte_stream, clip_indices)
+    audio_tensor, metadata = get_audio_batch(byte_stream, clip_indices, target_rate=16000)
 
     return None, audio_tensor, metadata
