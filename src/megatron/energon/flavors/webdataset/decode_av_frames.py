@@ -10,8 +10,40 @@ from pathlib import Path
 import av
 import numpy as np
 import torch
+import torchaudio
 
 from megatron.energon.flavors.webdataset.fastseek import Fastseek
+
+DEFAULT_AUDIO_FRAME_SHIFT_MS = 10  # in milliseconds
+
+def waveform2melspec(waveform, sample_rate, num_mel_bins, target_length):
+    # Based on https://github.com/YuanGongND/ast/blob/d7d8b4b8e06cdaeb6c843cdb38794c1c7692234c/src/dataloader.py#L102
+    waveform -= waveform.mean()
+    fbank = torchaudio.compliance.kaldi.fbank(
+        waveform,
+        htk_compat=True,
+        sample_frequency=sample_rate,
+        use_energy=False,
+        window_type="hanning",
+        num_mel_bins=num_mel_bins,
+        dither=0.0,
+        frame_length=25,
+        frame_shift=DEFAULT_AUDIO_FRAME_SHIFT_MS,
+    )
+    # Convert to [mel_bins, num_frames] shape
+    fbank = fbank.transpose(0, 1)
+    # Pad to target_length
+    n_frames = fbank.size(1)
+    p = target_length - n_frames
+    # cut and pad
+    if p > 0:
+        fbank = torch.nn.functional.pad(fbank, (0, p), mode="constant", value=0)
+    elif p < 0:
+        fbank = fbank[:, 0:target_length]
+    # Convert to [1, mel_bins, num_frames] shape, essentially like a 1
+    # channel image
+    fbank = fbank.unsqueeze(0)
+    return fbank
 
 def frame_to_ts(frame: int, average_rate: Fraction, time_base: Fraction) -> int:
     return int(frame / average_rate / time_base)
@@ -142,7 +174,8 @@ def decode_video_frames(data: bytes, num_frames: int = -1, out_frame_size: tuple
 def get_audio_batch(
     audio_file: io.BytesIO,
     clip_indices: list[list[int]],
-    target_rate: int = 16000
+    target_rate: int = 16000,
+    convert_to_melspec: bool = False,
 ) -> tuple[torch.Tensor, dict]:
     """
     Gets a batch of audio samples at the given indices from an audio file,
@@ -157,11 +190,12 @@ def get_audio_batch(
         metadata = {"audio_fps": orig_rate}
 
         # Initialize resampler to convert each frame to target_rate
-        resampler = av.audio.resampler.AudioResampler(
-            format=audio_stream.format,
-            layout=audio_stream.layout,
-            rate=target_rate
-        )
+        if target_rate != orig_rate:
+            resampler = av.audio.resampler.AudioResampler(
+                format=audio_stream.format,
+                layout=audio_stream.layout,
+                rate=target_rate
+            )
 
         clips = []
 
@@ -179,9 +213,10 @@ def get_audio_batch(
                 if frame_start >= end_time:
                     break
 
-                # Resample this frame to target_rate
-                resampled_frame = resampler.resample(frame)[0]
-                frame_nd = resampled_frame.to_ndarray()  # (channels, samples)
+                # Resample this frame to target_rate if necessary
+                if target_rate != orig_rate:
+                    frame = resampler.resample(frame)[0]
+                frame_nd = frame.to_ndarray()  # (channels, samples)
                 decoded_samples.append(frame_nd)
 
             if decoded_samples:
@@ -197,32 +232,33 @@ def get_audio_batch(
 
                 # Convert to torch
                 clip_tensor = torch.from_numpy(clip_all)
+                if convert_to_melspec:
+                    clip_tensor = waveform2melspec(clip_tensor.float()[None, :], 16000, 128, 204)[0]
                 clips.append(clip_tensor)
 
         return torch.stack(clips), metadata
 
 
 def get_clip_indices(sampling_rate, total_samples, num_clips, clip_duration_sec):
-    # Calculate clip length in samples
-    clip_samples = int(clip_duration_sec * sampling_rate)
+    clip_samples = int(sampling_rate * clip_duration_sec)
+    assert clip_samples <= total_samples, \
+        "Requested clip duration exceeds total samples."
 
     if num_clips == 1:
-        # Single clip
         return [np.arange(0, clip_samples)]
 
-    # Spacing between clip starts
-    spacing = total_samples // num_clips
+    # If total length can accommodate all clips without overlap, space them out evenly
+    if num_clips * clip_samples <= total_samples:
+        spacing = total_samples // num_clips
+    else:
+        # Overlap: distribute clips so first starts at 0 and last ends at total_samples - clip_samples
+        spacing = (total_samples - clip_samples) // (num_clips - 1)
 
-    # Calculate start indices for each clip
-    start_indices = [int(i * spacing) for i in range(num_clips)]
-
-    # Get the range of indices for each clip
-    clip_indices = [np.arange(start, start + clip_samples) for start in start_indices]
-
-    return clip_indices
+    start_indices = [i * spacing for i in range(num_clips)]
+    return [np.arange(start, start + clip_samples) for start in start_indices]
 
 
-def decode_audio_samples(data: bytes, num_clips: int = 1, clip_duration: int = 1):
+def decode_audio_samples(data: bytes, num_clips: int = 1, clip_duration: int = 1, target_rate: int = 16000, convert_to_melspec: bool = False):
 
     byte_stream = io.BytesIO(data)
 
@@ -236,6 +272,6 @@ def decode_audio_samples(data: bytes, num_clips: int = 1, clip_duration: int = 1
     else:
         clip_indices = get_clip_indices(sampling_rate, sample_count, num_clips, clip_duration)
 
-    audio_tensor, metadata = get_audio_batch(byte_stream, clip_indices, target_rate=16000)
+    audio_tensor, metadata = get_audio_batch(byte_stream, clip_indices, target_rate, convert_to_melspec)
 
     return None, audio_tensor, metadata
