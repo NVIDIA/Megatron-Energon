@@ -83,12 +83,22 @@ def load_video_to_tensor(video_path):
 #         assert are_resized_frames_close(video_tensor, strided_resized_baseline_tensor, tolerance=0.01), \
 #             "Energon decoded video does not match baseline"
 
-def load_audio_to_tensor(audio_path):
+def load_audio_to_tensor(audio_path, target_rate=16000):
     container = av.open(audio_path)
+    audio_stream = container.streams.audio[0]
+
+    # Initialize resampler to convert each frame to target_rate
+    resampler = av.audio.resampler.AudioResampler(
+        format=audio_stream.format,
+        layout=audio_stream.layout,
+        rate=target_rate
+    )
+
     frames = []
 
     for frame in container.decode(audio=0):
-        frames.append(torch.from_numpy(frame.to_ndarray()))
+        resampled_frame = resampler.resample(frame)[0]
+        frames.append(torch.from_numpy(resampled_frame.to_ndarray()))
 
     audio_tensor = torch.cat(frames, 1)
     return audio_tensor
@@ -129,7 +139,10 @@ class TestAudioDecode(unittest.TestCase):
 
         # get strided frames from baseline complete video tensor
         # this is a little pointless as Energon does this the same way
-        clip_indices = get_clip_indices(32000, 320000, 5, 1)
+        # e.g. shape [channels, total_length]
+        total_samples = self.complete_audio_tensor.shape[1] - 1
+        clip_indices = get_clip_indices(16000, total_samples, 5, 1)
+
         # now resize the baseline frames
         clips = []
         for indices in clip_indices:
@@ -137,11 +150,19 @@ class TestAudioDecode(unittest.TestCase):
         clips_baseline_tensor = torch.stack(clips)
 
         # TODO(jbarker): Fix this test, sub-sampling the full tensor should match energon
-        # assert (audio_tensor == clips_baseline_tensor).all(), \
-        #     "Energon decoded audio does not match baseline"
-        assert audio_tensor.shape == torch.Size([5, 32000]), \
-            "Energon decoded audio clips have wrong size"
+        assert (audio_tensor == clips_baseline_tensor).all(), \
+            "Energon decoded audio does not match baseline"
+        # assert audio_tensor.shape == torch.Size([5, 16000]), \
+        #     "Energon decoded audio clips have wrong size"
 
 if __name__ == "__main__":
+
+    ## VSCODE DEBUGGER INIT
+    import os
+    if int(os.environ["RANK"]) == 0:
+        import debugpy
+        debugpy.listen(("0.0.0.0", 5678))
+        print(">>>> RANK 0 IS WAITING FOR DEBUGGER...")
+        debugpy.wait_for_client()
 
     unittest.main()
