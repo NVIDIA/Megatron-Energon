@@ -3,6 +3,7 @@
 
 from typing import Any, Callable, Dict, Generic, Literal, Optional, TypeVar
 
+import functools
 import re
 import webdataset
 
@@ -58,6 +59,13 @@ class DefaultDecoderWebdatasetFactory(DefaultGenericWebdatasetFactory[T_sample],
         auto_decode: bool = True,
         image_decode: ImageDecoder = "torchrgb",
         ignore_decoder_errors: bool = False,
+        audio_convert_to_melspec: bool = False,
+        audio_clip_duration: int = 1,
+        audio_num_clips: int = -1,
+        audio_target_rate: int = 16000,
+        video_decode_audio: bool = False,
+        video_num_frames: int = 64,
+        video_out_frame_size: tuple = (224, 224),
         **kwargs,
     ):
         """
@@ -78,7 +86,17 @@ class DefaultDecoderWebdatasetFactory(DefaultGenericWebdatasetFactory[T_sample],
             self._decoder = webdataset.autodecode.Decoder(
                 [
                     webdataset.autodecode.imagehandler(self.image_decode),
-                    self._video_decoder,
+                    self._av_decoder,
+                    functools.partial(
+                        self._av_decoder,
+                        audio_convert_to_melspec=audio_convert_to_melspec,
+                        audio_clip_duration=audio_clip_duration,
+                        audio_num_clips=audio_num_clips,
+                        audio_target_rate=audio_target_rate,
+                        video_decode_audio=video_decode_audio,
+                        video_num_frames=video_num_frames,
+                        video_out_frame_size=video_out_frame_size,
+                    ),
                 ]
             )
         else:
@@ -89,7 +107,17 @@ class DefaultDecoderWebdatasetFactory(DefaultGenericWebdatasetFactory[T_sample],
             return True
         raise exc
 
-    def _video_decoder(self, key, data):
+    def _av_decoder(self,
+                    key,
+                    data,
+                    audio_convert_to_melspec,
+                    audio_clip_duration,
+                    audio_num_clips,
+                    audio_target_rate,
+                    video_decode_audio,
+                    video_num_frames,
+                    video_out_frame_size,
+                    ):
         """
         Extract the video or audio data from default media extensions.
 
@@ -103,16 +131,18 @@ class DefaultDecoderWebdatasetFactory(DefaultGenericWebdatasetFactory[T_sample],
             # TODO(jbarker): make the magic numbers configurable
             media = decode_video_frames(
                 data,
-                num_frames=64,
-                out_frame_size=(224, 224),
-                decode_audio=False
+                num_frames=video_num_frames,
+                out_frame_size=video_out_frame_size,
+                decode_audio=video_decode_audio,
             )
         elif extension in "flac mp3".split():
             # TODO(jbarker): make the magic numbers configurable
             media = decode_audio_samples(
                 data,
-                num_clips=5,
-                clip_duration=1,
+                convert_to_melspec=audio_convert_to_melspec,
+                num_clips=audio_num_clips,
+                clip_duration=audio_clip_duration,
+                target_rate=audio_target_rate,
             )
         else:
             return None
