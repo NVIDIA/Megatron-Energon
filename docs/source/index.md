@@ -5,13 +5,14 @@ SPDX-License-Identifier: BSD-3-Clause -->
 
 This is the documentation of Megatron's multi-modal data loader "Energon".
 
-We recommend getting started in the [Introduction](intro/introduction) section, which introduces this package and contains a few code snippets to get you started quickly.
+We recommend getting started in the [Introduction](intro/introduction) section, which explains what Energon is and how to install it.
 
-**TODO!**
+Once installed, check out the **Basic Usage** section starting with [Quickstart](basic/quickstart) for some basic examples and tutorials.
+Some underlying concepts, will be explained in the rest of that section.
 
-To better understand the underlying concepts, please read the [Basic Concepts](basics_dataconcepts) section.
+For specific use cases and advanced usage, please read **Advanced Usage**.
 
-In the end you will also find a [code documentation](modules) with the most important classes and methods.
+In the end you will also find some documentation on how to interface with energon programmatically and how to contribute to the code base.
 
 ```{toctree}
 ---
@@ -48,7 +49,6 @@ advanced/repro_scaling
 advanced/packing
 advanced/grouping
 advanced/joining_datasets
-advanced/blending_datasets
 ```
 
 

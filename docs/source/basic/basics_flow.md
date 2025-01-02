@@ -3,7 +3,7 @@ SPDX-License-Identifier: BSD-3-Clause -->
 
 # Data Flow
 
-![energon data flow](./images/data_flow.png)
+![energon data flow](../images/data_flow.png)
 
 
 (flavors_general)=

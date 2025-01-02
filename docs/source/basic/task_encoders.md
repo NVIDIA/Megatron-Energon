@@ -4,17 +4,20 @@ SPDX-License-Identifier: BSD-3-Clause -->
 # Task Encoders
 
 For writing your own task encoder, create a class based on {py:class}`DefaultTaskEncoder <megatron.energon.DefaultTaskEncoder>`
-and override one or more of the following methods. The data flow of {py:func}`get_dataset <megatron.energon.get_dataset>` 
-(or it's simplified aliases {py:func}`get_train_dataset <megatron.energon.get_train_dataset>` / {py:func}`get_val_dataset <megatron.energon.get_val_dataset>`) 
-is as follows:
+and override one or more of the following methods. The data flow of {py:func}`get_train_dataset <megatron.energon.get_train_dataset>` or {py:func}`get_val_dataset <megatron.energon.get_val_dataset>` is as follows:
 
-- {py:func}`def encode_sample(self, sample: T_sample) -> T_encoded_sample <megatron.energon.DefaultTaskEncoder.encode_sample>`: Transform the raw data from the dataset (e.g. augment/transform images, tokenize a single sample).
-- (optionally limit the dataset size)
-- {py:meth}`def select_samples_to_pack(self, samples: List[T_encoded_sample]) -> List[List[T_encoded_sample]] <megatron.energon.TaskEncoder.select_samples_to_pack>`: Optional. Allows for efficient sample packing.
-- {py:meth}`def pack_selected_samples(self, samples: List[T_encoded_sample]) -> T_batch_sample] <megatron.energon.TaskEncoder.pack_selected_samples>`: Required if select_samples_to_pack is used. Compresses a group of samples to a single sample.
+- {py:func}`def encode_sample(self, sample: T_sample) -> T_encoded_sample <megatron.energon.DefaultTaskEncoder.encode_sample>`
+  - Transform the raw data from the dataset (e.g. augment/transform images, tokenize a single sample).
+- (optionally limit the dataset size, based on the `limit` argument)
+- {py:meth}`def select_samples_to_pack(self, samples: List[T_encoded_sample]) -> List[List[T_encoded_sample]] <megatron.energon.TaskEncoder.select_samples_to_pack>`
+  - Optional. Allows for efficient sample packing.
+- {py:meth}`def pack_selected_samples(self, samples: List[T_encoded_sample]) -> T_batch_sample] <megatron.energon.TaskEncoder.pack_selected_samples>`
+  - Required if select_samples_to_pack is used. Compresses a group of samples to a single sample.
 - (samples are collected for a batch)
-- {py:meth}`def batch(self, batch: List[T_encoded_sample]) -> T_raw_batch <megatron.energon.DefaultTaskEncoder.batch>`: Collate the batch to a single sample, defaults to padded batching for tensors, lists for everything else.
-- {py:meth}`def encode_batch(self, batch_data: T_raw_batch) -> T_batch <megatron.energon.DefaultTaskEncoder.encode_batch>`: Transform the batched data (e.g. tokenize the whole batch).
+- {py:meth}`def batch(self, batch: List[T_encoded_sample]) -> T_raw_batch <megatron.energon.DefaultTaskEncoder.batch>`
+  - Collate the batch to a single sample, defaults to padded batching for tensors, lists for everything else.
+- {py:meth}`def encode_batch(self, batch_data: T_raw_batch) -> T_batch <megatron.energon.DefaultTaskEncoder.encode_batch>`
+  -  Transform the batched data (e.g. tokenize the whole batch).
 - (optionally epochize the dataset)
 - (move data from the worker to the main process through the {py:class}`torch.data.DataLoader` via {py:func}`get_loader <megatron.energon.get_loader>`)
 - For batches based on {py:class}`Batch <megatron.energon.Batch>`, call {py:meth}`def pin_memory(self, batch: T_batch) -> T_batch <megatron.energon.Batch.pin_memory>`, or if not a dataclass, use default torch pinning (this must happen in the main process, thus after data loading)

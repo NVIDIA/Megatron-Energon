@@ -8,6 +8,8 @@ You can use Megatron Energon to load datasets in the energon dataset format. Thi
 For a moment let's assume you already have prepared a dataset in the needed format, and it's stored on
 disk at `/my/dataset/path`. If you want to create a dataset now, check out [](data_prep).
 
+If you simply want to use some dummy data for trying this out, checkout the unit test method `create_captioning_test_dataset` inside `tests/test_dataset.py`.
+
 ```{admonition} Good to know
 :class: tip
 You can also store your dataset inside an S3-compatible object store and load it from there! See [Remote Dataset](remote_dataset.md)
@@ -37,7 +39,7 @@ At first, we call {py:meth}`get_train_dataset <megatron.energon.get_train_datase
 The method will check what kind of dataset is on disk and instantiate the correct class for it.
 
 A worker configuration is always needed to specify how the work is distributed across multiple ranks and workers.
-In this simple example, we use only a single rank with two worker processes.
+In this simple example, we use a helper method {py:meth}`default_worker_config <megatron.energon.WorkerConfig.default_worker_config>` to get reasonable default values.
 
 The dataset should not be iterated directly, but used with a loader which handles the worker processes.
 The batches will contain samples of the sample type specified in the [task encoder](task_encoders.md).
@@ -65,12 +67,13 @@ At the same time, a high value reduces the shuffling randomness, which requires 
 
 ## Tutorial 1: Preparing the Dataset
 
-For running any tutorials, you'll need your data structured as webdataset. For more details and more options check out [][data_prep].
+For running any tutorials, you'll need your data structured as webdataset. For more details and more options check out [](data_prep).
 
 For example, in your folder containing the tar files, run
 ```sh
-energon prepare ./
-# Exemplary answers to interactive questions:
+$ energon prepare ./
+
+# Example answers to interactive questions:
 Ratio: 8,1,1
 Dataset class: CaptioningWebdataset
 Field map: Yes
@@ -83,7 +86,7 @@ Field map: Yes
 
 ## Tutorial 2: Loading a Dataset
 
-Let's be a bit more concrete and try out the above code with a real dataset.
+Let's be a bit more concrete and try out the above data loading code with a real dataset.
 We are going to print the first batch and stop.
 
 ```python
@@ -141,7 +144,7 @@ Awesome, it returns a {py:class}`CaptioningSample <megatron.energon.CaptioningSa
 
 Let's also talk about the {py:class}`WorkerConfig <megatron.energon.WorkerConfig>`. As energon is made for distributed training,
 you always need to provide a worker config to the dataset so specify how many ranks and workers there are and which rank you're currently on.
-For this simple tutorial, we don't really distribute the work, so we use only a single rank with 2 workers.
+For this simple tutorial, we don't really distribute the work, so we use only a single rank with 4 workers. Check out the helper method {py:meth}`default_worker_config <megatron.energon.WorkerConfig.default_worker_config>` to see how the worker config is constructed. Also don't be afraid to click the *`[source]`* link and look at the very short source code of it.
 
 ## Tutorial 3: Batch Size
 
@@ -179,9 +182,10 @@ Hence, we can
 
 ## Tutorial 3: Blending using Metadataset
 
-A typical usecase is to blend multiple datasets of the same (or similar type) together.
+A typical use case is to blend multiple datasets of the same (or similar type) together.
 For example, you may want to blend the COCO dataset with the COYO dataset.
-The easiest way to do this, is to use the metadataset pattern:
+The easiest way to do this, is to use the metadataset pattern. 
+For this you need to create a new `yaml` file that defines the meta dataset:
 
 `coyo-coco-dataset.yaml`:
 ```yaml
@@ -201,6 +205,8 @@ splits:
   test:
     path: ./coyo
 ```
+
+This assumes, that the datasets `coyo` and `coco` exist in subfolders next to the `coyo-coco-dataset.yaml` file. You could also use absolute paths, but that will not work well when using object storage such as S3.
 
 Usage in your loader, simply use {py:func}`get_train_dataset <megatron.energon.get_train_dataset>`:
 ```python
@@ -258,7 +264,7 @@ for batch in loader:
 
 ## Tutorial 5: Saving and Restoring
 
-For saving and restoring the state (e.g. for autoresume), the loader must be instantiated with the savable loader.
+For saving and restoring the state (e.g. when pausing and resuming training), the loader must be instantiated with the savable loader.
 
 ```python
 from megatron.energon import get_train_dataset, get_savable_loader, WorkerConfig

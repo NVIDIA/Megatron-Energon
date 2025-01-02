@@ -365,9 +365,7 @@ my_dataset
 │   ├── ...
 ```
 
-Note that the `shards` folder is just an example. The shards and their folder can be named differently. 
-It does not even need to be a webdataset. [Other formats](#flavors_details) are supported, but the `.nv-meta` structure
-is always the same.
+Note that the `shards` folder is just an example. The shards and their folder can be named differently, but the `.nv-meta` structure is always the same.
 
 ### Files in `.nv-meta`
 #### dataset.yaml 
@@ -400,7 +398,7 @@ In that case, please check out [this page](advanced_dataformat).
 
 #### split.yaml
 This file contains the splits (i.e. train, val, test), each a list of the shards for each split.
-It can also contain a "denylist" to exclude certain samples or shards from training.
+It can also contain an "exclude list" to exclude certain samples or shards from training.
 Example:
 
 ```yaml
