@@ -12,7 +12,7 @@ If you simply want to use some dummy data for trying this out, checkout the unit
 
 ```{admonition} Good to know
 :class: tip
-You can also store your dataset inside an S3-compatible object store and load it from there! See [Remote Dataset](remote_dataset.md)
+You can also store your dataset inside an S3-compatible object store and load it from there! See [](../advanced/remote_dataset)
 ```
 
 You can then load the dataset like this:
@@ -42,7 +42,7 @@ A worker configuration is always needed to specify how the work is distributed a
 In this simple example, we use a helper method {py:meth}`default_worker_config <megatron.energon.WorkerConfig.default_worker_config>` to get reasonable default values.
 
 The dataset should not be iterated directly, but used with a loader which handles the worker processes.
-The batches will contain samples of the sample type specified in the [task encoder](task_encoders.md).
+The batches will contain samples of the sample type specified in the [task encoder](task_encoder).
 
 ```{admonition} Good to know
 :class: tip
@@ -53,7 +53,7 @@ It will not transform the data. For batching it will use common sense magic to p
 _Wait. Why does the dataset create batches? Shouldn't the dataloader do that?_
 
 Energon will create batches at dataset level.
-Internally, most of the cool things that energon can do (such as blending datasets together, [sequence packing](packing), etc.)
+Internally, most of the cool things that energon can do (such as blending datasets together, [sequence packing](../advanced/packing), etc.)
 are dataset wrappers. Even the process of batching is such a wrapper and the default {py:meth}`get_train_dataset <megatron.energon.get_train_dataset>`
 function will construct a suitable combination of all these based on the arguments you pass to that function.
 Check out the [](basics_flow) section to see the steps in which the data is processed.
@@ -172,13 +172,13 @@ The output will be similar to above but with different shapes and lengths:
 - `batch.image`: Tensor of shape `(2, 3, 267, 400)`
 - `batch.caption`: A list of two caption strings
 
-The default [task encoder](task_encoders) automagically padded and stacked the items to a batch.
+The default [task encoder](task_encoder) automagically padded and stacked the items to a batch.
 This may be ok for some cases, but usually you will want to process and batch your data differently.
 
 Hence, we can
 
 - either use an existing task encoder
-- or define a custom one (see [](task_encoders))
+- or define a custom one (see [](task_encoder))
 
 ## Tutorial 3: Blending using Metadataset
 
@@ -227,7 +227,7 @@ for batch in loader:
 ```
 
 If you need to handle samples from different datasets differently in your pipeline, you will want to use `subflavors`.
-For these and other details, check out the [](metadatasets) section.
+For these and other details, check out the [](metadataset) section.
 
 ## Tutorial 4: Distributed Loading
 

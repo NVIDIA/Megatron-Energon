@@ -1,7 +1,7 @@
 <!--- Copyright (c) 2024, NVIDIA CORPORATION.
 SPDX-License-Identifier: BSD-3-Clause -->
 
-# Task Encoders
+# Task Encoder
 
 The "Task Encoder" is an Energon-specific concept. It is a class that describes how each sample is going to be processed at different stages of the pipeline.
 Please also take a look at [](basics_flow) to see the pipeline.
@@ -11,7 +11,7 @@ If you don't specify any task encoder, a default version, the {py:meth}`DefaultT
 For writing your own task encoder, create a class based on {py:class}`DefaultTaskEncoder <megatron.energon.DefaultTaskEncoder>`
 and override one or more of the following methods. The data flow of {py:func}`get_train_dataset <megatron.energon.get_train_dataset>` or {py:func}`get_val_dataset <megatron.energon.get_val_dataset>` is as follows:
 
-- {py:func}`def cook_crude_sample(self, sample: Union[T_sample, CrudeSample]) -> T_sample <megatron.energon.TaskEncoder.cook_crude_sample>`
+- {py:meth}`def cook_crude_sample(self, sample: Union[T_sample, CrudeSample]) -> T_sample <megatron.energon.TaskEncoder.cook_crude_sample>`
   - Optional. Define when using [crude data](crude-data).
 - {py:func}`def encode_sample(self, sample: T_sample) -> T_encoded_sample <megatron.energon.DefaultTaskEncoder.encode_sample>`
   - Transform the raw data from the dataset (e.g. augment/transform images, tokenize a single sample).

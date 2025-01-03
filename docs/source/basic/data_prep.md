@@ -157,6 +157,7 @@ Here are your options:
 * Your sample type is experimental or used temporarily only
   * You can add the sample type class in your code repository and create the `dataset.yaml` manually, referring to your class with `__class__`
 
+(sect-sample-types)=
 #### Available Sample Types
 
 These are the possible integrated types you can currently choose from:
@@ -394,7 +395,7 @@ class CaptioningSample(Sample):
 ```
 
 In some scenarios, you might need a more advanced way to map samples into the dataclass.
-In that case, please check out [this page](advanced_dataformat).
+In that case, please check out [this page](../advanced/advanced_dataformat).
 
 #### split.yaml
 This file contains the splits (i.e. train, val, test), each a list of the shards for each split.

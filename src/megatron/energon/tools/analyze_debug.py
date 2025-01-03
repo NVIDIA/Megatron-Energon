@@ -267,7 +267,7 @@ def command(
     skip: int,
     no_colors: bool,
 ):
-    """Check energon dataset for errors.
+    """Internal tool to analyze randomness.
 
     The LOG_PATH should point to the folder with the debug log, or to a single log file."""
 

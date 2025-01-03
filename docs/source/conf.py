@@ -49,6 +49,7 @@ release = ""
 extensions = [
     "sphinx.ext.autodoc",
     "sphinx.ext.viewcode",
+    "sphinx.ext.mathjax",
     "sphinx.ext.napoleon",
     "myst_parser",  # markdown(*.md) parser
     "sphinx_click",

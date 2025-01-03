@@ -33,8 +33,8 @@ maxdepth: 2
 basic/quickstart
 basic/data_prep
 basic/basics_flow
-basic/task_encoders
-basic/metadatasets
+basic/task_encoder
+basic/metadataset
 ```
 
 
@@ -68,6 +68,7 @@ caption: Internals
 maxdepth: 2
 ---
 internals/contrib_guidelines
+internals/code_structure
 ```
 
 # Indices and tables

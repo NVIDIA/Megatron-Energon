@@ -15,12 +15,4 @@ A modality can for example be a {py:class}`CaptioningSample <megatron.energon.Ca
 and the iterated sample format. For example, the {py:class}`CaptioningWebdataset <megatron.energon.CaptioningWebdataset>` 
 combines the webdataset loader with the {py:class}`CaptioningSample <megatron.energon.CaptioningSample>`.
 
-For all types, see [Dataset Flavors](#flavors_details) below.
-
-## Task Encoders
-
-The task encoder define how the data is processed after loading from the dataset, before iterating batches in the
-training/validation loop. You should typically define your own task encoder, as you always need to encode text tokens
-specifically for your network, or want image augmentations.
-
-For more details see [Task Encoders](task_encoders.md).
+For all types, see [](sect-sample-types)

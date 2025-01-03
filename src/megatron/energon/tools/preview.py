@@ -105,7 +105,7 @@ def pprint(idx: int, sample: Sample):
     "--dataset-config", default="dataset.yaml", help="Dataset config file name", show_default=True
 )
 def command(path: EPath, split_parts: str, dataset_config: str):
-    """Views the contents of a dataset on the console."""
+    """Preview samples of a dataset on the console."""
 
     path = path.absolute()
 

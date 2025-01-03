@@ -50,8 +50,9 @@ def command(
     dataset_config: str,
 ):
     """
-    Print information about a dataset, formatted to be pasted in `existing_datasets.md`.
+    Get summarizing information about a dataset.
     """
+
     ds_config = yaml.safe_load(StringIO((path / MAIN_FOLDER_NAME / dataset_config).read_text()))
     info_config = yaml.safe_load(StringIO((path / MAIN_FOLDER_NAME / ".info.yaml").read_text()))
     split_config = yaml.safe_load(StringIO((path / MAIN_FOLDER_NAME / split_config).read_text()))
