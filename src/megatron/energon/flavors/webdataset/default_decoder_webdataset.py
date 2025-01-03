@@ -3,17 +3,14 @@
 
 from typing import Any, Callable, Dict, Generic, Literal, Optional, TypeVar
 
-import functools
-import re
 import webdataset
 
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.webdataset.decode_av_frames import decode_video_frames, decode_audio_samples
+from megatron.energon.flavors.webdataset.decode_av_frames import AVDecoder
 from megatron.energon.flavors.webdataset.default_generic_webdataset import (
     DefaultGenericWebdatasetFactory,
 )
 from megatron.energon.flavors.webdataset.structs import FilteredSample
-from megatron.energon.flavors.webdataset.video_data import VideoData
 
 T_sample = TypeVar("T_sample", covariant=True)
 
@@ -86,9 +83,7 @@ class DefaultDecoderWebdatasetFactory(DefaultGenericWebdatasetFactory[T_sample],
             self._decoder = webdataset.autodecode.Decoder(
                 [
                     webdataset.autodecode.imagehandler(self.image_decode),
-                    self._av_decoder,
-                    functools.partial(
-                        self._av_decoder,
+                    AVDecoder(
                         audio_convert_to_melspec=audio_convert_to_melspec,
                         audio_clip_duration=audio_clip_duration,
                         audio_num_clips=audio_num_clips,
@@ -107,52 +102,6 @@ class DefaultDecoderWebdatasetFactory(DefaultGenericWebdatasetFactory[T_sample],
             return True
         raise exc
 
-    def _av_decoder(self,
-                    key,
-                    data,
-                    audio_convert_to_melspec,
-                    audio_clip_duration,
-                    audio_num_clips,
-                    audio_target_rate,
-                    video_decode_audio,
-                    video_num_frames,
-                    video_out_frame_size,
-                    ):
-        """
-        Extract the video or audio data from default media extensions.
-
-        Args:
-            key: media file extension
-            data: raw media bytes
-        """
-        extension = re.sub(r".*[.]", "", key)
-        # TODO(jbarker): we should add a debug log here
-        if extension in "mov mp4 webm mkv".split():
-            # TODO(jbarker): make the magic numbers configurable
-            media = decode_video_frames(
-                data,
-                num_frames=video_num_frames,
-                out_frame_size=video_out_frame_size,
-                decode_audio=video_decode_audio,
-            )
-        elif extension in "flac mp3".split():
-            # TODO(jbarker): make the magic numbers configurable
-            media = decode_audio_samples(
-                data,
-                convert_to_melspec=audio_convert_to_melspec,
-                num_clips=audio_num_clips,
-                clip_duration=audio_clip_duration,
-                target_rate=audio_target_rate,
-            )
-        else:
-            return None
-        if media is not None:
-            return VideoData(
-                frames=media[0].permute((0, 3, 1, 2)),
-                aframes=media[1],
-                info=media[2],
-            )
-        return None
 
     def load_sample(self, sample: FilteredSample) -> T_sample:
         if self._decoder is not None:
