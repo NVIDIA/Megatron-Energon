@@ -2,10 +2,9 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import io
-from argparse import ArgumentParser
 from collections.abc import Collection, Iterator
 from fractions import Fraction
-from pathlib import Path
+import re
 
 import av
 import numpy as np
@@ -13,8 +12,65 @@ import torch
 import torchaudio
 
 from megatron.energon.flavors.webdataset.fastseek import Fastseek
+from megatron.energon.flavors.webdataset.video_data import VideoData
 
 DEFAULT_AUDIO_FRAME_SHIFT_MS = 10  # in milliseconds
+
+class AVDecoder:
+    def __init__(
+            self,
+            audio_convert_to_melspec,
+            audio_clip_duration,
+            audio_num_clips,
+            audio_target_rate,
+            video_decode_audio,
+            video_num_frames,
+            video_out_frame_size,
+    ):
+            self.audio_convert_to_melspec = audio_convert_to_melspec
+            self.audio_clip_duration = audio_clip_duration
+            self.audio_num_clips = audio_num_clips
+            self.audio_target_rate = audio_target_rate
+            self.video_decode_audio = video_decode_audio
+            self.video_num_frames = video_num_frames
+            self.video_out_frame_size = video_out_frame_size
+
+    def __call__(self, key, data):
+        """
+        Extract the video or audio data from default media extensions.
+
+        Args:
+            key: media file extension
+            data: raw media bytes
+        """
+        extension = re.sub(r".*[.]", "", key)
+        # TODO(jbarker): we should add a debug log here
+        if extension in "mov mp4 webm mkv".split():
+            # TODO(jbarker): make the magic numbers configurable
+            media = decode_video_frames(
+                data,
+                num_frames=self.video_num_frames,
+                out_frame_size=self.video_out_frame_size,
+                decode_audio=self.video_decode_audio,
+            )
+        elif extension in "flac mp3".split():
+            # TODO(jbarker): make the magic numbers configurable
+            media = decode_audio_samples(
+                data,
+                convert_to_melspec=self.audio_convert_to_melspec,
+                num_clips=self.audio_num_clips,
+                clip_duration=self.audio_clip_duration,
+                target_rate=self.audio_target_rate,
+            )
+        else:
+            return None
+        if media is not None:
+            return VideoData(
+                frames=media[0].permute((0, 3, 1, 2)),
+                aframes=media[1],
+                info=media[2],
+            )
+        return None
 
 def waveform2melspec(waveform, sample_rate, num_mel_bins, target_length):
     # Based on https://github.com/YuanGongND/ast/blob/d7d8b4b8e06cdaeb6c843cdb38794c1c7692234c/src/dataloader.py#L102
