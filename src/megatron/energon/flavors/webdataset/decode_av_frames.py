@@ -113,7 +113,6 @@ def get_frame_batch(
     video_file: io.BytesIO,
     frame_indices: Collection[int],
     out_frame_size: tuple = None,
-    decode_audio: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor, dict]:
     """Gets a batch of frames at the given indices from a video file."""
     seeker: Fastseek = Fastseek(video_file)
@@ -183,46 +182,66 @@ def get_frame_batch(
 
             previous_frame_number = target_frame_number
 
-        # Decode all audio frames (or just a subset if you prefer)
-        audio_frames = []
-        if decode_audio:
-            audio_iterator = input_container.decode(audio=0)
-            for audio_frame in audio_iterator:
-                # Convert audio frame to a NumPy array (shape: channels x samples)
-                audio_nd = audio_frame.to_ndarray()
-                audio_frames.append(torch.from_numpy(audio_nd))
-
     # Stack video frames along dim=0 => [batch_size, channels, height, width]
     video_tensor = torch.stack(frames)
 
-    # Depending on how you want to handle audio of varying lengths, you might
-    # cat them into one large tensor or return them as a list. Here's a simple cat:
-    if audio_frames:
-        # This will produce a shape like: [num_audio_frames, channels, samples]
-        audio_tensor = torch.cat([af.unsqueeze(0) for af in audio_frames], dim=0)
-    else:
-        audio_tensor = torch.empty(0)  # or None
-
-    return video_tensor, audio_tensor, metadata
+    return video_tensor, metadata
 
 
-def decode_video_frames(data: bytes, num_frames: int = -1, out_frame_size: tuple = None, decode_audio: bool = False):
-
+def decode_video_frames(
+    data: bytes,
+    num_frames: int = -1,
+    out_frame_size: tuple = None,
+    decode_audio: bool = False,
+    num_clips: int = 1,
+    clip_duration: int = 1,
+    target_rate: int = 16000,
+    convert_to_melspec: bool = False,
+):
     byte_stream = io.BytesIO(data)
 
+    # --- First, decode video frames ---
     with av.open(byte_stream) as input_container:
         if input_container.streams.video[0].frames != 0:
             frame_count = input_container.streams.video[0].frames
-        else:  # Need to count
-            frame_count = len(
-                [p for p in input_container.demux(video=0) if p.pts is not None]
-            )
+        else:
+            frame_count = len([p for p in input_container.demux(video=0) if p.pts is not None])
 
     if num_frames == -1:
         num_frames = frame_count
 
+    # Pick which video frames to extract
     frame_indices = np.linspace(0, frame_count - 1, num_frames, dtype=int).tolist()
-    video_tensor, audio_tensor, metadata = get_frame_batch(byte_stream, frame_indices, out_frame_size, decode_audio)
+    video_tensor, metadata = get_frame_batch(
+        byte_stream, frame_indices, out_frame_size
+    )
+
+    # --- Then, if requested, decode audio using the same clip logic as decode_audio_samples ---
+    audio_tensor = torch.empty(0)
+    if decode_audio:
+        # Open the container again to get sample_count and sampling_rate
+        with av.open(io.BytesIO(data)) as input_container:
+            audio_stream = input_container.streams.audio[0]
+            sample_count = audio_stream.duration
+            sampling_rate = audio_stream.rate
+
+        if num_clips == -1:
+            # Single clip from the entire audio
+            clip_indices = [[0, sample_count - 1]]
+        else:
+            clip_indices = get_clip_indices(
+                sampling_rate, sample_count, num_clips, clip_duration
+            )
+
+        # Actually read the audio clips
+        audio_tensor, audio_metadata = get_audio_batch(
+            io.BytesIO(data),
+            clip_indices,
+            target_rate=target_rate,
+            convert_to_melspec=convert_to_melspec,
+        )
+        # Merge any extra audio metadata
+        metadata.update(audio_metadata)
 
     return video_tensor, audio_tensor, metadata
 
