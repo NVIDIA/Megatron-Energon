@@ -30,7 +30,7 @@ def fmt_size(size: int) -> str:
         if size < 1024:
             return f"{size:.2f} {key}"
         size /= 1024
-    return f"{size:.2f} TiB"
+    return f"{size:.2f} PiB"
 
 
 @click.command(name="info")
