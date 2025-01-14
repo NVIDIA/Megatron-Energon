@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 from dataclasses import dataclass
 from pathlib import Path
+
 import click
 
 
@@ -23,10 +24,7 @@ class HeaderUpdater:
 
     def __post_init__(self):
         if self.line_comment is not None:
-            self._expected_lines = tuple(
-                self.line_comment + line
-                for line in self.HEADER_LINES
-            )
+            self._expected_lines = tuple(self.line_comment + line for line in self.HEADER_LINES)
         else:
             assert self.comment_start is not None and self.comment_end is not None
             if len(self.HEADER_LINES) >= 2:
@@ -46,14 +44,16 @@ class HeaderUpdater:
             num_lines = 0
             for line, expected in zip(rf, self._expected_lines):
                 num_lines += 1
-                if line.rstrip('\n') != expected:
+                if line.rstrip("\n") != expected:
                     return False
             return num_lines == len(self._expected_lines)
 
     def fix_header(self, file: Path):
         contents = file.read_text()
         first_comment = self.line_comment if self.line_comment is not None else self.comment_start
-        if contents.startswith(first_comment) and contents[len(first_comment):].startswith(self.UPDATE_IDENTIFIER):
+        if contents.startswith(first_comment) and contents[len(first_comment) :].startswith(
+            self.UPDATE_IDENTIFIER
+        ):
             # Already has header, but want to update
             *header_lines, remainder = contents.split("\n", len(self._expected_lines))
             new_contents = "\n".join(self._expected_lines) + "\n" + remainder
@@ -89,8 +89,13 @@ headers = (
 
 
 @click.command()
-@click.argument("path", type=click.Path(exists=True, file_okay=False, dir_okay=True, readable=True, path_type=Path))
-@click.option("--fix", is_flag=True, help="Automatically add missing/adapt existing license headers.")
+@click.argument(
+    "path",
+    type=click.Path(exists=True, file_okay=False, dir_okay=True, readable=True, path_type=Path),
+)
+@click.option(
+    "--fix", is_flag=True, help="Automatically add missing/adapt existing license headers."
+)
 def main(path: Path, fix: bool) -> None:
     # Get all files to check
     success = True
