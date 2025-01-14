@@ -183,7 +183,7 @@ class BlendJoinDatasetReference(BlendWeightMixin, MetadatasetJoin):
 
 @dataclass
 class MetadatasetBlend(DatasetLoaderInterface):
-    """Blending of datasets."""
+    """Blending of datasets by specifying the sampling weight for the inner datasets."""
 
     blend: List[Union[BlendDatasetReference, BlendJoinDatasetReference]]
 
@@ -246,7 +246,10 @@ class BlendEpochizedJoinDatasetReference(BlendRepetitionsMixin, MetadatasetJoin)
 
 @dataclass
 class MetadatasetBlendEpochized(DatasetLoaderInterface):
-    """Blending of datasets, epochized."""
+    """Blending of datasets, by specifying the number of repetitions for samples from the inner
+    datasets. Ensures that the constraint, that samples are seen exactly this many times before
+    repeating the "epoch" (i.e. one epoch contains the total number of repetitions for each inner
+    dataset)."""
 
     blend_epochized: List[Union[BlendEpochizedDatasetReference, BlendEpochizedJoinDatasetReference]]
 
