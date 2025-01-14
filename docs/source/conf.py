@@ -1,4 +1,7 @@
 # -*- coding: utf-8 -*-
+# Copyright (c) 2024, NVIDIA CORPORATION.
+# SPDX-License-Identifier: BSD-3-Clause
+
 #
 # Configuration file for the Sphinx documentation builder.
 #
@@ -13,8 +16,6 @@
 # documentation root, use os.path.abspath to make it absolute, like shown here.
 #
 import os
-import pathlib
-import shutil
 import sys
 
 # src_folder = pathlib.Path(__file__).parents[2]

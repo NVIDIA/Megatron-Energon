@@ -1,3 +1,6 @@
+<!--- Copyright (c) 2024, NVIDIA CORPORATION.
+SPDX-License-Identifier: BSD-3-Clause -->
+
 # Epochized Blending
 
 As an alternative to blending with a weight for each dataset, blending can be made accurate and
