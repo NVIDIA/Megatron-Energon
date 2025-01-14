@@ -81,6 +81,8 @@ splits:
 Actually `split_part: train` is the default, so there's no need to explicitely specify that.
 When referring to datasets under `val:` obviously `split_part: val` is the default.
 
+Energon also supports blending by specifying the number of repetitions for each dataset using [Epochized Blending](../advanced/epochized_blending).
+
 (sect-subflavors)=
 ## Subflavors
 

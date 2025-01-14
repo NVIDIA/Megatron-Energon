@@ -227,7 +227,7 @@ for batch in loader:
 ```
 
 If you need to handle samples from different datasets differently in your pipeline, you will want to use `subflavors`.
-For these and other details, check out the [](metadataset) section.
+For these and other details, check out the [](metadataset) section. Energon also supports blending by specifying the number of repetitions for each dataset using [](../advanced/epochized_blending).
 
 ## Tutorial 4: Distributed Loading
 
