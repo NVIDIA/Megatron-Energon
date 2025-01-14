@@ -5,7 +5,8 @@ SPDX-License-Identifier: BSD-3-Clause -->
 
 If you want to contribute to this repository please adhere to the following guidelines
 
-- Always use [black](https://pypi.org/project/black/) to format your code before committing
+- Always use [black](https://pypi.org/project/black/) and [isort](https://pycqa.github.io/isort/) to format your code before committing
+- Check that all license headers are present using `python3 scripts/license_headers.py --fix .`
 - Python `@dataclass` and `NamedTuple` are preferred over dictionaries, which don't allow for IDE
   auto-completion and type checking
 - User-exposed classes and methods should be documented in Google-style docstrings that are parsed by sphinx
@@ -17,3 +18,4 @@ If you want to contribute to this repository please adhere to the following guid
   - `DATASET CONFIG BREAKING CHANGE`: When the dataset config (`.nv-meta` folder) changed incompatibly
   - `METADATASET CONFIG BREAKING CHANGE`: When the metadataset config changed
 - In a release, all breaking changes except checkpoint lead to a new major version.
+-
