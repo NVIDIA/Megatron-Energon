@@ -136,53 +136,6 @@ Note that subflavors are entirely custom and you can use any name and any value 
 In the code they will be passed around as a dictionary.
 
 
-## Advanced Customized Blending
-
-In your Task Encoder you could customize the blend of datasets by overriding the `build_train_datasets` method as shown below.
-
-```py
-
-# All the typing is optional
-class CaptioningTaskEncoder(
-    DefaultTaskEncoder[CaptioningSample, CaptioningSample, CaptioningRawBatch, CaptioningBatch]
-):
-    ...
-    
-    def build_train_datasets(
-        self,
-        *,
-        datasets: List[Tuple[BaseCoreDataset[CaptioningSample], float]],
-        worker_config: WorkerConfig,
-        batch_size: int,
-        batch_drop_last: bool,
-        virtual_epoch_length: int = 0,
-    ) -> SavableDataset[ImageTaskBatch]:
-        # The default implementation uses MixDataset, which mixes the datasets according to their weights
-        # This could be customized, e.g. to batch the datasets first (i.e. each batch only contains data from a single datset)
-        # and then blend, which would yield the same distribution.
-        dataset = BlendDataset(
-            *datasets,
-            worker_config=worker_config,
-        )
-        # Build batches from blended samples
-        dataset = self.build_batch(
-            dataset,
-            batch_size=batch_size,
-            batch_drop_last=batch_drop_last,
-            worker_config=worker_config,
-        )
-        # Optionally epochize
-        if virtual_epoch_length > 0:
-            dataset = EpochizeDataset(
-                dataset,
-                length=virtual_epoch_length,
-                worker_config=worker_config,
-            )
-        return dataset
-
-```
-
-
 ## Classes
 * {py:class}`DatasetLoaderInterface <megatron.energon.DatasetLoaderInterface>`: Common interface for dataset loaders. Provides methods for constructing/loading the actual train- or val-mode dataset.
   * {py:class}`MetadatasetV2 <megatron.energon.MetadatasetV2>`: The metadataset loader using the yaml example above. Blends datasets for train-mode, and concatenates for val-mode.

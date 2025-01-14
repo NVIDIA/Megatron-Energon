@@ -49,6 +49,7 @@ advanced/repro_scaling
 advanced/packing
 advanced/grouping
 advanced/joining_datasets
+advanced/custom_blending
 ```
 
 
