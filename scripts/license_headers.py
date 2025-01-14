@@ -112,6 +112,7 @@ def main(path: Path, fix: bool) -> None:
     if success:
         print("All files have the correct license header.")
     else:
+        print("Some license headers are missing or incorrect. Run `python scripts/license_headers.py . --fix` to fix.")
         exit(1)
 
 

@@ -27,4 +27,4 @@ jobs:
           python -m pip install --upgrade pip
           pip install click==8.1.7
       - name: Run License Header Check
-        run: python scripts/license_headers.py
+        run: python scripts/license_headers.py .
