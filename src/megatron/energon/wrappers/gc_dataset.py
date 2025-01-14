@@ -121,4 +121,4 @@ class GcDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_sample])
         return self.dataset.config()
 
     def __str__(self):
-        return f"GcDataset(freeze={self.freeze}, every_n_iter={self.every_n_iter}, dataset={self.dataset})"
+        return f"GcDataset(every_n_iter={self.every_n_iter}, dataset={self.dataset})"
