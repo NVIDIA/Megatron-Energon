@@ -36,6 +36,7 @@ class RepeatDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_samp
         dataset: SavableDataset[T_sample],
         *,
         repeats: Optional[int] = None,
+        restart: bool = True,
         worker_config: WorkerConfig,
     ):
         """Construct a RepeatDataset.
@@ -43,10 +44,13 @@ class RepeatDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_samp
         Args:
             dataset: The input dataset to repeat.
             repeats: Number of repeats, `None` for infinitely
+            restart: If true, restart the underlying dataset after iterating once through the
+                repeats if repeats is set to an integer, but still stop iterating.
             worker_config: Configuration for the workers.
         """
         super().__init__(dataset, worker_config=worker_config)
         self.repeats = repeats
+        self.restart = restart
         self._offset = [0] * max(self.worker_config.num_workers, 1)
 
     def __len__(self):
@@ -58,6 +62,7 @@ class RepeatDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_samp
         worker_idx = self.worker_config.rank_worker_id()
         if self.repeats is None:
             assert self.dataset.worker_has_samples(), "Cannot repeat empty dataset infinitely"
+            self._offset[worker_idx] -= 1
             while True:
                 self._offset[worker_idx] += 1
                 for sample in self.dataset:
@@ -73,7 +78,7 @@ class RepeatDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_samp
                     )
         else:
             for offset in range(self._offset[worker_idx], self.repeats):
-                self._offset[worker_idx] = offset + 1
+                self._offset[worker_idx] = offset
                 for sample in self.dataset:
                     yield sample
                 if self.worker_config.should_log(level=2):
@@ -86,6 +91,8 @@ class RepeatDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_samp
                             "repeats": self.repeats,
                         }
                     )
+            if self.restart:
+                self._offset[worker_idx] = 0
 
     def save_state(self) -> RepeatState:
         return RepeatState.extend(

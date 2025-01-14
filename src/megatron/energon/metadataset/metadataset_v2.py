@@ -284,18 +284,19 @@ class MetadatasetBlendEpochized(DatasetLoaderInterface):
             for loaded_dataset, repetitions in inner_datasets:
                 if inner_blend_mode == DatasetBlendMode.SAMPLE_REPETITIONS:
                     assert isinstance(repetitions, int)
-                    repetitions = dataset.repetitions * repetitions
                 else:
                     assert repetitions is None
                     repetitions = 1
-                datasets.append((loaded_dataset, repetitions))
+                datasets.append((loaded_dataset, dataset.repetitions * repetitions))
         return DatasetBlendMode.SAMPLE_REPETITIONS, datasets
 
 
 @dataclass
 class MetadatasetV2(DatasetLoaderInterface):
     parent_path: Union[EPath, str]
-    splits: Dict[str, Union[MetadatasetBlend, MetadatasetJoin, DatasetReference]]
+    splits: Dict[
+        str, Union[MetadatasetBlend, MetadatasetBlendEpochized, MetadatasetJoin, DatasetReference]
+    ]
 
     def __post_init__(self):
         """Post-initialization to fix paths."""

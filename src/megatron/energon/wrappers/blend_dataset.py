@@ -65,12 +65,13 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
         self._worker_rng = WorkerRng(self.worker_config)
 
     def __len__(self) -> int:
+        return sum(len(dataset) for dataset, weight in self.dataset_weights)
         # Gives an approximation of the number of samples. This is very incorrect (as the length
         # is weighted by the dataset weights).
-        total = sum(weight for _, weight in self.dataset_weights)
-        return int(
-            sum(len(dataset) * weight / total for dataset, weight in self.dataset_weights)
-        ) * len(self.dataset_weights)
+        # total = sum(weight for _, weight in self.dataset_weights)
+        # return int(
+        #     sum(len(dataset) * weight / total for dataset, weight in self.dataset_weights)
+        # ) * len(self.dataset_weights)
 
     def __iter__(self) -> Iterator[T_sample]:
         assert self.worker_has_samples(), "Cannot blend all empty datasets"
@@ -99,7 +100,8 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
                 probs[ds_idx] = 0
                 if all(dataset_iter is None for dataset_iter in dataset_iters):
                     break
-            yield add_sample_restore_key(sample, ds_idx, src=self)
+            else:
+                yield add_sample_restore_key(sample, ds_idx, src=self)
 
     def worker_has_samples(self) -> bool:
         return any(dataset.worker_has_samples() for dataset, _weight in self.dataset_weights)

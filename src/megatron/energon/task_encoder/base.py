@@ -538,6 +538,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                         if repetition is None or repetition == 1
                         else RepeatDataset(
                             dataset.build(worker_rotation_offset=worker_rotation_offset),
+                            repeats=int(repetition),
                             worker_config=worker_config,
                         )
                     ),
