@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from dataclasses import dataclass
-from typing import Any, Dict, Generator, Generic, Iterator, List, Optional, Tuple, TypeVar, Union
+from typing import Any, Dict, Generic, Iterator, List, Optional, Tuple, TypeVar, Union
 
 import torch
 
@@ -65,13 +65,8 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
         self._worker_rng = WorkerRng(self.worker_config)
 
     def __len__(self) -> int:
+        # Give the number of samples in inner datasets, disregarding the weight
         return sum(len(dataset) for dataset, weight in self.dataset_weights)
-        # Gives an approximation of the number of samples. This is very incorrect (as the length
-        # is weighted by the dataset weights).
-        # total = sum(weight for _, weight in self.dataset_weights)
-        # return int(
-        #     sum(len(dataset) * weight / total for dataset, weight in self.dataset_weights)
-        # ) * len(self.dataset_weights)
 
     def __iter__(self) -> Iterator[T_sample]:
         assert self.worker_has_samples(), "Cannot blend all empty datasets"
