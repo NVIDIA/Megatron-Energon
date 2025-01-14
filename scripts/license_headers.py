@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional, Tuple
 
 import click
 
@@ -9,18 +10,18 @@ import click
 @dataclass
 class HeaderUpdater:
     file_ext: str
-    line_comment: str | None = None
-    comment_start: str | None = None
-    comment_end: str | None = None
+    line_comment: Optional[str] = None
+    comment_start: Optional[str] = None
+    comment_end: Optional[str] = None
 
     UPDATE_IDENTIFIER = "Copyright"
 
-    HEADER_LINES: tuple[str, ...] = (
+    HEADER_LINES: Tuple[str, ...] = (
         "Copyright (c) 2025, NVIDIA CORPORATION.",
         "SPDX-License-Identifier: BSD-3-Clause",
     )
 
-    _expected_lines: tuple[str, ...] = ()
+    _expected_lines: Tuple[str, ...] = ()
 
     def __post_init__(self):
         if self.line_comment is not None:
