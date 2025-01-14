@@ -1,9 +1,10 @@
-## Epochized Blending
+# Epochized Blending
 
 As an alternative to blending with a weight for each dataset, blending can be made accurate and
 iterating the dataset can follow epochs (i.e. interrupt iteration after an epoch) with this concept.
 
-Here is a modified example of the above `metadataset.yaml` config file that changes to epochized blending:
+Here is an example `metadataset.yaml` config file that changes to epochized blending:
+
 ```yaml
 __module__: megatron.energon
 __class__: MetadatasetV2
@@ -21,8 +22,7 @@ splits:
         split_part: val
 ```
 
-Now, the call to `get_train_dataset` requires the additional parameter `repeat=False` to stop interrupt after one epoch.
-This would also work without this, but then the shuffle buffer will shuffle samples at bounderies of epochs:
+Now, the call to `get_train_dataset` requires the additional parameter `repeat=False` to interrupt iterating after one epoch:
 
 ```py
 from megatron.energon import get_train_dataset, get_loader, WorkerConfig
@@ -43,4 +43,11 @@ loader = get_loader(get_train_dataset(
 for batch in loader:
     print(batch)
 
+# This will iterate the second epoch
+for batch in loader:
+    print(batch)
+
 ```
+
+If used as dataset for `get_val_dataset`, the `repetitions` are ignored.
+The metadataset would also work without setting `repeat=False`, but then the shuffle buffer will shuffle samples across bounderies of epochs.
