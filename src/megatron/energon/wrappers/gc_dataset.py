@@ -75,7 +75,7 @@ class GcDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_sample])
         *,
         worker_config: WorkerConfig,
         every_n_iter: int = 1,
-        freeze: bool = False,
+        freeze: bool = True,
     ):
         """Construct a GcDataset, which applies garbage collection every `every_n_iter` iterations.
 
