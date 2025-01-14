@@ -71,7 +71,7 @@ def get_train_dataset(
         max_samples_per_sequence: If set, limit the number of samples per sample-sequence to this.
         virtual_epoch_length: If set, the dataset will be epochized to this length (=iterating
             will be suspended and the for-loop returns, next for-loop continues iterating).
-            Otherwise, the dataset will loop infinitely.
+            Otherwise, the dataset will loop indefinitely.
         shuffle_over_epochs_multiplier: Shuffle the shards over this many epochs.
         task_encoder: Task encoder to use.
         repeat: By default, the inner datasets will loop. If set to False, stop iteration after

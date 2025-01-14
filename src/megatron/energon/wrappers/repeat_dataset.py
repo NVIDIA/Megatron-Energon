@@ -60,7 +60,9 @@ class RepeatDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_samp
 
     def __iter__(self) -> Iterator[T_sample]:
         worker_idx = self.worker_config.rank_worker_id()
-        assert self.repeats is not None or self.dataset.worker_has_samples(), "Cannot repeat empty dataset indefinitely"
+        assert (
+            self.repeats is not None or self.dataset.worker_has_samples()
+        ), "Cannot repeat empty dataset indefinitely"
         while self.repeats is None or self._repetition[worker_idx] < self.repeats:
             for sample in self.dataset:
                 yield sample
