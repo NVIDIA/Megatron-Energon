@@ -6,15 +6,15 @@ SPDX-License-Identifier: BSD-3-Clause -->
 Metadatasets allow combining datasets together in a variety of ways by using a yaml config file.
 This is useful for example if you want to mix multiple datasets together, and especially if you want to reuse that combination.
 
-Simple format of the `metadataset.yaml` config files:
+To create a metadataset, you simply create a yaml file of the following format.
+Example `demo-metadataset.yaml` file:
+
 ```yaml
-# Outer object must be a `Metadataset`
 __module__: megatron.energon
 __class__: MetadatasetV2
 splits:
   # Split defines the train/val/test subsets composition 
   train:
-    # This can be any `MetadatasetBase` class. E.g. a `DatasetMetadataset`, or a `MixMetadataset`.
     # Mix the following datasets
     blend:
       - weight: 5
@@ -22,7 +22,7 @@ splits:
       - weight: 2
         path: ./coyo
       - weight: 1
-        path: ./coyo
+        path: ./other
   val:
     # Only use coco-val for val
     path: ./coco
@@ -32,7 +32,10 @@ splits:
 ```
 
 
-Usage in your loader, simply use {py:func}`get_train_dataset <megatron.energon.get_train_dataset>`:
+In the above example, we create a blend of three datasets. Out of the yielded training samples, 62.5% ({math}`=\frac{5}{8}`) will come from `./coco`, 25% from `./coyo` and 12.5% from `./other`.
+Note that the relative paths in the metadataset are relative to the location of the metadataset file. Absolute paths are allowed but won't work for object storage.
+
+To use the metadataset in your loader, simply load it with {py:func}`get_train_dataset <megatron.energon.get_train_dataset>` instead of a normal energon dataset:
 ```python
 from megatron.energon import get_train_dataset
 
@@ -49,21 +52,53 @@ for batch in ds:
 
 ```
 
-Advanced format of the `metadataset.yaml` config files:
+Here is another example that takes both the training and the validation set of coyo into the blended training data (with different weights though):
+
 ```yaml
-# Outer object must be a `Metadataset`
 __module__: megatron.energon
 __class__: MetadatasetV2
 splits:
   # Split defines the train/val/test subsets composition 
   train:
-    # This can be any `MetadatasetBase` class. E.g. a `DatasetMetadataset`, or a `MixMetadataset`.
+    # Mix the following datasets
+    blend:
+      - weight: 5
+        path: ./coco
+      - weight: 2
+        path: ./coyo
+        split_part: train
+      - weight: 1
+        path: ./coyo
+        split_part: val  # <-- Takes the val set of coyo into the train split
+  val:
+    # Only use coco-val for val
+    path: ./coco
+  test:
+    # Only use coyo-test for test
+    path: ./coyo
+```
+
+Actually `split_part: train` is the default, so there's no need to explicitely specify that.
+When referring to datasets under `val:` obviously `split_part: val` is the default.
+
+(sect-subflavors)=
+## Subflavors
+
+Subflavors are a way to *tag* samples that come from different origins so that they can still be differentiated after blending.
+Even when blending many datasets together, you might want to handle some of them differently in your [Task Encoder](task_encoder).
+For example when doing OCR, you might have one dataset with full pages of text and one with only paragraphs. In your task encoder you could decide to augment the images differently.
+
+Here is a modified example of the above `metadataset.yaml` config file that adds some subflavors:
+```yaml
+__module__: megatron.energon
+__class__: MetadatasetV2
+splits:
+  # Split defines the train/val/test subsets composition 
+  train:
     # Blend the following datasets
     blend:
       - weight: 5
         path: ./coco
-        # Set the __subflavor__ property of the coco samples
-        subflavor: small_images
         # Set the __subflavors__ property of the samples
         subflavors:
           augmentation_type: small_images
@@ -83,7 +118,7 @@ splits:
         subflavors:
           augmentation_type: large_images
           text_length: short
-  # For val and test, MixDataset will actually concatenate the datasets
+  # For val and test, blending will actually concatenate the datasets
   val:
     # Only use coco val for val
     path: ./coco
@@ -95,51 +130,10 @@ splits:
     path: ./coyo
 ```
 
-## Customized Blending
+In the above example, the coco training samples will now have the subflavor `augmentation_type` set to `small_images` while the samples from coyo, will have that property set to `large_images`.
 
-The Task-Encoder allows to customize the blend of datasets given their accumulated blending weights:
-
-```py
-
-# All the typing is optional
-class CaptioningTaskEncoder(
-    DefaultTaskEncoder[CaptioningSample, CaptioningSample, CaptioningRawBatch, CaptioningBatch]
-):
-    ...
-    
-    def build_train_datasets(
-        self,
-        *,
-        datasets: List[Tuple[BaseCoreDataset[CaptioningSample], float]],
-        worker_config: WorkerConfig,
-        batch_size: int,
-        batch_drop_last: bool,
-        virtual_epoch_length: int = 0,
-    ) -> SavableDataset[ImageTaskBatch]:
-        # The default implementation uses MixDataset, which mixes the datasets according to their weights
-        # This could be customized, e.g. to batch the datasets first (i.e. each batch only contains data from a single datset)
-        # and then blend, which would yield the same distribution.
-        dataset = BlendDataset(
-            *datasets,
-            worker_config=worker_config,
-        )
-        # Build batches from blended samples
-        dataset = self.build_batch(
-            dataset,
-            batch_size=batch_size,
-            batch_drop_last=batch_drop_last,
-            worker_config=worker_config,
-        )
-        # Optionally epochize
-        if virtual_epoch_length > 0:
-            dataset = EpochizeDataset(
-                dataset,
-                length=virtual_epoch_length,
-                worker_config=worker_config,
-            )
-        return dataset
-
-```
+Note that subflavors are entirely custom and you can use any name and any value for them, for example `foo: bar`
+In the code they will be passed around as a dictionary.
 
 
 ## Classes
