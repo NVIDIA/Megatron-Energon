@@ -11,6 +11,38 @@ Joining is needed when you have two or more corresponding datasets, each dataset
 
 Dataset joining is analogous to webdataset's "add column", i.e., merging two datasets which require the same files within the tar files.
 
+## Example File Structure
+
+Here is an example structure of the datasets within the tar files:
+
+```
+ds1
+├── .nv-meta
+│   ├── .info.yaml
+│   ├── split.yaml
+│   └── dataset.yaml
+├── shard1.tar
+│   ├── 0001.jpg
+│   ├── 0002.jpg
+│   └── 0003.jpg
+├── shard1.idx
+
+ds2
+├── .nv-meta
+│   ├── .info.yaml
+│   ├── split.yaml
+│   └── dataset.yaml
+├── shard1.tar
+│   ├── 0001.txt
+│   ├── 0002.txt
+│   └── 0003.txt
+├── shard1.idx
+```
+
+In this example, `ds1/shard1.tar` and `ds2/shard1.tar` contain files with the same base names / keys.
+When joining, the files from both datasets are joined based on their keys, which must be in the same order. Each dataset must be [prepared](../basic/data_prep) (i.e. .nv-meta created).
+
+
 ## Minimal Example
 
 Below is a minimal meta dataset example for joining.
@@ -90,34 +122,4 @@ class JoinedSample(Sample):
 This class should implement the `from_joined` method to combine samples from `ds1` and `ds2`.
 Note: It is important to use `derive_from` with the first argument being the first sample, as this will guarantee that the state can be saved and restored. It ensures that all the internal keys of the sample are retained.
 
-## Example Structure
 
-Here is an example structure of the datasets within the tar files:
-
-```
-ds1
-├── .nv-meta
-│   ├── .info.yaml
-│   ├── split.yaml
-│   └── dataset.yaml
-├── shard1.tar
-│   ├── 0001.txt
-│   ├── 0002.txt
-│   └── 0003.txt
-├── shard1.idx
-
-ds2
-├── .nv-meta
-│   ├── .info.yaml
-│   ├── split.yaml
-│   └── dataset.yaml
-├── shard1.tar
-│   ├── 0001.txt
-│   ├── 0002.txt
-│   └── 0003.txt
-├── shard1.idx
-```
-
-In this example, `ds1/shard1.tar` and `ds1/shard1.tar` contain files with the same names. When joining, the files from both datasets are joined based on their keys, which must be in the same order. Each dataset must be [prepared](../basic/data_prep) (i.e. .nv-meta created).
-
-By following these examples, you can configure and extend your Metadataset to include additional columns and custom join types.

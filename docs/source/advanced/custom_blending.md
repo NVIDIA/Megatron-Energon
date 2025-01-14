@@ -1,4 +1,4 @@
-# Advanced Customized Blending
+# Customized Blending
 
 In your Task Encoder you could customize the blend of datasets by overriding the `build_train_datasets` method as shown below.
 
