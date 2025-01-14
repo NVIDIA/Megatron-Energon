@@ -6,6 +6,11 @@ SPDX-License-Identifier: BSD-3-Clause -->
 Since version 2.0.0, Megatron Energon supports the use of remote datasets that are stored in an object store bucket with an S3-compatible interface.
 This means you can train or validate with your data right from that object store by simply swapping the dataset path for a so-called _rclone URL_.
 
+```{admonition} Note
+:class: important
+We are planning to migrate to a more advanced backend for remote datasets. Please contact us if you are planning to use this feature.
+```
+
 ## Prerequisites
 
 To use this feature, you need to set up an [Rclone](https://rclone.org/) configuration. Rclone is an open source software to manage files on cloud storage. While Energon does not depend on the Rclone software itself, we rely on the same configuration mechanism.
@@ -41,7 +46,7 @@ rclone://coolstore/mainbucket/datasets/somedata
 You can use this URL instead of paths to datasets in
 
 * Functions like `get_train_dataset`, `get_val_dataset`
-* Inside [metadataset](metadatasets.md) specifications
+* Inside [metadataset](../basic/metadataset) specifications
 * As arguments to `energon prepare` or `energon lint`. Note that those may be slow for remote locations.
 
 Example usage:

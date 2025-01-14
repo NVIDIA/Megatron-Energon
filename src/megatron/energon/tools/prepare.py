@@ -129,7 +129,7 @@ def command(
     tar_index_only: bool,
     shuffle_tars: bool,
 ):
-    """Prepare plain WebDataset for use with energon.
+    """Prepare WebDataset for use with energon.
 
     The PATH should point to the folder with the dataset.
     This tool will add the required metadata yaml files to the dataset. See README.md for more

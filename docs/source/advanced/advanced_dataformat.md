@@ -4,7 +4,7 @@ SPDX-License-Identifier: BSD-3-Clause -->
 (custom-sample-loader)=
 # Custom Sample Loader
 
-As discussed in [](data_on_disk), you can specify how samples are loaded from disk and mapped to
+As discussed in [](/basic/data_prep), you can specify how samples are loaded from disk and mapped to
 the sample dataclass in memory.
 
 Instead of using a `field_map` in your `dataset.yaml`, you can also create custom python code for sample loading.
@@ -78,11 +78,11 @@ subflavors:
   example_crude_selector: foobar
 ```
 
-We recommend that you assign subflavors to differentiate the data.
-This helps, if you decide to mix different crude datasets or crude with non-crude data using a [Metadataset](metadatasets.md).
+We recommend that you assign [subflavors](sect-subflavors) to differentiate the data.
+This helps, if you decide to mix different crude datasets or crude with non-crude data using a [Metadataset](../basic/metadataset).
 You can then use the subflavors to assign how each sample shall be processed.
 
-Let's see how we set up our [TaskEncoder](task_encoders.md) to cook the crude samples and turn them into real samples like {py:class}`TextSample <megatron.energon.TextSample>`.
+Let's see how we set up our [Task Encoder](../basic/task_encoder) to cook the crude samples and turn them into real samples like {py:class}`TextSample <megatron.energon.TextSample>`.
 
 A crude sample is essentially a dictionary ({py:class}`CrudeSample <megatron.energon.CrudeSample>` inherits from `dict`) and the loader will look for a {py:class}`Cooker <megatron.energon.task_encoder.Cooker>` that can handle and convert your crude samples.
 You can provide cookers as follows:

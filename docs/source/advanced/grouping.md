@@ -15,7 +15,7 @@ On the other hand, grouping is an alternative to standard batching.
 
 ## How to group
 
-To use grouping, you need to define the method `batch_group_criterion` in your custom task encoder.
+To use grouping, you need to define the method {py:meth}`batch_group_criterion <megatron.energon.TaskEncoder.batch_group_criterion>` in your custom task encoder.
 This method gets a sample and returns a hashable value that will be used to cluster/group the samples
 and it also returns the batch size for that group.
 
