@@ -93,6 +93,9 @@ class RepeatDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_samp
                     )
             if self.restart:
                 self._offset[worker_idx] = 0
+            else:
+                # No more repeats
+                self._offset[worker_idx] = self.repeats
 
     def save_state(self) -> RepeatState:
         return RepeatState.extend(
