@@ -157,7 +157,6 @@ class BaseWebdatasetFactory(
             worker_config=self.worker_config,
             part_filter=self.part_filter,
             exclude=self.sample_excludes,
-            loop=self.training,
             shuffle_over_epochs=self.shuffle_over_epochs if self.training else None,
             parallel_shard_iters=parallel_shard_iters,
             handler=self.sample_error_handler,

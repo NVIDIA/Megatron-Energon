@@ -11,7 +11,7 @@ from megatron.energon.flavors import (
     Sample,
 )
 from megatron.energon.metadataset.dataset_loader import DatasetLoader
-from megatron.energon.metadataset.loader_interface import DatasetLoaderInterface
+from megatron.energon.metadataset.loader_interface import DatasetBlendMode, DatasetLoaderInterface
 from megatron.energon.worker import WorkerConfig
 
 
@@ -121,8 +121,8 @@ class JoinDatasetLoader(DatasetLoaderInterface):
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: int = 1,
         **kwargs,
-    ) -> List[Tuple[BaseCoreDatasetFactory, float]]:
-        return [
+    ) -> Tuple[DatasetBlendMode, List[Tuple[BaseCoreDatasetFactory, Union[float, int, None]]]]:
+        return DatasetBlendMode.NONE, [
             (
                 self.get_dataset(
                     training=training,
@@ -133,6 +133,6 @@ class JoinDatasetLoader(DatasetLoaderInterface):
                     shuffle_over_epochs=shuffle_over_epochs_multiplier,
                     **kwargs,
                 ),
-                1.0,
+                None,
             )
         ]

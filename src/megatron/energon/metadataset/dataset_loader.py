@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 from megatron.energon.dataset_config import get_dataset_from_config
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import BaseCoreDatasetFactory
-from megatron.energon.metadataset.loader_interface import DatasetLoaderInterface
+from megatron.energon.metadataset.loader_interface import DatasetBlendMode, DatasetLoaderInterface
 from megatron.energon.worker import WorkerConfig
 
 
@@ -85,8 +85,8 @@ class DatasetLoader(DatasetLoaderInterface):
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: int = 1,
         **kwargs,
-    ) -> List[Tuple[BaseCoreDatasetFactory, float]]:
-        return [
+    ) -> Tuple[DatasetBlendMode, List[Tuple[BaseCoreDatasetFactory, Union[float, int, None]]]]:
+        return DatasetBlendMode.NONE, [
             (
                 self.get_dataset(
                     training=training,
@@ -97,6 +97,6 @@ class DatasetLoader(DatasetLoaderInterface):
                     shuffle_over_epochs=shuffle_over_epochs_multiplier,
                     **kwargs,
                 ),
-                1.0,
+                None,
             )
         ]
