@@ -1,3 +1,5 @@
+<!--- Copyright (c) 2025, NVIDIA CORPORATION.
+SPDX-License-Identifier: BSD-3-Clause -->
 # Joining Datasets
 
 Joining is needed when you have two or more corresponding datasets, each dataset having some parts to compose each sample.
