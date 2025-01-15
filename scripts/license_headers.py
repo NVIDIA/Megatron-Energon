@@ -73,14 +73,15 @@ headers = (
         file_ext=".sh",
         line_comment="# ",
     ),
-    HeaderUpdater(
-        file_ext=".yml",
-        line_comment="# ",
-    ),
-    HeaderUpdater(
-        file_ext=".yaml",
-        line_comment="# ",
-    ),
+    # Do not add to yamls
+    # HeaderUpdater(
+    #     file_ext=".yml",
+    #     line_comment="# ",
+    # ),
+    # HeaderUpdater(
+    #     file_ext=".yaml",
+    #     line_comment="# ",
+    # ),
     HeaderUpdater(
         file_ext=".md",
         comment_start="<!--- ",
@@ -111,6 +112,9 @@ def main(path: Path, fix: bool) -> None:
 
     if success:
         print("All files have the correct license header.")
+    elif fix:
+        print("Some license headers were fixed.")
+        exit(1)
     else:
         print(
             "Some license headers are missing or incorrect. Run `python scripts/license_headers.py . --fix` to fix."
