@@ -2,10 +2,22 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from abc import ABC, abstractmethod
+from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory
 from megatron.energon.worker import WorkerConfig
+
+
+class DatasetBlendMode(Enum):
+    """Determines how the the datasets are to be blended. Either by using the associated number as
+    the weight for sampling from that dataset, or alternatively by using the number as the number
+    of repetitions for samples in that dataset in one epoch (effectively, that corresponds to the
+    weight for samples)."""
+
+    NONE = "none"
+    DATASET_WEIGHT = "dataset_weight"
+    SAMPLE_REPETITIONS = "sample_repetitions"
 
 
 class DatasetLoaderInterface(ABC):
@@ -22,7 +34,7 @@ class DatasetLoaderInterface(ABC):
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: int = 1,
         **kwargs,
-    ) -> List[Tuple[BaseCoreDatasetFactory, float]]:
+    ) -> Tuple[DatasetBlendMode, List[Tuple[BaseCoreDatasetFactory, Union[float, int, None]]]]:
         """
         Calls :func:`megatron.energon.dataset_config.get_dataset_from_config` (loads the raw dataset)
         for all innermost datasets and resolves their relative weights to absolute weights.
@@ -44,6 +56,6 @@ class DatasetLoaderInterface(ABC):
             **kwargs: Additional arguments to the dataset constructor.
 
         Returns:
-            The instantiated core datasets and their weights.
+            The dataset blending mode and the instantiated core datasets with their weights/repetitions.
         """
         ...

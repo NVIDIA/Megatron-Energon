@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from dataclasses import dataclass
-from typing import Any, Dict, Generator, Generic, Iterator, List, Optional, Tuple, TypeVar, Union
+from typing import Any, Dict, Generic, Iterator, List, Optional, Tuple, TypeVar, Union
 
 import torch
 
@@ -65,16 +65,8 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
         self._worker_rng = WorkerRng(self.worker_config)
 
     def __len__(self) -> int:
-        # Gives an approximation of the number of samples. This is very incorrect (as the length
-        # is weighted by the dataset weights).
-        total = sum(weight for _, weight in self.dataset_weights)
-        return int(
-            sum(len(dataset) * weight / total for dataset, weight in self.dataset_weights)
-        ) * len(self.dataset_weights)
-
-    def _repeat(self, dataset: SavableDataset[T_sample]) -> Generator[T_sample, None, None]:
-        while True:
-            yield from dataset
+        # Give the number of samples in inner datasets, disregarding the weight
+        return sum(len(dataset) for dataset, weight in self.dataset_weights)
 
     def __iter__(self) -> Iterator[T_sample]:
         assert self.worker_has_samples(), "Cannot blend all empty datasets"
@@ -85,14 +77,26 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
                 if dataset.worker_has_samples()
             ]
         )
-        dataset_iters = [self._repeat(dataset) for dataset in datasets]
+        dataset_iters = [iter(dataset) for dataset in datasets]
         weights = torch.tensor(weights, dtype=torch.float32)
         probs = weights / weights.sum()
+        assert torch.all(probs > 0), "Negative weights are not allowed"
 
         while True:
             ds_idx = self._worker_rng.choice_idx(probs=probs)
-            sample = next(dataset_iters[ds_idx])
-            yield add_sample_restore_key(sample, ds_idx, src=self)
+            if dataset_iters[ds_idx] is None:
+                if all(dataset_iter is None for dataset_iter in dataset_iters):
+                    break
+                continue
+            try:
+                sample = next(dataset_iters[ds_idx])
+            except StopIteration:
+                dataset_iters[ds_idx] = None
+                probs[ds_idx] = 0
+                if all(dataset_iter is None for dataset_iter in dataset_iters):
+                    break
+            else:
+                yield add_sample_restore_key(sample, ds_idx, src=self)
 
     def worker_has_samples(self) -> bool:
         return any(dataset.worker_has_samples() for dataset, _weight in self.dataset_weights)
