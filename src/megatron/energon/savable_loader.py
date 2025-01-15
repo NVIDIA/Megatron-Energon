@@ -690,6 +690,8 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
         checkpoint_every_sec: float = 60,
         checkpoint_every_min_n_samples: Optional[int] = None,
         n_checkpoints: int = 2,
+        gc_collect_every_n_steps: int = 1,
+        gc_freeze_at_start: bool = True,
     ):
         """
         Create the dataloader supporting saving and restoring the state.
@@ -705,11 +707,26 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
                 checkpoints. Defaults to `number of workers * 2`. Only applies if using workers.
             n_checkpoints: The number of checkpoints to keep in memory. Only applies if using
                 workers.
+            gc_collect_every_n_steps: The number of steps after which the garbage collector is
+                called. As we're usually handling large (but few) tensors here, and the python
+                garbage collection is already full of objects just by importing, this can improve
+                the memory footprint quite a lot, and may even be necessary to avoid memory
+                overflow.
+            gc_freeze_at_start: If true, the garbage collector is frozen at the start of the worker
+                processes. This improves the garbage collection performance by a lot.
+                In rare cases, this may cause issues and can be disabled. Keep enabled if you
+                experience no issues.
         """
         self.worker_config = dataset.worker_config
         self.id = self.next_id()
 
-        dataset = GcDataset(dataset, worker_config=self.worker_config)
+        if gc_collect_every_n_steps > 0:
+            dataset = GcDataset(
+                dataset,
+                worker_config=self.worker_config,
+                every_n_iter=gc_collect_every_n_steps,
+                freeze=gc_freeze_at_start,
+            )
 
         self.cmd_queues = [multiprocessing.Queue() for _ in range(self.worker_config.num_workers)]
         self.result_queues = [
@@ -1045,22 +1062,35 @@ class BasicDataLoader(DataLoader[T], Generic[T]):
     def __init__(
         self,
         dataset: SavableDataset[T],
+        gc_collect_every_n_steps: int = 1,
+        gc_freeze_at_start: bool = True,
     ):
         """
         Create the dataloader supporting saving and restoring the state.
 
         Args:
             dataset: The dataset to load.
-            worker_config: The worker config to use
-            checkpoint_every_sec: This is the time in seconds after which a checkpoint is saved.
-               It may take the same duration to restore a checkpoint, but introduces additional
-               overhead during reading data from the dataset, so this should be chosen accordingly.
+            gc_collect_every_n_steps: The number of steps after which the garbage collector is
+                called. As we're usually handling large (but few) tensors here, and the python
+                garbage collection is already full of objects just by importing, this can improve
+                the memory footprint quite a lot, and may even be necessary to avoid memory
+                overflow.
+            gc_freeze_at_start: If true, the garbage collector is frozen at the start of the worker
+                processes. This improves the garbage collection performance by a lot.
+                In rare cases, this may cause issues and can be disabled. Keep enabled if you
+                experience no issues.
         """
         self.worker_config = dataset.worker_config
 
         self.id = SavableDataLoader.next_id()
 
-        dataset = GcDataset(dataset, worker_config=self.worker_config)
+        if gc_collect_every_n_steps > 0:
+            dataset = GcDataset(
+                dataset,
+                worker_config=self.worker_config,
+                every_n_iter=gc_collect_every_n_steps,
+                freeze=gc_freeze_at_start,
+            )
         dataset = SimpleSavableDatasetWrapper(dataset, worker_config=self.worker_config)
 
         self._worker_sample_counters = [0] * max(self.worker_config.num_workers, 1)
