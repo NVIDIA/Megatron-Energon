@@ -31,7 +31,7 @@ sys.path.insert(0, os.path.abspath("../../src"))
 # -- Project information -----------------------------------------------------
 
 project = "megatron-energon"
-copyright = "2024 NVIDIA Corporation"
+copyright = "2025 NVIDIA Corporation"
 author = "Lukas Voegtle, Philipp Fischer"
 
 # The short X.Y version
