@@ -1,3 +1,6 @@
+<!--- Copyright (c) 2024, NVIDIA CORPORATION.
+SPDX-License-Identifier: BSD-3-Clause -->
+
 # Save and Restore
 
 For long-running training jobs, you will usually need to stop and resume the training including the data loader.
