@@ -12,7 +12,19 @@ import warnings
 import weakref
 from dataclasses import dataclass
 from functools import partial
-from typing import Any, ClassVar, Dict, Generic, Iterator, List, Optional, Tuple, TypeVar, Union
+from typing import (
+    Any,
+    ClassVar,
+    Dict,
+    Generic,
+    Iterator,
+    List,
+    Optional,
+    Sequence,
+    Tuple,
+    TypeVar,
+    Union,
+)
 
 import numpy as np
 import torch
@@ -945,7 +957,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
             assert isinstance(state.dataset_state, SavableDatasetMergedCheckpoint)
             self.dataset.restore_checkpoint(state.dataset_state, worker_offset=state.next_worker_id)
 
-    def save_state(self, dst_rank: int) -> List[Optional[SavableDataLoaderState]]:
+    def save_state(self, dst_rank: int) -> Optional[Sequence[Optional[SavableDataLoaderState]]]:
         """Deprecated. Use `save_state_global` (or `save_state_rank`) instead."""
         warnings.warn(
             "`save_state` is deprecated and was renamed to `save_state_global` and will be removed "
@@ -955,12 +967,14 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
         )
         return self.save_state_global(dst_rank)
 
-    def save_state_global(self, dst_rank: int) -> List[Optional[SavableDataLoaderState]]:
+    def save_state_global(
+        self, dst_rank: int
+    ) -> Optional[Sequence[Optional[SavableDataLoaderState]]]:
         """
         Saves the state of the dataset globally, collecting the state from all ranks using torch
         distributed. Allows for restoring the state later using `restore_state_global`, given the
         result of this method.
-        Typically scenario: Save the state to disk only on the `dst_rank`, the other ranks do not
+        Typical scenario: Save the state to disk only on the `dst_rank`, the other ranks do not
         save the state. Later, restore the state either only loaded on the `dst_rank` or
         loading on all ranks separately using `restore_state_global`.
 
@@ -978,7 +992,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
 
         # Gather the merged states
         if self.worker_config.world_size > 1:
-            output: Optional[List[Optional[SavableDataLoaderState]]]
+            output: Optional[Sequence[Optional[SavableDataLoaderState]]]
             if self.worker_config.rank == dst_rank:
                 output = [None] * self.worker_config.world_size
             else:
@@ -993,7 +1007,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
 
     def restore_state(
         self,
-        state: Optional[List[Optional[SavableDataLoaderState]]],
+        state: Optional[Sequence[Optional[SavableDataLoaderState]]],
         src_rank: Optional[int],
     ) -> None:
         """Deprecated. Use `restore_state_global` (or `restore_state_rank`) instead."""
@@ -1006,7 +1020,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
 
     def restore_state_global(
         self,
-        state: Optional[List[Optional[SavableDataLoaderState]]],
+        state: Optional[Sequence[Optional[SavableDataLoaderState]]],
         src_rank: Optional[int],
     ) -> None:
         """
@@ -1025,6 +1039,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
         """
         assert self._persistent_iterator is None, "Cannot restore state while workers are running"
         assert isinstance(state, list), "State must be a list in distributed setup"
+
         # Only restore multi-rank if state is actually a list and we are in a distributed setup.
         # Otherwise treat as single rank state.
         if src_rank is None or self.worker_config.world_size == 1:
