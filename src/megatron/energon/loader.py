@@ -1,14 +1,11 @@
-# Copyright (c) 2024, NVIDIA CORPORATION.
+# Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
 from typing import Optional, TypeVar
 
-from torch.utils.data import DataLoader
-
 from megatron.energon.flavors.base_dataset import SavableDataset
 from megatron.energon.savable_loader import BasicDataLoader, SavableDataLoader
 from megatron.energon.worker import WorkerConfig
-from megatron.energon.wrappers.gc_dataset import GcDataset
 
 T = TypeVar("T")
 
@@ -91,4 +88,4 @@ def get_loader(
                 DeprecationWarning,
             )
 
-    return BasicDataLoader(GcDataset(dataset, worker_config=dataset.worker_config))
+    return BasicDataLoader(dataset)
