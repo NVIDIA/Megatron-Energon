@@ -32,6 +32,7 @@ import torch.distributed
 import torch.multiprocessing
 from torch.utils.data import DataLoader, IterableDataset
 
+from megatron.energon.errors import deprecated
 from megatron.energon.flavors.base_dataset import (
     MergedState,
     SavableDataset,
@@ -957,14 +958,14 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
             assert isinstance(state.dataset_state, SavableDatasetMergedCheckpoint)
             self.dataset.restore_checkpoint(state.dataset_state, worker_offset=state.next_worker_id)
 
+    @deprecated(
+        "`save_state` is deprecated and was renamed to `save_state_global` and will be removed "
+        "in a future update. If you actually do not want to gather the states to a rank, use "
+        "`save_state_rank` instead."
+    )
     def save_state(self, dst_rank: int) -> Optional[Sequence[Optional[SavableDataLoaderState]]]:
         """Deprecated. Use `save_state_global` (or `save_state_rank`) instead."""
-        warnings.warn(
-            "`save_state` is deprecated and was renamed to `save_state_global` and will be removed "
-            "in a future update. If you actually do not want to gather the states to a rank, use "
-            "`save_state_rank` instead.",
-            DeprecationWarning,
-        )
+
         return self.save_state_global(dst_rank)
 
     def save_state_global(
@@ -1005,17 +1006,16 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
             # Not distributed -> return the merged state
             return [merged_state]
 
+    @deprecated(
+        "`restore_state` was renamed to `restore_state_global` and will be removed in a future update."
+    )
     def restore_state(
         self,
         state: Optional[Sequence[Optional[SavableDataLoaderState]]],
         src_rank: Optional[int],
     ) -> None:
         """Deprecated. Use `restore_state_global` (or `restore_state_rank`) instead."""
-        warnings.warn(
-            "`restore_state` was renamed to `restore_state_global` and will be removed in a future "
-            "update.",
-            DeprecationWarning,
-        )
+
         return self.restore_state_global(state, src_rank)
 
     def restore_state_global(
