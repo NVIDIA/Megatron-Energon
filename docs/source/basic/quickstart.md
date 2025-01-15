@@ -304,7 +304,7 @@ loader = get_savable_loader(ds)
 loader.restore_state_rank(state)
 ```
 
-We provide code for different scenarios for saving and loading in distributed settings especially in the section [](../advanced/save_restore).
+We provide code for different scenarios for saving and loading in distributed settings especially in the section [](save_restore).
 
 ## More Features
 
