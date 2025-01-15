@@ -43,6 +43,7 @@ basic/metadataset
 caption: Advanced Usage
 maxdepth: 2
 ---
+advanced/save_restore
 advanced/remote_dataset
 advanced/advanced_dataformat
 advanced/repro_scaling
