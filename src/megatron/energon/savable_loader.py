@@ -1012,6 +1012,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
         """
         Restores the saved state from `save_state_global` (in torch distributed setup).
         Typical scenarios are:
+
           - `src_rank=None`: All ranks load the same state from disk, restore their respective state.
           - `src_rank=rank`: Only the rank `rank` loads the state from disk, all other ranks receive
             the state from rank `rank`.
