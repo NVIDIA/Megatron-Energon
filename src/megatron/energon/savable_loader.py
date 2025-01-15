@@ -1038,11 +1038,15 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
                 state data.
         """
         assert self._persistent_iterator is None, "Cannot restore state while workers are running"
-        assert isinstance(state, list), "State must be a list in distributed setup"
 
         # Only restore multi-rank if state is actually a list and we are in a distributed setup.
         # Otherwise treat as single rank state.
         if src_rank is None or self.worker_config.world_size == 1:
+            assert isinstance(state, list), "State must be a list in distributed setup"
+            assert (
+                len(state) == self.worker_config.world_size
+            ), "State must be a list of size world_size"
+
             # All ranks have the state
             # Select the state of the current rank
             rank_state = state[self.worker_config.rank]
@@ -1053,6 +1057,12 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
                 assert state is None
                 # Must still be a list of Nones
                 state = [None] * self.worker_config.world_size
+            else:
+                assert isinstance(state, list), "State must be a list in distributed setup"
+                assert (
+                    len(state) == self.worker_config.world_size
+                ), "State must be a list of size world_size"
+
             local_object = [None]
             torch.distributed.scatter_object_list(
                 local_object,
