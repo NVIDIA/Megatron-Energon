@@ -75,15 +75,15 @@ class FatalSampleError(SampleException):
     pass
 
 
-def warn_deprecated(reason):
-    warnings.warn(reason, FutureWarning, stacklevel=2)
+def warn_deprecated(reason, stacklevel=2):
+    warnings.warn(reason, FutureWarning, stacklevel=stacklevel)
 
 
 def deprecated(reason):
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
-            warn_deprecated(f"{func.__name__} is deprecated: {reason}")
+            warn_deprecated(f"{func.__name__} is deprecated: {reason}", stacklevel=3)
             return func(*args, **kwargs)
 
         return wrapper
