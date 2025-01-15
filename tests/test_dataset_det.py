@@ -313,12 +313,12 @@ class TestDataset(unittest.TestCase):
         )
 
         # print("save state")
-        state_0 = loader.save_state()
+        state_0 = loader.save_state_global(dst_rank=0)
         # print("save state done")
         order_1 = [data.text[0] for idx, data in zip(range(count1), loader)]
         assert len(order_1) == count1
         # print("save state")
-        state_1 = loader.save_state()
+        state_1 = loader.save_state_global(dst_rank=0)
         # print("save state done")
         order_2 = [data.text[0] for idx, data in zip(range(count2), loader)]
         assert len(order_2) == count2
@@ -340,7 +340,7 @@ class TestDataset(unittest.TestCase):
             ),
             worker_config=worker_config,
         )
-        loader.restore_state(state_0)
+        loader.restore_state_global(state_0, src_rank=None)
         order_45 = [data.text[0] for idx, data in zip(range(count1 + count2), loader)]
         order_4 = order_45[:count1]
         order_5 = order_45[count1:]
@@ -366,7 +366,7 @@ class TestDataset(unittest.TestCase):
             worker_config=worker_config,
         )
         # print("restore state")
-        loader.restore_state(state_1)
+        loader.restore_state_global(state_1, src_rank=None)
         # print("restore state done")
         order_3 = [data.text[0] for idx, data in zip(range(count2), loader)]
         # print("order1", order_1)
@@ -399,16 +399,16 @@ class TestDataset(unittest.TestCase):
         loader = get_savable_loader(ds, worker_config=worker_config, checkpoint_every_sec=ces)
 
         # print("save state")
-        state_0 = loader.save_state()
+        state_0 = loader.save_state_rank()
         it1 = iter(loader)
         # print("save state done")
         order_1 = [data.text[0] for idx, data in zip(range(n1), it1)]
         # print("save state")
         # time.sleep(0.5)
-        state_1 = loader.save_state()
+        state_1 = loader.save_state_rank()
         # print("save state done")
         order_2 = [data.text[0] for idx, data in zip(range(n2), it1)]
-        state_2 = loader.save_state()
+        state_2 = loader.save_state_rank()
         order_3 = [data.text[0] for idx, data in zip(range(n3), it1)]
 
         print("order_1", order_1)
@@ -432,7 +432,7 @@ class TestDataset(unittest.TestCase):
             parallel_shard_iters=psi,
         )
         loader = get_savable_loader(ds, worker_config=worker_config)
-        loader.restore_state(state_0)
+        loader.restore_state_rank(state_0)
         order_6 = [data.text[0] for idx, data in zip(range(n1), loader)]
         print("order1", order_1)
         print("order6", order_6)
@@ -451,7 +451,7 @@ class TestDataset(unittest.TestCase):
             parallel_shard_iters=psi,
         )
         loader = get_savable_loader(ds, worker_config=worker_config)
-        loader.restore_state(state_1)
+        loader.restore_state_rank(state_1)
         order_7 = [data.text[0] for idx, data in zip(range(n2), loader)]
         print("order2", order_2[:100])
         print("order7", order_7[:100])
@@ -470,7 +470,7 @@ class TestDataset(unittest.TestCase):
             parallel_shard_iters=psi,
         )
         loader = get_savable_loader(ds, worker_config=worker_config)
-        loader.restore_state(state_2)
+        loader.restore_state_rank(state_2)
         order_8 = [data.text[0] for idx, data in zip(range(n3), loader)]
         print("order3", order_3)
         print("order8", order_8)

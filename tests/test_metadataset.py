@@ -568,35 +568,35 @@ class TestDataset(unittest.TestCase):
 
         # Train mode dataset
         loader = new_loader()
-        state_0 = loader.save_state()
+        state_0 = loader.save_state_rank()
         order_0 = [data.text for idx, data in zip(range(10), loader)]
-        state_1 = loader.save_state()
+        state_1 = loader.save_state_rank()
         # print("save state done")
         order_1 = [data.text for idx, data in zip(range(20), loader)]
 
-        state_2 = loader.save_state()
+        state_2 = loader.save_state_rank()
         # print("save state done")
         # Iterated 30 samples, afterwards 50 samples. Checkpoint should be around that
         order_2 = [data.text for idx, data in zip(range(20), loader)]
 
-        state_3 = loader.save_state()
+        state_3 = loader.save_state_rank()
         # print("save state done")
         # Iterated 50 samples, afterwards 53 samples. Checkpoint should be around that
         order_3 = [data.text for idx, data in zip(range(3), loader)]
 
-        state_4 = loader.save_state()
+        state_4 = loader.save_state_rank()
         # print("save state done")
         # Dataset size is 55, want to save one sample before end of epoch
         # Iterated 53 samples, afterwards 54 samples. Checkpoint should be around that
         order_4 = [data.text for idx, data in zip(range(1), loader)]
 
-        state_5 = loader.save_state()
+        state_5 = loader.save_state_rank()
         # print("save state done")
         # Dataset size is 55, want to save one sample before end of epoch
         # Iterated 54 samples, afterwards 55 samples. Checkpoint should be around that
         order_5 = [data.text for idx, data in zip(range(1), loader)]
 
-        state_6 = loader.save_state()
+        state_6 = loader.save_state_rank()
         # print("save state done")
         # Dataset size is 55, want to save one sample before end of epoch
         # Iterated 55 samples, afterwards 75 samples. Checkpoint should be around that
@@ -604,18 +604,18 @@ class TestDataset(unittest.TestCase):
 
         loader = new_loader()
         print("state_1:", _norng_state(state_1))
-        loader.restore_state(state_1)
+        loader.restore_state_rank(state_1)
         order_1_rest = [data.text for idx, data in zip(range(len(order_1)), loader)]
         assert order_1 == order_1_rest
 
         loader = new_loader()
-        loader.restore_state(state_0)
+        loader.restore_state_rank(state_0)
         order_0_rest = [data.text for idx, data in zip(range(len(order_0)), loader)]
         assert order_0 == order_0_rest
 
         loader = new_loader()
         print("state_2:", _norng_state(state_2))
-        loader.restore_state(state_2)
+        loader.restore_state_rank(state_2)
         order_2_rest = [data.text for idx, data in zip(range(len(order_2)), loader)]
         print("order_2:", order_2)
         print("order_2_rest:", order_2_rest)
@@ -623,7 +623,7 @@ class TestDataset(unittest.TestCase):
 
         loader = new_loader()
         print("state_3:", _norng_state(state_3))
-        loader.restore_state(state_3)
+        loader.restore_state_rank(state_3)
         order_3_rest = [data.text for idx, data in zip(range(len(order_3)), loader)]
         print("order_3:", order_3)
         print("order_3_rest:", order_3_rest)
@@ -631,7 +631,7 @@ class TestDataset(unittest.TestCase):
 
         loader = new_loader()
         print("state_4:", _norng_state(state_4))
-        loader.restore_state(state_4)
+        loader.restore_state_rank(state_4)
         order_4_rest = [data.text for idx, data in zip(range(len(order_4)), loader)]
         print("order_4:", order_4)
         print("order_4_rest:", order_4_rest)
@@ -639,7 +639,7 @@ class TestDataset(unittest.TestCase):
 
         loader = new_loader()
         print("state_5:", _norng_state(state_5))
-        loader.restore_state(state_5)
+        loader.restore_state_rank(state_5)
         order_5_rest = [data.text for idx, data in zip(range(len(order_5)), loader)]
         print("order_5:", order_5)
         print("order_5_rest:", order_5_rest)
@@ -647,7 +647,7 @@ class TestDataset(unittest.TestCase):
 
         loader = new_loader()
         print("state_6:", _norng_state(state_6))
-        loader.restore_state(state_6)
+        loader.restore_state_rank(state_6)
         order_6_rest = [data.text for idx, data in zip(range(len(order_6)), loader)]
         print("order_6:", order_6)
         print("order_6_rest:", order_6_rest)
@@ -954,22 +954,22 @@ class TestDataset(unittest.TestCase):
 
         # Train mode dataset
         loader = new_loader()
-        state_0 = loader.save_state()
+        state_0 = loader.save_state_rank()
         order_0 = [data.text for idx, data in zip(range(10), loader)]
         time.sleep(0.5)
-        state_1 = loader.save_state()
+        state_1 = loader.save_state_rank()
         # print("save state done")
         order_1 = [data.text for idx, data in zip(range(20), loader)]
 
         # Ensure a checkpoint is created on next()
         time.sleep(1.5)
 
-        state_2 = loader.save_state()
+        state_2 = loader.save_state_rank()
         # print("save state done")
         # Iterated 30 samples, afterwards 50 samples. Checkpoint should be around that
         order_2 = [data.text for idx, data in zip(range(20), loader)]
 
-        state_3 = loader.save_state()
+        state_3 = loader.save_state_rank()
         # print("save state done")
         # Iterated 50 samples, afterwards 53 samples. Checkpoint should be around that
         order_3 = [data.text for idx, data in zip(range(3), loader)]
@@ -977,7 +977,7 @@ class TestDataset(unittest.TestCase):
         # Ensure a checkpoint is created on next()
         time.sleep(1.5)
 
-        state_4 = loader.save_state()
+        state_4 = loader.save_state_rank()
         # print("save state done")
         # Dataset size is 55, want to save one sample before end of epoch
         # Iterated 1 samples, afterwards 54 samples. Checkpoint should be around that
@@ -986,7 +986,7 @@ class TestDataset(unittest.TestCase):
         # Ensure a checkpoint is created on next()
         time.sleep(1.5)
 
-        state_5 = loader.save_state()
+        state_5 = loader.save_state_rank()
         # print("save state done")
         # Dataset size is 55, want to save one sample before end of epoch
         # Iterated 1 samples, afterwards 55 samples. Checkpoint should be around that
@@ -995,7 +995,7 @@ class TestDataset(unittest.TestCase):
         # Ensure a checkpoint is created on next()
         time.sleep(1.5)
 
-        state_6 = loader.save_state()
+        state_6 = loader.save_state_rank()
         # print("save state done")
         # Dataset size is 55, want to save one sample before end of epoch
         # Iterated 1 samples, afterwards 55 samples. Checkpoint should be around that
@@ -1003,20 +1003,20 @@ class TestDataset(unittest.TestCase):
 
         loader = new_loader()
         print("state_1:", _norng_state(state_1))
-        loader.restore_state(state_1)
+        loader.restore_state_rank(state_1)
         order_1_rest = [data.text for idx, data in zip(range(len(order_1)), loader)]
         print("order_1:", order_1)
         print("order_1_rest:", order_1_rest)
         assert order_1 == order_1_rest
 
         loader = new_loader()
-        loader.restore_state(state_0)
+        loader.restore_state_rank(state_0)
         order_0_rest = [data.text for idx, data in zip(range(len(order_0)), loader)]
         assert order_0 == order_0_rest
 
         loader = new_loader()
         print("state_2:", _norng_state(state_2))
-        loader.restore_state(state_2)
+        loader.restore_state_rank(state_2)
         order_2_rest = [data.text for idx, data in zip(range(len(order_2)), loader)]
         print("order_2:", order_2)
         print("order_2_rest:", order_2_rest)
@@ -1024,7 +1024,7 @@ class TestDataset(unittest.TestCase):
 
         loader = new_loader()
         print("state_3:", _norng_state(state_3))
-        loader.restore_state(state_3)
+        loader.restore_state_rank(state_3)
         order_3_rest = [data.text for idx, data in zip(range(len(order_3)), loader)]
         print("order_3:", order_3)
         print("order_3_rest:", order_3_rest)
@@ -1032,7 +1032,7 @@ class TestDataset(unittest.TestCase):
 
         loader = new_loader()
         print("state_4:", _norng_state(state_4))
-        loader.restore_state(state_4)
+        loader.restore_state_rank(state_4)
         order_4_rest = [data.text for idx, data in zip(range(len(order_4)), loader)]
         print("order_4:", order_4)
         print("order_4_rest:", order_4_rest)
@@ -1040,7 +1040,7 @@ class TestDataset(unittest.TestCase):
 
         loader = new_loader()
         print("state_5:", _norng_state(state_5))
-        loader.restore_state(state_5)
+        loader.restore_state_rank(state_5)
         order_5_rest = [data.text for idx, data in zip(range(len(order_5)), loader)]
         print("order_5:", order_5)
         print("order_5_rest:", order_5_rest)
@@ -1048,7 +1048,7 @@ class TestDataset(unittest.TestCase):
 
         loader = new_loader()
         print("state_6:", _norng_state(state_6))
-        loader.restore_state(state_6)
+        loader.restore_state_rank(state_6)
         order_6_rest = [data.text for idx, data in zip(range(len(order_6)), loader)]
         print("order_6:", order_6)
         print("order_6_rest:", order_6_rest)
@@ -1081,11 +1081,11 @@ class TestDataset(unittest.TestCase):
             ),
             worker_config=worker_config,
         )
-        state_0 = loader.save_state()
+        state_0 = loader.save_state_rank()
         order_1 = [data.text[0] for data in loader]
-        state_1 = loader.save_state()
+        state_1 = loader.save_state_rank()
         order_2 = [data.text[0] for data in loader]
-        state_2 = loader.save_state()
+        state_2 = loader.save_state_rank()
         order_3 = [data.text[0] for idx, data in zip(range(17), loader)]
 
         torch.manual_seed(42)
@@ -1102,7 +1102,7 @@ class TestDataset(unittest.TestCase):
             worker_config=worker_config,
         )
         print("state_0:", _norng_state(state_0))
-        loader.restore_state(state_0)
+        loader.restore_state_rank(state_0)
         order_5 = [data.text[0] for data in loader]
         print("order_1:", order_1)
         print("order_5:", order_5)
@@ -1122,7 +1122,7 @@ class TestDataset(unittest.TestCase):
             worker_config=worker_config,
         )
         print("state_1:", _norng_state(state_1))
-        loader.restore_state(state_1)
+        loader.restore_state_rank(state_1)
         order_6 = [data.text[0] for data in loader]
         print("order_2:", order_2)
         print("order_6:", order_6)
@@ -1142,7 +1142,7 @@ class TestDataset(unittest.TestCase):
             worker_config=worker_config,
         )
         print("state_2:", _norng_state(state_2))
-        loader.restore_state(state_2)
+        loader.restore_state_rank(state_2)
         order_7 = [data.text[0] for idx, data in zip(range(17), loader)]
         print("order_3:", order_3)
         print("order_7:", order_7)
@@ -1163,9 +1163,9 @@ class TestDataset(unittest.TestCase):
             get_val_dataset(self.mds_path, worker_config=worker_config, batch_size=10),
             worker_config=worker_config,
         )
-        state_0 = loader.save_state()
+        state_0 = loader.save_state_rank()
         order_1 = [data.text for idx, data in zip(range(55 * 20), loader)]
-        state_1 = loader.save_state()
+        state_1 = loader.save_state_rank()
         # print("save state done")
         order_2 = [data.text for idx, data in zip(range(55 * 20), loader)]
 
@@ -1173,7 +1173,7 @@ class TestDataset(unittest.TestCase):
             get_val_dataset(self.mds_path, worker_config=worker_config, batch_size=10),
             worker_config=worker_config,
         )
-        loader.restore_state(state_1)
+        loader.restore_state_rank(state_1)
         order_3 = [data.text for idx, data in zip(range(55 * 20), loader)]
         assert order_2 == order_3
 
@@ -1181,7 +1181,7 @@ class TestDataset(unittest.TestCase):
             get_val_dataset(self.mds_path, worker_config=worker_config, batch_size=10),
             worker_config=worker_config,
         )
-        loader.restore_state(state_0)
+        loader.restore_state_rank(state_0)
         order_4 = [data.text for idx, data in zip(range(55 * 20), loader)]
         assert order_1 == order_4
 
