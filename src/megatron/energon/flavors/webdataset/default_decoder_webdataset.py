@@ -1,9 +1,12 @@
-# Copyright (c) 2025, NVIDIA CORPORATION.
+# Copyright (c) 2025, NVIDIA CORPORATION and Alibaba PAI.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from typing import Any, Callable, Dict, Generic, Literal, Optional, TypeVar
+from typing import Any, Callable, Dict, Generic, Literal, Optional, TypeVar, Sequence
 
+import re
+import pickle
 import webdataset
+import webdataset.autodecode
 
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.webdataset.default_generic_webdataset import (
@@ -34,6 +37,40 @@ ImageDecoder = Literal[
     "pilrgba",
 ]
 
+class NestedMultimodalHandler:
+    def __init__(self, base_image_handler, base_video_handler):
+        """Create an multimodal handler for images or videos.
+
+        :param imagespec: short string indicating the type of decoding
+        """
+        self.extensions = webdataset.autodecode.IMAGE_EXTENSIONS
+        self.image_handler = base_image_handler
+        self.video_handler = base_video_handler
+
+    def __call__(self, key, data):
+        """Perform nested multimodal decoding. 
+        Any extension of the list should be "{base key}" + "s", e.g., "jpgs".
+
+        :param key: file name extension
+        :param data: binary data
+        """    
+        extension = re.sub(r".*[.]", "", key).lower()
+        if not extension.endswith("s"):
+            return None
+        base_key = key[:-1]
+        base_extension = extension[:-1]
+        try:
+            data = pickle.loads(data)
+        except:
+            return None
+        if not isinstance(data, Sequence):
+            return None
+        maybe_videos = [self.video_handler(base_key, item) for item in data]
+        if sum([d is not None for d in maybe_videos]) == len(maybe_videos):
+            return maybe_videos
+        if base_extension in self.extensions:
+            return [self.image_handler(base_key, d) for d in data]
+        return None
 
 class DefaultDecoderWebdatasetFactory(DefaultGenericWebdatasetFactory[T_sample], Generic[T_sample]):
     """
@@ -73,10 +110,12 @@ class DefaultDecoderWebdatasetFactory(DefaultGenericWebdatasetFactory[T_sample],
         super().__init__(path, **kwargs)
 
         if auto_decode:
+            image_decoder = webdataset.autodecode.imagehandler(self.image_decode)
             self._decoder = webdataset.autodecode.Decoder(
                 [
-                    webdataset.autodecode.imagehandler(self.image_decode),
+                    image_decoder,
                     self._video_decoder,
+                    NestedMultimodalHandler(image_decoder, self._video_decoder)
                 ]
             )
         else:

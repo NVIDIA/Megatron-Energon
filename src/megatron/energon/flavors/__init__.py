@@ -20,6 +20,7 @@ from megatron.energon.flavors.text import TextSample, TextWebdataset
 from megatron.energon.flavors.vid_qa import VidQASample, VidQAWebdataset
 from megatron.energon.flavors.vqa import VQASample, VQAWebdataset
 from megatron.energon.flavors.vqa_and_ocr import VQAOCRWebdataset
+from megatron.energon.flavors.general_qa import GeneralQASample, GeneralQAWebdataset
 from megatron.energon.flavors.webdataset import (
     BaseWebdatasetFactory,
     DefaultDecoderWebdatasetFactory,
