@@ -286,7 +286,7 @@ for i, batch in zip(range(10), loader):
     break
 
 # Save the state
-state = loader.save_state()
+state = loader.save_state_rank()
 # Could save the state now using torch.save()
 
 # ... when loading:
@@ -301,8 +301,10 @@ ds = get_train_dataset(
     worker_config=WorkerConfig.default_worker_config(),
 )
 loader = get_savable_loader(ds)
-loader.restore_state(state)
+loader.restore_state_rank(state)
 ```
+
+We provide code for different scenarios for saving and loading in distributed settings especially in the section [](save_restore).
 
 ## More Features
 

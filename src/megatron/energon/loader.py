@@ -3,6 +3,7 @@
 
 from typing import Optional, TypeVar
 
+from megatron.energon.errors import warn_deprecated
 from megatron.energon.flavors.base_dataset import SavableDataset
 from megatron.energon.savable_loader import BasicDataLoader, SavableDataLoader
 from megatron.energon.worker import WorkerConfig
@@ -44,11 +45,8 @@ def get_savable_loader(
                 "Also note, it is deprecated to pass one to get_savable_loader() and it will have no effect."
             )
         else:
-            import warnings
-
-            warnings.warn(
-                "Passing a worker_config to get_savable_loader() is deprecated and will have no effect.",
-                DeprecationWarning,
+            warn_deprecated(
+                "Passing a worker_config to get_savable_loader() is deprecated and will have no effect."
             )
 
     return SavableDataLoader(
@@ -81,11 +79,8 @@ def get_loader(
                 "Also note, it is deprecated to pass one to get_loader() and it will have no effect."
             )
         else:
-            import warnings
-
-            warnings.warn(
-                "Passing a worker_config to get_loader() is deprecated and will have no effect.",
-                DeprecationWarning,
+            warn_deprecated(
+                "Passing a worker_config to get_loader() is deprecated and will have no effect."
             )
 
     return BasicDataLoader(dataset)
