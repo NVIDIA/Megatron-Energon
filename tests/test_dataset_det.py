@@ -374,6 +374,142 @@ class TestDataset(unittest.TestCase):
         # print("order3", order_3[:100])
         assert order_2 == order_3
 
+    def test_restore_state_dist(self):
+        from multiprocessing import Manager, Process
+
+        import torch.distributed as dist
+
+        world_size = 3
+
+        count1 = 55 * 20
+        count2 = 55 * 20
+        sbs = 42
+        psi = None
+
+        def phase1(rank: int, world_size: int, shared_dict: dict):
+            worker_config = WorkerConfig(rank=rank, world_size=world_size, num_workers=0)
+
+            # This seed is used by the dataset to shuffle the data
+            torch.manual_seed(42)
+
+            loader = get_savable_loader(
+                get_train_dataset(
+                    self.dataset_path,
+                    split_part="train",
+                    sample_type=TextSample,
+                    worker_config=worker_config,
+                    batch_size=1,
+                    shuffle_buffer_size=sbs,
+                    max_samples_per_sequence=2,
+                    parallel_shard_iters=psi,
+                )
+            )
+
+            state_0 = loader.save_state_global(dst_rank=0)
+            order_1 = [data.text[0] for idx, data in zip(range(count1), loader)]
+            assert len(order_1) == count1
+
+            # print(f"Rank {rank}: order_1", order_1)
+
+            state_1 = loader.save_state_global(dst_rank=0)
+            order_2 = [data.text[0] for idx, data in zip(range(count2), loader)]
+            assert len(order_2) == count2
+
+            shared_dict[(rank, "order_1")] = order_1
+            shared_dict[(rank, "order_2")] = order_2
+
+            if rank == 0:
+                shared_dict["state_0"] = state_0
+                shared_dict["state_1"] = state_1
+
+        def phase2(rank: int, world_size: int, shared_dict: dict):
+            order_1 = shared_dict[(rank, "order_1")]
+            order_2 = shared_dict[(rank, "order_2")]
+
+            if rank == 0:
+                state_0 = shared_dict["state_0"]
+                state_1 = shared_dict["state_1"]
+            else:
+                state_0 = None
+                state_1 = None
+
+            worker_config = WorkerConfig(rank=rank, world_size=world_size, num_workers=0)
+
+            torch.manual_seed(213)
+            loader = get_savable_loader(
+                get_train_dataset(
+                    self.dataset_path,
+                    split_part="train",
+                    sample_type=TextSample,
+                    worker_config=worker_config,
+                    batch_size=1,
+                    shuffle_buffer_size=sbs,
+                    max_samples_per_sequence=2,
+                    parallel_shard_iters=psi,
+                )
+            )
+            loader.restore_state_global(state_0, src_rank=0)
+
+            order_45 = [data.text[0] for idx, data in zip(range(count1 + count2), loader)]
+            order_4 = order_45[:count1]
+            order_5 = order_45[count1:]
+
+            # print(f"Rank {rank}: order_4", order_4)
+
+            assert order_1 == order_4
+            assert order_2 == order_5
+
+            torch.manual_seed(213)
+            loader = get_savable_loader(
+                get_train_dataset(
+                    self.dataset_path,
+                    split_part="train",
+                    sample_type=TextSample,
+                    worker_config=worker_config,
+                    batch_size=1,
+                    shuffle_buffer_size=sbs,
+                    max_samples_per_sequence=2,
+                    parallel_shard_iters=psi,
+                )
+            )
+            loader.restore_state_global(state_1, src_rank=0)
+            order_3 = [data.text[0] for idx, data in zip(range(count2), loader)]
+            assert order_2 == order_3
+
+        def init_process(rank, world_size, shared_dict, fn, backend="gloo"):
+            """Initializes the distributed environment."""
+            dist.init_process_group(
+                backend=backend,
+                init_method="tcp://127.0.0.1:12355",
+                world_size=world_size,
+                rank=rank,
+            )
+            fn(rank, world_size, shared_dict)
+            dist.destroy_process_group()
+
+        with Manager() as manager:
+            shared_dict = manager.dict()
+
+            # Phase 1 (save state)
+            processes = []
+            for rank in range(world_size):
+                p = Process(target=init_process, args=(rank, world_size, shared_dict, phase1))
+                p.start()
+                processes.append(p)
+
+            for p in processes:
+                p.join()
+
+            # Phase 2 (restore state)
+            processes = []
+            for rank in range(world_size):
+                p = Process(target=init_process, args=(rank, world_size, shared_dict, phase2))
+                p.start()
+                processes.append(p)
+
+            for p in processes:
+                p.join()
+
     def test_restore_state_workers(self):
         worker_config = WorkerConfig(rank=0, world_size=1, num_workers=2)
 
