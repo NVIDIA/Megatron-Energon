@@ -1,4 +1,4 @@
-<!--- Copyright (c) 2024, NVIDIA CORPORATION.
+<!--- Copyright (c) 2025, NVIDIA CORPORATION.
 SPDX-License-Identifier: BSD-3-Clause -->
 
 # Reproducible Scaling
@@ -7,11 +7,12 @@ A special use case is to re-run or continue a training run with the exact same d
 
 Since version 2.0.0, Megatron Energon supports this behavior if a few constraints are met:
 
+* The energon major version must be the same across runs
 * The global batch size must stay the same across runs
 * The global batch size must be a multiple of `micro-batch size * world_size * num_workers`
   * The multiple of that is the number of gradient accumulation steps in your training
 * The product `world_size * num_workers` must stay the same across runs, such that the global number of workers stays the same
-* You need to set the same `torch.manual_seed(...)` on each rank before constructing the dataset and the data loader
+* When using random seed offsets in your  {py:class}`WorkerConfig <megatron.energon.WorkerConfig>`, those need to be the same
 
 By obeying these rules, you will be able to reproduce the same global batches. Let's look at an example.
 

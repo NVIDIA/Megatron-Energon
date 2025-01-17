@@ -1,4 +1,4 @@
-# Copyright (c) 2024, NVIDIA CORPORATION.
+# Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
 import json
@@ -267,7 +267,7 @@ def command(
     skip: int,
     no_colors: bool,
 ):
-    """Check energon dataset for errors.
+    """Internal tool to analyze randomness.
 
     The LOG_PATH should point to the folder with the debug log, or to a single log file."""
 

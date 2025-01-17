@@ -1,4 +1,4 @@
-# Copyright (c) 2024, NVIDIA CORPORATION.
+# Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
 """This module defines tests for meta datasets."""
@@ -26,6 +26,7 @@ from megatron.energon import (
     load_dataset,
 )
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
+from megatron.energon.metadataset.loader_interface import DatasetBlendMode
 
 
 def _norng_state(state):
@@ -217,7 +218,7 @@ class TestDataset(unittest.TestCase):
         print(len(train_dataset))
         assert len(train_dataset) == 11
 
-        train_loader1 = get_loader(train_dataset, worker_config=worker_config)
+        train_loader1 = get_loader(train_dataset)
 
         train_order1 = [
             text for idx, data in zip(range(55 * 10), train_loader1) for text in data.text
@@ -237,10 +238,13 @@ class TestDataset(unittest.TestCase):
 
         dataset = load_dataset(self.nested_mds_path)
 
-        raw_datasets = dataset.get_datasets(
+        blend_mode, raw_datasets = dataset.get_datasets(
             training=False, split_part="train", worker_config=worker_config
         )
-        assert [weight for _raw_dataset, weight in raw_datasets] == [0.4, 0.4, 0.1, 0.1]
+        assert blend_mode == DatasetBlendMode.DATASET_WEIGHT
+        assert [weight for _raw_dataset, weight in raw_datasets] == [0.4, 0.4, 0.1, 0.1], [
+            weight for _raw_dataset, weight in raw_datasets
+        ]
         assert [raw_dataset.paths[0].name for raw_dataset, _weight in raw_datasets] == [
             "ds1",
             "ds2",
@@ -472,6 +476,144 @@ class TestDataset(unittest.TestCase):
         assert set(txt2_order) == set(f"j{i}" for i in range(200, 255))
         # Every item must occurr 2 times (2*55).
         assert Counter(txt1_order).most_common(1)[0][1] == 2
+
+    def test_metadataset_fixed_epochs(self):
+        torch.manual_seed(42)
+        worker_config = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=0,
+            seed_offset=42,
+        )
+
+        # Create a joined dataset configuration
+        fixed_epochs_mds_path = self.dataset_path / "metadataset_fixed_epochs.yaml"
+        with open(fixed_epochs_mds_path, "w") as f:
+            f.write(
+                "\n".join(
+                    [
+                        "__module__: megatron.energon",
+                        "__class__: MetadatasetV2",
+                        "splits:",
+                        "  train:",
+                        "    blend_epochized:",
+                        "      - repetitions: 2",
+                        "        path: ds1",
+                        "        subflavors:",
+                        "          source: ds1",
+                        "          number: 43",
+                        "      - repetitions: 3",
+                        "        path: ds2",
+                        "        subflavors:",
+                        "          source: ds2",
+                        "          number: 42",
+                    ]
+                )
+            )
+
+        # Train mode dataset
+        train_dataset = get_train_dataset(
+            fixed_epochs_mds_path,
+            worker_config=worker_config,
+            batch_size=1,
+            shuffle_buffer_size=None,
+            max_samples_per_sequence=None,
+            repeat=False,
+        )
+        print(len(train_dataset))
+        assert len(train_dataset) == 5 * 55, len(train_dataset)
+
+        train_loader = get_savable_loader(
+            train_dataset,
+            worker_config=worker_config,
+            checkpoint_every_sec=0,
+            checkpoint_every_min_n_samples=1,
+            n_checkpoints=5,
+        )
+
+        data = list(enumerate(train_loader))
+        txt_order = [data.text[0] for idx, data in data]
+        key_order = [data.__subflavors__[0]["source"] + "/" + data.__key__[0] for idx, data in data]
+        print("txt1:", txt_order)
+        print("key:", key_order)
+        assert len(txt_order) == 5 * 55, Counter(txt_order)
+        ds1_keys = [key for key in key_order if key.startswith("ds1/")]
+        ds2_keys = [key for key in key_order if key.startswith("ds2/")]
+        txt_cnt = Counter(txt_order)
+        ds1_key_cnt = Counter(ds1_keys)
+        ds2_key_cnt = Counter(ds2_keys)
+        assert len(ds1_keys) == 2 * 55, (len(ds1_keys), ds1_key_cnt)
+        assert len(ds2_keys) == 3 * 55, (len(ds2_keys), ds2_key_cnt)
+        assert all(ds1_key_cnt[key] == 2 for key in ds1_keys)
+        assert all(ds2_key_cnt[key] == 3 for key in ds2_keys)
+        assert all(txt_cnt[key] in (2, 3) for key in txt_order)
+
+        # Next epoch
+        data = list(enumerate(train_loader))
+        print([data.text[0] for idx, data in data])
+        assert len(data) == 5 * 55, len(data)
+
+        # Next epoch
+        data1 = list(zip(range(3 * 55), train_loader))
+        assert len(data1) == 3 * 55, len(data1)
+        # Save state mid epoch
+        state1 = train_loader.save_state_rank()
+        print(state1)
+
+        data2 = list(enumerate(train_loader))
+        assert len(data2) == 2 * 55
+        txt_order = [data.text[0] for idx, data in data1 + data2]
+        key_order = [
+            data.__subflavors__[0]["source"] + "/" + data.__key__[0] for idx, data in data1 + data2
+        ]
+        assert len(txt_order) == 5 * 55, Counter(txt_order)
+        ds1_keys = [key for key in key_order if key.startswith("ds1/")]
+        ds2_keys = [key for key in key_order if key.startswith("ds2/")]
+        txt_cnt = Counter(txt_order)
+        ds1_key_cnt = Counter(ds1_keys)
+        ds2_key_cnt = Counter(ds2_keys)
+        assert len(ds1_keys) == 2 * 55, (len(ds1_keys), ds1_key_cnt)
+        assert len(ds2_keys) == 3 * 55, (len(ds2_keys), ds2_key_cnt)
+        assert all(ds1_key_cnt[key] == 2 for key in ds1_keys)
+        assert all(ds2_key_cnt[key] == 3 for key in ds2_keys)
+        assert all(txt_cnt[key] in (2, 3) for key in txt_order)
+
+        # Restore state
+        train_loader = get_savable_loader(
+            get_train_dataset(
+                fixed_epochs_mds_path,
+                worker_config=worker_config,
+                batch_size=1,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                repeat=False,
+            ),
+            worker_config=worker_config,
+            checkpoint_every_sec=0,
+            checkpoint_every_min_n_samples=1,
+            n_checkpoints=5,
+        )
+        train_loader.restore_state_rank(state1)
+        data2_restore = list(enumerate(train_loader))
+        assert len(data2_restore) == 2 * 55
+        txt_order_rst = [data.text[0] for idx, data in data1 + data2_restore]
+        key_order_rst = [
+            data.__subflavors__[0]["source"] + "/" + data.__key__[0]
+            for idx, data in data1 + data2_restore
+        ]
+        assert len(txt_order_rst) == 5 * 55, Counter(txt_order_rst)
+        assert txt_order_rst == txt_order
+        assert key_order_rst == key_order
+        ds1_keys_rst = [key for key in key_order_rst if key.startswith("ds1/")]
+        ds2_keys_rst = [key for key in key_order_rst if key.startswith("ds2/")]
+        txt_cnt_rst = Counter(txt_order_rst)
+        ds1_key_cnt_rst = Counter(ds1_keys_rst)
+        ds2_key_cnt_rst = Counter(ds2_keys_rst)
+        assert len(ds1_keys_rst) == 2 * 55, (len(ds1_keys_rst), ds1_key_cnt_rst)
+        assert len(ds2_keys_rst) == 3 * 55, (len(ds2_keys_rst), ds2_key_cnt_rst)
+        assert all(ds1_key_cnt_rst[key] == 2 for key in ds1_keys_rst)
+        assert all(ds2_key_cnt_rst[key] == 3 for key in ds2_keys_rst)
+        assert all(txt_cnt_rst[key] in (2, 3) for key in txt_order_rst)
 
 
 if __name__ == "__main__":

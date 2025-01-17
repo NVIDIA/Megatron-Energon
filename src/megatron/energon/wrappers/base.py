@@ -1,4 +1,4 @@
-# Copyright (c) 2024, NVIDIA CORPORATION.
+# Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
 from contextlib import contextmanager
@@ -20,9 +20,9 @@ from megatron.energon.flavors.base_dataset import MergedState, Sample, SavableDa
 from megatron.energon.worker import WorkerConfig
 
 T = TypeVar("T")
-T_sample = TypeVar("T_sample")
-T_sample_out = TypeVar("T_sample_out")
-T_sample_in = TypeVar("T_sample_in")
+T_sample = TypeVar("T_sample", covariant=True)
+T_sample_out = TypeVar("T_sample_out", covariant=True)
+T_sample_in = TypeVar("T_sample_in", covariant=True)
 
 
 @dataclass
@@ -53,6 +53,23 @@ class BaseWrapperDataset(SavableDataset[T_sample], Generic[T_sample]):
     shuffling samples or applying custom functions to the data. Some wrappers only modify the
     length of the dataset or how it's repeated."""
 
+    def __init__(
+        self,
+        dataset: Union[SavableDataset, Iterable[SavableDataset]],
+        *,
+        worker_config: WorkerConfig,
+    ):
+        super().__init__(worker_config=worker_config)
+
+        if isinstance(dataset, SavableDataset):
+            dataset = [dataset]
+
+        for d in dataset:
+            # Check that the dataset worker configs are the same as the wrapper worker config
+            assert (
+                d.worker_config == self.worker_config
+            ), "Dataset and wrapper worker configs must match."
+
 
 class BaseSingleWrapperDataset(
     BaseWrapperDataset[T_sample_out], Generic[T_sample_in, T_sample_out]
@@ -62,8 +79,8 @@ class BaseSingleWrapperDataset(
 
     dataset: SavableDataset[T_sample_in]
 
-    def __init__(self, dataset: SavableDataset[T_sample_in]):
-        super().__init__()
+    def __init__(self, dataset: SavableDataset[T_sample_in], *, worker_config: WorkerConfig):
+        super().__init__(dataset, worker_config=worker_config)
         assert isinstance(dataset, SavableDataset)
         self.dataset = dataset
 
@@ -104,10 +121,6 @@ class BaseSingleWrapperDataset(
 
     def worker_has_samples(self) -> bool:
         return self.dataset.worker_has_samples()
-
-    def verify_worker_config(self, worker_config: WorkerConfig) -> None:
-        super().verify_worker_config(worker_config)
-        self.dataset.verify_worker_config(worker_config)
 
 
 class SampleIndex:

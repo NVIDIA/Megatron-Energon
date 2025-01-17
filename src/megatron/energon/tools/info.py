@@ -1,4 +1,4 @@
-# Copyright (c) 2024, NVIDIA CORPORATION.
+# Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
 from importlib import import_module
@@ -30,7 +30,7 @@ def fmt_size(size: int) -> str:
         if size < 1024:
             return f"{size:.2f} {key}"
         size /= 1024
-    return f"{size:.2f} TiB"
+    return f"{size:.2f} PiB"
 
 
 @click.command(name="info")
@@ -50,8 +50,9 @@ def command(
     dataset_config: str,
 ):
     """
-    Print information about a dataset, formatted to be pasted in `existing_datasets.md`.
+    Get summarizing information about a dataset.
     """
+
     ds_config = yaml.safe_load(StringIO((path / MAIN_FOLDER_NAME / dataset_config).read_text()))
     info_config = yaml.safe_load(StringIO((path / MAIN_FOLDER_NAME / ".info.yaml").read_text()))
     split_config = yaml.safe_load(StringIO((path / MAIN_FOLDER_NAME / split_config).read_text()))

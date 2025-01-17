@@ -1,3 +1,5 @@
+<!--- Copyright (c) 2025, NVIDIA CORPORATION.
+SPDX-License-Identifier: BSD-3-Clause -->
 <a name="top"></a>
 
 <div align="center">
@@ -39,10 +41,12 @@ This document is just a quick start. Please also check out the [documentation](h
 
 ## Installation
 
+To install the latest stable version:
 ```shell
 pip install megatron-energon
 ```
-Or
+
+Or to install the current development version:
 ```shell
 pip install git+https://github.com/NVIDIA/Megatron-Energon.git
 ```
@@ -70,15 +74,21 @@ To get started, pick a [WebDataset](https://github.com/webdataset/webdataset)-co
 Once done, try to load it from your Python program:
 
 ```python
-from megatron.energon import get_train_dataset, get_loader
+from megatron.energon import get_train_dataset, get_loader, WorkerConfig
 
 
-train_loader = get_loader(get_train_dataset(
+simple_worker_config = WorkerConfig(rank=0, world_size=1, num_workers=2)
+
+
+train_ds = get_train_dataset(
     '/my/dataset/path',
     batch_size=32,
     shuffle_buffer_size=None,
     max_samples_per_sequence=None,
-))
+    worker_config=simple_worker_config,
+)
+
+train_loader = get_loader(train_ds)
 
 for batch in train_loader:
     # Do something with batch

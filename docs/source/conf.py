@@ -1,4 +1,9 @@
+# Copyright (c) 2025, NVIDIA CORPORATION.
+# SPDX-License-Identifier: BSD-3-Clause
 # -*- coding: utf-8 -*-
+# Copyright (c) 2024, NVIDIA CORPORATION.
+# SPDX-License-Identifier: BSD-3-Clause
+
 #
 # Configuration file for the Sphinx documentation builder.
 #
@@ -13,8 +18,6 @@
 # documentation root, use os.path.abspath to make it absolute, like shown here.
 #
 import os
-import pathlib
-import shutil
 import sys
 
 # src_folder = pathlib.Path(__file__).parents[2]
@@ -29,7 +32,7 @@ sys.path.insert(0, os.path.abspath("../../src"))
 # -- Project information -----------------------------------------------------
 
 project = "megatron-energon"
-copyright = "2024 NVIDIA Corporation"
+copyright = "2025 NVIDIA Corporation"
 author = "Lukas Voegtle, Philipp Fischer"
 
 # The short X.Y version
@@ -49,13 +52,23 @@ release = ""
 extensions = [
     "sphinx.ext.autodoc",
     "sphinx.ext.viewcode",
+    "sphinx.ext.mathjax",
     "sphinx.ext.napoleon",
     "myst_parser",  # markdown(*.md) parser
     "sphinx_click",
 ]
 
 # Autodoc
-autodoc_mock_imports = ["braceexpand", "fsspec", "torch", "webdataset", "tqdm", "numpy", "PIL"]
+autodoc_mock_imports = [
+    "braceexpand",
+    "fsspec",
+    "torch",
+    "webdataset",
+    "tqdm",
+    "numpy",
+    "PIL",
+    "s3fs",
+]
 autodoc_typehints = "description"
 autodoc_typehints_format = "short"
 

@@ -1,4 +1,4 @@
-# Copyright (c) 2024, NVIDIA CORPORATION.
+# Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
 import dataclasses
@@ -105,7 +105,7 @@ def pprint(idx: int, sample: Sample):
     "--dataset-config", default="dataset.yaml", help="Dataset config file name", show_default=True
 )
 def command(path: EPath, split_parts: str, dataset_config: str):
-    """Views the contents of a dataset on the console."""
+    """Preview samples of a dataset on the console."""
 
     path = path.absolute()
 
@@ -128,7 +128,7 @@ def command(path: EPath, split_parts: str, dataset_config: str):
             continue
 
         try:
-            for idx, sample in enumerate(get_loader(dataset.build(), worker_config=worker_config)):
+            for idx, sample in enumerate(get_loader(dataset.build())):
                 pprint(idx, sample)
                 click.confirm("Continue?", abort=True)
         except click.Abort:

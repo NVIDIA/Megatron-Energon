@@ -1,4 +1,4 @@
-# Copyright (c) 2024, NVIDIA CORPORATION.
+# Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
 import gc
@@ -11,6 +11,7 @@ from torch.distributed._shard.sharded_tensor import ShardedTensorBase
 from torch.distributed.distributed_c10d import reduce_op
 
 from megatron.energon.flavors.base_dataset import SavableDataset
+from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseSingleWrapperDataset
 
 T_sample = TypeVar("T_sample")
@@ -69,7 +70,12 @@ class GcDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_sample])
     freeze: bool
 
     def __init__(
-        self, dataset: SavableDataset[T_sample], every_n_iter: int = 1, freeze: bool = False
+        self,
+        dataset: SavableDataset[T_sample],
+        *,
+        worker_config: WorkerConfig,
+        every_n_iter: int = 1,
+        freeze: bool = True,
     ):
         """Construct a GcDataset, which applies garbage collection every `every_n_iter` iterations.
 
@@ -81,7 +87,7 @@ class GcDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_sample])
                 alive until the end of the loop (i.e. if the dataset state was restored, that state
                 will be saved as well).
         """
-        super().__init__(dataset)
+        super().__init__(dataset, worker_config=worker_config)
         self.every_n_iter = every_n_iter
         self.freeze = freeze
 
@@ -115,4 +121,4 @@ class GcDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_sample])
         return self.dataset.config()
 
     def __str__(self):
-        return f"GcDataset(every_n_iter={self.every_n_iter}, dataset={self.dataset})"
+        return f"GcDataset(every_n_iter={self.every_n_iter}, dataset={self.dataset}, freeze={self.freeze})"

@@ -1,4 +1,4 @@
-# Copyright (c) 2024, NVIDIA CORPORATION.
+# Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
 import logging
@@ -112,7 +112,10 @@ class BaseWebdatasetFactory(
         self.part_filter = part_filter
         self.handler = handler
 
-    def build(self) -> SavableDataset[T_sample]:
+    def __len__(self) -> int:
+        return sum(shard.count for shard in self.shards)
+
+    def build(self, worker_rotation_offset: int = 0) -> SavableDataset[T_sample]:
         if self.parallel_shard_iters is None:
             if self.training:
                 # 16 seems to be a good choice since we don't want too many file handles open
@@ -126,6 +129,7 @@ class BaseWebdatasetFactory(
             [(shard,) for shard in self.shards],
             self.worker_config,
             max_samples_per_sequence=self.max_samples_per_sequence,
+            rotation_offset=worker_rotation_offset,
         )
         for rank_idx, inner_shards in enumerate(rank_shards):
             shards_text = ", ".join(
@@ -153,7 +157,6 @@ class BaseWebdatasetFactory(
             worker_config=self.worker_config,
             part_filter=self.part_filter,
             exclude=self.sample_excludes,
-            loop=self.training,
             shuffle_over_epochs=self.shuffle_over_epochs if self.training else None,
             parallel_shard_iters=parallel_shard_iters,
             handler=self.sample_error_handler,

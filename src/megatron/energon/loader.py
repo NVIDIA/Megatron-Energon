@@ -1,14 +1,12 @@
-# Copyright (c) 2024, NVIDIA CORPORATION.
+# Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
 from typing import Optional, TypeVar
 
-from torch.utils.data import DataLoader
-
+from megatron.energon.errors import warn_deprecated
 from megatron.energon.flavors.base_dataset import SavableDataset
 from megatron.energon.savable_loader import BasicDataLoader, SavableDataLoader
 from megatron.energon.worker import WorkerConfig
-from megatron.energon.wrappers.gc_dataset import GcDataset
 
 T = TypeVar("T")
 
@@ -16,7 +14,7 @@ T = TypeVar("T")
 def get_savable_loader(
     dataset: SavableDataset[T],
     *,
-    worker_config: WorkerConfig,
+    worker_config: Optional[WorkerConfig] = None,
     checkpoint_every_sec: float = 60,
     checkpoint_every_min_n_samples: Optional[int] = None,
     n_checkpoints: int = 2,
@@ -27,7 +25,7 @@ def get_savable_loader(
 
     Args:
         dataset: The dataset to create a loader for.
-        worker_config: The worker config. Set the same value to the `get(_val|_train)_dataset` call.
+        worker_config: Deprecated. Please pass this to the dataset instead.
         checkpoint_every_sec: This is the time in seconds after which an internal checkpoint is
             saved. It may take the same duration to restore a checkpoint, but introduces additional
             overhead during reading data from the dataset, so this should be chosen accordingly.
@@ -40,10 +38,19 @@ def get_savable_loader(
         The instantiated :class:`megatron.energon.SavableDataLoader`, yielding batches from the dataset,
         allowing to save the state of the dataset.
     """
-    dataset.verify_worker_config(worker_config)
+    if worker_config is not None:
+        if worker_config != dataset.worker_config:
+            raise AssertionError(
+                "The worker_config passed to get_savable_loader() does not match the one of the dataset. "
+                "Also note, it is deprecated to pass one to get_savable_loader() and it will have no effect."
+            )
+        else:
+            warn_deprecated(
+                "Passing a worker_config to get_savable_loader() is deprecated and will have no effect."
+            )
+
     return SavableDataLoader(
         dataset,
-        worker_config=worker_config,
         checkpoint_every_sec=checkpoint_every_sec,
         checkpoint_every_min_n_samples=checkpoint_every_min_n_samples,
         n_checkpoints=n_checkpoints,
@@ -53,20 +60,27 @@ def get_savable_loader(
 def get_loader(
     dataset: SavableDataset[T],
     *,
-    worker_config: WorkerConfig,
+    worker_config: Optional[WorkerConfig] = None,
 ) -> BasicDataLoader[T]:
     """
     Get a dataloader for the given dataset.
 
     Args:
         dataset: The dataset to create a loader for.
-        worker_config: The worker config. Set the same value to the `get(_val|_train)_dataset` call.
+        worker_config: Deprecated. Please pass this to the dataset instead.
 
     Returns:
         The instantiated :class:`torch.data.DataLoader`, yielding batches from the dataset.
     """
-    dataset.verify_worker_config(worker_config)
-    return BasicDataLoader(
-        GcDataset(dataset),
-        worker_config=worker_config,
-    )
+    if worker_config is not None:
+        if worker_config != dataset.worker_config:
+            raise AssertionError(
+                "The worker_config passed to get_loader() does not match the one of the dataset. "
+                "Also note, it is deprecated to pass one to get_loader() and it will have no effect."
+            )
+        else:
+            warn_deprecated(
+                "Passing a worker_config to get_loader() is deprecated and will have no effect."
+            )
+
+    return BasicDataLoader(dataset)

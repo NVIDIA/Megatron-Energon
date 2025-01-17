@@ -1,4 +1,4 @@
-<!--- Copyright (c) 2024, NVIDIA CORPORATION.
+<!--- Copyright (c) 2025, NVIDIA CORPORATION.
 SPDX-License-Identifier: BSD-3-Clause -->
 
 # Packing
@@ -25,7 +25,8 @@ For each group, the second method `pack_selected_samples` will be called. You ne
 samples will be mapped to a single sample. In terms of LLMs for example, this method might concatenate the input tokens.
 
 
-```{warning}
+```{admonition} Note
+:class: important
 You can set the `__restore_key__` of the packed sample to an empty tuple, since energon will set the correct
 restore key afterwards, based on the samples that went in.
 ```
@@ -41,7 +42,7 @@ samples for packing. If augmentations happen, it should be marked with
 You have to make sure the methods are actually stateless, meaning that they will produce the same output when invoked
 with the same input and random states.
 
-Example for padding for a large language model extending the example from the [Task Encoders](task_encoders) section:
+Example packing for a large language model extending the example from the [](../basic/task_encoder) section:
 
 ```python
 class PackingCaptioningTaskEncoder(CaptioningTaskEncoder):

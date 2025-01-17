@@ -1,4 +1,4 @@
-# Copyright (c) 2024, NVIDIA CORPORATION.
+# Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
 from dataclasses import dataclass
@@ -30,7 +30,6 @@ class LimitDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_sampl
 
     dataset: SavableDataset[T_sample]
     length: int
-    worker_config: WorkerConfig
 
     _current_offset: List[int]
 
@@ -51,10 +50,9 @@ class LimitDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_sampl
             reset_after_epoch: If true, reset the underlying dataset after one epoch.
             worker_config: Configuration for the workers.
         """
-        super().__init__(dataset)
+        super().__init__(dataset, worker_config=worker_config)
         self.length = length
         self.reset_after_epoch = reset_after_epoch
-        self.worker_config = worker_config
         self._current_offset = [0] * max(self.worker_config.num_workers, 1)
 
     def __len__(self) -> int:

@@ -1,4 +1,4 @@
-# Copyright (c) 2024, NVIDIA CORPORATION.
+# Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
 import gc
@@ -8,10 +8,23 @@ import random
 import threading
 import time
 import traceback
+import warnings
 import weakref
 from dataclasses import dataclass
 from functools import partial
-from typing import Any, ClassVar, Dict, Generic, Iterator, List, Optional, Tuple, TypeVar, Union
+from typing import (
+    Any,
+    ClassVar,
+    Dict,
+    Generic,
+    Iterator,
+    List,
+    Optional,
+    Sequence,
+    Tuple,
+    TypeVar,
+    Union,
+)
 
 import numpy as np
 import torch
@@ -19,6 +32,7 @@ import torch.distributed
 import torch.multiprocessing
 from torch.utils.data import DataLoader, IterableDataset
 
+from megatron.energon.errors import deprecated
 from megatron.energon.flavors.base_dataset import (
     MergedState,
     SavableDataset,
@@ -65,14 +79,18 @@ class SimpleSavableDatasetWrapper(SavableDataset[Tuple[int, int, T]], Generic[T]
     not intended to be used directly."""
 
     dataset: SavableDataset[T]
-    worker_config: WorkerConfig
     _state_restored: bool = False
     _sample_indexes: List[int]
 
     def __init__(self, dataset: SavableDataset[T], worker_config: WorkerConfig):
+        super().__init__(worker_config=worker_config)
         self.dataset = dataset
-        self.worker_config = worker_config
         self._sample_index = [0] * max(self.worker_config.num_workers, 1)
+
+        # Check that the dataset worker config is the same as the wrapper worker config
+        assert (
+            self.dataset.worker_config == self.worker_config
+        ), "Dataset and wrapper worker configs must match."
 
     def __len__(self):
         return len(self.dataset)
@@ -610,14 +628,18 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
     When restoring, the dataloader and dataset must be instantiated with the exactly same
     parameters.
 
-    ## How this works (for no worker processes)
+    How this works (for no worker processes)
+    ----------------------------------------
+
     1. The state of the dataset is saved using :meth:`megatron.energon.SavableDataset.save_state`
     2. (for compatibility) The state of the dataset is converted to using inner arrays using
        :meth:`megatron.energon.SavableDataset.merge_states`.
     3. The state can be restored using :meth:`megatron.energon.SavableDataset.restore_state` given the
        previously saved (and merged) state.
 
-    ## How this works (for worker processes)
+    How this works (for worker processes)
+    -------------------------------------
+
     - First issue is, that worker processes work with internal queues between processes to pass
       loaded samples to the main process (also to perform collating). This means that the whole
       state of the dataset is not directly accessible from the main process.
@@ -645,6 +667,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
        before a worker is started, such that all workers initially receive the same state array.
        The worker firstly sets the worker index offset, then uses its (shifted) own index to get its
        required state from the merged state array.
+
     """
 
     #: The worker config
@@ -678,10 +701,11 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
         self,
         dataset: SavableDataset[T],
         *,
-        worker_config: WorkerConfig,
         checkpoint_every_sec: float = 60,
         checkpoint_every_min_n_samples: Optional[int] = None,
         n_checkpoints: int = 2,
+        gc_collect_every_n_steps: int = 1,
+        gc_freeze_at_start: bool = True,
     ):
         """
         Create the dataloader supporting saving and restoring the state.
@@ -697,11 +721,26 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
                 checkpoints. Defaults to `number of workers * 2`. Only applies if using workers.
             n_checkpoints: The number of checkpoints to keep in memory. Only applies if using
                 workers.
+            gc_collect_every_n_steps: The number of steps after which the garbage collector is
+                called. As we're usually handling large (but few) tensors here, and the python
+                garbage collection is already full of objects just by importing, this can improve
+                the memory footprint quite a lot, and may even be necessary to avoid memory
+                overflow.
+            gc_freeze_at_start: If true, the garbage collector is frozen at the start of the worker
+                processes. This improves the garbage collection performance by a lot.
+                In rare cases, this may cause issues and can be disabled. Keep enabled if you
+                experience no issues.
         """
-        self.worker_config = worker_config
+        self.worker_config = dataset.worker_config
         self.id = self.next_id()
 
-        dataset = GcDataset(dataset)
+        if gc_collect_every_n_steps > 0:
+            dataset = GcDataset(
+                dataset,
+                worker_config=self.worker_config,
+                every_n_iter=gc_collect_every_n_steps,
+                freeze=gc_freeze_at_start,
+            )
 
         self.cmd_queues = [multiprocessing.Queue() for _ in range(self.worker_config.num_workers)]
         self.result_queues = [
@@ -896,7 +935,6 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
             dataset_state=merged_states,
             next_worker_id=self._next_worker_id,
         )
-        # print("Merged state", merged_state)
 
         # Not distributed -> return the merged state
         return merged_state
@@ -919,89 +957,122 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
             assert isinstance(self.dataset, SavableDatasetWrapper)
             assert isinstance(state.dataset_state, SavableDatasetMergedCheckpoint)
             self.dataset.restore_checkpoint(state.dataset_state, worker_offset=state.next_worker_id)
-        # if len(self.cmd_queues) > 0:
-        #     self._worker_command("restore_state", state["dataset"])
 
-    def save_state(
-        self, dst_rank: Optional[int] = None
-    ) -> Union[SavableDataLoaderState, List[SavableDataLoaderState], None, List[None]]:
+    @deprecated(
+        "`save_state` is deprecated and was renamed to `save_state_global` and will be removed "
+        "in a future update. If you actually do not want to gather the states to a rank, use "
+        "`save_state_rank` instead."
+    )
+    def save_state(self, dst_rank: int) -> Optional[Sequence[Optional[SavableDataLoaderState]]]:
+        """Deprecated. Use `save_state_global` (or `save_state_rank`) instead."""
+
+        return self.save_state_global(dst_rank)
+
+    def save_state_global(
+        self, dst_rank: int
+    ) -> Optional[Sequence[Optional[SavableDataLoaderState]]]:
         """
-        Saves the state of the dataset. Allows for restoring the state later using `restore_state`,
-        given the result of this method.
+        Saves the state of the dataset globally, collecting the state from all ranks using torch
+        distributed. Allows for restoring the state later using `restore_state_global`, given the
+        result of this method.
+        Typical scenario: Save the state to disk only on the `dst_rank`, the other ranks do not
+        save the state. Later, restore the state either only loaded on the `dst_rank` or
+        loading on all ranks separately using `restore_state_global`.
+
+        Note: If you want to save/restore the state per rank separately, use `save_state_rank` and
+        the corresponding `restore_state_rank`. Also, these do not rely on torch distributed.
 
         Args:
-            dst_rank: If specified, the state will be gathered to this rank. Otherwise, it will be
-                gathered to all ranks.
+            dst_rank: The state will be gathered to this rank.
 
         Returns:
             The state of the dataset (or `None`, if not on `dst_rank`).
         """
         # Fetch current rank's worker's state
         merged_state = self.save_state_rank()
-        # print("Merged state", merged_state)
 
         # Gather the merged states
-        if torch.distributed.is_available() and torch.distributed.is_initialized():
-            output: Optional[List[Optional[MergedState]]]
-            if dst_rank is None:
+        if self.worker_config.world_size > 1:
+            output: Optional[Sequence[Optional[SavableDataLoaderState]]]
+            if self.worker_config.rank == dst_rank:
                 output = [None] * self.worker_config.world_size
-                torch.distributed.all_gather_object(
-                    output, merged_state, group=self.worker_config.data_parallel_group
-                )
             else:
-                if self.worker_config.rank == dst_rank:
-                    output = [None] * self.worker_config.world_size
-                else:
-                    output = None
-                torch.distributed.gather_object(
-                    merged_state, output, dst_rank, group=self.worker_config.data_parallel_group
-                )
+                output = None
+            torch.distributed.gather_object(
+                merged_state, output, dst_rank, group=self.worker_config.data_parallel_group
+            )
             return output
         else:
             # Not distributed -> return the merged state
-            return merged_state
+            return [merged_state]
 
+    @deprecated(
+        "`restore_state` was renamed to `restore_state_global` and will be removed in a future update."
+    )
     def restore_state(
         self,
-        state: Union[SavableDataLoaderState, List[SavableDataLoaderState], None, List[None]],
-        src_rank: Optional[int] = None,
+        state: Optional[Sequence[Optional[SavableDataLoaderState]]],
+        src_rank: Optional[int],
+    ) -> None:
+        """Deprecated. Use `restore_state_global` (or `restore_state_rank`) instead."""
+
+        return self.restore_state_global(state, src_rank)
+
+    def restore_state_global(
+        self,
+        state: Optional[Sequence[Optional[SavableDataLoaderState]]],
+        src_rank: Optional[int],
     ) -> None:
         """
-        Restores the saved state.
+        Restores the saved state from `save_state_global` (in torch distributed setup).
+        Typical scenarios are:
+
+          - `src_rank=None`: All ranks load the same state from disk, restore their respective state.
+          - `src_rank=rank`: Only the rank `rank` loads the state from disk, all other ranks receive
+            the state from rank `rank`.
 
         Args:
-            state: The state to restore, as saved by `save_state`.
-            src_rank: If set, only this rank is assumed to hold the data, other ranks must set state
-                to None. If not set, all ranks are assumed to hold the data.
+            state: The state to restore, as saved by `save_state_global`.
+            src_rank: If set to a rank index, only this rank is assumed to hold the data, other
+                ranks must set state to `None`. If `None`, all ranks are assumed to have loaded the
+                state data.
         """
         assert self._persistent_iterator is None, "Cannot restore state while workers are running"
-        # Only restore multi-rank if state is actually a list and we are in a torch distributed setup.
+
+        # Only restore multi-rank if state is actually a list and we are in a distributed setup.
         # Otherwise treat as single rank state.
-        if (
-            torch.distributed.is_available()
-            and torch.distributed.is_initialized()
-            and isinstance(state, list)
-        ):
-            if src_rank is None:
-                # All ranks have the state
-                # Select the state of the current rank
-                state = state[self.worker_config.rank]
+        if src_rank is None or self.worker_config.world_size == 1:
+            assert isinstance(state, list), "State must be a list in distributed setup"
+            assert (
+                len(state) == self.worker_config.world_size
+            ), "State must be a list of size world_size"
+
+            # All ranks have the state
+            # Select the state of the current rank
+            rank_state = state[self.worker_config.rank]
+        else:
+            # Only the src_rank has the state
+            if self.worker_config.rank != src_rank:
+                # Send the state to all other ranks
+                assert state is None
+                # Must still be a list of Nones
+                state = [None] * self.worker_config.world_size
             else:
-                # Only the src_rank has the state
-                if self.worker_config.rank != src_rank:
-                    # Send the state to all other ranks
-                    assert state is None
-                    # Must still be a list of Nones
-                    state = [None] * self.worker_config.world_size
-                local_object = [None]
-                torch.distributed.scatter_object_list(
-                    local_object,
-                    state,
-                    src=src_rank,
-                    group=self.worker_config.data_parallel_group,
-                )
-                state = local_object[0]
-        self.restore_state_rank(state)
+                assert isinstance(state, list), "State must be a list in distributed setup"
+                assert (
+                    len(state) == self.worker_config.world_size
+                ), "State must be a list of size world_size"
+
+            local_object = [None]
+            torch.distributed.scatter_object_list(
+                local_object,
+                state,
+                src=src_rank,
+                group=self.worker_config.data_parallel_group,
+            )
+            rank_state = local_object[0]
+
+        self.restore_state_rank(rank_state)
 
     def can_restore_sample(self) -> bool:
         return self.dataset.can_restore_sample()
@@ -1037,25 +1108,36 @@ class BasicDataLoader(DataLoader[T], Generic[T]):
     def __init__(
         self,
         dataset: SavableDataset[T],
-        *,
-        worker_config: WorkerConfig,
+        gc_collect_every_n_steps: int = 1,
+        gc_freeze_at_start: bool = True,
     ):
         """
         Create the dataloader supporting saving and restoring the state.
 
         Args:
             dataset: The dataset to load.
-            worker_config: The worker config to use
-            checkpoint_every_sec: This is the time in seconds after which a checkpoint is saved.
-               It may take the same duration to restore a checkpoint, but introduces additional
-               overhead during reading data from the dataset, so this should be chosen accordingly.
+            gc_collect_every_n_steps: The number of steps after which the garbage collector is
+                called. As we're usually handling large (but few) tensors here, and the python
+                garbage collection is already full of objects just by importing, this can improve
+                the memory footprint quite a lot, and may even be necessary to avoid memory
+                overflow.
+            gc_freeze_at_start: If true, the garbage collector is frozen at the start of the worker
+                processes. This improves the garbage collection performance by a lot.
+                In rare cases, this may cause issues and can be disabled. Keep enabled if you
+                experience no issues.
         """
-        self.worker_config = worker_config
+        self.worker_config = dataset.worker_config
 
         self.id = SavableDataLoader.next_id()
 
-        dataset = GcDataset(dataset)
-        dataset = SimpleSavableDatasetWrapper(dataset, self.worker_config)
+        if gc_collect_every_n_steps > 0:
+            dataset = GcDataset(
+                dataset,
+                worker_config=self.worker_config,
+                every_n_iter=gc_collect_every_n_steps,
+                freeze=gc_freeze_at_start,
+            )
+        dataset = SimpleSavableDatasetWrapper(dataset, worker_config=self.worker_config)
 
         self._worker_sample_counters = [0] * max(self.worker_config.num_workers, 1)
 

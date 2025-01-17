@@ -1,15 +1,18 @@
-<!--- Copyright (c) 2024, NVIDIA CORPORATION.
+<!--- Copyright (c) 2025, NVIDIA CORPORATION.
 SPDX-License-Identifier: BSD-3-Clause -->
 
 # Megatron-Energon Documentation
 
 This is the documentation of Megatron's multi-modal data loader "Energon".
 
-We recommend getting started in the [Introduction](introduction) section, which introduces this package and contains a few code snippets to get you started quickly.
+We recommend getting started in the [Introduction](intro/introduction) section, which explains what Energon is and how to install it.
 
-To better understand the underlying concepts, please read the [Basic Concepts](basics_dataconcepts) section.
+Once installed, check out the **Basic Usage** section starting with [Quickstart](basic/quickstart) for some basic examples and tutorials.
+Some underlying concepts, will be explained in the rest of that section.
 
-In the end you will also find a [code documentation](modules) with the most important classes and methods.
+For specific use cases and advanced usage, please read **Advanced Usage**.
+
+In the end you will also find some documentation on how to interface with energon programmatically and how to contribute to the code base.
 
 ```{toctree}
 ---
@@ -17,35 +20,22 @@ caption: Introduction
 maxdepth: 2
 ---
 
-introduction
-installation
+intro/introduction
+intro/installation
 ```
 
 
 ```{toctree}
 ---
-caption: Usage
+caption: Basic Usage
 maxdepth: 2
 ---
-simple_use
-faq
-cli
-data_prep
-remote_dataset
-```
-
-
-```{toctree}
----
-caption: Basic Concepts
-maxdepth: 2
----
-data_on_disk
-basics_flow
-basics_dataconcepts
-task_encoders
-metadatasets
-blending_datasets
+basic/quickstart
+basic/data_prep
+basic/basics_flow
+basic/task_encoder
+basic/metadataset
+basic/save_restore
 ```
 
 
@@ -54,21 +44,34 @@ blending_datasets
 caption: Advanced Usage
 maxdepth: 2
 ---
-advanced_dataformat
-repro_scaling
-packing
-joining_datasets
+advanced/remote_dataset
+advanced/advanced_dataformat
+advanced/repro_scaling
+advanced/packing
+advanced/grouping
+advanced/joining_datasets
+advanced/epochized_blending
+advanced/custom_blending
 ```
 
 
 ```{toctree}
 ---
-caption: Developer's Manual
+caption: API
 maxdepth: 2
 ---
+api/modules
+api/cli
+```
 
-contrib_guidelines
-modules
+
+```{toctree}
+---
+caption: Internals
+maxdepth: 2
+---
+internals/contrib_guidelines
+internals/code_structure
 ```
 
 # Indices and tables

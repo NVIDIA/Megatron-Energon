@@ -1,4 +1,4 @@
-# Copyright (c) 2024, NVIDIA CORPORATION.
+# Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
 import hashlib
@@ -51,9 +51,6 @@ class WorkerConfig:
     # 2. The worker_config passed to the data loader initialization, is used to set the seed for the
     #    torch, numpy and random libraries. This does not affect the dataset shuffling, but only the
     #    user code (e.g. code in TaskEncoder).
-    # Typically, you will not have to worry about this, and just use the same worker_config for both.
-    # However, if you need to, you can pass two different worker_configs to the dataset and the
-    # data loader.
     seed_offset: int = 0
 
     #: The path to the debug file for the current worker. Should contain "{worker_id}" and "{pid}"
@@ -139,7 +136,9 @@ class WorkerConfig:
     def default_worker_config(
         num_workers: int = 4, data_parallel_group: Optional[torch.distributed.ProcessGroup] = None
     ) -> "WorkerConfig":
-        """Returns the default worker config using torch distributed."""
+        """Returns the default worker config using torch distributed if available.
+        If torch distributed is not available, a single local rank is assumed."""
+
         if torch.distributed.is_available() and torch.distributed.is_initialized():
             rank = torch.distributed.get_rank(data_parallel_group)
             world_size = torch.distributed.get_world_size(data_parallel_group)

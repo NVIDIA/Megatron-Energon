@@ -1,4 +1,4 @@
-# Copyright (c) 2024, NVIDIA CORPORATION.
+# Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
 from dataclasses import dataclass
@@ -67,7 +67,6 @@ class LogSampleDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_s
 
     get_keys_fn: Callable[[T_sample], Optional[List[str]]]
     mode: Literal["train", "val"]
-    worker_config: WorkerConfig
     _step: List[int]
 
     def __init__(
@@ -82,10 +81,9 @@ class LogSampleDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_s
         Args:
             dataset: The input dataset to wrap
         """
-        super().__init__(dataset)
+        super().__init__(dataset, worker_config=worker_config)
         self.get_keys_fn = get_keys_fn
         self.mode = mode
-        self.worker_config = worker_config
         self._step = [0] * max(self.worker_config.num_workers, 1)
 
     def __len__(self):

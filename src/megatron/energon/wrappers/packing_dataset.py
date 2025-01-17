@@ -1,4 +1,4 @@
-# Copyright (c) 2024, NVIDIA CORPORATION.
+# Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
 import inspect
@@ -69,7 +69,6 @@ class PackingDataset(
     final_packer_stateless: bool
     packer_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]]
     error_handler: Callable[[Exception, List[T_sample]], None]
-    worker_config: WorkerConfig
 
     #: The buffer for collecting the samples that shall be packed.
     _reading_buffer: SavableSampleBuffer
@@ -122,7 +121,7 @@ class PackingDataset(
                 implementation logs the exception.
             worker_config: Configuration for the workers.
         """
-        super().__init__(dataset)
+        super().__init__(dataset, worker_config=worker_config)
 
         assert buffer_size > 0, "Packing buffer size must be greater than 0."
 
@@ -132,9 +131,8 @@ class PackingDataset(
         self.final_packer_stateless = final_packer_stateless
         self.packer_config = packer_config
         self.error_handler = error_handler
-        self.worker_config = worker_config
-        self._reading_buffer = SavableSampleBuffer(dataset, worker_config)
-        self._pre_packing_buffer = SavableSampleBuffer(dataset, worker_config)
+        self._reading_buffer = SavableSampleBuffer(dataset, worker_config=worker_config)
+        self._pre_packing_buffer = SavableSampleBuffer(dataset, worker_config=worker_config)
         self._pre_packing_lengths = [[] for _ in range(max(worker_config.num_workers, 1))]
         self._pre_packing_sample_index = SampleIndex(worker_config, src=self)
         self._final_packing_sample_index = SampleIndex(worker_config, src=self)
@@ -164,7 +162,7 @@ class PackingDataset(
                 return False
         return True
 
-    def __iter__(self) -> Iterator[T_sample]:
+    def __iter__(self) -> Iterator[T_batch_sample]:
         worker_idx = self.worker_config.rank_worker_id()
         pre_packing_lengths = self._pre_packing_lengths[worker_idx]
         # The source dataset
@@ -204,7 +202,7 @@ class PackingDataset(
                     self._pre_packing_buffer.extend(pre_pack)
                     pre_packing_lengths.append(len(pre_pack))
 
-        def next_final_pack():
+        def next_final_pack() -> Generator[T_batch_sample, None, None]:
             """Yield the next packs from the buffer. The final packer is called on the fly."""
 
             pack = list(self._pre_packing_buffer[: pre_packing_lengths[0]])
@@ -217,7 +215,7 @@ class PackingDataset(
                 if isinstance(final_packed_sample, Generator):
                     assert inspect.isgeneratorfunction(
                         self.final_packer
-                    ), f"Generator in {self.map_fn} but not marked as such."
+                    ), f"Generator in {self.final_packer} but not marked as such."
                     for pack_sub_idx, (pack_idx, inner_batch_sample) in enumerate(
                         self._final_packing_sample_index.iter_ctx(final_packed_sample, pack_idx)
                     ):
@@ -348,7 +346,7 @@ class PackingDataset(
         if isinstance(final_pack, Generator):
             assert inspect.isgeneratorfunction(
                 self.final_packer
-            ), f"Generator in {self.map_fn} but not marked as such."
+            ), f"Generator in {self.final_packer} but not marked as such."
             for cur_batch_sub_idx, (pack_idx, inner_batch_sample) in enumerate(
                 self._final_packing_sample_index.iter_ctx(final_pack, pack_idx)
             ):

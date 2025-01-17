@@ -1,4 +1,4 @@
-<!--- Copyright (c) 2024, NVIDIA CORPORATION.
+<!--- Copyright (c) 2025, NVIDIA CORPORATION.
 SPDX-License-Identifier: BSD-3-Clause -->
 
 # General
@@ -17,10 +17,3 @@ The most important features are:
 * Handles various kinds of multi-modal data even in one training
 
 Energon also comes with a command line tool that you can use to prepare your datasets.
-
-# Quickstart
-
-Get started with just a few steps.
-For this, please check out the main [README.md](https://github.com/NVIDIA/Megatron-Energon#quickstart).
-Then come back here for the details.
-

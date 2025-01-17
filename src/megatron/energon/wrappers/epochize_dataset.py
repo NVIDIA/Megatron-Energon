@@ -1,8 +1,8 @@
-# Copyright (c) 2024, NVIDIA CORPORATION.
+# Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
 from dataclasses import dataclass
-from typing import Any, Dict, Generator, Generic, Iterator, List, Optional, TypeVar
+from typing import Any, Dict, Generic, Iterator, List, Optional, TypeVar
 
 from megatron.energon.flavors.base_dataset import SavableDataset
 from megatron.energon.worker import WorkerConfig
@@ -33,7 +33,6 @@ class EpochizeDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_sa
     """
 
     length: int
-    worker_config: WorkerConfig
     _active_iter: Optional[Iterator[T_sample]]
 
     def __init__(
@@ -52,16 +51,10 @@ class EpochizeDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_sa
                 if exhausted.
             worker_config: Configuration for the workers.
         """
-        super().__init__(dataset)
+        super().__init__(dataset, worker_config=worker_config)
         self.length = length
-        self.worker_config = worker_config
         self._offset = [0] * max(self.worker_config.num_workers, 1)
         self._active_iter = None
-
-    def _infinite(self) -> Generator[T_sample, None, None]:
-        while True:
-            for sample in self.dataset:
-                yield sample
 
     def __iter__(self) -> Iterator[T_sample]:
         # Compute the local length for this worker, i.e. all worker's lengths sum up to the total
@@ -91,11 +84,15 @@ class EpochizeDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_sa
         # Only iterate if there are samples to iterate
         if len(offset_range) > 0:
             if self._active_iter is None:
-                self._active_iter = iter(self._infinite())
+                self._active_iter = iter(self.dataset)
 
             for idx in offset_range:
                 self._offset[worker_idx] = (idx + 1) % local_length
-                yield next(self._active_iter)
+                try:
+                    sample = next(self._active_iter)
+                except StopIteration:
+                    break
+                yield sample
 
         if self.worker_config.should_log(level=2):
             self.worker_config.worker_log(

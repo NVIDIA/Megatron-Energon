@@ -1,30 +1,35 @@
-<!--- Copyright (c) 2024, NVIDIA CORPORATION.
+<!--- Copyright (c) 2025, NVIDIA CORPORATION.
 SPDX-License-Identifier: BSD-3-Clause -->
 
-# Simple Library Usage
+# Quickstart
 
 You can use Megatron Energon to load datasets in the energon dataset format. This format is essentially [WebDataset](https://github.com/webdataset/webdataset) with some meta data added.
 
 For a moment let's assume you already have prepared a dataset in the needed format, and it's stored on
-disk at `/my/dataset/path`.
+disk at `/my/dataset/path`. If you want to create a dataset now, check out [](data_prep).
+
+If you simply want to use some dummy data for trying this out, checkout the unit test method `create_captioning_test_dataset` inside `tests/test_dataset.py`.
 
 ```{admonition} Good to know
 :class: tip
-You can also store your dataset inside an S3-compatible object store and load it from there! See [Remote Dataset](remote_dataset.md)
+You can also store your dataset inside an S3-compatible object store and load it from there! See [](../advanced/remote_dataset)
 ```
 
 You can then load the dataset like this:
 ```python
-from megatron.energon import get_train_dataset
+from megatron.energon import get_train_dataset, get_loader, WorkerConfig
 
 ds = get_train_dataset(
     '/my/dataset/path',
     batch_size=1,
     shuffle_buffer_size=100,
     max_samples_per_sequence=100,
+    worker_config=WorkerConfig.default_worker_config(),
 )
 
-for batch in ds:
+loader = get_loader(ds)
+
+for batch in loader:
     # Do something with batch
     # Infer, gradient step, ...
     pass
@@ -33,9 +38,11 @@ for batch in ds:
 At first, we call {py:meth}`get_train_dataset <megatron.energon.get_train_dataset>` (click to see signature).
 The method will check what kind of dataset is on disk and instantiate the correct class for it.
 
+A worker configuration is always needed to specify how the work is distributed across multiple ranks and workers.
+In this simple example, we use a helper method {py:meth}`default_worker_config <megatron.energon.WorkerConfig.default_worker_config>` to get reasonable default values.
 
-This method will return a {py:class}`torch.data.IterableDataset` which we can iterate in a for-loop to get batches.
-The batches will contain samples of the sample type specified in the [task encoder](task_encoders.md).
+The dataset should not be iterated directly, but used with a loader which handles the worker processes.
+The batches will contain samples of the sample type specified in the [task encoder](task_encoder).
 
 ```{admonition} Good to know
 :class: tip
@@ -46,8 +53,9 @@ It will not transform the data. For batching it will use common sense magic to p
 _Wait. Why does the dataset create batches? Shouldn't the dataloader do that?_
 
 Energon will create batches at dataset level.
-This way, each batch will contain samples from only one dataset, later you can [blend](blending_datasets) batches
-from different datasets together before feeding those into the dataloader.
+Internally, most of the cool things that energon can do (such as blending datasets together, [sequence packing](../advanced/packing), etc.)
+are dataset wrappers. Even the process of batching is such a wrapper and the default {py:meth}`get_train_dataset <megatron.energon.get_train_dataset>`
+function will construct a suitable combination of all these based on the arguments you pass to that function.
 Check out the [](basics_flow) section to see the steps in which the data is processed.
 
 _Why must `shuffle_buffer_size` and `max_samples_per_sequence` be set explicitly?_
@@ -57,22 +65,44 @@ A value of 100 for both settings for image datasets seems to work well (i.e. bal
 Setting the sequence length to a very small size compared to the number of samples in the dataset will result in more random access, thus slowing down dataloading, so the recommendation is to set it to a high enough value.
 At the same time, a high value reduces the shuffling randomness, which requires a larger shuffle buffer size to compensate for that (i.e. higher memory footprint and longer state restore times).
 
-## Tutorial 1
+## Tutorial 1: Preparing the Dataset
 
-Let's be a bit more concrete and try out the above code with a real dataset.
+For running any tutorials, you'll need your data structured as webdataset. For more details and more options check out [](data_prep).
+
+For example, in your folder containing the tar files, run
+```sh
+$ energon prepare ./
+
+# Example answers to interactive questions:
+Ratio: 8,1,1
+Dataset class: CaptioningWebdataset
+Field map: Yes
+  image: jpg
+  caption: txt  # if txt contains the caption
+# or
+  caption: json[caption]  # if .json contains {"caption": "My nice image"}
+```
+
+
+## Tutorial 2: Loading a Dataset
+
+Let's be a bit more concrete and try out the above data loading code with a real dataset.
 We are going to print the first batch and stop.
 
 ```python
-from megatron.energon import get_train_dataset
+from megatron.energon import get_train_dataset, get_loader, WorkerConfig
 
 ds = get_train_dataset(
     '/path/to/your/dataset',
-    batch_size=1,
+    batch_size=None,
     shuffle_buffer_size=100,
     max_samples_per_sequence=100,
+    worker_config=WorkerConfig.default_worker_config(),
 )
 
-for batch in ds:
+loader = get_loader(ds)
+
+for batch in loader:
     print(batch)
     break
 ```
@@ -80,7 +110,7 @@ for batch in ds:
 This prints
 
 ```text
-CaptioningSample(__key__=['part_00123/00403.tar/004030195'], image=tensor([[[[0.4549, 0.4784, 0.5059,  ..., 0.8392, 0.8275, 0.7961],
+CaptioningSample(__key__='part_00123/00403.tar/004030195', image=tensor([[[0.4549, 0.4784, 0.5059,  ..., 0.8392, 0.8275, 0.7961],
           [0.4549, 0.4784, 0.5020,  ..., 0.6431, 0.6275, 0.5882],
           [0.4510, 0.4706, 0.4941,  ..., 0.6235, 0.6353, 0.6078],
           ...,
@@ -102,7 +132,7 @@ CaptioningSample(__key__=['part_00123/00403.tar/004030195'], image=tensor([[[[0.
           ...,
           [0.2667, 0.2392, 0.2706,  ..., 0.6510, 0.6000, 0.6235],
           [0.2863, 0.2549, 0.2863,  ..., 0.6235, 0.5765, 0.6039],
-          [0.3020, 0.2745, 0.3020,  ..., 0.6235, 0.5882, 0.6157]]]]), caption=['Cello Renting vs. Buying: Which is Right for You?'])
+          [0.3020, 0.2745, 0.3020,  ..., 0.6235, 0.5882, 0.6157]]]), caption='Cello Renting vs. Buying: Which is Right for You?')
 ```
 
 Awesome, it returns a {py:class}`CaptioningSample <megatron.energon.CaptioningSample>` with the attributes
@@ -112,21 +142,26 @@ Awesome, it returns a {py:class}`CaptioningSample <megatron.energon.CaptioningSa
 - `image`: The image as a tensor of shape `(1, 3, 267, 400)` (RGB image in a batch of size 1)
 - `caption`: A list of strings (here just one since batch size is one) 
 
-## Tutorial 2
+Let's also talk about the {py:class}`WorkerConfig <megatron.energon.WorkerConfig>`. As energon is made for distributed training,
+you always need to provide a worker config to the dataset so specify how many ranks and workers there are and which rank you're currently on.
+For this simple tutorial, we don't really distribute the work, so we use only a single rank with 4 workers. Check out the helper method {py:meth}`default_worker_config <megatron.energon.WorkerConfig.default_worker_config>` to see how the worker config is constructed. Also don't be afraid to click the *`[source]`* link and look at the very short source code of it.
+
+## Tutorial 3: Batch Size
 
 Actually, we would like to use a `batch_size` of more than one, let's go with 2 for now.
 
 ```python
-from megatron.energon import get_train_dataset
+from megatron.energon import get_train_dataset, get_loader, WorkerConfig
 
-ds = get_train_dataset(
+loader = get_loader(get_train_dataset(
     '/path/to/your/dataset',
     batch_size=2,
     shuffle_buffer_size=100,
     max_samples_per_sequence=100,
-)
+    worker_config=WorkerConfig.default_worker_config(),
+))
 
-for batch in ds:
+for batch in loader:
     print(batch)
     break
 ```
@@ -137,19 +172,20 @@ The output will be similar to above but with different shapes and lengths:
 - `batch.image`: Tensor of shape `(2, 3, 267, 400)`
 - `batch.caption`: A list of two caption strings
 
-The default [task encoder](task_encoders) automagically padded and stacked the items to a batch.
+The default [task encoder](task_encoder) automagically padded and stacked the items to a batch.
 This may be ok for some cases, but usually you will want to process and batch your data differently.
 
 Hence, we can
 
 - either use an existing task encoder
-- or define a custom one (see [](task_encoders))
+- or define a custom one (see [](task_encoder))
 
-## Tutorial 3
+## Tutorial 3: Blending using Metadataset
 
-A typical usecase is to blend multiple datasets of the same (or similar type) together.
+A typical use case is to blend multiple datasets of the same (or similar type) together.
 For example, you may want to blend the COCO dataset with the COYO dataset.
-The easiest way to do this, is to use the metadataset pattern:
+The easiest way to do this, is to use the metadataset pattern. 
+For this you need to create a new `yaml` file that defines the meta dataset:
 
 `coyo-coco-dataset.yaml`:
 ```yaml
@@ -170,47 +206,19 @@ splits:
     path: ./coyo
 ```
 
+This assumes, that the datasets `coyo` and `coco` exist in subfolders next to the `coyo-coco-dataset.yaml` file. You could also use absolute paths, but that will not work well when using object storage such as S3.
+
 Usage in your loader, simply use {py:func}`get_train_dataset <megatron.energon.get_train_dataset>`:
-```python
-from megatron.energon import get_train_dataset
-
-ds = get_train_dataset(
-    'coyo-coco-dataset.yaml',
-    batch_size=4,
-    shuffle_buffer_size=100,
-    max_samples_per_sequence=100,
-)
-
-for batch in ds:
-    print(batch)
-    break
-
-```
-
-If you need to handle samples from different datasets differently in your pipeline, you will want to use `subflavors`.
-For these and other details, check out the [](metadatasets) section.
-
-## Tutorial 4
-
-For multi-GPU support, properly set the worker config. Either by passing in the worker config, or by
-setting the global worker config. Defaults to 4 workers, if not set explicitly.
-
 ```python
 from megatron.energon import get_train_dataset, get_loader, WorkerConfig
 
-# Or set the fields `rank` and `world_size` manually
-worker_config = WorkerConfig.default_worker_config(num_workers=4)
-
-ds = get_train_dataset(
+loader = get_loader(get_train_dataset(
     'coyo-coco-dataset.yaml',
     batch_size=4,
     shuffle_buffer_size=100,
     max_samples_per_sequence=100,
-    worker_config=worker_config,
-)
-
-# Or use default pytorch loader with the same num_workers
-loader = get_loader(ds, worker_config=worker_config)
+    worker_config=WorkerConfig.default_worker_config(),
+))
 
 for batch in loader:
     print(batch)
@@ -218,34 +226,67 @@ for batch in loader:
 
 ```
 
-## Tutorial 5
+If you need to handle samples from different datasets differently in your pipeline, you will want to use `subflavors`.
+For these and other details, check out the [](metadataset) section. Energon also supports blending by specifying the number of repetitions for each dataset using [](../advanced/epochized_blending).
 
-For saving and restoring the state (e.g. for autoresume), the loader must be instantiated with the savable loader.
+## Tutorial 4: Distributed Loading
+
+For multi-GPU support, you may need to adapt the worker config.
+So far we have only used the default worker config, which you can get by calling {py:func}`WorkerConfig.default_worker_config() <megatron.energon.WorkerConfig.default_worker_config>`.
+This default config tries to infer your multi-GPU setup by using `torch.distributed`, which is fine in most cases.
+If you are not using any distributed setup, the default config will work, too. In that case, it assumes a single local rank.
+
+However, if you have a more complex multi-node setup and other non-data-parallel stragies, you may need to set it up yourself. 
+The following example shows how it could be set.
+
+```python
+from megatron.energon import get_train_dataset, get_loader, WorkerConfig
+import torch.distributed as dist
+
+worker_config = WorkerConfig(
+    rank=SET_YOUR_GLOBAL_DATA_RANK_HERE,
+    world_size=SET_YOUR_GLOBAL_WORLD_SIZE_HERE,
+    num_workers=2,
+)
+
+loader = get_loader(get_train_dataset(
+    'coyo-coco-dataset.yaml',
+    batch_size=4,
+    shuffle_buffer_size=100,
+    max_samples_per_sequence=100,
+    worker_config=worker_config,
+))
+
+for batch in loader:
+    print(batch)
+    break
+```
+
+## Tutorial 5: Saving and Restoring
+
+For saving and restoring the state (e.g. when pausing and resuming training), the loader must be instantiated with the savable loader.
 
 ```python
 from megatron.energon import get_train_dataset, get_savable_loader, WorkerConfig
-
-# Or set the fields `rank` and `world_size` manually
-worker_config = WorkerConfig.default_worker_config(num_workers=4)
 
 ds = get_train_dataset(
     'coyo-coco-dataset.yaml',
     batch_size=4,
     shuffle_buffer_size=100,
     max_samples_per_sequence=100,
-    worker_config=worker_config,
+    worker_config=WorkerConfig.default_worker_config(),
 )
 
-# Must use the savable loader, cannot use default torch loader. This provides methods to save
+# Must use the savable loader here. This provides methods to save
 # and load the state of the data loader
-loader = get_savable_loader(ds, worker_config=worker_config)
+loader = get_savable_loader(ds)
 
 for i, batch in zip(range(10), loader):
     print(batch)
     break
 
 # Save the state
-state = loader.save_state()
+state = loader.save_state_rank()
 # Could save the state now using torch.save()
 
 # ... when loading:
@@ -257,10 +298,14 @@ ds = get_train_dataset(
     batch_size=4,
     shuffle_buffer_size=100,
     max_samples_per_sequence=100,
-    worker_config=worker_config,
+    worker_config=WorkerConfig.default_worker_config(),
 )
-loader = get_savable_loader(ds, worker_config=worker_config)
-loader.restore_state(state)
-
-
+loader = get_savable_loader(ds)
+loader.restore_state_rank(state)
 ```
+
+We provide code for different scenarios for saving and loading in distributed settings especially in the section [](save_restore).
+
+## More Features
+
+Check out the topics in Advanced Usage for details on specific features.

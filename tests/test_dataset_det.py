@@ -1,10 +1,11 @@
-# Copyright (c) 2024, NVIDIA CORPORATION.
+# Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
 """This module defines tests for the dataset."""
 
 import gc
 import logging
+import random
 import sys
 import tempfile
 import unittest
@@ -15,10 +16,17 @@ from pathlib import Path
 import torch
 import webdataset as wds
 
-from megatron.energon import TextSample, WorkerConfig, get_loader, get_train_dataset
+from megatron.energon import (
+    DefaultTaskEncoder,
+    TextSample,
+    WorkerConfig,
+    get_loader,
+    get_train_dataset,
+)
 from megatron.energon.dataset_config import get_dataset_from_config
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 from megatron.energon.loader import get_savable_loader
+from megatron.energon.task_encoder.base import stateless
 
 
 def _norng_state(state):
@@ -119,14 +127,12 @@ class TestDataset(unittest.TestCase):
         # Check len operator
         assert len(ds) == 55
         # Check if iterating returns the same
-        iter1 = list(get_loader(ds, worker_config=worker_config))
-        iter2 = list(get_loader(ds, worker_config=worker_config))
+        iter1 = list(get_loader(ds))
+        iter2 = list(get_loader(ds))
         assert len(iter1) == 55
         assert len(iter2) == 55
         assert all(elem1.__key__ == elem2.__key__ for elem1, elem2 in zip(iter1, iter2))
-        assert all(
-            f"{idx}" == x.text for idx, x in enumerate(get_loader(ds, worker_config=worker_config))
-        )
+        assert all(f"{idx}" == x.text for idx, x in enumerate(get_loader(ds)))
 
         del ds
         gc.collect()
@@ -144,7 +150,7 @@ class TestDataset(unittest.TestCase):
             sample_type=TextSample,
             worker_config=worker_config,
         )
-        loader5 = get_loader(ds3.build(), worker_config=worker_config)
+        loader5 = get_loader(ds3.build())
         order9 = [data.text for idx, data in zip(range(55), loader5)]
         print(order9)
         print(Counter(order9))
@@ -195,8 +201,8 @@ class TestDataset(unittest.TestCase):
         )
 
         # Fork the dataset twice
-        loader1 = get_loader(ds1, worker_config=worker_config2)
-        loader2 = get_loader(ds1, worker_config=worker_config2)
+        loader1 = get_loader(ds1)
+        loader2 = get_loader(ds1)
 
         order4 = [data.text[0] for idx, data in zip(range(55 * 20), loader1)]
         order5 = [data.text[0] for idx, data in zip(range(55 * 20), loader1)]
@@ -209,15 +215,70 @@ class TestDataset(unittest.TestCase):
         assert order4 != order5
         assert order4 == order6
 
-        loader3 = get_loader(ds1b, worker_config=worker_config2b)
+        loader3 = get_loader(ds1b)
         order7 = [data.text[0] for idx, data in zip(range(55 * 20), loader3)]
         assert order6 != order7
 
-        loader4 = get_loader(ds3, worker_config=worker_config4)
+        loader4 = get_loader(ds3)
         order8 = [data.text[0] for idx, data in zip(range(55 * 100), loader4)]
         assert order6 != order8[: len(order6)]
         print(Counter(order8))
         assert all(90 <= v <= 110 for v in Counter(order8).values())
+
+        # Delete all locals, otherwise loaders might be kept alive
+        locals().clear()
+        gc.collect()
+
+    def test_determinism_taskencoder(self):
+
+        class TestTaskEncoder(DefaultTaskEncoder):
+            @stateless(restore_seeds=True)
+            def encode_sample(self, sample: TextSample) -> TextSample:
+                rand_str = f"_{torch.randint(0, 1000, (1,)).item()}_{random.randint(0, 1000)}"
+                return TextSample(
+                    __key__=sample.__key__,
+                    __restore_key__=sample.__restore_key__,
+                    __subflavor__=sample.__subflavor__,
+                    __subflavors__=sample.__subflavors__,
+                    text=sample.text + rand_str,
+                )
+
+        for num_workers in [0, 1]:
+            worker_config1 = WorkerConfig(rank=0, world_size=1, num_workers=num_workers)
+
+            # This seed is used by the dataset to shuffle the data
+            torch.manual_seed(42)
+            ds1a = get_train_dataset(
+                self.dataset_path,
+                split_part="train",
+                sample_type=TextSample,
+                worker_config=worker_config1,
+                batch_size=1,
+                shuffle_buffer_size=42,
+                max_samples_per_sequence=2,
+                task_encoder=TestTaskEncoder(),
+            )
+
+            torch.manual_seed(44)
+            ds1b = get_train_dataset(
+                self.dataset_path,
+                split_part="train",
+                sample_type=TextSample,
+                worker_config=worker_config1,
+                batch_size=1,
+                shuffle_buffer_size=42,
+                max_samples_per_sequence=2,
+                task_encoder=TestTaskEncoder(),
+            )
+
+            # Fork the dataset twice
+            loader1a = get_loader(ds1a)
+            loader1b = get_loader(ds1b)
+
+            order1a = [data.text[0] for idx, data in zip(range(55 * 20), loader1a)]
+            order1b = [data.text[0] for idx, data in zip(range(55 * 20), loader1b)]
+
+            assert order1a == order1b
 
         # Delete all locals, otherwise loaders might be kept alive
         locals().clear()
@@ -252,12 +313,12 @@ class TestDataset(unittest.TestCase):
         )
 
         # print("save state")
-        state_0 = loader.save_state()
+        state_0 = loader.save_state_global(dst_rank=0)
         # print("save state done")
         order_1 = [data.text[0] for idx, data in zip(range(count1), loader)]
         assert len(order_1) == count1
         # print("save state")
-        state_1 = loader.save_state()
+        state_1 = loader.save_state_global(dst_rank=0)
         # print("save state done")
         order_2 = [data.text[0] for idx, data in zip(range(count2), loader)]
         assert len(order_2) == count2
@@ -265,7 +326,7 @@ class TestDataset(unittest.TestCase):
         print("state0", state_0)
         print("state1", state_1)
 
-        torch.manual_seed(42)
+        torch.manual_seed(213)
         loader = get_savable_loader(
             get_train_dataset(
                 self.dataset_path,
@@ -279,7 +340,7 @@ class TestDataset(unittest.TestCase):
             ),
             worker_config=worker_config,
         )
-        loader.restore_state(state_0)
+        loader.restore_state_global(state_0, src_rank=None)
         order_45 = [data.text[0] for idx, data in zip(range(count1 + count2), loader)]
         order_4 = order_45[:count1]
         order_5 = order_45[count1:]
@@ -290,7 +351,7 @@ class TestDataset(unittest.TestCase):
         # print("order5", order_5)
         assert order_2 == order_5
 
-        torch.manual_seed(42)
+        torch.manual_seed(145)
         loader = get_savable_loader(
             get_train_dataset(
                 self.dataset_path,
@@ -305,13 +366,149 @@ class TestDataset(unittest.TestCase):
             worker_config=worker_config,
         )
         # print("restore state")
-        loader.restore_state(state_1)
+        loader.restore_state_global(state_1, src_rank=None)
         # print("restore state done")
         order_3 = [data.text[0] for idx, data in zip(range(count2), loader)]
         # print("order1", order_1)
         # print("order2", order_2[:100])
         # print("order3", order_3[:100])
         assert order_2 == order_3
+
+    def test_restore_state_dist(self):
+        from multiprocessing import Manager, Process
+
+        import torch.distributed as dist
+
+        world_size = 3
+
+        count1 = 55 * 20
+        count2 = 55 * 20
+        sbs = 42
+        psi = None
+
+        def phase1(rank: int, world_size: int, shared_dict: dict):
+            worker_config = WorkerConfig(rank=rank, world_size=world_size, num_workers=0)
+
+            # This seed is used by the dataset to shuffle the data
+            torch.manual_seed(42)
+
+            loader = get_savable_loader(
+                get_train_dataset(
+                    self.dataset_path,
+                    split_part="train",
+                    sample_type=TextSample,
+                    worker_config=worker_config,
+                    batch_size=1,
+                    shuffle_buffer_size=sbs,
+                    max_samples_per_sequence=2,
+                    parallel_shard_iters=psi,
+                )
+            )
+
+            state_0 = loader.save_state_global(dst_rank=0)
+            order_1 = [data.text[0] for idx, data in zip(range(count1), loader)]
+            assert len(order_1) == count1
+
+            # print(f"Rank {rank}: order_1", order_1)
+
+            state_1 = loader.save_state_global(dst_rank=0)
+            order_2 = [data.text[0] for idx, data in zip(range(count2), loader)]
+            assert len(order_2) == count2
+
+            shared_dict[(rank, "order_1")] = order_1
+            shared_dict[(rank, "order_2")] = order_2
+
+            if rank == 0:
+                shared_dict["state_0"] = state_0
+                shared_dict["state_1"] = state_1
+
+        def phase2(rank: int, world_size: int, shared_dict: dict):
+            order_1 = shared_dict[(rank, "order_1")]
+            order_2 = shared_dict[(rank, "order_2")]
+
+            if rank == 0:
+                state_0 = shared_dict["state_0"]
+                state_1 = shared_dict["state_1"]
+            else:
+                state_0 = None
+                state_1 = None
+
+            worker_config = WorkerConfig(rank=rank, world_size=world_size, num_workers=0)
+
+            torch.manual_seed(213)
+            loader = get_savable_loader(
+                get_train_dataset(
+                    self.dataset_path,
+                    split_part="train",
+                    sample_type=TextSample,
+                    worker_config=worker_config,
+                    batch_size=1,
+                    shuffle_buffer_size=sbs,
+                    max_samples_per_sequence=2,
+                    parallel_shard_iters=psi,
+                )
+            )
+            loader.restore_state_global(state_0, src_rank=0)
+
+            order_45 = [data.text[0] for idx, data in zip(range(count1 + count2), loader)]
+            order_4 = order_45[:count1]
+            order_5 = order_45[count1:]
+
+            # print(f"Rank {rank}: order_4", order_4)
+
+            assert order_1 == order_4
+            assert order_2 == order_5
+
+            torch.manual_seed(213)
+            loader = get_savable_loader(
+                get_train_dataset(
+                    self.dataset_path,
+                    split_part="train",
+                    sample_type=TextSample,
+                    worker_config=worker_config,
+                    batch_size=1,
+                    shuffle_buffer_size=sbs,
+                    max_samples_per_sequence=2,
+                    parallel_shard_iters=psi,
+                )
+            )
+            loader.restore_state_global(state_1, src_rank=0)
+            order_3 = [data.text[0] for idx, data in zip(range(count2), loader)]
+            assert order_2 == order_3
+
+        def init_process(rank, world_size, shared_dict, fn, backend="gloo"):
+            """Initializes the distributed environment."""
+            dist.init_process_group(
+                backend=backend,
+                init_method="tcp://127.0.0.1:12355",
+                world_size=world_size,
+                rank=rank,
+            )
+            fn(rank, world_size, shared_dict)
+            dist.destroy_process_group()
+
+        with Manager() as manager:
+            shared_dict = manager.dict()
+
+            # Phase 1 (save state)
+            processes = []
+            for rank in range(world_size):
+                p = Process(target=init_process, args=(rank, world_size, shared_dict, phase1))
+                p.start()
+                processes.append(p)
+
+            for p in processes:
+                p.join()
+
+            # Phase 2 (restore state)
+            processes = []
+            for rank in range(world_size):
+                p = Process(target=init_process, args=(rank, world_size, shared_dict, phase2))
+                p.start()
+                processes.append(p)
+
+            for p in processes:
+                p.join()
 
     def test_restore_state_workers(self):
         worker_config = WorkerConfig(rank=0, world_size=1, num_workers=2)
@@ -338,16 +535,16 @@ class TestDataset(unittest.TestCase):
         loader = get_savable_loader(ds, worker_config=worker_config, checkpoint_every_sec=ces)
 
         # print("save state")
-        state_0 = loader.save_state()
+        state_0 = loader.save_state_rank()
         it1 = iter(loader)
         # print("save state done")
         order_1 = [data.text[0] for idx, data in zip(range(n1), it1)]
         # print("save state")
         # time.sleep(0.5)
-        state_1 = loader.save_state()
+        state_1 = loader.save_state_rank()
         # print("save state done")
         order_2 = [data.text[0] for idx, data in zip(range(n2), it1)]
-        state_2 = loader.save_state()
+        state_2 = loader.save_state_rank()
         order_3 = [data.text[0] for idx, data in zip(range(n3), it1)]
 
         print("order_1", order_1)
@@ -371,7 +568,7 @@ class TestDataset(unittest.TestCase):
             parallel_shard_iters=psi,
         )
         loader = get_savable_loader(ds, worker_config=worker_config)
-        loader.restore_state(state_0)
+        loader.restore_state_rank(state_0)
         order_6 = [data.text[0] for idx, data in zip(range(n1), loader)]
         print("order1", order_1)
         print("order6", order_6)
@@ -390,7 +587,7 @@ class TestDataset(unittest.TestCase):
             parallel_shard_iters=psi,
         )
         loader = get_savable_loader(ds, worker_config=worker_config)
-        loader.restore_state(state_1)
+        loader.restore_state_rank(state_1)
         order_7 = [data.text[0] for idx, data in zip(range(n2), loader)]
         print("order2", order_2[:100])
         print("order7", order_7[:100])
@@ -409,7 +606,7 @@ class TestDataset(unittest.TestCase):
             parallel_shard_iters=psi,
         )
         loader = get_savable_loader(ds, worker_config=worker_config)
-        loader.restore_state(state_2)
+        loader.restore_state_rank(state_2)
         order_8 = [data.text[0] for idx, data in zip(range(n3), loader)]
         print("order3", order_3)
         print("order8", order_8)
@@ -486,7 +683,7 @@ class TestDataset(unittest.TestCase):
                     shuffle_buffer_size=42,
                     max_samples_per_sequence=2,
                 )
-                loader = get_loader(ds, worker_config=rank_config)
+                loader = get_loader(ds)
 
                 micro_batches = [
                     data.text

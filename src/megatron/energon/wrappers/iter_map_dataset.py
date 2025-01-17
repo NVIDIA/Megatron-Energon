@@ -1,4 +1,4 @@
-# Copyright (c) 2024, NVIDIA CORPORATION.
+# Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
 from dataclasses import dataclass
@@ -91,13 +91,12 @@ class IterMapDataset(
                 configuration. Defaults to None.
             worker_config: Configuration for the workers.
         """
-        super().__init__(dataset)
+        super().__init__(dataset, worker_config=worker_config)
         self.iter_map_fn = iter_map_fn
         self.len_map_fn = len_map_fn
         self.error_handler = error_handler
         self.stateless_iter_fn = stateless_iter_fn
         self.iter_map_fn_config = iter_map_fn_config
-        self.worker_config = worker_config
         self._sample_index = SampleIndex(worker_config, src=self)
 
     def __len__(self):

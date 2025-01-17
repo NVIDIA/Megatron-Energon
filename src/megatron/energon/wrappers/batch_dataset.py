@@ -1,4 +1,4 @@
-# Copyright (c) 2024, NVIDIA CORPORATION.
+# Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
 import inspect
@@ -65,7 +65,6 @@ class BatchDataset(
     batcher: Callable[[List[T_batch_sample]], T_batch]
     drop_last: bool
     error_handler: Callable[[Exception, List[T_batch_sample]], None]
-    worker_config: WorkerConfig
     _sample_index: SampleIndex
     _generator_sample_keys: List[Optional[Any]]
     _generator_offsets: List[Optional[int]]
@@ -98,14 +97,13 @@ class BatchDataset(
                 implementation logs the exception.
             worker_config: Configuration for the workers.
         """
-        super().__init__(dataset)
+        super().__init__(dataset, worker_config=worker_config)
         self.batch_size = batch_size
         self.batcher = batcher
         self.batcher_stateless = batcher_stateless
         self.batcher_config = batcher_config
         self.drop_last = drop_last
         self.error_handler = error_handler
-        self.worker_config = worker_config
         self._sample_index = SampleIndex(worker_config, src=self)
         self._generator_sample_keys = [None] * max(self.worker_config.num_workers, 1)
         self._generator_offsets = [None] * max(self.worker_config.num_workers, 1)

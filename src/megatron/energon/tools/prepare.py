@@ -1,4 +1,4 @@
-# Copyright (c) 2024, NVIDIA CORPORATION.
+# Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
 import dataclasses
@@ -13,7 +13,7 @@ import click
 import yaml
 
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors import BaseWebdatasetFactory, CrudeWebdataset
+from megatron.energon.flavors import BaseWebdatasetFactory
 from megatron.energon.flavors.base_dataset import Sample
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 
@@ -129,7 +129,7 @@ def command(
     tar_index_only: bool,
     shuffle_tars: bool,
 ):
-    """Prepare plain WebDataset for use with energon.
+    """Prepare WebDataset for use with energon.
 
     The PATH should point to the folder with the dataset.
     This tool will add the required metadata yaml files to the dataset. See README.md for more

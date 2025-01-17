@@ -1,4 +1,4 @@
-# Copyright (c) 2024, NVIDIA CORPORATION.
+# Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
 from abc import ABC
@@ -144,7 +144,10 @@ class JoinedWebdatasetFactory(
         self.join_method = join_method
         self.handler = handler
 
-    def build(self) -> SavableDataset[T_sample]:
+    def __len__(self) -> int:
+        return sum(shard.count for shard in self.inner_datasets[0].shards)
+
+    def build(self, worker_rotation_offset: int = 0) -> SavableDataset[T_sample]:
         if self.parallel_shard_iters is None:
             if self.training:
                 # 16 seems to be a good choice since we don't want too many file handles open
@@ -158,6 +161,7 @@ class JoinedWebdatasetFactory(
             self.shards,
             self.worker_config,
             max_samples_per_sequence=self.max_samples_per_sequence,
+            rotation_offset=worker_rotation_offset,
         )
 
         for rank_idx, shards in enumerate(rank_shards):
@@ -186,7 +190,6 @@ class JoinedWebdatasetFactory(
             worker_config=self.worker_config,
             part_filter=self.part_filter,
             exclude=self.sample_exclude,
-            loop=self.training,
             shuffle_over_epochs=self.shuffle_over_epochs if self.training else None,
             parallel_shard_iters=parallel_shard_iters,
             dataset_join_method=self.join_method,

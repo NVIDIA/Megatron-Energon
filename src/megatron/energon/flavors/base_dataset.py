@@ -1,4 +1,4 @@
-# Copyright (c) 2024, NVIDIA CORPORATION.
+# Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
 import dataclasses
@@ -266,14 +266,21 @@ class SavableDataset(IterableDataset[T_sample], Generic[T_sample], ABC):
     I.e. it can be resumed from a checkpoint.
 
     How dataset state saving works:
+
     1. The dataset state needs to be saved in all forked worker processes which contain a copy of
-      the main dataset instance (see :class:`megatron.energon.SavableDataLoader`). Each worker returns
-      only its own state.
+       the main dataset instance (see :class:`megatron.energon.SavableDataLoader`). Each worker returns
+       only its own state.
     2. The main process merges the states via the :meth:`megatron.energon.SavableDataset.merge_states`
-      method in the main process on the main dataset instance (which doesn't hold the worker states,
-      as they were forked).
+       method in the main process on the main dataset instance (which doesn't hold the worker states,
+       as they were forked).
     3. The main process saves the merged state to the checkpoint.
+
     """
+
+    worker_config: WorkerConfig
+
+    def __init__(self, worker_config: WorkerConfig):
+        self.worker_config = worker_config
 
     @abstractmethod
     def __len__(self) -> int: ...
@@ -319,11 +326,6 @@ class SavableDataset(IterableDataset[T_sample], Generic[T_sample], ABC):
         """Returns True if the worker's split has samples. This is used to determine if this dataset
         yields anything."""
         ...
-
-    def verify_worker_config(self, worker_config: WorkerConfig) -> None:
-        """Verify that the worker config is compatible with the dataset."""
-        if hasattr(self, "worker_config"):
-            assert self.worker_config == worker_config, "Worker config is not consistent."
 
     @staticmethod
     def _function_config(fn: Callable) -> str:
@@ -373,7 +375,12 @@ class BaseCoreDatasetFactory(Generic[T_sample], ABC):
     subflavors: Dict[str, Any]
 
     @abstractmethod
-    def build(self) -> SavableDataset[T_sample]: ...
+    def build(self, worker_rotation_offset: int = 0) -> SavableDataset[T_sample]: ...
+
+    @abstractmethod
+    def __len__(self) -> int:
+        """Returns the length of the dataset across all ranks."""
+        ...
 
 
 def add_sample_restore_key(

@@ -1,4 +1,4 @@
-# Copyright (c) 2024, NVIDIA CORPORATION.
+# Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
 import dataclasses
@@ -31,6 +31,7 @@ from megatron.energon.flavors.base_dataset import (
     SavableDataset,
 )
 from megatron.energon.flavors.crude import CrudeSample, CrudeWebdataset
+from megatron.energon.metadataset.loader_interface import DatasetBlendMode
 from megatron.energon.rng import SystemRng
 from megatron.energon.task_encoder.cooking import Cooker
 from megatron.energon.worker import WorkerConfig
@@ -46,6 +47,7 @@ from megatron.energon.wrappers import (
     PackingDataset,
     ShuffleBufferDataset,
 )
+from megatron.energon.wrappers.repeat_dataset import RepeatDataset
 
 T = TypeVar("T")
 V = TypeVar("V")
@@ -117,16 +119,19 @@ def stateless(
 
     Usage:
 
+    .. code-block:: python
+
         @stateless
         def encode_sample(self, sample: T_sample) -> T_encoded_sample:
             ...
-
 
         # Or if randomness is used (e.g. for augmentations):
         @stateless(restore_seeds=True)
         def encode_sample(self, sample: T_sample) -> T_encoded_sample:
             ...
+
     """
+
     if fn is None:
         return lambda f: stateless(f, restore_seeds=restore_seeds)
     if restore_seeds:
@@ -260,11 +265,16 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         """Move a batch to a device. May raise :exc:`megatron.energon.SkipSample` to skip a batch."""
         return self._batch(samples, type(samples[0]))
 
-    def batch_group_criterion(self, sample: T_encoded_sample) -> Hashable:
-        """Return a group criterion for the sample. Default implementation does not group
-        (effectively, it returns a single value (`None`), thus only one group is used). May raise
-        :exc:`megatron.energon.SkipSample` to skip a batch."""
-        return None
+    def batch_group_criterion(self, sample: T_encoded_sample) -> Tuple[Hashable, Optional[int]]:
+        """
+        Return a group criterion for the sample. Default implementation does not group
+        (effectively, it returns a single value `(None, None)`, thus only one group is used).
+        Returns the key of the bucket to put this sample into, and the size of the bucket (=batch size).
+        The bucket size must always be the same for the same bucket key.
+
+        May raise :exc:`megatron.energon.SkipSample` to skip a batch.
+        """
+        return None, None
 
     @stateless
     def encode_batch(self, batch: T_raw_batch) -> Union[T_batch, Generator[T_batch, None, None]]:
@@ -361,45 +371,43 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
     ) -> SavableDataset[T_raw_batch]:
         """Applies the batcher to the dataset."""
 
+        if packing_buffer_size is not None:
+            select_samples_to_pack_provided = (
+                getattr(self.select_samples_to_pack, "__func__", None)
+                is not TaskEncoder.select_samples_to_pack
+            )
+            pack_selected_samples_provided = (
+                getattr(self.pack_selected_samples, "__func__", None)
+                is not TaskEncoder.pack_selected_samples
+            )
+
+            assert (
+                select_samples_to_pack_provided and pack_selected_samples_provided
+            ), "Both select_samples_to_pack and pack_selected_samples methods must be provided in the TaskEncoder when using packing_buffer_size"
+
+            dataset = PackingDataset(
+                dataset,
+                buffer_size=packing_buffer_size,
+                pre_packer=self.select_samples_to_pack,
+                final_packer=self.pack_selected_samples,
+                final_packer_stateless=get_stateless(self.pack_selected_samples),
+                worker_config=worker_config,
+            )
+
         if (
             getattr(self.batch_group_criterion, "__func__", None)
             is not TaskEncoder.batch_group_criterion
         ):
-            assert batch_size is not None, "batch_size must be set if batch_group_criterion is set"
-            assert packing_buffer_size is None, "Packing not supported when grouping"
             dataset = GroupBatchDataset(
                 dataset,
-                batch_size=batch_size,
-                group_criterion=self.batch_group_criterion,
+                fixed_batch_size=batch_size,
+                sample_group_key=self.batch_group_criterion,
                 batcher=self.batch,
                 drop_last=batch_drop_last,
                 worker_config=worker_config,
             )
         else:
             # No grouping is active
-
-            if packing_buffer_size is not None:
-                select_samples_to_pack_provided = (
-                    getattr(self.select_samples_to_pack, "__func__", None)
-                    is not TaskEncoder.select_samples_to_pack
-                )
-                pack_selected_samples_provided = (
-                    getattr(self.pack_selected_samples, "__func__", None)
-                    is not TaskEncoder.pack_selected_samples
-                )
-
-                assert (
-                    select_samples_to_pack_provided and pack_selected_samples_provided
-                ), "Both select_samples_to_pack and pack_selected_samples methods must be provided in the TaskEncoder when using packing_buffer_size"
-
-                dataset = PackingDataset(
-                    dataset,
-                    buffer_size=packing_buffer_size,
-                    pre_packer=self.select_samples_to_pack,
-                    final_packer=self.pack_selected_samples,
-                    final_packer_stateless=get_stateless(self.pack_selected_samples),
-                    worker_config=worker_config,
-                )
 
             if batch_size is not None:
                 dataset = BatchDataset(
@@ -478,13 +486,15 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
     def build_train_datasets(
         self,
         *,
-        datasets: List[Tuple[BaseCoreDatasetFactory[T_sample], float]],
+        datasets: List[Tuple[BaseCoreDatasetFactory[T_sample], Union[float, int, None]]],
         worker_config: WorkerConfig,
-        batch_size: int,
+        batch_size: Optional[int],
         batch_drop_last: bool = False,
         packing_buffer_size: Optional[int] = None,
         virtual_epoch_length: int = 0,
         shuffle_buffer_size: Optional[int] = None,
+        blend_mode: DatasetBlendMode = DatasetBlendMode.NONE,
+        repeat: bool = True,
     ) -> SavableDataset[T_batch]:
         """Combines train datasets to a single dataset."""
 
@@ -493,13 +503,61 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             if isinstance(dataset, CrudeWebdataset):
                 assert self.cookers, "CrudeWebdataset found, but no cookers registered."
 
-        if len(datasets) > 1:
+        global_workers = max(1, worker_config.num_workers) * worker_config.world_size
+        rotation_lengths = [len(dataset) for dataset, _ in datasets]
+        for i in range(1, len(rotation_lengths)):
+            rotation_lengths[i] += rotation_lengths[i - 1]
+        worker_rotation_offsets = [
+            rotation_length % global_workers for rotation_length in [0] + rotation_lengths[:-1]
+        ]
+
+        if repeat:
+            inner_datasets = [
+                (
+                    RepeatDataset(
+                        dataset.build(worker_rotation_offset=worker_rotation_offset),
+                        worker_config=worker_config,
+                    ),
+                    1.0 if weight is None else float(weight),
+                )
+                for (dataset, weight), worker_rotation_offset in zip(
+                    datasets, worker_rotation_offsets
+                )
+            ]
+        else:
+            assert blend_mode in (
+                DatasetBlendMode.NONE,
+                DatasetBlendMode.SAMPLE_REPETITIONS,
+            ) and all(
+                isinstance(repetitions, int) for _dataset, repetitions in datasets
+            ), "If repeat is False, the datasets must be repeated with integer weights."
+            inner_datasets = [
+                (
+                    (
+                        dataset.build(worker_rotation_offset=worker_rotation_offset)
+                        if repetition is None or repetition == 1
+                        else RepeatDataset(
+                            dataset.build(worker_rotation_offset=worker_rotation_offset),
+                            repeats=int(repetition),
+                            worker_config=worker_config,
+                        )
+                    ),
+                    len(dataset) * (1 if repetition is None else int(repetition)),
+                )
+                for (dataset, repetition), worker_rotation_offset in zip(
+                    datasets, worker_rotation_offsets
+                )
+            ]
+
+        if len(inner_datasets) > 1:
+            # The worker offset for each dataset is the cumsum of the dataset lengths, but modulo the
+            # global number of workers.
             dataset = BlendDataset(
-                *[(dataset.build(), weight) for dataset, weight in datasets],
+                *inner_datasets,
                 worker_config=worker_config,
             )
         elif len(datasets) == 1:
-            dataset = datasets[0][0].build()
+            dataset = inner_datasets[0][0]
         else:
             raise ValueError("No datasets given.")
         if shuffle_buffer_size is not None and shuffle_buffer_size > 1:
@@ -530,7 +588,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
     def build_val_datasets(
         self,
         *,
-        datasets: List[Tuple[BaseCoreDatasetFactory[T_sample], float]],
+        datasets: List[BaseCoreDatasetFactory[T_sample]],
         worker_config: WorkerConfig,
         batch_size: int,
         batch_drop_last: bool = False,
@@ -540,17 +598,17 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         """Combines val datasets to a single dataset."""
 
         # Check if there's a CrudeWebdataset but no cookers
-        for dataset, _ in datasets:
+        for dataset in datasets:
             if isinstance(dataset, CrudeWebdataset):
                 assert self.cookers, "CrudeWebdataset found, but no cookers registered."
 
         if len(datasets) > 1:
             dataset = ConcatDataset(
-                *[dataset.build() for dataset, _ in datasets],
+                *[dataset.build() for dataset in datasets],
                 worker_config=worker_config,
             )
         elif len(datasets) == 1:
-            dataset = datasets[0][0].build()
+            dataset = datasets[0].build()
         else:
             raise ValueError("No datasets given.")
         dataset = self.build_cook_crude_sample(dataset, worker_config=worker_config)
@@ -727,9 +785,6 @@ class AugmentTaskEncoder(
 
     def batch(self, samples: List[T_encoded_sample]) -> T_raw_batch:
         return self._task_encoder.batch(samples)
-
-    def batch_group_criterion(self, sample: T_encoded_sample) -> Hashable:
-        return self._task_encoder.batch_group_criterion(sample)
 
     def encode_batch(self, batch_data: T_raw_batch) -> T_batch:
         return self._task_encoder.encode_batch(batch_data)

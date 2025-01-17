@@ -1,4 +1,4 @@
-# Copyright (c) 2024, NVIDIA CORPORATION.
+# Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
 """This module defines tests for meta datasets."""
@@ -26,6 +26,8 @@ from megatron.energon import (
     load_dataset,
 )
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
+from megatron.energon.metadataset.loader_interface import DatasetBlendMode
+from megatron.energon.wrappers.blend_dataset import BlendDataset
 
 
 def _norng_state(state):
@@ -198,7 +200,7 @@ class TestDataset(unittest.TestCase):
         print(len(train_dataset))
         assert len(train_dataset) == 11
 
-        train_loader1 = get_loader(train_dataset, worker_config=worker_config)
+        train_loader1 = get_loader(train_dataset)
 
         train_order1 = [
             text for idx, data in zip(range(55 * 10), train_loader1) for text in data.text
@@ -229,7 +231,7 @@ class TestDataset(unittest.TestCase):
         print(len(train_dataset))
         assert len(train_dataset) == 11
 
-        train_loader1 = get_loader(train_dataset, worker_config=worker_config)
+        train_loader1 = get_loader(train_dataset)
 
         train_order1 = [
             text for idx, data in zip(range(55 * 10), train_loader1) for text in data.text
@@ -244,7 +246,7 @@ class TestDataset(unittest.TestCase):
         print(len(val_dataset))
         assert len(val_dataset) == 11
 
-        val_loader1 = get_loader(val_dataset, worker_config=worker_config)
+        val_loader1 = get_loader(val_dataset)
 
         val_order1 = [text for data in val_loader1 for text in data.text]
         assert len(val_order1) == 110
@@ -261,9 +263,10 @@ class TestDataset(unittest.TestCase):
 
         dataset = load_dataset(self.nested_mds_path)
 
-        raw_datasets = dataset.get_datasets(
+        blend_mode, raw_datasets = dataset.get_datasets(
             training=False, split_part="train", worker_config=worker_config
         )
+        assert blend_mode == DatasetBlendMode.DATASET_WEIGHT
         assert [weight for _raw_dataset, weight in raw_datasets] == [0.4, 0.4, 0.1, 0.1]
         assert [raw_dataset.paths[0].name for raw_dataset, _weight in raw_datasets] == [
             "ds1",
@@ -316,7 +319,7 @@ class TestDataset(unittest.TestCase):
         print(len(train_dataset))
         assert len(train_dataset) == 22
 
-        train_loader1 = get_loader(train_dataset, worker_config=worker_config)
+        train_loader1 = get_loader(train_dataset)
 
         train_order1 = [
             text for idx, data in zip(range(55 * 10), train_loader1) for text in data.text
@@ -396,7 +399,7 @@ class TestDataset(unittest.TestCase):
         print(len(train_dataset))
         assert len(train_dataset) == 11
 
-        train_loader1 = get_loader(train_dataset, worker_config=worker_config)
+        train_loader1 = get_loader(train_dataset)
 
         train_order1 = [
             text for idx, data in zip(range(55 * 10), train_loader1) for text in data.text
@@ -411,12 +414,135 @@ class TestDataset(unittest.TestCase):
         print(len(val_dataset))
         assert len(val_dataset) == 11
 
-        val_loader1 = get_loader(val_dataset, worker_config=worker_config)
+        val_loader1 = get_loader(val_dataset)
 
         val_order1 = [text for data in val_loader1 for text in data.text]
         assert len(val_order1) == 110
         print(Counter(val_order1))
         assert all(v == 1 for v in Counter(val_order1).values())
+
+    def test_worker_sample_balance(self):
+        torch.manual_seed(42)
+
+        for num_workers in [6, 30]:
+            samples_per_global_worker = Counter()
+
+            for rank in range(2):
+                wc = WorkerConfig(
+                    rank=rank,
+                    world_size=2,
+                    num_workers=num_workers,
+                )
+
+                train_dataset = get_train_dataset(
+                    self.nested_mds_path,
+                    worker_config=wc,
+                    batch_size=1,
+                    shuffle_buffer_size=None,
+                    max_samples_per_sequence=None,
+                )
+
+                blend_dataset = train_dataset.dataset.dataset.dataset
+                assert isinstance(blend_dataset, BlendDataset)
+
+                ds_weights = blend_dataset.dataset_weights
+                assert len(ds_weights) == 4  # 4 datasets
+
+                # We are now going to count the number of samples that was assigned to each
+                # globally unique worker. This corresponds to the shard_ranges that energon
+                # prints out when the dataset is built.
+
+                for ds, w in ds_weights:
+                    ds_shards = ds.dataset.dataset.shards
+                    assert len(ds_shards) == num_workers
+
+                    for worker_idx, shards in enumerate(ds_shards):
+                        samples_per_global_worker[(rank, worker_idx)] += sum(
+                            [shard[0].count for shard in shards]
+                        )
+
+            # Check the sample assignnent is balanced across all global workers
+            if num_workers == 6:
+                assert list(samples_per_global_worker.values()) == [
+                    19,  # rank 0
+                    18,
+                    18,
+                    19,
+                    18,
+                    18,
+                    19,  # rank 1
+                    18,
+                    18,
+                    19,
+                    18,
+                    18,
+                ]
+            elif num_workers == 30:
+                # This should match the pattern of the first 40 items of a generalized bit
+                # reversal sequence of length 60.
+                # Given 4 * 55 = 220 samples modulo 60 workers, is 40 remaining samples
+                assert list(samples_per_global_worker.values()) == [
+                    4,
+                    4,
+                    4,
+                    4,
+                    3,
+                    4,
+                    3,
+                    4,
+                    4,
+                    4,
+                    3,
+                    4,
+                    3,
+                    4,
+                    3,
+                    4,
+                    4,
+                    4,
+                    4,
+                    3,
+                    4,
+                    3,
+                    4,
+                    4,
+                    4,
+                    3,
+                    4,
+                    3,
+                    4,
+                    3,
+                    4,
+                    4,
+                    4,
+                    4,
+                    3,
+                    4,
+                    3,
+                    4,
+                    4,
+                    4,
+                    3,
+                    4,
+                    3,
+                    4,
+                    3,
+                    4,
+                    4,
+                    4,
+                    4,
+                    3,
+                    4,
+                    3,
+                    4,
+                    4,
+                    4,
+                    3,
+                    4,
+                    3,
+                    4,
+                    3,
+                ]
 
     def test_save_restore_state_train(self):
         torch.manual_seed(42)
@@ -444,35 +570,35 @@ class TestDataset(unittest.TestCase):
 
         # Train mode dataset
         loader = new_loader()
-        state_0 = loader.save_state()
+        state_0 = loader.save_state_rank()
         order_0 = [data.text for idx, data in zip(range(10), loader)]
-        state_1 = loader.save_state()
+        state_1 = loader.save_state_rank()
         # print("save state done")
         order_1 = [data.text for idx, data in zip(range(20), loader)]
 
-        state_2 = loader.save_state()
+        state_2 = loader.save_state_rank()
         # print("save state done")
         # Iterated 30 samples, afterwards 50 samples. Checkpoint should be around that
         order_2 = [data.text for idx, data in zip(range(20), loader)]
 
-        state_3 = loader.save_state()
+        state_3 = loader.save_state_rank()
         # print("save state done")
         # Iterated 50 samples, afterwards 53 samples. Checkpoint should be around that
         order_3 = [data.text for idx, data in zip(range(3), loader)]
 
-        state_4 = loader.save_state()
+        state_4 = loader.save_state_rank()
         # print("save state done")
         # Dataset size is 55, want to save one sample before end of epoch
         # Iterated 53 samples, afterwards 54 samples. Checkpoint should be around that
         order_4 = [data.text for idx, data in zip(range(1), loader)]
 
-        state_5 = loader.save_state()
+        state_5 = loader.save_state_rank()
         # print("save state done")
         # Dataset size is 55, want to save one sample before end of epoch
         # Iterated 54 samples, afterwards 55 samples. Checkpoint should be around that
         order_5 = [data.text for idx, data in zip(range(1), loader)]
 
-        state_6 = loader.save_state()
+        state_6 = loader.save_state_rank()
         # print("save state done")
         # Dataset size is 55, want to save one sample before end of epoch
         # Iterated 55 samples, afterwards 75 samples. Checkpoint should be around that
@@ -480,18 +606,18 @@ class TestDataset(unittest.TestCase):
 
         loader = new_loader()
         print("state_1:", _norng_state(state_1))
-        loader.restore_state(state_1)
+        loader.restore_state_rank(state_1)
         order_1_rest = [data.text for idx, data in zip(range(len(order_1)), loader)]
         assert order_1 == order_1_rest
 
         loader = new_loader()
-        loader.restore_state(state_0)
+        loader.restore_state_rank(state_0)
         order_0_rest = [data.text for idx, data in zip(range(len(order_0)), loader)]
         assert order_0 == order_0_rest
 
         loader = new_loader()
         print("state_2:", _norng_state(state_2))
-        loader.restore_state(state_2)
+        loader.restore_state_rank(state_2)
         order_2_rest = [data.text for idx, data in zip(range(len(order_2)), loader)]
         print("order_2:", order_2)
         print("order_2_rest:", order_2_rest)
@@ -499,7 +625,7 @@ class TestDataset(unittest.TestCase):
 
         loader = new_loader()
         print("state_3:", _norng_state(state_3))
-        loader.restore_state(state_3)
+        loader.restore_state_rank(state_3)
         order_3_rest = [data.text for idx, data in zip(range(len(order_3)), loader)]
         print("order_3:", order_3)
         print("order_3_rest:", order_3_rest)
@@ -507,7 +633,7 @@ class TestDataset(unittest.TestCase):
 
         loader = new_loader()
         print("state_4:", _norng_state(state_4))
-        loader.restore_state(state_4)
+        loader.restore_state_rank(state_4)
         order_4_rest = [data.text for idx, data in zip(range(len(order_4)), loader)]
         print("order_4:", order_4)
         print("order_4_rest:", order_4_rest)
@@ -515,7 +641,7 @@ class TestDataset(unittest.TestCase):
 
         loader = new_loader()
         print("state_5:", _norng_state(state_5))
-        loader.restore_state(state_5)
+        loader.restore_state_rank(state_5)
         order_5_rest = [data.text for idx, data in zip(range(len(order_5)), loader)]
         print("order_5:", order_5)
         print("order_5_rest:", order_5_rest)
@@ -523,7 +649,7 @@ class TestDataset(unittest.TestCase):
 
         loader = new_loader()
         print("state_6:", _norng_state(state_6))
-        loader.restore_state(state_6)
+        loader.restore_state_rank(state_6)
         order_6_rest = [data.text for idx, data in zip(range(len(order_6)), loader)]
         print("order_6:", order_6)
         print("order_6_rest:", order_6_rest)
@@ -560,233 +686,241 @@ class TestDataset(unittest.TestCase):
                             "dataset_weights": [
                                 (
                                     {
-                                        "type": "MapDataset",
+                                        "type": "RepeatDataset",
                                         "dataset": {
-                                            "type": "WebdatasetSampleLoaderDataset",
-                                            "shards": [
-                                                [
+                                            "type": "MapDataset",
+                                            "dataset": {
+                                                "type": "WebdatasetSampleLoaderDataset",
+                                                "shards": [
                                                     [
-                                                        {
-                                                            "name": "parts/data-0.tar",
-                                                            "path": str(
-                                                                self.dataset_path
-                                                                / "ds1/parts/data-0.tar"
-                                                            ),
-                                                            "offset": 0,
-                                                            "count": 10,
-                                                            "byte_offset": 0,
-                                                            "byte_size": 20480,
-                                                        }
-                                                    ],
-                                                    [
-                                                        {
-                                                            "name": "parts/data-1.tar",
-                                                            "path": str(
-                                                                self.dataset_path
-                                                                / "ds1/parts/data-1.tar"
-                                                            ),
-                                                            "offset": 0,
-                                                            "count": 10,
-                                                            "byte_offset": 0,
-                                                            "byte_size": 20480,
-                                                        }
-                                                    ],
-                                                    [
-                                                        {
-                                                            "name": "parts/data-2.tar",
-                                                            "path": str(
-                                                                self.dataset_path
-                                                                / "ds1/parts/data-2.tar"
-                                                            ),
-                                                            "offset": 0,
-                                                            "count": 10,
-                                                            "byte_offset": 0,
-                                                            "byte_size": 20480,
-                                                        }
-                                                    ],
-                                                    [
-                                                        {
-                                                            "name": "parts/data-3.tar",
-                                                            "path": str(
-                                                                self.dataset_path
-                                                                / "ds1/parts/data-3.tar"
-                                                            ),
-                                                            "offset": 0,
-                                                            "count": 10,
-                                                            "byte_offset": 0,
-                                                            "byte_size": 20480,
-                                                        }
-                                                    ],
-                                                    [
-                                                        {
-                                                            "name": "parts/data-4.tar",
-                                                            "path": str(
-                                                                self.dataset_path
-                                                                / "ds1/parts/data-4.tar"
-                                                            ),
-                                                            "offset": 0,
-                                                            "count": 10,
-                                                            "byte_offset": 0,
-                                                            "byte_size": 20480,
-                                                        }
-                                                    ],
-                                                    [
-                                                        {
-                                                            "name": "parts/data-5.tar",
-                                                            "path": str(
-                                                                self.dataset_path
-                                                                / "ds1/parts/data-5.tar"
-                                                            ),
-                                                            "offset": 0,
-                                                            "count": 5,
-                                                            "byte_offset": 0,
-                                                            "byte_size": 10240,
-                                                        }
-                                                    ],
-                                                ]
-                                            ],
-                                            "worker_config": wrk_cfg,
-                                            "exclude": [],
-                                            "loop": True,
-                                            "shuffle_over_epochs": 6,
-                                            "parallel_shard_iters": 2,
-                                        },
-                                        "map_fn": "megatron.energon.flavors.webdataset.base_webdataset.BaseWebdatasetFactory._load_sample_raw",
-                                        "map_fn_config": {
-                                            "type": "StandardWebdatasetFactory",
-                                            "training": True,
-                                            "path": str(self.dataset_path / "ds1"),
-                                            "shuffle_over_epochs": 6,
-                                            "parallel_shard_iters": 2,
-                                            "max_samples_per_sequence": None,
-                                            "subflavor": "ds1",
-                                            "subflavors": {
-                                                "source": "metadataset.yaml",
-                                                "dataset.yaml": True,
-                                                "number": 43,
-                                                "mds": "mds",
+                                                        [
+                                                            {
+                                                                "name": "parts/data-0.tar",
+                                                                "path": str(
+                                                                    self.dataset_path
+                                                                    / "ds1/parts/data-0.tar"
+                                                                ),
+                                                                "offset": 0,
+                                                                "count": 10,
+                                                                "byte_offset": 0,
+                                                                "byte_size": 20480,
+                                                            }
+                                                        ],
+                                                        [
+                                                            {
+                                                                "name": "parts/data-1.tar",
+                                                                "path": str(
+                                                                    self.dataset_path
+                                                                    / "ds1/parts/data-1.tar"
+                                                                ),
+                                                                "offset": 0,
+                                                                "count": 10,
+                                                                "byte_offset": 0,
+                                                                "byte_size": 20480,
+                                                            }
+                                                        ],
+                                                        [
+                                                            {
+                                                                "name": "parts/data-2.tar",
+                                                                "path": str(
+                                                                    self.dataset_path
+                                                                    / "ds1/parts/data-2.tar"
+                                                                ),
+                                                                "offset": 0,
+                                                                "count": 10,
+                                                                "byte_offset": 0,
+                                                                "byte_size": 20480,
+                                                            }
+                                                        ],
+                                                        [
+                                                            {
+                                                                "name": "parts/data-3.tar",
+                                                                "path": str(
+                                                                    self.dataset_path
+                                                                    / "ds1/parts/data-3.tar"
+                                                                ),
+                                                                "offset": 0,
+                                                                "count": 10,
+                                                                "byte_offset": 0,
+                                                                "byte_size": 20480,
+                                                            }
+                                                        ],
+                                                        [
+                                                            {
+                                                                "name": "parts/data-4.tar",
+                                                                "path": str(
+                                                                    self.dataset_path
+                                                                    / "ds1/parts/data-4.tar"
+                                                                ),
+                                                                "offset": 0,
+                                                                "count": 10,
+                                                                "byte_offset": 0,
+                                                                "byte_size": 20480,
+                                                            }
+                                                        ],
+                                                        [
+                                                            {
+                                                                "name": "parts/data-5.tar",
+                                                                "path": str(
+                                                                    self.dataset_path
+                                                                    / "ds1/parts/data-5.tar"
+                                                                ),
+                                                                "offset": 0,
+                                                                "count": 5,
+                                                                "byte_offset": 0,
+                                                                "byte_size": 10240,
+                                                            }
+                                                        ],
+                                                    ]
+                                                ],
+                                                "worker_config": wrk_cfg,
+                                                "exclude": [],
+                                                "shuffle_over_epochs": 6,
+                                                "parallel_shard_iters": 2,
                                             },
-                                            "sample_loader": "megatron.energon.flavors.webdataset.default_generic_webdataset.DefaultGenericWebdatasetFactory.__init__.<locals>.<lambda>",
-                                            "image_decode": "torchrgb",
-                                            "ignore_decoder_errors": False,
+                                            "map_fn": "megatron.energon.flavors.webdataset.base_webdataset.BaseWebdatasetFactory._load_sample_raw",
+                                            "map_fn_config": {
+                                                "type": "StandardWebdatasetFactory",
+                                                "training": True,
+                                                "path": str(self.dataset_path / "ds1"),
+                                                "shuffle_over_epochs": 6,
+                                                "parallel_shard_iters": 2,
+                                                "max_samples_per_sequence": None,
+                                                "subflavor": "ds1",
+                                                "subflavors": {
+                                                    "source": "metadataset.yaml",
+                                                    "dataset.yaml": True,
+                                                    "number": 43,
+                                                    "mds": "mds",
+                                                },
+                                                "sample_loader": "megatron.energon.flavors.webdataset.default_generic_webdataset.DefaultGenericWebdatasetFactory.__init__.<locals>.<lambda>",
+                                                "image_decode": "torchrgb",
+                                                "ignore_decoder_errors": False,
+                                            },
+                                            "map_fn_stateless": True,
                                         },
-                                        "map_fn_stateless": True,
+                                        "repeats": None,
+                                        "worker_config": wrk_cfg,
                                     },
                                     0.5,
                                 ),
                                 (
                                     {
-                                        "type": "MapDataset",
+                                        "type": "RepeatDataset",
                                         "dataset": {
-                                            "type": "WebdatasetSampleLoaderDataset",
-                                            "shards": [
-                                                [
+                                            "type": "MapDataset",
+                                            "dataset": {
+                                                "type": "WebdatasetSampleLoaderDataset",
+                                                "shards": [
                                                     [
-                                                        {
-                                                            "name": "parts/data-0.tar",
-                                                            "path": str(
-                                                                self.dataset_path
-                                                                / "ds2/parts/data-0.tar"
-                                                            ),
-                                                            "offset": 0,
-                                                            "count": 10,
-                                                            "byte_offset": 0,
-                                                            "byte_size": 20480,
-                                                        }
-                                                    ],
-                                                    [
-                                                        {
-                                                            "name": "parts/data-1.tar",
-                                                            "path": str(
-                                                                self.dataset_path
-                                                                / "ds2/parts/data-1.tar"
-                                                            ),
-                                                            "offset": 0,
-                                                            "count": 10,
-                                                            "byte_offset": 0,
-                                                            "byte_size": 20480,
-                                                        }
-                                                    ],
-                                                    [
-                                                        {
-                                                            "name": "parts/data-2.tar",
-                                                            "path": str(
-                                                                self.dataset_path
-                                                                / "ds2/parts/data-2.tar"
-                                                            ),
-                                                            "offset": 0,
-                                                            "count": 10,
-                                                            "byte_offset": 0,
-                                                            "byte_size": 20480,
-                                                        }
-                                                    ],
-                                                    [
-                                                        {
-                                                            "name": "parts/data-3.tar",
-                                                            "path": str(
-                                                                self.dataset_path
-                                                                / "ds2/parts/data-3.tar"
-                                                            ),
-                                                            "offset": 0,
-                                                            "count": 10,
-                                                            "byte_offset": 0,
-                                                            "byte_size": 20480,
-                                                        }
-                                                    ],
-                                                    [
-                                                        {
-                                                            "name": "parts/data-4.tar",
-                                                            "path": str(
-                                                                self.dataset_path
-                                                                / "ds2/parts/data-4.tar"
-                                                            ),
-                                                            "offset": 0,
-                                                            "count": 10,
-                                                            "byte_offset": 0,
-                                                            "byte_size": 20480,
-                                                        }
-                                                    ],
-                                                    [
-                                                        {
-                                                            "name": "parts/data-5.tar",
-                                                            "path": str(
-                                                                self.dataset_path
-                                                                / "ds2/parts/data-5.tar"
-                                                            ),
-                                                            "offset": 0,
-                                                            "count": 5,
-                                                            "byte_offset": 0,
-                                                            "byte_size": 10240,
-                                                        }
-                                                    ],
-                                                ]
-                                            ],
-                                            "worker_config": wrk_cfg,
-                                            "exclude": [],
-                                            "loop": True,
-                                            "shuffle_over_epochs": 2,
-                                            "parallel_shard_iters": 2,
-                                        },
-                                        "map_fn": "megatron.energon.flavors.webdataset.base_webdataset.BaseWebdatasetFactory._load_sample_raw",
-                                        "map_fn_config": {
-                                            "type": "StandardWebdatasetFactory",
-                                            "training": True,
-                                            "path": str(self.dataset_path / "ds2"),
-                                            "shuffle_over_epochs": 2,
-                                            "parallel_shard_iters": 2,
-                                            "max_samples_per_sequence": None,
-                                            "subflavor": "ds2",
-                                            "subflavors": {
-                                                "source": "metadataset.yaml",
-                                                "dataset.yaml": True,
-                                                "number": 44,
-                                                "mds": "mds",
+                                                        [
+                                                            {
+                                                                "name": "parts/data-0.tar",
+                                                                "path": str(
+                                                                    self.dataset_path
+                                                                    / "ds2/parts/data-0.tar"
+                                                                ),
+                                                                "offset": 0,
+                                                                "count": 10,
+                                                                "byte_offset": 0,
+                                                                "byte_size": 20480,
+                                                            }
+                                                        ],
+                                                        [
+                                                            {
+                                                                "name": "parts/data-1.tar",
+                                                                "path": str(
+                                                                    self.dataset_path
+                                                                    / "ds2/parts/data-1.tar"
+                                                                ),
+                                                                "offset": 0,
+                                                                "count": 10,
+                                                                "byte_offset": 0,
+                                                                "byte_size": 20480,
+                                                            }
+                                                        ],
+                                                        [
+                                                            {
+                                                                "name": "parts/data-2.tar",
+                                                                "path": str(
+                                                                    self.dataset_path
+                                                                    / "ds2/parts/data-2.tar"
+                                                                ),
+                                                                "offset": 0,
+                                                                "count": 10,
+                                                                "byte_offset": 0,
+                                                                "byte_size": 20480,
+                                                            }
+                                                        ],
+                                                        [
+                                                            {
+                                                                "name": "parts/data-3.tar",
+                                                                "path": str(
+                                                                    self.dataset_path
+                                                                    / "ds2/parts/data-3.tar"
+                                                                ),
+                                                                "offset": 0,
+                                                                "count": 10,
+                                                                "byte_offset": 0,
+                                                                "byte_size": 20480,
+                                                            }
+                                                        ],
+                                                        [
+                                                            {
+                                                                "name": "parts/data-4.tar",
+                                                                "path": str(
+                                                                    self.dataset_path
+                                                                    / "ds2/parts/data-4.tar"
+                                                                ),
+                                                                "offset": 0,
+                                                                "count": 10,
+                                                                "byte_offset": 0,
+                                                                "byte_size": 20480,
+                                                            }
+                                                        ],
+                                                        [
+                                                            {
+                                                                "name": "parts/data-5.tar",
+                                                                "path": str(
+                                                                    self.dataset_path
+                                                                    / "ds2/parts/data-5.tar"
+                                                                ),
+                                                                "offset": 0,
+                                                                "count": 5,
+                                                                "byte_offset": 0,
+                                                                "byte_size": 10240,
+                                                            }
+                                                        ],
+                                                    ]
+                                                ],
+                                                "worker_config": wrk_cfg,
+                                                "exclude": [],
+                                                "shuffle_over_epochs": 2,
+                                                "parallel_shard_iters": 2,
                                             },
-                                            "sample_loader": "megatron.energon.flavors.webdataset.default_generic_webdataset.DefaultGenericWebdatasetFactory.__init__.<locals>.<lambda>",
-                                            "image_decode": "torchrgb",
-                                            "ignore_decoder_errors": False,
+                                            "map_fn": "megatron.energon.flavors.webdataset.base_webdataset.BaseWebdatasetFactory._load_sample_raw",
+                                            "map_fn_config": {
+                                                "type": "StandardWebdatasetFactory",
+                                                "training": True,
+                                                "path": str(self.dataset_path / "ds2"),
+                                                "shuffle_over_epochs": 2,
+                                                "parallel_shard_iters": 2,
+                                                "max_samples_per_sequence": None,
+                                                "subflavor": "ds2",
+                                                "subflavors": {
+                                                    "source": "metadataset.yaml",
+                                                    "dataset.yaml": True,
+                                                    "number": 44,
+                                                    "mds": "mds",
+                                                },
+                                                "sample_loader": "megatron.energon.flavors.webdataset.default_generic_webdataset.DefaultGenericWebdatasetFactory.__init__.<locals>.<lambda>",
+                                                "image_decode": "torchrgb",
+                                                "ignore_decoder_errors": False,
+                                            },
+                                            "map_fn_stateless": True,
                                         },
-                                        "map_fn_stateless": True,
+                                        "repeats": None,
+                                        "worker_config": wrk_cfg,
                                     },
                                     0.5,
                                 ),
@@ -830,22 +964,22 @@ class TestDataset(unittest.TestCase):
 
         # Train mode dataset
         loader = new_loader()
-        state_0 = loader.save_state()
+        state_0 = loader.save_state_rank()
         order_0 = [data.text for idx, data in zip(range(10), loader)]
         time.sleep(0.5)
-        state_1 = loader.save_state()
+        state_1 = loader.save_state_rank()
         # print("save state done")
         order_1 = [data.text for idx, data in zip(range(20), loader)]
 
         # Ensure a checkpoint is created on next()
         time.sleep(1.5)
 
-        state_2 = loader.save_state()
+        state_2 = loader.save_state_rank()
         # print("save state done")
         # Iterated 30 samples, afterwards 50 samples. Checkpoint should be around that
         order_2 = [data.text for idx, data in zip(range(20), loader)]
 
-        state_3 = loader.save_state()
+        state_3 = loader.save_state_rank()
         # print("save state done")
         # Iterated 50 samples, afterwards 53 samples. Checkpoint should be around that
         order_3 = [data.text for idx, data in zip(range(3), loader)]
@@ -853,7 +987,7 @@ class TestDataset(unittest.TestCase):
         # Ensure a checkpoint is created on next()
         time.sleep(1.5)
 
-        state_4 = loader.save_state()
+        state_4 = loader.save_state_rank()
         # print("save state done")
         # Dataset size is 55, want to save one sample before end of epoch
         # Iterated 1 samples, afterwards 54 samples. Checkpoint should be around that
@@ -862,7 +996,7 @@ class TestDataset(unittest.TestCase):
         # Ensure a checkpoint is created on next()
         time.sleep(1.5)
 
-        state_5 = loader.save_state()
+        state_5 = loader.save_state_rank()
         # print("save state done")
         # Dataset size is 55, want to save one sample before end of epoch
         # Iterated 1 samples, afterwards 55 samples. Checkpoint should be around that
@@ -871,7 +1005,7 @@ class TestDataset(unittest.TestCase):
         # Ensure a checkpoint is created on next()
         time.sleep(1.5)
 
-        state_6 = loader.save_state()
+        state_6 = loader.save_state_rank()
         # print("save state done")
         # Dataset size is 55, want to save one sample before end of epoch
         # Iterated 1 samples, afterwards 55 samples. Checkpoint should be around that
@@ -879,20 +1013,20 @@ class TestDataset(unittest.TestCase):
 
         loader = new_loader()
         print("state_1:", _norng_state(state_1))
-        loader.restore_state(state_1)
+        loader.restore_state_rank(state_1)
         order_1_rest = [data.text for idx, data in zip(range(len(order_1)), loader)]
         print("order_1:", order_1)
         print("order_1_rest:", order_1_rest)
         assert order_1 == order_1_rest
 
         loader = new_loader()
-        loader.restore_state(state_0)
+        loader.restore_state_rank(state_0)
         order_0_rest = [data.text for idx, data in zip(range(len(order_0)), loader)]
         assert order_0 == order_0_rest
 
         loader = new_loader()
         print("state_2:", _norng_state(state_2))
-        loader.restore_state(state_2)
+        loader.restore_state_rank(state_2)
         order_2_rest = [data.text for idx, data in zip(range(len(order_2)), loader)]
         print("order_2:", order_2)
         print("order_2_rest:", order_2_rest)
@@ -900,7 +1034,7 @@ class TestDataset(unittest.TestCase):
 
         loader = new_loader()
         print("state_3:", _norng_state(state_3))
-        loader.restore_state(state_3)
+        loader.restore_state_rank(state_3)
         order_3_rest = [data.text for idx, data in zip(range(len(order_3)), loader)]
         print("order_3:", order_3)
         print("order_3_rest:", order_3_rest)
@@ -908,7 +1042,7 @@ class TestDataset(unittest.TestCase):
 
         loader = new_loader()
         print("state_4:", _norng_state(state_4))
-        loader.restore_state(state_4)
+        loader.restore_state_rank(state_4)
         order_4_rest = [data.text for idx, data in zip(range(len(order_4)), loader)]
         print("order_4:", order_4)
         print("order_4_rest:", order_4_rest)
@@ -916,7 +1050,7 @@ class TestDataset(unittest.TestCase):
 
         loader = new_loader()
         print("state_5:", _norng_state(state_5))
-        loader.restore_state(state_5)
+        loader.restore_state_rank(state_5)
         order_5_rest = [data.text for idx, data in zip(range(len(order_5)), loader)]
         print("order_5:", order_5)
         print("order_5_rest:", order_5_rest)
@@ -924,7 +1058,7 @@ class TestDataset(unittest.TestCase):
 
         loader = new_loader()
         print("state_6:", _norng_state(state_6))
-        loader.restore_state(state_6)
+        loader.restore_state_rank(state_6)
         order_6_rest = [data.text for idx, data in zip(range(len(order_6)), loader)]
         print("order_6:", order_6)
         print("order_6_rest:", order_6_rest)
@@ -957,11 +1091,11 @@ class TestDataset(unittest.TestCase):
             ),
             worker_config=worker_config,
         )
-        state_0 = loader.save_state()
+        state_0 = loader.save_state_rank()
         order_1 = [data.text[0] for data in loader]
-        state_1 = loader.save_state()
+        state_1 = loader.save_state_rank()
         order_2 = [data.text[0] for data in loader]
-        state_2 = loader.save_state()
+        state_2 = loader.save_state_rank()
         order_3 = [data.text[0] for idx, data in zip(range(17), loader)]
 
         torch.manual_seed(42)
@@ -978,7 +1112,7 @@ class TestDataset(unittest.TestCase):
             worker_config=worker_config,
         )
         print("state_0:", _norng_state(state_0))
-        loader.restore_state(state_0)
+        loader.restore_state_rank(state_0)
         order_5 = [data.text[0] for data in loader]
         print("order_1:", order_1)
         print("order_5:", order_5)
@@ -998,7 +1132,7 @@ class TestDataset(unittest.TestCase):
             worker_config=worker_config,
         )
         print("state_1:", _norng_state(state_1))
-        loader.restore_state(state_1)
+        loader.restore_state_rank(state_1)
         order_6 = [data.text[0] for data in loader]
         print("order_2:", order_2)
         print("order_6:", order_6)
@@ -1018,7 +1152,7 @@ class TestDataset(unittest.TestCase):
             worker_config=worker_config,
         )
         print("state_2:", _norng_state(state_2))
-        loader.restore_state(state_2)
+        loader.restore_state_rank(state_2)
         order_7 = [data.text[0] for idx, data in zip(range(17), loader)]
         print("order_3:", order_3)
         print("order_7:", order_7)
@@ -1039,9 +1173,9 @@ class TestDataset(unittest.TestCase):
             get_val_dataset(self.mds_path, worker_config=worker_config, batch_size=10),
             worker_config=worker_config,
         )
-        state_0 = loader.save_state()
+        state_0 = loader.save_state_rank()
         order_1 = [data.text for idx, data in zip(range(55 * 20), loader)]
-        state_1 = loader.save_state()
+        state_1 = loader.save_state_rank()
         # print("save state done")
         order_2 = [data.text for idx, data in zip(range(55 * 20), loader)]
 
@@ -1049,7 +1183,7 @@ class TestDataset(unittest.TestCase):
             get_val_dataset(self.mds_path, worker_config=worker_config, batch_size=10),
             worker_config=worker_config,
         )
-        loader.restore_state(state_1)
+        loader.restore_state_rank(state_1)
         order_3 = [data.text for idx, data in zip(range(55 * 20), loader)]
         assert order_2 == order_3
 
@@ -1057,7 +1191,7 @@ class TestDataset(unittest.TestCase):
             get_val_dataset(self.mds_path, worker_config=worker_config, batch_size=10),
             worker_config=worker_config,
         )
-        loader.restore_state(state_0)
+        loader.restore_state_rank(state_0)
         order_4 = [data.text for idx, data in zip(range(55 * 20), loader)]
         assert order_1 == order_4
 
@@ -1092,7 +1226,7 @@ class TestDataset(unittest.TestCase):
                     shuffle_buffer_size=None,
                     max_samples_per_sequence=None,
                 )
-                loader = get_loader(ds, worker_config=rank_config)
+                loader = get_loader(ds)
 
                 subflavors = [data.__subflavor__[0] for idx, data in zip(range(25), loader)]
 

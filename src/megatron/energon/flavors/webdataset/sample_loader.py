@@ -1,4 +1,4 @@
-# Copyright (c) 2024, NVIDIA CORPORATION.
+# Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
 import contextlib
@@ -85,13 +85,9 @@ class WebdatasetSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample
     _shards_by_key: Optional[List[Dict[Tuple[str, int], Sequence[ShardInfo]]]] = None
     #: Paths to shards for all workers by name `shards[worker_idx][shard_name]`, created lazily
     _shard_paths_by_name: Optional[Dict[str, List[EPath]]] = None
-    #: The data parallel worker config
-    worker_config: WorkerConfig
     # Sample keys to ignore
     exclude: Set[str]
 
-    # If true, loop the shards
-    loop: bool
     # If = 1, every sample is seen exactly once per epoch. If > 1, samples
     # (or rather shard slices) are shuffled within this number of epochs (i.e. randomly
     # selected without replacement). If None, the shards are effectively shuffle over
@@ -132,7 +128,6 @@ class WebdatasetSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample
         worker_config: WorkerConfig,
         exclude: Set[str],
         part_filter: Optional[Callable[[str], bool]] = None,
-        loop: bool = False,
         shuffle_over_epochs: Optional[int] = None,
         parallel_shard_iters: int = 1,
         dataset_join_method: Literal["inner_match"] = "inner_match",
@@ -148,7 +143,6 @@ class WebdatasetSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample
             exclude: A set of strings of the form "<shard name>" or "<shard name>/<sample index>" to
                 exclude from iteration.
             part_filter: If not None, use this function to filter out wds files.
-            loop: If true, loop the shards indefinitely.
             shuffle_over_epochs: If None, disable shuffling.
                 If = 1, every sample is seen exactly once per epoch.
                 If > 1, samples (or rather shard slices) are shuffled within this number of epochs
@@ -162,12 +156,10 @@ class WebdatasetSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample
                 may come in the future if needed.
             handler: Exception handler. Args: (exception, key).
         """
-        super().__init__()
+        super().__init__(worker_config=worker_config)
         self.shards = rank_shards
-        self.worker_config = worker_config
         self.exclude = exclude
         self.part_filter = part_filter
-        self.loop = loop
         self.shuffle_over_epochs = shuffle_over_epochs
         self.parallel_shard_iters = parallel_shard_iters
         self.dataset_join_method = dataset_join_method
@@ -289,8 +281,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample
     def _shards_iter(
         self, shards: List[Sequence[ShardInfo]]
     ) -> Generator[Tuple[Optional[FilteredSample], ...], None, None]:
-        """Iterates the samples in a list of shards, possibly looping over them indefinitely,
-        possibly reshuffling the shards every loop, possibly using multiple parallel iterators over
+        """Iterates the samples in a list of shards, possibly using multiple parallel iterators over
         the shards."""
         worker_idx = self.worker_config.rank_worker_id()
         # Cleanup other states
@@ -303,212 +294,210 @@ class WebdatasetSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample
             []
         )
         active_shards: List[Optional[List[ShardState]]]
-        while True:
-            shards_probs[:] = 0
-            shard_iters = []
-            if (
-                any(s is not None for s in self._active_shards_state[worker_idx])
-                or len(self._pending_shards[worker_idx]) > 0
-            ):
-                shards_order = self._pending_shards[worker_idx]
 
-                # Restore the state
-                active_shards = self._active_shards_state[worker_idx]
-                assert len(active_shards) == self.parallel_shard_iters
-                for shard_states in active_shards:
-                    if shard_states is None:
-                        shard_iters.append(None)
-                    else:
-                        shards_probs[len(shard_iters)] = shard_states[0].shard.count
-                        shard_iters.append(self._read_multicolumn_shard(shard_states))
+        shards_probs[:] = 0
+        shard_iters = []
+        if (
+            any(s is not None for s in self._active_shards_state[worker_idx])
+            or len(self._pending_shards[worker_idx]) > 0
+        ):
+            shards_order = self._pending_shards[worker_idx]
 
-                if self.worker_config.should_log(level=1):
-                    self.worker_config.worker_log(
-                        {
-                            "t": "WebdatasetSampleLoaderDataset._shards_iter.resume_epoch",
-                            "r": self.worker_config.rank,
-                            "w": self.worker_config.rank_worker_id(),
-                            "shards": [
-                                [
-                                    {
-                                        "name": subshard.name,
-                                        "path": str(subshard.path),
-                                        "offset": subshard.offset,
-                                        "count": subshard.count,
-                                    }
-                                    for subshard in subshards
-                                ]
-                                for subshards in shards_order
-                            ],
-                            "active_shards": [
-                                (
-                                    None
-                                    if subshard_states is None
-                                    else [
-                                        {
-                                            "shard": {
-                                                "name": subshard_state.shard.name,
-                                                "path": str(subshard_state.shard.path),
-                                                "offset": subshard_state.shard.offset,
-                                                "count": subshard_state.shard.count,
-                                            },
-                                            "offset": subshard_state.offset,
-                                        }
-                                        for subshard_state in subshard_states
-                                    ]
-                                )
-                                for subshard_states in active_shards
-                            ],
-                            "count": self._sample_count[worker_idx],
-                            "epoch": self._epoch_count[worker_idx],
-                            "epoch_count": self._epoch_sample_count[worker_idx],
-                            "probs": shards_probs.tolist(),
-                        }
-                    )
-
-            else:
-                # Weight the shards by their size to get a more even distribution of samples
-                shards_order = self._shards_once(shards)
-                shards_order.reverse()
-
-                if self.worker_config.should_log(level=1):
-                    self.worker_config.worker_log(
-                        {
-                            "t": "WebdatasetSampleLoaderDataset._shards_iter.next_epoch",
-                            "r": self.worker_config.rank,
-                            "w": self.worker_config.rank_worker_id(),
-                            "shards": [
-                                [
-                                    {
-                                        "name": shard.name,
-                                        "path": str(shard.path),
-                                        "offset": shard.offset,
-                                        "count": shard.count,
-                                    }
-                                    for shard in subshards
-                                ]
-                                for subshards in shards_order
-                            ],
-                            "count": self._sample_count[worker_idx],
-                            "epoch": self._epoch_count[worker_idx],
-                            "epoch_count": self._epoch_sample_count[worker_idx],
-                            "probs": shards_probs.tolist(),
-                            "shuffle_over_epochs": self.shuffle_over_epochs,
-                        }
-                    )
-
-                # List of shard iterators, always of length `parallel_shard_iters`. May contain `None`.
-                active_shards = []
-                # Fill up the shard iterators
-                while len(shards_order) > 0 and len(shard_iters) < self.parallel_shard_iters:
-                    subshards = shards_order.pop()
-                    shard_states = [
-                        ShardState(shard=shard, byte_offset=0, offset=0) for shard in subshards
-                    ]
-                    shards_probs[len(shard_iters)] = subshards[0].count
-                    shard_iters.append(self._read_multicolumn_shard(shard_states))
-                    active_shards.append(shard_states)
-                # Fill up the shard iterators with None
-                for _ in range(len(shard_iters), self.parallel_shard_iters):
+            # Restore the state
+            active_shards = self._active_shards_state[worker_idx]
+            assert len(active_shards) == self.parallel_shard_iters
+            for shard_states in active_shards:
+                if shard_states is None:
                     shard_iters.append(None)
-                    active_shards.append(None)
-
-                self._active_shards_state[worker_idx] = active_shards
-                self._pending_shards[worker_idx] = shards_order
-
-            # print(
-            #     f"Next shard iters generated for {self.worker_config.rank}:{self.worker_config.rank_worker_id()}: probs={shards_probs}"
-            # )
-
-            # Iterate over the shard iterators
-            while True:
-                if torch.count_nonzero(shards_probs).item() == 0:
-                    # There is no iterator left
-                    break
-                if self.shuffle_over_epochs is None:
-                    # No shuffling, deterministic order, always the same
-                    assert self.parallel_shard_iters == 1
-                    shard_iter = shard_iters[0]
                 else:
-                    # Take a random shard iterator
-                    shard_iter = self._worker_rng.choice(shard_iters, probs=shards_probs)
-                try:
-                    sample: Tuple[Optional[FilteredSample], ...] = next(shard_iter)
-                except StopIteration:
-                    # Iterator exhausted -> take next / remove from list
-                    rm_idx = shard_iters.index(shard_iter)
-                    if len(shards_order) > 0 or self.shuffle_over_epochs == -1:
-                        if len(shards_order) > 0:
-                            # Take the next shard (without replacement)
-                            subshards = shards_order.pop()
-                        else:
-                            # Randomly select a new shard directly (with replacement)
-                            subshards = shards[self._worker_rng.randbelow(len(shards))]
-                        shard_states = [
-                            ShardState(shard=shard, byte_offset=0, offset=0) for shard in subshards
-                        ]
-                        shard_iters[rm_idx] = self._read_multicolumn_shard(shard_states)
-                        shards_probs[rm_idx] = subshards[0].count
-                        active_shards[rm_idx] = shard_states
-                        # print(
-                        #     f"Shard iter for {self.worker_config.rank}:{self.worker_config.rank_worker_id()} exhausted, taking next shard {shard.name} [{shard.offset}, {shard.offset + shard.count}), {len(shards_order)} shards left, probs={shards_probs}"
-                        # )
-                    else:
-                        shard_iters[rm_idx] = None
-                        shards_probs[rm_idx] = 0
-                        active_shards[rm_idx] = None
-                        # print(
-                        #     f"Shard iter for {self.worker_config.rank}:{self.worker_config.rank_worker_id()} exhausted, no next shards, probs={shards_probs}"
-                        # )
-                    if self.worker_config.should_log(level=2):
-                        self.worker_config.worker_log(
-                            {
-                                "t": "WebdatasetSampleLoaderDataset._shards_iter.exhausted",
-                                "r": self.worker_config.rank,
-                                "w": self.worker_config.rank_worker_id(),
-                                "remaining": len(shards_order),
-                                "count": self._sample_count[worker_idx],
-                                "epoch": self._epoch_count[worker_idx],
-                                "epoch_count": self._epoch_sample_count[worker_idx],
-                                "probs": shards_probs.tolist(),
-                            }
-                        )
-                else:
-                    self._sample_count[worker_idx] += 1
-                    self._epoch_sample_count[worker_idx] += 1
-                    if self.worker_config.should_log(level=1):
-                        self.worker_config.worker_log(
-                            {
-                                "t": "WebdatasetSampleLoaderDataset._shards_iter.yield",
-                                "r": self.worker_config.rank,
-                                "w": self.worker_config.rank_worker_id(),
-                                "key": sample[0]["__key__"],
-                                "shard": sample[0]["__shard__"],
-                                "count": self._sample_count[worker_idx],
-                                "epoch": self._epoch_count[worker_idx],
-                                "epoch_count": self._epoch_sample_count[worker_idx],
-                            }
-                        )
-                    yield sample
-            if self.worker_config.should_log(level=2):
+                    shards_probs[len(shard_iters)] = shard_states[0].shard.count
+                    shard_iters.append(self._read_multicolumn_shard(shard_states))
+
+            if self.worker_config.should_log(level=1):
                 self.worker_config.worker_log(
                     {
-                        "t": "WebdatasetSampleLoaderDataset._shards_iter.all_exhausted",
+                        "t": "WebdatasetSampleLoaderDataset._shards_iter.resume_epoch",
                         "r": self.worker_config.rank,
                         "w": self.worker_config.rank_worker_id(),
+                        "shards": [
+                            [
+                                {
+                                    "name": subshard.name,
+                                    "path": str(subshard.path),
+                                    "offset": subshard.offset,
+                                    "count": subshard.count,
+                                }
+                                for subshard in subshards
+                            ]
+                            for subshards in shards_order
+                        ],
+                        "active_shards": [
+                            (
+                                None
+                                if subshard_states is None
+                                else [
+                                    {
+                                        "shard": {
+                                            "name": subshard_state.shard.name,
+                                            "path": str(subshard_state.shard.path),
+                                            "offset": subshard_state.shard.offset,
+                                            "count": subshard_state.shard.count,
+                                        },
+                                        "offset": subshard_state.offset,
+                                    }
+                                    for subshard_state in subshard_states
+                                ]
+                            )
+                            for subshard_states in active_shards
+                        ],
                         "count": self._sample_count[worker_idx],
                         "epoch": self._epoch_count[worker_idx],
                         "epoch_count": self._epoch_sample_count[worker_idx],
+                        "probs": shards_probs.tolist(),
                     }
                 )
 
-            self._epoch_count[worker_idx] += 1
-            self._epoch_sample_count[worker_idx] = 0
-            # print(
-            #     f"Shard iters exhausted for {self.worker_config.rank}:{self.worker_config.rank_worker_id()} after {cnt} samples"
-            # )
-            if not self.loop:
+        else:
+            # Weight the shards by their size to get a more even distribution of samples
+            shards_order = self._shards_once(shards)
+            shards_order.reverse()
+
+            if self.worker_config.should_log(level=1):
+                self.worker_config.worker_log(
+                    {
+                        "t": "WebdatasetSampleLoaderDataset._shards_iter.next_epoch",
+                        "r": self.worker_config.rank,
+                        "w": self.worker_config.rank_worker_id(),
+                        "shards": [
+                            [
+                                {
+                                    "name": shard.name,
+                                    "path": str(shard.path),
+                                    "offset": shard.offset,
+                                    "count": shard.count,
+                                }
+                                for shard in subshards
+                            ]
+                            for subshards in shards_order
+                        ],
+                        "count": self._sample_count[worker_idx],
+                        "epoch": self._epoch_count[worker_idx],
+                        "epoch_count": self._epoch_sample_count[worker_idx],
+                        "probs": shards_probs.tolist(),
+                        "shuffle_over_epochs": self.shuffle_over_epochs,
+                    }
+                )
+
+            # List of shard iterators, always of length `parallel_shard_iters`. May contain `None`.
+            active_shards = []
+            # Fill up the shard iterators
+            while len(shards_order) > 0 and len(shard_iters) < self.parallel_shard_iters:
+                subshards = shards_order.pop()
+                shard_states = [
+                    ShardState(shard=shard, byte_offset=0, offset=0) for shard in subshards
+                ]
+                shards_probs[len(shard_iters)] = subshards[0].count
+                shard_iters.append(self._read_multicolumn_shard(shard_states))
+                active_shards.append(shard_states)
+            # Fill up the shard iterators with None
+            for _ in range(len(shard_iters), self.parallel_shard_iters):
+                shard_iters.append(None)
+                active_shards.append(None)
+
+            self._active_shards_state[worker_idx] = active_shards
+            self._pending_shards[worker_idx] = shards_order
+
+        # print(
+        #     f"Next shard iters generated for {self.worker_config.rank}:{self.worker_config.rank_worker_id()}: probs={shards_probs}"
+        # )
+
+        # Iterate over the shard iterators
+        while True:
+            if torch.count_nonzero(shards_probs).item() == 0:
+                # There is no iterator left
                 break
+            if self.shuffle_over_epochs is None:
+                # No shuffling, deterministic order, always the same
+                assert self.parallel_shard_iters == 1
+                shard_iter = shard_iters[0]
+            else:
+                # Take a random shard iterator
+                shard_iter = self._worker_rng.choice(shard_iters, probs=shards_probs)
+            try:
+                sample: Tuple[Optional[FilteredSample], ...] = next(shard_iter)
+            except StopIteration:
+                # Iterator exhausted -> take next / remove from list
+                rm_idx = shard_iters.index(shard_iter)
+                if len(shards_order) > 0 or self.shuffle_over_epochs == -1:
+                    if len(shards_order) > 0:
+                        # Take the next shard (without replacement)
+                        subshards = shards_order.pop()
+                    else:
+                        # Randomly select a new shard directly (with replacement)
+                        subshards = shards[self._worker_rng.randbelow(len(shards))]
+                    shard_states = [
+                        ShardState(shard=shard, byte_offset=0, offset=0) for shard in subshards
+                    ]
+                    shard_iters[rm_idx] = self._read_multicolumn_shard(shard_states)
+                    shards_probs[rm_idx] = subshards[0].count
+                    active_shards[rm_idx] = shard_states
+                    # print(
+                    #     f"Shard iter for {self.worker_config.rank}:{self.worker_config.rank_worker_id()} exhausted, taking next shard {shard.name} [{shard.offset}, {shard.offset + shard.count}), {len(shards_order)} shards left, probs={shards_probs}"
+                    # )
+                else:
+                    shard_iters[rm_idx] = None
+                    shards_probs[rm_idx] = 0
+                    active_shards[rm_idx] = None
+                    # print(
+                    #     f"Shard iter for {self.worker_config.rank}:{self.worker_config.rank_worker_id()} exhausted, no next shards, probs={shards_probs}"
+                    # )
+                if self.worker_config.should_log(level=2):
+                    self.worker_config.worker_log(
+                        {
+                            "t": "WebdatasetSampleLoaderDataset._shards_iter.exhausted",
+                            "r": self.worker_config.rank,
+                            "w": self.worker_config.rank_worker_id(),
+                            "remaining": len(shards_order),
+                            "count": self._sample_count[worker_idx],
+                            "epoch": self._epoch_count[worker_idx],
+                            "epoch_count": self._epoch_sample_count[worker_idx],
+                            "probs": shards_probs.tolist(),
+                        }
+                    )
+            else:
+                self._sample_count[worker_idx] += 1
+                self._epoch_sample_count[worker_idx] += 1
+                if self.worker_config.should_log(level=1):
+                    self.worker_config.worker_log(
+                        {
+                            "t": "WebdatasetSampleLoaderDataset._shards_iter.yield",
+                            "r": self.worker_config.rank,
+                            "w": self.worker_config.rank_worker_id(),
+                            "key": sample[0]["__key__"],
+                            "shard": sample[0]["__shard__"],
+                            "count": self._sample_count[worker_idx],
+                            "epoch": self._epoch_count[worker_idx],
+                            "epoch_count": self._epoch_sample_count[worker_idx],
+                        }
+                    )
+                yield sample
+        if self.worker_config.should_log(level=2):
+            self.worker_config.worker_log(
+                {
+                    "t": "WebdatasetSampleLoaderDataset._shards_iter.all_exhausted",
+                    "r": self.worker_config.rank,
+                    "w": self.worker_config.rank_worker_id(),
+                    "count": self._sample_count[worker_idx],
+                    "epoch": self._epoch_count[worker_idx],
+                    "epoch_count": self._epoch_sample_count[worker_idx],
+                }
+            )
+
+        self._epoch_count[worker_idx] += 1
+        self._epoch_sample_count[worker_idx] = 0
+        # print(
+        #     f"Shard iters exhausted for {self.worker_config.rank}:{self.worker_config.rank_worker_id()} after {cnt} samples"
+        # )
 
     def __len__(self) -> int:
         return sum(
@@ -539,7 +528,6 @@ class WebdatasetSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample
                     ],
                     "parallel_shard_iters": self.parallel_shard_iters,
                     "shuffle_over_epochs": self.shuffle_over_epochs,
-                    "loop": self.loop,
                 }
             )
 
@@ -778,10 +766,9 @@ class WebdatasetSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample
             ],
             "worker_config": self.worker_config.config(),
             "exclude": list(self.exclude),
-            "loop": self.loop,
             "shuffle_over_epochs": self.shuffle_over_epochs,
             "parallel_shard_iters": self.parallel_shard_iters,
         }
 
     def __str__(self):
-        return f"WebdatasetSampleLoaderDataset(shards={self.shards}, loop={self.loop}, shuffle_over_epochs={self.shuffle_over_epochs}, parallel_shard_iters={self.parallel_shard_iters})"
+        return f"WebdatasetSampleLoaderDataset(shards={self.shards}, shuffle_over_epochs={self.shuffle_over_epochs}, parallel_shard_iters={self.parallel_shard_iters})"

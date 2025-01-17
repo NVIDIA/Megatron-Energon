@@ -1,4 +1,4 @@
-# Copyright (c) 2024, NVIDIA CORPORATION.
+# Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
 from dataclasses import dataclass
@@ -43,8 +43,7 @@ class ConcatDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
         worker_config: WorkerConfig,
     ):
         """Construct a concatenated dataset."""
-        super().__init__()
-        self.worker_config = worker_config
+        super().__init__(datasets, worker_config=worker_config)
         self.datasets = datasets
         assert len(self) >= 0, "Datasets must be finite."
 
@@ -107,11 +106,6 @@ class ConcatDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
             ds_idx,
             src=self,
         )
-
-    def verify_worker_config(self, worker_config: WorkerConfig) -> None:
-        super().verify_worker_config(worker_config)
-        for dataset in self.datasets:
-            dataset.verify_worker_config(worker_config)
 
     def config(self) -> Dict[str, Any]:
         return {
