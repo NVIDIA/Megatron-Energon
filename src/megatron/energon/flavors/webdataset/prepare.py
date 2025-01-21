@@ -28,6 +28,7 @@ import yaml
 
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME, skip_meta_re, split_name_re
+from megatron.energon.flavors.webdataset.indexing import SqliteIndexWriter
 from megatron.energon.flavors.webdataset.itar import TarIndexWriter
 from megatron.energon.flavors.webdataset.structs import ShardInfo, WebdatasetInfo, WebdatasetSplits
 from megatron.energon.typed_converter import to_json_object
@@ -41,7 +42,10 @@ class WebdatasetPreparator:
 
     @staticmethod
     def _preprocess_tar(
-        path: Union[str, EPath], parent_path: Union[str, EPath], max_parts: int
+        path: Union[str, EPath],
+        parent_path: Union[str, EPath],
+        max_parts: int,
+        sqlite_path: EPath,
     ) -> Tuple[ShardInfo, Set[str]]:
         """Process a single tar file, i.e. read the tarinfos, generate the tar index and return
         stats.
@@ -71,7 +75,7 @@ class WebdatasetPreparator:
             with shard_info.path.open("rb") as f:
                 with tarfile.open(fileobj=f, mode="r:*") as tar, TarIndexWriter(
                     shard_info.path
-                ) as iw:
+                ) as iw, SqliteIndexWriter(EPath(sqlite_path)) as sqlite_indexer:
                     count = 0
                     parts = set()
                     last_base_name = None
@@ -94,6 +98,12 @@ class WebdatasetPreparator:
 
                         if last_base_name != base_name:
                             iw.append(member.offset)
+                            sqlite_indexer.append_sample(
+                                tar_file=path.relpath,
+                                sample_key=base_name,
+                                sample_index=count,
+                                byte_offset=member.offset,
+                            )
                             last_base_name = base_name
                             count += 1
                     shard_info.count = count
@@ -190,11 +200,14 @@ class WebdatasetPreparator:
 
         assert parent_path.is_absolute(), f"Parent path must be absolute: {parent_path}"
 
+        (parent_path / MAIN_FOLDER_NAME).mkdir(exist_ok=True)
+
         # use functools partial to pass parent_path to process_tar
         process_tar = functools.partial(
             cls._preprocess_tar,
             parent_path=parent_path.url,  # convert to url string, to avoid EPath in multiprocessing
             max_parts=50,
+            sqlite_path=parent_path / MAIN_FOLDER_NAME / "index.sqlite",
         )
 
         with mp.Pool(workers) as pool:
@@ -210,8 +223,6 @@ class WebdatasetPreparator:
 
         if tar_index_only:
             return found_parts
-
-        (parent_path / MAIN_FOLDER_NAME).mkdir(exist_ok=True)
 
         # Save info
         info = WebdatasetInfo(
