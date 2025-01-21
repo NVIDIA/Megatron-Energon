@@ -27,7 +27,7 @@ class DatasetReference:
 
     _dataset: Optional[DatasetLoaderInterface] = None
 
-    def prepare(self, parent_path: EPath):
+    def post_initialize(self, parent_path: EPath):
         self.path = parent_path.absolute() / self.path
         if self.path.is_file():
             assert self.dataset_config == "dataset.yaml", "Must not set dataset_config"
@@ -83,10 +83,10 @@ class MetadatasetBlender:
 
     datasets: List[DatasetReference]
 
-    def prepare(self, parent_path: EPath):
+    def post_initialize(self, parent_path: EPath):
         parent_path = parent_path.absolute()
         for dataset in self.datasets:
-            dataset.prepare(parent_path)
+            dataset.post_initialize(parent_path)
 
     def get_datasets(
         self,
@@ -140,7 +140,7 @@ class Metadataset(DatasetLoaderInterface):
         self._splits = splits
         # Fix paths
         for split in splits.values():
-            split.prepare(parent_path)
+            split.post_initialize(parent_path)
 
     def get_datasets(
         self,
