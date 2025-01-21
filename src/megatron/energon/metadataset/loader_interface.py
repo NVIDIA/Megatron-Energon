@@ -5,6 +5,7 @@ from abc import ABC, abstractmethod
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
+from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory
 from megatron.energon.worker import WorkerConfig
 
@@ -59,3 +60,7 @@ class DatasetLoaderInterface(ABC):
             The dataset blending mode and the instantiated core datasets with their weights/repetitions.
         """
         ...
+
+    def prepare(self, parent_path: EPath):
+        """Can be overridden to add actions when running the `energon prepare` CLI command on a meta dataset."""
+        pass

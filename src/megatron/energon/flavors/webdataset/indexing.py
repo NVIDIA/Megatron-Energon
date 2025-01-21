@@ -3,7 +3,9 @@
 
 import sqlite3
 import struct
-from typing import Optional, Union
+from typing import List, Optional, Tuple, Union
+
+from anyio import key
 
 from megatron.energon.epathlib import EPath
 
@@ -20,7 +22,8 @@ class SqliteIndexWriter:
                     tar_file_id INTEGER,
                     sample_key TEXT,
                     sample_index INTEGER,
-                    byte_offset INTEGER)
+                    byte_offset INTEGER,
+                    byte_size INTEGER)
         Also creates an index on samples(sample_key).
         """
 
@@ -29,8 +32,8 @@ class SqliteIndexWriter:
 
         # Initialize SQLite connection
         self.db = sqlite3.connect(str(self.sqlite_path))
-        self.db.execute("PRAGMA journal_mode = WAL;")
         self.db.execute("PRAGMA busy_timeout = 5000;")  # wait up to 5000ms when locked
+        self.db.execute("PRAGMA journal_mode = WAL;")
 
         # Create the tables
         self.db.execute(
@@ -48,7 +51,8 @@ class SqliteIndexWriter:
                 tar_file_id INTEGER,
                 sample_key TEXT,
                 sample_index INTEGER,
-                byte_offset INTEGER
+                byte_offset INTEGER,
+                byte_size INTEGER
             )
         """
         )
@@ -59,7 +63,12 @@ class SqliteIndexWriter:
         self._tar_file_cache = {}
 
     def append_sample(
-        self, tar_file: str, sample_key: str, sample_index: int, byte_offset: Optional[int]
+        self,
+        tar_file: str,
+        sample_key: str,
+        sample_index: int,
+        byte_offset: Optional[int],
+        byte_size: Optional[int],
     ):
         """
         Adds a new sample row to the samples table, linking to the tar_files table.
@@ -86,10 +95,10 @@ class SqliteIndexWriter:
         # 2) Insert a row in the samples table
         self.db.execute(
             """
-            INSERT INTO samples (tar_file_id, sample_key, sample_index, byte_offset)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO samples (tar_file_id, sample_key, sample_index, byte_offset, byte_size)
+            VALUES (?, ?, ?, ?, ?)
             """,
-            (tar_file_id, sample_key, sample_index, byte_offset),
+            (tar_file_id, sample_key, sample_index, byte_offset, byte_size),
         )
 
     def close(self):
@@ -107,4 +116,89 @@ class SqliteIndexWriter:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         # If an exception occurred, do not finalize (so you can inspect the temp file)
+        self.close()
+
+
+class JoinIndexWriter:
+    """Describes how one primary dataset is joined with multiple secondary datasets.
+
+    For fast random access, this is a binary format that is memory-mapped.
+    """
+
+    def __init__(self, join_index_path: EPath):
+        self.join_index_path = join_index_path
+        self.join_index_file = join_index_path.open("wb")
+        self.num_secondary_keys = None
+
+    def append(self, *secondary_keys: Tuple[int, int, int]):
+        """Appends a new row to the join index file.
+
+        Each row contains (shard_idx, byte_offset, byte_size) for each secondary key.
+        """
+
+        if self.num_secondary_keys is None:
+            # Write the number of secondary keys
+            self.join_index_file.write(b"JIDX0001")  # Magic bytes with version
+            self.join_index_file.write(struct.pack("q", len(secondary_keys)))
+            self.num_secondary_keys = len(secondary_keys)
+        else:
+            assert (
+                len(secondary_keys) == self.num_secondary_keys
+            ), f"Inconsistent number of keys: Had {self.num_secondary_keys} before, got {len(secondary_keys)}"
+
+        # Write the secondary keys
+        for key in secondary_keys:
+            assert isinstance(key, tuple) and len(key) == 3
+            self.join_index_file.write(struct.pack("qqq", *key))
+
+    def close(self):
+        self.join_index_file.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+
+class JoinIndexReader:
+    """Reads a join index file."""
+
+    def __init__(self, join_index_path: EPath):
+        self.join_index_path = join_index_path
+        self.join_index_file = join_index_path.open("rb")
+        self.num_secondary_keys = None
+
+    def __iter__(self):
+        return self
+
+    def __next__(self) -> Union[None, List[int]]:
+        if self.num_secondary_keys is None:
+            bytes_magic = self.join_index_file.read(8)
+            assert isinstance(bytes_magic, bytes)
+            assert bytes_magic[:4] == b"JIDX", f"Invalid magic bytes: {bytes_magic}"
+            assert bytes_magic[4:8] == b"0001", f"Unsupported version: {bytes_magic[4:8]}"
+
+            # Read the number of secondary keys
+            bytes_seckeys = self.join_index_file.read(8)
+            assert isinstance(bytes_seckeys, bytes)
+            num_secondary_keys = struct.unpack("q", bytes_seckeys)[0]
+            self.num_secondary_keys = num_secondary_keys
+        else:
+            secondary_keys = []
+            for _ in range(self.num_secondary_keys):
+                bytes_key = self.join_index_file.read(8)
+                assert isinstance(bytes_key, bytes)
+                key_tuple = struct.unpack("qqq", bytes_key)
+                secondary_keys.append(key_tuple)
+            return secondary_keys
+        return None
+
+    def close(self):
+        self.join_index_file.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()

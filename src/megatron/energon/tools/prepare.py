@@ -87,7 +87,6 @@ def printify_json(data: Any) -> Any:
 
 def prepare_metadataset(path: EPath):
     from megatron.energon.dataset_config import load_config
-    from megatron.energon.flavors.webdataset.metadata import WebdatasetMeta
     from megatron.energon.metadataset.metadataset import Metadataset
 
     metads = load_config(
@@ -97,28 +96,7 @@ def prepare_metadataset(path: EPath):
         default_kwargs=dict(parent_path=path.parent),
     )
 
-    # metads.splits['train'].prepare()
-
-    # TODO: Generate sqlite indices for individual join parts if not already present
-    # Iterate primary DS in shard order from split config
-
-    primary_ds = metads.splits["train"].join[0]
-
-    wds_meta = WebdatasetMeta.from_config(
-        path=primary_ds.path, split_part="train", split_config=primary_ds.split_config
-    )
-
-    # TODO: check split_part is correct above (can it be specified by the user?)
-
-    for join_ds in metads.splits["train"].join[1:]:
-        print(path)
-        path = join_ds.path
-
-        # TODO:
-        # Iterate primary dataset and find matching samples in join dataset
-        # Use this information to generate a sqlite index for the join dataset
-
-    print()
+    metads.prepare(path.parent)
 
 
 @click.command(name="prepare")

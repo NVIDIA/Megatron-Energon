@@ -80,6 +80,9 @@ class WebdatasetPreparator:
                     parts = set()
                     last_base_name = None
                     member: tarfile.TarInfo
+
+                    next_index_sample = None
+
                     for member in tar:
                         if not member.isreg():
                             continue
@@ -98,7 +101,14 @@ class WebdatasetPreparator:
 
                         if last_base_name != base_name:
                             iw.append(member.offset)
-                            sqlite_indexer.append_sample(
+
+                            if next_index_sample is not None:
+                                sqlite_indexer.append_sample(
+                                    **next_index_sample,
+                                    byte_size=member.offset - next_index_sample["byte_offset"],
+                                )
+
+                            next_index_sample = dict(
                                 tar_file=path.relpath,
                                 sample_key=base_name,
                                 sample_index=count,
@@ -108,6 +118,11 @@ class WebdatasetPreparator:
                             count += 1
                     shard_info.count = count
                     iw.append(tar.offset)
+                    if next_index_sample is not None:
+                        sqlite_indexer.append_sample(
+                            **next_index_sample,
+                            byte_size=tar.offset - next_index_sample["byte_offset"],
+                        )
             return shard_info, parts
         except BaseException:
             logger.exception(f"Shard failed to load: {path!r}. Skipping it.")
