@@ -43,9 +43,13 @@ class SampleLoaderState(State):
 
     #: Rng state
     rng: WorkerRngState
-    #: Pending shards are the shards which have not yet been opened, but should be processed
-    # in the current "epoch"
-    pending_shards: Optional[List[List[ShardInfo]]]
+    #: The seed that was used to generate the current pending shards
+    pending_shards_seed: WorkerRngState
+    #: The number of shards that have already been opened / processed and thus been removed from the
+    # pending shards. None if starting a new epoch.
+    # Pending shards are the shards which have not yet been opened, but should be processed in the
+    # current epoch.
+    pending_shards_offset: Optional[int]
     #: The active shards are the currently opened shards. May contain `None`, if there are fewer
     # shards available (i.e. pending_shards empty) than parallel shard iterators requested.
     active_shards: Optional[List[Optional[List[ShardState]]]]
@@ -61,9 +65,13 @@ class SampleLoaderState(State):
 class SampleLoaderMergedState(MergedState):
     #: Rng state
     rng: WorkerRngMergedState
-    #: Pending shards are the shards which have not yet been opened, but should be processed
-    # in the current "epoch"
-    pending_shards: List[Optional[List[List[ShardInfo]]]]
+    #: The seed that was used to generate the current pending shards
+    pending_shards_seed: WorkerRngMergedState
+    #: The number of shards that have already been opened / processed and thus been removed from the
+    # pending shards. None if starting a new epoch.
+    # Pending shards are the shards which have not yet been opened, but should be processed in the
+    # current epoch.
+    pending_shards_offset: List[Optional[int]]
     #: The active shards are the currently opened shards. May contain `None`, if there are fewer
     # shards available (i.e. pending_shards empty) than parallel shard iterators requested.
     active_shards: List[Optional[List[Optional[List[ShardState]]]]]
@@ -108,9 +116,14 @@ class WebdatasetSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample
 
     # Worker's random generator
     _worker_rng: WorkerRng
+    #: The seed to be used for regenerating the pending shards
+    _pending_shards_seed: WorkerRngMergedState
+    #: The number of shards that have already been opened / processed and thus been removed from the
+    # pending shards.
+    _pending_shards_offset: List[Optional[int]]
     #: Pending shards are the shards which have not yet been opened, but should be processed
-    # in the current "epoch"
-    _pending_shards: List[List[Sequence[ShardInfo]]]
+    # in the current "epoch". If None, regenerate from the seed and offset.
+    _pending_shards: List[Optional[List[Sequence[ShardInfo]]]]
     #: The active shards are the currently opened shards. May contain `None`, if there are fewer
     # shards available (i.e. pending_shards empty) than parallel shard iterators requested.
     _active_shards_state: List[Optional[List[Optional[List[ShardState]]]]]
@@ -165,7 +178,9 @@ class WebdatasetSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample
         self.dataset_join_method = dataset_join_method
         self.handler = handler
         self._worker_rng = WorkerRng(worker_config)
-        self._pending_shards = [[] for _ in range(len(self.shards))]
+        self._pending_shards = [None] * len(self.shards)
+        self._pending_shards_offset = [None] * len(self.shards)
+        self._pending_shards_seed = WorkerRngMergedState(rng=[None] * len(self.shards))
         self._active_shards_state = [[None] * parallel_shard_iters for _ in range(len(self.shards))]
         self._sample_count = [0] * len(self.shards)
         self._epoch_count = [0] * len(self.shards)
@@ -259,28 +274,54 @@ class WebdatasetSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample
                             self.handler(e, reader.shard_state.shard.name)
                     yield tuple(groups)
 
-    def _shards_once(self, shards: List[Sequence[ShardInfo]]) -> List[Sequence[ShardInfo]]:
+    def _shards_once(self) -> List[Sequence[ShardInfo]]:
         """Possibly (re)shuffles the shards using the random generator."""
+        worker_idx = self.worker_config.rank_worker_id()
+        shards = self.shards[worker_idx]
+        shards_offset = self._pending_shards_offset[worker_idx]
+
         if self.shuffle_over_epochs is None:
             # No shuffling
-            return list(shards)
-        elif self.shuffle_over_epochs == -1:
-            # Shuffle with replacement (i.e. infinite epochs), effectively return as many shards
-            # as are required for parallel shard iterators.
-            # Next shards are drawn in the _shards_iter function.
-            return [
-                shards[self._worker_rng.randbelow(len(shards))]
-                for _ in range(self.parallel_shard_iters)
-            ]
-        elif self.shuffle_over_epochs >= 1:
-            # Shuffle without replacement (potentially over multiple epochs)
-            return self._worker_rng.shuffle(shards * self.shuffle_over_epochs)
+            res_list = list(shards)
+            shards_offset = 0
         else:
-            raise ValueError(f"Invalid shuffle_over_epochs: {self.shuffle_over_epochs}")
+            # Restore state or start new (and save)
+            if shards_offset is None:
+                # Start new state. First, save the state to restore the same order.
+                self._pending_shards_seed.rng[worker_idx] = self._worker_rng.save_state().rng
+                rng = self._worker_rng
+                shards_offset = 0
+            else:
+                # Restore the state. Create a dedicated rng for this, as the main rng is in the
+                # state for iterating from the next iterator.
+                rng = WorkerRng(self.worker_config)
+                rng.restore_state(self._pending_shards_seed)
 
-    def _shards_iter(
-        self, shards: List[Sequence[ShardInfo]]
-    ) -> Generator[Tuple[Optional[FilteredSample], ...], None, None]:
+            if self.shuffle_over_epochs == -1:
+                # Shuffle with replacement (i.e. infinite epochs), effectively return as many shards
+                # as are required for parallel shard iterators.
+                # Next shards are drawn in the _shards_iter function.
+                res_list = [
+                    shards[rng.randbelow(len(shards))] for _ in range(self.parallel_shard_iters)
+                ]
+            elif self.shuffle_over_epochs >= 1:
+                # Shuffle without replacement (potentially over multiple epochs)
+                res_list = rng.shuffle(shards * self.shuffle_over_epochs)
+            else:
+                raise ValueError(f"Invalid shuffle_over_epochs: {self.shuffle_over_epochs}")
+        # Reverse, such that pop returns the first element (in O(1) time)
+        res_list.reverse()
+        # Skip restored shard list already processed shards
+        assert shards_offset is not None
+        self._pending_shards_offset[worker_idx] = shards_offset
+        if shards_offset > 0:
+            # Those have already been popped in the current state
+            del res_list[-shards_offset:]
+        # Set the pending shards
+        self._pending_shards[worker_idx] = res_list
+        return res_list
+
+    def _shards_iter(self) -> Generator[Tuple[Optional[FilteredSample], ...], None, None]:
         """Iterates the samples in a list of shards, possibly using multiple parallel iterators over
         the shards."""
         worker_idx = self.worker_config.rank_worker_id()
@@ -288,23 +329,29 @@ class WebdatasetSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample
         for i in range(self.worker_config.num_workers):
             if i != worker_idx:
                 self._active_shards_state[i] = [None] * self.parallel_shard_iters
-                self._pending_shards[i] = []
+                self._pending_shards[i] = None
         shards_probs = torch.empty(self.parallel_shard_iters, dtype=torch.float32)
         shard_iters: List[Optional[Generator[Tuple[Optional[FilteredSample], ...], None, None]]] = (
             []
         )
-        active_shards: List[Optional[List[ShardState]]]
+        active_shards: List[Optional[List[ShardState]]] = self._active_shards_state[worker_idx]
 
+        # Weight the shards by their size to get a more even distribution of samples
         shards_probs[:] = 0
         shard_iters = []
+        pending_shards = self._pending_shards[worker_idx]
         if (
-            any(s is not None for s in self._active_shards_state[worker_idx])
-            or len(self._pending_shards[worker_idx]) > 0
+            any(s is not None for s in active_shards)
+            or self._pending_shards_offset[worker_idx] is not None
         ):
-            shards_order = self._pending_shards[worker_idx]
+            # Having an active state, or pending shards. This means we are resuming an epoch.
+            if pending_shards is None:
+                # Need to restore the pending shards
+                pending_shards = self._shards_once()
+            assert pending_shards is not None
 
             # Restore the state
-            active_shards = self._active_shards_state[worker_idx]
+            assert active_shards is not None
             assert len(active_shards) == self.parallel_shard_iters
             for shard_states in active_shards:
                 if shard_states is None:
@@ -329,7 +376,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample
                                 }
                                 for subshard in subshards
                             ]
-                            for subshards in shards_order
+                            for subshards in pending_shards
                         ],
                         "active_shards": [
                             (
@@ -358,9 +405,9 @@ class WebdatasetSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample
                 )
 
         else:
-            # Weight the shards by their size to get a more even distribution of samples
-            shards_order = self._shards_once(shards)
-            shards_order.reverse()
+            # Start a new epoch
+            assert pending_shards is None
+            pending_shards = self._shards_once()
 
             if self.worker_config.should_log(level=1):
                 self.worker_config.worker_log(
@@ -378,7 +425,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample
                                 }
                                 for shard in subshards
                             ]
-                            for subshards in shards_order
+                            for subshards in pending_shards
                         ],
                         "count": self._sample_count[worker_idx],
                         "epoch": self._epoch_count[worker_idx],
@@ -391,8 +438,10 @@ class WebdatasetSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample
             # List of shard iterators, always of length `parallel_shard_iters`. May contain `None`.
             active_shards = []
             # Fill up the shard iterators
-            while len(shards_order) > 0 and len(shard_iters) < self.parallel_shard_iters:
-                subshards = shards_order.pop()
+            while len(pending_shards) > 0 and len(shard_iters) < self.parallel_shard_iters:
+                subshards = pending_shards.pop()
+                assert self._pending_shards_offset[worker_idx] is not None
+                self._pending_shards_offset[worker_idx] += 1
                 shard_states = [
                     ShardState(shard=shard, byte_offset=0, offset=0) for shard in subshards
                 ]
@@ -405,17 +454,13 @@ class WebdatasetSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample
                 active_shards.append(None)
 
             self._active_shards_state[worker_idx] = active_shards
-            self._pending_shards[worker_idx] = shards_order
 
         # print(
         #     f"Next shard iters generated for {self.worker_config.rank}:{self.worker_config.rank_worker_id()}: probs={shards_probs}"
         # )
 
-        # Iterate over the shard iterators
-        while True:
-            if torch.count_nonzero(shards_probs).item() == 0:
-                # There is no iterator left
-                break
+        # Iterate over the shard iterators while there is an iterator left
+        while torch.count_nonzero(shards_probs).item() > 0:
             if self.shuffle_over_epochs is None:
                 # No shuffling, deterministic order, always the same
                 assert self.parallel_shard_iters == 1
@@ -423,17 +468,21 @@ class WebdatasetSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample
             else:
                 # Take a random shard iterator
                 shard_iter = self._worker_rng.choice(shard_iters, probs=shards_probs)
+            assert shard_iter is not None
             try:
                 sample: Tuple[Optional[FilteredSample], ...] = next(shard_iter)
             except StopIteration:
                 # Iterator exhausted -> take next / remove from list
                 rm_idx = shard_iters.index(shard_iter)
-                if len(shards_order) > 0 or self.shuffle_over_epochs == -1:
-                    if len(shards_order) > 0:
+                if len(pending_shards) > 0 or self.shuffle_over_epochs == -1:
+                    if len(pending_shards) > 0:
                         # Take the next shard (without replacement)
-                        subshards = shards_order.pop()
+                        subshards = pending_shards.pop()
+                        assert self._pending_shards_offset[worker_idx] is not None
+                        self._pending_shards_offset[worker_idx] += 1
                     else:
                         # Randomly select a new shard directly (with replacement)
+                        shards = self.shards[worker_idx]
                         subshards = shards[self._worker_rng.randbelow(len(shards))]
                     shard_states = [
                         ShardState(shard=shard, byte_offset=0, offset=0) for shard in subshards
@@ -457,7 +506,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample
                             "t": "WebdatasetSampleLoaderDataset._shards_iter.exhausted",
                             "r": self.worker_config.rank,
                             "w": self.worker_config.rank_worker_id(),
-                            "remaining": len(shards_order),
+                            "remaining": len(pending_shards),
                             "count": self._sample_count[worker_idx],
                             "epoch": self._epoch_count[worker_idx],
                             "epoch_count": self._epoch_sample_count[worker_idx],
@@ -465,6 +514,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample
                         }
                     )
             else:
+                assert sample is not None
                 self._sample_count[worker_idx] += 1
                 self._epoch_sample_count[worker_idx] += 1
                 if self.worker_config.should_log(level=1):
@@ -473,8 +523,8 @@ class WebdatasetSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample
                             "t": "WebdatasetSampleLoaderDataset._shards_iter.yield",
                             "r": self.worker_config.rank,
                             "w": self.worker_config.rank_worker_id(),
-                            "key": sample[0]["__key__"],
-                            "shard": sample[0]["__shard__"],
+                            "key": sample[0]["__key__"] if sample[0] is not None else None,
+                            "shard": sample[0]["__shard__"] if sample[0] is not None else None,
                             "count": self._sample_count[worker_idx],
                             "epoch": self._epoch_count[worker_idx],
                             "epoch_count": self._epoch_sample_count[worker_idx],
@@ -493,8 +543,11 @@ class WebdatasetSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample
                 }
             )
 
+        # Epoch has finished, reset states.
         self._epoch_count[worker_idx] += 1
         self._epoch_sample_count[worker_idx] = 0
+        self._pending_shards[worker_idx] = None
+        self._pending_shards_offset[worker_idx] = None
         # print(
         #     f"Shard iters exhausted for {self.worker_config.rank}:{self.worker_config.rank_worker_id()} after {cnt} samples"
         # )
@@ -511,8 +564,8 @@ class WebdatasetSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample
 
     def __iter__(self) -> Iterator[Tuple[Optional[FilteredSample], ...]]:
         self.worker_config.assert_worker()
-        worker_shards = self.shards[self.worker_config.rank_worker_id()]
 
+        worker_shards = self.shards[self.worker_config.rank_worker_id()]
         if self.worker_config.should_log(level=1):
             self.worker_config.worker_log(
                 {
@@ -534,7 +587,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample
         if len(worker_shards) == 0:
             return
 
-        yield from self._shards_iter(worker_shards)
+        yield from self._shards_iter()
 
     def can_restore_sample(self) -> bool:
         return True
@@ -586,18 +639,22 @@ class WebdatasetSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample
                     "count": self._sample_count[worker_idx],
                     "epoch": self._epoch_count[worker_idx],
                     "epoch_count": self._epoch_sample_count[worker_idx],
-                    "pending_shards": [
+                    "pending_shards": (
                         [
-                            {
-                                "name": subshard.name,
-                                "path": str(subshard.path),
-                                "offset": subshard.offset,
-                                "count": subshard.count,
-                            }
-                            for subshard in subshards
+                            [
+                                {
+                                    "name": subshard.name,
+                                    "path": str(subshard.path),
+                                    "offset": subshard.offset,
+                                    "count": subshard.count,
+                                }
+                                for subshard in subshards
+                            ]
+                            for subshards in self._pending_shards[worker_idx]
                         ]
-                        for subshards in self._pending_shards[worker_idx]
-                    ],
+                        if self._pending_shards[worker_idx] is not None
+                        else None
+                    ),
                     "active_shards": (
                         None
                         if self._active_shards_state[worker_idx] is None
@@ -625,7 +682,8 @@ class WebdatasetSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample
             )
         return SampleLoaderState(
             rng=self._worker_rng.save_state(),
-            pending_shards=list(list(s) for s in self._pending_shards[worker_idx]),
+            pending_shards_offset=self._pending_shards_offset[worker_idx],
+            pending_shards_seed=WorkerRngState(rng=self._pending_shards_seed.rng[worker_idx]),
             active_shards=(
                 None
                 if self._active_shards_state[worker_idx] is None
@@ -648,7 +706,11 @@ class WebdatasetSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample
         assert len(states) == len(self.shards)
         return SampleLoaderMergedState(
             rng=self._worker_rng.merge_states([None if s is None else s.rng for s in states]),
-            pending_shards=[[] if s is None else s.pending_shards for s in states],
+            pending_shards_offset=[s.pending_shards_offset for s in states],
+            pending_shards_seed=self._worker_rng.merge_states(
+                [None if s is None else s.pending_shards_seed for s in states]
+            ),
+            # pending_shards=[[] if s is None else s.pending_shards for s in states],
             active_shards=[
                 [None] * self.parallel_shard_iters if s is None else s.active_shards for s in states
             ],
@@ -690,7 +752,9 @@ class WebdatasetSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample
         if state is None:
             # Restore initial state
             self._worker_rng.restore_state(None)
-            self._pending_shards = [[] for _ in range(len(self.shards))]
+            self._pending_shards = [None] * len(self.shards)
+            self._pending_shards_offset = [None] * len(self.shards)
+            self._pending_shards_seed = WorkerRngMergedState(rng=[None] * len(self.shards))
             self._active_shards_state = [
                 [None] * self.parallel_shard_iters for _ in range(len(self.shards))
             ]
@@ -701,16 +765,11 @@ class WebdatasetSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample
             assert isinstance(state, SampleLoaderMergedState)
             self._worker_rng.restore_state(state.rng)
             # Restore state
-            assert len(state.pending_shards) == len(self.shards)
+            assert len(state.pending_shards_offset) == len(self.shards)
             assert len(state.active_shards) == len(self.shards)
-            self._pending_shards = [
-                (
-                    [self._restore_find_shard(shard, shards_by_key) for shard in pending_shards]
-                    if pending_shards is not None
-                    else []
-                )
-                for pending_shards, shards_by_key in zip(state.pending_shards, self.shards_by_key)
-            ]
+            self._pending_shards = [None] * len(self.shards)
+            self._pending_shards_offset = list(state.pending_shards_offset)
+            self._pending_shards_seed = state.pending_shards_seed
             self._active_shards_state = [
                 (
                     [
