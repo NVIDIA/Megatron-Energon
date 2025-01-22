@@ -7,7 +7,7 @@ from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Type, Un
 from megatron.energon.dataset_config import load_config
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import BaseCoreDatasetFactory, Sample
-from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset import JOIN_INDEX_FILENAME, MAIN_FOLDER_NAME
 from megatron.energon.metadataset.dataset_loader import DatasetLoader
 from megatron.energon.metadataset.join_dataset_loader import JoinDatasetLoader
 from megatron.energon.metadataset.loader_interface import DatasetBlendMode, DatasetLoaderInterface
@@ -138,10 +138,17 @@ class MetadatasetJoin(DatasetLoaderInterface):
             }
         else:
             raise ValueError("Invalid join type")
+
+        # Pass join index if it exists
+        join_index_path = parent_path / JOIN_INDEX_FILENAME
+        if not join_index_path.is_file():
+            join_index_path = None
+
         self._dataset = JoinDatasetLoader(
             datasets=inner_loaders,
             join_method=self.join_method,
             joiner=self.joiner,
+            join_index=join_index_path,
             split_part=self.split_part,
             subflavor=self.subflavor,
             subflavors=self.subflavors,

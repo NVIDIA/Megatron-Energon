@@ -115,19 +115,33 @@ def join_multiple_indices(
     # 4. Write the results to a binary file (or any other format) row by row
     with JoinIndexWriter(output_join_index_path) as join_index_writer:
         # Example: We'll just show how to iterate the rows and pseudo-write them
+        num_rows = 0
         for row in cursor:
             # 'row' is a tuple of columns in the order of select_cols
 
             join_tuples = []
             for i in range(len(aliases)):
                 alias = aliases[i]
-                shard_idx = tar_files_id_mapping[alias][row[3 * i + 0]]
+                tar_file_id = row[3 * i + 0]
+
+                assert (
+                    tar_file_id is not None
+                ), f"Left join has encountered a missing sample: Sample key {row[0]} missing in {secondary_dbs[i]}"
+                shard_idx = tar_files_id_mapping[alias][tar_file_id]
                 byte_offset = row[3 * i + 1]
                 byte_size = row[3 * i + 2]
                 join_tuples.append((shard_idx, byte_offset, byte_size))
 
             # Each row contains (shard_idx, byte_offset, byte_size) for each secondary key.
             join_index_writer.append(*join_tuples)
+            num_rows += 1
+
+    # Check that num_rows matches the number of samples in the primary DB
+    # It might deviate in case of duplicate samples in a secondary DB
+    num_samples = conn.execute("SELECT COUNT(*) FROM main.samples").fetchone()[0]
+    assert (
+        num_rows == num_samples
+    ), f"Number of rows in join index ({num_rows}) does not match number of samples in primary DB ({num_samples})"
 
     # 5. Detach databases and close
     for alias in aliases:
@@ -143,6 +157,7 @@ class JoinDatasetLoader(DatasetLoaderInterface):
     datasets: Union[List[DatasetLoader], Dict[str, DatasetLoader]]
     joiner: Union[Type[Sample], Callable[..., Sample]]
     join_method: Literal["inner_match", "inner", "left"] = "inner_match"
+    join_index: Optional[EPath] = None
 
     split_part: Optional[str] = None
     split_config: Optional[str] = None
@@ -273,6 +288,7 @@ class JoinDatasetLoader(DatasetLoaderInterface):
             worker_config=worker_config,
             shuffle_over_epochs=shuffle_over_epochs,
             join_method=self.join_method,
+            join_index=self.join_index,
             joiner=self.joiner,
             **kwargs,
         )

@@ -49,6 +49,7 @@ class JoinedWebdatasetFactory(
     max_samples_per_sequence: Optional[int]
     part_filter: Optional[Callable[[str], bool]]
     join_method: Literal["inner_match"]
+    join_index: Optional[EPath]
     handler: Callable[[Exception, Optional[str]], None]
 
     shards: List[Sequence[ShardInfo]]
@@ -116,20 +117,27 @@ class JoinedWebdatasetFactory(
         else:
             self._sample_joiner = joiner
             self.inner_dataset_keys = None
-        assert all(
-            len(dataset.shards) == len(inner_datasets[0].shards) for dataset in inner_datasets[1:]
-        ), f"Dataset structures do not match, shards differ"
-        self.sample_exclude = inner_datasets[0].sample_excludes
-        assert all(
-            self.sample_exclude == dataset.sample_excludes for dataset in inner_datasets[1:]
-        ), f"Sample excludes must be the same for all paths"
 
         if join_method == "inner_match":
+            assert all(
+                len(dataset.shards) == len(inner_datasets[0].shards)
+                for dataset in inner_datasets[1:]
+            ), f"Dataset structures do not match, shards differ"
+            self.sample_exclude = inner_datasets[0].sample_excludes
+            assert all(
+                self.sample_exclude == dataset.sample_excludes for dataset in inner_datasets[1:]
+            ), f"Sample excludes must be the same for all paths"
             assert all(
                 shard1.count == shard2.count
                 for dataset in inner_datasets[1:]
                 for shard1, shard2 in zip(dataset.shards, inner_datasets[0].shards)
             ), "When joining datasets with the 'inner_match' method, all shards must have the same count"
+        elif join_method == "left":
+            # Check if join index is present, if not throw error and tell user how to prepare the dataset
+            assert self.join_index is not None, (
+                "When joining datasets with the 'left' method, a join index must be present. "
+                "This can be created by running 'energon prepare' on the meta dataset file."
+            )
         else:
             assert False, f"Invalid join method {join_method}"
 
