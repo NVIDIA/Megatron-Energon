@@ -165,7 +165,7 @@ class JoinDatasetLoader(DatasetLoaderInterface):
     subflavors: Optional[Dict[str, Any]] = None
     shuffle_over_epochs_multiplier: int = 1
 
-    def prepare(self, parent_path: EPath):
+    def prepare(self, parent_path: EPath, split_part: Optional[str] = None):
         print(f"Preparing {self.__class__.__name__}")
 
         # Get list of joinable datasets
@@ -187,20 +187,33 @@ class JoinDatasetLoader(DatasetLoaderInterface):
 
         for dataset in datasets:
             db_path = dataset.path / MAIN_FOLDER_NAME / "index.sqlite"
-            info_path = dataset.path / MAIN_FOLDER_NAME / ".info.yaml"
 
-            info = raw_to_typed(
-                yaml.safe_load(info_path.read_text()),
-                WebdatasetInfo,
+            # info = raw_to_typed(
+            #     yaml.safe_load(info_path.read_text()),
+            #     WebdatasetInfo,
+            # )
+
+            # Join split_config may override individual split configs
+            cur_split_config = self.split_config or dataset.split_config
+
+            # Precedence for split_part is:
+            # 1. Join dataset split part (overrides individual dataset split parts)
+            # 2. Individual dataset split part
+            # 3. If none of the above is set, use the split part of the surrounding meta dataset
+            cur_split_part = self.split_part or dataset.split_part or split_part
+
+            wds_meta = WebdatasetMeta.from_config(
+                path=EPath(dataset.path), split_part=cur_split_part, split_config=cur_split_config
             )
+
+            shard_names = [shard_info.name for shard_info in wds_meta.shards]
 
             db_paths.append(db_path)
             shard_name_to_idx.append(
-                {
-                    shard_name: shard_idx
-                    for shard_idx, shard_name in enumerate(info.shard_counts.keys())
-                }
+                {shard_name: shard_idx for shard_idx, shard_name in enumerate(shard_names)}
             )
+
+        # TODO: We might have multiple joins in one metadataset (e.g. for train and val, or not?)
 
         join_index_path = parent_path / "join_index.bin"
 

@@ -70,6 +70,7 @@ class JoinedWebdatasetFactory(
         max_samples_per_sequence: Optional[int] = None,
         part_filter: Optional[Callable[[str], bool]] = None,
         join_method: Literal["inner_match"] = "inner_match",
+        join_index: Optional[EPath] = None,
         joiner: Union[Type[T_sample], Callable[..., T_sample]],
         handler: Callable[[Exception, Optional[str]], None] = reraise_exception,
     ):
@@ -97,6 +98,7 @@ class JoinedWebdatasetFactory(
             join_method: How to join the samples from the datasets.
                 inner_match: All samples must match 1:1 of the merged datasets.
                 This might be extended to further modes in the future, but those will require a new index, which
+            join_index: Path to the join index file. Only required for join_method="left".
             joiner: Type of the joined samples or a method for joining the samples.
             handler: Exception handler. Args: (exception, key).
         """
@@ -134,7 +136,7 @@ class JoinedWebdatasetFactory(
             ), "When joining datasets with the 'inner_match' method, all shards must have the same count"
         elif join_method == "left":
             # Check if join index is present, if not throw error and tell user how to prepare the dataset
-            assert self.join_index is not None, (
+            assert join_index is not None, (
                 "When joining datasets with the 'left' method, a join index must be present. "
                 "This can be created by running 'energon prepare' on the meta dataset file."
             )
@@ -201,6 +203,7 @@ class JoinedWebdatasetFactory(
             shuffle_over_epochs=self.shuffle_over_epochs if self.training else None,
             parallel_shard_iters=parallel_shard_iters,
             dataset_join_method=self.join_method,
+            dataset_join_index=self.join_index,
             handler=self.sample_error_handler,
         )
         return self._process_samples(dataset)

@@ -51,9 +51,9 @@ class DatasetReference(DatasetLoaderInterface):
         else:
             raise FileNotFoundError(self.path)
 
-    def prepare(self, parent_path: EPath):
+    def prepare(self, parent_path: EPath, split_part: Optional[str] = None):
         assert self._dataset is not None
-        self._dataset.prepare(parent_path)
+        self._dataset.prepare(parent_path, split_part=split_part)
 
     def get_datasets(
         self,
@@ -156,9 +156,9 @@ class MetadatasetJoin(DatasetLoaderInterface):
             split_config=self.split_config,
         )
 
-    def prepare(self, parent_path: EPath):
+    def prepare(self, parent_path: EPath, split_part: Optional[str] = None):
         assert self._dataset is not None, "Not prepared."
-        self._dataset.prepare(parent_path)
+        self._dataset.prepare(parent_path, split_part=split_part)
 
     def get_datasets(
         self,
@@ -209,10 +209,10 @@ class MetadatasetBlend(DatasetLoaderInterface):
         for dataset in self.blend:
             dataset.post_initialize(parent_path)
 
-    def prepare(self, parent_path: EPath):
+    def prepare(self, parent_path: EPath, split_part: Optional[str] = None):
         parent_path = parent_path.absolute()
         for dataset in self.blend:
-            dataset.prepare(parent_path)
+            dataset.prepare(parent_path, split_part=split_part)
 
     def get_datasets(
         self,
@@ -280,10 +280,10 @@ class MetadatasetBlendEpochized(DatasetLoaderInterface):
         for dataset in self.blend_epochized:
             dataset.post_initialize(parent_path)
 
-    def prepare(self, parent_path: EPath):
+    def prepare(self, parent_path: EPath, split_part: Optional[str] = None):
         parent_path = parent_path.absolute()
         for dataset in self.blend_epochized:
-            dataset.prepare(parent_path)
+            dataset.prepare(parent_path, split_part=split_part)
 
     def get_datasets(
         self,
@@ -341,8 +341,8 @@ class MetadatasetV2(DatasetLoaderInterface):
         # If someone runs energon prepare on a metadataset that refers to another metadataset,
         # any actions concerning the inner metadataset will be done on the inner metadataset's path.
 
-        for split in self.splits.values():
-            split.prepare(self.parent_path)
+        for split_part, split in self.splits.items():
+            split.prepare(self.parent_path, split_part=split_part)
 
     def get_datasets(
         self,

@@ -184,15 +184,14 @@ class JoinIndexReader:
             assert isinstance(bytes_seckeys, bytes)
             num_secondary_keys = struct.unpack("q", bytes_seckeys)[0]
             self.num_secondary_keys = num_secondary_keys
-        else:
-            secondary_keys = []
-            for _ in range(self.num_secondary_keys):
-                bytes_key = self.join_index_file.read(8)
-                assert isinstance(bytes_key, bytes)
-                key_tuple = struct.unpack("qqq", bytes_key)
-                secondary_keys.append(key_tuple)
-            return secondary_keys
-        return None
+
+        secondary_keys = []
+        for _ in range(self.num_secondary_keys):
+            bytes_key = self.join_index_file.read(8)
+            assert isinstance(bytes_key, bytes)
+            key_tuple = struct.unpack("qqq", bytes_key)
+            secondary_keys.append(key_tuple)
+        return secondary_keys
 
     def close(self):
         self.join_index_file.close()

@@ -61,6 +61,6 @@ class DatasetLoaderInterface(ABC):
         """
         ...
 
-    def prepare(self, parent_path: EPath):
+    def prepare(self, parent_path: EPath, split_part: Optional[str] = None):
         """Can be overridden to add actions when running the `energon prepare` CLI command on a meta dataset."""
         pass
