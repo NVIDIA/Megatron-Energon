@@ -114,9 +114,9 @@ class TestEPath(unittest.TestCase):
 
         p4 = p3.parent / "../bla/bla/bla/../../../no/../subpath2.txt"
         assert str(p4) == "rclone://s3/subpath2.txt", str(p4)
-    
+
     def test_multi_storage_client(self):
-        """ Test the Multi-Storage Client integration """
+        """Test the Multi-Storage Client integration"""
         # Test path handling
         p = EPath("msc://default/etc/resolv.conf")
         assert str(p) == "msc://default/etc/resolv.conf", str(p)
@@ -130,12 +130,12 @@ class TestEPath(unittest.TestCase):
         assert p3.is_dir()
         for i in p3.glob("*.conf"):
             assert str(i).endswith(".conf")
-        
+
         # Test open file
         assert p.size() > 0
         with p.open("r") as fp:
             assert len(fp.read()) > 0
-        
+
         # Test move and delete
         p4 = EPath("msc://default/tmp/random_file_0001")
         p4.unlink()

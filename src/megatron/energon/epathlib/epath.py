@@ -7,13 +7,14 @@ from pathlib import Path as PathlibPath
 from pathlib import PurePosixPath
 from typing import Any, Dict, Generator, List, Optional, Tuple, Union
 
-import multistorageclient as msc
 import fsspec
+import multistorageclient as msc
 import s3fs
 from fsspec import AbstractFileSystem
 from fsspec.implementations.local import LocalFileSystem
 
 from megatron.energon.epathlib.rclone_config import ConfigEntry, read_rclone_config
+
 
 class EPath:
     """EPath work much like pathlib.Path but does support local as well as remote file systems.
@@ -27,7 +28,7 @@ class EPath:
     Alternatively, you can use Multi-Storage Client (MSC) to access the object stores in S3/GCP/OCI/Azure.
 
         EPath("msc://profilename/my_datasets/webdataset-000.tar")
-    
+
     You will need to have your MSC configuration (~/.msc_config.yaml) set up to access the object stores.
     """
 
@@ -49,13 +50,13 @@ class EPath:
 
         if isinstance(initial_path, EPath):
             self.internal_path = initial_path.internal_path
-            
+
             if hasattr(initial_path, "fs"):
                 self.fs = initial_path.fs
-            
+
             if hasattr(initial_path, "storage_client"):
                 self.storage_client = initial_path.storage_client
-            
+
             self.protocol = initial_path.protocol
             self.num_fs_path_parts = initial_path.num_fs_path_parts
             self.s3_args = initial_path.s3_args
@@ -209,7 +210,7 @@ class EPath:
 
         if self.protocol == "msc":
             return self.storage_client.open(self._internal_nonfs_path, mode)
-        
+
         return self.fs.open(self._internal_nonfs_path, mode, block_size=block_size)
 
     def read_text(self):
@@ -261,7 +262,7 @@ class EPath:
 
         if self.protocol == "msc":
             return self.storage_client.info(self._internal_nonfs_path).type == "directory"
-        
+
         return self.fs.isdir(self._internal_nonfs_path)
 
     def is_file(self):
@@ -270,7 +271,7 @@ class EPath:
 
         if self.protocol == "msc":
             return self.storage_client.is_file(self._internal_nonfs_path)
-        
+
         return self.fs.isfile(self._internal_nonfs_path)
 
     def mkdir(self, exist_ok: bool = True, parents: bool = False):
@@ -280,7 +281,7 @@ class EPath:
         # mkdir is a no-op for MSC
         if self.protocol == "msc":
             return
-        
+
         if parents:
             return self.fs.makedirs(self._internal_nonfs_path, exist_ok=exist_ok)
         else:
@@ -320,7 +321,9 @@ class EPath:
                     assert path.startswith("/"), "Local FS glob should return absolute paths"
                     new_path.internal_path = self._resolve(path)
                 else:
-                    new_path.internal_path = self._resolve(self._internal_fs_path / PurePosixPath(path))
+                    new_path.internal_path = self._resolve(
+                        self._internal_fs_path / PurePosixPath(path)
+                    )
 
                 yield new_path
 
@@ -330,7 +333,7 @@ class EPath:
 
         if self.protocol == "msc":
             return self.storage_client.info(self._internal_nonfs_path).content_length
-        
+
         return self.fs.size(self._internal_nonfs_path)
 
     def with_suffix(self, suffix):
@@ -345,10 +348,12 @@ class EPath:
 
         if hasattr(self, "fs"):
             assert self.fs == target.fs, "Can only move within same FS"
-        
+
         if hasattr(self, "storage_client"):
-            assert self.storage_client.profile == target.storage_client.profile, "Can only move within same profile"
-        
+            assert (
+                self.storage_client.profile == target.storage_client.profile
+            ), "Can only move within same profile"
+
         assert self.protocol == target.protocol, "Can only move within same FS"
         assert self._internal_fs_path == target._internal_fs_path, "Can only move within same FS"
 
@@ -364,7 +369,7 @@ class EPath:
 
         if self.protocol == "msc":
             return self.storage_client.delete(self._internal_nonfs_path)
-        
+
         return self.fs.rm(self._internal_nonfs_path)
 
     def relative_to(self, other: "EPath") -> str:
@@ -374,10 +379,12 @@ class EPath:
 
         if hasattr(self, "fs"):
             assert self.fs == other.fs, "Can only use relative_to within same FS"
-        
+
         if hasattr(self, "storage_client"):
-            assert self.storage_client.profile == other.storage_client.profile, "Can only use relative_to within same profile"
-        
+            assert (
+                self.storage_client.profile == other.storage_client.profile
+            ), "Can only use relative_to within same profile"
+
         assert self.protocol == other.protocol, "Can only use relative_to within same FS"
         assert (
             self._internal_fs_path == other._internal_fs_path
@@ -413,13 +420,15 @@ class EPath:
 
     def __lt__(self, other: "EPath"):
         self.fork_guard()
-        
+
         if hasattr(self, "fs"):
             assert self.fs == other.fs, "Cannot compare paths from different file systems"
-        
+
         if hasattr(self, "storage_client"):
-            assert self.storage_client.profile == other.storage_client.profile, "Cannot compare paths from different profiles"
-        
+            assert (
+                self.storage_client.profile == other.storage_client.profile
+            ), "Cannot compare paths from different profiles"
+
         assert self.protocol == other.protocol, "Cannot compare paths from different file systems"
         assert (
             self._internal_fs_path == other._internal_fs_path
