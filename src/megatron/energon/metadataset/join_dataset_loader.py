@@ -112,6 +112,8 @@ def join_multiple_indices(
     # 3. Execute the query; this returns a cursor we can iterate over row by row
     cursor = conn.execute(sql)
 
+    # TODO: We could remove excluded shards and samples here. Or remove exclusion support.
+
     # 4. Write the results to a binary file (or any other format) row by row
     with JoinIndexWriter(output_join_index_path) as join_index_writer:
         # Example: We'll just show how to iterate the rows and pseudo-write them
@@ -179,8 +181,6 @@ class JoinDatasetLoader(DatasetLoaderInterface):
         # TODO: Generate sqlite indices for individual join parts if not already present
 
         # TODO: Iterate primary DS in shard order from split config. This is currently not the case!
-
-        # TODO: check split_part is correct above (can it be specified by the user?)
 
         db_paths = []
         shard_name_to_idx = []

@@ -133,6 +133,40 @@ def get_itar_byte_offset(
         return itar[sample_offset]
 
 
+class ITarFile(tarfile.TarFile):
+    """This class is a subclass of tarfile.TarFile that allows for reading a tarfile,
+    with random access while keeping the file open.
+
+    Usage:
+        with open(filename, "rb") as fileobj:
+            with ITarFile.open(fileobj=fileobj, mode="r:") as f:
+                f.offset = 101888
+                tarinfo = f.next()
+                print(tarinfo.name)
+                member_bytes = f.extractfile(tarinfo)
+
+                # Read more offsets here ...
+    """
+
+    def __init__(self, *args, **kwargs):
+        self.in_init = True
+        try:
+            super().__init__(*args, **kwargs)
+        finally:
+            self.in_init = False
+
+    def next(self):
+        if self.in_init:
+            # Don't automatically read the first member
+            return None
+
+        if self.offset != self.fileobj.tell():
+            # This prevents tarfile from reading the one byte before
+            self.fileobj.seek(self.offset)
+
+        return super().next()
+
+
 @contextlib.contextmanager
 def open_itar(path: Union[str, EPath], byte_offset: int = 0, byte_size: Optional[int] = None):
     """
@@ -162,9 +196,9 @@ def open_itar(path: Union[str, EPath], byte_offset: int = 0, byte_size: Optional
                 offset=byte_offset,
                 size=byte_size,
             ) as fileobj:
-                with tarfile.open(fileobj=fileobj, mode="r|") as f:
+                with ITarFile.open(fileobj=fileobj, mode="r:") as f:
                     yield f
     else:
         with RetryReadStream(path) as fileobj:
-            with tarfile.open(fileobj=fileobj, mode="r|") as f:
+            with ITarFile.open(fileobj=fileobj, mode="r:") as f:
                 yield f

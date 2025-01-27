@@ -3,9 +3,10 @@
 
 import sqlite3
 import struct
-from typing import List, Optional, Tuple, Union
+from typing import BinaryIO, List, Optional, Tuple, Union
 
 from anyio import key
+from attr import has
 
 from megatron.energon.epathlib import EPath
 
@@ -164,27 +165,50 @@ class JoinIndexWriter:
 class JoinIndexReader:
     """Reads a join index file."""
 
+    join_index_path: EPath
+    join_index_file: BinaryIO
+    num_secondary_keys: int
+    has_iterated: bool
+
     def __init__(self, join_index_path: EPath):
         self.join_index_path = join_index_path
         self.join_index_file = join_index_path.open("rb")
-        self.num_secondary_keys = None
+        self.has_iterated = False
+
+        # Read the header with number of secondary keys
+        bytes_magic = self.join_index_file.read(8)
+        assert isinstance(bytes_magic, bytes)
+        assert bytes_magic[:4] == b"JIDX", f"Invalid magic bytes: {bytes_magic}"
+        assert bytes_magic[4:8] == b"0001", f"Unsupported version: {bytes_magic[4:8]}"
+
+        # Read the number of secondary keys
+        bytes_seckeys = self.join_index_file.read(8)
+        assert isinstance(bytes_seckeys, bytes)
+        num_secondary_keys = struct.unpack("q", bytes_seckeys)[0]
+        self.num_secondary_keys = num_secondary_keys
+
+    def get_as_tensor(self):
+        """Returns the join index as a tensor with shape (N, num_secondary_keys, 3)."""
+
+        assert not self.has_iterated, "Cannot get_as_tensor after iterating"
+
+        import torch
+
+        num_bytes = self.num_secondary_keys * 3
+
+        # Read the raw bytes for all N * 3 int64s.
+        data = self.join_index_file.read()
+        assert (
+            len(data) % (8 * 3) == 0
+        ), f"Index file reading: Expected multiple of 3 * 8 bytes, got {len(data)} bytes"
+
+        return torch.frombuffer(data, dtype=torch.int64).view(-1, self.num_secondary_keys, 3)
 
     def __iter__(self):
         return self
 
     def __next__(self) -> Union[None, List[int]]:
-        if self.num_secondary_keys is None:
-            bytes_magic = self.join_index_file.read(8)
-            assert isinstance(bytes_magic, bytes)
-            assert bytes_magic[:4] == b"JIDX", f"Invalid magic bytes: {bytes_magic}"
-            assert bytes_magic[4:8] == b"0001", f"Unsupported version: {bytes_magic[4:8]}"
-
-            # Read the number of secondary keys
-            bytes_seckeys = self.join_index_file.read(8)
-            assert isinstance(bytes_seckeys, bytes)
-            num_secondary_keys = struct.unpack("q", bytes_seckeys)[0]
-            self.num_secondary_keys = num_secondary_keys
-
+        self.has_iterated = True
         secondary_keys = []
         for _ in range(self.num_secondary_keys):
             bytes_key = self.join_index_file.read(8)
