@@ -1,37 +1,13 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-import contextlib
-import dataclasses
 from dataclasses import dataclass
-from typing import (
-    Any,
-    Callable,
-    Dict,
-    Generator,
-    Iterator,
-    List,
-    Literal,
-    Optional,
-    Sequence,
-    Set,
-    Tuple,
-    Union,
-)
-
-import torch
+from typing import Any, Callable, Dict, Iterator, List, Optional, Set, Tuple, Union
 
 from megatron.energon.epathlib import EPath
-from megatron.energon.errors import SYSTEM_EXCEPTIONS, FatalSampleError
 from megatron.energon.flavors.base_dataset import MergedState, SavableDataset, State
-from megatron.energon.flavors.webdataset.base_webdataset import BaseWebdatasetFactory
 from megatron.energon.flavors.webdataset.itar_dataset import ITarDataset
-from megatron.energon.flavors.webdataset.structs import (
-    FilteredSample,
-    ShardInfo,
-    ShardState,
-    reraise_exception,
-)
+from megatron.energon.flavors.webdataset.structs import FilteredSample, reraise_exception
 from megatron.energon.rng import WorkerRng, WorkerRngMergedState, WorkerRngState
 from megatron.energon.worker import WorkerConfig
 
@@ -53,8 +29,7 @@ class ITarSampleLoaderMergedState(MergedState):
 class ITarSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample], ...]]):
     """Internal class for loading samples from an indexed webdataset."""
 
-    index: EPath
-    indexed_datasets: List[BaseWebdatasetFactory]
+    itar_datasets: List[ITarDataset]
 
     # Sample keys to ignore
     exclude: Set[str]
@@ -72,17 +47,13 @@ class ITarSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample], ...
     # Worker's random generator
     _worker_rng: WorkerRng
 
-    _itar_datasets: List[ITarDataset]
-
     def __init__(
         self,
-        index: EPath,
-        indexed_datasets: List[BaseWebdatasetFactory],
+        itar_datasets: List[ITarDataset],
         local_worker_sample_split_offsets: List[int],
         *,
         worker_config: WorkerConfig,
         exclude: Set[str],
-        part_filter: Optional[Callable[[str], bool]] = None,
         shuffle_over_epochs: Optional[int] = None,
         parallel_shard_iters: int = 1,
         handler: Callable[[Exception, Optional[str]], None] = reraise_exception,
@@ -96,7 +67,6 @@ class ITarSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample], ...
             worker_config: The worker configuration.
             exclude: A set of strings of the form "<shard name>" or "<shard name>/<sample index>" to
                 exclude from iteration.
-            part_filter: If not None, use this function to filter out wds files.
             shuffle_over_epochs: If None, disable shuffling.
                 If = 1, every sample is seen exactly once per epoch.
                 If > 1, samples (or rather shard slices) are shuffled within this number of epochs
@@ -109,11 +79,9 @@ class ITarSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample], ...
             handler: Exception handler. Args: (exception, key).
         """
         super().__init__(worker_config=worker_config)
-        self.index = index
-        self.indexed_datasets = indexed_datasets
+        self.itar_datasets = itar_datasets
         self.local_worker_sample_split_offsets = local_worker_sample_split_offsets
         self.exclude = exclude
-        self.part_filter = part_filter
         self.shuffle_over_epochs = shuffle_over_epochs
         self.parallel_iters = parallel_shard_iters
         self.handler = handler
@@ -121,18 +89,6 @@ class ITarSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample], ...
 
         assert shuffle_over_epochs is None or shuffle_over_epochs == -1 or shuffle_over_epochs >= 1
         assert self.parallel_iters >= 1
-
-        # For each column in the index, create an ITarDataset
-        self._itar_datasets = [
-            ITarDataset.from_join_index_file(
-                index_file=index,
-                column=col_idx,
-                tar_filenames=indexed_dataset.split_part_files,
-                base_path=indexed_dataset.path,
-                part_filter=part_filter,
-            )
-            for col_idx, indexed_dataset in enumerate(indexed_datasets)
-        ]
 
     def __len__(self) -> int:
         # TODO: This is only for the current rank, is this the right number?
@@ -155,8 +111,7 @@ class ITarSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample], ...
         worker_range_start = self.local_worker_sample_split_offsets[worker_idx]
         worker_range_end = self.local_worker_sample_split_offsets[worker_idx + 1]
         worker_itar_datasets = [
-            itar_dataset[worker_range_start:worker_range_end]
-            for itar_dataset in self._itar_datasets
+            itar_dataset[worker_range_start:worker_range_end] for itar_dataset in self.itar_datasets
         ]
 
         if self.worker_config.should_log(level=1):

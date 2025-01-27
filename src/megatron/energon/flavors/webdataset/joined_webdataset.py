@@ -27,6 +27,7 @@ from megatron.energon.flavors.base_dataset import (
 from megatron.energon.flavors.webdataset.base_webdataset import BaseWebdatasetFactory
 from megatron.energon.flavors.webdataset.error_handler import ErrorHandler
 from megatron.energon.flavors.webdataset.indexing import JoinIndexReader
+from megatron.energon.flavors.webdataset.itar_dataset import ITarDataset
 from megatron.energon.flavors.webdataset.itar_sample_loader import ITarSampleLoaderDataset
 from megatron.energon.flavors.webdataset.sharder import Sharder
 from megatron.energon.flavors.webdataset.structs import FilteredSample, ShardInfo, reraise_exception
@@ -196,12 +197,21 @@ class JoinedWebdatasetFactory(
                 f"sum(count)={end_idx-start_idx}"
             )
 
+        itar_datasets = [
+            ITarDataset.from_join_index_file(
+                index_file=self.join_index,
+                column=col_idx,
+                tar_filenames=indexed_dataset.split_part_files,
+                base_path=indexed_dataset.path,
+                part_filter=self.part_filter,
+            )
+            for col_idx, indexed_dataset in enumerate(self.inner_datasets)
+        ]
+
         dataset = ITarSampleLoaderDataset(
-            index=self.join_index,
-            indexed_datasets=self.inner_datasets,
+            itar_datasets=itar_datasets,
             local_worker_sample_split_offsets=local_worker_sample_split_offsets,
             worker_config=self.worker_config,
-            part_filter=self.part_filter,
             exclude=self.sample_exclude,
             shuffle_over_epochs=self.shuffle_over_epochs if self.training else None,
             parallel_shard_iters=parallel_shard_iters,
