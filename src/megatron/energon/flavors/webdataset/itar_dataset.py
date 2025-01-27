@@ -2,14 +2,14 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from io import BytesIO
-from typing import Callable, Dict, List, Optional, Union, overload
+from typing import Callable, Dict, List, Optional, Tuple, Union, overload
 
 import torch
 
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.webdataset.config import skip_meta_re, split_name_re
 from megatron.energon.flavors.webdataset.indexing import JoinIndexReader
-from megatron.energon.flavors.webdataset.itar import ITarFile
+from megatron.energon.flavors.webdataset.itar import CachedItarOffsetReader, ITarFile
 from megatron.energon.flavors.webdataset.structs import FilteredSample, ShardInfo, reraise_exception
 
 # The cache size determines how many tar files are kept open at the same time.
@@ -91,18 +91,24 @@ class ITarDataset:
 
         # TODO: We could remove excluded shards and samples here. Or remove exclusion support.
 
-        cur_tar_filenames: Dict[str, str] = dict()
+        cur_tar_files: Dict[str, Tuple[int, EPath]] = dict()
 
         num_samples = sum(shard.count for shard in shardinfos)
 
         samples = torch.zeros((num_samples, 3), dtype=torch.int64, device="cpu")
 
+        cached_offset_reader = CachedItarOffsetReader()
+
         samp_idx = 0
         for shardinfo in shardinfos:
-            filepath = str(shardinfo.path)
+            filepath = shardinfo.path
             filename = shardinfo.name
-            cur_tar_file_idx = len(cur_tar_filenames)
-            cur_tar_filenames[filename] = filepath
+
+            if filename in cur_tar_files:
+                cur_tar_file_idx = cur_tar_files[filename][0]
+            else:
+                cur_tar_file_idx = len(cur_tar_files)
+                cur_tar_files[filename] = (cur_tar_file_idx, filepath)
 
             # Add the samples of the current shard to the samples tensor
             samp_idx_end = samp_idx + shardinfo.count
@@ -110,16 +116,24 @@ class ITarDataset:
             # Set same tar file for all
             samples[samp_idx:samp_idx_end, ITarDataset.COL_TAR_FILE_ID] = cur_tar_file_idx
 
-            for _ in range(shardinfo.count):
-                samples[samp_idx, ITarDataset.COL_BYTE_OFFSET] = shardinfo.byte_offset
-                samples[samp_idx, ITarDataset.COL_BYTE_SIZE] = shardinfo.byte_size
+            tar_index_reader = cached_offset_reader.tar_index_reader(shardinfo.path)
+            for i in range(shardinfo.count):
+                sample_idx_in_shard = shardinfo.offset + i
+
+                # Get the byte offset and size of that sample in that tar file
+                byte_offset, byte_size = cached_offset_reader.get_itar_byte_offset_with_reader(
+                    tar_index_reader, sample_idx_in_shard
+                )
+
+                samples[samp_idx, ITarDataset.COL_BYTE_OFFSET] = byte_offset
+                samples[samp_idx, ITarDataset.COL_BYTE_SIZE] = byte_size
                 samp_idx += 1
 
         assert samp_idx == num_samples
 
         return ITarDataset(
-            list(cur_tar_filenames.keys()),
-            list(cur_tar_filenames.values()),
+            list(cur_tar_files.keys()),
+            [x[1] for x in cur_tar_files.values()],
             samples,
             part_filter=part_filter,
         )

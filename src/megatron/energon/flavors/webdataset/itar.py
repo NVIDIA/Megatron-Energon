@@ -5,7 +5,7 @@ import contextlib
 import struct
 import tarfile
 from types import TracebackType
-from typing import BinaryIO, Optional, Type, Union
+from typing import BinaryIO, Optional, Tuple, Type, Union
 
 from megatron.energon.epathlib import EPath
 from megatron.energon.retry_stream import RetryReadStream
@@ -131,6 +131,67 @@ def get_itar_byte_offset(
         return 0
     with TarIndexReader(path) as itar:
         return itar[sample_offset]
+
+
+class CachedItarOffsetReader:
+    def __init__(self, cache_size: int = 32):
+        self.tar_index_reader_cache = {}
+        self.cache_size = cache_size
+
+        self.lookahead_offset = None
+        self.lookahead_byteoffset = None
+        self.lookahead_reader = None
+
+    def tar_index_reader(self, tar_file: Union[EPath, str]) -> TarIndexReader:
+        tar_file = str(tar_file)
+        if tar_file not in self.tar_index_reader_cache:
+
+            # Free up space if needed
+            if len(self.tar_index_reader_cache) >= self.cache_size:
+                oldest_reader = next(iter(self.tar_index_reader_cache))
+                oldest_reader.close()
+                if self.lookahead_reader is oldest_reader:
+                    self.lookahead_reader = None
+                    self.lookahead_offset = None
+                    self.lookahead_byteoffset = None
+                del self.tar_index_reader_cache[oldest_reader]
+
+            self.tar_index_reader_cache[tar_file] = TarIndexReader(tar_file)
+        return self.tar_index_reader_cache[tar_file]
+
+    def get_itar_byte_offset_with_reader(
+        self,
+        tar_index_reader: TarIndexReader,
+        sample_offset: int = 0,
+    ) -> Tuple[int, int]:
+        if sample_offset == 0:
+            result_byte_offset = 0
+        elif sample_offset == self.lookahead_offset and self.lookahead_reader is tar_index_reader:
+            assert self.lookahead_byteoffset is not None
+            result_byte_offset = self.lookahead_byteoffset
+        else:
+            result_byte_offset = tar_index_reader[sample_offset]
+
+        self.lookahead_offset = sample_offset + 1
+        self.lookahead_reader = tar_index_reader
+        try:
+            self.lookahead_byteoffset = tar_index_reader[self.lookahead_offset]
+        except IndexError:
+            self.lookahead_byteoffset = None
+            self.lookahead_offset = None
+
+        if self.lookahead_byteoffset:
+            return result_byte_offset, self.lookahead_byteoffset - result_byte_offset
+        else:
+            return result_byte_offset, 0
+
+    def get_itar_byte_offset(
+        self,
+        tar_file: EPath,
+        sample_offset: int = 0,
+    ):
+        tar_index_reader = self.tar_index_reader(tar_file)
+        return self.get_itar_byte_offset_with_reader(tar_index_reader, sample_offset)
 
 
 class ITarFile(tarfile.TarFile):

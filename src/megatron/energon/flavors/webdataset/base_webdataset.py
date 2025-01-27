@@ -116,7 +116,8 @@ class BaseWebdatasetFactory(
         return sum(shard.count for shard in self.shards)
 
     def build(self, worker_rotation_offset: int = 0) -> SavableDataset[T_sample]:
-        from megatron.energon.flavors.webdataset.sample_loader import WebdatasetSampleLoaderDataset
+        from megatron.energon.flavors.webdataset.itar_dataset import ITarDataset
+        from megatron.energon.flavors.webdataset.itar_sample_loader import ITarSampleLoaderDataset
 
         if self.parallel_shard_iters is None:
             if self.training:
@@ -154,10 +155,22 @@ class BaseWebdatasetFactory(
                 f"sum(count)={sum(subshards[0].count for subshards in inner_shards)}"
             )
 
-        dataset = WebdatasetSampleLoaderDataset(
-            rank_shards=rank_shards,
-            worker_config=self.worker_config,
+        itar_dataset = ITarDataset.from_shardinfos(
+            self.shards,
             part_filter=self.part_filter,
+        )
+
+        local_worker_sample_split_offsets = self.split_samples_to_workers(
+            len(itar_dataset),
+            self.worker_config,
+            max_samples_per_sequence=self.max_samples_per_sequence,
+            rotation_offset=worker_rotation_offset,
+        )
+
+        dataset = ITarSampleLoaderDataset(
+            itar_datasets=[itar_dataset],
+            local_worker_sample_split_offsets=local_worker_sample_split_offsets,
+            worker_config=self.worker_config,
             exclude=self.sample_excludes,
             shuffle_over_epochs=self.shuffle_over_epochs if self.training else None,
             parallel_shard_iters=parallel_shard_iters,
