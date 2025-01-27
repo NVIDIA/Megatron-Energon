@@ -203,26 +203,14 @@ class Sharder:
         return result
 
     @classmethod
-    def shard_workers(
+    def split_samples_to_workers(
         cls,
-        shards: List[Sequence[ShardInfo]],
+        total_samples: int,
         worker_config: WorkerConfig,
         *,
         max_samples_per_sequence: Optional[int],
         rotation_offset: int = 0,
-    ) -> List[List[Sequence[ShardInfo]]]:
-        """
-        Creates subshards (ShardInfo) for each worker of the current rank.
-        For that, the number of global samples is split across the number of global workers across all
-        ranks. Then each worker gets a slice of the global samples.
-
-        Args:
-            shards: The shards to split
-            worker_config: The config for the current rank and workers
-
-        Returns:
-            The shards for the current rank and all workers
-        """
+    ) -> List[int]:
 
         # We split the total number of samples into the number of global workers across all ranks.
         # Note that the global number of workers intentionally stays the same if you
@@ -231,7 +219,6 @@ class Sharder:
 
         num_workers = max(1, worker_config.num_workers)
 
-        total_samples = sum(subshards[0].count for subshards in shards)
         global_workers = num_workers * worker_config.world_size
 
         min_samples_per_worker = int(total_samples / global_workers)
@@ -291,6 +278,38 @@ class Sharder:
         assert (
             len(local_worker_sample_split_offsets) == num_workers + 1
         ), "If this fails, there's a bug in the code above."
+
+        return local_worker_sample_split_offsets
+
+    @classmethod
+    def shard_workers(
+        cls,
+        shards: List[Sequence[ShardInfo]],
+        worker_config: WorkerConfig,
+        *,
+        max_samples_per_sequence: Optional[int],
+        rotation_offset: int = 0,
+    ) -> List[List[Sequence[ShardInfo]]]:
+        """
+        Creates subshards (ShardInfo) for each worker of the current rank.
+        For that, the number of global samples is split across the number of global workers across all
+        ranks. Then each worker gets a slice of the global samples.
+
+        Args:
+            shards: The shards to split
+            worker_config: The config for the current rank and workers
+
+        Returns:
+            The shards for the current rank and all workers
+        """
+        total_samples = sum(subshards[0].count for subshards in shards)
+
+        local_worker_sample_split_offsets = cls.split_samples_to_workers(
+            total_samples,
+            worker_config,
+            max_samples_per_sequence=max_samples_per_sequence,
+            rotation_offset=rotation_offset,
+        )
 
         # 5. Now we can split the shards
         return list(

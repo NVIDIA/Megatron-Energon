@@ -1,7 +1,8 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from typing import Callable, Dict, List, Optional
+from io import BytesIO
+from typing import Callable, Dict, List, Optional, Union, overload
 
 import torch
 
@@ -133,24 +134,43 @@ class ITarDataset:
         """
 
         if tar_file_id not in self.itar_files_cache:
-            file_object = open(self.tar_filepaths[tar_file_id], "rb")
-            tar_file = ITarFile.open(fileobj=fileobj, mode="r:")
+            file_object = open(str(self.tar_filepaths[tar_file_id]), "rb")
+            tar_file = ITarFile.open(fileobj=file_object, mode="r:")
             self.itar_files_cache[tar_file_id] = tar_file
 
         # If we hit the limit of open files, close the least recently used file
         while len(self.itar_files_cache) > ITAR_CACHE_SIZE:
             # Get the oldest file
             lru_key = next(iter(self.itar_files_cache))
+
             self.itar_files_cache[lru_key].fileobj.close()
             self.itar_files_cache[lru_key].close()
             del self.itar_files_cache[lru_key]
 
         return self.itar_files_cache[tar_file_id]
 
-    def __getitem__(self, idx: int) -> FilteredSample:
+    @overload
+    def __getitem__(self, key: int) -> FilteredSample: ...
+
+    @overload
+    def __getitem__(self, key: slice) -> "ITarDataset": ...
+
+    def __getitem__(self, key: Union[slice, int]) -> Union["ITarDataset", FilteredSample]:
         """
-        Get a sample from the dataset.
+        Get a sample from the dataset or slice it.
         """
+
+        if isinstance(key, slice):
+            return ITarDataset(
+                tar_filenames=self.tar_filenames,
+                tar_filepaths=self.tar_filepaths,
+                samples=self.samples[key],
+                part_filter=self.part_filter,
+            )
+        elif isinstance(key, int):
+            idx = key
+        else:
+            raise TypeError("Invalid argument type")
 
         # Get the sample
         sample = self.samples[idx]

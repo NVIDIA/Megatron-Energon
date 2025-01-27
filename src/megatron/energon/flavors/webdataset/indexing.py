@@ -172,6 +172,7 @@ class JoinIndexReader:
 
     def __init__(self, join_index_path: EPath):
         self.join_index_path = join_index_path
+        self.join_index_byte_size = join_index_path.size()
         self.join_index_file = join_index_path.open("rb")
         self.has_iterated = False
 
@@ -194,8 +195,6 @@ class JoinIndexReader:
 
         import torch
 
-        num_bytes = self.num_secondary_keys * 3
-
         # Read the raw bytes for all N * 3 int64s.
         data = self.join_index_file.read()
         assert (
@@ -203,6 +202,9 @@ class JoinIndexReader:
         ), f"Index file reading: Expected multiple of 3 * 8 bytes, got {len(data)} bytes"
 
         return torch.frombuffer(data, dtype=torch.int64).view(-1, self.num_secondary_keys, 3)
+
+    def __len__(self):
+        return (self.join_index_byte_size - 16) // (self.num_secondary_keys * 8 * 3)
 
     def __iter__(self):
         return self

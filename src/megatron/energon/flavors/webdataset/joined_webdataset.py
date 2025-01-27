@@ -26,7 +26,8 @@ from megatron.energon.flavors.base_dataset import (
 )
 from megatron.energon.flavors.webdataset.base_webdataset import BaseWebdatasetFactory
 from megatron.energon.flavors.webdataset.error_handler import ErrorHandler
-from megatron.energon.flavors.webdataset.sample_loader import WebdatasetSampleLoaderDataset
+from megatron.energon.flavors.webdataset.indexing import JoinIndexReader
+from megatron.energon.flavors.webdataset.itar_sample_loader import ITarSampleLoaderDataset
 from megatron.energon.flavors.webdataset.sharder import Sharder
 from megatron.energon.flavors.webdataset.structs import FilteredSample, ShardInfo, reraise_exception
 from megatron.energon.worker import WorkerConfig
@@ -49,7 +50,7 @@ class JoinedWebdatasetFactory(
     max_samples_per_sequence: Optional[int]
     part_filter: Optional[Callable[[str], bool]]
     join_method: Literal["inner_match"]
-    join_index: Optional[EPath]
+    join_index: EPath
     handler: Callable[[Exception, Optional[str]], None]
 
     shards: List[Sequence[ShardInfo]]
@@ -70,7 +71,7 @@ class JoinedWebdatasetFactory(
         max_samples_per_sequence: Optional[int] = None,
         part_filter: Optional[Callable[[str], bool]] = None,
         join_method: Literal["inner_match"] = "inner_match",
-        join_index: Optional[EPath] = None,
+        join_index: EPath,
         joiner: Union[Type[T_sample], Callable[..., T_sample]],
         handler: Callable[[Exception, Optional[str]], None] = reraise_exception,
     ):
@@ -140,9 +141,15 @@ class JoinedWebdatasetFactory(
                 "When joining datasets with the 'left' method, a join index must be present. "
                 "This can be created by running 'energon prepare' on the meta dataset file."
             )
+
+            self.sample_exclude = inner_datasets[0].sample_excludes
+            assert all(
+                self.sample_exclude == dataset.sample_excludes for dataset in inner_datasets[1:]
+            ), f"Sample excludes must be the same for all paths"
         else:
             assert False, f"Invalid join method {join_method}"
 
+        self.join_index = join_index
         self.inner_datasets = inner_datasets
         self.shards = list(zip(*(dataset.shards for dataset in self.inner_datasets)))
         self.training = training
@@ -167,43 +174,37 @@ class JoinedWebdatasetFactory(
         else:
             parallel_shard_iters = self.parallel_shard_iters
 
-        rank_shards = self.shard_workers(
-            self.shards,
+        # Get join index, get size, distribute samples
+        # Get samples for each worker on current rank
+
+        with JoinIndexReader(self.join_index) as jir:
+            total_samples = len(jir)
+
+        local_worker_sample_split_offsets = self.split_samples_to_workers(
+            total_samples,
             self.worker_config,
             max_samples_per_sequence=self.max_samples_per_sequence,
             rotation_offset=worker_rotation_offset,
         )
 
-        for rank_idx, shards in enumerate(rank_shards):
-            shards_text = ", ".join(
-                f"{subshard[0].name}[{subshard[0].offset}, {subshard[0].offset+subshard[0].count})"
-                for subshard in shards[:3]
-            )
-            if len(shards) > 6:
-                shards_text += f", ...<{len(shards) - 6}>, " + ", ".join(
-                    f"{subshards[0].name}[{subshards[0].offset}, {subshards[0].offset+subshards[0].count})"
-                    for subshards in shards[-3:]
-                )
-            elif len(shards) > 3:
-                shards_text += ", " + ", ".join(
-                    f"{subshards[0].name}[{subshards[0].offset}, {subshards[0].offset+subshards[0].count})"
-                    for subshards in shards[3:]
-                )
+        for worker_idx in range(len(local_worker_sample_split_offsets) - 1):
+            start_idx = local_worker_sample_split_offsets[worker_idx]
+            end_idx = local_worker_sample_split_offsets[worker_idx + 1]
+
             print(
-                f"rank={self.worker_config.rank}, worker={rank_idx}: shard_range="
-                f"[{shards_text}] "
-                f"sum(count)={sum(subshards[0].count for subshards in shards)}"
+                f"rank={self.worker_config.rank}, worker={worker_idx}: sample_range=[{start_idx}, {end_idx})"
+                f"sum(count)={end_idx-start_idx}"
             )
 
-        dataset = WebdatasetSampleLoaderDataset(
-            rank_shards=rank_shards,
+        dataset = ITarSampleLoaderDataset(
+            index=self.join_index,
+            indexed_datasets=self.inner_datasets,
+            local_worker_sample_split_offsets=local_worker_sample_split_offsets,
             worker_config=self.worker_config,
             part_filter=self.part_filter,
             exclude=self.sample_exclude,
             shuffle_over_epochs=self.shuffle_over_epochs if self.training else None,
             parallel_shard_iters=parallel_shard_iters,
-            dataset_join_method=self.join_method,
-            dataset_join_index=self.join_index,
             handler=self.sample_error_handler,
         )
         return self._process_samples(dataset)

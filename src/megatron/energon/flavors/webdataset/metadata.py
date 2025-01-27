@@ -20,6 +20,7 @@ class WebdatasetMeta:
 
     sample_excludes: Set[str]
     shards: List[ShardInfo]
+    split_part_files: List[str]
 
     @staticmethod
     def from_config(
@@ -70,4 +71,5 @@ class WebdatasetMeta:
                 )
                 for name in split_part_files
             ],
+            split_part_files=split_part_files,
         )

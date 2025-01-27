@@ -16,7 +16,6 @@ from megatron.energon.flavors.base_dataset import (
 from megatron.energon.flavors.webdataset.error_handler import ErrorHandler
 from megatron.energon.flavors.webdataset.metadata import WebdatasetMeta
 from megatron.energon.flavors.webdataset.prepare import WebdatasetPreparator
-from megatron.energon.flavors.webdataset.sample_loader import WebdatasetSampleLoaderDataset
 from megatron.energon.flavors.webdataset.sharder import Sharder
 from megatron.energon.flavors.webdataset.structs import FilteredSample, ShardInfo, reraise_exception
 from megatron.energon.worker import WorkerConfig
@@ -104,6 +103,7 @@ class BaseWebdatasetFactory(
         self.paths = [path]
         self.shards = wds_meta.shards
         self.sample_excludes = wds_meta.sample_excludes
+        self.split_part_files = wds_meta.split_part_files
         self.training = training
         self.worker_config = worker_config
         self.shuffle_over_epochs = shuffle_over_epochs
@@ -116,6 +116,8 @@ class BaseWebdatasetFactory(
         return sum(shard.count for shard in self.shards)
 
     def build(self, worker_rotation_offset: int = 0) -> SavableDataset[T_sample]:
+        from megatron.energon.flavors.webdataset.sample_loader import WebdatasetSampleLoaderDataset
+
         if self.parallel_shard_iters is None:
             if self.training:
                 # 16 seems to be a good choice since we don't want too many file handles open

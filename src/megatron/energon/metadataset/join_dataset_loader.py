@@ -114,6 +114,8 @@ def join_multiple_indices(
 
     # TODO: We could remove excluded shards and samples here. Or remove exclusion support.
 
+    all_db_aliases = ["main"] + aliases
+
     # 4. Write the results to a binary file (or any other format) row by row
     with JoinIndexWriter(output_join_index_path) as join_index_writer:
         # Example: We'll just show how to iterate the rows and pseudo-write them
@@ -122,9 +124,9 @@ def join_multiple_indices(
             # 'row' is a tuple of columns in the order of select_cols
 
             join_tuples = []
-            for i in range(len(aliases)):
-                alias = aliases[i]
-                tar_file_id = row[3 * i + 0]
+            for i in range(len(all_db_aliases)):
+                alias = all_db_aliases[i]
+                tar_file_id = row[3 * i]
 
                 assert (
                     tar_file_id is not None
@@ -214,6 +216,7 @@ class JoinDatasetLoader(DatasetLoaderInterface):
             )
 
         # TODO: We might have multiple joins in one metadataset (e.g. for train and val, or not?)
+        # TODO: Keep multiple join indices
 
         join_index_path = parent_path / "join_index.bin"
 
