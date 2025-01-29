@@ -35,12 +35,11 @@ def join_multiple_indices(
       - byte_offset
       - byte_size
     The result is streamed out row-by-row and written to join index.
+    Note that the order of samples is determined by the shard_map of the primary DB.
 
     Args:
-        primary_db: Path to the primary database.
-        secondary_dbs: List of paths to secondary databases.
-        secondary_shard_maps: List of mappings from tar_file name to tar_file_index
-            for each secondary DB. The order should be as in .info.yaml.
+        db_paths: List of paths to primary and secondary databases.
+        shard_maps: List of shards dor all datasets. Mapping from shard name to shard index.
         output_join_index_path: Path to the output join index.
     """
 
@@ -170,7 +169,7 @@ class JoinDatasetLoader(DatasetLoaderInterface):
     shuffle_over_epochs_multiplier: int = 1
 
     def prepare(self, parent_path: EPath, split_part: Optional[str] = None):
-        print(f"Preparing {self.__class__.__name__}")
+        print(f"Preparing joined dataset in {parent_path}")
 
         # Get list of joinable datasets
         datasets = self.datasets
@@ -188,12 +187,7 @@ class JoinDatasetLoader(DatasetLoaderInterface):
         shard_name_to_idx = []
 
         for dataset in datasets:
-            db_path = dataset.path / MAIN_FOLDER_NAME / "index.sqlite"
-
-            # info = raw_to_typed(
-            #     yaml.safe_load(info_path.read_text()),
-            #     WebdatasetInfo,
-            # )
+            db_path = EPath(dataset.path) / MAIN_FOLDER_NAME / "index.sqlite"
 
             # Join split_config may override individual split configs
             cur_split_config = self.split_config or dataset.split_config
@@ -208,17 +202,15 @@ class JoinDatasetLoader(DatasetLoaderInterface):
                 path=EPath(dataset.path), split_part=cur_split_part, split_config=cur_split_config
             )
 
-            shard_names = [shard_info.name for shard_info in wds_meta.shards]
-
             db_paths.append(db_path)
             shard_name_to_idx.append(
-                {shard_name: shard_idx for shard_idx, shard_name in enumerate(shard_names)}
+                {
+                    shard_name: shard_idx
+                    for shard_idx, shard_name in enumerate(wds_meta.split_part_files)
+                }
             )
 
-        # TODO: We might have multiple joins in one metadataset (e.g. for train and val, or not?)
-        # TODO: Keep multiple join indices
-
-        join_index_path = parent_path / "join_index.bin"
+        join_index_path = parent_path / f"join_index_{split_part}.bin"
 
         join_multiple_indices(
             db_paths=db_paths,
