@@ -49,7 +49,7 @@ def join_multiple_indices(
     secondary_dbs = db_paths[1:]
 
     # 1. Connect to the primary DB in 'main'
-    conn = sqlite3.connect(str(primary_db))
+    conn = sqlite3.connect(f"file:{primary_db!s}?mode=ro", uri=True)
 
     # For safety, enable a read-only or big timeouts
     conn.execute("PRAGMA busy_timeout = 5000;")
@@ -60,27 +60,41 @@ def join_multiple_indices(
     for i, sec_db in enumerate(secondary_dbs, start=1):
         alias = f"db{i}"
         aliases.append(alias)
-        conn.execute(f"ATTACH DATABASE ? AS {alias}", (str(sec_db),))
+        conn.execute(f"ATTACH DATABASE ? AS {alias}", (f"file:{sec_db}?mode=ro",))
 
     # 3. Load tar_files mappings from primary and secondaries into memory
     # The mapping will map from tar_file_id as used in the sqlite DBs to the
-    # index as used in the .info.yaml files.
+    # index as used in the shard_map from the split.
     tar_files_id_mapping = {}
     # Load for primary
     tar_files_id_mapping["main"] = {
         row[0]: shard_maps[0][row[1]]
         for row in conn.execute("SELECT id, tar_file_name FROM main.tar_files")
+        if row[1] in shard_maps[0]
     }
+
+    conn.execute("DROP TABLE IF EXISTS temp_order")
+    conn.execute(
+        """
+        CREATE TEMP TABLE primary_order (
+            tar_file_id INTEGER PRIMARY KEY,
+            split_index INTEGER
+        )
+    """
+    )
+    conn.executemany(
+        "INSERT INTO primary_order(tar_file_id, split_index) values (?,?)",
+        tar_files_id_mapping["main"].items(),
+    )
+
     # Load for each secondary alias
     for idx, alias in enumerate(aliases):
         tar_files_id_mapping[alias] = {
             row[0]: shard_maps[idx + 1][row[1]]
             for row in conn.execute(f"SELECT id, tar_file_name FROM {alias}.tar_files")
+            if row[1] in shard_maps[idx + 1]
         }
 
-    # Build the SELECT list:
-    #   - For columns from the primary, let's pick what you want (sample_key, tar_file_id, etc).
-    #   - For each attached DB alias, add "alias.samples.tar_file_id AS tar_file_id_i, alias.samples.byte_offset AS byte_offset_i, alias.samples.byte_size AS byte_size_i"
     select_cols = [
         "main.samples.tar_file_id AS main_tar_file_id",
         "main.samples.byte_offset AS main_byte_offset",
@@ -101,11 +115,21 @@ def join_multiple_indices(
         )
 
     # Construct the full SQL query
+    # We select three columns for the primary and each secondary DB
+    # Those are (tar_file_id, byte_offset, and byte_size)
+    # We join the secondary DBs to the primary DB using a LEFT JOIN, i.e.
+    # we keep all rows from the primary DB and add columns from the secondary DBs if available
+    # Finally, we also join the temporary shard order table to order the shards as in the split config.
+    # This join is done using an INNER JOIN, i.e. we only keep rows that have a matching shard index in the primary dataset,
+    # so we'll not include shards that come from other split parts
     sql = f"""
         SELECT
             {', '.join(select_cols)}
         FROM main.samples
         {join_clauses}
+        INNER JOIN primary_order o
+            ON main_tar_file_id = o.tar_file_id
+        ORDER BY o.split_index
     """
 
     # 3. Execute the query; this returns a cursor we can iterate over row by row
@@ -141,14 +165,12 @@ def join_multiple_indices(
 
     # Check that num_rows matches the number of samples in the primary DB
     # It might deviate in case of duplicate samples in a secondary DB
-    num_samples = conn.execute("SELECT COUNT(*) FROM main.samples").fetchone()[0]
+    num_samples = conn.execute(
+        "SELECT COUNT(*) FROM main.samples INNER JOIN primary_order o ON main.samples.tar_file_id = o.tar_file_id"
+    ).fetchone()[0]
     assert (
         num_rows == num_samples
     ), f"Number of rows in join index ({num_rows}) does not match number of samples in primary DB ({num_samples})"
-
-    # 5. Detach databases and close
-    for alias in aliases:
-        conn.execute(f"DETACH DATABASE {alias}")
 
     conn.close()
 
