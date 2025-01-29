@@ -239,11 +239,9 @@ class ITarDataset:
                 member_bytes = tar_file.extractfile(tarinfo).read()
                 group_parts[cur_ext] = member_bytes
 
-        group = FilteredSample(
+        return FilteredSample(
             __key__=cur_base_name,
             __shard__=self.tar_filenames[tar_file_id],
             __restore_key__=("itar", "", idx),
             **group_parts,
         )
-
-        return group

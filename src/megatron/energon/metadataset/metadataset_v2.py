@@ -122,7 +122,7 @@ class MetadatasetJoin(DatasetLoaderInterface):
     dataset_config: str = "dataset.yaml"
     split_config: str = "split.yaml"
 
-    _dataset: Optional[DatasetLoaderInterface] = None
+    _dataset: Optional[JoinDatasetLoader] = None
 
     def post_initialize(self, parent_path: EPath):
         assert self.join is not None
