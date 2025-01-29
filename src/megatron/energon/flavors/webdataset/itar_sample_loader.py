@@ -40,7 +40,8 @@ class ITarSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample], ...
     # infinite epochs (i.e. shard slices are drawn with replacement).
     shuffle_over_epochs: Optional[int]
     # Number of parallel iterators to be opened simultaneously (and random sample between them)
-    parallel_iters: int
+    parallel_iter_count: int
+    parallel_iters: List[Any]
     # Error handler
     handler: Callable[[Exception, Optional[str]], None]
 
@@ -55,7 +56,7 @@ class ITarSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample], ...
         worker_config: WorkerConfig,
         exclude: Set[str],
         shuffle_over_epochs: Optional[int] = None,
-        parallel_shard_iters: int = 1,
+        parallel_iter_count: int = 1,
         handler: Callable[[Exception, Optional[str]], None] = reraise_exception,
     ):
         """
@@ -73,7 +74,7 @@ class ITarSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample], ...
                 (i.e. randomly selected without replacement).
                 If -1, the shards are effectively shuffle over infinite epochs (i.e. shard slices
                 are drawn with replacement).
-            parallel_shard_iters: If > 1, samples are randomly drawn from parallel shard iterators.
+            parallel_iter_count: If > 1, samples are randomly drawn from parallel shard iterators.
                 This will not impact performance, but increase randomness. If = 1, the shards are
                 iterated in order.
             handler: Exception handler. Args: (exception, key).
@@ -83,12 +84,12 @@ class ITarSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample], ...
         self.local_worker_sample_split_offsets = local_worker_sample_split_offsets
         self.exclude = exclude
         self.shuffle_over_epochs = shuffle_over_epochs
-        self.parallel_iters = parallel_shard_iters
+        self.parallel_iter_count = parallel_iter_count
         self.handler = handler
         self._worker_rng = WorkerRng(worker_config)
 
         assert shuffle_over_epochs is None or shuffle_over_epochs == -1 or shuffle_over_epochs >= 1
-        assert self.parallel_iters >= 1
+        assert self.parallel_iter_count >= 1
 
     def __len__(self) -> int:
         # TODO: This is only for the current rank, is this the right number?
