@@ -29,6 +29,10 @@ from megatron.energon.flavors.webdataset.error_handler import ErrorHandler
 from megatron.energon.flavors.webdataset.indexing import JoinIndexReader
 from megatron.energon.flavors.webdataset.itar_dataset import ITarDataset
 from megatron.energon.flavors.webdataset.itar_sample_loader import ITarSampleLoaderDataset
+from megatron.energon.flavors.webdataset.sample_loader import (
+    RawSampleData,
+    WebdatasetSampleLoaderDataset,
+)
 from megatron.energon.flavors.webdataset.sharder import Sharder
 from megatron.energon.flavors.webdataset.structs import FilteredSample, ShardInfo, reraise_exception
 from megatron.energon.worker import WorkerConfig
@@ -181,20 +185,25 @@ class JoinedWebdatasetFactory(
         with JoinIndexReader(self.join_index) as jir:
             total_samples = len(jir)
 
-        local_worker_sample_split_offsets = self.split_samples_to_workers(
+        workers_sample_slice_offsets = self.slice_workers(
             total_samples,
-            self.worker_config,
+            worker_config=self.worker_config,
             max_samples_per_sequence=self.max_samples_per_sequence,
             rotation_offset=worker_rotation_offset,
         )
 
-        for worker_idx in range(len(local_worker_sample_split_offsets) - 1):
-            start_idx = local_worker_sample_split_offsets[worker_idx]
-            end_idx = local_worker_sample_split_offsets[worker_idx + 1]
+        for worker_idx, sample_slice_offsets in enumerate(workers_sample_slice_offsets):
+            start_idx = sample_slice_offsets[0]
+            end_idx = sample_slice_offsets[-1]
+
+            if len(sample_slice_offsets) > 6:
+                offset_str = f"{', '.join(str(o) for o in sample_slice_offsets[:3])} ...<{len(sample_slice_offsets) - 6}> {', '.join(str(o) for o in sample_slice_offsets[-3:])}"
+            else:
+                offset_str = ", ".join(str(o) for o in sample_slice_offsets)
 
             print(
-                f"rank={self.worker_config.rank}, worker={worker_idx}: sample_range=[{start_idx}, {end_idx})"
-                f"sum(count)={end_idx-start_idx}"
+                f"rank={self.worker_config.rank}, worker={worker_idx}: sample_range=[{start_idx}, {end_idx}) in {len(sample_slice_offsets) - 1} slices, "
+                f"sum(count)={end_idx - start_idx}: [{offset_str}]"
             )
 
         itar_datasets = [
@@ -208,9 +217,9 @@ class JoinedWebdatasetFactory(
             for col_idx, indexed_dataset in enumerate(self.inner_datasets)
         ]
 
-        dataset = ITarSampleLoaderDataset(
-            itar_datasets=itar_datasets,
-            local_worker_sample_split_offsets=local_worker_sample_split_offsets,
+        dataset = WebdatasetSampleLoaderDataset(
+            join_readers=itar_datasets,
+            workers_sample_slice_offsets=workers_sample_slice_offsets,
             worker_config=self.worker_config,
             exclude=self.sample_exclude,
             shuffle_over_epochs=self.shuffle_over_epochs if self.training else None,
@@ -223,9 +232,7 @@ class JoinedWebdatasetFactory(
     def paths(self) -> List[EPath]:
         return [dataset.path for dataset in self.inner_datasets]
 
-    def _process_samples(
-        self, dataset: SavableDataset[Tuple[Optional[FilteredSample], ...]]
-    ) -> SavableDataset[T_sample]:
+    def _process_samples(self, dataset: SavableDataset[RawSampleData]) -> SavableDataset[T_sample]:
         """Internally loads the sample."""
         return MapDataset(
             dataset,
@@ -236,28 +243,17 @@ class JoinedWebdatasetFactory(
             worker_config=self.worker_config,
         )
 
-    def load_sample(self, samples: Tuple[Optional[FilteredSample], ...]) -> T_sample:
-        assert len(samples) > 0 and samples[0] is not None, "Always need primary sample"
-        # Combine the restore key. This must be in accordance to the ShardReader's restore unpacking
-        restore_key = [
-            *samples[0]["__restore_key__"],
-        ]
-        for sample in samples[1:]:
-            if sample is None:
-                restore_key.append("")
-                restore_key.append(-1)
-            else:
-                restore_key.extend(sample["__restore_key__"][1:3])
-
+    def load_sample(self, samples: RawSampleData) -> T_sample:
+        assert len(samples.data) > 0 and samples.data[0] is not None, "Always need primary sample"
         # First call the loaders of all inner datasets
         loaded_samples = tuple(
             None if sample is None else dataset.load_sample(sample)
-            for dataset, sample in zip(self.inner_datasets, samples)
+            for dataset, sample in zip(self.inner_datasets, samples.data)
         )
         # Then combine the loaded smaples into the final type
         return set_sample_restore_key(
             self._sample_joiner(*loaded_samples),
-            *restore_key,
+            *samples.__restore_key__,
             src=self,
             fail_otherwise=True,
         )

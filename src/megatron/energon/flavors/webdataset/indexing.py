@@ -5,9 +5,6 @@ import sqlite3
 import struct
 from typing import BinaryIO, List, Optional, Tuple, Union
 
-from anyio import key
-from attr import has
-
 from megatron.energon.epathlib import EPath
 
 

@@ -1,9 +1,10 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-import dataclasses
 from itertools import zip_longest
-from typing import Generator, List, Optional, Sequence, Union
+from typing import Generator, Optional, Sequence, Tuple, Union
+
+import numpy as np
 
 from megatron.energon.flavors.webdataset.structs import ShardInfo
 from megatron.energon.worker import WorkerConfig
@@ -13,11 +14,12 @@ class Sharder:
 
     @staticmethod
     def _split_shard(
-        subshards: Sequence[ShardInfo],
         start_offset: int,
         end_offset: int,
         max_samples_per_sequence: Optional[int],
-    ) -> List[Sequence[ShardInfo]]:
+    ) -> Tuple[int, ...]:
+        """Splits a shard into multiple slices of max_samples_per_sequence (more or less).
+        Returns the starting index of each slice (excluding the end_offset)."""
         if (
             max_samples_per_sequence is not None
             and end_offset - start_offset > max_samples_per_sequence * 1.5
@@ -25,134 +27,120 @@ class Sharder:
             # Split the shard into slices of max_samples_per_sequence (more or less)
             slice_count = max(round((end_offset - start_offset) / max_samples_per_sequence), 1)
             samples_per_sequence = (end_offset - start_offset) / slice_count
-            # Note this must include the end offset as well, so slice_count + 1 steps (down there,
-            # idx+1 is used to access the end offset)
-            offsets = [
-                start_offset + int(slice * samples_per_sequence) for slice in range(slice_count + 1)
-            ]
-            return [
-                [
-                    dataclasses.replace(
-                        shard,
-                        offset=offsets[idx],
-                        count=offsets[idx + 1] - offsets[idx],
-                        byte_offset=None,
-                        byte_size=None,
-                    )
-                    for shard in subshards
-                ]
-                for idx in range(slice_count)
-            ]
+            # Note this must include the end offset as well, so slice_count + 1 steps
+            return tuple(
+                start_offset + int(slice * samples_per_sequence) for slice in range(slice_count)
+            )
         else:
-            return [
-                [
-                    dataclasses.replace(
-                        shard,
-                        offset=start_offset,
-                        count=end_offset - start_offset,
-                        byte_offset=None,
-                        byte_size=None,
-                    )
-                    for shard in subshards
-                ]
-            ]
+            return (start_offset,)
 
     @classmethod
     def _split_shards(
         cls,
-        shards: List[Sequence[ShardInfo]],
-        offsets: List[int],
+        shard_cumsums: np.ndarray,
+        offsets: Sequence[int],
         *,
         max_samples_per_sequence: Optional[int],
-    ) -> Generator[List[Sequence[ShardInfo]], None, None]:
+    ) -> Generator[Sequence[int], None, None]:
         """
         Splits the shards into multiple lists based on the offsets. The first offset is the start
-        of the first shard emitted, the last offset is the end of the last shard emitted.
-        (i.e. number of shards emitted is `len(offsets) - 1`)
+        of the first shard emitted, the last offset is the beginning of the last shard emitted.
+        (i.e. number of slice sequences emitted is `len(offsets) - 1`).
 
         Args:
-            shards: The source shards
+            shard_cumsums: The source shard offsets
             offsets: The offsets to samples to get shards for (must be strictly increasing)
             max_samples_per_sequence: Maximum number of samples per sequence (=how many samples
                   will be sequential).
 
         Returns:
-            A list of shards for each offset pair
+            A list of starting offsets for each slice (including the end offset)
         """
-        # The start index of the current shard
-        cum_count = 0
-
         # Find shard idx for start
-        for start_index, start_subshards in enumerate(shards):
-            if cum_count + start_subshards[0].count < offsets[0]:
-                # The shard is before the offset -> go to next shard
-                cum_count += start_subshards[0].count
-                continue
-            else:
-                # The shard contains the offset
-                start_offset = offsets[0] - cum_count
-                break
-        else:
-            raise ValueError("Invalid shard distribution")
+        start_index = np.searchsorted(shard_cumsums, offsets[0], side="right") - 1
 
-        for offset in offsets[1:]:
+        for start_offset, end_offset in zip(offsets, offsets[1:]):
             # Find shard idx for end
-            for end_index, end_subshards in enumerate(shards[start_index:], start=start_index):
-                if cum_count + end_subshards[0].count < offset:
-                    # The shard is before the offset -> go to next shard
-                    cum_count += end_subshards[0].count
-                    continue
-                else:
-                    # The shard contains the offset
-                    end_offset = offset - cum_count
+            end_index = start_index
+            while True:
+                if end_offset <= shard_cumsums[end_index + 1]:
                     break
-            else:
-                raise ValueError("Invalid shard distribution")
+                end_index += 1
             if start_index == end_index:
-                yield cls._split_shard(
-                    start_subshards,
-                    start_offset=start_offset,
-                    end_offset=end_offset,
-                    max_samples_per_sequence=max_samples_per_sequence,
+                yield (
+                    *cls._split_shard(
+                        start_offset=start_offset,
+                        end_offset=end_offset,
+                        max_samples_per_sequence=max_samples_per_sequence,
+                    ),
+                    end_offset,
                 )
             else:
                 # Middle is the original shards, start and end get an offset/length
                 yield (
-                    (
+                    *(
                         cls._split_shard(
-                            start_subshards,
                             start_offset=start_offset,
-                            end_offset=start_subshards[0].count,
+                            end_offset=shard_cumsums[start_index + 1],
                             max_samples_per_sequence=max_samples_per_sequence,
                         )
-                        if start_subshards[0].count > start_offset
-                        else []
-                    )
-                    + sum(
-                        (
-                            cls._split_shard(
-                                subshards,
-                                start_offset=subshards[0].offset,
-                                end_offset=subshards[0].count,
-                                max_samples_per_sequence=max_samples_per_sequence,
-                            )
-                            for subshards in shards[start_index + 1 : end_index]
-                        ),
-                        start=[],
-                    )
-                    + cls._split_shard(
-                        end_subshards,
-                        start_offset=end_subshards[0].offset,
+                        if shard_cumsums[start_index + 1] > start_offset
+                        else ()
+                    ),
+                    *(
+                        offset
+                        for inner_shard_start, inner_shard_end in zip(
+                            shard_cumsums[start_index + 1 : end_index],
+                            shard_cumsums[start_index + 2 : end_index + 1],
+                        )
+                        for offset in cls._split_shard(
+                            start_offset=inner_shard_start,
+                            end_offset=inner_shard_end,
+                            max_samples_per_sequence=max_samples_per_sequence,
+                        )
+                    ),
+                    *cls._split_shard(
+                        start_offset=shard_cumsums[end_index],
                         end_offset=end_offset,
                         max_samples_per_sequence=max_samples_per_sequence,
-                    )
+                    ),
+                    end_offset,
                 )
             start_index = end_index
-            start_subshards = end_subshards
-            start_offset = end_offset
 
     @classmethod
-    def _generalized_bit_reversal(cls, length_or_indices: Union[int, List[int]]) -> List[int]:
+    def _split_slices(
+        cls,
+        offsets: Sequence[int],
+        *,
+        max_samples_per_sequence: Optional[int],
+    ) -> Generator[Sequence[int], None, None]:
+        """
+        Splits the offsets into approximately `max_samples_per_sequence` sized slices. Each sequence
+        of slices includes the end of that sequence.
+
+        Args:
+            offsets: The offsets to samples to get shards for (must be strictly increasing)
+            max_samples_per_sequence: Maximum number of samples per sequence (=how many samples
+                  will be sequential).
+
+        Returns:
+            A list of offsets for each slice sequence.
+        """
+        for start, end in zip(offsets[:-1], offsets[1:]):
+            yield (
+                *cls._split_shard(
+                    start_offset=start,
+                    end_offset=end,
+                    max_samples_per_sequence=max_samples_per_sequence,
+                ),
+                end,
+            )
+
+    @classmethod
+    def _generalized_bit_reversal(
+        cls, length_or_indices: Union[int, Sequence[int]]
+    ) -> Sequence[int]:
         """This function creates a permutation of given length.
         The sequence is created by a recursive divide and interleave algorithm
         to ensure a balanced distribution across ranks.
@@ -208,9 +196,8 @@ class Sharder:
         total_samples: int,
         worker_config: WorkerConfig,
         *,
-        max_samples_per_sequence: Optional[int],
         rotation_offset: int = 0,
-    ) -> List[int]:
+    ) -> Sequence[int]:
 
         # We split the total number of samples into the number of global workers across all ranks.
         # Note that the global number of workers intentionally stays the same if you
@@ -281,17 +268,25 @@ class Sharder:
 
         return local_worker_sample_split_offsets
 
+    @staticmethod
+    def _clean_offsets(offsets: Sequence[int]) -> Sequence[int]:
+        """Removes empty offset slices, i.e. duplicates from offsets."""
+        return (
+            *(int(start) for start, end in zip(offsets, offsets[1:]) if start < end),
+            int(offsets[-1]),
+        )
+
     @classmethod
     def shard_workers(
         cls,
-        shards: List[Sequence[ShardInfo]],
+        shards: Sequence[ShardInfo],
         worker_config: WorkerConfig,
         *,
         max_samples_per_sequence: Optional[int],
         rotation_offset: int = 0,
-    ) -> List[List[Sequence[ShardInfo]]]:
+    ) -> Sequence[Sequence[int]]:
         """
-        Creates subshards (ShardInfo) for each worker of the current rank.
+        Creates shard slices for each worker of the current rank.
         For that, the number of global samples is split across the number of global workers across all
         ranks. Then each worker gets a slice of the global samples.
 
@@ -302,21 +297,58 @@ class Sharder:
         Returns:
             The shards for the current rank and all workers
         """
-        total_samples = sum(subshards[0].count for subshards in shards)
+        total_samples = sum(shard.count for shard in shards)
 
         local_worker_sample_split_offsets = cls.split_samples_to_workers(
             total_samples,
             worker_config,
-            max_samples_per_sequence=max_samples_per_sequence,
             rotation_offset=rotation_offset,
         )
 
-        # 5. Now we can split the shards
-        return list(
+        shard_cumsums = np.cumsum([0] + [shard.count for shard in shards])
+
+        return tuple(
             # Filter out any empty shards for this worker
-            [subshards for subshards in shards if subshards[0].count > 0]
-            for shards in cls._split_shards(
-                shards,
+            cls._clean_offsets(offsets)
+            for offsets in cls._split_shards(
+                shard_cumsums,
+                local_worker_sample_split_offsets,
+                max_samples_per_sequence=max_samples_per_sequence,
+            )
+        )
+
+    @classmethod
+    def slice_workers(
+        cls,
+        total_samples: int,
+        worker_config: WorkerConfig,
+        *,
+        max_samples_per_sequence: Optional[int],
+        rotation_offset: int = 0,
+    ) -> Sequence[Sequence[int]]:
+        """
+        Creates shard slices for each worker of the current rank.
+        For that, the number of global samples is split across the number of global workers across all
+        ranks. Then each worker gets a slice of the global samples.
+
+        Args:
+            shards: The shards to split
+            worker_config: The config for the current rank and workers
+
+        Returns:
+            The shards for the current rank and all workers
+        """
+        local_worker_sample_split_offsets = cls.split_samples_to_workers(
+            total_samples,
+            worker_config,
+            rotation_offset=rotation_offset,
+        )
+
+        # Split the shards
+        return tuple(
+            # Filter out any empty shards for this worker
+            cls._clean_offsets(offsets)
+            for offsets in cls._split_slices(
                 local_worker_sample_split_offsets,
                 max_samples_per_sequence=max_samples_per_sequence,
             )

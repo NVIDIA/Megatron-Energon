@@ -16,6 +16,10 @@ from megatron.energon.flavors.base_dataset import (
 from megatron.energon.flavors.webdataset.error_handler import ErrorHandler
 from megatron.energon.flavors.webdataset.metadata import WebdatasetMeta
 from megatron.energon.flavors.webdataset.prepare import WebdatasetPreparator
+from megatron.energon.flavors.webdataset.sample_loader import (
+    RawSampleData,
+    WebdatasetSampleLoaderDataset,
+)
 from megatron.energon.flavors.webdataset.sharder import Sharder
 from megatron.energon.flavors.webdataset.structs import FilteredSample, ShardInfo, reraise_exception
 from megatron.energon.worker import WorkerConfig
@@ -128,48 +132,70 @@ class BaseWebdatasetFactory(
         else:
             parallel_shard_iters = self.parallel_shard_iters
 
-        rank_shards = self.shard_workers(
-            [(shard,) for shard in self.shards],
-            self.worker_config,
+        workers_sample_slice_offsets = self.shard_workers(
+            self.shards,
+            worker_config=self.worker_config,
             max_samples_per_sequence=self.max_samples_per_sequence,
             rotation_offset=worker_rotation_offset,
         )
-        for rank_idx, inner_shards in enumerate(rank_shards):
-            shards_text = ", ".join(
-                f"{subshard[0].name}[{subshard[0].offset}, {subshard[0].offset+subshard[0].count})"
-                for subshard in inner_shards[:3]
-            )
-            if len(self.shards) > 6:
-                shards_text += f", ...<{len(self.shards) - 6}>, " + ", ".join(
-                    f"{subshards[0].name}[{subshards[0].offset}, {subshards[0].offset+subshards[0].count})"
-                    for subshards in inner_shards[-3:]
+        print(self.shards)
+        import numpy as np
+
+        shard_starts = np.cumsum([0] + [shard.count for shard in self.shards])
+
+        def dbg_range_info(start: int, end: int) -> str:
+            start_shard_idx = np.searchsorted(shard_starts, start, side="right") - 1
+            end_shard_idx = np.searchsorted(shard_starts, end, side="left") - 1
+            if start_shard_idx == end_shard_idx:
+                shard = self.shards[start_shard_idx]
+                return f"{shard.name}[{start - shard_starts[start_shard_idx]}, {end - shard_starts[start_shard_idx]}]"
+            else:
+                start_shard = self.shards[start_shard_idx]
+                end_shard = self.shards[end_shard_idx]
+                return f"{start_shard.name}[{start - shard_starts[start_shard_idx]},]-{end_shard.name}[,{end - shard_starts[end_shard_idx]}]"
+
+        for worker_idx, sample_slice_offsets in enumerate(workers_sample_slice_offsets):
+            start_idx = sample_slice_offsets[0]
+            end_idx = sample_slice_offsets[-1]
+
+            if len(sample_slice_offsets) > 6:
+                offset_str = f"{', '.join(str(o) for o in sample_slice_offsets[:3])} ...<{len(sample_slice_offsets) - 6}> {', '.join(str(o) for o in sample_slice_offsets[-3:])}"
+            else:
+                offset_str = ", ".join(str(o) for o in sample_slice_offsets)
+            if len(sample_slice_offsets) > 6:
+                slices_str = (
+                    ", ".join(
+                        dbg_range_info(start, end)
+                        for start, end in zip(sample_slice_offsets[:3], sample_slice_offsets[1:4])
+                    )
+                    + f" ...<{len(sample_slice_offsets) - 6}> "
+                    + ", ".join(
+                        dbg_range_info(start, end)
+                        for start, end in zip(
+                            sample_slice_offsets[-4:-1], sample_slice_offsets[-3:]
+                        )
+                    )
                 )
-            elif len(self.shards) > 3:
-                shards_text += ", " + ", ".join(
-                    f"{subshards[0].name}[{subshards[0].offset}, {subshards[0].offset+subshards[0].count})"
-                    for subshards in inner_shards[3:]
+            else:
+                slices_str = ", ".join(
+                    dbg_range_info(start, end)
+                    for start, end in zip(sample_slice_offsets[:-1], sample_slice_offsets[1:])
                 )
+
             print(
-                f"rank={self.worker_config.rank}, worker={rank_idx}: shard_range="
-                f"[{shards_text}] "
-                f"sum(count)={sum(subshards[0].count for subshards in inner_shards)}"
+                f"rank={self.worker_config.rank}, worker={worker_idx}: sample_range=[{start_idx}, {end_idx}] in {len(sample_slice_offsets) - 1} slices, "
+                f"sum(count)={end_idx - start_idx}: slices=[{slices_str}]"
             )
 
         itar_dataset = ITarDataset.from_shardinfos(
+            self.path,
             self.shards,
             part_filter=self.part_filter,
         )
 
-        local_worker_sample_split_offsets = self.split_samples_to_workers(
-            len(itar_dataset),
-            self.worker_config,
-            max_samples_per_sequence=self.max_samples_per_sequence,
-            rotation_offset=worker_rotation_offset,
-        )
-
-        dataset = ITarSampleLoaderDataset(
-            itar_datasets=[itar_dataset],
-            local_worker_sample_split_offsets=local_worker_sample_split_offsets,
+        dataset = WebdatasetSampleLoaderDataset(
+            join_readers=[itar_dataset],
+            workers_sample_slice_offsets=workers_sample_slice_offsets,
             worker_config=self.worker_config,
             exclude=self.sample_excludes,
             shuffle_over_epochs=self.shuffle_over_epochs if self.training else None,
@@ -185,10 +211,10 @@ class BaseWebdatasetFactory(
             worker_config=self.worker_config,
         )
 
-    def _load_sample_raw(self, sample: Tuple[Optional[FilteredSample], ...]) -> T_sample:
+    def _load_sample_raw(self, raw_sample: RawSampleData) -> T_sample:
         # Just a wrapper for the inner tuple. Tuple should be of length 1.
-        assert len(sample) == 1 and sample[0] is not None
-        return self.load_sample(sample[0])
+        assert len(raw_sample.data) == 1 and raw_sample.data[0] is not None
+        return self.load_sample(raw_sample.data[0])
 
     @abstractmethod
     def load_sample(self, raw_data: FilteredSample) -> T_sample:

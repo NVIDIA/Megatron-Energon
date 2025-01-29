@@ -31,10 +31,6 @@ class ShardInfo:
     offset: int
     #: The number of samples in this sub shard
     count: int
-    #: The absolute file offset in bytes where this sub shard starts, None if not computed yet
-    byte_offset: Optional[int] = field(default=None, compare=False)
-    #: The length of the sub shard in bytes within the shard file, None if not computed yet
-    byte_size: Optional[int] = field(default=None, compare=False)
 
 
 class FilteredSample(TypedDict):
@@ -45,9 +41,8 @@ class FilteredSample(TypedDict):
     #: The base name of the shard file e.g. "shard_000"
     __shard__: str
     #: Globally unique key to restore a sample from disk.
-    #: For example `("Webdataset", "shard_000", 123)` would restore
-    #: the sample from "shard_000.tar" at byte offset 123.
-    __restore_key__: Tuple[str, str, int]
+    #: For example `("Webdataset", 123)` would restore the sample at index 123.
+    __restore_key__: Tuple[str, int]
 
 
 def reraise_exception(exc: Exception, key: Optional[str]) -> None:
@@ -55,18 +50,3 @@ def reraise_exception(exc: Exception, key: Optional[str]) -> None:
         raise Exception(f"For sample {key!r}") from exc
     else:
         raise
-
-
-@dataclass
-class ShardState:
-    """
-    Represents the iteration state of a single shard. I.e. contains a reference to the shard and the
-    reader's offset.
-    """
-
-    #: The shard of this state
-    shard: ShardInfo
-    #: Sample offset relative to the sub-shard file offset
-    offset: int
-    #: Byte offset relative to the sub-shard file byte offset
-    byte_offset: int

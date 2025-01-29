@@ -3,6 +3,7 @@
 
 """This module defines tests for the dataset."""
 
+from collections import defaultdict
 import dataclasses
 import io
 import json
@@ -475,9 +476,8 @@ class TestDataset(unittest.TestCase):
 
         def hist(data):
             """Histogram function"""
-            r = {}
+            r = defaultdict(lambda: 0)
             for k in data:
-                r.setdefault(k, 0)
                 r[k] += 1
             return r
 
@@ -485,6 +485,7 @@ class TestDataset(unittest.TestCase):
         keys = [key for _ in range(100) for batch in loader for key in batch.__key__]
         # 100 iterations, 2 virtual epoch size, batch size 10
         print(len(keys), keys)
+        print(hist(keys))
         assert len(keys) == 100 * 2 * 10
         # Data should be approximately sampled uniformly (40+-1 samples per key)
         assert all(v in (39, 40, 41) for v in hist(keys).values())

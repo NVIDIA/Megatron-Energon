@@ -12,14 +12,14 @@ from megatron.energon.rng import WorkerRng, WorkerRngMergedState, WorkerRngState
 from megatron.energon.worker import WorkerConfig
 
 
-@dataclass
+@dataclass(slots=True)
 class ITarSampleLoaderState(State):
     #: Rng state
     rng: WorkerRngState
     # TODO
 
 
-@dataclass
+@dataclass(slots=True)
 class ITarSampleLoaderMergedState(MergedState):
     #: Rng state
     rng: WorkerRngMergedState

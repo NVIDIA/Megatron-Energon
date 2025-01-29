@@ -1,7 +1,6 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from io import BytesIO
 from typing import Callable, Dict, List, Optional, Tuple, Union, overload
 
 import torch
@@ -10,7 +9,7 @@ from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.webdataset.config import skip_meta_re, split_name_re
 from megatron.energon.flavors.webdataset.indexing import JoinIndexReader
 from megatron.energon.flavors.webdataset.itar import CachedItarOffsetReader, ITarFile
-from megatron.energon.flavors.webdataset.structs import FilteredSample, ShardInfo, reraise_exception
+from megatron.energon.flavors.webdataset.structs import FilteredSample, ShardInfo
 
 # The cache size determines how many tar files are kept open at the same time.
 ITAR_CACHE_SIZE = 5
@@ -18,6 +17,9 @@ ITAR_CACHE_SIZE = 5
 
 class ITarDataset:
     """
+    The ITarDataset represents a sequence of tar files with samples. They are virtually concatenated
+    and thus indexable by a single index.
+
     An ITarDataset keeps a list of pointers to samples in various tar files.
     Each sample can be in a different tar file and at a different offset.
     It supports random access to any sample at any time, but in case of sequential access,
@@ -30,12 +32,12 @@ class ITarDataset:
     For memory efficiency, the sample list is stored as a torch tensor without strings.
     """
 
+    base_path: EPath
     tar_filenames: List[str]
     tar_filepaths: List[EPath]
     itar_files_cache: Dict[int, ITarFile]
-    samples: (
-        torch.Tensor
-    )  # Shape [num_samples, 3] with columns [tar_file_id, byte_offset, byte_size]
+    # Shape [num_samples, 3] with columns [tar_file_id, byte_offset, byte_size]
+    samples: torch.Tensor
     part_filter: Optional[Callable[[str], bool]]
 
     COL_TAR_FILE_ID = 0
@@ -44,12 +46,14 @@ class ITarDataset:
 
     def __init__(
         self,
+        base_path: EPath,
         tar_filenames: List[str],
         tar_filepaths: List[EPath],
         samples: torch.Tensor,
         part_filter: Optional[Callable[[str], bool]] = None,
     ):
         assert len(tar_filenames) == len(tar_filepaths)
+        self.base_path = base_path
         self.tar_filenames = tar_filenames
         self.tar_filepaths = tar_filepaths
         self.itar_files_cache = dict()
@@ -79,11 +83,15 @@ class ITarDataset:
         for tar_filename in tar_filenames:
             tar_filepaths.append(base_path / tar_filename)
 
-        return ITarDataset(tar_filenames, tar_filepaths, samples, part_filter=part_filter)
+        return ITarDataset(
+            base_path, tar_filenames, tar_filepaths, samples, part_filter=part_filter
+        )
 
     @staticmethod
     def from_shardinfos(
-        shardinfos: List[ShardInfo], part_filter: Optional[Callable[[str], bool]] = None
+        base_path: EPath,
+        shardinfos: List[ShardInfo],
+        part_filter: Optional[Callable[[str], bool]] = None,
     ) -> "ITarDataset":
         """
         Create an ITarDataset from a list of ShardInfos.
@@ -132,6 +140,7 @@ class ITarDataset:
         assert samp_idx == num_samples
 
         return ITarDataset(
+            base_path,
             list(cur_tar_files.keys()),
             [x[1] for x in cur_tar_files.values()],
             samples,
@@ -176,6 +185,7 @@ class ITarDataset:
 
         if isinstance(key, slice):
             return ITarDataset(
+                base_path=self.base_path,
                 tar_filenames=self.tar_filenames,
                 tar_filepaths=self.tar_filepaths,
                 samples=self.samples[key],
@@ -242,6 +252,9 @@ class ITarDataset:
         return FilteredSample(
             __key__=cur_base_name,
             __shard__=self.tar_filenames[tar_file_id],
-            __restore_key__=("itar", "", idx),
+            __restore_key__=("Webdataset", idx),
             **group_parts,
         )
+
+    def __str__(self):
+        return f"ITarReader(len={len(self)}, base_path={self.base_path}, len(shards)={len(self.tar_filenames)}, shards=[{self.tar_filenames[0]}, ...])"

@@ -103,7 +103,7 @@ class ExtendableDataclassMixin:
         return cls(**kwargs)
 
 
-@dataclass
+@dataclass(slots=True)
 class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
     """An abstract base class for one element of a batch.
     Each task should derive a specific subclass as a `@dataclass`, like
@@ -184,7 +184,7 @@ class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
         return cls(**init_args)
 
 
-@dataclass
+@dataclass(slots=True)
 class State(ABC, ExtendableDataclassMixin):
     """An abstract base class for the state of a dataset. See :class:`megatron.energon.SavableDataset`.
     The state of a dataset is used to save and restore the dataset state (i.e. random generators,
@@ -221,7 +221,7 @@ class State(ABC, ExtendableDataclassMixin):
     """
 
 
-@dataclass
+@dataclass(slots=True)
 class MergedState(ABC, ExtendableDataclassMixin):
     """An abstract base class for the merged state of a dataset. See :class:`SavableDataset`.
     The merged state is created in the :meth:`megatron.energon.SavableDataset.merge_states` method, and
