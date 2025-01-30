@@ -1,11 +1,12 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+import gc
 import os
 import re
 from pathlib import Path as PathlibPath
 from pathlib import PurePosixPath
-from typing import Any, Dict, Generator, List, Optional, Tuple, Union
+from typing import Any, BinaryIO, Dict, Generator, Literal, Optional, TextIO, Tuple, Union, overload
 
 import fsspec
 import s3fs
@@ -25,18 +26,19 @@ class EPath:
     Currently only S3-based rclone remotes are supported.
     """
 
-    internal_path: PurePosixPath  # The path without the protocol. Can also be in S3 for example
+    # The path without the protocol. Can also be in S3 for example
+    internal_path: PurePosixPath
     fs: AbstractFileSystem
     protocol: str
-    num_fs_path_parts: (
-        int  # Number of parts in the internal_path that are part of the file system specification
-    )
+    # Number of parts in the internal_path that are part of the file system specification
+    num_fs_path_parts: int
     s3_args: Optional[Dict[str, Any]]
 
     def __init__(
         self,
         initial_path: Union[str, "EPath", PathlibPath],
-        config_override: Optional[Dict[str, ConfigEntry]] = None,
+        *,
+        _test_config_override: Optional[Dict[str, ConfigEntry]] = None,
     ) -> None:
         self.s3_args = None
 
@@ -68,12 +70,32 @@ class EPath:
 
                 remote_name = self.internal_path.parts[1]
                 self.fs, self.s3_args = self.create_s3fs_from_rclone_remote(
-                    remote_name, config_override=config_override
+                    remote_name, config_override=_test_config_override
                 )
                 self.protocol = "rclone"
-                self.num_fs_path_parts = 2  # Root and remote name
+                # Root and remote name
+                self.num_fs_path_parts = 2
             else:
                 raise ValueError(f"Unknown protocol: {protocol}")
+
+    def __getstate__(self):
+        return {
+            "internal_path": self.internal_path,
+            "protocol": self.protocol,
+        }
+
+    def __setstate__(self, state) -> None:
+        self.internal_path = state["internal_path"]
+        self.protocol = state["protocol"]
+        if self.protocol == "local":
+            self.fs = LocalFileSystem()
+            self.s3_args = None
+            self.num_fs_path_parts = 0
+        elif self.protocol == "rclone":
+            self.fs, self.s3_args = self.create_s3fs_from_rclone_remote(self.internal_path.parts[1])
+            self.num_fs_path_parts = 2
+        else:
+            raise ValueError(f"Unknown protocol: {self.protocol}")
 
     @staticmethod
     def _resolve(path: Union[str, PurePosixPath]) -> PurePosixPath:
@@ -147,7 +169,7 @@ class EPath:
         return s3fs.S3FileSystem(**s3_args), s3_args  # type: ignore
 
     @staticmethod
-    def prepare_forked_process():
+    def _after_fork_global():
         """Clear the cache of instances created by EPath and the async stuff.
         This is needed to avoid issues when forking a process that uses EPath.
 
@@ -161,7 +183,7 @@ class EPath:
 
         s3fs.S3FileSystem.clear_instance_cache()
 
-    def fork_guard(self):
+    def _after_fork(self):
         """Check if this EPath instance is a forked copy with S3FS and re-create S3FS if needed.
 
         This method should be called before any operation that potentially uses the S3FS instance.
@@ -181,8 +203,15 @@ class EPath:
         """Return the path as used inside the file system, without the protocol and fs part."""
         return str(PurePosixPath("/", *self.internal_path.parts[self.num_fs_path_parts :]))
 
-    def open(self, mode="r", block_size=None):
-        self.fork_guard()
+    @overload
+    def open(self, mode: Literal["r", "w"] = "r", block_size: Optional[int] = None) -> TextIO: ...
+
+    @overload
+    def open(self, mode: Literal["rb", "wb"], block_size: Optional[int] = None) -> BinaryIO: ...
+
+    def open(
+        self, mode: Literal["r", "rb", "w", "wb"] = "r", block_size: Optional[int] = None
+    ) -> Union[TextIO, BinaryIO]:
         assert self.is_absolute()
         return self.fs.open(self._internal_nonfs_path, mode, block_size=block_size)
 
@@ -230,17 +259,14 @@ class EPath:
             return self
 
     def is_dir(self):
-        self.fork_guard()
         assert self.is_absolute()
         return self.fs.isdir(self._internal_nonfs_path)
 
     def is_file(self):
-        self.fork_guard()
         assert self.is_absolute()
         return self.fs.isfile(self._internal_nonfs_path)
 
     def mkdir(self, exist_ok: bool = True, parents: bool = False):
-        self.fork_guard()
         assert self.is_absolute()
         if parents:
             return self.fs.makedirs(self._internal_nonfs_path, exist_ok=exist_ok)
@@ -254,7 +280,6 @@ class EPath:
                     raise
 
     def glob(self, pattern) -> Generator["EPath", None, None]:
-        self.fork_guard()
         assert self.is_absolute()
 
         search_path_pattern = (self / pattern)._internal_nonfs_path
@@ -277,7 +302,6 @@ class EPath:
             yield new_path
 
     def size(self):
-        self.fork_guard()
         assert self.is_absolute()
         return self.fs.size(self._internal_nonfs_path)
 
@@ -287,7 +311,6 @@ class EPath:
         return new_path
 
     def move(self, target: "EPath"):
-        self.fork_guard()
         assert self.is_absolute()
         assert target.is_absolute()
 
@@ -298,12 +321,10 @@ class EPath:
         self.fs.mv(self._internal_nonfs_path, target._internal_nonfs_path)
 
     def unlink(self):
-        self.fork_guard()
         assert self.is_absolute()
         return self.fs.rm(self._internal_nonfs_path)
 
     def relative_to(self, other: "EPath") -> str:
-        self.fork_guard()
         assert self.is_absolute()
         assert other.is_absolute()
 
@@ -342,7 +363,6 @@ class EPath:
         return new_path
 
     def __lt__(self, other: "EPath"):
-        self.fork_guard()
         assert self.fs == other.fs, "Cannot compare paths from different file systems"
         assert self.protocol == other.protocol, "Cannot compare paths from different file systems"
         assert (
@@ -365,3 +385,27 @@ class EPath:
 
     def __eq__(self, other):
         return self.internal_path == other.internal_path and self.protocol == other.protocol
+
+
+def _cleanup_fork():
+    """Cleanup function to be called after forking a process."""
+    import sys
+
+    if "torch" in sys.modules:
+        # This is so stupid, but pytorch will trigger a warning if calling isinstance of this object.
+        # So we need to ignore this specific object.
+        import torch
+
+        if hasattr(torch, "distributed"):
+            ignore_obj = getattr(torch.distributed, "reduce_op", None)
+        else:
+            ignore_obj = None
+    else:
+        ignore_obj = None
+    EPath._after_fork_global()
+    for object in gc.get_objects():
+        if object is not ignore_obj and isinstance(object, EPath):
+            object._after_fork()
+
+
+os.register_at_fork(after_in_child=_cleanup_fork)

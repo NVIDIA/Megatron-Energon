@@ -4,6 +4,7 @@
 """This module tests the EPath class, our custom version of pathlib.Path"""
 
 import logging
+import multiprocessing
 import struct
 import sys
 import unittest
@@ -103,17 +104,46 @@ class TestEPath(unittest.TestCase):
         }
 
         # Test globbing
-        p = EPath("rclone://s3/tmp/path/subpath.txt", config_override=config_override)
+        p = EPath("rclone://s3/tmp/path/subpath.txt", _test_config_override=config_override)
         assert str(p) == "rclone://s3/tmp/path/subpath.txt", str(p)
 
         p2 = p / ".." / "subpath2.txt"
         assert str(p2) == "rclone://s3/tmp/path/subpath2.txt", str(p2)
 
-        p3 = EPath("rclone://s3/tmp/path/.././subpath.txt", config_override=config_override)
+        p3 = EPath("rclone://s3/tmp/path/.././subpath.txt", _test_config_override=config_override)
         assert str(p3) == "rclone://s3/tmp/subpath.txt", str(p3)
 
         p4 = p3.parent / "../bla/bla/bla/../../../no/../subpath2.txt"
         assert str(p4) == "rclone://s3/subpath2.txt", str(p4)
+
+    def test_multiprocessing(self):
+        """Test EPath in multiprocessing context"""
+        p = EPath("/tmp/path/subpath.txt")
+
+        orig_start_method = multiprocessing.get_start_method()
+        try:
+            multiprocessing.set_start_method("spawn", force=True)
+            
+            proc = multiprocessing.Process(target=_multiproc_test_func, args=(p, True))
+            proc.start()
+            proc.join()
+            assert proc.exitcode == 0
+
+            multiprocessing.set_start_method("fork", force=True)
+            
+            proc = multiprocessing.Process(target=_multiproc_test_func, args=(p, True))
+            proc.start()
+            proc.join()
+            assert proc.exitcode == 0
+        finally:
+            multiprocessing.set_start_method(orig_start_method, force=True)
+
+
+def _multiproc_test_func(p: EPath, test_function: bool):
+    """Helper function for multiprocessing test"""
+    print(f"str: {str(p)}")
+    if test_function:
+        print(f"is_file: {p.is_file()}")
 
 
 if __name__ == "__main__":
