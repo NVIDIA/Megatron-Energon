@@ -6,6 +6,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Generic, List, Optional, Sequence, Tuple, TypeVar
 
+import numpy as np
+
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.base_dataset import (
     BaseCoreDatasetFactory,
@@ -138,82 +140,19 @@ class BaseWebdatasetFactory(
             max_samples_per_sequence=self.max_samples_per_sequence,
             rotation_offset=worker_rotation_offset,
         )
-        print(self.shards)
-        import numpy as np
-
-        shard_starts = np.cumsum([0] + [shard.count for shard in self.shards])
-
-        def dbg_range_info(start: int, end: int) -> str:
-            start_shard_idx = np.searchsorted(shard_starts, start, side="right") - 1
-            end_shard_idx = np.searchsorted(shard_starts, end, side="left") - 1
-            if start_shard_idx == end_shard_idx:
-                shard = self.shards[start_shard_idx]
-                if start - shard_starts[start_shard_idx] == 0:
-                    start_str = "(start)"
-                else:
-                    start_str = ""
-                if end - shard_starts[start_shard_idx] == shard.count:
-                    end_str = "(end)"
-                else:
-                    end_str = ""
-                return f"{shard.name}[{start - shard_starts[start_shard_idx]}{start_str}, {end - shard_starts[start_shard_idx]}{end_str}]"
-            else:
-                start_shard = self.shards[start_shard_idx]
-                end_shard = self.shards[end_shard_idx]
-                if start - shard_starts[start_shard_idx] == 0:
-                    start_str = "(start)"
-                else:
-                    start_str = ""
-                if end - shard_starts[end_shard_idx] == end_shard.count:
-                    end_str = "(end)"
-                else:
-                    end_str = ""
-                return f"{start_shard.name}[{start - shard_starts[start_shard_idx]}{start_str},]-{end_shard.name}[,{end - shard_starts[end_shard_idx]}{end_str}]"
-
-        for worker_idx, sample_slice_offsets in enumerate(workers_sample_slice_offsets):
-            start_idx = sample_slice_offsets[0]
-            end_idx = sample_slice_offsets[-1]
-
-            if len(sample_slice_offsets) > 6:
-                offset_str = f"{', '.join(str(o) for o in sample_slice_offsets[:3])} ...<{len(sample_slice_offsets) - 6}> {', '.join(str(o) for o in sample_slice_offsets[-3:])}"
-            else:
-                offset_str = ", ".join(str(o) for o in sample_slice_offsets)
-            if len(sample_slice_offsets) > 6:
-                slices_str = (
-                    ", ".join(
-                        dbg_range_info(start, end)
-                        for start, end in zip(sample_slice_offsets[:3], sample_slice_offsets[1:4])
-                    )
-                    + f" ...<{len(sample_slice_offsets) - 6}> "
-                    + ", ".join(
-                        dbg_range_info(start, end)
-                        for start, end in zip(
-                            sample_slice_offsets[-4:-1], sample_slice_offsets[-3:]
-                        )
-                    )
-                )
-            else:
-                slices_str = ", ".join(
-                    dbg_range_info(start, end)
-                    for start, end in zip(sample_slice_offsets[:-1], sample_slice_offsets[1:])
-                )
-
-            print(
-                f"rank={self.worker_config.rank}, worker={worker_idx}: sample_range=[{start_idx}, {end_idx}] in {len(sample_slice_offsets) - 1} slices, "
-                f"sum(count)={end_idx - start_idx}: slices=[{slices_str}]"
-            )
+        _print_shard_slices(self.worker_config, self.shards, workers_sample_slice_offsets)
 
         itar_reader = ITarReader.from_shardinfos(
             self.path,
             self.shards,
             part_filter=self.part_filter,
+            sample_filter=self.sample_filter,
         )
 
         dataset = WebdatasetSampleLoaderDataset(
             join_readers=[itar_reader],
             workers_sample_slice_offsets=workers_sample_slice_offsets,
             worker_config=self.worker_config,
-            exclude=self.sample_excludes,
             shuffle_over_epochs=self.shuffle_over_epochs if self.training else None,
             parallel_slice_iters=parallel_shard_iters,
             handler=self.sample_error_handler,
@@ -226,6 +165,9 @@ class BaseWebdatasetFactory(
             map_fn_config=self.config,
             worker_config=self.worker_config,
         )
+
+    def sample_filter(self, key: str) -> bool:
+        return key not in self.sample_excludes
 
     def _load_sample_raw(self, raw_sample: RawSampleData) -> T_sample:
         # Just a wrapper for the inner tuple. Tuple should be of length 1.
@@ -249,3 +191,67 @@ class BaseWebdatasetFactory(
 
     def __str__(self):
         return f"{type(self).__name__}(path={self.path})"
+
+
+def _print_shard_slices(
+    worker_config: WorkerConfig, shards: List[ShardInfo], slice_offsets: Sequence[Sequence[int]]
+):
+    shard_starts = np.cumsum([0] + [shard.count for shard in shards])
+
+    def shard_range_info(start: int, end: int) -> str:
+        start_shard_idx = np.searchsorted(shard_starts, start, side="right") - 1
+        end_shard_idx = np.searchsorted(shard_starts, end, side="left") - 1
+        if start_shard_idx == end_shard_idx:
+            shard = shards[start_shard_idx]
+            if start - shard_starts[start_shard_idx] == 0:
+                start_str = "(start)"
+            else:
+                start_str = ""
+            if end - shard_starts[start_shard_idx] == shard.count:
+                end_str = "(end)"
+            else:
+                end_str = ""
+            return f"{shard.name}[{start - shard_starts[start_shard_idx]}{start_str}, {end - shard_starts[start_shard_idx]}{end_str}]"
+        else:
+            start_shard = shards[start_shard_idx]
+            end_shard = shards[end_shard_idx]
+            if start - shard_starts[start_shard_idx] == 0:
+                start_str = "(start)"
+            else:
+                start_str = ""
+            if end - shard_starts[end_shard_idx] == end_shard.count:
+                end_str = "(end)"
+            else:
+                end_str = ""
+            return f"{start_shard.name}[{start - shard_starts[start_shard_idx]}{start_str},]-{end_shard.name}[,{end - shard_starts[end_shard_idx]}{end_str}]"
+
+    for worker_idx, sample_slice_offsets in enumerate(slice_offsets):
+        start_idx = sample_slice_offsets[0]
+        end_idx = sample_slice_offsets[-1]
+
+        if len(sample_slice_offsets) > 6:
+            offset_str = f"{', '.join(str(o) for o in sample_slice_offsets[:3])} ...<{len(sample_slice_offsets) - 6}> {', '.join(str(o) for o in sample_slice_offsets[-3:])}"
+        else:
+            offset_str = ", ".join(str(o) for o in sample_slice_offsets)
+        if len(sample_slice_offsets) > 6:
+            slices_str = (
+                ", ".join(
+                    shard_range_info(start, end)
+                    for start, end in zip(sample_slice_offsets[:3], sample_slice_offsets[1:4])
+                )
+                + f" ...<{len(sample_slice_offsets) - 6}> "
+                + ", ".join(
+                    shard_range_info(start, end)
+                    for start, end in zip(sample_slice_offsets[-4:-1], sample_slice_offsets[-3:])
+                )
+            )
+        else:
+            slices_str = ", ".join(
+                shard_range_info(start, end)
+                for start, end in zip(sample_slice_offsets[:-1], sample_slice_offsets[1:])
+            )
+
+        print(
+            f"rank={worker_config.rank}, worker={worker_idx}: sample_range=[{start_idx}, {end_idx}] in {len(sample_slice_offsets) - 1} slices, "
+            f"sum(count)={end_idx - start_idx}: indexes=[{offset_str}] slices=[{slices_str}]"
+        )

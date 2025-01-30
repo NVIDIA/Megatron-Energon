@@ -332,7 +332,7 @@ class Sharder:
         ranks. Then each worker gets a slice of the global samples.
 
         Args:
-            shards: The shards to split
+            total_samples: The total number of samples
             worker_config: The config for the current rank and workers
 
         Returns:

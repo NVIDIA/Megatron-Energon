@@ -442,7 +442,7 @@ class TestDataset(unittest.TestCase):
         keys = [entry.__key__ for entry in get_loader(ds.build())]
         assert keys == [
             f"parts/data-1.tar/{i:06d}" for i in list(range(30, 35)) + list(range(40, 50))
-        ]
+        ], keys
 
     def test_loader(self):
         torch.manual_seed(42)
@@ -456,7 +456,7 @@ class TestDataset(unittest.TestCase):
                     __key__=sample.__key__,
                     __restore_key__=sample.__restore_key__,
                     image=sample.image,
-                    caption=torch.frombuffer(sample.caption.encode(), dtype=torch.uint8),
+                    caption=torch.frombuffer(bytearray(sample.caption.encode()), dtype=torch.uint8),
                 )
 
         loader = get_loader(

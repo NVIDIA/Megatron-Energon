@@ -1,12 +1,14 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+import concurrent.futures
 import functools
 import logging
-import multiprocessing as mp
+import multiprocessing
 import random
 import re
 import tarfile
+import threading
 from pathlib import Path
 from typing import (
     Any,
@@ -14,7 +16,7 @@ from typing import (
     Container,
     Dict,
     Generator,
-    Iterable,
+    Iterator,
     List,
     Optional,
     Set,
@@ -38,14 +40,56 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T", covariant=True)
 
 
+def _mp_pool_init(sqlite_queue: multiprocessing.Queue) -> None:
+    """Sets the globally shared sqlite queue. Unfortunately, this has to be a global object :-/"""
+    global _SQLITE_QUEUE
+    _SQLITE_QUEUE = sqlite_queue
+
+
+class MultiprocessingSqliteIndexWriter:
+    """
+    This class is a wrapper around SqliteIndexWriter to allow it to be used in multiprocessing.
+
+    It works by creating a single writer on the main process. When passed to a subprocess, the
+    processes communicate via a multiprocessing queue to the main process and submit the samples to
+    be written to the sqlite database.
+
+    It internally creates another process for writing.
+    """
+
+    def __init__(self, sqlite_path: EPath):
+        self.sqlite_path = sqlite_path
+        self.queue = multiprocessing.Queue()
+
+    def put(self, sample: Dict[str, Any]) -> None:
+        self.queue.put(sample)
+
+    def _write_samples(self) -> None:
+        with SqliteIndexWriter(self.sqlite_path) as idx_writer:
+            while True:
+                sample = self.queue.get()
+                if sample is None:
+                    break
+                idx_writer.append_sample(**sample)
+
+    def __enter__(self) -> "MultiprocessingSqliteIndexWriter":
+        self._sqlwriter_proc = threading.Thread(target=self._write_samples)
+        self._sqlwriter_proc.start()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.queue.put(None)
+        self._sqlwriter_proc.join()
+        del self._sqlwriter_proc
+
+
 class WebdatasetPreparator:
 
     @staticmethod
     def _preprocess_tar(
         path: Union[str, EPath],
-        parent_path: Union[str, EPath],
+        parent_path: EPath,
         max_parts: int,
-        sqlite_path: EPath,
     ) -> Tuple[ShardInfo, Set[str]]:
         """Process a single tar file, i.e. read the tarinfos, generate the tar index and return
         stats.
@@ -54,6 +98,7 @@ class WebdatasetPreparator:
             path: Path to the tar file.
             parent_path: Root path of the dataset.
             max_parts: Maximum number of different parts to return
+            sqlite_writer: SqliteIndexWriter to write the index to.
 
         Returns:
             Tuple of shard info and found keys of the loaded dicts.
@@ -73,7 +118,7 @@ class WebdatasetPreparator:
             with shard_info.path.open("rb") as f:
                 with tarfile.open(fileobj=f, mode="r:*") as tar, TarIndexWriter(
                     shard_info.path
-                ) as iw, SqliteIndexWriter(EPath(sqlite_path)) as sqlite_indexer:
+                ) as iw:
                     count = 0
                     parts = set()
                     last_base_name = None
@@ -101,10 +146,10 @@ class WebdatasetPreparator:
                             iw.append(member.offset)
 
                             if next_index_sample is not None:
-                                sqlite_indexer.append_sample(
-                                    **next_index_sample,
-                                    byte_size=member.offset - next_index_sample["byte_offset"],
+                                next_index_sample["byte_size"] = (
+                                    member.offset - next_index_sample["byte_offset"]
                                 )
+                                _SQLITE_QUEUE.put(next_index_sample)
 
                             next_index_sample = dict(
                                 tar_file=path.relpath,
@@ -117,10 +162,10 @@ class WebdatasetPreparator:
                     shard_info.count = count
                     iw.append(tar.offset)
                     if next_index_sample is not None:
-                        sqlite_indexer.append_sample(
-                            **next_index_sample,
-                            byte_size=tar.offset - next_index_sample["byte_offset"],
+                        next_index_sample["byte_size"] = (
+                            tar.offset - next_index_sample["byte_offset"]
                         )
+                        _SQLITE_QUEUE.put(next_index_sample)
             return shard_info, parts
         except BaseException:
             logger.exception(f"Shard failed to load: {path!r}. Skipping it.")
@@ -181,7 +226,7 @@ class WebdatasetPreparator:
         info_config: str = ".info.yaml",
         split_config: str = "split.yaml",
         shuffle_seed: Optional[int] = 42,
-        progress_fn: Callable[[List[T], int], Iterable[T]] = (lambda x, l: x),
+        progress_fn: Callable[[Iterator[T], int], Iterator[T]] = (lambda x, l: x),
         workers: int = 32,
         tar_index_only: bool = False,
     ) -> Set[str]:
@@ -215,15 +260,17 @@ class WebdatasetPreparator:
 
         (parent_path / MAIN_FOLDER_NAME).mkdir(exist_ok=True)
 
-        # use functools partial to pass parent_path to process_tar
-        process_tar = functools.partial(
-            cls._preprocess_tar,
-            parent_path=parent_path.url,  # convert to url string, to avoid EPath in multiprocessing
-            max_parts=50,
-            sqlite_path=parent_path / MAIN_FOLDER_NAME / "index.sqlite",
-        )
-
-        with mp.Pool(workers) as pool:
+        with MultiprocessingSqliteIndexWriter(
+            parent_path / MAIN_FOLDER_NAME / "index.sqlite"
+        ) as sqlite_writer, multiprocessing.Pool(
+            workers, initializer=_mp_pool_init, initargs=(sqlite_writer.queue,)
+        ) as pool:
+            process_tar = functools.partial(
+                cls._preprocess_tar,
+                # convert to url string, to avoid EPath in multiprocessing
+                parent_path=parent_path,
+                max_parts=50,
+            )
             shard_info: ShardInfo
             cur_parts: Set[str]
             for shard_info, cur_parts in progress_fn(pool.imap(process_tar, paths), len(paths)):

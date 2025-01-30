@@ -5,7 +5,7 @@ import contextlib
 import struct
 import tarfile
 from types import TracebackType
-from typing import BinaryIO, Optional, Tuple, Type, Union
+from typing import BinaryIO, Generator, Optional, Tuple, Type, Union
 
 from megatron.energon.epathlib import EPath
 from megatron.energon.retry_stream import RetryReadStream
@@ -25,6 +25,15 @@ class TarIndexReader:
 
         self.itar.seek(8 * index)
         return struct.unpack("Q", self.itar.read(8))[0]
+
+    def __iter__(self) -> Generator[int, None, None]:
+        self.itar.seek(0)
+        while True:
+            raw = self.itar.read(8)
+            if len(raw) == 0:
+                break
+            assert len(raw) == 8
+            yield struct.unpack("Q", raw)[0]
 
     def __len__(self) -> int:
         self.itar.seek(0, 2)

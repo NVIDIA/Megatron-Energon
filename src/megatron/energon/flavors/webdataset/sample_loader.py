@@ -101,8 +101,6 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
     join_readers: Sequence[ITarReader]
     #: The offsets of the slice slices to iterate over
     worker_slice_offsets: Sequence[Sequence[int]]
-    # Sample keys to ignore
-    exclude: Set[str]
 
     # If = 1, every sample is seen exactly once per epoch. If > 1, samples
     # (or rather slice slices) are shuffled within this number of epochs (i.e. randomly
@@ -141,7 +139,6 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
         workers_sample_slice_offsets: Sequence[Sequence[int]],
         *,
         worker_config: WorkerConfig,
-        exclude: Set[str],
         part_filter: Optional[Callable[[str], bool]] = None,
         shuffle_over_epochs: Optional[int] = None,
         parallel_slice_iters: int = 1,
@@ -151,11 +148,9 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
         The webdataset loader. Iterates over the slice infos and yields the samples.
 
         Args:
-            join_readers: A sequence of the joined readers (or just a single slice) to iterate over.
+            join_readers: A sequence of the joined readers (or just a single reader) to iterate over.
             worker_slice_offsets: The offsets of the slice slices to iterate over, for each worker.
             worker_config: The worker configuration.
-            exclude: A set of strings of the form "<shard name>" or "<shard name>/<sample index>" to
-                exclude from iteration.
             part_filter: If not None, use this function to filter out wds files.
             shuffle_over_epochs: If None, disable shuffling.
                 If = 1, every sample is seen exactly once per epoch.
@@ -171,7 +166,6 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
         super().__init__(worker_config=worker_config)
         self.join_readers = join_readers
         self.worker_slice_offsets = workers_sample_slice_offsets
-        self.exclude = exclude
         self.part_filter = part_filter
         self.shuffle_over_epochs = shuffle_over_epochs
         self.parallel_slice_iters = parallel_slice_iters
@@ -363,25 +357,10 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
             slice_state = active_slices[slice_idx]
             assert slice_state is not None
             sample = self._get_sample(slice_state.current)
-            # print(f"Read sample at {slice_state.current} -> {sample.data[0]['__key__']}")
+            # print(f"Read sample at {slice_state.current} -> {'None' if sample is None or sample.data[0] is None else sample.data[0]['__key__']}")
             slice_state.current += 1
             self._sample_count[worker_idx] += 1
             self._epoch_sample_count[worker_idx] += 1
-            if self.worker_config.should_log(level=1):
-                self.worker_config.worker_log(
-                    {
-                        "t": "WebdatasetSampleLoaderDataset._slices_iter.yield",
-                        "r": self.worker_config.rank,
-                        "w": self.worker_config.rank_worker_id(),
-                        "index": sample.__restore_key__[1],
-                        "key": sample.data[0]["__key__"],
-                        "count": self._sample_count[worker_idx],
-                        "epoch": self._epoch_count[worker_idx],
-                        "epoch_count": self._epoch_sample_count[worker_idx],
-                    }
-                )
-            assert sample is not None
-            yield sample
             if slice_state.current >= slice_offsets[slice_state.index + 1]:
                 # Iterator exhausted -> take next / remove from list
                 if len(pending_slice_indexes) > 0 or self.shuffle_over_epochs == -1:
@@ -426,6 +405,24 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
                             "probs": active_slice_probs.tolist(),
                         }
                     )
+            if sample.data[0] is not None:
+                # Otherwise the sample was skipped.
+                if self.worker_config.should_log(level=1):
+                    self.worker_config.worker_log(
+                        {
+                            "t": "WebdatasetSampleLoaderDataset._slices_iter.yield",
+                            "r": self.worker_config.rank,
+                            "w": self.worker_config.rank_worker_id(),
+                            "index": sample.__restore_key__[1],
+                            "key": sample.data[0]["__key__"],
+                            "count": self._sample_count[worker_idx],
+                            "epoch": self._epoch_count[worker_idx],
+                            "epoch_count": self._epoch_sample_count[worker_idx],
+                        }
+                    )
+                # Now, yield the sample
+                yield sample
+                del sample
         if self.worker_config.should_log(level=2):
             self.worker_config.worker_log(
                 {
@@ -628,7 +625,6 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
             ],
             "slice_offsets": self.worker_slice_offsets,
             "worker_config": self.worker_config.config(),
-            "exclude": list(self.exclude),
             "shuffle_over_epochs": self.shuffle_over_epochs,
             "parallel_slice_iters": self.parallel_slice_iters,
         }

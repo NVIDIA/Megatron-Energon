@@ -39,6 +39,7 @@ class ITarReader:
     # Shape [num_samples, 3] with columns [tar_file_id, byte_offset, byte_size]
     samples: torch.Tensor
     part_filter: Optional[Callable[[str], bool]]
+    sample_filter: Optional[Callable[[str], bool]]
 
     COL_TAR_FILE_ID = 0
     COL_BYTE_OFFSET = 1
@@ -51,6 +52,7 @@ class ITarReader:
         tar_filepaths: List[EPath],
         samples: torch.Tensor,
         part_filter: Optional[Callable[[str], bool]] = None,
+        sample_filter: Optional[Callable[[str], bool]] = None,
     ):
         assert len(tar_filenames) == len(tar_filepaths)
         self.base_path = base_path
@@ -59,6 +61,7 @@ class ITarReader:
         self.itar_files_cache = dict()
         self.samples = samples
         self.part_filter = part_filter
+        self.sample_filter = sample_filter
 
     @staticmethod
     def from_join_index_file(
@@ -67,6 +70,7 @@ class ITarReader:
         tar_filenames: List[str],
         base_path: EPath,
         part_filter: Optional[Callable[[str], bool]] = None,
+        sample_filter: Optional[Callable[[str], bool]] = None,
     ) -> "ITarReader":
         """
         Create an ITarReader from one column of a join index file.
@@ -83,13 +87,21 @@ class ITarReader:
         for tar_filename in tar_filenames:
             tar_filepaths.append(base_path / tar_filename)
 
-        return ITarReader(base_path, tar_filenames, tar_filepaths, samples, part_filter=part_filter)
+        return ITarReader(
+            base_path,
+            tar_filenames,
+            tar_filepaths,
+            samples,
+            part_filter=part_filter,
+            sample_filter=sample_filter,
+        )
 
     @staticmethod
     def from_shardinfos(
         base_path: EPath,
         shardinfos: List[ShardInfo],
         part_filter: Optional[Callable[[str], bool]] = None,
+        sample_filter: Optional[Callable[[str], bool]] = None,
     ) -> "ITarReader":
         """
         Create an ITarReader from a list of ShardInfos.
@@ -143,6 +155,7 @@ class ITarReader:
             [x[1] for x in cur_tar_files.values()],
             samples,
             part_filter=part_filter,
+            sample_filter=sample_filter,
         )
 
     def __len__(self):
@@ -171,12 +184,12 @@ class ITarReader:
         return self.itar_files_cache[tar_file_id]
 
     @overload
-    def __getitem__(self, key: int) -> FilteredSample: ...
+    def __getitem__(self, key: int) -> Optional[FilteredSample]: ...
 
     @overload
     def __getitem__(self, key: slice) -> "ITarReader": ...
 
-    def __getitem__(self, key: Union[slice, int]) -> Union["ITarReader", FilteredSample]:
+    def __getitem__(self, key: Union[slice, int]) -> Union["ITarReader", FilteredSample, None]:
         """
         Get a sample from the dataset or slice it.
         """
@@ -188,6 +201,7 @@ class ITarReader:
                 tar_filepaths=self.tar_filepaths,
                 samples=self.samples[key],
                 part_filter=self.part_filter,
+                sample_filter=self.sample_filter,
             )
         elif isinstance(key, int):
             idx = key
@@ -206,9 +220,11 @@ class ITarReader:
 
         # Open the tar file if it is not already open
         tar_file = self._get_itarfile_cached(tar_file_id)
+        shard_name = self.tar_filenames[tar_file_id]
 
         # Read the sample
         sample_base_name = None
+        sample_name = None
 
         # Here we set the byte offset in the tar file
         # Note that if the the offset is already at the correct position, this is a no-op
@@ -238,6 +254,9 @@ class ITarReader:
 
             if sample_base_name is None:
                 sample_base_name = cur_base_name
+                sample_name = f"{shard_name}/{cur_base_name}"
+                if self.sample_filter is not None and not self.sample_filter(sample_name):
+                    return None
             else:
                 assert (
                     sample_base_name == cur_base_name
@@ -247,8 +266,9 @@ class ITarReader:
                 member_bytes = tar_file.extractfile(tarinfo).read()
                 group_parts[cur_ext] = member_bytes
 
+        assert sample_name is not None, "No data for sample"
         return FilteredSample(
-            __key__=cur_base_name,
+            __key__=sample_name,
             __shard__=self.tar_filenames[tar_file_id],
             __restore_key__=("Webdataset", idx),
             **group_parts,
