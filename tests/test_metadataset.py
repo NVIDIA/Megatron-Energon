@@ -453,13 +453,12 @@ class TestDataset(unittest.TestCase):
                 # prints out when the dataset is built.
 
                 for ds, w in ds_weights:
-                    ds_shards = ds.dataset.dataset.shards
-                    assert len(ds_shards) == num_workers
+                    worker_slice_offsets = ds.dataset.dataset.worker_slice_offsets
+                    assert len(worker_slice_offsets) == num_workers
 
-                    for worker_idx, shards in enumerate(ds_shards):
-                        samples_per_global_worker[(rank, worker_idx)] += sum(
-                            [shard[0].count for shard in shards]
-                        )
+                    for worker_idx, slice_offsets in enumerate(worker_slice_offsets):
+                        samples_per_global_worker[(rank, worker_idx)] += slice_offsets[-1] - slice_offsets[0]
+            print(samples_per_global_worker)
 
             # Check the sample assignnent is balanced across all global workers
             if num_workers == 6:
