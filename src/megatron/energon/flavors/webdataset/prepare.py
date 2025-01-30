@@ -9,6 +9,7 @@ import random
 import re
 import tarfile
 import threading
+import uuid
 from pathlib import Path
 from typing import (
     Any,
@@ -60,9 +61,7 @@ class MultiprocessingSqliteIndexWriter:
     def __init__(self, sqlite_path: EPath):
         self.sqlite_path = sqlite_path
         self.queue = multiprocessing.Queue()
-
-    def put(self, sample: Dict[str, Any]) -> None:
-        self.queue.put(sample)
+        self.had_update = False
 
     def _write_samples(self) -> None:
         with SqliteIndexWriter(self.sqlite_path) as idx_writer:
@@ -71,6 +70,7 @@ class MultiprocessingSqliteIndexWriter:
                 if sample is None:
                     break
                 idx_writer.append_sample(**sample)
+                self.had_update = True
 
     def __enter__(self) -> "MultiprocessingSqliteIndexWriter":
         self._sqlwriter_proc = threading.Thread(target=self._write_samples)
@@ -280,6 +280,11 @@ class WebdatasetPreparator:
                 shards.append(shard_info)
                 if len(found_parts) < 50:
                     found_parts.update(cur_parts)
+
+        if sqlite_writer.had_update:
+            logger.info("Regenerating dataset UUID...")
+            with (parent_path / MAIN_FOLDER_NAME / "index.uuid").open("w") as f:
+                f.write(str(uuid.uuid4()))
 
         if tar_index_only:
             return found_parts

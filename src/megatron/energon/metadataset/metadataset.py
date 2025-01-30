@@ -27,17 +27,18 @@ class DatasetReference:
 
     _dataset: Optional[DatasetLoaderInterface] = None
 
-    def post_initialize(self, parent_path: EPath):
-        self.path = parent_path.absolute() / self.path
+    def post_initialize(self, mds_path: Optional[EPath] = None):
+        assert mds_path is not None
+        self.path = mds_path.parent / self.path
         if self.path.is_file():
             assert self.dataset_config == "dataset.yaml", "Must not set dataset_config"
             assert self.split_config == "split.yaml", "Must not set split_config"
             self._dataset = load_config(
                 self.path,
                 default_type=Metadataset,
-                strict=True,
-                default_kwargs=dict(parent_path=self.path.parent),
+                default_kwargs=dict(path=self.path),
             )
+            self._dataset.post_initialize()
         elif (self.path / MAIN_FOLDER_NAME / ".info.yaml").is_file():
             self._dataset = DatasetLoader(
                 path=self.path,
@@ -48,6 +49,7 @@ class DatasetReference:
                 dataset_config=self.dataset_config,
                 split_config=self.split_config,
             )
+            self._dataset.post_initialize()
         else:
             raise FileNotFoundError(self.path)
 
@@ -83,10 +85,10 @@ class MetadatasetBlender:
 
     datasets: List[DatasetReference]
 
-    def post_initialize(self, parent_path: EPath):
-        parent_path = parent_path.absolute()
+    def post_initialize(self, mds_path: Optional[EPath] = None):
+        assert mds_path is not None
         for dataset in self.datasets:
-            dataset.post_initialize(parent_path)
+            dataset.post_initialize(mds_path)
 
     def get_datasets(
         self,
@@ -128,19 +130,22 @@ class MetadatasetBlender:
 class Metadataset(DatasetLoaderInterface):
     """Main entry for metadataset."""
 
+    _path: EPath
     _splits: Dict[str, MetadatasetBlender]
 
     def __init__(
         self,
-        parent_path: Union[EPath, str],
+        path: Union[EPath, str],
         splits: Dict[str, MetadatasetBlender],
     ):
         """Create the metadataset"""
-        parent_path = EPath(parent_path).absolute()
+        self._path = EPath(path).absolute()
         self._splits = splits
-        # Fix paths
-        for split in splits.values():
-            split.post_initialize(parent_path)
+
+    def post_initialize(self, mds_path: EPath | None = None):
+        assert mds_path is None
+        for split in self._splits.values():
+            split.post_initialize(self._path)
 
     def get_datasets(
         self,

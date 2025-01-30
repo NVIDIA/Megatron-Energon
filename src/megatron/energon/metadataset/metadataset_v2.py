@@ -27,17 +27,18 @@ class DatasetReference(DatasetLoaderInterface):
 
     _dataset: Optional[DatasetLoaderInterface] = None
 
-    def post_initialize(self, parent_path: EPath) -> None:
-        self.path = parent_path.absolute() / self.path
+    def post_initialize(self, mds_path: Optional[EPath] = None) -> None:
+        assert mds_path is not None
+        self.path = mds_path.parent / self.path
         if self.path.is_file():
             assert self.dataset_config == "dataset.yaml", "Must not set dataset_config"
             assert self.split_config == "split.yaml", "Must not set split_config"
             self._dataset = load_config(
                 self.path,
                 default_type=MetadatasetV2,
-                strict=True,
-                default_kwargs=dict(parent_path=self.path.parent),
+                default_kwargs=dict(path=self.path),
             )
+            self._dataset.post_initialize()
         elif (self.path / MAIN_FOLDER_NAME / ".info.yaml").is_file():
             self._dataset = DatasetLoader(
                 path=self.path,
@@ -48,12 +49,13 @@ class DatasetReference(DatasetLoaderInterface):
                 dataset_config=self.dataset_config,
                 split_config=self.split_config,
             )
+            self._dataset.post_initialize()
         else:
             raise FileNotFoundError(self.path)
 
-    def prepare(self, parent_path: EPath, split_part: Optional[str] = None):
+    def prepare(self, split_part: Optional[str] = None):
         assert self._dataset is not None
-        self._dataset.prepare(parent_path, split_part=split_part)
+        self._dataset.prepare(split_part=split_part)
 
     def get_datasets(
         self,
@@ -83,10 +85,11 @@ class DatasetReference(DatasetLoaderInterface):
 
 @dataclass
 class JoinDatasetReference(DatasetReference):
-    def post_initialize(self, parent_path: EPath) -> DatasetLoader:
+    def post_initialize(self, mds_path: Optional[EPath] = None) -> DatasetLoader:
+        assert mds_path is not None
         # Override and disable another metadataset reference, only allow direct dataset references.
         # Do not store the loader, the parent MetadatasetJoin will do that.
-        self.path = parent_path.absolute() / self.path
+        self.path = mds_path.parent / self.path
         if (self.path / MAIN_FOLDER_NAME / ".info.yaml").is_file():
             return DatasetLoader(
                 path=self.path,
@@ -99,6 +102,11 @@ class JoinDatasetReference(DatasetReference):
             )
         else:
             raise FileNotFoundError(self.path)
+
+    def prepare(self, split_part: Optional[str] = None):
+        assert (
+            False
+        ), "JoinDatasetReference should not be used directly, but only by MetadatasetJoin"
 
     def get_datasets(
         self,
@@ -124,41 +132,35 @@ class MetadatasetJoin(DatasetLoaderInterface):
 
     _dataset: Optional[JoinDatasetLoader] = None
 
-    def post_initialize(self, parent_path: EPath):
+    def post_initialize(self, mds_path: Optional[EPath] = None):
+        assert mds_path is not None
         assert self.join is not None
         assert self.joiner is not None, "Must set joiner for joining datasets"
         assert (
             self.dataset_config == "dataset.yaml"
         ), "Cannot set dataset_config for joining datasets"
         if isinstance(self.join, list):
-            inner_loaders = [join.post_initialize(parent_path) for join in self.join]
+            inner_loaders = [join.post_initialize(mds_path) for join in self.join]
         elif isinstance(self.join, dict):
-            inner_loaders = {
-                key: join.post_initialize(parent_path) for key, join in self.join.items()
-            }
+            inner_loaders = {key: join.post_initialize(mds_path) for key, join in self.join.items()}
         else:
             raise ValueError("Invalid join type")
-
-        # Pass join index if it exists
-        join_index_path = parent_path / JOIN_INDEX_FILENAME
-        if not join_index_path.is_file():
-            join_index_path = None
 
         self._dataset = JoinDatasetLoader(
             datasets=inner_loaders,
             join_method=self.join_method,
             joiner=self.joiner,
-            join_index=join_index_path,
             split_part=self.split_part,
             subflavor=self.subflavor,
             subflavors=self.subflavors,
             shuffle_over_epochs_multiplier=self.shuffle_over_epochs_multiplier,
             split_config=self.split_config,
         )
+        self._dataset.post_initialize(mds_path)
 
-    def prepare(self, parent_path: EPath, split_part: Optional[str] = None):
-        assert self._dataset is not None, "Not prepared."
-        self._dataset.prepare(parent_path, split_part=split_part)
+    def prepare(self, split_part: Optional[str] = None):
+        assert self._dataset is not None, "Missing post_initialize call."
+        self._dataset.prepare(split_part=split_part)
 
     def get_datasets(
         self,
@@ -171,7 +173,7 @@ class MetadatasetJoin(DatasetLoaderInterface):
         shuffle_over_epochs_multiplier: int = 1,
         **kwargs,
     ) -> Tuple[DatasetBlendMode, List[Tuple[BaseCoreDatasetFactory, Union[float, int, None]]]]:
-        assert self._dataset is not None, "Not prepared."
+        assert self._dataset is not None, "Missing post_initialize call."
         return self._dataset.get_datasets(
             training=training,
             split_part=split_part,
@@ -204,15 +206,14 @@ class MetadatasetBlend(DatasetLoaderInterface):
 
     blend: List[Union[BlendDatasetReference, BlendJoinDatasetReference]]
 
-    def post_initialize(self, parent_path: EPath):
-        parent_path = parent_path.absolute()
+    def post_initialize(self, mds_path: Optional[EPath] = None):
+        assert mds_path is not None
         for dataset in self.blend:
-            dataset.post_initialize(parent_path)
+            dataset.post_initialize(mds_path)
 
-    def prepare(self, parent_path: EPath, split_part: Optional[str] = None):
-        parent_path = parent_path.absolute()
+    def prepare(self, split_part: Optional[str] = None):
         for dataset in self.blend:
-            dataset.prepare(parent_path, split_part=split_part)
+            dataset.prepare(split_part=split_part)
 
     def get_datasets(
         self,
@@ -275,15 +276,14 @@ class MetadatasetBlendEpochized(DatasetLoaderInterface):
 
     blend_epochized: List[Union[BlendEpochizedDatasetReference, BlendEpochizedJoinDatasetReference]]
 
-    def post_initialize(self, parent_path: EPath):
-        parent_path = parent_path.absolute()
+    def post_initialize(self, mds_path: Optional[EPath] = None):
+        assert mds_path is not None
         for dataset in self.blend_epochized:
-            dataset.post_initialize(parent_path)
+            dataset.post_initialize(mds_path)
 
-    def prepare(self, parent_path: EPath, split_part: Optional[str] = None):
-        parent_path = parent_path.absolute()
+    def prepare(self, split_part: Optional[str] = None):
         for dataset in self.blend_epochized:
-            dataset.prepare(parent_path, split_part=split_part)
+            dataset.prepare(split_part=split_part)
 
     def get_datasets(
         self,
@@ -323,26 +323,31 @@ class MetadatasetBlendEpochized(DatasetLoaderInterface):
 
 @dataclass
 class MetadatasetV2(DatasetLoaderInterface):
-    parent_path: EPath
+    path: EPath
     splits: Dict[
         str, Union[MetadatasetBlend, MetadatasetBlendEpochized, MetadatasetJoin, DatasetReference]
     ]
 
     def __post_init__(self):
         """Post-initialization to fix paths."""
-        self.parent_path = EPath(self.parent_path).absolute()
-        # Fix paths
-        for split in self.splits.values():
-            split.post_initialize(self.parent_path)
+        self.path = EPath(self.path).absolute()
 
-    def prepare(self, parent_path: EPath):
-        # In the case of prepare for MetadatasetV2, we ignore the passed parent_path
-        # and instead use the own parent_path.
+    def post_initialize(self, mds_path: Optional[EPath] = None):
+        assert mds_path is None
+        for split in self.splits.values():
+            split.post_initialize(self.path)
+
+    def prepare(self, split_part: Optional[str] = None):
+        # In the case of prepare for MetadatasetV2, we ignore the passed cache_path
+        # and instead use the own path.
         # If someone runs energon prepare on a metadataset that refers to another metadataset,
         # any actions concerning the inner metadataset will be done on the inner metadataset's path.
 
-        for split_part, split in self.splits.items():
-            split.prepare(self.parent_path, split_part=split_part)
+        if split_part is None:
+            for split_part, split in self.splits.items():
+                split.prepare(split_part=split_part)
+        else:
+            self.splits[split_part].prepare(split_part=split_part)
 
     def get_datasets(
         self,

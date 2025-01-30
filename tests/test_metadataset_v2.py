@@ -25,7 +25,9 @@ from megatron.energon import (
     get_train_dataset,
     load_dataset,
 )
+from megatron.energon.epathlib.epath import EPath
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
+from megatron.energon.metadataset.loader import prepare_metadataset
 from megatron.energon.metadataset.loader_interface import DatasetBlendMode
 
 
@@ -321,6 +323,7 @@ class TestDataset(unittest.TestCase):
                     ]
                 )
             )
+        prepare_metadataset(EPath(joined_mds_path))
 
         # Train mode dataset
         train_dataset = get_train_dataset(

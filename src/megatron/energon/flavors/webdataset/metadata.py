@@ -11,7 +11,7 @@ from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
 from megatron.energon.flavors.webdataset.empty_dataset_error import EmptyDatasetError
 from megatron.energon.flavors.webdataset.structs import ShardInfo, WebdatasetInfo, WebdatasetSplits
-from megatron.energon.typed_converter import raw_to_typed
+from megatron.energon.typed_converter import JsonParser
 
 
 @dataclass
@@ -38,11 +38,12 @@ class WebdatasetMeta:
             info_config: Config file to use for sample metadata.
             split_config: Config file to use for shard split definitions.
         """
-        info = raw_to_typed(
+        parser = JsonParser(strict=True)
+        info = parser.raw_to_typed(
             yaml.safe_load((path / MAIN_FOLDER_NAME / info_config).read_text()),
             WebdatasetInfo,
         )
-        splits = raw_to_typed(
+        splits = parser.raw_to_typed(
             yaml.safe_load((path / MAIN_FOLDER_NAME / split_config).read_text()),
             WebdatasetSplits,
         )

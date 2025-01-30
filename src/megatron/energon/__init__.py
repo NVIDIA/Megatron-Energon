@@ -41,6 +41,7 @@ from megatron.energon.metadataset import (
     Metadataset,
     MetadatasetV2,
     load_dataset,
+    prepare_metadataset,
 )
 from megatron.energon.savable_loader import SavableDataLoader
 from megatron.energon.task_encoder import (
@@ -154,5 +155,6 @@ __all__ = [
     "get_val_datasets",
     "homogeneous_concat_mix",
     "load_dataset",
+    "prepare_metadataset",
     "stateless",
 ]
