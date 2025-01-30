@@ -485,11 +485,13 @@ class TestDataset(unittest.TestCase):
         keys = [key for _ in range(100) for batch in loader for key in batch.__key__]
         # 100 iterations, 2 virtual epoch size, batch size 10
         print(len(keys), keys)
-        print(hist(keys))
+        keyhist = hist(keys)
+        print(sorted(keyhist.items()))
+        print(sorted(keyhist.items(), key=lambda x: (x[1], x[0])))
         assert len(keys) == 100 * 2 * 10
         # Data should be approximately sampled uniformly (40+-1 samples per key)
-        assert all(v in (39, 40, 41) for v in hist(keys).values())
-        assert len(hist(keys)) == 50
+        assert len(keyhist) == 50
+        assert all(v in (39, 40, 41) for v in keyhist.values())
 
         loader2 = get_loader(
             get_val_dataset(

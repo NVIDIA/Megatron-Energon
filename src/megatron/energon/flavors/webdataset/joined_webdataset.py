@@ -223,7 +223,7 @@ class JoinedWebdatasetFactory(
             worker_config=self.worker_config,
             exclude=self.sample_exclude,
             shuffle_over_epochs=self.shuffle_over_epochs if self.training else None,
-            parallel_shard_iters=parallel_shard_iters,
+            parallel_slice_iters=parallel_shard_iters,
             handler=self.sample_error_handler,
         )
         return self._process_samples(dataset)

@@ -148,11 +148,27 @@ class BaseWebdatasetFactory(
             end_shard_idx = np.searchsorted(shard_starts, end, side="left") - 1
             if start_shard_idx == end_shard_idx:
                 shard = self.shards[start_shard_idx]
-                return f"{shard.name}[{start - shard_starts[start_shard_idx]}, {end - shard_starts[start_shard_idx]}]"
+                if start - shard_starts[start_shard_idx] == 0:
+                    start_str = "(start)"
+                else:
+                    start_str = ""
+                if end - shard_starts[start_shard_idx] == shard.count:
+                    end_str = "(end)"
+                else:
+                    end_str = ""
+                return f"{shard.name}[{start - shard_starts[start_shard_idx]}{start_str}, {end - shard_starts[start_shard_idx]}{end_str}]"
             else:
                 start_shard = self.shards[start_shard_idx]
                 end_shard = self.shards[end_shard_idx]
-                return f"{start_shard.name}[{start - shard_starts[start_shard_idx]},]-{end_shard.name}[,{end - shard_starts[end_shard_idx]}]"
+                if start - shard_starts[start_shard_idx] == 0:
+                    start_str = "(start)"
+                else:
+                    start_str = ""
+                if end - shard_starts[end_shard_idx] == end_shard.count:
+                    end_str = "(end)"
+                else:
+                    end_str = ""
+                return f"{start_shard.name}[{start - shard_starts[start_shard_idx]}{start_str},]-{end_shard.name}[,{end - shard_starts[end_shard_idx]}{end_str}]"
 
         for worker_idx, sample_slice_offsets in enumerate(workers_sample_slice_offsets):
             start_idx = sample_slice_offsets[0]
@@ -199,7 +215,7 @@ class BaseWebdatasetFactory(
             worker_config=self.worker_config,
             exclude=self.sample_excludes,
             shuffle_over_epochs=self.shuffle_over_epochs if self.training else None,
-            parallel_shard_iters=parallel_shard_iters,
+            parallel_slice_iters=parallel_shard_iters,
             handler=self.sample_error_handler,
         )
         return MapDataset(
