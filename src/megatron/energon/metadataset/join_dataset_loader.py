@@ -203,8 +203,6 @@ class JoinDatasetLoader(DatasetLoaderInterface):
 
         # TODO: Generate sqlite indices for individual join parts if not already present
 
-        # TODO: Iterate primary DS in shard order from split config. This is currently not the case!
-
         db_paths = []
         shard_name_to_idx = []
 

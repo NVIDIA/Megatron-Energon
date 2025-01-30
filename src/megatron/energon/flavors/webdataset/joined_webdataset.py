@@ -27,7 +27,7 @@ from megatron.energon.flavors.base_dataset import (
 from megatron.energon.flavors.webdataset.base_webdataset import BaseWebdatasetFactory
 from megatron.energon.flavors.webdataset.error_handler import ErrorHandler
 from megatron.energon.flavors.webdataset.indexing import JoinIndexReader
-from megatron.energon.flavors.webdataset.itar_dataset import ITarDataset
+from megatron.energon.flavors.webdataset.itar_reader import ITarReader
 from megatron.energon.flavors.webdataset.itar_sample_loader import ITarSampleLoaderDataset
 from megatron.energon.flavors.webdataset.sample_loader import (
     RawSampleData,
@@ -206,8 +206,8 @@ class JoinedWebdatasetFactory(
                 f"sum(count)={end_idx - start_idx}: [{offset_str}]"
             )
 
-        itar_datasets = [
-            ITarDataset.from_join_index_file(
+        itar_readers = [
+            ITarReader.from_join_index_file(
                 index_file=self.join_index,
                 column=col_idx,
                 tar_filenames=indexed_dataset.split_part_files,
@@ -218,7 +218,7 @@ class JoinedWebdatasetFactory(
         ]
 
         dataset = WebdatasetSampleLoaderDataset(
-            join_readers=itar_datasets,
+            join_readers=itar_readers,
             workers_sample_slice_offsets=workers_sample_slice_offsets,
             worker_config=self.worker_config,
             exclude=self.sample_exclude,

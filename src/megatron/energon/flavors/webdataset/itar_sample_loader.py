@@ -6,7 +6,7 @@ from typing import Any, Callable, Dict, Iterator, List, Optional, Set, Tuple, Un
 
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.base_dataset import MergedState, SavableDataset, State
-from megatron.energon.flavors.webdataset.itar_dataset import ITarDataset
+from megatron.energon.flavors.webdataset.itar_reader import ITarReader
 from megatron.energon.flavors.webdataset.structs import FilteredSample, reraise_exception
 from megatron.energon.rng import WorkerRng, WorkerRngMergedState, WorkerRngState
 from megatron.energon.worker import WorkerConfig
@@ -29,7 +29,7 @@ class ITarSampleLoaderMergedState(MergedState):
 class ITarSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample], ...]]):
     """Internal class for loading samples from an indexed webdataset."""
 
-    itar_datasets: List[ITarDataset]
+    itar_readers: List[ITarReader]
 
     # Sample keys to ignore
     exclude: Set[str]
@@ -50,7 +50,7 @@ class ITarSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample], ...
 
     def __init__(
         self,
-        itar_datasets: List[ITarDataset],
+        itar_readers: List[ITarReader],
         local_worker_sample_split_offsets: List[int],
         *,
         worker_config: WorkerConfig,
@@ -80,7 +80,7 @@ class ITarSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample], ...
             handler: Exception handler. Args: (exception, key).
         """
         super().__init__(worker_config=worker_config)
-        self.itar_datasets = itar_datasets
+        self.itar_readers = itar_readers
         self.local_worker_sample_split_offsets = local_worker_sample_split_offsets
         self.exclude = exclude
         self.shuffle_over_epochs = shuffle_over_epochs
@@ -111,8 +111,8 @@ class ITarSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample], ...
         # Slice itar datasets according to local worker ranges
         worker_range_start = self.local_worker_sample_split_offsets[worker_idx]
         worker_range_end = self.local_worker_sample_split_offsets[worker_idx + 1]
-        worker_itar_datasets = [
-            itar_dataset[worker_range_start:worker_range_end] for itar_dataset in self.itar_datasets
+        worker_itar_readers = [
+            itar_readers[worker_range_start:worker_range_end] for itar_readers in self.itar_readers
         ]
 
         if self.worker_config.should_log(level=1):
@@ -129,12 +129,12 @@ class ITarSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample], ...
                 }
             )
 
-        if len(worker_itar_datasets[0]) == 0:
+        if len(worker_itar_readers[0]) == 0:
             return
 
         # TODO: shuffling, parallel shard iters
-        for sample_idx in range(len(worker_itar_datasets[0])):
-            yield tuple(itar_dataset[sample_idx] for itar_dataset in worker_itar_datasets)
+        for sample_idx in range(len(worker_itar_readers[0])):
+            yield tuple(itar_reader[sample_idx] for itar_reader in worker_itar_readers)
 
     def can_restore_sample(self) -> bool:
         return True

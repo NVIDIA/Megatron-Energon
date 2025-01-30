@@ -15,17 +15,17 @@ from megatron.energon.flavors.webdataset.structs import FilteredSample, ShardInf
 ITAR_CACHE_SIZE = 5
 
 
-class ITarDataset:
+class ITarReader:
     """
-    The ITarDataset represents a sequence of tar files with samples. They are virtually concatenated
+    The ITarReader represents a sequence of tar files with samples. They are virtually concatenated
     and thus indexable by a single index.
 
-    An ITarDataset keeps a list of pointers to samples in various tar files.
+    An ITarReader keeps a list of pointers to samples in various tar files.
     Each sample can be in a different tar file and at a different offset.
     It supports random access to any sample at any time, but in case of sequential access,
     it is more efficient.
 
-    Internally, ITarDataset keeps the most recently used tar files open as ITarFile objects.
+    Internally, ITarReader keeps the most recently used tar files open as ITarFile objects.
     When a new sample is requested, it first checks if the sample is in the currently open tar files,
     or even at the current offset in the current tar file.
 
@@ -67,9 +67,9 @@ class ITarDataset:
         tar_filenames: List[str],
         base_path: EPath,
         part_filter: Optional[Callable[[str], bool]] = None,
-    ) -> "ITarDataset":
+    ) -> "ITarReader":
         """
-        Create an ITarDataset from one column of a join index file.
+        Create an ITarReader from one column of a join index file.
 
         The tar_filenames are assumed to be relative to the base_path.
         """
@@ -83,18 +83,16 @@ class ITarDataset:
         for tar_filename in tar_filenames:
             tar_filepaths.append(base_path / tar_filename)
 
-        return ITarDataset(
-            base_path, tar_filenames, tar_filepaths, samples, part_filter=part_filter
-        )
+        return ITarReader(base_path, tar_filenames, tar_filepaths, samples, part_filter=part_filter)
 
     @staticmethod
     def from_shardinfos(
         base_path: EPath,
         shardinfos: List[ShardInfo],
         part_filter: Optional[Callable[[str], bool]] = None,
-    ) -> "ITarDataset":
+    ) -> "ITarReader":
         """
-        Create an ITarDataset from a list of ShardInfos.
+        Create an ITarReader from a list of ShardInfos.
         """
 
         # TODO: We could remove excluded shards and samples here. Or remove exclusion support.
@@ -122,7 +120,7 @@ class ITarDataset:
             samp_idx_end = samp_idx + shardinfo.count
 
             # Set same tar file for all
-            samples[samp_idx:samp_idx_end, ITarDataset.COL_TAR_FILE_ID] = cur_tar_file_idx
+            samples[samp_idx:samp_idx_end, ITarReader.COL_TAR_FILE_ID] = cur_tar_file_idx
 
             tar_index_reader = cached_offset_reader.tar_index_reader(shardinfo.path)
             for i in range(shardinfo.count):
@@ -133,13 +131,13 @@ class ITarDataset:
                     tar_index_reader, sample_idx_in_shard
                 )
 
-                samples[samp_idx, ITarDataset.COL_BYTE_OFFSET] = byte_offset
-                samples[samp_idx, ITarDataset.COL_BYTE_SIZE] = byte_size
+                samples[samp_idx, ITarReader.COL_BYTE_OFFSET] = byte_offset
+                samples[samp_idx, ITarReader.COL_BYTE_SIZE] = byte_size
                 samp_idx += 1
 
         assert samp_idx == num_samples
 
-        return ITarDataset(
+        return ITarReader(
             base_path,
             list(cur_tar_files.keys()),
             [x[1] for x in cur_tar_files.values()],
@@ -176,15 +174,15 @@ class ITarDataset:
     def __getitem__(self, key: int) -> FilteredSample: ...
 
     @overload
-    def __getitem__(self, key: slice) -> "ITarDataset": ...
+    def __getitem__(self, key: slice) -> "ITarReader": ...
 
-    def __getitem__(self, key: Union[slice, int]) -> Union["ITarDataset", FilteredSample]:
+    def __getitem__(self, key: Union[slice, int]) -> Union["ITarReader", FilteredSample]:
         """
         Get a sample from the dataset or slice it.
         """
 
         if isinstance(key, slice):
-            return ITarDataset(
+            return ITarReader(
                 base_path=self.base_path,
                 tar_filenames=self.tar_filenames,
                 tar_filepaths=self.tar_filepaths,
@@ -200,11 +198,11 @@ class ITarDataset:
         sample = self.samples[idx]
 
         # Get the tar file id
-        tar_file_id = int(sample[ITarDataset.COL_TAR_FILE_ID].item())
+        tar_file_id = int(sample[ITarReader.COL_TAR_FILE_ID].item())
 
         # Get the byte offset and size
-        byte_offset = int(sample[ITarDataset.COL_BYTE_OFFSET].item())
-        byte_size = int(sample[ITarDataset.COL_BYTE_SIZE].item())
+        byte_offset = int(sample[ITarReader.COL_BYTE_OFFSET].item())
+        byte_size = int(sample[ITarReader.COL_BYTE_SIZE].item())
 
         # Open the tar file if it is not already open
         tar_file = self._get_itarfile_cached(tar_file_id)

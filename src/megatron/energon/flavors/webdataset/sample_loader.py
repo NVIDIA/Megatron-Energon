@@ -21,7 +21,7 @@ import torch
 
 from megatron.energon.epathlib.epath import EPath
 from megatron.energon.flavors.base_dataset import MergedState, SavableDataset, State
-from megatron.energon.flavors.webdataset.itar_dataset import ITarDataset
+from megatron.energon.flavors.webdataset.itar_dataset import ITarReader
 from megatron.energon.flavors.webdataset.structs import FilteredSample, reraise_exception
 from megatron.energon.rng import WorkerRng, WorkerRngMergedState, WorkerRngState
 from megatron.energon.worker import WorkerConfig
@@ -99,7 +99,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
     """Internal class for loading samples from webdataset shards"""
 
     #: The readers for each joined dataset
-    join_readers: Sequence[ITarDataset]
+    join_readers: Sequence[ITarReader]
     #: The offsets of the shard slices to iterate over
     worker_slice_offsets: Sequence[Sequence[int]]
     # Sample keys to ignore
@@ -138,7 +138,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
 
     def __init__(
         self,
-        join_readers: Sequence[ITarDataset],
+        join_readers: Sequence[ITarReader],
         workers_sample_slice_offsets: Sequence[Sequence[int]],
         *,
         worker_config: WorkerConfig,
