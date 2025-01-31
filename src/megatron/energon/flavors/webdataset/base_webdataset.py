@@ -122,8 +122,7 @@ class BaseWebdatasetFactory(
         return sum(shard.count for shard in self.shards)
 
     def build(self, worker_rotation_offset: int = 0) -> SavableDataset[T_sample]:
-        from megatron.energon.flavors.webdataset.itar_reader import ITarReader
-        from megatron.energon.flavors.webdataset.itar_sample_loader import ITarSampleLoaderDataset
+        from megatron.energon.flavors.webdataset.itar_reader import ShardInfosITarReader
 
         if self.parallel_shard_iters is None:
             if self.training:
@@ -142,11 +141,12 @@ class BaseWebdatasetFactory(
         )
         _print_shard_slices(self.worker_config, self.shards, workers_sample_slice_offsets)
 
-        itar_reader = ITarReader.from_shardinfos(
+        itar_reader = ShardInfosITarReader(
             self.path,
             self.shards,
             part_filter=self.part_filter,
             sample_filter=self.sample_filter,
+            itar_cache_size=parallel_shard_iters,
         )
 
         dataset = WebdatasetSampleLoaderDataset(

@@ -121,31 +121,33 @@ class JoinIndexWriter:
     """Describes how one primary dataset is joined with multiple secondary datasets.
 
     For fast random access, this is a binary format that is memory-mapped.
+    The first 16 bytes are a header with the number of columns (1 primary + N secondary).
+    Each row contains (shard_idx, byte_offset, byte_size) for each column.
     """
 
     def __init__(self, join_index_path: EPath):
         self.join_index_path = join_index_path
         self.join_index_file = join_index_path.open("wb")
-        self.num_secondary_keys = None
+        self.num_columns = None
 
-    def append(self, *secondary_keys: Tuple[int, int, int]):
+    def append(self, *columns: Tuple[int, int, int]):
         """Appends a new row to the join index file.
 
-        Each row contains (shard_idx, byte_offset, byte_size) for each secondary key.
+        Each row contains (shard_idx, byte_offset, byte_size) for each column.
         """
 
-        if self.num_secondary_keys is None:
-            # Write the number of secondary keys
+        if self.num_columns is None:
+            # Write the number of columns
             self.join_index_file.write(b"JIDX0001")  # Magic bytes with version
-            self.join_index_file.write(struct.pack("q", len(secondary_keys)))
-            self.num_secondary_keys = len(secondary_keys)
+            self.join_index_file.write(struct.pack("q", len(columns)))
+            self.num_columns = len(columns)
         else:
             assert (
-                len(secondary_keys) == self.num_secondary_keys
-            ), f"Inconsistent number of keys: Had {self.num_secondary_keys} before, got {len(secondary_keys)}"
+                len(columns) == self.num_columns
+            ), f"Inconsistent number of keys: Had {self.num_columns} before, got {len(columns)}"
 
-        # Write the secondary keys
-        for key in secondary_keys:
+        # Write the columns
+        for key in columns:
             assert isinstance(key, tuple) and len(key) == 3
             self.join_index_file.write(struct.pack("qqq", *key))
 
@@ -160,33 +162,46 @@ class JoinIndexWriter:
 
 
 class JoinIndexReader:
-    """Reads a join index file."""
+    """Reads a join index file in different ways.
+
+    If a column is specified, only that column is read, otherwise the full rows.
+    You can iterate over the rows, or read a specific row by index, or get the full tensor.
+
+    Each row contains (shard_idx, byte_offset, byte_size) for each column.
+    """
 
     join_index_path: EPath
     join_index_file: BinaryIO
-    num_secondary_keys: int
+    column: Optional[int]
+    num_columns: int
     has_iterated: bool
+    index_row_position: int
 
-    def __init__(self, join_index_path: EPath):
+    def __init__(self, join_index_path: EPath, column: Optional[int] = None):
         self.join_index_path = join_index_path
         self.join_index_byte_size = join_index_path.size()
+
+        self.column = column
+
         self.join_index_file = join_index_path.open("rb")
         self.has_iterated = False
+        self.index_row_position = -1
 
-        # Read the header with number of secondary keys
+        # Read the header
         bytes_magic = self.join_index_file.read(8)
         assert isinstance(bytes_magic, bytes)
         assert bytes_magic[:4] == b"JIDX", f"Invalid magic bytes: {bytes_magic}"
         assert bytes_magic[4:8] == b"0001", f"Unsupported version: {bytes_magic[4:8]}"
 
-        # Read the number of secondary keys
+        # Read the number of columns
         bytes_seckeys = self.join_index_file.read(8)
         assert isinstance(bytes_seckeys, bytes)
-        num_secondary_keys = struct.unpack("q", bytes_seckeys)[0]
-        self.num_secondary_keys = num_secondary_keys
+        self.num_columns = struct.unpack("q", bytes_seckeys)[0]
+
+        self.index_row_position = 0
 
     def get_as_tensor(self):
-        """Returns the join index as a tensor with shape (N, num_secondary_keys, 3)."""
+        """Returns the join index as a tensor with shape (N, num_columns, 3)."""
 
         assert not self.has_iterated, "Cannot get_as_tensor after iterating"
 
@@ -194,27 +209,61 @@ class JoinIndexReader:
 
         # Read the raw bytes for all N * 3 int64s.
         data = self.join_index_file.read()
+        self.index_file_position = self.join_index_file.tell()
         assert (
             len(data) % (8 * 3) == 0
         ), f"Index file reading: Expected multiple of 3 * 8 bytes, got {len(data)} bytes"
 
-        return torch.frombuffer(data, dtype=torch.int64).view(-1, self.num_secondary_keys, 3)
+        return torch.frombuffer(data, dtype=torch.int64).view(-1, self.num_columns, 3)
 
     def __len__(self):
-        return (self.join_index_byte_size - 16) // (self.num_secondary_keys * 8 * 3)
+        return (self.join_index_byte_size - 16) // (self.num_columns * 8 * 3)
 
     def __iter__(self):
         return self
 
-    def __next__(self) -> Union[None, List[int]]:
-        self.has_iterated = True
-        secondary_keys = []
-        for _ in range(self.num_secondary_keys):
+    def _read_one_row(
+        self, column: Optional[int] = None
+    ) -> Union[None, List[Tuple[int, int, int]]]:
+        row = []
+        for col_idx in range(self.num_columns):
+            if column is not None and col_idx != column:
+                # Skip this column
+                self.join_index_file.seek(8, 1)
+                continue
+
             bytes_key = self.join_index_file.read(8)
+            if not bytes_key:
+                return None
             assert isinstance(bytes_key, bytes)
             key_tuple = struct.unpack("qqq", bytes_key)
-            secondary_keys.append(key_tuple)
-        return secondary_keys
+            row.append(key_tuple)
+        self.index_row_position += 1
+        return row
+
+    def __next__(self) -> Union[None, List[Tuple[int, int, int]]]:
+        self.has_iterated = True
+        return self._read_one_row(column=self.column)
+
+    def tell_row(self) -> int:
+        return self.index_row_position
+
+    def __getitem__(self, idx: int) -> List[Tuple[int, int, int]]:
+        """Reads the idx-th row of the join index file."""
+
+        assert 0 <= idx < len(self), f"Index out of bounds: {idx} not in [0, {len(self)})"
+
+        # Seek to the correct position
+
+        if self.index_row_position != idx:
+            self.join_index_file.seek(16 + idx * self.num_columns * 8 * 3)
+            self.index_row_position = idx
+
+        # Read the secondary keys
+        row = self._read_one_row(column=self.column)
+        assert row is not None, f"Failed to read row {idx}"
+
+        return row
 
     def close(self):
         self.join_index_file.close()

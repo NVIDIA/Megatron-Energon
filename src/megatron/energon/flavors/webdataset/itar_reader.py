@@ -188,6 +188,11 @@ class JoinIndexFileITarReader(ITarReader):
     A concrete ITarReader that reads samples from a join index file (via JoinIndexReader).
     """
 
+    index_file: EPath
+    column: int
+    index_reader_cache: Dict[int, JoinIndexReader]
+    index_reader_cache_size: int
+
     def __init__(
         self,
         index_file: EPath,
@@ -195,25 +200,76 @@ class JoinIndexFileITarReader(ITarReader):
         tar_filenames: List[str],
         base_path: EPath,
         part_filter: Optional[Callable[[str], bool]] = None,
+        itar_cache_size: int = 5,
         sample_filter: Optional[Callable[[str], bool]] = None,
     ):
-        # Read the index file
-        with JoinIndexReader(index_file) as jir:
-            all_cols = jir.get_as_tensor()
-
-        samples = all_cols[:, column, :].clone()
+        self.index_file = index_file
+        self.column = column
 
         # Create the full path to each tar file
         tar_filepaths = [base_path / fn for fn in tar_filenames]
+
+        self.index_reader_cache = {}
+        self.index_reader_cache_size = itar_cache_size
 
         super().__init__(
             base_path=base_path,
             tar_filenames=tar_filenames,
             tar_filepaths=tar_filepaths,
-            samples=samples,
             part_filter=part_filter,
+            itar_cache_size=itar_cache_size,
             sample_filter=sample_filter,
         )
+
+    def _get_join_index_reader_cached(self, samp_idx: int) -> JoinIndexReader:
+        """
+        Get the JoinIndexReader object for the given sample index, or create it if it doesn't exist.
+        """
+
+        if samp_idx not in self.index_reader_cache:
+            index_reader = JoinIndexReader(self.index_file, column=self.column)
+            self.index_reader_cache[samp_idx] = index_reader
+
+        # If we hit the limit of open files, close the least recently used file
+        while len(self.index_reader_cache) > self.index_reader_cache_size:
+            # Get the oldest file
+            lru_key = next(iter(self.index_reader_cache))
+
+            self.index_reader_cache[lru_key].close()
+            del self.index_reader_cache[lru_key]
+
+        return self.index_reader_cache[samp_idx]
+
+    def _get_itar_sample_pointer(self, samp_idx: int) -> ITarSamplePointer:
+        """
+        Get the ITarSample object for the given index.
+        """
+        index_reader = self._get_join_index_reader_cached(samp_idx)
+        row = index_reader[samp_idx]
+
+        # Update cache entry
+        new_offset = index_reader.tell_row()
+        del self.index_reader_cache[samp_idx]
+        self.index_reader_cache[new_offset] = index_reader
+
+        assert len(row) == 1
+        shard_idx, byte_offset, byte_size = row[0]
+
+        return ITarSamplePointer(
+            tar_file_id=shard_idx,
+            byte_offset=byte_offset,
+            byte_size=byte_size,
+        )
+
+    def __len__(self) -> int:
+        try:
+            # Get any reader, they will all work
+            index_reader = next(iter(self.index_reader_cache.values()))
+        except StopIteration:
+            # If there's no reader yet, we need to create one to get the length
+            index_reader = self._get_join_index_reader_cached(0)
+
+        return len(index_reader)
 
     def __str__(self) -> str:
         return (
@@ -239,8 +295,8 @@ class ShardInfosITarReader(ITarReader):
         base_path: EPath,
         shard_infos: List[ShardInfo],
         part_filter: Optional[Callable[[str], bool]] = None,
-        sample_filter: Optional[Callable[[str], bool]] = None,
         itar_cache_size: int = 5,
+        sample_filter: Optional[Callable[[str], bool]] = None,
     ):
         # Build the tar_filenames and tar_filepaths from shard_infos,
         # constructing the samples tensor as we go.
@@ -252,7 +308,7 @@ class ShardInfosITarReader(ITarReader):
         # the shard index for a given sample index.
         # Get all tar files from the shard_infos
 
-        self.shard_count_cumsum = []
+        self.shard_count_cumsum = [0]
         self.shard_tar_file_idxs = []
         sample_idx = 0
         for shardinfo in shard_infos:
@@ -262,9 +318,9 @@ class ShardInfosITarReader(ITarReader):
             if filename not in cur_tar_files:
                 cur_tar_files[filename] = (len(cur_tar_files), filepath)
 
-            self.shard_count_cumsum.append(shardinfo.count)
-            self.shard_tar_file_idxs.append(cur_tar_files[filename][0])
             sample_idx += shardinfo.count
+            self.shard_count_cumsum.append(sample_idx)
+            self.shard_tar_file_idxs.append(cur_tar_files[filename][0])
 
         tar_filenames = list(cur_tar_files.keys())
         tar_filepaths = [p[1] for p in cur_tar_files.values()]
@@ -277,8 +333,8 @@ class ShardInfosITarReader(ITarReader):
             tar_filenames=tar_filenames,
             tar_filepaths=tar_filepaths,
             part_filter=part_filter,
-            sample_filter=sample_filter,
             itar_cache_size=itar_cache_size,
+            sample_filter=sample_filter,
         )
 
     def _get_itar_sample_pointer(self, idx: int) -> ITarSamplePointer:
@@ -287,8 +343,8 @@ class ShardInfosITarReader(ITarReader):
         """
 
         # Find the shard index using binary search
-        shard_idx = bisect_right(self.shard_count_cumsum, idx)
-        if shard_idx < 0 or shard_idx >= len(self.shard_count_cumsum):
+        shard_idx = bisect_right(self.shard_count_cumsum, idx) - 1
+        if shard_idx < 0 or shard_idx >= len(self.shard_infos):
             raise IndexError(f"Index out of bounds: {idx}")
 
         # Get the shard info for the given index
@@ -308,6 +364,9 @@ class ShardInfosITarReader(ITarReader):
             byte_offset=byte_offset,
             byte_size=byte_size,
         )
+
+    def __len__(self) -> int:
+        return self.shard_count_cumsum[-1]
 
     def __str__(self) -> str:
         return (
