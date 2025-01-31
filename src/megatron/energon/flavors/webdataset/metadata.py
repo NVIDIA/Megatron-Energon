@@ -67,7 +67,6 @@ class WebdatasetMeta:
                 ShardInfo(
                     name=name,
                     path=path / name,
-                    offset=0,
                     count=info.shard_counts[name],
                 )
                 for name in split_part_files

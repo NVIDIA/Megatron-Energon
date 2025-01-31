@@ -4,8 +4,9 @@
 import contextlib
 import struct
 import tarfile
+from dataclasses import dataclass
 from types import TracebackType
-from typing import BinaryIO, Generator, Optional, Tuple, Type, Union
+from typing import BinaryIO, Dict, Generator, Optional, Tuple, Type, Union
 
 from megatron.energon.epathlib import EPath
 from megatron.energon.retry_stream import RetryReadStream
@@ -23,7 +24,9 @@ class TarIndexReader:
         if index >= self._length or index < 0:
             raise IndexError(f"Index {index} out of range")
 
-        self.itar.seek(8 * index)
+        if self.itar.tell() != 8 * index:
+            self.itar.seek(8 * index)
+
         return struct.unpack("Q", self.itar.read(8))[0]
 
     def __iter__(self) -> Generator[int, None, None]:
@@ -142,65 +145,128 @@ def get_itar_byte_offset(
         return itar[sample_offset]
 
 
+@dataclass
+class CacheEntry:
+    tar_index_reader: TarIndexReader
+    lookahead_offset: Optional[int] = None
+    lookahead_byteoffset: Optional[int] = None
+
+
 class CachedItarOffsetReader:
+    """
+    This class is a high-level wrapper around TarIndexReader that caches some
+    of the recent lookups for faster access. It is designed for the case when
+    you need to read multiple offsets from the same tar file or from multiple
+    tar files.
+
+    Args:
+        cache_size: The number of entries to keep in the cache. By default, we keep 32.
+    """
+
     def __init__(self, cache_size: int = 32):
-        self.tar_index_reader_cache = {}
+        # Maps (tar_file, current_offset) -> CacheEntry
+        self.tar_index_reader_cache: Dict[Tuple[str, int], CacheEntry] = {}
         self.cache_size = cache_size
 
-        self.lookahead_offset = None
-        self.lookahead_byteoffset = None
-        self.lookahead_reader = None
-
-    def tar_index_reader(self, tar_file: Union[EPath, str]) -> TarIndexReader:
-        tar_file = str(tar_file)
-        if tar_file not in self.tar_index_reader_cache:
-
-            # Free up space if needed
-            if len(self.tar_index_reader_cache) >= self.cache_size:
-                oldest_reader = next(iter(self.tar_index_reader_cache))
-                oldest_reader.close()
-                if self.lookahead_reader is oldest_reader:
-                    self.lookahead_reader = None
-                    self.lookahead_offset = None
-                    self.lookahead_byteoffset = None
-                del self.tar_index_reader_cache[oldest_reader]
-
-            self.tar_index_reader_cache[tar_file] = TarIndexReader(tar_file)
-        return self.tar_index_reader_cache[tar_file]
-
-    def get_itar_byte_offset_with_reader(
+    def _find_or_create_entry(
         self,
-        tar_index_reader: TarIndexReader,
-        sample_offset: int = 0,
+        tar_file: Union[str, "EPath"],
+        sample_offset: int,
+    ) -> Tuple[Tuple[str, int], CacheEntry]:
+        """
+        1. If we already have a key == (tar_file, sample_offset), return it.
+        2. Otherwise, create a new entry (and evict if necessary).
+        """
+        tar_file = str(tar_file)
+        key = (tar_file, sample_offset)
+
+        # Direct hit in the cache?
+        if key in self.tar_index_reader_cache:
+            return key, self.tar_index_reader_cache[key]
+
+        # We didn't find an existing entry. Create a new one.
+        # Evict if needed.
+        if len(self.tar_index_reader_cache) >= self.cache_size:
+            self._evict_one_entry()
+
+        new_reader = TarIndexReader(tar_file)
+        cache_entry = CacheEntry(tar_index_reader=new_reader)
+        self.tar_index_reader_cache[key] = cache_entry
+        return key, cache_entry
+
+    def _evict_one_entry(self):
+        """
+        Evict the 'oldest' item in the cache. Here we just pop the first item
+        returned by iter(...) in Python 3.7+ which *should* be insertion order,
+        but not strictly an LRU. For true LRU, you can use OrderedDict or similar.
+        """
+        oldest_key = next(iter(self.tar_index_reader_cache))
+        oldest_entry = self.tar_index_reader_cache.pop(oldest_key)
+        oldest_entry.tar_index_reader.close()
+
+    def _get_itar_byte_offset_with_entry(
+        self,
+        cache_entry: CacheEntry,
+        sample_offset: int,
     ) -> Tuple[int, int]:
+        """
+        Return (start_byte_offset, length_to_next),
+        possibly using per-entry lookahead for speed.
+        """
+        tar_index_reader = cache_entry.tar_index_reader
+
+        # If offset=0, define the result as byte offset=0 for convenience
         if sample_offset == 0:
             result_byte_offset = 0
-        elif sample_offset == self.lookahead_offset and self.lookahead_reader is tar_index_reader:
-            assert self.lookahead_byteoffset is not None
-            result_byte_offset = self.lookahead_byteoffset
+        elif sample_offset == cache_entry.lookahead_offset:
+            # Reuse the previously cached byte offset from the lookahead
+            assert (
+                cache_entry.lookahead_byteoffset is not None
+            ), "Lookahead offset matched but no lookahead byte offset found."
+            result_byte_offset = cache_entry.lookahead_byteoffset
         else:
+            # Normal random access
             result_byte_offset = tar_index_reader[sample_offset]
 
-        self.lookahead_offset = sample_offset + 1
-        self.lookahead_reader = tar_index_reader
+        # Prepare the lookahead for (sample_offset+1)
+        next_offset = sample_offset + 1
         try:
-            self.lookahead_byteoffset = tar_index_reader[self.lookahead_offset]
+            cache_entry.lookahead_byteoffset = tar_index_reader[next_offset]
+            cache_entry.lookahead_offset = next_offset
         except IndexError:
-            self.lookahead_byteoffset = None
-            self.lookahead_offset = None
+            cache_entry.lookahead_offset = None
+            cache_entry.lookahead_byteoffset = None
 
-        if self.lookahead_byteoffset:
-            return result_byte_offset, self.lookahead_byteoffset - result_byte_offset
+        # length = difference to the next offset, or 0 if none
+        if cache_entry.lookahead_byteoffset is not None:
+            length = cache_entry.lookahead_byteoffset - result_byte_offset
         else:
-            return result_byte_offset, 0
+            length = 0
+
+        return result_byte_offset, length
 
     def get_itar_byte_offset(
         self,
-        tar_file: EPath,
+        tar_file: Union[str, "EPath"],
         sample_offset: int = 0,
-    ):
-        tar_index_reader = self.tar_index_reader(tar_file)
-        return self.get_itar_byte_offset_with_reader(tar_index_reader, sample_offset)
+    ) -> Tuple[int, int]:
+        """
+        High-level API to get the byte offset and length for the given file & sample_offset.
+        """
+
+        # Find or create the suitable CacheEntry
+        key, entry = self._find_or_create_entry(tar_file, sample_offset)
+
+        # Use (and update) the per-entry lookahead logic
+        result_byte_offset, length = self._get_itar_byte_offset_with_entry(entry, sample_offset)
+
+        # Update cache entry with the new offset
+        self.tar_index_reader_cache.pop(key)
+        if entry.lookahead_offset is not None:
+            new_key = (str(tar_file), entry.lookahead_offset)
+            self.tar_index_reader_cache[new_key] = entry
+
+        return result_byte_offset, length
 
 
 class ITarFile(tarfile.TarFile):
