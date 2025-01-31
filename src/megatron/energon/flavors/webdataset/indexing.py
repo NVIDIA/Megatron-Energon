@@ -34,17 +34,20 @@ class SqliteIndexWriter:
         self.db.execute("PRAGMA journal_mode = WAL;")
 
         # Create the tables
+        self.db.execute("DROP TABLE IF EXISTS tar_files")
         self.db.execute(
             """
-            CREATE TABLE IF NOT EXISTS tar_files (
+            CREATE TABLE tar_files (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 tar_file_name TEXT UNIQUE
             )
         """
         )
+        self.db.execute("DROP INDEX IF EXISTS idx_samples_sample_key")
+        self.db.execute("DROP TABLE IF EXISTS samples")
         self.db.execute(
             """
-            CREATE TABLE IF NOT EXISTS samples (
+            CREATE TABLE samples (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 tar_file_id INTEGER,
                 sample_key TEXT,

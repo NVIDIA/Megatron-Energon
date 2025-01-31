@@ -98,7 +98,6 @@ class WebdatasetPreparator:
             path: Path to the tar file.
             parent_path: Root path of the dataset.
             max_parts: Maximum number of different parts to return
-            sqlite_writer: SqliteIndexWriter to write the index to.
 
         Returns:
             Tuple of shard info and found keys of the loaded dicts.
