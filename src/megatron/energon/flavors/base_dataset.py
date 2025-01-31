@@ -14,7 +14,6 @@ from typing import (
     Generic,
     List,
     Optional,
-    Self,
     Tuple,
     Type,
     TypeVar,
@@ -24,6 +23,7 @@ from typing import (
 
 import torch
 from torch.utils.data import IterableDataset
+from typing_extensions import Self
 
 from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.epathlib import EPath
