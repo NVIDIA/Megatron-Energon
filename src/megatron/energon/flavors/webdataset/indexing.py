@@ -229,10 +229,10 @@ class JoinIndexReader:
         for col_idx in range(self.num_columns):
             if column is not None and col_idx != column:
                 # Skip this column
-                self.join_index_file.seek(8, 1)
+                self.join_index_file.seek(8 * 3, 1)
                 continue
 
-            bytes_key = self.join_index_file.read(8)
+            bytes_key = self.join_index_file.read(8 * 3)
             if not bytes_key:
                 return None
             assert isinstance(bytes_key, bytes)
