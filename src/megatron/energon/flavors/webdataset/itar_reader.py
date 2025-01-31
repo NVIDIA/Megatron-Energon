@@ -15,7 +15,7 @@ from megatron.energon.flavors.webdataset.itar import CachedItarOffsetReader, ITa
 from megatron.energon.flavors.webdataset.structs import FilteredSample, ShardInfo
 
 
-@dataclass(slots=True)
+@dataclass
 class ITarSamplePointer:
     """
     Points to a sample inside some tar file on disk.

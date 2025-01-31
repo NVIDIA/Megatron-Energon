@@ -59,7 +59,7 @@ def _check_instance_type(cls, inst_type: Type) -> bool:
         return not issubclass(inst_type, type) or issubclass(cls, inst_type)
 
 
-@dataclasses.dataclass(slots=True)
+@dataclasses.dataclass
 class JsonParser:
     strict: bool = True
 

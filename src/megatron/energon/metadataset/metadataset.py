@@ -142,7 +142,7 @@ class Metadataset(DatasetLoaderInterface):
         self._path = EPath(path).absolute()
         self._splits = splits
 
-    def post_initialize(self, mds_path: EPath | None = None):
+    def post_initialize(self, mds_path: Optional[EPath] = None):
         assert mds_path is None
         for split in self._splits.values():
             split.post_initialize(self._path)

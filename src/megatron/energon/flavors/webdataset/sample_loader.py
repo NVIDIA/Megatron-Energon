@@ -26,7 +26,7 @@ from megatron.energon.rng import WorkerRng, WorkerRngMergedState, WorkerRngState
 from megatron.energon.worker import WorkerConfig
 
 
-@dataclass(slots=True)
+@dataclass
 class SliceState:
     """Represents the iteration state of a single slice slice to the index."""
 
@@ -36,7 +36,7 @@ class SliceState:
     current: int
 
 
-@dataclass(slots=True)
+@dataclass
 class RawSampleData:
     """Represents the iteration state of a single slice slice to the index."""
 
@@ -46,7 +46,7 @@ class RawSampleData:
     data: Tuple[Optional[FilteredSample], ...]
 
 
-@dataclass(slots=True)
+@dataclass
 class SampleLoaderState(State):
     """
     The savable state for the wds sample loader. Contains the active and pending slices.
@@ -72,7 +72,7 @@ class SampleLoaderState(State):
     epoch_sample_count: int
 
 
-@dataclass(slots=True)
+@dataclass
 class SampleLoaderMergedState(MergedState):
     #: Rng state
     rng: WorkerRngMergedState
