@@ -9,6 +9,7 @@ from typing import (
     Generic,
     List,
     Literal,
+    Mapping,
     Optional,
     Sequence,
     Type,
@@ -51,8 +52,6 @@ class JoinedWebdatasetFactory(
     shuffle_over_epochs: int = 1
     parallel_shard_iters: Optional[int]
     max_samples_per_sequence: Optional[int]
-    part_filter: Optional[Callable[[str], bool]]
-    join_method: Literal["inner_match"]
     join_index: EPath
     handler: Callable[[Exception, Optional[str]], None]
 
@@ -65,15 +64,13 @@ class JoinedWebdatasetFactory(
 
     def __init__(
         self,
-        inner_datasets: Union[List[BaseWebdatasetFactory], Dict[str, BaseWebdatasetFactory]],
+        inner_datasets: Union[Sequence[BaseWebdatasetFactory], Mapping[str, BaseWebdatasetFactory]],
         *,
         training: bool,
         worker_config: WorkerConfig,
         shuffle_over_epochs: int = 1,
         parallel_shard_iters: Optional[int] = None,
         max_samples_per_sequence: Optional[int] = None,
-        part_filter: Optional[Callable[[str], bool]] = None,
-        join_method: Literal["inner_match"] = "inner_match",
         join_index: EPath,
         joiner: Union[Type[T_sample], Callable[..., T_sample]],
         handler: Callable[[Exception, Optional[str]], None] = reraise_exception,
@@ -98,10 +95,6 @@ class JoinedWebdatasetFactory(
             parallel_shard_iters: Number of parallel opened shards per worker, shuffling between.
             max_samples_per_sequence: Maximum number of samples per sequence (=how many samples
                     will be sequentially iterated).
-            part_filter: (internal) Function for filtering tar files by dict keys
-            join_method: How to join the samples from the datasets.
-                inner_match: All samples must match 1:1 of the merged datasets.
-                This might be extended to further modes in the future, but those will require a new index, which
             join_index: Path to the join index file. Only required for join_method="left".
             joiner: Type of the joined samples or a method for joining the samples.
             handler: Exception handler. Args: (exception, key).
@@ -114,37 +107,16 @@ class JoinedWebdatasetFactory(
             joiner = joiner.from_joined
         else:
             assert callable(joiner), f"Joiner {joiner} must be a callable or a Sample subclass"
-        if isinstance(inner_datasets, dict):
+        if isinstance(inner_datasets, Mapping):
             inner_keys = list(inner_datasets.keys())
             self.inner_dataset_keys = inner_keys
             # Wrap the joiner to pass the samples as kwargs
             self._sample_joiner = lambda *samples: joiner(**dict(zip(inner_keys, samples)))
             inner_datasets = list(inner_datasets.values())
         else:
+            assert isinstance(inner_datasets, Sequence)
             self._sample_joiner = joiner
             self.inner_dataset_keys = None
-
-        if join_method == "inner_match":
-            assert all(
-                len(dataset.shards) == len(inner_datasets[0].shards)
-                for dataset in inner_datasets[1:]
-            ), f"Dataset structures do not match, shards differ"
-            self.sample_exclude = inner_datasets[0].sample_excludes
-            assert all(
-                self.sample_exclude == dataset.sample_excludes for dataset in inner_datasets[1:]
-            ), f"Sample excludes must be the same for all paths"
-            assert all(
-                shard1.count == shard2.count
-                for dataset in inner_datasets[1:]
-                for shard1, shard2 in zip(dataset.shards, inner_datasets[0].shards)
-            ), "When joining datasets with the 'inner_match' method, all shards must have the same count"
-        elif join_method == "left":
-            self.sample_exclude = inner_datasets[0].sample_excludes
-            assert all(
-                self.sample_exclude == dataset.sample_excludes for dataset in inner_datasets[1:]
-            ), f"Sample excludes must be the same for all paths"
-        else:
-            assert False, f"Invalid join method {join_method}"
 
         self.join_index = join_index
         self.inner_datasets = inner_datasets
@@ -154,8 +126,6 @@ class JoinedWebdatasetFactory(
         self.shuffle_over_epochs = shuffle_over_epochs
         self.parallel_shard_iters = parallel_shard_iters
         self.max_samples_per_sequence = max_samples_per_sequence
-        self.part_filter = part_filter
-        self.join_method = join_method
         self.handler = handler
 
     def __len__(self) -> int:
@@ -207,9 +177,8 @@ class JoinedWebdatasetFactory(
                 column=col_idx,
                 tar_filenames=indexed_dataset.split_part_files,
                 base_path=indexed_dataset.path,
-                part_filter=self.part_filter,
+                part_filter=indexed_dataset.part_filter,
                 itar_cache_size=parallel_shard_iters,
-                sample_filter=(lambda x: x not in self.sample_exclude) if col_idx == 0 else None,
             )
             for col_idx, indexed_dataset in enumerate(self.inner_datasets)
         ]

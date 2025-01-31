@@ -9,7 +9,7 @@ from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import BaseCoreDatasetFactory, Sample
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 from megatron.energon.metadataset.dataset_loader import DatasetLoader
-from megatron.energon.metadataset.join_dataset_loader import JoinDatasetLoader
+from megatron.energon.metadataset.join_dataset_loader import JoinDatasetLoader, JoinedDatasetInfo
 from megatron.energon.metadataset.loader_interface import DatasetBlendMode, DatasetLoaderInterface
 from megatron.energon.worker import WorkerConfig
 
@@ -85,6 +85,8 @@ class DatasetReference(DatasetLoaderInterface):
 
 @dataclass_slots
 class JoinDatasetReference(DatasetReference):
+    nonmatch: Literal["skip", "none", "error"] = "error"
+
     def post_initialize(self, mds_path: Optional[EPath] = None) -> DatasetLoader:
         assert mds_path is not None
         # Override and disable another metadataset reference, only allow direct dataset references.
@@ -121,7 +123,6 @@ class JoinDatasetReference(DatasetReference):
 class MetadatasetJoin(DatasetLoaderInterface):
     join: Union[List[JoinDatasetReference], Dict[str, JoinDatasetReference]]
     joiner: Union[Type[Sample], Callable[..., Sample]]
-    join_method: Literal["inner_match", "inner", "left"] = "inner_match"
 
     split_part: Optional[str] = None
     subflavor: Optional[str] = None
@@ -140,15 +141,26 @@ class MetadatasetJoin(DatasetLoaderInterface):
             self.dataset_config == "dataset.yaml"
         ), "Cannot set dataset_config for joining datasets"
         if isinstance(self.join, list):
-            inner_loaders = [join.post_initialize(mds_path) for join in self.join]
+            inner_loaders = [
+                JoinedDatasetInfo(
+                    dataset=join.post_initialize(mds_path),
+                    nonmatch=join.nonmatch,
+                )
+                for join in self.join
+            ]
         elif isinstance(self.join, dict):
-            inner_loaders = {key: join.post_initialize(mds_path) for key, join in self.join.items()}
+            inner_loaders = {
+                key: JoinedDatasetInfo(
+                    dataset=join.post_initialize(mds_path),
+                    nonmatch=join.nonmatch,
+                )
+                for key, join in self.join.items()
+            }
         else:
             raise ValueError("Invalid join type")
 
         self._dataset = JoinDatasetLoader(
             datasets=inner_loaders,
-            join_method=self.join_method,
             joiner=self.joiner,
             split_part=self.split_part,
             subflavor=self.subflavor,

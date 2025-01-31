@@ -100,6 +100,12 @@ class TestDataset(unittest.TestCase):
             self.dataset_path / "ds1b", shuffled_range_100, shuffled_range_100, prefix="B"
         )
 
+        shuffled_range_100 = list(range(100))
+        random.shuffle(shuffled_range_100)
+        self.create_text_test_dataset(
+            self.dataset_path / "ds1c", shuffled_range_100, shuffled_range_100, prefix="C"
+        )
+
         self.mds_path = self.dataset_path / "metadataset_v2.yaml"
         with open(self.mds_path, "w") as f:
             f.write(
@@ -516,6 +522,7 @@ class TestDataset(unittest.TestCase):
                         "        join:",
                         "          text1:",
                         "            path: ds1",
+                        "            nonmatch: skip",
                         "            subflavors:",
                         "              source1: ds1",
                         "              number: 43",
@@ -524,7 +531,6 @@ class TestDataset(unittest.TestCase):
                         "            subflavors:",
                         "              source2: ds1b",
                         "              number: 44",
-                        "        join_method: left",
                         "        joiner:",
                         f"          __module__: {test_joiner.__module__}",
                         f"          __function__: {test_joiner.__name__}",
@@ -542,7 +548,7 @@ class TestDataset(unittest.TestCase):
             max_samples_per_sequence=None,
         )
         print(len(train_dataset))
-        assert len(train_dataset) == 55
+        assert len(train_dataset) == 55, len(train_dataset)
 
         train_loader = get_savable_loader(
             train_dataset,
@@ -571,6 +577,73 @@ class TestDataset(unittest.TestCase):
         # Every item must occurr 2 times (2*55).
         assert Counter(txt1_order).most_common(1)[0][1] == 2
 
+        # Test that changing the file works as expected
+        with open(joined_mds_path, "w") as f:
+            f.write(
+                "\n".join(
+                    [
+                        "__module__: megatron.energon",
+                        "__class__: MetadatasetV2",
+                        "splits:",
+                        "  train:",
+                        "    blend:",
+                        "      - weight: 1",
+                        "        join:",
+                        "          text1:",
+                        "            path: ds1c",
+                        "            nonmatch: skip",
+                        "            subflavors:",
+                        "              source1: ds1c",
+                        "              number: 43",
+                        "          text2:",
+                        "            path: ds1b",
+                        "            subflavors:",
+                        "              source2: ds1b",
+                        "              number: 44",
+                        "        joiner:",
+                        f"          __module__: {test_joiner.__module__}",
+                        f"          __function__: {test_joiner.__name__}",
+                        "      - weight: 1",
+                        "        join:",
+                        "          text1:",
+                        "            path: ds1b",
+                        "            nonmatch: skip",
+                        "          text2:",
+                        "            path: ds1",
+                        "            nonmatch: skip",
+                        "        joiner:",
+                        f"          __module__: {test_joiner.__module__}",
+                        f"          __function__: {test_joiner.__name__}",
+                    ]
+                )
+            )
+
+        # Expect this to fail. Preparation does not match!
+        with self.assertRaises(Exception):
+            # Train mode dataset
+            train_dataset = get_train_dataset(
+                joined_mds_path,
+                worker_config=worker_config,
+                batch_size=1,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+            )
+
+        # Shall succeed after preparation
+        prepare_metadataset(EPath(joined_mds_path))
+        train_dataset = get_train_dataset(
+            joined_mds_path,
+            worker_config=worker_config,
+            batch_size=1,
+            shuffle_buffer_size=None,
+            max_samples_per_sequence=None,
+        )
+        # Check that there are no remainder files
+        cache_folder = joined_mds_path.with_name(joined_mds_path.name + ".cache")
+        assert sum(1 for f in cache_folder.iterdir() if f.is_file()) == 2, list(
+            cache_folder.iterdir()
+        )
+
     def test_joined_metadataset_prepare_mock(self):
         torch.manual_seed(42)
 
@@ -587,7 +660,6 @@ class TestDataset(unittest.TestCase):
                         "    join:",
                         "      - path: ds1",
                         "      - path: ds3",
-                        "    join_method: left",
                         "    joiner:",
                         "      __module__: __main__",
                         "      __class__: NonExistantSample",
@@ -609,7 +681,6 @@ class TestDataset(unittest.TestCase):
                         "    join:",
                         "      - path: ds1",
                         "      - path: ds3",
-                        "    join_method: left",
                         "    joiner:",
                         "      __module__: non_existant_module",
                         "      __class__: MyCaptioningSample",
