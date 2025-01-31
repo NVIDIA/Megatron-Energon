@@ -173,5 +173,15 @@ class SavableSampleBuffer(BaseWrapperDataset[T_sample], Generic[T_sample]):
             "worker_config": self.worker_config.config(),
         }
 
+    def debug_print(self, indent: str = ""):
+        print(
+            f"{indent}SavableSampleBuffer(size={len(self._restore_keys[self._rank_id])}, res_pend={self._restore_pending}):\n",
+            end="",
+        )
+        for i, (sample, restore_key) in enumerate(
+            zip(self._buffer[self._rank_id], self._restore_keys[self._rank_id])
+        ):
+            print(f"{indent}Sample {i} [{restore_key!r}]: {sample.__key__}\n", end="")
+
     def __str__(self):
         return f"SavableSampleBuffer(size={len(self._buffer)})"
