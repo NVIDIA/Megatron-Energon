@@ -183,7 +183,16 @@ class BaseWebdatasetFactory(
         return dict(
             type=type(self).__qualname__,
             training=self.training,
-            path=str(self.path),
+            _path=str(self.path),
+            shards=[
+                dict(
+                    name=shard.name,
+                    count=shard.count,
+                    _path=str(shard.path),
+                )
+                for shard in self.shards
+            ],
+            sample_excludes=list(self.sample_excludes),
             shuffle_over_epochs=self.shuffle_over_epochs,
             parallel_shard_iters=self.parallel_shard_iters,
             max_samples_per_sequence=self.max_samples_per_sequence,

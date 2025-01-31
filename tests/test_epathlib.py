@@ -123,14 +123,14 @@ class TestEPath(unittest.TestCase):
         orig_start_method = multiprocessing.get_start_method()
         try:
             multiprocessing.set_start_method("spawn", force=True)
-            
+
             proc = multiprocessing.Process(target=_multiproc_test_func, args=(p, True))
             proc.start()
             proc.join()
             assert proc.exitcode == 0
 
             multiprocessing.set_start_method("fork", force=True)
-            
+
             proc = multiprocessing.Process(target=_multiproc_test_func, args=(p, True))
             proc.start()
             proc.join()

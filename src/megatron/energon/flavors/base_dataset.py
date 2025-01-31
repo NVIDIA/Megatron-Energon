@@ -338,7 +338,9 @@ class SavableDataset(IterableDataset[T_sample], Generic[T_sample], ABC):
 
     @abstractmethod
     def config(self) -> Dict[str, Any]:
-        """Return a config dict that can be used to check if datasets have the same settings."""
+        """Return a config dict that can be used to check if datasets have the same settings.
+        Variables in dicts starting with "_" represent a possibly changable setting, like a full
+        path which may be changed."""
         return {
             "type": type(self).__qualname__,
         }

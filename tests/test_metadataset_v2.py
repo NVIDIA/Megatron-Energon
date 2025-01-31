@@ -438,6 +438,7 @@ class TestDataset(unittest.TestCase):
                     ]
                 )
             )
+        prepare_metadataset(EPath(joined_mds_path))
 
         # Train mode dataset
         train_dataset = get_train_dataset(

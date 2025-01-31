@@ -143,14 +143,7 @@ class JsonParser:
                 object_name = kwargs.pop("__function__", None)
                 is_instantiating_class = False
                 is_calling_function = True
-            else:
-                raise JsonValueError(
-                    f"Expected __class__ or __function__ with __module__ for {inst_type}, got {kwargs}",
-                    inst_type,
-                    kwargs,
-                    _path,
-                    _stage,
-                )
+            # Else case: It's a plain type, and nothing was passed, use the default cls
         if module_name is None or object_name is None:
             cls = inst_type
         else:
@@ -190,7 +183,7 @@ class JsonParser:
         if is_type or is_callable:
             inst = cls
         else:
-            assert is_instantiating_class or is_calling_function
+            # Do not assert the other cases, we fallback to the passed cls
             inst = self.safe_call_function(kwargs, cls, allow_imports=True)
             assert not isinstance(cls, type) or _check_instance_type(
                 type(inst), inst_type

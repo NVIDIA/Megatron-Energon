@@ -3,7 +3,6 @@
 
 """This module defines tests for the dataset."""
 
-from collections import defaultdict
 import dataclasses
 import io
 import json
@@ -14,6 +13,7 @@ import sys
 import tempfile
 import unittest
 import warnings
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Hashable, List, Tuple, Type, Union

@@ -612,15 +612,11 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
     def config(self) -> Dict[str, Any]:
         return {
             "type": type(self).__qualname__,
-            "total_count": len(self.join_readers),
-            "readers": [
-                {
-                    # 'base_path': EPath.common_path(reader.tar_filepaths),
-                    "tar_filenames": [str(p) for p in reader.tar_filenames],
-                }
-                for reader in self.join_readers
+            "joins": len(self.join_readers),
+            "len": len(self),
+            "slice_offsets": [
+                list(worker_slice_offsets) for worker_slice_offsets in self.worker_slice_offsets
             ],
-            "slice_offsets": self.worker_slice_offsets,
             "worker_config": self.worker_config.config(),
             "shuffle_over_epochs": self.shuffle_over_epochs,
             "parallel_slice_iters": self.parallel_slice_iters,
