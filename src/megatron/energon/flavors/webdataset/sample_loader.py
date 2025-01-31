@@ -400,6 +400,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
                             "w": self.worker_config.rank_worker_id(),
                             "index": sample.__restore_key__[1],
                             "key": sample.data[0]["__key__"],
+                            "shard": sample.data[0]["__shard__"],
                             "count": self._sample_count[worker_idx],
                             "epoch": self._epoch_count[worker_idx],
                             "epoch_count": self._epoch_sample_count[worker_idx],
