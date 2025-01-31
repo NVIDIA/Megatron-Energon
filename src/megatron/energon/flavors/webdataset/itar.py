@@ -182,7 +182,7 @@ class CachedItarOffsetReader:
 
         # Direct hit in the cache?
         if key in self.tar_index_reader_cache:
-            return self.tar_index_reader_cache[key]
+            return key, self.tar_index_reader_cache[key]
 
         # We didn't find an existing entry. Create a new one.
         # Evict if needed.

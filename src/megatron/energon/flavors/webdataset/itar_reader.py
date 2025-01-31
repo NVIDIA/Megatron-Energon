@@ -176,7 +176,7 @@ class ITarReader(ABC):
             raise ValueError(f"No valid files found in sample {idx}")
 
         return FilteredSample(
-            __key__=sample_base_name,
+            __key__=f"{shard_name}/{sample_base_name}",
             __shard__=self.tar_filenames[sample.tar_file_id],
             __restore_key__=("Webdataset", idx),
             **group_parts,
