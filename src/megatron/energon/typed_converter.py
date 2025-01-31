@@ -82,7 +82,10 @@ class JsonParser:
                 module = try_energon_module
             else:
                 raise
-        return getattr(module, object_name)
+        try:
+            return getattr(module, object_name)
+        except AttributeError:
+            raise ModuleNotFoundError(f"Object {object_name} not found in {module_name}")
 
     def raw_to_instance(
         self,

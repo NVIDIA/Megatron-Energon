@@ -481,6 +481,53 @@ class TestDataset(unittest.TestCase):
         # Every item must occurr 2 times (2*55).
         assert Counter(txt1_order).most_common(1)[0][1] == 2
 
+    def test_joined_metadataset_prepare_mock(self):
+        torch.manual_seed(42)
+
+        # Create a joined dataset configuration
+        joined_mds_path = self.dataset_path / "joined_metadataset_prepare_mock.yaml"
+        with open(joined_mds_path, "w") as f:
+            f.write(
+                "\n".join(
+                    [
+                        "__module__: megatron.energon",
+                        "__class__: MetadatasetV2",
+                        "splits:",
+                        "  train:",
+                        "    join:",
+                        "      - path: ds1",
+                        "      - path: ds3",
+                        "    join_method: left",
+                        "    joiner:",
+                        "      __module__: __main__",
+                        "      __class__: NonExistantSample",
+                    ]
+                )
+            )
+        prepare_metadataset(EPath(joined_mds_path))
+
+        # Create a joined dataset configuration
+        joined_mds_path = self.dataset_path / "joined_metadataset_prepare_mock2.yaml"
+        with open(joined_mds_path, "w") as f:
+            f.write(
+                "\n".join(
+                    [
+                        "__module__: megatron.energon",
+                        "__class__: MetadatasetV2",
+                        "splits:",
+                        "  train:",
+                        "    join:",
+                        "      - path: ds1",
+                        "      - path: ds3",
+                        "    join_method: left",
+                        "    joiner:",
+                        "      __module__: non_existant_module",
+                        "      __class__: MyCaptioningSample",
+                    ]
+                )
+            )
+        prepare_metadataset(EPath(joined_mds_path))
+
     def test_metadataset_fixed_epochs(self):
         torch.manual_seed(42)
         worker_config = WorkerConfig(
