@@ -104,7 +104,7 @@ class WebdatasetPreparator:
             Tuple of shard info and found keys of the loaded dicts.
         """
         path = EPath(path)
-        shard_info = ShardInfo(name=path.relpath, path=path, offset=0, count=0)
+        shard_info = ShardInfo(name=path.relpath, path=path, count=0)
 
         if not shard_info.path.is_absolute():
             parent_path = EPath(parent_path)
