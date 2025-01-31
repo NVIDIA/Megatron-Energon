@@ -139,7 +139,6 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
         workers_sample_slice_offsets: Sequence[Sequence[int]],
         *,
         worker_config: WorkerConfig,
-        part_filter: Optional[Callable[[str], bool]] = None,
         shuffle_over_epochs: Optional[int] = None,
         parallel_slice_iters: int = 1,
         handler: Callable[[Exception, Optional[str]], None] = reraise_exception,
@@ -151,7 +150,6 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
             join_readers: A sequence of the joined readers (or just a single reader) to iterate over.
             worker_slice_offsets: The offsets of the slice slices to iterate over, for each worker.
             worker_config: The worker configuration.
-            part_filter: If not None, use this function to filter out wds files.
             shuffle_over_epochs: If None, disable shuffling.
                 If = 1, every sample is seen exactly once per epoch.
                 If > 1, samples (or rather slice slices) are shuffled within this number of epochs
@@ -166,7 +164,6 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
         super().__init__(worker_config=worker_config)
         self.join_readers = join_readers
         self.worker_slice_offsets = workers_sample_slice_offsets
-        self.part_filter = part_filter
         self.shuffle_over_epochs = shuffle_over_epochs
         self.parallel_slice_iters = parallel_slice_iters
         self.handler = handler

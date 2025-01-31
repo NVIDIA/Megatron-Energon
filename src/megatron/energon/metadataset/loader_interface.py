@@ -25,6 +25,11 @@ class DatasetLoaderInterface(ABC):
     """General interface for a dataset loader."""
 
     @abstractmethod
+    def post_initialize(self, mds_path: Optional[EPath] = None):
+        """Called to finally initialize the dataset."""
+        ...
+
+    @abstractmethod
     def get_datasets(
         self,
         *,
@@ -61,6 +66,11 @@ class DatasetLoaderInterface(ABC):
         """
         ...
 
-    def prepare(self, parent_path: EPath, split_part: Optional[str] = None):
-        """Can be overridden to add actions when running the `energon prepare` CLI command on a meta dataset."""
+    def prepare(self, split_part: Optional[str] = None):
+        """
+        Prepares the loader by creating caches and other necessary structures on disk.
+
+        Args:
+            split_part: Name of the split to load.
+        """
         pass

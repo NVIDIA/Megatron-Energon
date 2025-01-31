@@ -141,12 +141,6 @@ class JoinedWebdatasetFactory(
                 for shard1, shard2 in zip(dataset.shards, inner_datasets[0].shards)
             ), "When joining datasets with the 'inner_match' method, all shards must have the same count"
         elif join_method == "left":
-            # Check if join index is present, if not throw error and tell user how to prepare the dataset
-            assert join_index is not None, (
-                "When joining datasets with the 'left' method, a join index must be present. "
-                "This can be created by running 'energon prepare' on the meta dataset file."
-            )
-
             self.sample_exclude = inner_datasets[0].sample_excludes
             assert all(
                 self.sample_exclude == dataset.sample_excludes for dataset in inner_datasets[1:]
@@ -181,6 +175,9 @@ class JoinedWebdatasetFactory(
 
         # Get join index, get size, distribute samples
         # Get samples for each worker on current rank
+        assert (
+            self.join_index.is_file()
+        ), f"Join index {self.join_index} does not exist, did you prepare the metadataset?"
 
         with JoinIndexReader(self.join_index) as jir:
             total_samples = len(jir)
@@ -213,6 +210,7 @@ class JoinedWebdatasetFactory(
                 tar_filenames=indexed_dataset.split_part_files,
                 base_path=indexed_dataset.path,
                 part_filter=self.part_filter,
+                sample_filter=(lambda x: x not in self.sample_exclude) if col_idx == 0 else None,
             )
             for col_idx, indexed_dataset in enumerate(self.inner_datasets)
         ]
@@ -221,7 +219,6 @@ class JoinedWebdatasetFactory(
             join_readers=itar_readers,
             workers_sample_slice_offsets=workers_sample_slice_offsets,
             worker_config=self.worker_config,
-            exclude=self.sample_exclude,
             shuffle_over_epochs=self.shuffle_over_epochs if self.training else None,
             parallel_slice_iters=parallel_shard_iters,
             handler=self.sample_error_handler,

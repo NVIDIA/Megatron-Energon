@@ -7,7 +7,7 @@ import json
 import re
 import typing
 from types import FunctionType
-from typing import Any, List, Optional, Type
+from typing import Any, List, Optional, Tuple, Type
 
 import click
 import yaml
@@ -16,6 +16,7 @@ from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import BaseWebdatasetFactory
 from megatron.energon.flavors.base_dataset import Sample
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
+from megatron.energon.metadataset.loader import prepare_metadataset
 
 
 class CrudeSampleDummy:
@@ -83,20 +84,6 @@ def printify_json(data: Any) -> Any:
     elif isinstance(data, str):
         return data[:25] + ("..." if len(data) > 25 else "")
     return data
-
-
-def prepare_metadataset(path: EPath):
-    from megatron.energon.dataset_config import load_config
-    from megatron.energon.metadataset.metadataset import Metadataset
-
-    metads = load_config(
-        path,
-        default_type=Metadataset,
-        strict=True,
-        default_kwargs=dict(parent_path=path.parent),
-    )
-
-    metads.prepare(path.parent)
 
 
 @click.command(name="prepare")
@@ -189,8 +176,9 @@ def command(
             "filter in the command line."
         )
 
+    split_parts_patterns: Optional[List[Tuple[str, str]]]
     if split_parts:
-        split_parts_patterns = [x.split(":", 1) for x in split_parts]
+        split_parts_patterns = [tuple(x.split(":", 1)) for x in split_parts]
         split_parts_ratio = None
     elif not tar_index_only:
         split_input = click.prompt(

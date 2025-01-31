@@ -1,10 +1,9 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+import hashlib
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Type, Union
-
-import yaml
 
 from megatron.energon.epathlib.epath import EPath
 from megatron.energon.flavors import (
@@ -16,10 +15,8 @@ from megatron.energon.flavors import (
 from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
 from megatron.energon.flavors.webdataset.indexing import JoinIndexWriter
 from megatron.energon.flavors.webdataset.metadata import WebdatasetMeta
-from megatron.energon.flavors.webdataset.structs import WebdatasetInfo
 from megatron.energon.metadataset.dataset_loader import DatasetLoader
 from megatron.energon.metadataset.loader_interface import DatasetBlendMode, DatasetLoaderInterface
-from megatron.energon.typed_converter import raw_to_typed
 from megatron.energon.worker import WorkerConfig
 
 
@@ -182,7 +179,8 @@ class JoinDatasetLoader(DatasetLoaderInterface):
     datasets: Union[List[DatasetLoader], Dict[str, DatasetLoader]]
     joiner: Union[Type[Sample], Callable[..., Sample]]
     join_method: Literal["inner_match", "inner", "left"] = "inner_match"
-    join_index: Optional[EPath] = None
+    joined_hash: Optional[str] = None
+    cache_path: Optional[EPath] = None
 
     split_part: Optional[str] = None
     split_config: Optional[str] = None
@@ -190,23 +188,60 @@ class JoinDatasetLoader(DatasetLoaderInterface):
     subflavors: Optional[Dict[str, Any]] = None
     shuffle_over_epochs_multiplier: int = 1
 
-    def prepare(self, parent_path: EPath, split_part: Optional[str] = None):
-        print(f"Preparing joined dataset in {parent_path}")
+    def _get_joined_hash(self) -> str:
+        # Get list of joinable datasets
+        datasets = self.datasets
+        if isinstance(datasets, dict):
+            datasets = list(datasets.values())
+
+        db_uuids = []
+
+        for dataset in datasets:
+            db_path = EPath(dataset.path) / MAIN_FOLDER_NAME / "index.uuid"
+            try:
+                db_uuids.append(db_path.read_text())
+            except FileNotFoundError:
+                raise FileNotFoundError(
+                    f"Missing uuid file in {db_path}. Did you prepare the dataset?"
+                )
+
+        # Combine the hashes into a single hash by xor
+        hash = hashlib.sha256()
+        hash.update("\0".join(db_uuids).encode())
+        return hash.hexdigest()
+
+    def _get_joined_index_path(self, split_part: str) -> EPath:
+        assert self.cache_path is not None
+        assert self.joined_hash is not None
+        return self.cache_path / f"join_index_{split_part}_{self.joined_hash}.bin"
+
+    def post_initialize(self, mds_path: Optional[EPath] = None):
+        assert mds_path is not None
+        self.joined_hash = self._get_joined_hash()
+        self.cache_path = mds_path.parent / f"{mds_path.name}.cache"
+
+    def prepare(self, split_part: Optional[str] = None):
+        assert self.cache_path is not None
+        assert self.joined_hash is not None
+        assert split_part is not None
+        join_index_path = self._get_joined_index_path(split_part)
+        if join_index_path.is_file():
+            print(f"Joined dataset already prepared at {join_index_path}")
+            return
+
+        print(f"Preparing joined dataset in {join_index_path}")
 
         # Get list of joinable datasets
         datasets = self.datasets
         if isinstance(datasets, dict):
             datasets = list(datasets.values())
 
-        for dataset in self.datasets:
-            print(f" - {dataset}")
-
-        # TODO: Generate sqlite indices for individual join parts if not already present
-
         db_paths = []
         shard_name_to_idx = []
 
         for dataset in datasets:
+            print(f" - {dataset}")
+
             db_path = EPath(dataset.path) / MAIN_FOLDER_NAME / "index.sqlite"
 
             # Join split_config may override individual split configs
@@ -217,6 +252,7 @@ class JoinDatasetLoader(DatasetLoaderInterface):
             # 2. Individual dataset split part
             # 3. If none of the above is set, use the split part of the surrounding meta dataset
             cur_split_part = self.split_part or dataset.split_part or split_part
+            assert cur_split_part is not None, "Missing split part"
 
             wds_meta = WebdatasetMeta.from_config(
                 path=EPath(dataset.path), split_part=cur_split_part, split_config=cur_split_config
@@ -230,8 +266,7 @@ class JoinDatasetLoader(DatasetLoaderInterface):
                 }
             )
 
-        join_index_path = parent_path / f"join_index_{split_part}.bin"
-
+        join_index_path.parent.mkdir(parents=True, exist_ok=True)
         join_multiple_indices(
             db_paths=db_paths,
             shard_maps=shard_name_to_idx,
@@ -316,7 +351,7 @@ class JoinDatasetLoader(DatasetLoaderInterface):
             worker_config=worker_config,
             shuffle_over_epochs=shuffle_over_epochs,
             join_method=self.join_method,
-            join_index=self.join_index,
+            join_index=self._get_joined_index_path(split_part),
             joiner=self.joiner,
             **kwargs,
         )

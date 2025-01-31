@@ -23,6 +23,9 @@ class DatasetLoader(DatasetLoaderInterface):
     dataset_config: str = "dataset.yaml"
     split_config: str = "split.yaml"
 
+    def post_initialize(self, mds_path: Optional[EPath] = None):
+        pass
+
     def get_dataset(
         self,
         *,
