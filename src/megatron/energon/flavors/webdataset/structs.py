@@ -27,9 +27,7 @@ class ShardInfo:
     name: str
     #: The path to the shard file
     path: EPath
-    #: The offset of the first sample (counted in samples) where this sub shard starts
-    offset: int
-    #: The number of samples in this sub shard
+    #: The number of samples in this shard
     count: int
 
 

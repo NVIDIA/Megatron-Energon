@@ -349,8 +349,7 @@ class ShardInfosITarReader(ITarReader):
 
         # Get the shard info for the given index
         shard = self.shard_infos[shard_idx]
-        sample_idx_in_shard_info = idx - self.shard_count_cumsum[shard_idx]
-        sample_idx_in_shard_file = shard.offset + sample_idx_in_shard_info
+        sample_idx_in_shard_file = idx - self.shard_count_cumsum[shard_idx]
 
         # Now we know the tar file and the sample offset in the file.
         # We need to figure out the byte offset and size of the sample,
