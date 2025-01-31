@@ -28,7 +28,6 @@ from megatron.energon.flavors.webdataset.base_webdataset import BaseWebdatasetFa
 from megatron.energon.flavors.webdataset.error_handler import ErrorHandler
 from megatron.energon.flavors.webdataset.indexing import JoinIndexReader
 from megatron.energon.flavors.webdataset.itar_reader import JoinIndexFileITarReader
-from megatron.energon.flavors.webdataset.itar_sample_loader import ITarSampleLoaderDataset
 from megatron.energon.flavors.webdataset.sample_loader import (
     RawSampleData,
     WebdatasetSampleLoaderDataset,
