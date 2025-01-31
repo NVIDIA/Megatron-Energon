@@ -2,23 +2,11 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import dataclasses
-from dataclasses import dataclass
-from typing import (
-    Any,
-    Callable,
-    Dict,
-    Generator,
-    Iterator,
-    List,
-    Optional,
-    Sequence,
-    Set,
-    Tuple,
-    Union,
-)
+from typing import Any, Callable, Dict, Generator, Iterator, List, Optional, Sequence, Tuple, Union
 
 import torch
 
+from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.flavors.base_dataset import MergedState, SavableDataset, State
 from megatron.energon.flavors.webdataset.itar_reader import ITarReader
 from megatron.energon.flavors.webdataset.structs import FilteredSample, reraise_exception
@@ -26,7 +14,7 @@ from megatron.energon.rng import WorkerRng, WorkerRngMergedState, WorkerRngState
 from megatron.energon.worker import WorkerConfig
 
 
-@dataclass
+@dataclass_slots
 class SliceState:
     """Represents the iteration state of a single slice slice to the index."""
 
@@ -36,7 +24,7 @@ class SliceState:
     current: int
 
 
-@dataclass
+@dataclass_slots
 class RawSampleData:
     """Represents the iteration state of a single slice slice to the index."""
 
@@ -46,7 +34,7 @@ class RawSampleData:
     data: Tuple[Optional[FilteredSample], ...]
 
 
-@dataclass
+@dataclass_slots
 class SampleLoaderState(State):
     """
     The savable state for the wds sample loader. Contains the active and pending slices.
@@ -72,7 +60,7 @@ class SampleLoaderState(State):
     epoch_sample_count: int
 
 
-@dataclass
+@dataclass_slots
 class SampleLoaderMergedState(MergedState):
     #: Rng state
     rng: WorkerRngMergedState

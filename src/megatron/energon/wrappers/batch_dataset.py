@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import inspect
-from dataclasses import dataclass
 from typing import (
     Any,
     Callable,
@@ -17,6 +16,7 @@ from typing import (
     Union,
 )
 
+from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.errors import SYSTEM_EXCEPTIONS, FatalSampleError
 from megatron.energon.flavors.base_dataset import SavableDataset, set_sample_restore_key
 from megatron.energon.worker import WorkerConfig
@@ -34,23 +34,23 @@ T_batch = TypeVar("T_batch", covariant=True)
 T_batch_sample = TypeVar("T_batch_sample", covariant=True)
 
 
-@dataclass
+@dataclass_slots
 class BatchState(BaseSingleWrapperState):
     sample_index: int
 
 
-@dataclass
+@dataclass_slots
 class BatchMergedState(BaseSingleWrapperMergedState):
     sample_indexes: List[int]
 
 
-@dataclass
+@dataclass_slots
 class BatchGeneratorState(BatchState):
     generator_sample_key: Any
     generator_offset: int
 
 
-@dataclass
+@dataclass_slots
 class BatchGeneratorMergedState(BatchMergedState):
     generator_sample_keys: List[Any]
     generator_offsets: List[int]

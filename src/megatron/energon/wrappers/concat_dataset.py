@@ -1,9 +1,9 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from dataclasses import dataclass
 from typing import Any, Dict, Generic, Iterator, List, Optional, Tuple, TypeVar, Union
 
+from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.flavors.base_dataset import (
     MergedState,
     SavableDataset,
@@ -16,13 +16,13 @@ from megatron.energon.wrappers.base import BaseWrapperDataset
 T_sample = TypeVar("T_sample")
 
 
-@dataclass
+@dataclass_slots
 class ConcatState(State):
     #: State of the inner datasets
     dataset_states: List[State]
 
 
-@dataclass
+@dataclass_slots
 class ConcatMergedState(MergedState):
     #: State of the inner datasets
     dataset_states: List[MergedState]

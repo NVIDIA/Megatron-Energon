@@ -5,7 +5,6 @@ import json
 import time
 import traceback
 from concurrent.futures.process import ProcessPoolExecutor
-from dataclasses import dataclass
 from pathlib import Path
 from typing import (
     Container,
@@ -24,6 +23,8 @@ import click
 import numpy as np
 from PIL import Image
 from tqdm import tqdm
+
+from megatron.energon.dataclass_slots import dataclass_slots
 
 cpal = np.array(
     [
@@ -490,7 +491,7 @@ LOADER_LOG_LINE_TYPES_T = (
 )
 
 
-@dataclass
+@dataclass_slots
 class LoaderInfo:
     id: int
     modality: str

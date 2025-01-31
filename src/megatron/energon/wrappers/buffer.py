@@ -1,7 +1,6 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from dataclasses import dataclass
 from typing import (
     Any,
     Dict,
@@ -16,6 +15,7 @@ from typing import (
     Union,
 )
 
+from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.flavors.base_dataset import MergedState, SavableDataset, State
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset, get_sample_restore_key
@@ -23,12 +23,12 @@ from megatron.energon.wrappers.base import BaseWrapperDataset, get_sample_restor
 T_sample = TypeVar("T_sample")
 
 
-@dataclass
+@dataclass_slots
 class SampleBufferState(State):
     buffer: List[Tuple[Union[str, int], ...]]
 
 
-@dataclass
+@dataclass_slots
 class SampleBufferMergedState(MergedState):
     buffer: List[List[Tuple[Union[str, int], ...]]]
 

@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from contextlib import contextmanager
-from dataclasses import dataclass
 from typing import (
     Any,
     Generator,
@@ -16,6 +15,7 @@ from typing import (
     Union,
 )
 
+from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.flavors.base_dataset import MergedState, Sample, SavableDataset, State
 from megatron.energon.worker import WorkerConfig
 
@@ -25,7 +25,7 @@ T_sample_out = TypeVar("T_sample_out", covariant=True)
 T_sample_in = TypeVar("T_sample_in", covariant=True)
 
 
-@dataclass
+@dataclass_slots
 class BaseSingleWrapperState(State):
     """Base class for dataset states."""
 
@@ -36,7 +36,7 @@ class BaseSingleWrapperState(State):
     dataset_state: State
 
 
-@dataclass
+@dataclass_slots
 class BaseSingleWrapperMergedState(MergedState):
     """Base class for dataset states."""
 

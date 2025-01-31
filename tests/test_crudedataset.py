@@ -9,7 +9,6 @@ import sys
 import tempfile
 import unittest
 import warnings
-from dataclasses import dataclass
 from pathlib import Path
 from typing import List
 
@@ -27,11 +26,12 @@ from megatron.energon import (
     get_train_dataset,
     stateless,
 )
+from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 from megatron.energon.flavors.webdataset.structs import reraise_exception
 
 
-@dataclass
+@dataclass_slots
 class TextBatch(Batch):
     __keys__: List[str]
     txts: List[str]

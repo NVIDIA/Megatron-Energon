@@ -1,20 +1,20 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Type, Union
 
+from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.dataset_config import load_config
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import BaseCoreDatasetFactory, Sample
-from megatron.energon.flavors.webdataset import JOIN_INDEX_FILENAME, MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 from megatron.energon.metadataset.dataset_loader import DatasetLoader
 from megatron.energon.metadataset.join_dataset_loader import JoinDatasetLoader
 from megatron.energon.metadataset.loader_interface import DatasetBlendMode, DatasetLoaderInterface
 from megatron.energon.worker import WorkerConfig
 
 
-@dataclass
+@dataclass_slots
 class DatasetReference(DatasetLoaderInterface):
     path: Union[str, EPath]
 
@@ -83,7 +83,7 @@ class DatasetReference(DatasetLoaderInterface):
         )
 
 
-@dataclass
+@dataclass_slots
 class JoinDatasetReference(DatasetReference):
     def post_initialize(self, mds_path: Optional[EPath] = None) -> DatasetLoader:
         assert mds_path is not None
@@ -117,7 +117,7 @@ class JoinDatasetReference(DatasetReference):
         ), "JoinDatasetReference should not be used directly, but only by MetadatasetJoin"
 
 
-@dataclass
+@dataclass_slots
 class MetadatasetJoin(DatasetLoaderInterface):
     join: Union[List[JoinDatasetReference], Dict[str, JoinDatasetReference]]
     joiner: Union[Type[Sample], Callable[..., Sample]]
@@ -185,22 +185,22 @@ class MetadatasetJoin(DatasetLoaderInterface):
         )
 
 
-@dataclass
+@dataclass_slots
 class BlendWeightMixin:
     weight: float = 1.0
 
 
-@dataclass
+@dataclass_slots
 class BlendDatasetReference(BlendWeightMixin, DatasetReference):
     pass
 
 
-@dataclass
+@dataclass_slots
 class BlendJoinDatasetReference(BlendWeightMixin, MetadatasetJoin):
     pass
 
 
-@dataclass
+@dataclass_slots
 class MetadatasetBlend(DatasetLoaderInterface):
     """Blending of datasets by specifying the sampling weight for the inner datasets."""
 
@@ -252,22 +252,22 @@ class MetadatasetBlend(DatasetLoaderInterface):
         return DatasetBlendMode.DATASET_WEIGHT, datasets
 
 
-@dataclass
+@dataclass_slots
 class BlendRepetitionsMixin:
     repetitions: int = 1
 
 
-@dataclass
+@dataclass_slots
 class BlendEpochizedDatasetReference(BlendRepetitionsMixin, DatasetReference):
     pass
 
 
-@dataclass
+@dataclass_slots
 class BlendEpochizedJoinDatasetReference(BlendRepetitionsMixin, MetadatasetJoin):
     pass
 
 
-@dataclass
+@dataclass_slots
 class MetadatasetBlendEpochized(DatasetLoaderInterface):
     """Blending of datasets, by specifying the number of repetitions for samples from the inner
     datasets. Ensures that the constraint, that samples are seen exactly this many times before
@@ -321,7 +321,7 @@ class MetadatasetBlendEpochized(DatasetLoaderInterface):
         return DatasetBlendMode.SAMPLE_REPETITIONS, datasets
 
 
-@dataclass
+@dataclass_slots
 class MetadatasetV2(DatasetLoaderInterface):
     path: EPath
     splits: Dict[

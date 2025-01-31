@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import hashlib
-from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Type, Union
 
+from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.epathlib.epath import EPath
 from megatron.energon.flavors import (
     BaseCoreDatasetFactory,
@@ -172,7 +172,7 @@ def join_multiple_indices(
     conn.close()
 
 
-@dataclass
+@dataclass_slots
 class JoinDatasetLoader(DatasetLoaderInterface):
     """Loads a joined dataset from a path."""
 

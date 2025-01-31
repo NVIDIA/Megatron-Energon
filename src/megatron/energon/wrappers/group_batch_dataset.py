@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import inspect
-from dataclasses import dataclass
 from typing import (
     Any,
     Callable,
@@ -18,6 +17,7 @@ from typing import (
     Union,
 )
 
+from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.errors import SYSTEM_EXCEPTIONS, FatalSampleError
 from megatron.energon.flavors.base_dataset import (
     MergedState,
@@ -44,35 +44,35 @@ T_batch = TypeVar("T_batch", covariant=True)
 T_batch_sample = TypeVar("T_batch_sample", covariant=True)
 
 
-@dataclass
+@dataclass_slots
 class BucketState(State):
     key: Hashable
     batch_size: int
     samples: SampleBufferState
 
 
-@dataclass
+@dataclass_slots
 class BucketMergedState(MergedState):
     key: Hashable
     batch_size: int
     samples: SampleBufferState
 
 
-@dataclass
+@dataclass_slots
 class GroupBatchState(BaseSingleWrapperState):
     bucket_sample_index: int
     batch_sample_index: int
     buckets: List[BucketState]
 
 
-@dataclass
+@dataclass_slots
 class GroupBatchMergedState(BaseSingleWrapperMergedState):
     bucket_sample_index: List[int]
     batch_sample_index: List[int]
     buckets: List[List[BucketMergedState]]
 
 
-@dataclass
+@dataclass_slots
 class Bucket(Generic[T_batch_sample]):
     batch_size: int
 

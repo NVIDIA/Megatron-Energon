@@ -3,11 +3,9 @@
 
 from abc import ABC, abstractmethod
 from bisect import bisect_right
-from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Tuple, Union, overload
 
-import torch
-
+from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.webdataset.config import skip_meta_re, split_name_re
 from megatron.energon.flavors.webdataset.indexing import JoinIndexReader
@@ -15,7 +13,7 @@ from megatron.energon.flavors.webdataset.itar import CachedItarOffsetReader, ITa
 from megatron.energon.flavors.webdataset.structs import FilteredSample, ShardInfo
 
 
-@dataclass
+@dataclass_slots
 class ITarSamplePointer:
     """
     Points to a sample inside some tar file on disk.

@@ -11,7 +11,6 @@ from typing import (
     Literal,
     Optional,
     Sequence,
-    Tuple,
     Type,
     TypeVar,
     Union,
@@ -33,7 +32,7 @@ from megatron.energon.flavors.webdataset.sample_loader import (
     WebdatasetSampleLoaderDataset,
 )
 from megatron.energon.flavors.webdataset.sharder import Sharder
-from megatron.energon.flavors.webdataset.structs import FilteredSample, ShardInfo, reraise_exception
+from megatron.energon.flavors.webdataset.structs import ShardInfo, reraise_exception
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.map_dataset import MapDataset
 

@@ -17,6 +17,7 @@ from typing import (
     Union,
 )
 
+from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.errors import SYSTEM_EXCEPTIONS, FatalSampleError
 from megatron.energon.flavors.base_dataset import SavableDataset, set_sample_restore_key
 from megatron.energon.worker import WorkerConfig
@@ -39,7 +40,7 @@ T_sample = TypeVar("T_sample")
 T_batch_sample = TypeVar("T_batch_sample")
 
 
-@dataclass
+@dataclass_slots
 class PackingState(BaseSingleWrapperState):
     reading_buffer: SampleBufferState
     pre_packing_buffer: SampleBufferState
@@ -48,7 +49,7 @@ class PackingState(BaseSingleWrapperState):
     final_packing_index: int
 
 
-@dataclass
+@dataclass_slots
 class PackingMergedState(BaseSingleWrapperMergedState):
     reading_buffer: SampleBufferMergedState
     pre_packing_buffer: SampleBufferMergedState

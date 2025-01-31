@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from types import TracebackType
 from typing import BinaryIO, Dict, Generator, Optional, Tuple, Type, Union
 
+from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.epathlib import EPath
 from megatron.energon.retry_stream import RetryReadStream
 
@@ -145,7 +146,7 @@ def get_itar_byte_offset(
         return itar[sample_offset]
 
 
-@dataclass
+@dataclass_slots
 class CacheEntry:
     tar_index_reader: TarIndexReader
     lookahead_offset: Optional[int] = None
