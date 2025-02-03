@@ -1,6 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Type, Union
 
 from megatron.energon.dataclass_slots import dataclass_slots
@@ -197,7 +198,7 @@ class MetadatasetJoin(DatasetLoaderInterface):
         )
 
 
-@dataclass_slots
+@dataclass
 class BlendWeightMixin:
     weight: float = 1.0
 
@@ -264,7 +265,7 @@ class MetadatasetBlend(DatasetLoaderInterface):
         return DatasetBlendMode.DATASET_WEIGHT, datasets
 
 
-@dataclass_slots
+@dataclass
 class BlendRepetitionsMixin:
     repetitions: int = 1
 

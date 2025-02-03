@@ -1,10 +1,15 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from dataclasses import dataclass
+# from dataclasses import dataclass
+import sys
 from typing import Callable, TypeVar, dataclass_transform, overload
 
-from typing_extensions import dataclass_transform
+if sys.version_info >= (3, 10):
+    from dataclasses import dataclass
+else:
+    # Fallback for 3.9 and below
+    from dataslots import dataclass
 
 T = TypeVar("T", bound=type)
 
@@ -17,7 +22,7 @@ def dataclass_slots(cls: T) -> T: ...
 def dataclass_slots(**kwargs) -> Callable[[T], T]: ...
 
 
-@dataclass_transform(eq_default=True, order_default=False, kw_only_default=False)
+@dataclass_transform(slots_default=True)
 def dataclass_slots(cls=None, **kwargs):
     """
     A decorator that is a combination of `dataclass` and `__slots__` for python <3.10.
@@ -27,6 +32,13 @@ def dataclass_slots(cls=None, **kwargs):
     Kwargs are the same as for dataclass if passed.
     """
     if cls is None:
-        return lambda cls: dataclass(cls, **kwargs)
+
+        def wrap(cls):
+            new_cls = dataclass(cls, **kwargs, slots=True)
+            return new_cls
+
+        return wrap
+
     assert not kwargs
-    return dataclass(cls)
+    new_cls = dataclass(cls, **kwargs, slots=True)
+    return new_cls
