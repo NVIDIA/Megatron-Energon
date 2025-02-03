@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Type, Union
+from typing import Any, Callable, Dict, List, Literal, Optional, Sequence, Tuple, Type, Union
 
 from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.dataset_config import load_config
@@ -12,6 +12,7 @@ from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 from megatron.energon.metadataset.dataset_loader import DatasetLoader
 from megatron.energon.metadataset.join_dataset_loader import JoinDatasetLoader, JoinedDatasetInfo
 from megatron.energon.metadataset.loader_interface import DatasetBlendMode, DatasetLoaderInterface
+from megatron.energon.metadataset.metadataset import Metadataset
 from megatron.energon.worker import WorkerConfig
 
 
@@ -34,9 +35,10 @@ class DatasetReference(DatasetLoaderInterface):
         if self.path.is_file():
             assert self.dataset_config == "dataset.yaml", "Must not set dataset_config"
             assert self.split_config == "split.yaml", "Must not set split_config"
+            # Note: For backwards compatibility, the type must be Metadataset (V1).
             self._dataset = load_config(
                 self.path,
-                default_type=MetadatasetV2,
+                default_type=Metadataset,
                 default_kwargs=dict(path=self.path),
             )
             self._dataset.post_initialize()
@@ -54,9 +56,9 @@ class DatasetReference(DatasetLoaderInterface):
         else:
             raise FileNotFoundError(self.path)
 
-    def prepare(self, split_part: Optional[str] = None):
+    def prepare(self, split_part: Optional[str] = None) -> Sequence[EPath]:
         assert self._dataset is not None
-        self._dataset.prepare(split_part=split_part)
+        return self._dataset.prepare(split_part=split_part)
 
     def get_datasets(
         self,
@@ -171,9 +173,9 @@ class MetadatasetJoin(DatasetLoaderInterface):
         )
         self._dataset.post_initialize(mds_path)
 
-    def prepare(self, split_part: Optional[str] = None):
+    def prepare(self, split_part: Optional[str] = None) -> Sequence[EPath]:
         assert self._dataset is not None, "Missing post_initialize call."
-        self._dataset.prepare(split_part=split_part)
+        return self._dataset.prepare(split_part=split_part)
 
     def get_datasets(
         self,
@@ -224,9 +226,11 @@ class MetadatasetBlend(DatasetLoaderInterface):
         for dataset in self.blend:
             dataset.post_initialize(mds_path)
 
-    def prepare(self, split_part: Optional[str] = None):
+    def prepare(self, split_part: Optional[str] = None) -> Sequence[EPath]:
+        files = []
         for dataset in self.blend:
-            dataset.prepare(split_part=split_part)
+            files.extend(dataset.prepare(split_part=split_part))
+        return files
 
     def get_datasets(
         self,
@@ -294,9 +298,11 @@ class MetadatasetBlendEpochized(DatasetLoaderInterface):
         for dataset in self.blend_epochized:
             dataset.post_initialize(mds_path)
 
-    def prepare(self, split_part: Optional[str] = None):
+    def prepare(self, split_part: Optional[str] = None) -> Sequence[EPath]:
+        files = []
         for dataset in self.blend_epochized:
-            dataset.prepare(split_part=split_part)
+            files.extend(dataset.prepare(split_part=split_part))
+        return files
 
     def get_datasets(
         self,
@@ -350,17 +356,26 @@ class MetadatasetV2(DatasetLoaderInterface):
         for split in self.splits.values():
             split.post_initialize(self.path)
 
-    def prepare(self, split_part: Optional[str] = None):
+    def prepare(self, split_part: Optional[str] = None) -> Sequence[EPath]:
         # In the case of prepare for MetadatasetV2, we ignore the passed cache_path
         # and instead use the own path.
         # If someone runs energon prepare on a metadataset that refers to another metadataset,
         # any actions concerning the inner metadataset will be done on the inner metadataset's path.
 
         if split_part is None:
+            files = []
             for split_part, split in self.splits.items():
-                split.prepare(split_part=split_part)
+                files.extend(split.prepare(split_part=split_part))
         else:
-            self.splits[split_part].prepare(split_part=split_part)
+            files = self.splits[split_part].prepare(split_part=split_part)
+        # Cleanup paths here
+        cache_path = EPath(self.path.parent / f"{self.path.name}.cache")
+        remove_files = set(cache_path.glob("*")) - set(files)
+        for file in remove_files:
+            print(f"Cleanup cache file {file}")
+            file.unlink()
+        # Do not return paths. This is a barrier
+        return ()
 
     def get_datasets(
         self,

@@ -57,9 +57,13 @@ class MultiprocessingSqliteIndexWriter:
     It internally creates another process for writing.
     """
 
-    def __init__(self, sqlite_path: EPath):
+    def __init__(self, sqlite_path: EPath, num_files: int):
         self.sqlite_path = sqlite_path
         self.queue = multiprocessing.Queue()
+        # Internally counts the number of files remaining to be processed
+        # There may still be data in the multiprocessing queue, although exit was called.
+        # To avoid data loss, let each file report itself when it's done.
+        self.files_remaining = num_files
         self.had_update = False
 
     def _write_samples(self) -> None:
@@ -67,7 +71,12 @@ class MultiprocessingSqliteIndexWriter:
             while True:
                 sample = self.queue.get()
                 if sample is None:
-                    break
+                    # A file is done processing
+                    self.files_remaining -= 1
+                    if self.files_remaining == -1:
+                        # -1, because this class itself also reports that it wants to exit by None
+                        break
+                    continue
                 idx_writer.append_sample(**sample)
                 self.had_update = True
 
@@ -168,6 +177,9 @@ class WebdatasetPreparator:
         except BaseException:
             logger.exception(f"Shard failed to load: {path!r}. Skipping it.")
             return shard_info, set()
+        finally:
+            # Notify that this shard is done
+            _SQLITE_QUEUE.put(None)
 
     @staticmethod
     def iter_dataset_content(
@@ -259,7 +271,7 @@ class WebdatasetPreparator:
         (parent_path / MAIN_FOLDER_NAME).mkdir(exist_ok=True)
 
         with MultiprocessingSqliteIndexWriter(
-            parent_path / MAIN_FOLDER_NAME / "index.sqlite"
+            parent_path / MAIN_FOLDER_NAME / "index.sqlite", num_files=len(paths)
         ) as sqlite_writer, multiprocessing.Pool(
             workers, initializer=_mp_pool_init, initargs=(sqlite_writer.queue,)
         ) as pool:

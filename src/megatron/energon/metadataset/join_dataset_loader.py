@@ -398,13 +398,13 @@ class JoinDatasetLoader(DatasetLoaderInterface):
         assert mds_path is not None
         self.cache_path = mds_path.parent / f"{mds_path.name}.cache"
 
-    def prepare(self, split_part: Optional[str] = None):
+    def prepare(self, split_part: Optional[str] = None) -> Sequence[EPath]:
         assert self.cache_path is not None
         assert split_part is not None
         join_index_path, meta_infos = self._get_joined_meta(split_part)
         if join_index_path.is_file():
-            print(f"Joined dataset already prepared at {join_index_path}")
-            return
+            print(f"Joined dataset already prepared at {join_index_path} and up-to-date")
+            return (join_index_path,)
 
         print(f"Preparing joined dataset in {join_index_path}")
         join_index_path.parent.mkdir(parents=True, exist_ok=True)
@@ -412,6 +412,7 @@ class JoinDatasetLoader(DatasetLoaderInterface):
             meta_infos=meta_infos,
             output_join_index_path=join_index_path,
         )
+        return (join_index_path,)  
 
     def get_dataset(
         self,

@@ -3,7 +3,7 @@
 
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, Union
 
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory
@@ -66,11 +66,14 @@ class DatasetLoaderInterface(ABC):
         """
         ...
 
-    def prepare(self, split_part: Optional[str] = None):
+    def prepare(self, split_part: Optional[str] = None) -> Sequence[EPath]:
         """
         Prepares the loader by creating caches and other necessary structures on disk.
 
         Args:
             split_part: Name of the split to load.
+        
+        Returns:
+            List of paths to the cache paths. This is used for cleanup.
         """
-        pass
+        return ()
