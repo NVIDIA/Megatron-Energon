@@ -72,7 +72,7 @@ class DatasetLoaderInterface(ABC):
 
         Args:
             split_part: Name of the split to load.
-        
+
         Returns:
             List of paths to the cache paths. This is used for cleanup.
         """

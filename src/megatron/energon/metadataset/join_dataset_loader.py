@@ -56,7 +56,14 @@ def filter_samples_with_excludes(
         if exclude in meta.shard_name_to_idx:
             excluded_shard_ids.append(meta.shard_name_to_idx[exclude])
         else:
-            excluded_sample_keys.append(exclude)
+            # Find the shard name for the sample key
+            # Trivial split by .tar/
+            if ".tar/" in exclude:
+                tarname, sample_key = exclude.split(".tar/", 1)
+                shard_idx = meta.shard_name_to_idx.get(tarname + ".tar")
+                excluded_sample_keys.append((shard_idx, sample_key))
+            else:
+                print(f"Cannot split exclude {exclude} into shard and sample key")
 
     # Create a temporary table for the shard excludes
     # The key will be integers according to the tar_file_id column of the samples table
@@ -78,22 +85,33 @@ def filter_samples_with_excludes(
     conn.execute(
         f"""
             CREATE TEMP TABLE temp_sample_excludes_{db_alias} (
-                exclude_key TEXT PRIMARY KEY
+                shard_idx INTEGER,
+                exclude_key TEXT,
+                PRIMARY KEY (shard_idx, exclude_key)
             )
         """
     )
     conn.executemany(
-        f"INSERT INTO temp_sample_excludes_{db_alias}(exclude_key) values (?)",
-        [(e,) for e in excluded_sample_keys],
+        f"INSERT INTO temp_sample_excludes_{db_alias}(shard_idx, exclude_key) values (?, ?)",
+        [(shard_idx, sample_key) for shard_idx, sample_key in excluded_sample_keys],
     )
 
     # Create view for filtered samples
     conn.execute(
         f"""
             CREATE TEMP VIEW {filtered_name} AS
-            SELECT * FROM {db_alias}.samples
-            WHERE tar_file_id NOT IN (SELECT exclude_key FROM temp_shard_excludes_{db_alias})
-            AND sample_key NOT IN (SELECT exclude_key FROM temp_sample_excludes_{db_alias})
+            SELECT *
+            FROM {db_alias}.samples s
+            WHERE s.tar_file_id NOT IN (
+                SELECT exclude_key
+                FROM temp_shard_excludes_{db_alias}
+            )
+            AND NOT EXISTS (
+                SELECT 1
+                FROM temp_sample_excludes_{db_alias} e
+                WHERE e.shard_idx = s.tar_file_id
+                  AND e.exclude_key = s.sample_key
+            )
         """
     )
 
@@ -352,20 +370,17 @@ class JoinDatasetLoader(DatasetLoaderInterface):
                 )
             db_path = EPath(dataset.dataset.path) / MAIN_FOLDER_NAME / "index.sqlite"
 
-            # Join split_config may override individual split configs
-            cur_split_config = self.split_config or dataset.dataset.split_config
-
             # Precedence for split_part is:
             # 1. Join dataset split part (overrides individual dataset split parts)
             # 2. Individual dataset split part
             # 3. If none of the above is set, use the split part of the surrounding meta dataset
-            cur_split_part = self.split_part or dataset.dataset.split_part or split_part
+            cur_split_part = dataset.dataset.split_part or self.split_part or split_part
             assert cur_split_part is not None, "Missing split part"
 
             wds_meta = WebdatasetMeta.from_config(
                 path=EPath(dataset.dataset.path),
                 split_part=cur_split_part,
-                split_config=cur_split_config,
+                split_config=dataset.dataset.split_config,
             )
 
             meta_infos.append(
@@ -412,7 +427,7 @@ class JoinDatasetLoader(DatasetLoaderInterface):
             meta_infos=meta_infos,
             output_join_index_path=join_index_path,
         )
-        return (join_index_path,)  
+        return (join_index_path,)
 
     def get_dataset(
         self,

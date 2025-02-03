@@ -84,9 +84,6 @@ class TestDataset(unittest.TestCase):
 
         self.dataset_path.mkdir(exist_ok=True, parents=True)
 
-        (self.dataset_path / "ds1").mkdir(exist_ok=True, parents=True)
-        (self.dataset_path / "ds2").mkdir(exist_ok=True, parents=True)
-
         # Create a small dummy datasets
         self.create_text_test_dataset(self.dataset_path / "ds1", range(55), range(55))
         self.create_text_test_dataset(self.dataset_path / "ds2", range(100, 155), range(100, 155))
@@ -522,12 +519,12 @@ class TestDataset(unittest.TestCase):
                         "        join:",
                         "          text1:",
                         "            path: ds1",
-                        "            nonmatch: skip",
                         "            subflavors:",
                         "              source1: ds1",
                         "              number: 43",
                         "          text2:",
                         "            path: ds1b",
+                        "            nonmatch: skip",
                         "            subflavors:",
                         "              source2: ds1b",
                         "              number: 44",
@@ -549,6 +546,166 @@ class TestDataset(unittest.TestCase):
         )
         print(len(train_dataset))
         assert len(train_dataset) == 55, len(train_dataset)
+
+        train_loader = get_savable_loader(
+            train_dataset,
+            checkpoint_every_sec=0,
+            checkpoint_every_min_n_samples=1,
+            n_checkpoints=5,
+        )
+
+        data = list(zip(range(2 * 55), train_loader))
+        txt1_order = [data.text1[0] for idx, data in data]
+        txt2_order = [data.text2[0] for idx, data in data]
+        key_order = [data.__key__[0] for idx, data in data]
+        # ds1 has 55 samples, key range 0:55, txt range 0:55
+        # ds3 has 28 samples, key range 0:55, txt range 200:255
+        # Joining results in: 0:55, with prefix "j"
+        print("txt1:", txt1_order)
+        # Joining results in: 200:255, with prefix "j"
+        print("txt2:", txt2_order)
+        # Joining results in: 0:55
+        print("key:", key_order)
+        # Check matching
+        assert all(int(txt1[1:]) == int(txt2[2:]) for txt1, txt2 in zip(txt1_order, txt2_order))
+        # Check frequency
+        assert set(txt1_order) == set(f"j{i}" for i in range(55))
+        assert set(txt2_order) == set(f"jB{i}" for i in range(55))
+        # Every item must occurr 2 times (2*55).
+        assert Counter(txt1_order).most_common(1)[0][1] == 2
+
+        # Test that changing the file works as expected
+        with open(joined_mds_path, "w") as f:
+            f.write(
+                "\n".join(
+                    [
+                        "__module__: megatron.energon",
+                        "__class__: MetadatasetV2",
+                        "splits:",
+                        "  train:",
+                        "    blend:",
+                        "      - weight: 1",
+                        "        join:",
+                        "          text1:",
+                        "            path: ds1c",
+                        "            subflavors:",
+                        "              source1: ds1c",
+                        "              number: 43",
+                        "          text2:",
+                        "            path: ds1b",
+                        "            nonmatch: skip",
+                        "            subflavors:",
+                        "              source2: ds1b",
+                        "              number: 44",
+                        "        joiner:",
+                        f"          __module__: {test_joiner.__module__}",
+                        f"          __function__: {test_joiner.__name__}",
+                        "      - weight: 1",
+                        "        join:",
+                        "          text1:",
+                        "            path: ds1b",
+                        "          text2:",
+                        "            path: ds1",
+                        "            nonmatch: skip",
+                        "        joiner:",
+                        f"          __module__: {test_joiner.__module__}",
+                        f"          __function__: {test_joiner.__name__}",
+                    ]
+                )
+            )
+
+        # Expect this to fail. Preparation does not match!
+        with self.assertRaises(Exception):
+            # Train mode dataset
+            train_dataset = get_train_dataset(
+                joined_mds_path,
+                worker_config=worker_config,
+                batch_size=1,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+            )
+
+        # Shall succeed after preparation
+        prepare_metadataset(EPath(joined_mds_path))
+        train_dataset = get_train_dataset(
+            joined_mds_path,
+            worker_config=worker_config,
+            batch_size=1,
+            shuffle_buffer_size=None,
+            max_samples_per_sequence=None,
+        )
+        # Check that there are no remainder files
+        cache_folder = joined_mds_path.with_name(joined_mds_path.name + ".cache")
+        assert sum(1 for f in cache_folder.iterdir() if f.is_file()) == 2, list(
+            cache_folder.iterdir()
+        )
+
+    def test_left_join_exclude(self):
+        torch.manual_seed(42)
+        worker_config = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=0,
+            seed_offset=42,
+        )
+
+        # Create a joined dataset configuration
+        orig_split_path = self.dataset_path / "ds1" / ".nv-meta" / "split.yaml"
+        exclude_split_path = self.dataset_path / "ds1" / ".nv-meta" / "exclude_split.yaml"
+        with open(exclude_split_path, "w") as f:
+            f.write(
+                "\n".join(
+                    [
+                        orig_split_path.read_text(),
+                        "exclude:",
+                        ' - "parts/data-0.tar/000000"',
+                        ' - "parts/data-0.tar/000001"',
+                        ' - "parts/data-0.tar/000002"',
+                        ' - "parts/data-0.tar/000003"',
+                        ' - "parts/data-0.tar/000004"',
+                        ' - "parts/data-1.tar"',
+                        ' - "parts/data-2.tar/000030"',
+                    ]
+                )
+            )
+
+        # Create a joined dataset configuration
+        joined_mds_path = self.dataset_path / "left_join.yaml"
+        with open(joined_mds_path, "w") as f:
+            f.write(
+                "\n".join(
+                    [
+                        "__module__: megatron.energon",
+                        "__class__: MetadatasetV2",
+                        "splits:",
+                        "  train:",
+                        "    blend:",
+                        "      - weight: 1",
+                        "        join:",
+                        "          text1:",
+                        "            path: ds1",
+                        "            split_config: exclude_split.yaml",
+                        "          text2:",
+                        "            path: ds1b",
+                        "            nonmatch: skip",
+                        "        joiner:",
+                        f"          __module__: {test_joiner.__module__}",
+                        f"          __function__: {test_joiner.__name__}",
+                    ]
+                )
+            )
+        prepare_metadataset(EPath(joined_mds_path))
+
+        # Train mode dataset
+        train_dataset = get_train_dataset(
+            joined_mds_path,
+            worker_config=worker_config,
+            batch_size=1,
+            shuffle_buffer_size=None,
+            max_samples_per_sequence=None,
+        )
+        print(len(train_dataset))
+        assert len(train_dataset) == 55 - 16, len(train_dataset)
 
         train_loader = get_savable_loader(
             train_dataset,
