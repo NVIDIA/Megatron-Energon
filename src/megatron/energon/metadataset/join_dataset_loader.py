@@ -32,6 +32,72 @@ from megatron.energon.metadataset.loader_interface import DatasetBlendMode, Data
 from megatron.energon.worker import WorkerConfig
 
 
+def filter_samples_with_excludes(
+    conn,
+    db_alias: str,
+    meta: "JoinedDatasetMetaInfo",
+):
+    """
+    Filter the samples in the database with the given excludes.
+    """
+    filtered_name = f"{db_alias}_filtered"
+
+    conn.execute(f"DROP VIEW IF EXISTS {filtered_name}")
+
+    if not meta.excludes:
+        # Nothing to exclude, just use the original table
+        conn.execute(f"CREATE TEMP VIEW {filtered_name} AS SELECT * FROM {db_alias}.samples")
+        return
+
+    # Split the excludes into shard-level excludes and sample-level excludes
+    excluded_shard_ids = []
+    excluded_sample_keys = []
+    for exclude in meta.excludes:
+        if exclude in meta.shard_name_to_idx:
+            excluded_shard_ids.append(meta.shard_name_to_idx[exclude])
+        else:
+            excluded_sample_keys.append(exclude)
+
+    # Create a temporary table for the shard excludes
+    # The key will be integers according to the tar_file_id column of the samples table
+    conn.execute(f"DROP TABLE IF EXISTS temp_shard_excludes_{db_alias}")
+    conn.execute(
+        f"""
+            CREATE TEMP TABLE temp_shard_excludes_{db_alias} (
+                exclude_key INTEGER PRIMARY KEY
+            )
+        """
+    )
+    for shard_id in excluded_shard_ids:
+        conn.execute(
+            f"INSERT INTO temp_shard_excludes_{db_alias}(exclude_key) values (?)", (shard_id,)
+        )
+
+    # Create a temporary table for the sample excludes
+    conn.execute(f"DROP TABLE IF EXISTS temp_sample_excludes_{db_alias}")
+    conn.execute(
+        f"""
+            CREATE TEMP TABLE temp_sample_excludes_{db_alias} (
+                exclude_key TEXT PRIMARY KEY
+            )
+        """
+    )
+    conn.executemany(
+        f"INSERT INTO temp_sample_excludes_{db_alias}(exclude_key) values (?)",
+        [(e,) for e in excluded_sample_keys],
+    )
+
+    # Create view for filtered samples
+    conn.execute(
+        f"""
+            CREATE TEMP VIEW {filtered_name} AS
+            SELECT * FROM {db_alias}.samples
+            WHERE tar_file_id NOT IN (SELECT exclude_key FROM temp_shard_excludes_{db_alias})
+            AND sample_key NOT IN (SELECT exclude_key FROM temp_sample_excludes_{db_alias})
+        """
+    )
+
+
 def join_multiple_indices(
     meta_infos: List["JoinedDatasetMetaInfo"],
     output_join_index_path: EPath,
@@ -50,15 +116,17 @@ def join_multiple_indices(
         output_join_index_path: Path to the output join index.
     """
 
-    assert meta_infos[0].nonmatch in (
-        "skip",
-        "error",
-    ), "Primary dataset must have nonmatch set to 'skip' or 'error'"
+    primary = meta_infos[0]
+    secondaries = meta_infos[1:]
+
+    assert (
+        primary.nonmatch == "error"
+    ), "Primary join dataset must have nonmatch set 'error' (default)"
 
     import sqlite3
 
     # 1. Connect to the primary DB in 'main'
-    conn = sqlite3.connect(f"file:{meta_infos[0].db_path!s}?mode=ro", uri=True)
+    conn = sqlite3.connect(f"file:{primary.db_path!s}?mode=ro", uri=True)
 
     # For safety, enable a read-only or big timeouts
     conn.execute("PRAGMA busy_timeout = 5000;")
@@ -66,7 +134,7 @@ def join_multiple_indices(
 
     # 2. Attach each secondary DB under a unique alias, e.g. db1, db2, ...
     secondary_aliases = []
-    for i, sec_mi in enumerate(meta_infos[1:], start=1):
+    for i, sec_mi in enumerate(secondaries, start=1):
         alias = f"db{i}"
         secondary_aliases.append(alias)
         conn.execute(f"ATTACH DATABASE ? AS {alias}", (f"file:{sec_mi.db_path}?mode=ro",))
@@ -74,15 +142,31 @@ def join_multiple_indices(
     # 3. Load tar_files mappings from primary and secondaries into memory
     # The mapping will map from tar_file_id as used in the sqlite DBs to the
     # index as used in the shard_map from the split.
+
     tar_files_id_mapping = {}
     # Load for primary
     tar_files_id_mapping["main"] = {
-        row[0]: meta_infos[0].shard_name_to_idx[row[1]]
+        row[0]: primary.shard_name_to_idx[row[1]]
         for row in conn.execute("SELECT id, tar_file_name FROM main.tar_files")
-        if row[1] in meta_infos[0].shard_name_to_idx
+        if row[1] in primary.shard_name_to_idx
     }
 
-    conn.execute("DROP TABLE IF EXISTS temp_order")
+    # Load for each secondary alias
+    for alias, mi in zip(secondary_aliases, secondaries):
+        tar_files_id_mapping[alias] = {
+            row[0]: mi.shard_name_to_idx[row[1]]
+            for row in conn.execute(f"SELECT id, tar_file_name FROM {alias}.tar_files")
+            if row[1] in mi.shard_name_to_idx
+        }
+
+    # Filter the primary and each secondary DB for excluded samples by creating
+    # a new VIEW for each
+    filter_samples_with_excludes(conn, "main", primary)
+    for alias, mi in zip(secondary_aliases, secondaries):
+        filter_samples_with_excludes(conn, alias, mi)
+
+    # Create a temporary table to order the shards as in the current split config
+    conn.execute("DROP TABLE IF EXISTS primary_order")
     conn.execute(
         """
         CREATE TEMP TABLE primary_order (
@@ -96,75 +180,27 @@ def join_multiple_indices(
         tar_files_id_mapping["main"].items(),
     )
 
-    # Load for each secondary alias
-    for alias, mi in zip(secondary_aliases, meta_infos[1:]):
-        tar_files_id_mapping[alias] = {
-            row[0]: mi.shard_name_to_idx[row[1]]
-            for row in conn.execute(f"SELECT id, tar_file_name FROM {alias}.tar_files")
-            if row[1] in mi.shard_name_to_idx
-        }
-
+    # These are the columns we want to select in the main SQL query
     select_cols = [
-        "main.samples.tar_file_id AS main_tar_file_id",
-        "main.samples.byte_offset AS main_byte_offset",
-        "main.samples.byte_size AS main_byte_size",
+        "main_filtered.tar_file_id AS main_tar_file_id",
+        "main_filtered.byte_offset AS main_byte_offset",
+        "main_filtered.byte_size AS main_byte_size",
     ]
 
     for i, alias in enumerate(secondary_aliases, start=1):
-        select_cols.append(f"{alias}.samples.tar_file_id AS tar_file_id_{i}")
-        select_cols.append(f"{alias}.samples.byte_offset AS byte_offset_{i}")
-        select_cols.append(f"{alias}.samples.byte_size AS byte_size_{i}")
+        select_cols.append(f"{alias}_filtered.tar_file_id AS tar_file_id_{i}")
+        select_cols.append(f"{alias}_filtered.byte_offset AS byte_offset_{i}")
+        select_cols.append(f"{alias}_filtered.byte_size AS byte_size_{i}")
 
+    # Build the LEFT JOIN or INNER JOIN clauses
     join_clauses = ""
-    where_clauses = ""
-
-    # Build excludes for main
-    main_excludes = meta_infos[0].excludes
-    if main_excludes and len(main_excludes) > 0:
-        # Create temporary table for excludes
-        conn.execute("DROP TABLE IF EXISTS temp_excludes_main")
-        conn.execute(
-            """
-                CREATE TEMP TABLE temp_excludes_main (
-                    sample_key TEXT PRIMARY KEY
-                )
-            """
-        )
-        conn.executemany(
-            "INSERT INTO temp_excludes_main(sample_key) values (?)", [(e,) for e in main_excludes]
-        )
-        # Join with the excludes table
-        join_clauses += " LEFT JOIN temp_excludes_main ON main.samples.sample_key = temp_excludes_main.sample_key"
-        # And exclude those rows which have an exclude key
-        where_clauses += " AND temp_excludes_main.sample_key IS NULL"
-
-    # Build the LEFT JOIN clauses
-    for alias, mi in zip(secondary_aliases, meta_infos[1:]):
+    for alias, mi in zip(secondary_aliases, secondaries):
         if mi.nonmatch == "skip":
             join_type = "INNER JOIN"
         else:
             join_type = "LEFT JOIN"
-        # LEFT JOIN dbX.samples sX ON main.samples.sample_key = sX.sample_key
-        if mi.excludes:
-            # Additionally, for excludes, we need to create a temporary table and join with that, and exclude if found
-            # Create temporary table for excludes
-            conn.execute(f"DROP TABLE IF EXISTS temp_excludes_{alias}")
-            conn.execute(
-                f"""
-                    CREATE TEMP TABLE temp_excludes_{alias} (
-                        sample_key TEXT PRIMARY KEY
-                    )
-                """
-            )
-            conn.executemany(
-                f"INSERT INTO temp_excludes_{alias}(sample_key) values (?)",
-                [(e,) for e in mi.excludes],
-            )
-            # Join with the excludes table and exclude if found
-            join_clauses += f" {join_type} {alias}.samples ON main.samples.sample_key = {alias}.samples.sample_key AND temp_excludes_{alias}.sample_key IS NULL"
-            join_clauses += f" LEFT JOIN temp_excludes_{alias} ON {alias}.samples.sample_key = temp_excludes_{alias}.sample_key"
-        else:
-            join_clauses += f" {join_type} {alias}.samples ON main.samples.sample_key = {alias}.samples.sample_key"
+
+        join_clauses += f" {join_type} {alias}_filtered ON main_filtered.sample_key = {alias}_filtered.sample_key"
 
     # Construct the full SQL query
     # We select three columns for the primary and each secondary DB
@@ -177,11 +213,10 @@ def join_multiple_indices(
     sql = f"""
         SELECT
             {', '.join(select_cols)}
-        FROM main.samples
+        FROM main_filtered
         {join_clauses}
         INNER JOIN primary_order o
             ON main_tar_file_id = o.tar_file_id
-        {'WHERE ' + where_clauses if where_clauses else ''}
         ORDER BY o.split_index
     """
 
@@ -190,7 +225,7 @@ def join_multiple_indices(
 
     all_db_aliases = ["main"] + secondary_aliases
 
-    # 4. Write the results to a binary file (or any other format) row by row
+    # 4. Write the results to a binary file join index file row by row
     with JoinIndexWriter(output_join_index_path) as join_index_writer:
         # Example: We'll just show how to iterate the rows and pseudo-write them
         num_rows = 0
@@ -203,15 +238,22 @@ def join_multiple_indices(
                 tar_file_id = row[3 * i]
 
                 if tar_file_id is None:
-                    # This is missing from the secondary dataset
+                    # This column is missing in this secondary dataset
+                    # How we handle this case depends on the nonmatch setting
                     if meta_info.nonmatch == "none":
+                        # The user accepts missing samples, we'll just add a dummy entry
                         join_tuples.append((-1, -1, -1))
                         num_missing[i] += 1
                     elif meta_info.nonmatch == "skip":
-                        # Skip this row. May only happen for the primary dataset, in which case we skip here.
-                        assert i == 0, "Should not happen, should already be excluded by the query"
-                        break
+                        # The user wants to skip rows with missing samples.
+                        # Skipping rows is already handled by the INNER JOIN above, so
+                        # this case should not happen.
+                        raise AssertionError(
+                            f"Join has encountered a missing sample: Sample key {row[0]} missing from "
+                            f"{meta_info.db_path}, although nonmatch_skip is set"
+                        )
                     else:
+                        # The user wants to raise an error on missing samples
                         raise ValueError(
                             f"Join has encountered a missing sample: Sample key {row[0]} missing from "
                             f"{meta_info.db_path}, although neither nonmatch_none nor nonmatch_skip are set"
@@ -226,22 +268,26 @@ def join_multiple_indices(
                 join_index_writer.append(*join_tuples)
                 num_rows += 1
 
-    # Check that num_rows matches the number of samples in the primary DB
-    # It might deviate in case of duplicate samples in a secondary DB
+    any_skip = any(mi.nonmatch == "skip" for mi in meta_infos)
+
     num_samples = conn.execute(
-        "SELECT COUNT(*) FROM main.samples INNER JOIN primary_order o ON main.samples.tar_file_id = o.tar_file_id"
+        "SELECT COUNT(*) FROM main_filtered INNER JOIN primary_order o ON main_filtered.tar_file_id = o.tar_file_id"
     ).fetchone()[0]
-    assert meta_infos[0].nonmatch == "skip" or (
-        num_rows == num_samples
-    ), f"Number of rows in join index ({num_rows}) does not match number of samples in primary DB ({num_samples})"
-    if num_rows != num_samples:
+
+    if not any_skip:
+        # If no dataset has skipping active, we can check that the number of rows matches the number of samples in the primary DB
+        assert (
+            num_rows == num_samples
+        ), f"Number of rows in join index ({num_rows}) does not match number of samples in primary DB ({num_samples})"
+
+        print(f"Joined all {num_rows} samples")
+    else:
         print(
             f"Joined {num_rows}/{num_samples} samples, skipped {num_samples - num_rows} samples due to join"
         )
-    else:
-        print(f"Joined all {num_rows} samples")
+
     if any(num_missing):
-        print(f"Samples missing from joins: {num_missing}")
+        print(f"Non-matching samples filled with None for each dataset: {num_missing}")
 
     conn.close()
 
