@@ -3,7 +3,9 @@
 
 # from dataclasses import dataclass
 import sys
-from typing import Callable, TypeVar, dataclass_transform, overload
+from typing import Callable, TypeVar, overload
+
+from typing_extensions import dataclass_transform
 
 if sys.version_info >= (3, 10):
     from dataclasses import dataclass
