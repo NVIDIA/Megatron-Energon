@@ -54,10 +54,15 @@ class WebdatasetMeta:
             for excluded in splits.exclude
             for excluded in braceexpand.braceexpand(excluded)
         }
-        split_part_files = [
+        
+        all_split_part_files = [
             name
             for name in splits.split_parts[split_part]
             for name in braceexpand.braceexpand(name)
+        ]
+
+        split_part_files = [
+            name for name in all_split_part_files
             if name not in split_excludes
         ]
         if len(split_part_files) == 0:
@@ -72,7 +77,7 @@ class WebdatasetMeta:
                 )
                 for name in split_part_files
             ],
-            split_part_files=split_part_files,
+            split_part_files=all_split_part_files,
             info_shard_files=list(info.shard_counts.keys()),
         )
 

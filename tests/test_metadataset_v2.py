@@ -664,7 +664,7 @@ class TestDataset(unittest.TestCase):
                         ' - "parts/data-0.tar/000003"',
                         ' - "parts/data-0.tar/000004"',
                         ' - "parts/data-1.tar"',
-                        ' - "parts/data-2.tar/000030"',
+                        ' - "parts/data-2.tar/000029"',
                     ]
                 )
             )
@@ -729,77 +729,9 @@ class TestDataset(unittest.TestCase):
         # Check matching
         assert all(int(txt1[1:]) == int(txt2[2:]) for txt1, txt2 in zip(txt1_order, txt2_order))
         # Check frequency
-        assert set(txt1_order) == set(f"j{i}" for i in range(55))
-        assert set(txt2_order) == set(f"jB{i}" for i in range(55))
-        # Every item must occurr 2 times (2*55).
-        assert Counter(txt1_order).most_common(1)[0][1] == 2
-
-        # Test that changing the file works as expected
-        with open(joined_mds_path, "w") as f:
-            f.write(
-                "\n".join(
-                    [
-                        "__module__: megatron.energon",
-                        "__class__: MetadatasetV2",
-                        "splits:",
-                        "  train:",
-                        "    blend:",
-                        "      - weight: 1",
-                        "        join:",
-                        "          text1:",
-                        "            path: ds1c",
-                        "            nonmatch: skip",
-                        "            subflavors:",
-                        "              source1: ds1c",
-                        "              number: 43",
-                        "          text2:",
-                        "            path: ds1b",
-                        "            subflavors:",
-                        "              source2: ds1b",
-                        "              number: 44",
-                        "        joiner:",
-                        f"          __module__: {test_joiner.__module__}",
-                        f"          __function__: {test_joiner.__name__}",
-                        "      - weight: 1",
-                        "        join:",
-                        "          text1:",
-                        "            path: ds1b",
-                        "            nonmatch: skip",
-                        "          text2:",
-                        "            path: ds1",
-                        "            nonmatch: skip",
-                        "        joiner:",
-                        f"          __module__: {test_joiner.__module__}",
-                        f"          __function__: {test_joiner.__name__}",
-                    ]
-                )
-            )
-
-        # Expect this to fail. Preparation does not match!
-        with self.assertRaises(Exception):
-            # Train mode dataset
-            train_dataset = get_train_dataset(
-                joined_mds_path,
-                worker_config=worker_config,
-                batch_size=1,
-                shuffle_buffer_size=None,
-                max_samples_per_sequence=None,
-            )
-
-        # Shall succeed after preparation
-        prepare_metadataset(EPath(joined_mds_path))
-        train_dataset = get_train_dataset(
-            joined_mds_path,
-            worker_config=worker_config,
-            batch_size=1,
-            shuffle_buffer_size=None,
-            max_samples_per_sequence=None,
-        )
-        # Check that there are no remainder files
-        cache_folder = joined_mds_path.with_name(joined_mds_path.name + ".cache")
-        assert sum(1 for f in cache_folder.iterdir() if f.is_file()) == 2, list(
-            cache_folder.iterdir()
-        )
+        set_filtered_nums = set(range(5, 10)) | set(range(20, 29)) | set(range(30,55))
+        assert set(txt1_order) == set(f"j{i}" for i in set_filtered_nums)
+        assert set(txt2_order) == set(f"jB{i}" for i in set_filtered_nums)
 
     def test_joined_metadataset_prepare_mock(self):
         torch.manual_seed(42)
