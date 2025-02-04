@@ -31,6 +31,7 @@ dependencies = [
   "tqdm",
   "webdataset",
   "s3fs",
+  "dataslots; python_version<'3.10'",
 ]
 
 [project.optional-dependencies]
