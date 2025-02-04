@@ -5,6 +5,8 @@ import sqlite3
 import struct
 from typing import BinaryIO, List, Optional, Tuple, Union
 
+from numpy import int8
+
 from megatron.energon.epathlib import EPath
 
 
@@ -14,8 +16,7 @@ class SqliteIndexWriter:
 
     def __init__(self, sqlite_path: EPath):
         """
-        Initializes an SQLite database and sets up two tables:
-          - tar_files(id INTEGER PRIMARY KEY AUTOINCREMENT, tar_file_name TEXT UNIQUE)
+        Initializes an SQLite database and sets up the samples table:
           - samples(id INTEGER PRIMARY KEY AUTOINCREMENT,
                     tar_file_id INTEGER,
                     sample_key TEXT,
@@ -33,16 +34,7 @@ class SqliteIndexWriter:
         self.db.execute("PRAGMA busy_timeout = 5000;")  # wait up to 5000ms when locked
         self.db.execute("PRAGMA journal_mode = WAL;")
 
-        # Create the tables
-        self.db.execute("DROP TABLE IF EXISTS tar_files")
-        self.db.execute(
-            """
-            CREATE TABLE tar_files (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                tar_file_name TEXT UNIQUE
-            )
-        """
-        )
+        # Create the table
         self.db.execute("DROP INDEX IF EXISTS idx_samples_sample_key")
         self.db.execute("DROP TABLE IF EXISTS samples")
         self.db.execute(
@@ -60,40 +52,19 @@ class SqliteIndexWriter:
         # Index on sample_key for fast lookups
         self.db.execute("CREATE INDEX IF NOT EXISTS idx_samples_sample_key ON samples(sample_key)")
 
-        # We'll cache tar_file -> tar_file_id to avoid repeated lookups
-        self._tar_file_cache = {}
-
     def append_sample(
         self,
-        tar_file: str,
+        tar_file_id: int8,
         sample_key: str,
         sample_index: int,
         byte_offset: Optional[int],
         byte_size: Optional[int],
     ):
-        """
-        Adds a new sample row to the samples table, linking to the tar_files table.
-        """
+        """Adds a new sample row to the samples table."""
 
         assert self.db is not None, "Database is closed"
 
-        # 1) Check if tar_file is in the cache
-        if tar_file in self._tar_file_cache:
-            tar_file_id = self._tar_file_cache[tar_file]
-        else:
-            # Insert the tar_file into tar_files if not already present
-            # Using INSERT OR IGNORE, then we can fetch the rowid
-            self.db.execute(
-                "INSERT OR IGNORE INTO tar_files (tar_file_name) VALUES (?)", (tar_file,)
-            )
-            # Now fetch the ID
-            cursor = self.db.execute(
-                "SELECT id FROM tar_files WHERE tar_file_name = ?", (tar_file,)
-            )
-            tar_file_id = cursor.fetchone()[0]
-            self._tar_file_cache[tar_file] = tar_file_id
-
-        # 2) Insert a row in the samples table
+        # Insert a row in the samples table
         self.db.execute(
             """
             INSERT INTO samples (tar_file_id, sample_key, sample_index, byte_offset, byte_size)

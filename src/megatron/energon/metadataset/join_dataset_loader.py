@@ -53,17 +53,22 @@ def filter_samples_with_excludes(
     excluded_shard_ids = []
     excluded_sample_keys = []
     for exclude in meta.excludes:
-        if exclude in meta.shard_name_to_idx:
-            excluded_shard_ids.append(meta.shard_name_to_idx[exclude])
+        if exclude in meta.shard_name_to_info_idx:
+            excluded_shard_ids.append(meta.shard_name_to_info_idx[exclude])
         else:
             # Find the shard name for the sample key
             # Trivial split by .tar/
             if ".tar/" in exclude:
                 tarname, sample_key = exclude.split(".tar/", 1)
-                shard_idx = meta.shard_name_to_idx.get(tarname + ".tar")
+                shard_idx = meta.shard_name_to_info_idx[tarname + ".tar"]
                 excluded_sample_keys.append((shard_idx, sample_key))
+            elif exclude.endswith(".tar"):
+                # This is a shard and was probably already excluded outside this function
+                pass
             else:
-                print(f"Cannot split exclude {exclude} into shard and sample key")
+                raise ValueError(
+                    f"Invalid exclusion: Cannot split exclude {exclude} into shard and sample key"
+                )
 
     # Create a temporary table for the shard excludes
     # The key will be integers according to the tar_file_id column of the samples table
@@ -157,26 +162,6 @@ def join_multiple_indices(
         secondary_aliases.append(alias)
         conn.execute(f"ATTACH DATABASE ? AS {alias}", (f"file:{sec_mi.db_path}?mode=ro",))
 
-    # 3. Load tar_files mappings from primary and secondaries into memory
-    # The mapping will map from tar_file_id as used in the sqlite DBs to the
-    # index as used in the shard_map from the split.
-
-    tar_files_id_mapping = {}
-    # Load for primary
-    tar_files_id_mapping["main"] = {
-        row[0]: primary.shard_name_to_idx[row[1]]
-        for row in conn.execute("SELECT id, tar_file_name FROM main.tar_files")
-        if row[1] in primary.shard_name_to_idx
-    }
-
-    # Load for each secondary alias
-    for alias, mi in zip(secondary_aliases, secondaries):
-        tar_files_id_mapping[alias] = {
-            row[0]: mi.shard_name_to_idx[row[1]]
-            for row in conn.execute(f"SELECT id, tar_file_name FROM {alias}.tar_files")
-            if row[1] in mi.shard_name_to_idx
-        }
-
     # Filter the primary and each secondary DB for excluded samples by creating
     # a new VIEW for each
     filter_samples_with_excludes(conn, "main", primary)
@@ -194,9 +179,16 @@ def join_multiple_indices(
     """
     )
     conn.executemany(
-        "INSERT INTO primary_order(tar_file_id, split_index) values (?,?)",
-        tar_files_id_mapping["main"].items(),
+        "INSERT INTO primary_order(tar_file_id, split_index) values (?, ?)",
+        ((n, i) for i, n in enumerate(primary.split_part_oder)),
     )
+
+    # Map from tar_file_id to shard idx in the split part
+    tar_files_id_mapping = {}
+    for alias, mi in zip(["main"] + secondary_aliases, meta_infos):
+        tar_files_id_mapping[alias] = {
+            tar_file_id: shard_idx for shard_idx, tar_file_id in enumerate(mi.split_part_oder)
+        }
 
     # These are the columns we want to select in the main SQL query
     select_cols = [
@@ -326,7 +318,8 @@ class JoinedDatasetMetaInfo:
     db_path: EPath
     uuid: str
     excludes: List[str]
-    shard_name_to_idx: Dict[str, int]
+    shard_name_to_info_idx: Dict[str, int]
+    split_part_oder: List[int]
     nonmatch: Literal["skip", "none", "error"]
 
 
@@ -383,15 +376,18 @@ class JoinDatasetLoader(DatasetLoaderInterface):
                 split_config=dataset.dataset.split_config,
             )
 
+            shard_name_to_info_idx = {name: i for i, name in enumerate(wds_meta.info_shard_files)}
+
+            # Given wds_meta.split_part_files, translate their order to info idx IDs
+            split_part_oder = [shard_name_to_info_idx[name] for name in wds_meta.split_part_files]
+
             meta_infos.append(
                 JoinedDatasetMetaInfo(
                     db_path=db_path,
                     uuid=uuid,
                     excludes=list(wds_meta.sample_excludes),
-                    shard_name_to_idx={
-                        shard_name: shard_idx
-                        for shard_idx, shard_name in enumerate(wds_meta.split_part_files)
-                    },
+                    shard_name_to_info_idx=shard_name_to_info_idx,
+                    split_part_oder=split_part_oder,
                     nonmatch=dataset.nonmatch,
                 )
             )

@@ -29,6 +29,7 @@ import braceexpand
 import yaml
 
 from megatron.energon.epathlib import EPath
+from megatron.energon.flavors.webdataset.aggregator_pool import AggregatorPool, BaseAggregator
 from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME, skip_meta_re, split_name_re
 from megatron.energon.flavors.webdataset.indexing import SqliteIndexWriter
 from megatron.energon.flavors.webdataset.itar import TarIndexWriter
@@ -40,55 +41,60 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T", covariant=True)
 
 
-def _mp_pool_init(sqlite_queue: multiprocessing.Queue) -> None:
-    """Sets the globally shared sqlite queue. Unfortunately, this has to be a global object :-/"""
-    global _SQLITE_QUEUE
-    _SQLITE_QUEUE = sqlite_queue
+class SqliteIndexWriterAggregator(BaseAggregator):
+    sqlite_path: EPath
+    total_tasks: int
+    progress_fn: Optional[Callable]
+    writer: Optional[SqliteIndexWriter]
+    had_update: bool
+    shards: List[ShardInfo]
+    found_parts: Set[str]
+    prog_iter: Optional[Iterator]
 
-
-class MultiprocessingSqliteIndexWriter:
-    """
-    This class is a wrapper around SqliteIndexWriter to allow it to be used in multiprocessing.
-
-    It works by creating a single writer on the main process. When passed to a subprocess, the
-    processes communicate via a multiprocessing queue to the main process and submit the samples to
-    be written to the sqlite database.
-
-    It internally creates another process for writing.
-    """
-
-    def __init__(self, sqlite_path: EPath, num_files: int):
+    def __init__(
+        self,
+        sqlite_path: EPath,
+        total_tasks: int,
+        progress_fn: Optional[Callable[[Iterator[Any], int], Iterator[T]]] = None,
+    ):
         self.sqlite_path = sqlite_path
-        self.queue = multiprocessing.Queue()
-        # Internally counts the number of files remaining to be processed
-        # There may still be data in the multiprocessing queue, although exit was called.
-        # To avoid data loss, let each file report itself when it's done.
-        self.files_remaining = num_files
+        self.total_tasks = total_tasks
+        self.progress_fn = progress_fn
+        self.writer = None
         self.had_update = False
+        self.shards = []
+        self.found_parts = set()
 
-    def _write_samples(self) -> None:
-        with SqliteIndexWriter(self.sqlite_path) as idx_writer:
-            while True:
-                sample = self.queue.get()
-                if sample is None:
-                    # A file is done processing
-                    self.files_remaining -= 1
-                    if self.files_remaining == -1:
-                        # -1, because this class itself also reports that it wants to exit by None
-                        break
-                    continue
-                idx_writer.append_sample(**sample)
-                self.had_update = True
+        if progress_fn is not None:
+            self.prog_iter = progress_fn(iter(range(self.total_tasks)), self.total_tasks)
+        else:
+            self.prog_iter = None
 
-    def __enter__(self) -> "MultiprocessingSqliteIndexWriter":
-        self._sqlwriter_proc = threading.Thread(target=self._write_samples)
-        self._sqlwriter_proc.start()
-        return self
+    def on_start(self, aggregator_pool: AggregatorPool) -> None:
+        self.writer = SqliteIndexWriter(self.sqlite_path)
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        self.queue.put(None)
-        self._sqlwriter_proc.join()
-        del self._sqlwriter_proc
+    def on_item(self, item: Any, aggregator_pool: AggregatorPool) -> None:
+        assert self.writer is not None, "Writer is not initialized."
+        if isinstance(item, dict):
+            self.writer.append_sample(**item)
+            self.had_update = True
+        elif isinstance(item, tuple):
+            # This is a (shard_info, parts) tuple
+            if self.prog_iter is not None:
+                next(self.prog_iter)
+
+            shard_info, cur_parts = item
+            assert shard_info.count != 0, f"Shard {shard_info.name} has no samples."
+            self.shards.append(shard_info)
+            if len(self.found_parts) < 50:
+                self.found_parts.update(cur_parts)
+
+    def on_finish(self, aggregator_pool: AggregatorPool) -> None:
+        assert self.writer is not None, "Writer is not initialized."
+        self.writer.close()
+
+    def get_final_result_data(self) -> Any:
+        return self.shards, self.found_parts, self.had_update
 
 
 class WebdatasetPreparator:
@@ -96,9 +102,10 @@ class WebdatasetPreparator:
     @staticmethod
     def _preprocess_tar(
         path: Union[str, EPath],
+        shard_to_idx: Dict[str, int],
         parent_path: EPath,
         max_parts: int,
-    ) -> Tuple[ShardInfo, Set[str]]:
+    ) -> Generator[Tuple[ShardInfo, Set[str]], None, None]:
         """Process a single tar file, i.e. read the tarinfos, generate the tar index and return
         stats.
 
@@ -156,10 +163,10 @@ class WebdatasetPreparator:
                                 next_index_sample["byte_size"] = (
                                     member.offset - next_index_sample["byte_offset"]
                                 )
-                                _SQLITE_QUEUE.put(next_index_sample)
+                                yield next_index_sample
 
                             next_index_sample = dict(
-                                tar_file=path.relpath,
+                                tar_file_id=shard_to_idx[path.relpath],
                                 sample_key=base_name,
                                 sample_index=count,
                                 byte_offset=member.offset,
@@ -172,14 +179,13 @@ class WebdatasetPreparator:
                         next_index_sample["byte_size"] = (
                             tar.offset - next_index_sample["byte_offset"]
                         )
-                        _SQLITE_QUEUE.put(next_index_sample)
-            return shard_info, parts
+                        yield next_index_sample
+            yield shard_info, parts
+            return
         except BaseException:
             logger.exception(f"Shard failed to load: {path!r}. Skipping it.")
-            return shard_info, set()
-        finally:
-            # Notify that this shard is done
-            _SQLITE_QUEUE.put(None)
+            yield shard_info, set()
+            return
 
     @staticmethod
     def iter_dataset_content(
@@ -262,36 +268,44 @@ class WebdatasetPreparator:
         """
         parent_path = EPath(parent_path).absolute()
 
-        found_parts = set()
         paths = [path for path in paths for path in braceexpand.braceexpand(path)]
-        shards: List[ShardInfo] = []
+
+        # Construct a mapping from relative shard path to its index
+        shard_to_idx = {path: idx for idx, path in enumerate(paths)}
 
         assert parent_path.is_absolute(), f"Parent path must be absolute: {parent_path}"
 
         (parent_path / MAIN_FOLDER_NAME).mkdir(exist_ok=True)
 
-        with MultiprocessingSqliteIndexWriter(
-            parent_path / MAIN_FOLDER_NAME / "index.sqlite", num_files=len(paths)
-        ) as sqlite_writer, multiprocessing.Pool(
-            workers, initializer=_mp_pool_init, initargs=(sqlite_writer.queue,)
-        ) as pool:
-            process_tar = functools.partial(
-                cls._preprocess_tar,
-                # convert to url string, to avoid EPath in multiprocessing
-                parent_path=parent_path,
-                max_parts=50,
-            )
-            shard_info: ShardInfo
-            cur_parts: Set[str]
-            for shard_info, cur_parts in progress_fn(pool.imap(process_tar, paths), len(paths)):
-                if shard_info.count == 0:
-                    # This shard failed to load. Skip it.
-                    continue
-                shards.append(shard_info)
-                if len(found_parts) < 50:
-                    found_parts.update(cur_parts)
+        aggregator = SqliteIndexWriterAggregator(
+            parent_path / MAIN_FOLDER_NAME / "index.sqlite", total_tasks=len(paths)
+        )
 
-        if sqlite_writer.had_update:
+        process_tar = functools.partial(
+            cls._preprocess_tar,
+            # convert to url string, to avoid EPath in multiprocessing
+            shard_to_idx=shard_to_idx,
+            parent_path=parent_path,
+            max_parts=50,
+        )
+
+        pool = AggregatorPool(
+            num_workers=workers,
+            user_produce_data=process_tar,
+            aggregator=aggregator,
+        )
+
+        pool.start()
+
+        for path in paths:
+            pool.submit_task(path)
+
+        pool.close()
+
+        # Get final results
+        shards, found_parts, had_update = pool.get_final_aggregator_data()
+
+        if had_update:
             logger.info("Regenerating dataset UUID...")
             with (parent_path / MAIN_FOLDER_NAME / "index.uuid").open("w") as f:
                 f.write(str(uuid.uuid4()))
@@ -299,7 +313,18 @@ class WebdatasetPreparator:
         if tar_index_only:
             return found_parts
 
+        assert len(shards) == len(
+            shard_to_idx
+        ), f"Lengths of shards and shard_to_idx do not match: {len(shards)} != {len(shard_to_idx)}"
+
+        # Sort the shards according to the order in the input list
+        shards.sort(key=lambda shard: shard_to_idx[shard.name])
+
         # Save info
+        assert [shard.name for shard in shards] == list(
+            shard_to_idx.keys()
+        ), "Shards are not in the same order as in the input list."
+
         info = WebdatasetInfo(
             shard_counts={shard.name: shard.count for shard in shards},
         )
