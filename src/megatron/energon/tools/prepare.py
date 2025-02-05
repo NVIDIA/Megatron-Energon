@@ -290,6 +290,7 @@ def command(
 
         if cls == CrudeSampleDummy:
             from megatron.energon.flavors import CrudeWebdataset
+
             click.echo(
                 "CrudeWebdataset does not need a field map. You will need to provide a `Cooker` for your dataset samples in your `TaskEncoder`."
             )
@@ -297,7 +298,7 @@ def command(
                 "Furthermore, you might want to add `subflavors` in your meta dataset specification."
             )
             dataset_definition = dataset_definition["sample_type"]
-            dataset_definition["__class__"]=CrudeWebdataset.__name__
+            dataset_definition["__class__"] = CrudeWebdataset.__name__
         else:
             if not allow_interactive_field_map:
                 click.echo(
