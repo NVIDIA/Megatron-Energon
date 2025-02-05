@@ -289,7 +289,7 @@ def command(
         }
 
         if cls == CrudeSampleDummy:
-            from megatron.energon import CrudeWebdataset
+            from megatron.energon.flavors import CrudeWebdataset
             click.echo(
                 "CrudeWebdataset does not need a field map. You will need to provide a `Cooker` for your dataset samples in your `TaskEncoder`."
             )
