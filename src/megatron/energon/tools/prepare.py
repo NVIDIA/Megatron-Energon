@@ -12,6 +12,7 @@ from typing import Any, List, Optional, Type
 import click
 import yaml
 
+from megatron.energon import CrudeWebdataset
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import BaseWebdatasetFactory
 from megatron.energon.flavors.base_dataset import Sample
@@ -295,6 +296,8 @@ def command(
             click.echo(
                 "Furthermore, you might want to add `subflavors` in your meta dataset specification."
             )
+            dataset_definition = dataset_definition["sample_type"]
+            dataset_definition["__class__"]=CrudeWebdataset.__name__
         else:
             if not allow_interactive_field_map:
                 click.echo(
