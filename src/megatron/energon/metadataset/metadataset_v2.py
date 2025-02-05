@@ -231,7 +231,7 @@ class MetadatasetBlend(DatasetLoaderInterface):
 
 @dataclass
 class BlendRepetitionsMixin:
-    repetitions: int = 1
+    repetitions: Union[int, float] = 1
 
 
 @dataclass
