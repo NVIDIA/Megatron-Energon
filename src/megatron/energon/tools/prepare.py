@@ -12,7 +12,6 @@ from typing import Any, List, Optional, Type
 import click
 import yaml
 
-from megatron.energon import CrudeWebdataset
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import BaseWebdatasetFactory
 from megatron.energon.flavors.base_dataset import Sample
@@ -290,6 +289,7 @@ def command(
         }
 
         if cls == CrudeSampleDummy:
+            from megatron.energon import CrudeWebdataset
             click.echo(
                 "CrudeWebdataset does not need a field map. You will need to provide a `Cooker` for your dataset samples in your `TaskEncoder`."
             )
