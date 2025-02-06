@@ -78,10 +78,9 @@ class RepeatDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_samp
             else:
                 stop_after = None
 
-            self._index[worker_idx] = 0
             for sample in self.dataset:
-                yield sample
                 self._index[worker_idx] += 1
+                yield sample
                 if stop_after is not None and self._index[worker_idx] >= stop_after:
                     break
 
@@ -96,6 +95,8 @@ class RepeatDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_samp
                     }
                 )
             self._repetition[worker_idx] += 1
+            self._index[worker_idx] = 0
+
         if self.restart:
             self._repetition[worker_idx] = 0
         else:
