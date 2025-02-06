@@ -266,10 +266,10 @@ def command(
                 click.echo("Invalid choice. Please try again.")
                 continue
 
-            sample_type = {
-                "__module__": "megatron.energon",
-                "__class__": cls.__name__,
-            }
+        sample_type = {
+            "__module__": "megatron.energon",
+            "__class__": cls.__name__,
+        }
 
         if cls == CrudeWebdataset:
             click.echo(
