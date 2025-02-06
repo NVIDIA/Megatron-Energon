@@ -73,7 +73,10 @@ class DatasetReference(DatasetLoaderInterface):
             subflavors=subflavors,
             shuffle_over_epochs_multiplier=(
                 shuffle_over_epochs_multiplier * self.shuffle_over_epochs_multiplier
-                if (shuffle_over_epochs_multiplier is not None and self.shuffle_over_epochs_multiplier is not None)
+                if (
+                    shuffle_over_epochs_multiplier is not None
+                    and self.shuffle_over_epochs_multiplier is not None
+                )
                 else None
             ),
             **kwargs,
