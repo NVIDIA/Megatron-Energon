@@ -67,8 +67,10 @@ class RepeatDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_samp
         assert (
             self.repeats is not None or self.dataset.worker_has_samples()
         ), "Cannot repeat empty dataset indefinitely"
+
+        ds_len = len(self.dataset)
+
         while self.repeats is None or self._repetition[worker_idx] < self.repeats:
-            ds_len = len(self.dataset)
             if self.repeats is not None and self._repetition[worker_idx] == math.floor(
                 self.repeats
             ):
