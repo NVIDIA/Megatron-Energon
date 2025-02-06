@@ -53,7 +53,7 @@ class MSCFileSystem:
 
     def makedirs(self, path: str, exist_ok: bool = False):
         pass
-    
+
     def __eq__(self, other):
         if not isinstance(other, MSCFileSystem):
             return False
