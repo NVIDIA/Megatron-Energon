@@ -16,6 +16,67 @@ from fsspec.implementations.local import LocalFileSystem
 from megatron.energon.epathlib.rclone_config import ConfigEntry, read_rclone_config
 
 
+class MSCFileSystem:
+    """
+    A FileSystem wrapper around multistorageclient.StorageClient so that MSC
+    can be used interchangeably with other fsspec filesystems (e.g. LocalFileSystem, S3FileSystem).
+    """
+
+    def __init__(self, path: str, **kwargs):
+        super().__init__(**kwargs)
+        self.storage_client, _ = msc.resolve_storage_client(path)
+
+    def open(self, path: str, mode: str = "rb", block_size: Optional[int] = None, **kwargs):
+        return self.storage_client.open(path, mode)
+
+    def isfile(self, path: str) -> bool:
+        return self.storage_client.is_file(path)
+
+    def isdir(self, path: str) -> bool:
+        return self.storage_client.info(path).type == "directory"
+
+    def glob(self, path: str, **kwargs) -> List[str]:
+        return list(self.storage_client.glob(path))
+
+    def size(self, path: str) -> int:
+        return self.storage_client.info(path).content_length
+
+    def rm(self, path: str, recursive: bool = False, maxdepth: Optional[int] = None):
+        """
+        Remove the file or directory at the given path. If recursive is True, remove
+        directories and their contents recursively.
+        """
+        if recursive:
+            for f in self._expand_recursive(path):
+                self.storage_client.delete(f)
+        else:
+            self.storage_client.delete(path)
+
+    def _expand_recursive(self, path: str) -> Generator[str, None, None]:
+        # If path is a file, just yield it
+        if self.isfile(path):
+            yield path
+        else:
+            # Directory: yield contents
+            for p in self.storage_client.glob(path + "/**"):
+                yield p
+
+    def mv(self, path1: str, path2: str, **kwargs):
+        self.storage_client.copy(path1, path2)
+        self.storage_client.delete(path1)
+
+    def mkdir(self, path: str, create_parents: bool = True, **kwargs):
+        pass
+
+    def makedirs(self, path: str, exist_ok: bool = False):
+        pass
+    
+    def __eq__(self, other):
+        if not isinstance(other, MSCFileSystem):
+            return False
+        return self.storage_client.profile == other.storage_client.profile
+
+
 class EPath:
     """EPath work much like pathlib.Path but does support local as well as remote file systems.
     To initialize a remote path, prepend the path with "rclone://". For example:
@@ -33,7 +94,7 @@ class EPath:
     """
 
     internal_path: PurePosixPath  # The path without the protocol. Can also be in S3 for example
-    fs: AbstractFileSystem
+    fs: Union[AbstractFileSystem, MSCFileSystem]
     storage_client: msc.StorageClient
     protocol: str
     num_fs_path_parts: (
@@ -50,13 +111,7 @@ class EPath:
 
         if isinstance(initial_path, EPath):
             self.internal_path = initial_path.internal_path
-
-            if hasattr(initial_path, "fs"):
-                self.fs = initial_path.fs
-
-            if hasattr(initial_path, "storage_client"):
-                self.storage_client = initial_path.storage_client
-
+            self.fs = initial_path.fs
             self.protocol = initial_path.protocol
             self.num_fs_path_parts = initial_path.num_fs_path_parts
             self.s3_args = initial_path.s3_args
@@ -91,7 +146,7 @@ class EPath:
                     path = "/" + path
 
                 self.internal_path = self._resolve(path)
-                self.storage_client, _ = msc.resolve_storage_client(initial_path)
+                self.fs = MSCFileSystem(initial_path)
                 self.protocol = "msc"
                 self.num_fs_path_parts = 2  # Root and remote name
             else:
@@ -207,10 +262,6 @@ class EPath:
     def open(self, mode="r", block_size=None):
         self.fork_guard()
         assert self.is_absolute()
-
-        if self.protocol == "msc":
-            return self.storage_client.open(self._internal_nonfs_path, mode)
-
         return self.fs.open(self._internal_nonfs_path, mode, block_size=block_size)
 
     def read_text(self):
@@ -259,28 +310,16 @@ class EPath:
     def is_dir(self):
         self.fork_guard()
         assert self.is_absolute()
-
-        if self.protocol == "msc":
-            return self.storage_client.info(self._internal_nonfs_path).type == "directory"
-
         return self.fs.isdir(self._internal_nonfs_path)
 
     def is_file(self):
         self.fork_guard()
         assert self.is_absolute()
-
-        if self.protocol == "msc":
-            return self.storage_client.is_file(self._internal_nonfs_path)
-
         return self.fs.isfile(self._internal_nonfs_path)
 
     def mkdir(self, exist_ok: bool = True, parents: bool = False):
         self.fork_guard()
         assert self.is_absolute()
-
-        # mkdir is a no-op for MSC
-        if self.protocol == "msc":
-            return
 
         if parents:
             return self.fs.makedirs(self._internal_nonfs_path, exist_ok=exist_ok)
@@ -303,37 +342,24 @@ class EPath:
             # For some reason s3fs glob does not like leading /
             search_path_pattern = search_path_pattern[1:]
 
-        if self.protocol == "msc":
-            for path in self.storage_client.glob(search_path_pattern):
-                assert isinstance(path, str)
+        for path in self.fs.glob(search_path_pattern):
+            assert isinstance(path, str)
 
-                new_path = EPath(self)  # Copy
-                new_path.internal_path = self._resolve(self._internal_fs_path / PurePosixPath(path))
+            new_path = EPath(self)  # Copy
 
-                yield new_path
-        else:
-            for path in self.fs.glob(search_path_pattern):
-                assert isinstance(path, str)
+            if self.protocol == "local":
+                assert path.startswith("/"), "Local FS glob should return absolute paths"
+                new_path.internal_path = self._resolve(path)
+            else:
+                new_path.internal_path = self._resolve(
+                    self._internal_fs_path / PurePosixPath(path)
+                )
 
-                new_path = EPath(self)  # Copy
-
-                if self.protocol == "local":
-                    assert path.startswith("/"), "Local FS glob should return absolute paths"
-                    new_path.internal_path = self._resolve(path)
-                else:
-                    new_path.internal_path = self._resolve(
-                        self._internal_fs_path / PurePosixPath(path)
-                    )
-
-                yield new_path
+            yield new_path
 
     def size(self):
         self.fork_guard()
         assert self.is_absolute()
-
-        if self.protocol == "msc":
-            return self.storage_client.info(self._internal_nonfs_path).content_length
-
         return self.fs.size(self._internal_nonfs_path)
 
     def with_suffix(self, suffix):
@@ -346,30 +372,15 @@ class EPath:
         assert self.is_absolute()
         assert target.is_absolute()
 
-        if hasattr(self, "fs"):
-            assert self.fs == target.fs, "Can only move within same FS"
-
-        if hasattr(self, "storage_client"):
-            assert (
-                self.storage_client.profile == target.storage_client.profile
-            ), "Can only move within same profile"
-
+        assert self.fs == target.fs, "Can only move within same FS"
         assert self.protocol == target.protocol, "Can only move within same FS"
         assert self._internal_fs_path == target._internal_fs_path, "Can only move within same FS"
 
-        if self.protocol == "msc":
-            self.storage_client.copy(self._internal_nonfs_path, target._internal_nonfs_path)
-            self.storage_client.delete(self._internal_nonfs_path)
-        else:
-            self.fs.mv(self._internal_nonfs_path, target._internal_nonfs_path)
+        self.fs.mv(self._internal_nonfs_path, target._internal_nonfs_path)
 
     def unlink(self):
         self.fork_guard()
         assert self.is_absolute()
-
-        if self.protocol == "msc":
-            return self.storage_client.delete(self._internal_nonfs_path)
-
         return self.fs.rm(self._internal_nonfs_path)
 
     def relative_to(self, other: "EPath") -> str:
@@ -377,14 +388,7 @@ class EPath:
         assert self.is_absolute()
         assert other.is_absolute()
 
-        if hasattr(self, "fs"):
-            assert self.fs == other.fs, "Can only use relative_to within same FS"
-
-        if hasattr(self, "storage_client"):
-            assert (
-                self.storage_client.profile == other.storage_client.profile
-            ), "Can only use relative_to within same profile"
-
+        assert self.fs == other.fs, "Can only use relative_to within same FS"   
         assert self.protocol == other.protocol, "Can only use relative_to within same FS"
         assert (
             self._internal_fs_path == other._internal_fs_path
@@ -420,15 +424,7 @@ class EPath:
 
     def __lt__(self, other: "EPath"):
         self.fork_guard()
-
-        if hasattr(self, "fs"):
-            assert self.fs == other.fs, "Cannot compare paths from different file systems"
-
-        if hasattr(self, "storage_client"):
-            assert (
-                self.storage_client.profile == other.storage_client.profile
-            ), "Cannot compare paths from different profiles"
-
+        assert self.fs == other.fs, "Cannot compare paths from different file systems"
         assert self.protocol == other.protocol, "Cannot compare paths from different file systems"
         assert (
             self._internal_fs_path == other._internal_fs_path
