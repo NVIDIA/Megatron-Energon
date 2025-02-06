@@ -26,7 +26,7 @@ class MSCFileSystem:
         super().__init__(**kwargs)
         self.storage_client, _ = msc.resolve_storage_client(path)
 
-    def open(self, path: str, mode: str = "rb", block_size: Optional[int] = None, **kwargs):
+    def open(self, path: str, mode: str = "rb", **kwargs):
         return self.storage_client.open(path, mode)
 
     def isfile(self, path: str) -> bool:
@@ -42,24 +42,7 @@ class MSCFileSystem:
         return self.storage_client.info(path).content_length
 
     def rm(self, path: str, recursive: bool = False, maxdepth: Optional[int] = None):
-        """
-        Remove the file or directory at the given path. If recursive is True, remove
-        directories and their contents recursively.
-        """
-        if recursive:
-            for f in self._expand_recursive(path):
-                self.storage_client.delete(f)
-        else:
-            self.storage_client.delete(path)
-
-    def _expand_recursive(self, path: str) -> Generator[str, None, None]:
-        # If path is a file, just yield it
-        if self.isfile(path):
-            yield path
-        else:
-            # Directory: yield contents
-            for p in self.storage_client.glob(path + "/**"):
-                yield p
+        self.storage_client.delete(path)
 
     def mv(self, path1: str, path2: str, **kwargs):
         self.storage_client.copy(path1, path2)
@@ -243,11 +226,9 @@ class EPath:
 
         This method should be called before any operation that potentially uses the S3FS instance.
         """
-
-        if self.protocol == "rclone":
-            if isinstance(self.fs, s3fs.S3FileSystem) and self.fs._pid != os.getpid():
-                assert self.s3_args is not None
-                self.fs = s3fs.S3FileSystem(**self.s3_args)
+        if isinstance(self.fs, s3fs.S3FileSystem) and self.fs._pid != os.getpid():
+            assert self.s3_args is not None
+            self.fs = s3fs.S3FileSystem(**self.s3_args)
 
     @property
     def _internal_fs_path(self) -> str:
@@ -320,7 +301,6 @@ class EPath:
     def mkdir(self, exist_ok: bool = True, parents: bool = False):
         self.fork_guard()
         assert self.is_absolute()
-
         if parents:
             return self.fs.makedirs(self._internal_nonfs_path, exist_ok=exist_ok)
         else:
@@ -351,9 +331,7 @@ class EPath:
                 assert path.startswith("/"), "Local FS glob should return absolute paths"
                 new_path.internal_path = self._resolve(path)
             else:
-                new_path.internal_path = self._resolve(
-                    self._internal_fs_path / PurePosixPath(path)
-                )
+                new_path.internal_path = self._resolve(self._internal_fs_path / PurePosixPath(path))
 
             yield new_path
 
@@ -388,7 +366,7 @@ class EPath:
         assert self.is_absolute()
         assert other.is_absolute()
 
-        assert self.fs == other.fs, "Can only use relative_to within same FS"   
+        assert self.fs == other.fs, "Can only use relative_to within same FS"
         assert self.protocol == other.protocol, "Can only use relative_to within same FS"
         assert (
             self._internal_fs_path == other._internal_fs_path
