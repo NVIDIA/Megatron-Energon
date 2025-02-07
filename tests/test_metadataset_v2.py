@@ -650,6 +650,8 @@ class TestDataset(unittest.TestCase):
                 )
             )
 
+        # ===== Part 1: Verify fractions =====
+
         # Train mode dataset
         train_dataset = get_train_dataset(
             fixed_epochs_mds_path,
@@ -686,6 +688,8 @@ class TestDataset(unittest.TestCase):
         # The remaining samples from ds2 (127 to incl. 154) should be repeated only once
         assert all(sample_counts[sample] == 1 for sample in range(127, 155))
 
+        # ===== Part 2: Save and restore state =====
+
         # Now let's check if the state is stored and restored correctly
 
         train_loader = get_savable_loader(
@@ -705,6 +709,70 @@ class TestDataset(unittest.TestCase):
         )
 
         data1 = list(zip(range(95), train_loader))
+        state1 = train_loader.save_state_rank()
+
+        train_loader = get_savable_loader(
+            get_train_dataset(
+                fixed_epochs_mds_path,
+                worker_config=worker_config,
+                batch_size=1,
+                shuffle_buffer_size=None,
+                shuffle_over_epochs_multiplier=None,
+                parallel_shard_iters=1,
+                max_samples_per_sequence=None,
+                repeat=False,
+            ),
+            checkpoint_every_sec=0,
+            checkpoint_every_min_n_samples=1,
+            n_checkpoints=5,
+        )
+        train_loader.restore_state_rank(state1)
+        data2_restore = list(enumerate(train_loader))
+
+        total_samples_save_restore = len(data1) + len(data2_restore)
+
+        assert total_samples_save_restore == len(
+            data
+        ), "Total number of samples do not match when using save/restore"
+
+        sample_counts_save_restore = Counter(
+            [int(s[1].text[0]) for d in [data1, data2_restore] for s in d]
+        )
+
+        assert (
+            sample_counts_save_restore == sample_counts
+        ), "Sample counts do not match when using save/restore"
+
+        # ===== Part 3: Check if the state is restored correctly when saving right at the end of a dataset =====
+
+        torch.manual_seed(42)
+
+        train_loader = get_savable_loader(
+            get_train_dataset(
+                fixed_epochs_mds_path,
+                worker_config=worker_config,
+                batch_size=1,
+                shuffle_buffer_size=None,
+                shuffle_over_epochs_multiplier=None,
+                parallel_shard_iters=1,
+                max_samples_per_sequence=None,
+                repeat=False,
+            ),
+            checkpoint_every_sec=0,
+            checkpoint_every_min_n_samples=1,
+            n_checkpoints=5,
+        )
+
+        ds1_counter = 0
+        data1 = []
+        for idx, sample in enumerate(train_loader):
+            data1.append((idx, sample))
+            if sample.__subflavors__[0]["source"] == "ds1":
+                ds1_counter += 1
+                if ds1_counter == 38:
+                    # Stop right after the last sample from ds1
+                    break
+
         state1 = train_loader.save_state_rank()
 
         train_loader = get_savable_loader(
