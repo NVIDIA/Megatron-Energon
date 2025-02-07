@@ -23,6 +23,8 @@ T_sample = TypeVar("T_sample")
 class BlendDatasetState(State):
     #: States of the sub datasets
     datasets: List[State]
+    #: Whether the subdatasets are done
+    exhausted: List[bool]
     #: State of the worker rng
     rng: WorkerRngState
 
@@ -31,6 +33,8 @@ class BlendDatasetState(State):
 class BlendDatasetMergedState(MergedState):
     #: States of the sub datasets
     datasets: List[MergedState]
+    #: Whether the dataset is done
+    exhausted: List[List[bool]]
     #: State of the worker rng
     rng: WorkerRngMergedState
 
@@ -42,7 +46,7 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
     """
 
     dataset_weights: Tuple[Tuple[SavableDataset[T_sample], float], ...]
-
+    exhausted: List[List[bool]]
     _worker_rng: WorkerRng
 
     def __init__(
@@ -63,6 +67,9 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
 
         self.dataset_weights = dataset_weights
         self._worker_rng = WorkerRng(self.worker_config)
+        self.exhausted = [
+            [False] * len(dataset_weights) for _ in range(max(self.worker_config.num_workers, 1))
+        ]
 
     def __len__(self) -> int:
         # Give the number of samples in inner datasets, disregarding the weight
@@ -82,8 +89,14 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
         probs = weights / weights.sum()
         assert torch.all(probs > 0), "Negative weights are not allowed"
 
+        for idx, exhausted in enumerate(self.exhausted[self.worker_config.rank_worker_id()]):
+            if exhausted:
+                probs[idx] = 0
+                dataset_iters[idx] = None
+
         while True:
             ds_idx = self._worker_rng.choice_idx(probs=probs)
+
             if dataset_iters[ds_idx] is None:
                 if all(dataset_iter is None for dataset_iter in dataset_iters):
                     break
@@ -93,10 +106,13 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
             except StopIteration:
                 dataset_iters[ds_idx] = None
                 probs[ds_idx] = 0
+                self.exhausted[self.worker_config.rank_worker_id()][ds_idx] = True
                 if all(dataset_iter is None for dataset_iter in dataset_iters):
                     break
             else:
                 yield add_sample_restore_key(sample, ds_idx, src=self)
+
+        self.exhausted[self.worker_config.rank_worker_id()] = [False] * len(self.dataset_weights)
 
     def worker_has_samples(self) -> bool:
         return any(dataset.worker_has_samples() for dataset, _weight in self.dataset_weights)
@@ -104,6 +120,8 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
     def save_state(self) -> BlendDatasetState:
         return BlendDatasetState(
             datasets=[d.save_state() for d, _weight in self.dataset_weights],
+            # Need list() to create a copy
+            exhausted=list(self.exhausted[self.worker_config.rank_worker_id()]),
             rng=self._worker_rng.save_state(),
         )
 
@@ -115,6 +133,7 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
                 d.merge_states([None if s is None else s.datasets[ds_idx] for s in states])
                 for ds_idx, (d, _) in enumerate(self.dataset_weights)
             ],
+            exhausted=[s.exhausted for s in states],
             rng=self._worker_rng.merge_states([None if s is None else s.rng for s in states]),
         )
 
@@ -123,6 +142,10 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
             for dataset, _weight in self.dataset_weights:
                 dataset.restore_state(None)
             self._worker_rng.restore_state(None)
+            self.exhausted = [
+                [False] * len(self.dataset_weights)
+                for _ in range(max(self.worker_config.num_workers, 1))
+            ]
         else:
             assert isinstance(state, BlendDatasetMergedState)
             assert len(state.datasets) == len(
@@ -131,6 +154,8 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
             for (dataset, _weight), dstate in zip(self.dataset_weights, state.datasets):
                 dataset.restore_state(dstate)
             self._worker_rng.restore_state(state.rng)
+            # Need [list() for ...] to create a deep copy
+            self.exhausted = [list(sub) for sub in state.exhausted]
 
     def can_restore_sample(self) -> bool:
         return all(dataset.can_restore_sample() for dataset, _weight in self.dataset_weights)

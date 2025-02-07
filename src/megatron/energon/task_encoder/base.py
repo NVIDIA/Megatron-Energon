@@ -529,7 +529,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 DatasetBlendMode.NONE,
                 DatasetBlendMode.SAMPLE_REPETITIONS,
             ) and all(
-                isinstance(repetitions, int) for _dataset, repetitions in datasets
+                isinstance(repetitions, (int, float)) for _dataset, repetitions in datasets
             ), "If repeat is False, the datasets must be repeated with integer weights."
             inner_datasets = [
                 (
@@ -538,11 +538,11 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                         if repetition is None or repetition == 1
                         else RepeatDataset(
                             dataset.build(worker_rotation_offset=worker_rotation_offset),
-                            repeats=int(repetition),
+                            repeats=repetition,
                             worker_config=worker_config,
                         )
                     ),
-                    len(dataset) * (1 if repetition is None else int(repetition)),
+                    len(dataset) * (1 if repetition is None else repetition),
                 )
                 for (dataset, repetition), worker_rotation_offset in zip(
                     datasets, worker_rotation_offsets

@@ -21,7 +21,7 @@ class DatasetReference(DatasetLoaderInterface):
     split_part: Optional[str] = None
     subflavor: Optional[str] = None
     subflavors: Optional[Dict[str, Any]] = None
-    shuffle_over_epochs_multiplier: int = 1
+    shuffle_over_epochs_multiplier: Optional[int] = 1
     dataset_config: str = "dataset.yaml"
     split_config: str = "split.yaml"
 
@@ -59,20 +59,32 @@ class DatasetReference(DatasetLoaderInterface):
         worker_config: WorkerConfig,
         subflavor: Optional[str] = None,
         subflavors: Optional[Dict[str, Any]] = None,
-        shuffle_over_epochs_multiplier: int = 1,
+        shuffle_over_epochs_multiplier: Optional[int] = 1,
         **kwargs,
     ) -> Tuple[DatasetBlendMode, List[Tuple[BaseCoreDatasetFactory, Union[float, int, None]]]]:
         if self.subflavors is not None:
             subflavors = {**self.subflavors, **(subflavors or {})}
         assert self._dataset is not None
+
+        if shuffle_over_epochs_multiplier is None or self.shuffle_over_epochs_multiplier is None:
+            # If no shuffling is requested, this has override priority.
+            new_shuffle_over_epochs_multiplier = None
+        elif shuffle_over_epochs_multiplier == -1 or self.shuffle_over_epochs_multiplier == -1:
+            # Next priority is sampling without replacement.
+            new_shuffle_over_epochs_multiplier = -1
+        else:
+            # Otherwise, multiply the shuffle over epochs multiplier.
+            new_shuffle_over_epochs_multiplier = (
+                shuffle_over_epochs_multiplier * self.shuffle_over_epochs_multiplier
+            )
+
         return self._dataset.get_datasets(
             training=training,
             split_part=self.split_part or split_part,
             worker_config=worker_config,
             subflavor=subflavor or self.subflavor,
             subflavors=subflavors,
-            shuffle_over_epochs_multiplier=shuffle_over_epochs_multiplier
-            * self.shuffle_over_epochs_multiplier,
+            shuffle_over_epochs_multiplier=new_shuffle_over_epochs_multiplier,
             **kwargs,
         )
 
@@ -114,7 +126,7 @@ class MetadatasetJoin(DatasetLoaderInterface):
     split_part: Optional[str] = None
     subflavor: Optional[str] = None
     subflavors: Optional[Dict[str, Any]] = None
-    shuffle_over_epochs_multiplier: int = 1
+    shuffle_over_epochs_multiplier: Optional[int] = 1
     dataset_config: str = "dataset.yaml"
     split_config: str = "split.yaml"
 
@@ -153,7 +165,7 @@ class MetadatasetJoin(DatasetLoaderInterface):
         worker_config: WorkerConfig,
         subflavor: Optional[str] = None,
         subflavors: Optional[Dict[str, Any]] = None,
-        shuffle_over_epochs_multiplier: int = 1,
+        shuffle_over_epochs_multiplier: Optional[int] = 1,
         **kwargs,
     ) -> Tuple[DatasetBlendMode, List[Tuple[BaseCoreDatasetFactory, Union[float, int, None]]]]:
         assert self._dataset is not None, "Not prepared."
@@ -202,7 +214,7 @@ class MetadatasetBlend(DatasetLoaderInterface):
         worker_config: WorkerConfig,
         subflavor: Optional[str] = None,
         subflavors: Optional[Dict[str, Any]] = None,
-        shuffle_over_epochs_multiplier: int = 1,
+        shuffle_over_epochs_multiplier: Optional[int] = 1,
         **kwargs,
     ) -> Tuple[DatasetBlendMode, List[Tuple[BaseCoreDatasetFactory, Union[float, int, None]]]]:
         sum_weight = sum(dataset.weight for dataset in self.blend)
@@ -233,7 +245,7 @@ class MetadatasetBlend(DatasetLoaderInterface):
 
 @dataclass
 class BlendRepetitionsMixin:
-    repetitions: int = 1
+    repetitions: Union[int, float] = 1
 
 
 @dataclass
@@ -268,7 +280,7 @@ class MetadatasetBlendEpochized(DatasetLoaderInterface):
         worker_config: WorkerConfig,
         subflavor: Optional[str] = None,
         subflavors: Optional[Dict[str, Any]] = None,
-        shuffle_over_epochs_multiplier: int = 1,
+        shuffle_over_epochs_multiplier: Optional[int] = 1,
         **kwargs,
     ) -> Tuple[DatasetBlendMode, List[Tuple[BaseCoreDatasetFactory, Union[float, int, None]]]]:
         datasets = []
@@ -318,7 +330,7 @@ class MetadatasetV2(DatasetLoaderInterface):
         worker_config: WorkerConfig,
         subflavor: Optional[str] = None,
         subflavors: Optional[Dict[str, Any]] = None,
-        shuffle_over_epochs_multiplier: int = 1,
+        shuffle_over_epochs_multiplier: Optional[int] = 1,
         **kwargs,
     ) -> Tuple[DatasetBlendMode, List[Tuple[BaseCoreDatasetFactory, Union[float, int, None]]]]:
         return self.splits[split_part].get_datasets(
