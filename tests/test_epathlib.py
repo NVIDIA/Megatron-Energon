@@ -186,6 +186,31 @@ class TestEPath(unittest.TestCase):
         finally:
             multiprocessing.set_start_method(orig_start_method, force=True)
 
+    def test_multiprocessing_msc(self):
+        """Test EPath in multiprocessing context"""
+        p = EPath("msc://default/tmp/random_file_0001")
+        with p.open("w") as fp:
+            fp.write("*****")
+
+        orig_start_method = multiprocessing.get_start_method()
+        try:
+            multiprocessing.set_start_method("spawn", force=True)
+
+            proc = multiprocessing.Process(target=_multiproc_test_func, args=(p, True))
+            proc.start()
+            proc.join()
+            assert proc.exitcode == 0
+
+            multiprocessing.set_start_method("fork", force=True)
+
+            proc = multiprocessing.Process(target=_multiproc_test_func, args=(p, True))
+            proc.start()
+            proc.join()
+            assert proc.exitcode == 0
+        finally:
+            multiprocessing.set_start_method(orig_start_method, force=True)
+            p.unlink()
+
 
 def _multiproc_test_func(p: EPath, test_function: bool):
     """Helper function for multiprocessing test"""
