@@ -27,7 +27,7 @@ class DatasetReference(DatasetLoaderInterface):
 
     _dataset: Optional[DatasetLoaderInterface] = None
 
-    def prepare(self, parent_path: EPath) -> None:
+    def post_initialize(self, parent_path: EPath) -> None:
         self.path = parent_path.absolute() / self.path
         if self.path.is_file():
             assert self.dataset_config == "dataset.yaml", "Must not set dataset_config"
@@ -79,7 +79,7 @@ class DatasetReference(DatasetLoaderInterface):
 
 @dataclass
 class JoinDatasetReference(DatasetReference):
-    def prepare(self, parent_path: EPath) -> DatasetLoader:
+    def post_initialize(self, parent_path: EPath) -> DatasetLoader:
         # Override and disable another metadataset reference, only allow direct dataset references.
         # Do not store the loader, the parent MetadatasetJoin will do that.
         self.path = parent_path.absolute() / self.path
@@ -120,16 +120,18 @@ class MetadatasetJoin(DatasetLoaderInterface):
 
     _dataset: Optional[DatasetLoaderInterface] = None
 
-    def prepare(self, parent_path: EPath):
+    def post_initialize(self, parent_path: EPath):
         assert self.join is not None
         assert self.joiner is not None, "Must set joiner for joining datasets"
         assert (
             self.dataset_config == "dataset.yaml"
         ), "Cannot set dataset_config for joining datasets"
         if isinstance(self.join, list):
-            inner_loaders = [join.prepare(parent_path) for join in self.join]
+            inner_loaders = [join.post_initialize(parent_path) for join in self.join]
         elif isinstance(self.join, dict):
-            inner_loaders = {key: join.prepare(parent_path) for key, join in self.join.items()}
+            inner_loaders = {
+                key: join.post_initialize(parent_path) for key, join in self.join.items()
+            }
         else:
             raise ValueError("Invalid join type")
         self._dataset = JoinDatasetLoader(
@@ -187,10 +189,10 @@ class MetadatasetBlend(DatasetLoaderInterface):
 
     blend: List[Union[BlendDatasetReference, BlendJoinDatasetReference]]
 
-    def prepare(self, parent_path: EPath):
+    def post_initialize(self, parent_path: EPath):
         parent_path = parent_path.absolute()
         for dataset in self.blend:
-            dataset.prepare(parent_path)
+            dataset.post_initialize(parent_path)
 
     def get_datasets(
         self,
@@ -253,10 +255,10 @@ class MetadatasetBlendEpochized(DatasetLoaderInterface):
 
     blend_epochized: List[Union[BlendEpochizedDatasetReference, BlendEpochizedJoinDatasetReference]]
 
-    def prepare(self, parent_path: EPath):
+    def post_initialize(self, parent_path: EPath):
         parent_path = parent_path.absolute()
         for dataset in self.blend_epochized:
-            dataset.prepare(parent_path)
+            dataset.post_initialize(parent_path)
 
     def get_datasets(
         self,
@@ -306,7 +308,7 @@ class MetadatasetV2(DatasetLoaderInterface):
         self.parent_path = EPath(self.parent_path).absolute()
         # Fix paths
         for split in self.splits.values():
-            split.prepare(self.parent_path)
+            split.post_initialize(self.parent_path)
 
     def get_datasets(
         self,
