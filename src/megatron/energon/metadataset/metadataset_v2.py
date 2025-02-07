@@ -65,20 +65,26 @@ class DatasetReference(DatasetLoaderInterface):
         if self.subflavors is not None:
             subflavors = {**self.subflavors, **(subflavors or {})}
         assert self._dataset is not None
+
+        if shuffle_over_epochs_multiplier is None or self.shuffle_over_epochs_multiplier is None:
+            # If no shuffling is requested, this has override priority.
+            new_shuffle_over_epochs_multiplier = None
+        elif shuffle_over_epochs_multiplier == -1 or self.shuffle_over_epochs_multiplier == -1:
+            # Next priority is sampling without replacement.
+            new_shuffle_over_epochs_multiplier = -1
+        else:
+            # Otherwise, multiply the shuffle over epochs multiplier.
+            new_shuffle_over_epochs_multiplier = (
+                shuffle_over_epochs_multiplier * self.shuffle_over_epochs_multiplier
+            )
+
         return self._dataset.get_datasets(
             training=training,
             split_part=self.split_part or split_part,
             worker_config=worker_config,
             subflavor=subflavor or self.subflavor,
             subflavors=subflavors,
-            shuffle_over_epochs_multiplier=(
-                shuffle_over_epochs_multiplier * self.shuffle_over_epochs_multiplier
-                if (
-                    shuffle_over_epochs_multiplier is not None
-                    and self.shuffle_over_epochs_multiplier is not None
-                )
-                else None
-            ),
+            shuffle_over_epochs_multiplier=new_shuffle_over_epochs_multiplier,
             **kwargs,
         )
 

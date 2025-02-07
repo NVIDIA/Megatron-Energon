@@ -133,7 +133,7 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
                 d.merge_states([None if s is None else s.datasets[ds_idx] for s in states])
                 for ds_idx, (d, _) in enumerate(self.dataset_weights)
             ],
-            exhausted=deepcopy([s.exhausted for s in states]),
+            exhausted=[s.exhausted for s in states],
             rng=self._worker_rng.merge_states([None if s is None else s.rng for s in states]),
         )
 
