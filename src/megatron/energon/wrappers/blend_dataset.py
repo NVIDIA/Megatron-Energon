@@ -1,6 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Dict, Generic, Iterator, List, Optional, Tuple, TypeVar, Union
 
@@ -96,6 +97,7 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
 
         while True:
             ds_idx = self._worker_rng.choice_idx(probs=probs)
+
             if dataset_iters[ds_idx] is None:
                 if all(dataset_iter is None for dataset_iter in dataset_iters):
                     break
@@ -119,7 +121,7 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
     def save_state(self) -> BlendDatasetState:
         return BlendDatasetState(
             datasets=[d.save_state() for d, _weight in self.dataset_weights],
-            exhausted=self.exhausted[self.worker_config.rank_worker_id()],
+            exhausted=deepcopy(self.exhausted[self.worker_config.rank_worker_id()]),
             rng=self._worker_rng.save_state(),
         )
 
@@ -131,7 +133,7 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
                 d.merge_states([None if s is None else s.datasets[ds_idx] for s in states])
                 for ds_idx, (d, _) in enumerate(self.dataset_weights)
             ],
-            exhausted=[s.exhausted for s in states],
+            exhausted=deepcopy([s.exhausted for s in states]),
             rng=self._worker_rng.merge_states([None if s is None else s.rng for s in states]),
         )
 
@@ -152,7 +154,7 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
             for (dataset, _weight), dstate in zip(self.dataset_weights, state.datasets):
                 dataset.restore_state(dstate)
             self._worker_rng.restore_state(state.rng)
-            self.exhausted = state.exhausted
+            self.exhausted = deepcopy(state.exhausted)
 
     def can_restore_sample(self) -> bool:
         return all(dataset.can_restore_sample() for dataset, _weight in self.dataset_weights)
