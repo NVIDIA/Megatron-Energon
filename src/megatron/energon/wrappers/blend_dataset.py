@@ -120,9 +120,8 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
     def save_state(self) -> BlendDatasetState:
         return BlendDatasetState(
             datasets=[d.save_state() for d, _weight in self.dataset_weights],
-            exhausted=list(
-                self.exhausted[self.worker_config.rank_worker_id()]
-            ),  # Need list() to create a copy
+            # Need list() to create a copy
+            exhausted=list(self.exhausted[self.worker_config.rank_worker_id()]),
             rng=self._worker_rng.save_state(),
         )
 
@@ -155,9 +154,8 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
             for (dataset, _weight), dstate in zip(self.dataset_weights, state.datasets):
                 dataset.restore_state(dstate)
             self._worker_rng.restore_state(state.rng)
-            self.exhausted = [
-                list(sub) for sub in state.exhausted
-            ]  # Need [list() for ...] to create a deep copy
+            # Need [list() for ...] to create a deep copy
+            self.exhausted = [list(sub) for sub in state.exhausted]
 
     def can_restore_sample(self) -> bool:
         return all(dataset.can_restore_sample() for dataset, _weight in self.dataset_weights)
