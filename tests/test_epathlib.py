@@ -5,6 +5,7 @@
 
 import logging
 import multiprocessing
+import pickle
 import struct
 import sys
 import unittest
@@ -116,6 +117,11 @@ class TestEPath(unittest.TestCase):
         p4 = p3.parent / "../bla/bla/bla/../../../no/../subpath2.txt"
         assert str(p4) == "rclone://s3/subpath2.txt", str(p4)
 
+        # Test pickle / unpickle
+        p4serialized = pickle.dumps(p4)
+        # No secret must be serialized
+        assert b"dummy" not in p4serialized
+
     def test_multi_storage_client(self):
         """Test the Multi-Storage Client integration"""
         # Test path handling
@@ -151,6 +157,12 @@ class TestEPath(unittest.TestCase):
         assert p4.is_file() is False
         p5.unlink()
         assert p5.is_file() is False
+
+        # Test pickle / unpickle
+        p5serialized = pickle.dumps(p5)
+        p5unserialized = pickle.loads(p5serialized)
+        assert p5unserialized == p5
+        assert str(p5unserialized) == str(p5)
 
     def test_multiprocessing(self):
         """Test EPath in multiprocessing context"""

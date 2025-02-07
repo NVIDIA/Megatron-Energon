@@ -143,7 +143,7 @@ class EPath:
                     path = "/" + path
 
                 self.internal_path = self._resolve(path)
-                self.fs = MSCFileSystem(initial_path)
+                self.fs = MSCFileSystem(str(self.internal_path))
                 self.protocol = "msc"
                 # Root and remote name
                 self.num_fs_path_parts = 2
@@ -165,6 +165,11 @@ class EPath:
             self.num_fs_path_parts = 0
         elif self.protocol == "rclone":
             self.fs, self.s3_args = self.create_s3fs_from_rclone_remote(self.internal_path.parts[1])
+            self.num_fs_path_parts = 2
+        elif self.protocol == "msc":
+            self.fs = MSCFileSystem(str(self.internal_path))
+            self.protocol = "msc"
+            # Root and remote name
             self.num_fs_path_parts = 2
         else:
             raise ValueError(f"Unknown protocol: {self.protocol}")
