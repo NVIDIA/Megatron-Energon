@@ -1,7 +1,6 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Dict, Generic, Iterator, List, Optional, Tuple, TypeVar, Union
 
@@ -121,7 +120,9 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
     def save_state(self) -> BlendDatasetState:
         return BlendDatasetState(
             datasets=[d.save_state() for d, _weight in self.dataset_weights],
-            exhausted=deepcopy(self.exhausted[self.worker_config.rank_worker_id()]),
+            exhausted=list(
+                self.exhausted[self.worker_config.rank_worker_id()]
+            ),  # Need list() to create a copy
             rng=self._worker_rng.save_state(),
         )
 
@@ -154,7 +155,9 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
             for (dataset, _weight), dstate in zip(self.dataset_weights, state.datasets):
                 dataset.restore_state(dstate)
             self._worker_rng.restore_state(state.rng)
-            self.exhausted = deepcopy(state.exhausted)
+            self.exhausted = [
+                list(sub) for sub in state.exhausted
+            ]  # Need [list() for ...] to create a deep copy
 
     def can_restore_sample(self) -> bool:
         return all(dataset.can_restore_sample() for dataset, _weight in self.dataset_weights)
