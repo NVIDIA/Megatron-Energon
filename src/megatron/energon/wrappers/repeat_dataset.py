@@ -77,6 +77,9 @@ class RepeatDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_samp
                 # Last iteration, adjust the number of samples
                 fraction = self.repeats - math.floor(self.repeats)
                 stop_after = math.floor(ds_len * fraction)
+                if self._index[worker_idx] >= stop_after:
+                    # We restored an index and it is already past the stop_after
+                    break
             else:
                 stop_after = None
 
