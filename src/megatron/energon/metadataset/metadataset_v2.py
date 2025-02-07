@@ -28,7 +28,8 @@ class DatasetReference(DatasetLoaderInterface):
     _dataset: Optional[DatasetLoaderInterface] = None
 
     def post_initialize(self, parent_path: EPath) -> None:
-        self.path = parent_path.absolute() / self.path
+        if not isinstance(self.path, EPath):
+            self.path = parent_path / self.path
         if self.path.is_file():
             assert self.dataset_config == "dataset.yaml", "Must not set dataset_config"
             assert self.split_config == "split.yaml", "Must not set split_config"
@@ -82,7 +83,8 @@ class JoinDatasetReference(DatasetReference):
     def post_initialize(self, parent_path: EPath) -> DatasetLoader:
         # Override and disable another metadataset reference, only allow direct dataset references.
         # Do not store the loader, the parent MetadatasetJoin will do that.
-        self.path = parent_path.absolute() / self.path
+        if not isinstance(self.path, EPath):
+            self.path = parent_path / self.path
         if (self.path / MAIN_FOLDER_NAME / ".info.yaml").is_file():
             return DatasetLoader(
                 path=self.path,
@@ -190,7 +192,6 @@ class MetadatasetBlend(DatasetLoaderInterface):
     blend: List[Union[BlendDatasetReference, BlendJoinDatasetReference]]
 
     def post_initialize(self, parent_path: EPath):
-        parent_path = parent_path.absolute()
         for dataset in self.blend:
             dataset.post_initialize(parent_path)
 
@@ -256,7 +257,6 @@ class MetadatasetBlendEpochized(DatasetLoaderInterface):
     blend_epochized: List[Union[BlendEpochizedDatasetReference, BlendEpochizedJoinDatasetReference]]
 
     def post_initialize(self, parent_path: EPath):
-        parent_path = parent_path.absolute()
         for dataset in self.blend_epochized:
             dataset.post_initialize(parent_path)
 
@@ -305,7 +305,7 @@ class MetadatasetV2(DatasetLoaderInterface):
 
     def __post_init__(self):
         """Post-initialization to fix paths."""
-        self.parent_path = EPath(self.parent_path).absolute()
+        self.parent_path = EPath(self.parent_path)
         # Fix paths
         for split in self.splits.values():
             split.post_initialize(self.parent_path)

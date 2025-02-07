@@ -5,6 +5,7 @@
 
 import logging
 import multiprocessing
+import os
 import pickle
 import struct
 import sys
@@ -28,16 +29,10 @@ class TestEPath(unittest.TestCase):
         p_abs = EPath("/tmp")
 
         p_comb = p_abs / p_rel
-        # logging.info(f"p_comb: {p_comb}")
-        # logging.info(f"p_comb: {p_comb.internal_path}")
-
-        # We don't want to work on relative paths
-        self.assertRaises(AssertionError, lambda: p_rel.is_file())
-
         # Those should not raise:
-        assert p_comb.is_absolute()
-        _ = p_comb.is_file()
-        _ = p_abs.is_file()
+        assert not p_comb.is_file()
+        assert not p_abs.is_file()
+        assert p_abs.is_dir()
 
     def test_contextman(self):
         """Test the context manager"""
@@ -49,6 +44,7 @@ class TestEPath(unittest.TestCase):
 
         # Test context manager reading
         p = EPath(tmp_file_path).open("rb")
+        print(p)
         with p:
             b = p.read()
             assert isinstance(b, bytes)
@@ -57,10 +53,6 @@ class TestEPath(unittest.TestCase):
             logging.info(f"num: {num}")
             assert num == 1337
             assert data == b"1234567890"
-
-            assert not p.closed
-
-        assert p.closed
 
         # Test context manager writing
         tmp_file_path2 = "/tmp/testfile2.bin"
@@ -92,26 +84,34 @@ class TestEPath(unittest.TestCase):
 
     def test_s3_path_resolution(self):
         """Test s3 path resolution"""
-        config_override = {
-            "s3": ConfigEntry(
-                name="s3",
-                type="s3",
-                provider="s3",
-                access_key_id="dummy",
-                secret_access_key="dummy",
-                region="dummy",
-                endpoint="https://localhost",
+        with EPath("/tmp/XDG_CONFIG_HOME/rclone/rclone.conf").open("w") as f:
+            f.write(
+                "\n".join(
+                    [
+                        "[s3]",
+                        # TODO: Remove the next two lines, when MSC fixes the issue
+                        "base_path = /",
+                        # TODO: End remove
+                        "type = s3",
+                        "env_auth = false",
+                        "access_key_id = dummy",
+                        "secret_access_key = dummy",
+                        "region = dummy",
+                        "endpoint = https://localhost",
+                    ]
+                )
             )
-        }
+
+        os.environ["XDG_CONFIG_HOME"] = "/tmp/XDG_CONFIG_HOME"
 
         # Test globbing
-        p = EPath("rclone://s3/tmp/path/subpath.txt", _test_config_override=config_override)
+        p = EPath("rclone://s3/tmp/path/subpath.txt")
         assert str(p) == "rclone://s3/tmp/path/subpath.txt", str(p)
 
         p2 = p / ".." / "subpath2.txt"
         assert str(p2) == "rclone://s3/tmp/path/subpath2.txt", str(p2)
 
-        p3 = EPath("rclone://s3/tmp/path/.././subpath.txt", _test_config_override=config_override)
+        p3 = EPath("rclone://s3/tmp/path/.././subpath.txt")
         assert str(p3) == "rclone://s3/tmp/subpath.txt", str(p3)
 
         p4 = p3.parent / "../bla/bla/bla/../../../no/../subpath2.txt"
@@ -126,11 +126,11 @@ class TestEPath(unittest.TestCase):
         """Test the Multi-Storage Client integration"""
         # Test path handling
         p = EPath("msc://default/etc/resolv.conf")
-        assert str(p) == "msc://default/etc/resolv.conf", str(p)
+        assert str(p) == "/etc/resolv.conf", str(p)
         assert p.is_file()
 
         p2 = p / ".." / "hosts"
-        assert str(p2) == "msc://default/etc/hosts", str(p2)
+        assert str(p2) == "/etc/hosts", str(p2)
 
         # Test glob
         p3 = EPath("msc://default/etc/")

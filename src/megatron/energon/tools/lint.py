@@ -63,8 +63,6 @@ def command(path: EPath, split_parts: str, dataset_config: str, split_config: st
     The PATH should point to the folder with the dataset.
     The dataset must comply with the energon dataset format. See README.md for more details."""
 
-    path = path.absolute()
-
     # Check the tar file index
     if not check_index(path):
         raise click.ClickException("Validation failed with errors, see logs for details.")

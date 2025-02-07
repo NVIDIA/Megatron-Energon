@@ -136,8 +136,6 @@ def command(
     details.
     """
 
-    path = path.absolute()
-
     if tar_index_only:
         assert (path / MAIN_FOLDER_NAME / ".info.yaml").is_file(), "No .info.yaml found"
         with (path / MAIN_FOLDER_NAME / ".info.yaml").open("r") as f:

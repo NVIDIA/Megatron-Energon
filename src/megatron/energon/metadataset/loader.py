@@ -24,7 +24,7 @@ def load_dataset(
             strict=True,
             default_kwargs=dict(parent_path=EPath("/"), **kwargs),
         )
-    path = EPath(path).absolute()
+    path = EPath(path)
     if path.is_file():
         return load_config(
             path,

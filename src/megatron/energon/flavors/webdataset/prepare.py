@@ -41,7 +41,7 @@ class WebdatasetPreparator:
 
     @staticmethod
     def _preprocess_tar(
-        path: Union[str, EPath], parent_path: Union[str, EPath], max_parts: int
+        path: str, parent_path: EPath, max_parts: int
     ) -> Tuple[ShardInfo, Set[str]]:
         """Process a single tar file, i.e. read the tarinfos, generate the tar index and return
         stats.
@@ -54,13 +54,9 @@ class WebdatasetPreparator:
         Returns:
             Tuple of shard info and found keys of the loaded dicts.
         """
-        path = EPath(path)
-        shard_info = ShardInfo(name=path.relpath, path=path, offset=0, count=0)
-
-        if not shard_info.path.is_absolute():
-            parent_path = EPath(parent_path)
-            assert parent_path.is_absolute(), f"Parent path must be absolute: {parent_path}"
-            shard_info.path = parent_path / path
+        assert not path.startswith("/"), f"Path must not start with '/': {path}"
+        abs_path = parent_path / path
+        shard_info = ShardInfo(name=path, path=abs_path, offset=0, count=0)
 
         try:
             # Note: Write to .tmp file first, then remove .tmp extension, to make sure only complete
@@ -180,18 +176,16 @@ class WebdatasetPreparator:
         Returns:
             The set of all parts found in the shards. But at most 50.
         """
-        parent_path = EPath(parent_path).absolute()
+        parent_path = EPath(parent_path)
 
         found_parts = set()
         paths = [path for path in paths for path in braceexpand.braceexpand(path)]
         shards: List[ShardInfo] = []
 
-        assert parent_path.is_absolute(), f"Parent path must be absolute: {parent_path}"
-
         # use functools partial to pass parent_path to process_tar
         process_tar = functools.partial(
             cls._preprocess_tar,
-            parent_path=parent_path.url,  # convert to url string, to avoid EPath in multiprocessing
+            parent_path=parent_path,
             max_parts=50,
         )
 
@@ -215,6 +209,7 @@ class WebdatasetPreparator:
         info = WebdatasetInfo(
             shard_counts={shard.name: shard.count for shard in shards},
         )
+        print(f"Saving info to {parent_path / MAIN_FOLDER_NAME / info_config}")
         with (parent_path / MAIN_FOLDER_NAME / info_config).open("w") as wf:
             yaml.dump(to_json_object(info), wf)
 
