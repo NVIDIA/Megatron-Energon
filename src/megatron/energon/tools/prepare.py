@@ -245,22 +245,21 @@ def command(
         # Get a list of all classes in megatron.energon that are subclasses of WebdatasetBase
         import megatron.energon as data_import
 
-        name_to_class = {
-            name: cls
+        display_name_and_class = [
+            (name, cls)
             for name, cls in inspect.getmembers(data_import)
             if isinstance(cls, type) and issubclass(cls, Sample)
-        }
-        name_to_class["Crude sample (plain dict for cooking)"] = CrudeWebdataset
-        name_to_class = OrderedDict(name_to_class)
+        ]
+        display_name_and_class.append(("Crude sample (plain dict for cooking)", CrudeWebdataset))
 
         # Print all classes and ask user to pick one
         click.echo("The following sample types are available:")
-        for i, (name, cls) in enumerate(name_to_class.items()):
+        for i, (name, cls) in enumerate(display_name_and_class):
             click.echo(f"{i}. {name}")
         while True:
             choice = click.prompt("Please enter a number to choose a class", type=int)
             try:
-                cls = name_to_class[list(name_to_class.keys())[choice]]
+                _, cls = display_name_and_class[choice]
                 break
             except IndexError:
                 click.echo("Invalid choice. Please try again.")
