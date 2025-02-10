@@ -406,6 +406,14 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 drop_last=batch_drop_last,
                 worker_config=worker_config,
             )
+
+            if getattr(self.encode_batch, "__func__", None) is not TaskEncoder.encode_batch:
+                dataset = MapDataset(
+                    dataset,
+                    self.encode_batch,
+                    worker_config=worker_config,
+                    stateless_map_fn=get_stateless(self.encode_batch),
+                )
         else:
             # No grouping is active
 

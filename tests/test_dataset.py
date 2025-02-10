@@ -41,6 +41,7 @@ from megatron.energon import (
     get_train_dataset,
     get_val_dataset,
     homogeneous_concat_mix,
+    basic_sample_keys,
 )
 from megatron.energon.dataset_config import get_dataset_from_config
 from megatron.energon.flavors import BaseWebdatasetFactory
@@ -70,6 +71,11 @@ class EncodedCaptioningSample:
     __restore_key__: Tuple[Union[str, int, tuple], ...]
     image: torch.Tensor
     caption: torch.Tensor
+
+
+@dataclass
+class CaptioningBatchSample(CaptioningSample):
+    encoded_batch: bool
 
 
 @dataclass
@@ -1484,6 +1490,15 @@ class TestDataset(unittest.TestCase):
                 else:
                     assert False
 
+            @stateless
+            def encode_batch(self, batch: CaptioningSample) -> CaptioningBatchSample:
+                return CaptioningBatchSample(
+                    **basic_sample_keys(dataclasses.asdict(batch)),
+                    image=batch.image,
+                    caption=batch.caption,
+                    encoded_batch=True,
+                )
+
         worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0)
         loader = get_savable_loader(
             get_train_dataset(
@@ -1501,6 +1516,10 @@ class TestDataset(unittest.TestCase):
         batches = list(zip(range(40), loader))
         print([batch.__key__ for idx, batch in batches])
         assert all(all(key == batch.caption[0] for key in batch.caption) for idx, batch in batches)
+
+        assert all(
+            isinstance(batch.encoded_batch, bool) and batch.encoded_batch for idx, batch in batches
+        )
 
         worker_config_r0 = WorkerConfig(rank=0, world_size=2, num_workers=2)
 
