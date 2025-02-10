@@ -41,7 +41,6 @@ from megatron.energon import (
     get_train_dataset,
     get_val_dataset,
     homogeneous_concat_mix,
-    basic_sample_keys,
 )
 from megatron.energon.dataset_config import get_dataset_from_config
 from megatron.energon.flavors import BaseWebdatasetFactory
