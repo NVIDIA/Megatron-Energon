@@ -729,7 +729,7 @@ class TestDataset(unittest.TestCase):
         # Check matching
         assert all(int(txt1[1:]) == int(txt2[2:]) for txt1, txt2 in zip(txt1_order, txt2_order))
         # Check frequency
-        set_filtered_nums = set(range(5, 10)) | set(range(20, 29)) | set(range(30,55))
+        set_filtered_nums = set(range(5, 10)) | set(range(20, 29)) | set(range(30, 55))
         assert set(txt1_order) == set(f"j{i}" for i in set_filtered_nums)
         assert set(txt2_order) == set(f"jB{i}" for i in set_filtered_nums)
 
