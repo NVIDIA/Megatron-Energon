@@ -13,7 +13,7 @@ import click
 import yaml
 
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors import BaseWebdatasetFactory
+from megatron.energon.flavors import BaseWebdatasetFactory, CrudeWebdataset
 from megatron.energon.flavors.base_dataset import Sample
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 
@@ -281,13 +281,6 @@ def command(
         click.echo("The sample type you selected:\n")
         click.echo(sample_type_source)
 
-        dataset_definition = {
-            "sample_type": {
-                "__module__": "megatron.energon",
-                "__class__": cls.__name__,
-            }
-        }
-
         if cls == CrudeSampleDummy:
             click.echo(
                 "CrudeWebdataset does not need a field map. You will need to provide a `Cooker` for your dataset samples in your `TaskEncoder`."
@@ -295,7 +288,18 @@ def command(
             click.echo(
                 "Furthermore, you might want to add `subflavors` in your meta dataset specification."
             )
+            dataset_definition = {
+                "__module__": "megatron.energon",
+                "__class__": CrudeWebdataset.__name__,
+            }
         else:
+            dataset_definition = {
+                "sample_type": {
+                    "__module__": "megatron.energon",
+                    "__class__": cls.__name__,
+                }
+            }
+
             if not allow_interactive_field_map:
                 click.echo(
                     "You cannot set a field_map for this dataset. You will need a sample_loader."
