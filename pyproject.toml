@@ -12,10 +12,9 @@ authors = [
 description = "Megatron's multi-modal data loader"
 readme = "README.md"
 license = "BSD-3-Clause"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 classifiers = [
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.9",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
@@ -36,8 +35,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-  "black",
-  "isort",
+  "ruff",
   "sphinxcontrib-napoleon",
   "sphinx",
   "myst-parser",
@@ -63,33 +61,15 @@ energon = "megatron.energon.cli.main:main"
 [tool.hatch.version]
 source = "vcs"
 
-[tool.black]
-line-length = 100
-target-version = ['py38']
-include = '\.pyi?$'
-exclude = '''
-(
-  /(
-      \.eggs         # exclude a few common directories in the
-    | \.git          # root of the project
-    | \.hg
-    | \.mypy_cache
-    | \.tox
-    | \.venv
-    | \.vscode
-    | \.idea
-    | _build
-    | build
-    | dist
-  )/
-)
-'''
+[tool.ruff.lint]
+extend-select = ["I"]
 
-[tool.isort]
-profile = "black"
-multi_line_output = 3
-include_trailing_comma = true
-force_grid_wrap = 0
-use_parentheses = true
-ensure_newline_before_comments = true
-line_length = 100
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+include = ["**/*.py", "**/*.pyi"]
+exclude = [
+  ".idea",
+  "docs",
+]
+
