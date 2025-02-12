@@ -20,6 +20,9 @@ _frozen_cuda_tensors = set()
 _frozen_cuda_tensors_initialized = False
 
 
+GC_DEFAULT_EVERY_N_ITER = 10
+
+
 class GcFreezeError(RuntimeError):
     pass
 
@@ -74,7 +77,7 @@ class GcDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_sample])
         dataset: SavableDataset[T_sample],
         *,
         worker_config: WorkerConfig,
-        every_n_iter: int = 1,
+        every_n_iter: int = GC_DEFAULT_EVERY_N_ITER,
         freeze: bool = True,
     ):
         """Construct a GcDataset, which applies garbage collection every `every_n_iter` iterations.
