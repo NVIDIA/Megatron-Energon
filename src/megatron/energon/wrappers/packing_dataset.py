@@ -242,7 +242,9 @@ class PackingDataset(
 
         # Main loop:
         pre_pack_round = 0
-        while pre_pack_round < 10:
+        while True:
+            if pre_pack_round > 10:
+                raise RuntimeError("Pre packer did not yield any packs after 10 rounds.")
             # Fill a portion of the buffer
             if not self._fill_reading_buffer(src_iter):
                 # Break out of the main loop when the source is exhausted.
