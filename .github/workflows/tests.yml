@@ -10,7 +10,7 @@ on:
       - develop
 
 jobs:
-  black:
+  tests:
     runs-on: ubuntu-latest
 
     steps:
