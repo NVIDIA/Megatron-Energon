@@ -77,10 +77,10 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
 
     def __iter__(self) -> Iterator[T_sample]:
         assert self.worker_has_samples(), "Cannot blend all empty datasets"
-        datasets, weights = zip(
+        ds_indices, datasets, weights = zip(
             *[
-                (dataset, weight)
-                for dataset, weight in self.dataset_weights
+                (idx, dataset, weight)
+                for idx, (dataset, weight) in enumerate(self.dataset_weights)
                 if dataset.worker_has_samples()
             ]
         )
@@ -89,8 +89,9 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
         probs = weights / weights.sum()
 
         while True:
-            ds_idx = self._worker_rng.choice_idx(probs=probs)
-            sample = next(dataset_iters[ds_idx])
+            iter_idx = self._worker_rng.choice_idx(probs=probs)
+            sample = next(dataset_iters[iter_idx])
+            ds_idx = ds_indices[iter_idx]
             yield add_sample_restore_key(sample, ds_idx, src=self)
 
     def worker_has_samples(self) -> bool:
