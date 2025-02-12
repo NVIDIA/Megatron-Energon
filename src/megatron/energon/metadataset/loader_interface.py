@@ -38,7 +38,7 @@ class DatasetLoaderInterface(ABC):
         worker_config: WorkerConfig,
         subflavor: Optional[str] = None,
         subflavors: Optional[Dict[str, Any]] = None,
-        shuffle_over_epochs_multiplier: int = 1,
+        shuffle_over_epochs_multiplier: Optional[int] = 1,
         **kwargs,
     ) -> Tuple[DatasetBlendMode, List[Tuple[BaseCoreDatasetFactory, Union[float, int, None]]]]:
         """

@@ -335,7 +335,7 @@ class JoinDatasetLoader(DatasetLoaderInterface):
     split_config: Optional[str] = None
     subflavor: Optional[str] = None
     subflavors: Optional[Dict[str, Any]] = None
-    shuffle_over_epochs_multiplier: int = 1
+    shuffle_over_epochs_multiplier: Optional[int] = 1
 
     def _get_joined_meta(self, split_part: str) -> Tuple[EPath, List[JoinedDatasetMetaInfo]]:
         """
@@ -433,7 +433,7 @@ class JoinDatasetLoader(DatasetLoaderInterface):
         worker_config: WorkerConfig,
         subflavor: Optional[str] = None,
         subflavors: Optional[Dict[str, Any]] = None,
-        shuffle_over_epochs: int = 1,
+        shuffle_over_epochs: Optional[int] = 1,
         split_config: Optional[str] = None,
         **kwargs,
     ) -> BaseCoreDatasetFactory:
@@ -518,7 +518,7 @@ class JoinDatasetLoader(DatasetLoaderInterface):
         worker_config: WorkerConfig,
         subflavor: Optional[str] = None,
         subflavors: Optional[Dict[str, Any]] = None,
-        shuffle_over_epochs_multiplier: int = 1,
+        shuffle_over_epochs_multiplier: Optional[int] = 1,
         **kwargs,
     ) -> Tuple[DatasetBlendMode, List[Tuple[BaseCoreDatasetFactory, Union[float, int, None]]]]:
         return DatasetBlendMode.NONE, [

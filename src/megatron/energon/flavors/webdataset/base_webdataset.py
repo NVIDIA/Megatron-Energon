@@ -70,7 +70,7 @@ class BaseWebdatasetFactory(
         split_part: str,
         training: bool,
         worker_config: WorkerConfig,
-        shuffle_over_epochs: int = 1,
+        shuffle_over_epochs: Optional[int] = 1,
         parallel_shard_iters: Optional[int] = None,
         max_samples_per_sequence: Optional[int] = None,
         info_config: str = ".info.yaml",

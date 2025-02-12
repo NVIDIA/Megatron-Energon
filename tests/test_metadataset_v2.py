@@ -916,10 +916,197 @@ class TestDataset(unittest.TestCase):
         assert all(ds2_key_cnt_rst[key] == 3 for key in ds2_keys_rst)
         assert all(txt_cnt_rst[key] in (2, 3) for key in txt_order_rst)
 
+    def test_metadataset_fixed_fractional_epochs(self):
+        torch.manual_seed(42)
+        worker_config = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=0,
+            seed_offset=42,
+        )
+
+        # Create a joined dataset configuration
+        fixed_epochs_mds_path = self.dataset_path / "metadataset_fixed_epochs.yaml"
+        with open(fixed_epochs_mds_path, "w") as f:
+            f.write(
+                "\n".join(
+                    [
+                        "__module__: megatron.energon",
+                        "__class__: MetadatasetV2",
+                        "splits:",
+                        "  train:",
+                        "    blend_epochized:",
+                        "      - repetitions: 0.7",
+                        "        path: ds1",
+                        "        subflavors:",
+                        "          source: ds1",
+                        "          number: 43",
+                        "      - repetitions: 1.5",
+                        "        path: ds2",
+                        "        subflavors:",
+                        "          source: ds2",
+                        "          number: 42",
+                    ]
+                )
+            )
+
+        # ===== Part 1: Verify fractions =====
+
+        # Train mode dataset
+        train_dataset = get_train_dataset(
+            fixed_epochs_mds_path,
+            worker_config=worker_config,
+            batch_size=1,
+            shuffle_buffer_size=None,
+            shuffle_over_epochs_multiplier=None,
+            parallel_shard_iters=1,
+            max_samples_per_sequence=None,
+            repeat=False,
+        )
+
+        train_loader = get_savable_loader(
+            train_dataset,
+            checkpoint_every_sec=0,
+            checkpoint_every_min_n_samples=1,
+            n_checkpoints=5,
+        )
+
+        data = list(enumerate(train_loader))
+
+        # Check the overall number of samples
+        # Should be 0.7*len(ds1) + 1.5*len(ds2) = 38 + 55 + 27 (floor rounding)
+        assert len(data) == 38 + 55 + 27, len(data)
+
+        sample_counts = Counter([int(s[1].text[0]) for s in data])
+
+        # The first 70% of samples from ds1 (0 to incl. 37) should be repeated only once
+        assert all(sample_counts[sample] == 1 for sample in range(38))
+
+        # Since ds2 is repeated 1.5 times, the first 50% of samples from ds2 (100 to incl. 126) should be repeated twice
+        assert all(sample_counts[sample] == 2 for sample in range(100, 127))
+
+        # The remaining samples from ds2 (127 to incl. 154) should be repeated only once
+        assert all(sample_counts[sample] == 1 for sample in range(127, 155))
+
+        # ===== Part 2: Save and restore state =====
+
+        # Now let's check if the state is stored and restored correctly
+
+        train_loader = get_savable_loader(
+            get_train_dataset(
+                fixed_epochs_mds_path,
+                worker_config=worker_config,
+                batch_size=1,
+                shuffle_buffer_size=None,
+                shuffle_over_epochs_multiplier=None,
+                parallel_shard_iters=1,
+                max_samples_per_sequence=None,
+                repeat=False,
+            ),
+            checkpoint_every_sec=0,
+            checkpoint_every_min_n_samples=1,
+            n_checkpoints=5,
+        )
+
+        data1 = list(zip(range(95), train_loader))
+        state1 = train_loader.save_state_rank()
+
+        train_loader = get_savable_loader(
+            get_train_dataset(
+                fixed_epochs_mds_path,
+                worker_config=worker_config,
+                batch_size=1,
+                shuffle_buffer_size=None,
+                shuffle_over_epochs_multiplier=None,
+                parallel_shard_iters=1,
+                max_samples_per_sequence=None,
+                repeat=False,
+            ),
+            checkpoint_every_sec=0,
+            checkpoint_every_min_n_samples=1,
+            n_checkpoints=5,
+        )
+        train_loader.restore_state_rank(state1)
+        data2_restore = list(enumerate(train_loader))
+
+        total_samples_save_restore = len(data1) + len(data2_restore)
+
+        assert total_samples_save_restore == len(
+            data
+        ), "Total number of samples do not match when using save/restore"
+
+        sample_counts_save_restore = Counter(
+            [int(s[1].text[0]) for d in [data1, data2_restore] for s in d]
+        )
+
+        assert (
+            sample_counts_save_restore == sample_counts
+        ), "Sample counts do not match when using save/restore"
+
+        # ===== Part 3: Check if the state is restored correctly when saving right at the end of a dataset =====
+
+        torch.manual_seed(42)
+
+        train_loader = get_savable_loader(
+            get_train_dataset(
+                fixed_epochs_mds_path,
+                worker_config=worker_config,
+                batch_size=1,
+                shuffle_buffer_size=None,
+                shuffle_over_epochs_multiplier=None,
+                parallel_shard_iters=1,
+                max_samples_per_sequence=None,
+                repeat=False,
+            ),
+            checkpoint_every_sec=0,
+            checkpoint_every_min_n_samples=1,
+            n_checkpoints=5,
+        )
+
+        ds1_counter = 0
+        data1 = []
+        for idx, sample in enumerate(train_loader):
+            data1.append((idx, sample))
+            if sample.__subflavors__[0]["source"] == "ds1":
+                ds1_counter += 1
+                if ds1_counter == 38:
+                    # Stop right after the last sample from ds1
+                    break
+
+        state1 = train_loader.save_state_rank()
+
+        train_loader = get_savable_loader(
+            get_train_dataset(
+                fixed_epochs_mds_path,
+                worker_config=worker_config,
+                batch_size=1,
+                shuffle_buffer_size=None,
+                shuffle_over_epochs_multiplier=None,
+                parallel_shard_iters=1,
+                max_samples_per_sequence=None,
+                repeat=False,
+            ),
+            checkpoint_every_sec=0,
+            checkpoint_every_min_n_samples=1,
+            n_checkpoints=5,
+        )
+        train_loader.restore_state_rank(state1)
+        data2_restore = list(enumerate(train_loader))
+
+        total_samples_save_restore = len(data1) + len(data2_restore)
+
+        assert total_samples_save_restore == len(
+            data
+        ), "Total number of samples do not match when using save/restore"
+
+        sample_counts_save_restore = Counter(
+            [int(s[1].text[0]) for d in [data1, data2_restore] for s in d]
+        )
+
+        assert (
+            sample_counts_save_restore == sample_counts
+        ), "Sample counts do not match when using save/restore"
+
 
 if __name__ == "__main__":
-    # unittest.main()
-    t = TestDataset()
-    t.setUp()
-    t.test_left_join()
-    t.tearDown()
+    unittest.main()

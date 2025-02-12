@@ -24,14 +24,15 @@ classifiers = [
 dependencies = [
   "braceexpand",
   "click",
+  "dataslots; python_version<'3.10'",
+  "multi-storage-client>=0.13.0",
   "numpy",
   "pillow>=10.0.1",  # WEBP vulnerability fixed starting from 10.0.1
   "pyyaml",
+  "s3fs",
   "torch",
   "tqdm",
   "webdataset",
-  "s3fs",
-  "dataslots; python_version<'3.10'",
 ]
 
 [project.optional-dependencies]
