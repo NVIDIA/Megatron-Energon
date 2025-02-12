@@ -20,15 +20,13 @@ jobs:
     - name: Install uv
       uses: astral-sh/setup-uv@v5
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.10'
-
-    - name: Set up just
+    - name: Install just
       uses: ./.github/actions/setupjust
 
-    - name: Install dependencies and check
+    - name: Install dependencies
       run: |
         just dev-sync
+
+    - name: Check code
+      run: |
         just check
