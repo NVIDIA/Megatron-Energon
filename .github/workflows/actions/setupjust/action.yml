@@ -13,4 +13,4 @@ inputs:
     default: ${{ github.token }}
 runs:
   using: 'node20'
-  main: 'setupjust.js'
+  main: 'index.js'
