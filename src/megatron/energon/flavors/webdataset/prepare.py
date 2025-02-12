@@ -117,6 +117,8 @@ class WebdatasetPreparator:
         Returns:
             Tuple of shard info and found keys of the loaded dicts.
         """
+        EPath.prepare_forked_process()  # Multiproc with fork
+
         path = EPath(path)
         shard_info = ShardInfo(name=path.relpath, path=path, count=0)
 

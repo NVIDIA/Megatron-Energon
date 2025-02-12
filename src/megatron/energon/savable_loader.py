@@ -60,6 +60,8 @@ def _init_worker(seed_per_worker: List[int], worker_id: int):
 
     SystemRng.seed(worker_seed)
 
+    EPath.prepare_forked_process()
+
 
 @dataclass_slots
 class SimpleSavableDatasetState(BaseSingleWrapperState):
