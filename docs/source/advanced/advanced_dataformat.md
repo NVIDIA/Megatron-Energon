@@ -51,7 +51,7 @@ Given a field name, the method should return True if the field is to be kept.
 
 
 (interleaved-sample-loader)=
-## Example Custom Sample Loader: Multimodal Datasets with Interleaved Data
+## Example: Interleaved Data and Arbitrary Image Count
 
 ### The Webdataset Structure
 
