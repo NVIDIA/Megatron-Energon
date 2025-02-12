@@ -1,0 +1,16 @@
+name: 'Setup just'
+author: 'Ross MacArthur'
+description: 'Install the just command runner'
+branding:
+  icon: 'play'
+  color: 'blue'
+inputs:
+  just-version:
+    description: 'A valid semver specifier of the just version to install'
+  github-token:
+    description: 'Github token to use to authenticate downloads'
+    required: false
+    default: ${{ github.token }}
+runs:
+  using: 'node20'
+  main: 'setupjust.js'
