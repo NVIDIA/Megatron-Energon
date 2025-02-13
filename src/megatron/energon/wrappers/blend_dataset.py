@@ -118,9 +118,6 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
                 if all(dataset_iter is None for dataset_iter in dataset_iters):
                     break
             else:
-                # Translate the filtered index to the original index,
-                # for the restore key of the sample.
-
                 yield add_sample_restore_key(sample, ds_idx, src=self)
 
         self.exhausted[self.worker_config.rank_worker_id()] = [False] * len(self.dataset_weights)
