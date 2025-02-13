@@ -93,7 +93,7 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
                 dataset_iters.append(None)
                 weights.append(0)
 
-        probs = torch.tensor(weights, dtype=torch.float32)
+        weights = torch.tensor(weights, dtype=torch.float32)
         if probs.sum() == 0:
             raise RuntimeError(
                 "There is a worker with no samples in any of the blended datasets. "
@@ -104,11 +104,11 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
         # Some may already be exhausted on this worker when restoring a state.
         for idx, exhausted in enumerate(self.exhausted[self.worker_config.rank_worker_id()]):
             if exhausted:
-                probs[idx] = 0
+                weights[idx] = 0
                 dataset_iters[idx] = None
 
         while True:
-            ds_idx = self._worker_rng.choice_idx(probs=probs)
+            ds_idx = self._worker_rng.choice_idx(probs=weights)
 
             if dataset_iters[ds_idx] is None:
                 if all(dataset_iter is None for dataset_iter in dataset_iters):
@@ -118,7 +118,7 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
                 sample = next(dataset_iters[ds_idx])
             except StopIteration:
                 dataset_iters[ds_idx] = None
-                probs[ds_idx] = 0
+                weights[ds_idx] = 0
                 self.exhausted[self.worker_config.rank_worker_id()][ds_idx] = True
                 if all(dataset_iter is None for dataset_iter in dataset_iters):
                     break
