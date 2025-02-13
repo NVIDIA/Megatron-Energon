@@ -78,40 +78,42 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
     def __iter__(self) -> Iterator[T_sample]:
         assert self.worker_has_samples(), "Cannot blend all empty datasets"
 
-        # Note: We are filtering out empty datasets here,
-        # so the indices will not match the original dataset_weights.
-        # We call the original index ds_idx, and the filtered index iter_idx.
+        # Create a list of datasets and their weights, but
+        # set the weight to 0 if the dataset has no samples on this worker.
 
-        ds_indices, datasets, weights = zip(
-            *[
-                (idx, dataset, weight)
-                for idx, (dataset, weight) in enumerate(self.dataset_weights)
-                if dataset.worker_has_samples()
-            ]
-        )
-        dataset_iters = [iter(dataset) for dataset in datasets]
-        weights = torch.tensor(weights, dtype=torch.float32)
-        probs = weights / weights.sum()
+        dataset_iters = []
+        weights = []
+        for idx, (dataset, weight) in enumerate(self.dataset_weights):
+
+            if dataset.worker_has_samples():
+                dataset_iters.append(iter(dataset))
+                weights.append(weight)
+            else:
+                dataset_iters.append(None)
+                weights.append(0)
+
+        probs = torch.tensor(weights, dtype=torch.float32)
+        probs = probs / probs.sum()
         assert torch.all(probs > 0), "Negative weights are not allowed"
 
+        # Some may already be exhausted on this worker when restoring a state.
         for idx, exhausted in enumerate(self.exhausted[self.worker_config.rank_worker_id()]):
             if exhausted:
                 probs[idx] = 0
                 dataset_iters[idx] = None
 
         while True:
-            iter_idx = self._worker_rng.choice_idx(probs=probs)
-            ds_idx = ds_indices[iter_idx]
+            ds_idx = self._worker_rng.choice_idx(probs=probs)
 
-            if dataset_iters[iter_idx] is None:
+            if dataset_iters[ds_idx] is None:
                 if all(dataset_iter is None for dataset_iter in dataset_iters):
                     break
                 continue
             try:
-                sample = next(dataset_iters[iter_idx])
+                sample = next(dataset_iters[ds_idx])
             except StopIteration:
-                dataset_iters[iter_idx] = None
-                probs[iter_idx] = 0
+                dataset_iters[ds_idx] = None
+                probs[ds_idx] = 0
                 self.exhausted[self.worker_config.rank_worker_id()][ds_idx] = True
                 if all(dataset_iter is None for dataset_iter in dataset_iters):
                     break
