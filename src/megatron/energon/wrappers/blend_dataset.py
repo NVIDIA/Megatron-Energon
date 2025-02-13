@@ -94,7 +94,7 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
                 weights.append(0)
 
         weights = torch.tensor(weights, dtype=torch.float32)
-        if probs.sum() == 0:
+        if weights.sum() == 0:
             raise RuntimeError(
                 "There is a worker with no samples in any of the blended datasets. "
                 "This can happen if you have a lot of workers and your dataset is too small. "
