@@ -97,7 +97,7 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
         if probs.sum() == 0:
             raise RuntimeError(
                 "There is a worker with no samples in any of the blended datasets. "
-                "This can happen if you have a lot of workers and many small datasets. "
+                "This can happen if you have a lot of workers and your dataset is too small. "
                 "Currently this case is not supported."
             )
 
