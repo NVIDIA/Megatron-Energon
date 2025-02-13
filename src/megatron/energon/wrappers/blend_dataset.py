@@ -77,25 +77,38 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
 
     def __iter__(self) -> Iterator[T_sample]:
         assert self.worker_has_samples(), "Cannot blend all empty datasets"
-        datasets, weights = zip(
-            *[
-                (dataset, weight)
-                for dataset, weight in self.dataset_weights
-                if dataset.worker_has_samples()
-            ]
-        )
-        dataset_iters = [iter(dataset) for dataset in datasets]
-        weights = torch.tensor(weights, dtype=torch.float32)
-        probs = weights / weights.sum()
-        assert torch.all(probs > 0), "Negative weights are not allowed"
 
+        # Create a list of datasets and their weights, but
+        # set the weight to 0 if the dataset has no samples on this worker.
+
+        dataset_iters = []
+        weights = []
+        for idx, (dataset, weight) in enumerate(self.dataset_weights):
+            assert weight > 0, "All blending weights must be > 0"
+
+            if dataset.worker_has_samples():
+                dataset_iters.append(iter(dataset))
+                weights.append(weight)
+            else:
+                dataset_iters.append(None)
+                weights.append(0)
+
+        weights = torch.tensor(weights, dtype=torch.float32)
+        if weights.sum() == 0:
+            raise RuntimeError(
+                "There is a worker with no samples in any of the blended datasets. "
+                "This can happen if you have a lot of workers and your dataset is too small. "
+                "Currently this case is not supported."
+            )
+
+        # Some may already be exhausted on this worker when restoring a state.
         for idx, exhausted in enumerate(self.exhausted[self.worker_config.rank_worker_id()]):
             if exhausted:
-                probs[idx] = 0
+                weights[idx] = 0
                 dataset_iters[idx] = None
 
         while True:
-            ds_idx = self._worker_rng.choice_idx(probs=probs)
+            ds_idx = self._worker_rng.choice_idx(probs=weights)
 
             if dataset_iters[ds_idx] is None:
                 if all(dataset_iter is None for dataset_iter in dataset_iters):
@@ -105,7 +118,7 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
                 sample = next(dataset_iters[ds_idx])
             except StopIteration:
                 dataset_iters[ds_idx] = None
-                probs[ds_idx] = 0
+                weights[ds_idx] = 0
                 self.exhausted[self.worker_config.rank_worker_id()][ds_idx] = True
                 if all(dataset_iter is None for dataset_iter in dataset_iters):
                     break

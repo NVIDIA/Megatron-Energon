@@ -41,7 +41,7 @@ from megatron.energon.flavors.base_dataset import (
 from megatron.energon.rng import SystemRng
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseSingleWrapperMergedState, BaseSingleWrapperState
-from megatron.energon.wrappers.gc_dataset import GcDataset, gc_init_worker
+from megatron.energon.wrappers.gc_dataset import GC_DEFAULT_EVERY_N_ITER, GcDataset, gc_init_worker
 from megatron.energon.wrappers.log_sample_dataset import default_get_keys
 
 T = TypeVar("T")
@@ -703,7 +703,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
         checkpoint_every_sec: float = 60,
         checkpoint_every_min_n_samples: Optional[int] = None,
         n_checkpoints: int = 2,
-        gc_collect_every_n_steps: int = 1,
+        gc_collect_every_n_steps: int = GC_DEFAULT_EVERY_N_ITER,
         gc_freeze_at_start: bool = True,
     ):
         """
@@ -1107,7 +1107,7 @@ class BasicDataLoader(DataLoader[T], Generic[T]):
     def __init__(
         self,
         dataset: SavableDataset[T],
-        gc_collect_every_n_steps: int = 1,
+        gc_collect_every_n_steps: int = GC_DEFAULT_EVERY_N_ITER,
         gc_freeze_at_start: bool = True,
     ):
         """
