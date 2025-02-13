@@ -176,11 +176,12 @@ class TestDataset(unittest.TestCase):
             n_checkpoints=5,
         )
 
-        data1 = list(zip(train_loader, range(3)))  # Load 3 samples
+        data1a = list(zip(train_loader, range(3)))  # Load 3 samples
 
         # Save state mid epoch
         state1 = train_loader.save_state_rank()
-        print(state1)
+
+        data1b = list(zip(train_loader, range(5)))  # Load 5 samples
 
         # Restore state
         train_loader = get_savable_loader(
@@ -196,10 +197,18 @@ class TestDataset(unittest.TestCase):
             n_checkpoints=5,
         )
         train_loader.restore_state_rank(state1)
-        data2_restore = list(zip(train_loader, range(3)))  # Load 3 samples
+        data2_restore = list(zip(train_loader, range(5)))  # Load 5 samples
 
         # Check that the restored state is the same
-        assert data1 == data2_restore
+        order1b = [(s[0].__key__[0], int(s[0].text[0])) for s in data1b]
+        order2 = [(s[0].__key__[0], int(s[0].text[0])) for s in data2_restore]
+
+        print("order1b")
+        print(order1b)
+        print("order2")
+        print(order2)
+
+        assert order1b == order2, "The restored state does not match the original state."
 
 
 if __name__ == "__main__":
