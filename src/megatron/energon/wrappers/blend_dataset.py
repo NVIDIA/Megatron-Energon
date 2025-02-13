@@ -84,6 +84,7 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
         dataset_iters = []
         weights = []
         for idx, (dataset, weight) in enumerate(self.dataset_weights):
+            assert weight > 0, "All blending weights must be > 0"
 
             if dataset.worker_has_samples():
                 dataset_iters.append(iter(dataset))
@@ -93,8 +94,12 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
                 weights.append(0)
 
         probs = torch.tensor(weights, dtype=torch.float32)
-        probs = probs / probs.sum()
-        assert torch.all(probs > 0), "Negative weights are not allowed"
+        if probs.sum() == 0:
+            raise RuntimeError(
+                "There is a worker with no samples in any of the blended datasets. "
+                "This can happen if you have a lot of workers and many small datasets. "
+                "Currently this case is not supported."
+            )
 
         # Some may already be exhausted on this worker when restoring a state.
         for idx, exhausted in enumerate(self.exhausted[self.worker_config.rank_worker_id()]):
