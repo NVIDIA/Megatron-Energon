@@ -77,10 +77,15 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
 
     def __iter__(self) -> Iterator[T_sample]:
         assert self.worker_has_samples(), "Cannot blend all empty datasets"
-        datasets, weights = zip(
+
+        # Note: We are filtering out empty datasets here,
+        # so the indices will not match the original dataset_weights.
+        # We call the original index ds_idx, and the filtered index iter_idx.
+
+        ds_indices, datasets, weights = zip(
             *[
-                (dataset, weight)
-                for dataset, weight in self.dataset_weights
+                (idx, dataset, weight)
+                for idx, (dataset, weight) in enumerate(self.dataset_weights)
                 if dataset.worker_has_samples()
             ]
         )
@@ -95,21 +100,25 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
                 dataset_iters[idx] = None
 
         while True:
-            ds_idx = self._worker_rng.choice_idx(probs=probs)
+            iter_idx = self._worker_rng.choice_idx(probs=probs)
+            ds_idx = ds_indices[iter_idx]
 
-            if dataset_iters[ds_idx] is None:
+            if dataset_iters[iter_idx] is None:
                 if all(dataset_iter is None for dataset_iter in dataset_iters):
                     break
                 continue
             try:
-                sample = next(dataset_iters[ds_idx])
+                sample = next(dataset_iters[iter_idx])
             except StopIteration:
-                dataset_iters[ds_idx] = None
-                probs[ds_idx] = 0
+                dataset_iters[iter_idx] = None
+                probs[iter_idx] = 0
                 self.exhausted[self.worker_config.rank_worker_id()][ds_idx] = True
                 if all(dataset_iter is None for dataset_iter in dataset_iters):
                     break
             else:
+                # Translate the filtered index to the original index,
+                # for the restore key of the sample.
+
                 yield add_sample_restore_key(sample, ds_idx, src=self)
 
         self.exhausted[self.worker_config.rank_worker_id()] = [False] * len(self.dataset_weights)
