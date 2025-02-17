@@ -31,6 +31,8 @@ Example with the following ranks and worker configuration (Data Parallel = 2, Pi
 * `Global Rank 6`: `DP Rank = X` (No DP group), `PP Rank = 1`, `TP Rank = 0`
 * `Global Rank 7`: `DP Rank = X` (No DP group), `PP Rank = 1`, `TP Rank = 1`
 
+Saving should only happen on global rank 0 and 4. When restoring, global ranks 0, 1, 4, 5 need to receive a state.
+
 
 ```py
 import torch
@@ -89,7 +91,7 @@ if data_parallel_rank is not None:
         torch.save(state, f"dataloader_rank{data_parallel_rank}.pt")
 
         # Alternatively, save once for the whole dp group:
-        # state = loader.save_state_global(dst_rank=0)
+        # state = loader.save_state_global(dst_dp_rank=0)
         # if state is not None:
         #     torch.save(state, "dataloader.pt")
 
@@ -114,13 +116,13 @@ if data_parallel_rank is not None:
 
     # Alternatively load the global checkpoint from disk on every dp rank:
     # state = torch.load("dataloader.pt")
-    # loader.restore_state_global(state, src_rank=None)
+    # loader.restore_state_global(state, src_dp_rank=None)
 
     # Or load only once from disk for each dp group:
     # if data_parallel_rank == 0:
     #     state = torch.load("dataloader.pt")
     # else:
     #     state = None
-    # loader.restore_state_global(state, src_rank=0)
+    # loader.restore_state_global(state, src_dp_rank=0)
 
 ```
