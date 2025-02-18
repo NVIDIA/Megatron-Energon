@@ -969,7 +969,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
         return self.save_state_global(dst_rank)
 
     def save_state_global(
-        self, dst_rank: int
+        self, global_dst_rank: int
     ) -> Optional[Sequence[Optional[SavableDataLoaderState]]]:
         """
         Saves the state of the dataset globally, collecting the state from all ranks using torch
@@ -983,7 +983,8 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
         the corresponding `restore_state_rank`. Also, these do not rely on torch distributed.
 
         Args:
-            dst_rank: The state will be gathered to this rank.
+            global_dst_rank: The state will be gathered to this rank. The rank refers to the
+                global rank, not the rank within the data parallel group.
 
         Returns:
             The state of the dataset (or `None`, if not on `dst_rank`).
@@ -994,13 +995,29 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
         # Gather the merged states
         if self.worker_config.world_size > 1:
             output: Optional[Sequence[Optional[SavableDataLoaderState]]]
-            if self.worker_config.rank == dst_rank:
+            if self.worker_config.global_rank() == global_dst_rank:
                 output = [None] * self.worker_config.world_size
             else:
+                # Check if the global_dst_rank is in the same group at all
+                if self.worker_config.data_parallel_group is not None:
+                    try:
+                        _ = torch.distributed.get_group_rank(
+                            self.worker_config.data_parallel_group, global_dst_rank
+                        )
+                    except RuntimeError:
+                        raise ValueError(
+                            f"global_dst_rank {global_dst_rank} is not in the group of the current rank's worker config"
+                        )
+
                 output = None
+
             torch.distributed.gather_object(
-                merged_state, output, dst_rank, group=self.worker_config.data_parallel_group
+                merged_state,
+                output,
+                global_dst_rank,
+                group=self.worker_config.data_parallel_group,
             )
+
             return output
         else:
             # Not distributed -> return the merged state
@@ -1012,31 +1029,31 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
     def restore_state(
         self,
         state: Optional[Sequence[Optional[SavableDataLoaderState]]],
-        src_rank: Optional[int],
     ) -> None:
         """Deprecated. Use `restore_state_global` (or `restore_state_rank`) instead."""
 
-        return self.restore_state_global(state, src_rank)
+        return self.restore_state_global(state)
 
     def restore_state_global(
         self,
         state: Optional[Sequence[Optional[SavableDataLoaderState]]],
-        src_rank: Optional[int],
+        *,
+        src_rank: Optional[int] = None,
     ) -> None:
         """
         Restores the saved state from `save_state_global` (in torch distributed setup).
-        Typical scenarios are:
+        The global state needs be loaded on every rank that has a data loader instance.
 
-          - `src_rank=None`: All ranks load the same state from disk, restore their respective state.
-          - `src_rank=rank`: Only the rank `rank` loads the state from disk, all other ranks receive
-            the state from rank `rank`.
+        Optionally, one can specify a src_rank and only provide the state once.
+        In case of multiple data parallel groups, you must provide the state once
+        in each data parallel group. In this case the `src_rank` is the rank within the
+        data parallel group.
 
         Args:
             state: The state to restore, as saved by `save_state_global`.
-            src_rank: If set to a rank index, only this rank is assumed to hold the data, other
-                ranks must set state to `None`. If `None`, all ranks are assumed to have loaded the
-                state data.
+            src_rank: The rank from which the state is broadcasted (within the data parallel group, if using DP groups).
         """
+
         assert self._persistent_iterator is None, "Cannot restore state while workers are running"
 
         # Only restore multi-rank if state is actually a list and we are in a distributed setup.
@@ -1051,7 +1068,22 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
             # Select the state of the current rank
             rank_state = state[self.worker_config.rank]
         else:
-            # Only the src_rank has the state
+
+            if self.worker_config.data_parallel_group is not None:
+                # Only the src_rank has the state within this dp group
+                try:
+                    global_src_rank = torch.distributed.get_global_rank(
+                        self.worker_config.data_parallel_group, src_rank
+                    )
+                except RuntimeError:
+                    raise ValueError(
+                        f"src_rank {src_rank} is not in the group of the current rank's worker config"
+                    )
+            else:
+                # If no DP group is given, we assume the global rank is
+                # the same as the data parallel rank
+                global_src_rank = src_rank
+
             if self.worker_config.rank != src_rank:
                 # Send the state to all other ranks
                 assert state is None
@@ -1067,7 +1099,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
             torch.distributed.scatter_object_list(
                 local_object,
                 state,
-                src=src_rank,
+                src=global_src_rank,
                 group=self.worker_config.data_parallel_group,
             )
             rank_state = local_object[0]
