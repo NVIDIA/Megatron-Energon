@@ -164,9 +164,24 @@ def join_multiple_indices(
 
     # Filter the primary and each secondary DB for excluded samples by creating
     # a new VIEW for each
-    filter_samples_with_excludes(conn, "main", primary)
-    for alias, mi in zip(secondary_aliases, secondaries):
+    for alias, mi in zip(["main"] + secondary_aliases, meta_infos):
         filter_samples_with_excludes(conn, alias, mi)
+
+    # Check each primary and secondary DB for duplicate sample_key values
+    for alias, mi in zip(["main"] + secondary_aliases, meta_infos):
+        duplicates = conn.execute(
+            f"""
+            SELECT sample_key, COUNT(*) AS c
+            FROM {alias}_filtered
+            GROUP BY sample_key
+            HAVING c > 1
+            LIMIT 5
+        """
+        ).fetchall()
+        if duplicates:
+            raise ValueError(
+                f"Can't join. Found duplicate sample keys in {mi.db_path}: {duplicates}"
+            )
 
     # Create a temporary table to order the shards as in the current split config
     conn.execute("DROP TABLE IF EXISTS primary_order")
