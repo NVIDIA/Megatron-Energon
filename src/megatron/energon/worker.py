@@ -118,6 +118,15 @@ class WorkerConfig:
             WorkerConfig._sample_index_stack[0] * max(self.num_workers, 1) + self.rank_worker_id()
         )
 
+    def global_rank(self) -> int:
+        """Returns the global rank of this worker config but as a global rank, not
+        as a rank within the data parallel group."""
+
+        if self.data_parallel_group is None:
+            return self.rank
+
+        return torch.distributed.get_global_rank(self.data_parallel_group, self.rank)
+
     def __eq__(self, other):
         """Do not compare everything to check for equal config"""
         if not isinstance(other, WorkerConfig):
