@@ -17,7 +17,7 @@ These parallelisms have different consequences for the dataloader:
 
 - **Data Parallelism** (DP): The dataloader needs to ensure that each processor gets a different subset of the data. This is supported by Energon. The data parallel groups should be specified in the worker config.
 
-- **Pipeline Parallelism** (PP): Data is typically only loaded on the first Pipeline Parallel rank, and propagates through the other ranks within the pipeline parallel group. This means, you only instantiate an enegon dataset and loader on the first ranks of those groups.
+- **Pipeline Parallelism** (PP): Data is typically only loaded on the first Pipeline Parallel rank, and propagates through the other ranks within the pipeline parallel group. This means, you only instantiate an Energon dataset and loader on the first ranks of those groups.
 
 - **Tensor Parallelism** (TP): The dataloader will load the same input data on multiple devices. Typically, this can be ensured by either instantiating the dataloader exactly the same on the same data parallel ranks in different data parallel groups, or e.g. by loading the data only once and distributing it using torch distributed.
 
