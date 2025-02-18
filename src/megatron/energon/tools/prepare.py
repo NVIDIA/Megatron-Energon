@@ -265,11 +265,6 @@ def command(
                 click.echo("Invalid choice. Please try again.")
                 continue
 
-        sample_type = {
-            "__module__": "megatron.energon",
-            "__class__": cls.__name__,
-        }
-
         if cls == CrudeWebdataset:
             click.echo(
                 "CrudeWebdataset does not need a field map. You will need to provide a `Cooker` for your dataset samples in your `TaskEncoder`."
@@ -277,13 +272,19 @@ def command(
             click.echo(
                 "Furthermore, you might want to add `subflavors` in your meta dataset specification."
             )
-            dataset_definition = sample_type
+            dataset_definition = {
+                "__module__": "megatron.energon",
+                "__class__": cls.__name__,
+            }
         else:
             click.echo("The sample type you selected:\n")
             click.echo(inspect.getsource(cls))
 
             dataset_definition = {
-                "sample_type": sample_type,
+                "sample_type": {
+                    "__module__": "megatron.energon",
+                    "__class__": cls.__name__,
+                },
             }
 
             if not allow_interactive_field_map:
