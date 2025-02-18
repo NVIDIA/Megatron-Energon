@@ -6,6 +6,7 @@ import inspect
 import json
 import re
 import typing
+from collections import OrderedDict
 from types import FunctionType
 from typing import Any, List, Optional, Tuple, Type
 
@@ -17,10 +18,6 @@ from megatron.energon.flavors import BaseWebdatasetFactory, CrudeWebdataset
 from megatron.energon.flavors.base_dataset import Sample
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 from megatron.energon.metadataset.loader import prepare_metadataset
-
-
-class CrudeSampleDummy:
-    pass
 
 
 def type_str(tp: Type) -> str:
@@ -254,40 +251,27 @@ def command(
         # Get a list of all classes in megatron.energon that are subclasses of WebdatasetBase
         import megatron.energon as data_import
 
-        all_classes = []
-        for name, cls in inspect.getmembers(data_import):
-            if isinstance(cls, type) and issubclass(cls, Sample):
-                all_classes.append(cls)
-
-        all_classes.append(
-            ("Crude sample (plain dict for cooking)", CrudeSampleDummy)
-        )  # Tuple is (Printed name, resulting class)
+        display_name_and_class = [
+            (name, cls)
+            for name, cls in inspect.getmembers(data_import)
+            if isinstance(cls, type) and issubclass(cls, Sample)
+        ]
+        display_name_and_class.append(("Crude sample (plain dict for cooking)", CrudeWebdataset))
 
         # Print all classes and ask user to pick one
         click.echo("The following sample types are available:")
-        for i, cls in enumerate(all_classes):
-            if isinstance(cls, tuple):
-                click.echo(f"{i}. {cls[0]}")
-            else:
-                click.echo(f"{i}. {cls.__name__}")
+        for i, (name, cls) in enumerate(display_name_and_class):
+            click.echo(f"{i}. {name}")
         while True:
             choice = click.prompt("Please enter a number to choose a class", type=int)
             try:
-                cls = all_classes[choice]
+                _, cls = display_name_and_class[choice]
                 break
             except IndexError:
                 click.echo("Invalid choice. Please try again.")
                 continue
 
-        if isinstance(cls, tuple):
-            cls = cls[1]
-
-        # Ask user to enter field_map
-        sample_type_source = inspect.getsource(cls)
-        click.echo("The sample type you selected:\n")
-        click.echo(sample_type_source)
-
-        if cls == CrudeSampleDummy:
+        if cls == CrudeWebdataset:
             click.echo(
                 "CrudeWebdataset does not need a field map. You will need to provide a `Cooker` for your dataset samples in your `TaskEncoder`."
             )
@@ -296,14 +280,17 @@ def command(
             )
             dataset_definition = {
                 "__module__": "megatron.energon",
-                "__class__": CrudeWebdataset.__name__,
+                "__class__": cls.__name__,
             }
         else:
+            click.echo("The sample type you selected:\n")
+            click.echo(inspect.getsource(cls))
+
             dataset_definition = {
                 "sample_type": {
                     "__module__": "megatron.energon",
                     "__class__": cls.__name__,
-                }
+                },
             }
 
             if not allow_interactive_field_map:
