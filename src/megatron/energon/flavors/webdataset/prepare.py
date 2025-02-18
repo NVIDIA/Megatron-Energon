@@ -94,7 +94,7 @@ class SqliteIndexWriterAggregator(BaseAggregator):
         self.writer.close()
 
     def get_final_result_data(self) -> Any:
-        return self.shards, self.found_parts, self.had_update
+        return self.shards, self.found_parts, self.had_update, self.writer.duplicates
 
 
 class WebdatasetPreparator:
@@ -305,7 +305,7 @@ class WebdatasetPreparator:
         pool.close()
 
         # Get final results
-        shards, found_parts, had_update = pool.get_final_aggregator_data()
+        shards, found_parts, had_update, duplicates = pool.get_final_aggregator_data()
 
         if had_update:
             logger.info("Regenerating dataset UUID...")
@@ -371,4 +371,4 @@ class WebdatasetPreparator:
         with (parent_path / MAIN_FOLDER_NAME / split_config).open("w") as wf:
             yaml.dump(to_json_object(splits_config), wf)
 
-        return found_parts
+        return found_parts, duplicates

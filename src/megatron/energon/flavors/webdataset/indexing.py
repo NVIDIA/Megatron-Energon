@@ -13,6 +13,7 @@ from megatron.energon.epathlib import EPath
 class SqliteIndexWriter:
     sqlite_path: EPath
     db: Optional[sqlite3.Connection]
+    duplicates: List[Tuple[str, int]]
 
     def __init__(self, sqlite_path: EPath):
         """
@@ -52,6 +53,8 @@ class SqliteIndexWriter:
         # Index on sample_key for fast lookups
         self.db.execute("CREATE INDEX IF NOT EXISTS idx_samples_sample_key ON samples(sample_key)")
 
+        self.duplicates = []
+
     def append_sample(
         self,
         tar_file_id: int8,
@@ -78,6 +81,12 @@ class SqliteIndexWriter:
         Closes the DB connection. If finalize=True, the temporary database is
         renamed to the final name, overwriting if necessary.
         """
+        # Check if sample_key are all unique
+        # self.db.execute("CREATE TEMP TABLE temp AS SELECT sample_key, COUNT(*) AS c FROM samples GROUP BY sample_key HAVING c > 1")
+        duplicates = self.db.execute("SELECT sample_key, COUNT(*) AS c FROM samples GROUP BY sample_key HAVING c > 1 LIMIT 5").fetchall()
+        if len(duplicates) > 0:
+            self.duplicates = duplicates
+
         if self.db is not None:
             self.db.commit()
             self.db.close()

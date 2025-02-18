@@ -211,7 +211,7 @@ def command(
         def progress_fn(els, length=None):
             return els
 
-    found_types = BaseWebdatasetFactory.prepare_dataset(
+    found_types, duplicates = BaseWebdatasetFactory.prepare_dataset(
         path,
         all_tars,
         split_parts_ratio=split_parts_ratio,
@@ -221,6 +221,15 @@ def command(
         shuffle_seed=42 if shuffle_tars else None,
         workers=num_workers,
     )
+
+    if duplicates:
+        print(f"Examples of duplicates found: {duplicates}")
+        print()
+        if not click.confirm(
+                "The dataset has duplicate keys. Best practice is to use unique keys. If you continue, you won't be able to use this dataset for joining later on. Do you want to continue?"
+            ):
+                return
+
     found_types = list(found_types)
     if tar_index_only:
         return
