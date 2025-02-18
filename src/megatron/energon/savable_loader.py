@@ -998,6 +998,17 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
             if self.worker_config.global_rank() == global_dst_rank:
                 output = [None] * self.worker_config.world_size
             else:
+                # Check if the global_dst_rank is in the same group at all
+                if self.worker_config.data_parallel_group is not None:
+                    try:
+                        _ = torch.distributed.get_group_rank(
+                            self.worker_config.data_parallel_group, global_dst_rank
+                        )
+                    except RuntimeError:
+                        raise ValueError(
+                            f"global_dst_rank {global_dst_rank} is not in the group of the current rank's worker config"
+                        )
+
                 output = None
 
             torch.distributed.gather_object(
@@ -1024,28 +1035,74 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
         return self.restore_state_global(state)
 
     def restore_state_global(
-        self, state: Optional[Sequence[Optional[SavableDataLoaderState]]]
+        self,
+        state: Optional[Sequence[Optional[SavableDataLoaderState]]],
+        *,
+        src_rank: Optional[int] = None,
     ) -> None:
         """
         Restores the saved state from `save_state_global` (in torch distributed setup).
         The global state needs be loaded on every rank that has a data loader instance.
-        Setting a global_src_rank is not supported anymore.
+
+        Optionally, one can specify a src_rank and only provide the state once.
+        In case of multiple data parallel groups, you must provide the state once
+        in each data parallel group. In this case the `src_rank` is the rank within the
+        data parallel group.
 
         Args:
             state: The state to restore, as saved by `save_state_global`.
+            src_rank: The rank from which the state is broadcasted (within the data parallel group, if using DP groups).
         """
+
         assert self._persistent_iterator is None, "Cannot restore state while workers are running"
 
         # Only restore multi-rank if state is actually a list and we are in a distributed setup.
         # Otherwise treat as single rank state.
-        assert isinstance(state, list), "State must be a list in distributed setup"
-        assert (
-            len(state) == self.worker_config.world_size
-        ), "State must be a list of size world_size"
+        if src_rank is None or self.worker_config.world_size == 1:
+            assert isinstance(state, list), "State must be a list in distributed setup"
+            assert (
+                len(state) == self.worker_config.world_size
+            ), "State must be a list of size world_size"
 
-        # All ranks have the state
-        # Select the state of the current rank
-        rank_state = state[self.worker_config.rank]
+            # All ranks have the state
+            # Select the state of the current rank
+            rank_state = state[self.worker_config.rank]
+        else:
+
+            if self.worker_config.data_parallel_group is not None:
+                # Only the src_rank has the state within this dp group
+                try:
+                    global_src_rank = torch.distributed.get_global_rank(
+                        self.worker_config.data_parallel_group, src_rank
+                    )
+                except RuntimeError:
+                    raise ValueError(
+                        f"src_rank {src_rank} is not in the group of the current rank's worker config"
+                    )
+            else:
+                # If no DP group is given, we assume the global rank is
+                # the same as the data parallel rank
+                global_src_rank = src_rank
+
+            if self.worker_config.rank != src_rank:
+                # Send the state to all other ranks
+                assert state is None
+                # Must still be a list of Nones
+                state = [None] * self.worker_config.world_size
+            else:
+                assert isinstance(state, list), "State must be a list in distributed setup"
+                assert (
+                    len(state) == self.worker_config.world_size
+                ), "State must be a list of size world_size"
+
+            local_object = [None]
+            torch.distributed.scatter_object_list(
+                local_object,
+                state,
+                src=global_src_rank,
+                group=self.worker_config.data_parallel_group,
+            )
+            rank_state = local_object[0]
 
         self.restore_state_rank(rank_state)
 

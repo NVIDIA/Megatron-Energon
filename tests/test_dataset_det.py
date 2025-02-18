@@ -313,12 +313,12 @@ class TestDataset(unittest.TestCase):
         )
 
         # print("save state")
-        state_0 = loader.save_state_global(dst_rank=0)
+        state_0 = loader.save_state_global(global_dst_rank=0)
         # print("save state done")
         order_1 = [data.text[0] for idx, data in zip(range(count1), loader)]
         assert len(order_1) == count1
         # print("save state")
-        state_1 = loader.save_state_global(dst_rank=0)
+        state_1 = loader.save_state_global(global_dst_rank=0)
         # print("save state done")
         order_2 = [data.text[0] for idx, data in zip(range(count2), loader)]
         assert len(order_2) == count2
@@ -405,13 +405,13 @@ class TestDataset(unittest.TestCase):
                 )
             )
 
-            state_0 = loader.save_state_global(dst_rank=0)
+            state_0 = loader.save_state_global(global_dst_rank=0)
             order_1 = [data.text[0] for idx, data in zip(range(count1), loader)]
             assert len(order_1) == count1
 
             # print(f"Rank {rank}: order_1", order_1)
 
-            state_1 = loader.save_state_global(dst_rank=0)
+            state_1 = loader.save_state_global(global_dst_rank=0)
             order_2 = [data.text[0] for idx, data in zip(range(count2), loader)]
             assert len(order_2) == count2
 

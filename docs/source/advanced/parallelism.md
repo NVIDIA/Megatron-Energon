@@ -5,7 +5,7 @@ SPDX-License-Identifier: BSD-3-Clause -->
 
 Neural network parallelism can be categorized into several types:
 
-1. **Data Parallelism** (DP): This involves splitting the data across multiple processors and performing the same operation on each subset of the data. It is commonly used when the model is too large to fit into a single processor's memory.
+1. **Data Parallelism** (DP): This involves splitting the data across multiple processors and performing the same operation on each subset of the data. It is commonly used to increase the global batch size.
 
 2. **Model Parallelism**: In this approach, different parts of the model are distributed across multiple processors. This is useful when the model itself is too large to fit into the memory of a single processor.
 
@@ -15,11 +15,11 @@ Neural network parallelism can be categorized into several types:
 
 These parallelisms have different consequences for the dataloader:
 
-- **Data Parallelism** (DP): The dataloader needs to ensure that each processor gets a different subset of the data. This is basically supported by Energon.
+- **Data Parallelism** (DP): The dataloader needs to ensure that each processor gets a different subset of the data. This is supported by Energon. The data parallel groups should be specified in the worker config.
 
-- **Model/Pipeline Parallelism** (PP): The dataloader's role remains relatively unchanged, but care must be taken to ensure that the data is accessible to all parts of the model distributed across different processors. Data is typically loaded on the first Model Parallel rank, and propagates through the other Model Parallel Ranks.
+- **Pipeline Parallelism** (PP): Data is typically only loaded on the first Pipeline Parallel rank, and propagates through the other ranks within the pipeline parallel group. This means, you only instantiate an enegon dataset and loader on the first ranks of those groups.
 
-- **Tensor Parallelism** (TP): The dataloader must handle the distribution of tensor data across multiple devices. This can involve splitting tensors and ensuring that each device receives the correct portion of the data. Typically, all Tensor Parallel ranks of the same Data Parallel Group should receive the same input data. Typically, this can be ensured by either instantiating the dataloader exactly the same on the same Data Parallel ranks, or e.g. by loading the data only once and distributing it using torch distributed.
+- **Tensor Parallelism** (TP): The dataloader will load the same input data on multiple devices. Typically, this can be ensured by either instantiating the dataloader exactly the same on the same data parallel ranks in different data parallel groups, or e.g. by loading the data only once and distributing it using torch distributed.
 
 
 ## Example
@@ -34,7 +34,14 @@ Example with the following ranks and worker configuration (Data Parallel = 2, Pi
 * `Global Rank 6`: `DP Rank = X` (No DP group), `PP Rank = 1`, `TP Rank = 0`
 * `Global Rank 7`: `DP Rank = X` (No DP group), `PP Rank = 1`, `TP Rank = 1`
 
-Saving should only happen on global rank 0 and 4. When restoring, global ranks 0, 1, 4, 5 need to receive a state.
+When saving the state of the data loader, we only need to store the states
+of global ranks 0 and 4, i.e. the fist DP group "A".
+Ranks 1 and 5 will have the same state as they are duplicates.
+
+When restoring the state, global ranks 0, 1, 4, 5 need to receive a state.
+
+There are different ways to achieve this. The following example illustrates how the state
+can be saved and restored in a distributed setting.
 
 
 ```py
@@ -63,6 +70,7 @@ else:
 
 if data_parallel_rank is not None:
     assert pipeline_parallel_rank == 0, "Only Pipeline Parallel ranks 0 load data"
+    
     # Set the worker config correspondingly
     worker_config = WorkerConfig(
         rank=data_parallel_rank,
@@ -94,7 +102,7 @@ if data_parallel_rank is not None:
         torch.save(state, f"dataloader_rank{data_parallel_rank}.pt")
 
         # Alternatively, save once for the whole dp group:
-        # state = loader.save_state_global(dst_dp_rank=0)
+        # state = loader.save_state_global(global_dst_rank=0)
         # if state is not None:
         #     torch.save(state, "dataloader.pt")
 
@@ -117,15 +125,16 @@ if data_parallel_rank is not None:
     # Restore the state
     loader.restore_state_rank(state)
 
-    # Alternatively load the global checkpoint from disk on every dp rank:
+    # Alternatively, when using a global checkpoint,
+    # load the checkpoint from disk on every dp rank:
     # state = torch.load("dataloader.pt")
-    # loader.restore_state_global(state, src_dp_rank=None)
+    # loader.restore_state_global(state)
 
     # Or load only once from disk for each dp group:
     # if data_parallel_rank == 0:
     #     state = torch.load("dataloader.pt")
     # else:
     #     state = None
-    # loader.restore_state_global(state, src_dp_rank=0)
+    # loader.restore_state_global(state, src_rank=0)
 
 ```
