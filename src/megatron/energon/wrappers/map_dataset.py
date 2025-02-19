@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import inspect
-from dataclasses import dataclass
 from typing import (
     Any,
     Callable,
@@ -17,6 +16,7 @@ from typing import (
     Union,
 )
 
+from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.errors import SYSTEM_EXCEPTIONS, FatalSampleError
 from megatron.energon.flavors.base_dataset import SavableDataset, add_sample_restore_key
 from megatron.energon.worker import WorkerConfig
@@ -34,23 +34,23 @@ T_sample = TypeVar("T_sample")
 T_sample_out = TypeVar("T_sample_out")
 
 
-@dataclass
+@dataclass_slots
 class MapState(BaseSingleWrapperState):
     sample_index: int
 
 
-@dataclass
+@dataclass_slots
 class MapMergedState(BaseSingleWrapperMergedState):
     sample_indexes: List[int]
 
 
-@dataclass
+@dataclass_slots
 class MapGeneratorState(MapState):
     generator_sample_key: Any
     generator_offset: int
 
 
-@dataclass
+@dataclass_slots
 class MapGeneratorMergedState(MapMergedState):
     generator_sample_keys: List[Any]
     generator_offsets: List[int]

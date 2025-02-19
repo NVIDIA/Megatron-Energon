@@ -24,6 +24,7 @@ from megatron.energon import (
     get_train_dataset,
 )
 from megatron.energon.dataset_config import get_dataset_from_config
+from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 from megatron.energon.loader import get_savable_loader
 from megatron.energon.task_encoder.base import stateless
@@ -313,12 +314,12 @@ class TestDataset(unittest.TestCase):
         )
 
         # print("save state")
-        state_0 = loader.save_state_global(dst_rank=0)
+        state_0 = loader.save_state_global(global_dst_rank=0)
         # print("save state done")
         order_1 = [data.text[0] for idx, data in zip(range(count1), loader)]
         assert len(order_1) == count1
         # print("save state")
-        state_1 = loader.save_state_global(dst_rank=0)
+        state_1 = loader.save_state_global(global_dst_rank=0)
         # print("save state done")
         order_2 = [data.text[0] for idx, data in zip(range(count2), loader)]
         assert len(order_2) == count2
@@ -405,13 +406,13 @@ class TestDataset(unittest.TestCase):
                 )
             )
 
-            state_0 = loader.save_state_global(dst_rank=0)
+            state_0 = loader.save_state_global(global_dst_rank=0)
             order_1 = [data.text[0] for idx, data in zip(range(count1), loader)]
             assert len(order_1) == count1
 
             # print(f"Rank {rank}: order_1", order_1)
 
-            state_1 = loader.save_state_global(dst_rank=0)
+            state_1 = loader.save_state_global(global_dst_rank=0)
             order_2 = [data.text[0] for idx, data in zip(range(count2), loader)]
             assert len(order_2) == count2
 
@@ -478,6 +479,8 @@ class TestDataset(unittest.TestCase):
 
         def init_process(rank, world_size, shared_dict, fn, backend="gloo"):
             """Initializes the distributed environment."""
+            EPath.prepare_forked_process()
+
             dist.init_process_group(
                 backend=backend,
                 init_method="tcp://127.0.0.1:12355",

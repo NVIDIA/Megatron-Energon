@@ -6,3 +6,4 @@ import re
 split_name_re = re.compile(r"^((?:.*/|)[^.]+)[.]([^/]*)$")
 skip_meta_re = re.compile(r"__[^/]*__($|/)")
 MAIN_FOLDER_NAME = ".nv-meta"
+JOIN_INDEX_FILENAME = "join_index.bin"

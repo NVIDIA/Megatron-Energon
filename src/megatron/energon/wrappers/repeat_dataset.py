@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import math
-from dataclasses import dataclass
 from typing import Any, Dict, Generic, Iterator, List, Optional, TypeVar, Union
 
+from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.flavors.base_dataset import SavableDataset
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import (
@@ -16,13 +16,13 @@ from megatron.energon.wrappers.base import (
 T_sample = TypeVar("T_sample")
 
 
-@dataclass
+@dataclass_slots
 class RepeatState(BaseSingleWrapperState):
     repetition: int
     index: int
 
 
-@dataclass
+@dataclass_slots
 class RepeatMergedState(BaseSingleWrapperMergedState):
     repetition: List[int]
     index: List[int]
