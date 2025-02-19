@@ -7,6 +7,7 @@ from megatron.energon.errors import warn_deprecated
 from megatron.energon.flavors.base_dataset import SavableDataset
 from megatron.energon.savable_loader import BasicDataLoader, SavableDataLoader
 from megatron.energon.worker import WorkerConfig
+from megatron.energon.wrappers.gc_dataset import GC_DEFAULT_EVERY_N_ITER
 
 T = TypeVar("T")
 
@@ -18,6 +19,7 @@ def get_savable_loader(
     checkpoint_every_sec: float = 60,
     checkpoint_every_min_n_samples: Optional[int] = None,
     n_checkpoints: int = 2,
+    gc_collect_every_n_steps: int = GC_DEFAULT_EVERY_N_ITER,
 ) -> SavableDataLoader[T]:
     """
 
@@ -54,6 +56,7 @@ def get_savable_loader(
         checkpoint_every_sec=checkpoint_every_sec,
         checkpoint_every_min_n_samples=checkpoint_every_min_n_samples,
         n_checkpoints=n_checkpoints,
+        gc_collect_every_n_steps=gc_collect_every_n_steps,
     )
 
 

@@ -283,7 +283,9 @@ class WebdatasetSampleLoaderDataset(SavableDataset[Tuple[Optional[FilteredSample
         if self.shuffle_over_epochs is None:
             # No shuffling
             res_list = list(shards)
-            shards_offset = 0
+
+            if shards_offset is None:
+                shards_offset = 0
         else:
             # Restore state or start new (and save)
             if shards_offset is None:

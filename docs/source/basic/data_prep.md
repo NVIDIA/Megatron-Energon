@@ -41,7 +41,7 @@ In the example you can see two shards (i.e. tar files) with multiple samples. Ea
 So `sample_0000.jpg`, `sample_0000.txt` and `sample_0000.detail.json` are three parts that belong to the first sample.
 
 Note that each sample may have a different number of parts, for example some samples may have more images than others.
-In this case, they should still have the same basename, for example `sample_0000.img1.jpg` and `sample_0000.img2.jpg`.
+In this case, they should still have the same basename, for example `sample_0000.img1.jpg` and `sample_0000.img2.jpg`. For an advanced example for interleaved data, check out [this section](interleaved-sample-loader).
 
 The order of samples in the tar file is important. Samples with the same base name (~before the first dot of the filename) must follow each other.
 The base name is used to group the samples, i.e. in the example `sample_0000` is the first group name, with the part types `jpg`, `txt`, `detail.json`.

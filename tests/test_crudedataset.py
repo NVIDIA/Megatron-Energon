@@ -74,6 +74,18 @@ class CookingTaskEncoder(DefaultTaskEncoder[TextSample, TextSample, TextBatch, T
         return samples[0]
 
 
+class GenericCookingTaskEncoder(DefaultTaskEncoder[TextSample, TextSample, TextBatch, TextBatch]):
+    """A simple task encoder for captioning."""
+
+    cookers = [Cooker(cook_text)]
+
+    def batch(self, samples: List[TextSample]) -> TextBatch:
+        return TextBatch(
+            __keys__=[sample.__key__ for sample in samples],
+            txts=[sample.text for sample in samples],
+        )
+
+
 class TestDataset(unittest.TestCase):
     # Set up the test fixture
     def setUp(self):
@@ -278,6 +290,33 @@ class TestDataset(unittest.TestCase):
         print(samples_restored)
 
         assert all([a == b for a, b in zip(samples_after, samples_restored)])
+
+    def test_nomds(self):
+        torch.manual_seed(42)
+        worker_config = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=2,
+        )
+
+        loader = get_savable_loader(
+            get_train_dataset(
+                self.dataset_path / "ds1",
+                batch_size=2,
+                worker_config=worker_config,
+                task_encoder=GenericCookingTaskEncoder(),
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+            ),
+            worker_config=worker_config,
+            checkpoint_every_sec=0,
+            checkpoint_every_min_n_samples=1,
+            n_checkpoints=4,
+        )
+        samples = [s.__keys__ for idx, s in zip(range(100), loader)]
+
+        print(samples)
+        assert len(samples) == 100
 
 
 if __name__ == "__main__":

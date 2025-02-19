@@ -65,7 +65,7 @@ class BaseWebdatasetFactory(
         split_part: str,
         training: bool,
         worker_config: WorkerConfig,
-        shuffle_over_epochs: int = 1,
+        shuffle_over_epochs: Optional[int] = 1,
         parallel_shard_iters: Optional[int] = None,
         max_samples_per_sequence: Optional[int] = None,
         info_config: str = ".info.yaml",
@@ -136,12 +136,12 @@ class BaseWebdatasetFactory(
                 f"{subshard[0].name}[{subshard[0].offset}, {subshard[0].offset+subshard[0].count})"
                 for subshard in inner_shards[:3]
             )
-            if len(self.shards) > 6:
-                shards_text += f", ...<{len(self.shards) - 6}>, " + ", ".join(
+            if len(inner_shards) > 6:
+                shards_text += f", ...<{len(inner_shards) - 6}>, " + ", ".join(
                     f"{subshards[0].name}[{subshards[0].offset}, {subshards[0].offset+subshards[0].count})"
                     for subshards in inner_shards[-3:]
                 )
-            elif len(self.shards) > 3:
+            elif len(inner_shards) > 3:
                 shards_text += ", " + ", ".join(
                     f"{subshards[0].name}[{subshards[0].offset}, {subshards[0].offset+subshards[0].count})"
                     for subshards in inner_shards[3:]

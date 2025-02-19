@@ -8,11 +8,56 @@ from pathlib import PurePosixPath
 from typing import Any, Dict, Generator, List, Optional, Tuple, Union
 
 import fsspec
+import multistorageclient as msc
 import s3fs
 from fsspec import AbstractFileSystem
 from fsspec.implementations.local import LocalFileSystem
 
 from megatron.energon.epathlib.rclone_config import ConfigEntry, read_rclone_config
+
+
+class MSCFileSystem:
+    """
+    A FileSystem wrapper around multistorageclient.StorageClient so that MSC
+    can be used interchangeably with other fsspec filesystems (e.g. LocalFileSystem, S3FileSystem).
+    """
+
+    def __init__(self, path: str, **kwargs):
+        super().__init__(**kwargs)
+        self.storage_client, _ = msc.resolve_storage_client(path)
+
+    def open(self, path: str, mode: str = "rb", **kwargs):
+        return self.storage_client.open(path, mode)
+
+    def isfile(self, path: str) -> bool:
+        return self.storage_client.is_file(path)
+
+    def isdir(self, path: str) -> bool:
+        return self.storage_client.info(path).type == "directory"
+
+    def glob(self, path: str, **kwargs) -> List[str]:
+        return list(self.storage_client.glob(path))
+
+    def size(self, path: str) -> int:
+        return self.storage_client.info(path).content_length
+
+    def rm(self, path: str, recursive: bool = False, maxdepth: Optional[int] = None):
+        self.storage_client.delete(path)
+
+    def mv(self, path1: str, path2: str, **kwargs):
+        self.storage_client.copy(path1, path2)
+        self.storage_client.delete(path1)
+
+    def mkdir(self, path: str, create_parents: bool = True, **kwargs):
+        pass
+
+    def makedirs(self, path: str, exist_ok: bool = False):
+        pass
+
+    def __eq__(self, other):
+        if not isinstance(other, MSCFileSystem):
+            return False
+        return self.storage_client.profile == other.storage_client.profile
 
 
 class EPath:
@@ -23,10 +68,17 @@ class EPath:
 
     You will need to have your rclone configuration set up to access the remote file system.
     Currently only S3-based rclone remotes are supported.
+
+    Alternatively, you can use Multi-Storage Client (MSC) to access the object stores in S3/GCP/OCI/Azure.
+
+        EPath("msc://profilename/my_datasets/webdataset-000.tar")
+
+    You will need to have your MSC configuration (~/.msc_config.yaml) set up to access the object stores.
     """
 
     internal_path: PurePosixPath  # The path without the protocol. Can also be in S3 for example
-    fs: AbstractFileSystem
+    fs: Union[AbstractFileSystem, MSCFileSystem]
+    storage_client: msc.StorageClient
     protocol: str
     num_fs_path_parts: (
         int  # Number of parts in the internal_path that are part of the file system specification
@@ -71,6 +123,14 @@ class EPath:
                     remote_name, config_override=config_override
                 )
                 self.protocol = "rclone"
+                self.num_fs_path_parts = 2  # Root and remote name
+            elif protocol == "msc":
+                if not path.startswith("/"):
+                    path = "/" + path
+
+                self.internal_path = self._resolve(path)
+                self.fs = MSCFileSystem(initial_path)
+                self.protocol = "msc"
                 self.num_fs_path_parts = 2  # Root and remote name
             else:
                 raise ValueError(f"Unknown protocol: {protocol}")
@@ -166,7 +226,6 @@ class EPath:
 
         This method should be called before any operation that potentially uses the S3FS instance.
         """
-
         if isinstance(self.fs, s3fs.S3FileSystem) and self.fs._pid != os.getpid():
             assert self.s3_args is not None
             self.fs = s3fs.S3FileSystem(**self.s3_args)
@@ -203,7 +262,7 @@ class EPath:
     @property
     def url(self):
         assert self.is_absolute(), "Can only call url on absolute EPath"
-        if self.protocol == "rclone":
+        if self.protocol in ("rclone", "msc"):
             int_path_str = str(self.internal_path)
             if int_path_str.startswith("/"):
                 # Strip leading / for display purposes

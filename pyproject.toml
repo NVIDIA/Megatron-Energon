@@ -31,6 +31,7 @@ dependencies = [
   "tqdm",
   "webdataset",
   "s3fs",
+  "multi-storage-client>=0.13.0",
 ]
 
 [project.optional-dependencies]

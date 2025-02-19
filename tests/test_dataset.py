@@ -73,6 +73,11 @@ class EncodedCaptioningSample:
 
 
 @dataclass
+class CaptioningEncodedBatch(CaptioningSample):
+    pass
+
+
+@dataclass
 class CaptioningBatch(Batch):
     __key__: List[str]
     __restore_key__: Tuple[Union[str, int, tuple], ...]
@@ -1484,6 +1489,10 @@ class TestDataset(unittest.TestCase):
                 else:
                     assert False
 
+            @stateless
+            def encode_batch(self, batch: CaptioningSample) -> CaptioningEncodedBatch:
+                return CaptioningEncodedBatch(**dataclasses.asdict(batch))
+
         worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0)
         loader = get_savable_loader(
             get_train_dataset(
@@ -1500,6 +1509,8 @@ class TestDataset(unittest.TestCase):
         )
         batches = list(zip(range(40), loader))
         print([batch.__key__ for idx, batch in batches])
+
+        assert all(isinstance(batch, CaptioningEncodedBatch) for idx, batch in batches)
         assert all(all(key == batch.caption[0] for key in batch.caption) for idx, batch in batches)
 
         worker_config_r0 = WorkerConfig(rank=0, world_size=2, num_workers=2)
@@ -1522,6 +1533,7 @@ class TestDataset(unittest.TestCase):
 
         print([batch.__key__ for idx, batch in batches])
 
+        assert all(isinstance(batch, CaptioningEncodedBatch) for idx, batch in batches)
         assert all(all(key == batch.caption[0] for key in batch.caption) for idx, batch in batches)
 
         state = loader_r0.save_state_rank()
