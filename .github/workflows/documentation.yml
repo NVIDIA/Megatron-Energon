@@ -36,7 +36,11 @@ jobs:
       - name: Sphinx build
         run: |
           just docs
-
+      
+      - name: Move built docs
+        run: |
+          mv docs/build _site
+  
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
 
