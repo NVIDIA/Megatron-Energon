@@ -225,16 +225,19 @@ def command(
     if duplicates:
         print(f"Examples of duplicates found: {duplicates}")
         print()
-        if not click.confirm(
+        print(
             "The dataset has duplicate keys. Best practice is to use unique keys. "
-            "If you continue, you won't be able to use this dataset for joining "
-            "later on. Do you want to continue?"
-        ):
-            return
+            "You won't be able to use this dataset for joining "
+            "later on."
+        )
 
     found_types = list(found_types)
     if tar_index_only:
         return
+
+    if duplicates:
+        if not click.confirm("Do you want to continue?"):
+            return
 
     # Print json of first two samples
     for sample_idx, data in enumerate(
