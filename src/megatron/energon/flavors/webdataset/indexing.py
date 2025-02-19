@@ -81,9 +81,13 @@ class SqliteIndexWriter:
         Closes the DB connection. If finalize=True, the temporary database is
         renamed to the final name, overwriting if necessary.
         """
+        assert self.db is not None, "Database is closed"
+
         # Check if sample_key are all unique
         # self.db.execute("CREATE TEMP TABLE temp AS SELECT sample_key, COUNT(*) AS c FROM samples GROUP BY sample_key HAVING c > 1")
-        duplicates = self.db.execute("SELECT sample_key, COUNT(*) AS c FROM samples GROUP BY sample_key HAVING c > 1 LIMIT 5").fetchall()
+        duplicates = self.db.execute(
+            "SELECT sample_key, COUNT(*) AS c FROM samples GROUP BY sample_key HAVING c > 1 LIMIT 5"
+        ).fetchall()
         if len(duplicates) > 0:
             self.duplicates = duplicates
 

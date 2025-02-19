@@ -143,9 +143,11 @@ class JoinedWebdatasetFactory(
 
         # Get join index, get size, distribute samples
         # Get samples for each worker on current rank
-        assert (
-            self.join_index.is_file()
-        ), f"Join index {self.join_index} does not exist, did you prepare the metadataset?"
+        assert self.join_index.is_file(), (
+            f"Join index {self.join_index} does not exist, did you prepare the metadataset? "
+            "If you already prepared the metadataset, the join index might be outdated due to "
+            "modifications to the inner datasets. In this case, you need to re-prepare the metadataset."
+        )
 
         with JoinIndexReader(self.join_index) as jir:
             total_samples = len(jir)

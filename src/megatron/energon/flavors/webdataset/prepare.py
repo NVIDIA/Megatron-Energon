@@ -94,6 +94,7 @@ class SqliteIndexWriterAggregator(BaseAggregator):
         self.writer.close()
 
     def get_final_result_data(self) -> Any:
+        assert self.writer is not None, "Writer is not initialized."
         return self.shards, self.found_parts, self.had_update, self.writer.duplicates
 
 
@@ -247,7 +248,7 @@ class WebdatasetPreparator:
         progress_fn: Callable[[Iterator[T], int], Iterator[T]] = (lambda x, l: x),
         workers: int = 32,
         tar_index_only: bool = False,
-    ) -> Set[str]:
+    ) -> Tuple[Set[str], List[Tuple[str, int]]]:
         """
         Preprocess the shards and write the split config. Preprocessing is done in parallel.
         Counts the number of samples in each shard.
@@ -313,7 +314,7 @@ class WebdatasetPreparator:
                 f.write(str(uuid.uuid4()))
 
         if tar_index_only:
-            return found_parts
+            return found_parts, duplicates
 
         assert len(shards) == len(
             shard_to_idx

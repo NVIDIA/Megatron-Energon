@@ -374,7 +374,9 @@ class JoinDatasetLoader(DatasetLoaderInterface):
                 uuid = uuid_path.read_text()
             except FileNotFoundError:
                 raise FileNotFoundError(
-                    f"Missing uuid file in {uuid_path}. Did you prepare the dataset?"
+                    f"Missing uuid file in {uuid_path}. You need to prepare the dataset "
+                    "(with a recent version of energon). If you have already prepared the "
+                    "dataset, it should be sufficient to run prepare with --tar-index-only."
                 )
             db_path = EPath(dataset.dataset.path) / MAIN_FOLDER_NAME / "index.sqlite"
 
