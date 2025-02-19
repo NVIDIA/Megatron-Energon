@@ -24,6 +24,7 @@ from megatron.energon import (
     get_train_dataset,
 )
 from megatron.energon.dataset_config import get_dataset_from_config
+from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 from megatron.energon.loader import get_savable_loader
 from megatron.energon.task_encoder.base import stateless
@@ -478,6 +479,8 @@ class TestDataset(unittest.TestCase):
 
         def init_process(rank, world_size, shared_dict, fn, backend="gloo"):
             """Initializes the distributed environment."""
+            EPath.prepare_forked_process()
+
             dist.init_process_group(
                 backend=backend,
                 init_method="tcp://127.0.0.1:12355",
