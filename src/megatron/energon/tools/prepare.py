@@ -226,9 +226,11 @@ def command(
         print(f"Examples of duplicates found: {duplicates}")
         print()
         if not click.confirm(
-                "The dataset has duplicate keys. Best practice is to use unique keys. If you continue, you won't be able to use this dataset for joining later on. Do you want to continue?"
-            ):
-                return
+            "The dataset has duplicate keys. Best practice is to use unique keys. "
+            "If you continue, you won't be able to use this dataset for joining "
+            "later on. Do you want to continue?"
+        ):
+            return
 
     found_types = list(found_types)
     if tar_index_only:
