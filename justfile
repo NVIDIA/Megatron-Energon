@@ -18,3 +18,6 @@ test:
 docs:
 	uv run sphinx-build -b html docs/source docs/build
 
+build:
+    rm -rf dist
+    uv build

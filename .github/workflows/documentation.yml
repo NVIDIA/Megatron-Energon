@@ -20,19 +20,23 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout code
         uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.10' 
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+  
+      - name: Install just
+        uses: ./.github/actions/setupjust
+  
       - name: Install dependencies
         run: |
-          pip install -U sphinx-rtd-theme sphinx sphinxcontrib-napoleon myst-parser sphinx-click
+          just dev-sync
+
       - name: Sphinx build
         run: |
-          sphinx-build -b html docs/source _site
+          just docs
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
 
