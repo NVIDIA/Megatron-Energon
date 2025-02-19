@@ -22,7 +22,8 @@ class MSCFileSystem:
     can be used interchangeably with other fsspec filesystems (e.g. LocalFileSystem, S3FileSystem).
     """
 
-    def __init__(self, path: str):
+    def __init__(self, path: str, **kwargs):
+        super().__init__(**kwargs)
         self.storage_client, _ = msc.resolve_storage_client(path)
 
     def open(self, path: str, mode: str = "rb", **kwargs):
@@ -77,6 +78,7 @@ class EPath:
 
     internal_path: PurePosixPath  # The path without the protocol. Can also be in S3 for example
     fs: Union[AbstractFileSystem, MSCFileSystem]
+    storage_client: msc.StorageClient
     protocol: str
     num_fs_path_parts: (
         int  # Number of parts in the internal_path that are part of the file system specification
