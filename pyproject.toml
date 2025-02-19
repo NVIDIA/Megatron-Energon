@@ -65,6 +65,7 @@ source = "vcs"
 
 [tool.ruff.lint]
 extend-select = ["I"]
+ignore = ["E741", "E731"]
 
 [tool.ruff]
 line-length = 100
