@@ -189,9 +189,9 @@ class JsonParser:
         else:
             # Do not assert the other cases, we fallback to the passed cls
             inst = self.safe_call_function(kwargs, cls, allow_imports=True)
-            assert not isinstance(cls, type) or _check_instance_type(
-                type(inst), inst_type
-            ), f"Expected {inst_type}, got {cls}"
+            assert not isinstance(cls, type) or _check_instance_type(type(inst), inst_type), (
+                f"Expected {inst_type}, got {cls}"
+            )
         return inst
 
     def raw_to_typed(  # noqa: C901
@@ -217,7 +217,6 @@ class JsonParser:
         Args:
             raw_data: The raw (e.g. json) data to be made as `inst_type`
             inst_type: The type to return
-            strict: If true, don't allow additional attributes
             allow_imports: If true, parse '__module__' and '__class__/__function__' attributes to allow explicit
                 instantiation of types
             _path: (internal for recursive call) The path to the object being converted from the root
@@ -239,7 +238,7 @@ class JsonParser:
         elif inst_type in (str, int, float, bool, None, type(None)):
             # Literal types or missing data
             if not isinstance(raw_data, inst_type) and not (
-                isinstance(raw_data, int) and inst_type == float
+                isinstance(raw_data, int) and inst_type is float
             ):
                 raise JsonValueError(
                     f"Type does not match, expected {type_name} at {_path}, got {raw_data!r}",
@@ -340,7 +339,7 @@ class JsonParser:
                 )
                 for idx, (field_name, field_type) in enumerate(inst_type.__annotations__.items())
             }
-            if strict and not set(raw_data).issubset(inst_type.__annotations__):
+            if self.strict and not set(raw_data).issubset(inst_type.__annotations__):
                 raise JsonValueError(
                     f"Additional attributes for {type_name} at {_path}, got {raw_data!r}",
                     inst_type,
@@ -519,7 +518,7 @@ class JsonParser:
                     _stage,
                 )
             return raw_data
-        elif inst_type == EPath:
+        elif inst_type is EPath:
             if isinstance(raw_data, str):
                 return EPath(raw_data)
             elif not isinstance(raw_data, EPath):
@@ -706,12 +705,12 @@ class JsonParser:
             # Literal types
             if inst_type in (None, type(None)) and overrides == "None":
                 overrides = None
-            elif inst_type == bool and overrides in ("True", "true", "1", "False", "false", "0"):
+            elif inst_type is bool and overrides in ("True", "true", "1", "False", "false", "0"):
                 overrides = overrides in ("True", "true", "1")
             elif inst_type in (int, float) and isinstance(overrides, str):
                 overrides = inst_type(overrides)
             if not isinstance(overrides, inst_type) and not (
-                isinstance(overrides, int) and inst_type == float
+                isinstance(overrides, int) and inst_type is float
             ):
                 raise JsonValueError(
                     f"Type does not match, expected {type_name} at {_path}, got {overrides!r}",
@@ -923,11 +922,11 @@ class JsonParser:
         ):
             # List[inner_type] or Tuple[inner_type, Ellipsis] or
             # Tuple[inner_type[0], inner_type[1], ...]
-            if inst_type == list:
+            if inst_type is list:
                 inner_type = Any
                 inner_types = []
                 cls = list
-            elif inst_type == tuple:
+            elif inst_type is tuple:
                 inner_type = Any
                 inner_types = []
                 cls = tuple
@@ -1004,9 +1003,9 @@ class JsonParser:
                 )
                 for idx in range(max(new_max_idx + 1, original_max_idx))
             )
-        elif typing.get_origin(inst_type) is dict or inst_type == dict:
+        elif typing.get_origin(inst_type) is dict or inst_type is dict:
             # Dict[str, value_type]
-            if inst_type == dict:
+            if inst_type is dict:
                 value_type = Any
             else:
                 key_type, value_type = typing.get_args(inst_type)

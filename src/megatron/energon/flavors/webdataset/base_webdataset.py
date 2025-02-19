@@ -4,7 +4,7 @@
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Generic, List, Optional, Sequence, Tuple, TypeVar
+from typing import Any, Callable, Dict, Generic, List, Optional, Sequence, TypeVar
 
 import numpy as np
 

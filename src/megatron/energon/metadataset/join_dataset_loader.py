@@ -8,7 +8,6 @@ from typing import (
     Dict,
     List,
     Literal,
-    Mapping,
     Optional,
     Sequence,
     Tuple,
