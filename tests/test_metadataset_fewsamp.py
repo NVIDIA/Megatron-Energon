@@ -124,7 +124,7 @@ class TestDataset(unittest.TestCase):
 
         BaseWebdatasetFactory.prepare_dataset(
             path,
-            [f"parts/data-{{0..{total_shards-1}}}.tar"],
+            [f"parts/data-{{0..{total_shards - 1}}}.tar"],
             split_parts_ratio=[("train", 1.0)],
             shuffle_seed=None,
         )
@@ -177,7 +177,7 @@ class TestDataset(unittest.TestCase):
             n_checkpoints=5,
         )
 
-        data1a = list(zip(train_loader, range(3)))  # Load 3 samples
+        data1a = list(zip(train_loader, range(3)))  # noqa: F841. Load 3 samples
 
         # Save state mid epoch
         state1 = train_loader.save_state_rank()

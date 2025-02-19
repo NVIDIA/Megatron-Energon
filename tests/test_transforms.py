@@ -15,7 +15,7 @@ from PIL import Image
 from torchvision import transforms as T
 from torchvision.transforms import InterpolationMode
 
-from megatron.energon.transforms import *
+from megatron.energon.transforms import CustomTransform, MergeTransform
 
 
 class TestTransforms(unittest.TestCase):
@@ -146,12 +146,12 @@ class TestTransforms(unittest.TestCase):
         source_size = (55, 33)
         img = TestTransforms.get_test_image(*source_size)
 
-        logging.info(f"Testing RandomHorizontalFlip 5 times")
+        logging.info("Testing RandomHorizontalFlip 5 times")
         for idx in range(5):
             randhflip = T.RandomHorizontalFlip(p=0.8)
             self._apply_and_compare(randhflip, img, seed=idx, msg="RandomHorizontalFlip")
 
-        logging.info(f"Testing RandomVerticalFlip 5 times")
+        logging.info("Testing RandomVerticalFlip 5 times")
         for idx in range(5):
             randvflip = T.RandomVerticalFlip(p=0.8)
             self._apply_and_compare(randvflip, img, seed=idx, msg="RandomVerticalFlip")
@@ -160,7 +160,7 @@ class TestTransforms(unittest.TestCase):
         source_size = (55, 33)
         img = TestTransforms.get_test_image_soft(*source_size)
 
-        logging.info(f"Testing RandomRotation without expand")
+        logging.info("Testing RandomRotation without expand")
         for idx in range(5):
             randrot = T.RandomRotation((-90, 269), interpolation=InterpolationMode.BILINEAR)
             self._apply_and_compare(
@@ -170,7 +170,7 @@ class TestTransforms(unittest.TestCase):
                 msg="RandomRotation without expand",
             )
 
-        logging.info(f"Testing RandomRotation with expand")
+        logging.info("Testing RandomRotation with expand")
         for idx in range(5):
             randrot = T.RandomRotation(
                 (-180, 269), interpolation=InterpolationMode.BILINEAR, expand=True
@@ -194,7 +194,7 @@ class TestTransforms(unittest.TestCase):
             (155, 8),  # One dimension same size
         ]
 
-        logging.info(f"Testing RandomCrop")
+        logging.info("Testing RandomCrop")
         for idx, size in enumerate(size_list):
             randcrop = T.RandomCrop(size)
             self._apply_and_compare(
@@ -212,7 +212,7 @@ class TestTransforms(unittest.TestCase):
         source_size = (128, 133)
         img = TestTransforms.get_test_image_soft(*source_size)
 
-        logging.info(f"Testing RandomPerspective")
+        logging.info("Testing RandomPerspective")
         for idx in range(5):
             randpersp = T.RandomPerspective(interpolation=InterpolationMode.BILINEAR)
             self._apply_and_compare(
@@ -239,7 +239,7 @@ class TestTransforms(unittest.TestCase):
             (200, 200),  # Large than image in both directions
         ]
 
-        logging.info(f"Testing CenterCrop")
+        logging.info("Testing CenterCrop")
 
         for source_size in source_size_list:
             img = TestTransforms.get_test_image(*source_size)

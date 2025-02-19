@@ -4,7 +4,6 @@
 import contextlib
 import struct
 import tarfile
-from dataclasses import dataclass
 from types import TracebackType
 from typing import BinaryIO, Dict, Generator, Optional, Tuple, Type, Union
 

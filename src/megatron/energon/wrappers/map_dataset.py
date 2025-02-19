@@ -167,7 +167,7 @@ class MapDataset(BaseSingleWrapperDataset[T_sample, T_sample_out], Generic[T_sam
                     )
             except SkipSample:
                 pass
-            except SYSTEM_EXCEPTIONS as e:
+            except SYSTEM_EXCEPTIONS:
                 raise FatalSampleError.from_sample(sample)
             except Exception as e:
                 self.error_handler(e, sample)
