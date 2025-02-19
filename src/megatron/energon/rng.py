@@ -3,7 +3,6 @@
 
 import hashlib
 import random
-from dataclasses import dataclass
 from typing import Any, List, Optional, TypeVar
 
 import numpy
@@ -11,13 +10,14 @@ import torch
 import torch.distributed
 import torch.utils.data
 
+from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.flavors.base_dataset import State
 from megatron.energon.worker import WorkerConfig
 
 T = TypeVar("T")
 
 
-@dataclass
+@dataclass_slots
 class WorkerRngState(State):
     """The state of a worker random generator."""
 
@@ -31,7 +31,7 @@ class WorkerRngState(State):
             return f"WorkerRngState(rng={inner!r})"
 
 
-@dataclass
+@dataclass_slots
 class WorkerRngMergedState(State):
     """The state of a worker random generator."""
 
@@ -117,7 +117,7 @@ class WorkerRng:
             self._restore_states = state.rng
 
 
-@dataclass
+@dataclass_slots
 class SystemRngState:
     """The state of the global random generators.
 

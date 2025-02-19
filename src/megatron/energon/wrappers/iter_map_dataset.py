@@ -1,7 +1,6 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from dataclasses import dataclass
 from typing import (
     Any,
     Callable,
@@ -18,6 +17,7 @@ from typing import (
 
 from torch.utils.data import IterableDataset
 
+from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.errors import SYSTEM_EXCEPTIONS, FatalSampleError
 from megatron.energon.flavors.base_dataset import SavableDataset, set_sample_restore_key
 from megatron.energon.worker import WorkerConfig
@@ -34,12 +34,12 @@ T_sample = TypeVar("T_sample")
 T_sample_out = TypeVar("T_sample_out")
 
 
-@dataclass
+@dataclass_slots
 class IterMapState(BaseSingleWrapperState):
     sample_index: int
 
 
-@dataclass
+@dataclass_slots
 class IterMapMergedState(BaseSingleWrapperMergedState):
     sample_indexes: List[int]
 

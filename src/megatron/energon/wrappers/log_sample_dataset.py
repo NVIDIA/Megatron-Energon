@@ -1,9 +1,9 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from dataclasses import dataclass
 from typing import Any, Callable, Dict, Generic, Iterator, List, Literal, Optional, TypeVar
 
+from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.flavors.base_dataset import SavableDataset
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import (
@@ -52,12 +52,12 @@ def default_get_keys(batch: Any) -> Optional[List[str]]:
     return None
 
 
-@dataclass
+@dataclass_slots
 class LogSampleState(BaseSingleWrapperState):
     step: int
 
 
-@dataclass
+@dataclass_slots
 class LogSampleMergedState(BaseSingleWrapperMergedState):
     step: List[int]
 

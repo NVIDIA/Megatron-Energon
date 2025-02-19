@@ -5,7 +5,6 @@ import json
 import time
 import traceback
 from concurrent.futures.process import ProcessPoolExecutor
-from dataclasses import dataclass
 from pathlib import Path
 from typing import (
     Container,
@@ -24,6 +23,8 @@ import click
 import numpy as np
 from PIL import Image
 from tqdm import tqdm
+
+from megatron.energon.dataclass_slots import dataclass_slots
 
 cpal = np.array(
     [
@@ -120,22 +121,30 @@ class YieldBatchLogLine(TypedDict):
 class SampleLoaderYieldLogLine(TypedDict):
     # Json example:
     # {
-    #   "t": "WebdatasetSampleLoaderDataset._shards_iter.yield",
+    #   "t": "WebdatasetSampleLoaderDataset._slices_iter.yield",
     #   "r": 1,
     #   "w": 1,
+    #   "index": 528800,
     #   "key": "parts/data-train-000051.tar/528866",
     #   "shard": "parts/data-train-000051.tar",
     #   "count": 633,
     #   "epoch": 0,
     #   "epoch_count": 633
     # }
-    t: Literal["WebdatasetSampleLoaderDataset._shards_iter.yield"]
+    t: Literal["WebdatasetSampleLoaderDataset._slices_iter.yield"]
     r: int
     w: int
+    #: The global index in the underlying dataset (concats of all shards)
+    index: int
+    #: The sample key from the shard, concatenated as f"{shard}/{key}"
     key: str
+    #: Name of the shard
     shard: str
+    #: Number of samples yielded from the sample loader over all epochs
     count: int
+    #: Number of repetitions of the dataset (=epochs). First epoch is 0.
     epoch: int
+    #: Number of samples yielded from the sample loader in the current epoch
     epoch_count: int
 
 
@@ -490,7 +499,7 @@ LOADER_LOG_LINE_TYPES_T = (
 )
 
 
-@dataclass
+@dataclass_slots
 class LoaderInfo:
     id: int
     modality: str
@@ -531,10 +540,8 @@ class LoaderLogIter:
     @staticmethod
     def _find_config_path(config: dict) -> str:
         assert isinstance(config, dict)
-        if "map_fn_config" in config and "path" in config["map_fn_config"]:
-            return config["map_fn_config"]["path"]
-        elif "map_fn_config" in config and "paths" in config["map_fn_config"]:
-            return config["map_fn_config"]["paths"][0]
+        if "map_fn_config" in config and "_path" in config["map_fn_config"]:
+            return config["map_fn_config"]["_path"]
         elif "dataset" in config:
             return LoaderLogIter._find_config_path(config["dataset"])
         elif "dataset_weights" in config:
@@ -606,7 +613,7 @@ def _iter_sl_log_line_keys(
 def _iter_sl_log_samples(path: Path) -> Generator[SampleLoaderYieldLogLine, None, None]:
     with path.open("r") as rf:
         for line in rf:
-            if '"t": "WebdatasetSampleLoaderDataset._shards_iter.yield"' in line:
+            if '"t": "WebdatasetSampleLoaderDataset._slices_iter.yield"' in line:
                 try:
                     yield json.loads(line.strip())
                 except json.JSONDecodeError:

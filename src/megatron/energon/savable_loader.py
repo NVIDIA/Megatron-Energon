@@ -8,9 +8,7 @@ import random
 import threading
 import time
 import traceback
-import warnings
 import weakref
-from dataclasses import dataclass
 from functools import partial
 from typing import (
     Any,
@@ -32,6 +30,7 @@ import torch.distributed
 import torch.multiprocessing
 from torch.utils.data import DataLoader, IterableDataset
 
+from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.errors import deprecated
 from megatron.energon.flavors.base_dataset import (
     MergedState,
@@ -64,12 +63,12 @@ def _init_worker(seed_per_worker: List[int], worker_id: int):
     EPath.prepare_forked_process()
 
 
-@dataclass
+@dataclass_slots
 class SimpleSavableDatasetState(BaseSingleWrapperState):
     sample_index: int
 
 
-@dataclass
+@dataclass_slots
 class SimpleSavableDatasetMergedState(BaseSingleWrapperMergedState):
     sample_indexes: List[int]
 
@@ -160,7 +159,7 @@ class SimpleSavableDatasetWrapper(SavableDataset[Tuple[int, int, T]], Generic[T]
         return f"SimpleSavableDatasetWrapper(dataset={self.dataset})"
 
 
-@dataclass
+@dataclass_slots
 class SavableDatasetState(State):
     """State of the dataset wrapper. It stores the global random states and the index of the next
     sample to be returned from the dataset. This class is not intended to be used directly, but by
@@ -182,7 +181,7 @@ class SavableDatasetState(State):
         return f"SavableDatasetState(torch_rng={tr!r}, numpy_rng={nr!r}, rng={r!r}, sample_index={self.sample_index})"
 
 
-@dataclass
+@dataclass_slots
 class SavableDatasetMergedState(MergedState):
     """Merged state of the dataset wrapper. See :class:`megatron.energon.SavableDatasetState` for more
     information. This class is not intended to be used directly, but by
@@ -204,7 +203,7 @@ class SavableDatasetMergedState(MergedState):
         return f"SavableDatasetMergedState(torch_rng={tr!r}, numpy_rng={nr!r}, rng={r!r}, sample_index={self.sample_index})"
 
 
-@dataclass
+@dataclass_slots
 class SavableCheckpoint:
     """Checkpoint data for :class:`megatron.energon.SavableDatasetWrapper`. An instance is created
     regularly to be able to save the state of the dataset wrapper before the currently emitted
@@ -221,7 +220,7 @@ class SavableCheckpoint:
     sample_index: int
 
 
-@dataclass
+@dataclass_slots
 class SavableDatasetCheckpoint(State):
     """Checkpoint data for :class:`megatron.energon.SavableDatasetWrapper`. The checkpoint state
     represents a state before that checkpoint, with an offset (i.e. samples to be skipped)."""
@@ -234,7 +233,7 @@ class SavableDatasetCheckpoint(State):
     offset: int
 
 
-@dataclass
+@dataclass_slots
 class SavableDatasetMergedCheckpoint(MergedState):
     """Checkpoint data for :class:`megatron.energon.SavableDatasetWrapper`. The checkpoint state
     represents a state before that checkpoint, with an offset (i.e. samples to be skipped)."""
@@ -611,7 +610,7 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
         return f"SavableDatasetWrapper(dataset={self.dataset})"
 
 
-@dataclass
+@dataclass_slots
 class SavableDataLoaderState(State):
     """Saved state of the :class:`megatron.energon.SavableDataLoader`. Contains the state for all worker
     processed of a single rank."""

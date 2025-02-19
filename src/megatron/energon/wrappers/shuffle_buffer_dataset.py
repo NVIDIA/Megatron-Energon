@@ -1,9 +1,9 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from dataclasses import dataclass
 from typing import Any, Dict, Generic, Iterator, List, Optional, Tuple, TypeVar, Union
 
+from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.flavors.base_dataset import SavableDataset
 from megatron.energon.rng import WorkerRng, WorkerRngMergedState, WorkerRngState
 from megatron.energon.worker import WorkerConfig
@@ -21,13 +21,13 @@ from megatron.energon.wrappers.buffer import (
 T_sample = TypeVar("T_sample")
 
 
-@dataclass
+@dataclass_slots
 class ShuffleBufferState(BaseSingleWrapperState):
     buffer: SampleBufferState
     rng: WorkerRngState
 
 
-@dataclass
+@dataclass_slots
 class ShuffleBufferMergedState(BaseSingleWrapperMergedState):
     buffer: SampleBufferMergedState
     rng: WorkerRngMergedState

@@ -24,6 +24,7 @@ from typing import (
 
 import torch
 
+from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.flavors.base_dataset import (
     BaseCoreDatasetFactory,
     PinMemoryMixin,
@@ -218,7 +219,7 @@ def get_stateless(fn: Callable[..., T_sample]) -> bool:
     return getattr(fn, "__stateless__", False)
 
 
-@dataclasses.dataclass
+@dataclass_slots
 class Batch(PinMemoryMixin):
     """Base class for a batch dataclass. Provides a default implementation for pinning memory."""
 

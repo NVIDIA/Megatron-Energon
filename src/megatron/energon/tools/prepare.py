@@ -8,7 +8,7 @@ import re
 import typing
 from collections import OrderedDict
 from types import FunctionType
-from typing import Any, List, Optional, Type
+from typing import Any, List, Optional, Tuple, Type
 
 import click
 import yaml
@@ -17,6 +17,7 @@ from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import BaseWebdatasetFactory, CrudeWebdataset
 from megatron.energon.flavors.base_dataset import Sample
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
+from megatron.energon.metadataset.loader import prepare_metadataset
 
 
 def type_str(tp: Type) -> str:
@@ -135,6 +136,10 @@ def command(
 
     path = path.absolute()
 
+    if path.is_file() and str(path).endswith(".yaml"):
+        prepare_metadataset(path)
+        return
+
     if tar_index_only:
         assert (path / MAIN_FOLDER_NAME / ".info.yaml").is_file(), "No .info.yaml found"
         with (path / MAIN_FOLDER_NAME / ".info.yaml").open("r") as f:
@@ -168,8 +173,9 @@ def command(
             "filter in the command line."
         )
 
+    split_parts_patterns: Optional[List[Tuple[str, str]]]
     if split_parts:
-        split_parts_patterns = [x.split(":", 1) for x in split_parts]
+        split_parts_patterns = [tuple(x.split(":", 1)) for x in split_parts]
         split_parts_ratio = None
     elif not tar_index_only:
         split_input = click.prompt(
@@ -205,7 +211,7 @@ def command(
         def progress_fn(els, length=None):
             return els
 
-    found_types = BaseWebdatasetFactory.prepare_dataset(
+    found_types, duplicates = BaseWebdatasetFactory.prepare_dataset(
         path,
         all_tars,
         split_parts_ratio=split_parts_ratio,
@@ -215,9 +221,23 @@ def command(
         shuffle_seed=42 if shuffle_tars else None,
         workers=num_workers,
     )
+
+    if duplicates:
+        print(f"Examples of duplicates found: {duplicates}")
+        print()
+        print(
+            "The dataset has duplicate keys. Best practice is to use unique keys. "
+            "You won't be able to use this dataset for joining "
+            "later on."
+        )
+
     found_types = list(found_types)
     if tar_index_only:
         return
+
+    if duplicates:
+        if not click.confirm("Do you want to continue?"):
+            return
 
     # Print json of first two samples
     for sample_idx, data in enumerate(

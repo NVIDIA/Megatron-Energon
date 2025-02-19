@@ -1,9 +1,9 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from dataclasses import dataclass
 from typing import Any, Dict, Generic, Iterator, List, Optional, TypeVar
 
+from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.flavors.base_dataset import SavableDataset
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import (
@@ -15,12 +15,12 @@ from megatron.energon.wrappers.base import (
 T_sample = TypeVar("T_sample")
 
 
-@dataclass
+@dataclass_slots
 class EpochizeState(BaseSingleWrapperState):
     offset: int
 
 
-@dataclass
+@dataclass_slots
 class EpochizeMergedState(BaseSingleWrapperMergedState):
     offset: List[int]
 

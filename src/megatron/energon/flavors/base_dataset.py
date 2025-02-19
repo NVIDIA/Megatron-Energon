@@ -5,7 +5,7 @@ import dataclasses
 import inspect
 import typing
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, is_dataclass
+from dataclasses import is_dataclass
 from typing import (
     Any,
     Callable,
@@ -23,7 +23,9 @@ from typing import (
 
 import torch
 from torch.utils.data import IterableDataset
+from typing_extensions import Self
 
+from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.epathlib import EPath
 from megatron.energon.worker import WorkerConfig
 
@@ -58,7 +60,7 @@ class PinMemoryMixin:
         else:
             return batch
 
-    def pin_memory(self: T) -> T:
+    def pin_memory(self: Self) -> Self:
         return self._pin_memory(self)
 
 
@@ -103,7 +105,7 @@ class ExtendableDataclassMixin:
         return cls(**kwargs)
 
 
-@dataclass
+@dataclass_slots
 class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
     """An abstract base class for one element of a batch.
     Each task should derive a specific subclass as a `@dataclass`, like
@@ -184,7 +186,7 @@ class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
         return cls(**init_args)
 
 
-@dataclass
+@dataclass_slots
 class State(ABC, ExtendableDataclassMixin):
     """An abstract base class for the state of a dataset. See :class:`megatron.energon.SavableDataset`.
     The state of a dataset is used to save and restore the dataset state (i.e. random generators,
@@ -221,7 +223,7 @@ class State(ABC, ExtendableDataclassMixin):
     """
 
 
-@dataclass
+@dataclass_slots
 class MergedState(ABC, ExtendableDataclassMixin):
     """An abstract base class for the merged state of a dataset. See :class:`SavableDataset`.
     The merged state is created in the :meth:`megatron.energon.SavableDataset.merge_states` method, and
@@ -338,7 +340,9 @@ class SavableDataset(IterableDataset[T_sample], Generic[T_sample], ABC):
 
     @abstractmethod
     def config(self) -> Dict[str, Any]:
-        """Return a config dict that can be used to check if datasets have the same settings."""
+        """Return a config dict that can be used to check if datasets have the same settings.
+        Variables in dicts starting with "_" represent a possibly changable setting, like a full
+        path which may be changed."""
         return {
             "type": type(self).__qualname__,
         }

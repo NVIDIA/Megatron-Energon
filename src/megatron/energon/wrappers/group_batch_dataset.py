@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import inspect
-from dataclasses import dataclass
 from typing import (
     Any,
     Callable,
@@ -18,6 +17,7 @@ from typing import (
     Union,
 )
 
+from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.errors import SYSTEM_EXCEPTIONS, FatalSampleError
 from megatron.energon.flavors.base_dataset import (
     MergedState,
@@ -44,35 +44,35 @@ T_batch = TypeVar("T_batch", covariant=True)
 T_batch_sample = TypeVar("T_batch_sample", covariant=True)
 
 
-@dataclass
+@dataclass_slots
 class BucketState(State):
     key: Hashable
     batch_size: int
     samples: SampleBufferState
 
 
-@dataclass
+@dataclass_slots
 class BucketMergedState(MergedState):
     key: Hashable
     batch_size: int
     samples: SampleBufferState
 
 
-@dataclass
+@dataclass_slots
 class GroupBatchState(BaseSingleWrapperState):
     bucket_sample_index: int
     batch_sample_index: int
     buckets: List[BucketState]
 
 
-@dataclass
+@dataclass_slots
 class GroupBatchMergedState(BaseSingleWrapperMergedState):
     bucket_sample_index: List[int]
     batch_sample_index: List[int]
     buckets: List[List[BucketMergedState]]
 
 
-@dataclass
+@dataclass_slots
 class Bucket(Generic[T_batch_sample]):
     batch_size: int
 
@@ -157,8 +157,20 @@ class GroupBatchDataset(
         for bucket in buckets.values():
             bucket.samples.worker_start()
 
+        # print(f"[wrk={worker_idx}, s={self._batch_sample_index.current_idx}] initial GroupBatchDataset state:\n", end="")
+        # for bucket_key, bucket in buckets.items():
+        #     print(f"[wrk={worker_idx}, s={self._batch_sample_index.current_idx}] - Bucket [{bucket_key}] (bs={bucket.batch_size}, len(samples)={len(bucket.samples)}):\n", end="")
+        #     bucket.samples.debug_print("    ")
+        # print(f"[wrk={worker_idx}, s={self._batch_sample_index.current_idx}] initial done\n", end="")
+
         def flush(bucket: Bucket[T_batch_sample]) -> Generator[T_batch, None, None]:
+            # Debug print the state
+            # print(f"[wrk={worker_idx}, s={self._batch_sample_index.current_idx}] flush GroupBatchDataset state:\n", end="")
+            # for dbg_bucket_key, dbg_bucket in buckets.items():
+            #     print(f"[wrk={worker_idx}, s={self._batch_sample_index.current_idx}] - Bucket [{dbg_bucket_key}{'*' if dbg_bucket_key == bucket_key else ''}] (bs={dbg_bucket.batch_size}, len(samples)={len(dbg_bucket.samples)}):\n", end="")
+            #     dbg_bucket.samples.debug_print("    ")
             batch_items, sample_restore_keys = bucket.samples.flush()
+            # print(f"[wrk={worker_idx}, s={self._batch_sample_index.current_idx}] flushed: len(batch)={len(batch_items)} len(samples)={len(bucket.samples)}\n", end="")
             try:
                 with self._batch_sample_index.ctx() as sample_idx:
                     batch_sample = self.batcher(batch_items)
@@ -194,6 +206,7 @@ class GroupBatchDataset(
                 continue
             bucket = buckets.get(bucket_key)
             if bucket is None:
+                assert batch_size is not None
                 buckets[bucket_key] = bucket = Bucket(
                     batch_size=batch_size,
                     samples=SavableSampleBuffer(self.dataset, worker_config=self.worker_config),
@@ -272,9 +285,9 @@ class GroupBatchDataset(
                             SampleBufferMergedState(
                                 buffer=[
                                     (
-                                        []
+                                        bucket_state.samples.buffer
                                         if gen_worker_idx == worker_idx
-                                        else bucket_state.samples.buffer
+                                        else []
                                     )
                                     for gen_worker_idx in range(
                                         max(self.worker_config.num_workers, 1)
