@@ -53,7 +53,7 @@ pip install git+https://github.com/NVIDIA/Megatron-Energon.git
 
 **NOTE**: We encourage you to install the package (and not just import a local copy). This will ensure you have all the needed dependencies and that you can use the command line tool.
 
-For more details on installing this package, see [here](https://nvidia.github.io/Megatron-Energon/installation.html).
+For more details on installing this package, see [here](https://nvidia.github.io/Megatron-Energon/intro/installation.html).
 
 ## Usage of command line tool
 
