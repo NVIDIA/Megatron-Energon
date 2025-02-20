@@ -6,7 +6,6 @@ import inspect
 import json
 import re
 import typing
-from collections import OrderedDict
 from types import FunctionType
 from typing import Any, List, Optional, Tuple, Type
 
@@ -320,11 +319,11 @@ def command(
                     "\nFor each field, please specify the corresponding name in the WebDataset."
                 )
                 click.echo(f"Available types in WebDataset: {', '.join(found_types)}")
-                click.echo(f"Leave empty for skipping optional field")
+                click.echo("Leave empty for skipping optional field")
                 click.echo(
-                    f"You may also access json fields e.g. by setting the field to: json[field][field]"
+                    "You may also access json fields e.g. by setting the field to: json[field][field]"
                 )
-                click.echo(f"You may also specify alternative fields e.g. by setting to: jpg,png")
+                click.echo("You may also specify alternative fields e.g. by setting to: jpg,png")
 
                 click.echo(f"Please enter the field_map for {cls.__name__}:")
 

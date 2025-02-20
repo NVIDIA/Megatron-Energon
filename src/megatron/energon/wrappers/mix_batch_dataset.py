@@ -67,7 +67,7 @@ def homogeneous_concat_mix(samples: List[T_batch_in]) -> T_batch:
         The mixed batch.
     """
     first_type = type(samples[0])
-    assert all(first_type == type(sample) for sample in samples)
+    assert all(first_type is type(sample) for sample in samples)
     # All the same type -> concat batches
     return generic_concat(samples)
 
