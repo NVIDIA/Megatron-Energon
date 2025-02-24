@@ -45,7 +45,7 @@ class AVDecoder:
         """
         extension = re.sub(r".*[.]", "", key)
         # TODO(jbarker): we should add a debug log here
-        if extension in "mov mp4 webm mkv".split():
+        if extension in ("mov", "mp4", "webm", "mkv"):
             # TODO(jbarker): make the magic numbers configurable
             media = decode_video_frames(
                 data,
