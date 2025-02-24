@@ -8,7 +8,6 @@ from typing import (
     Generator,
     Generic,
     Iterator,
-    List,
     Optional,
     Tuple,
     TypeVar,
@@ -17,36 +16,17 @@ from typing import (
 
 from torch.utils.data import IterableDataset
 
-from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.errors import SYSTEM_EXCEPTIONS, FatalSampleError
 from megatron.energon.flavors.base_dataset import SavableDataset, set_sample_restore_key
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers._log_exception import log_exception
-from megatron.energon.wrappers.base import (
-    BaseSingleWrapperDataset,
-    BaseSingleWrapperMergedState,
-    BaseSingleWrapperState,
-    SampleIndex,
-    get_sample_restore_key,
-)
+from megatron.energon.wrappers.base import BaseWrapperDataset, SampleIndex, get_sample_restore_key
 
 T_sample = TypeVar("T_sample")
 T_sample_out = TypeVar("T_sample_out")
 
 
-@dataclass_slots
-class IterMapState(BaseSingleWrapperState):
-    sample_index: int
-
-
-@dataclass_slots
-class IterMapMergedState(BaseSingleWrapperMergedState):
-    sample_indexes: List[int]
-
-
-class IterMapDataset(
-    BaseSingleWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T_sample_out]
-):
+class IterMapDataset(BaseWrapperDataset, Generic[T_sample, T_sample_out]):
     """This dataset wrapper applies a custom function to transform the stream of samples and yield
     a new stream of samples.
     If used in a savable dataset context, it is critical, that `iter_map_fn` is either stateless,
@@ -59,6 +39,8 @@ class IterMapDataset(
     stateless_iter_fn: bool
     iter_map_fn_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]]
     _sample_index: SampleIndex
+
+    _savable_fields = ["_sample_index"]
 
     def __init__(
         self,
@@ -97,7 +79,11 @@ class IterMapDataset(
         self.error_handler = error_handler
         self.stateless_iter_fn = stateless_iter_fn
         self.iter_map_fn_config = iter_map_fn_config
-        self._sample_index = SampleIndex(worker_config, src=self)
+
+        self.reset_state_own()
+
+    def reset_state_own(self) -> None:
+        self._sample_index = SampleIndex(self.worker_config, src=self)
 
     def __len__(self):
         return self.len_map_fn(len(self.dataset))
@@ -143,28 +129,14 @@ class IterMapDataset(
             else:
                 break
 
-    def save_state(self) -> IterMapState:
-        return IterMapState.extend(
-            super().save_state(),
-            sample_index=self._sample_index.save_state(),
-        )
-
-    def restore_state(self, state: Optional[IterMapMergedState]) -> None:
-        super().restore_state(state)
-        if state is None:
-            self._sample_index.restore_state(None)
-        else:
-            assert isinstance(state, IterMapMergedState)
-            self._sample_index.restore_state(state.sample_indexes)
-
     def can_restore_sample(self) -> bool:
-        return self.stateless_iter_fn and self.dataset.can_restore_sample()
+        return super().can_restore_sample() and self.stateless_iter_fn
 
     def assert_can_restore(self) -> None:
         assert self.stateless_iter_fn, (
             "IterMapDataset can only restore samples if iter_map_fn is stateless."
         )
-        self.dataset.assert_can_restore()
+        super().assert_can_restore()
 
     def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_sample:
         self.assert_can_restore()

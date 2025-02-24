@@ -5,6 +5,7 @@ import dataclasses
 import inspect
 import typing
 from abc import ABC, abstractmethod
+from copy import deepcopy
 from dataclasses import is_dataclass
 from typing import (
     Any,
@@ -27,6 +28,7 @@ from typing_extensions import Self
 
 from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.epathlib import EPath
+from megatron.energon.savable import Savable
 from megatron.energon.worker import WorkerConfig
 
 T_sample = TypeVar("T_sample", covariant=True)
@@ -223,7 +225,11 @@ class State(ABC, ExtendableDataclassMixin):
     """
 
 
-class SavableDataset(IterableDataset[T_sample], Generic[T_sample], ABC):
+class FlexState(dict):
+    pass
+
+
+class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC):
     """A dataset that can be saved and restored (i.e. the random state, internal buffers, etc.).
     I.e. it can be resumed from a checkpoint.
 
@@ -241,33 +247,65 @@ class SavableDataset(IterableDataset[T_sample], Generic[T_sample], ABC):
 
     worker_config: WorkerConfig
 
+    #: List of names of the fields that are saved and restored in the state.
+    _savable_fields: ClassVar[List[str]] = []
+
     def __init__(self, worker_config: WorkerConfig):
         self.worker_config = worker_config
 
     @abstractmethod
     def __len__(self) -> int: ...
 
-    @abstractmethod
-    def save_state(self) -> State:
+    def save_state(self) -> FlexState:
         """
-        Saves the state of the dataset. This should include the random state, but not the data
-        itself. Can only be called in a worker process.
+        Saves the state of the dataset. This will save and return the state of all fields
+        in the _savable_fields list.
+        Can only be called in a worker process.
+        """
 
-        Returns:
-            The state of the dataset as savable object (i.e. python basic types).
-        """
-        ...
+        state = FlexState()
+        for key in self._savable_fields:
+            attr = getattr(self, key)
+            if isinstance(attr, Savable):
+                state[key] = attr.save_state()
+            else:
+                # Check if this field is a simple python type or a user class
+                if attr.__module__ != "builtins":
+                    import warnings
 
-    @abstractmethod
-    def restore_state(self, state: Optional[MergedState]) -> None:
+                    warnings.warn(
+                        f"The savable attribute {key} of class {type(self)} does "
+                        "not inherit from Savable, nor it is a simple builtin type. Please double-check.",
+                        UserWarning,
+                    )
+
+                state[key] = deepcopy(getattr(self, key))
+
+        return state
+
+    def restore_state(self, state: FlexState) -> None:
         """
-        Restores the state of the dataset. This should include the random state, but not the data
-        itself. Can only be called in a worker process.
+        Restores the state of the dataset. This will restore the state of all fields
+        in the _savable_fields list.
+        Can only be called in a worker process.
 
         Args:
-            state: The state of the dataset as savable object (i.e. python basic types) as saved by
-                `save_state`. If None, restore initial state.
+            state: The state of the dataset as savable object. If None, restore initial state.
         """
+
+        for key in self._savable_fields:
+            assert key in state, f"Key {key} not in state {state}"
+            value = state.get(key)
+
+            assert hasattr(self, key), f"Savable field {key} not in dataset {self}"
+            if isinstance(getattr(self, key), Savable):
+                getattr(self, key).restore_state(value)
+            else:
+                setattr(self, key, value)
+
+    @abstractmethod
+    def reset_state_own(self) -> None:
+        """Resets the state of the dataset to the initial state. Can only be called in a worker process."""
         ...
 
     @abstractmethod

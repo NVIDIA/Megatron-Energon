@@ -1,45 +1,25 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from typing import Any, Dict, Generic, Iterator, List, Optional, Tuple, TypeVar, Union
+from typing import Any, Dict, Generic, Iterator, Tuple, TypeVar, Union
 
-from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.flavors.base_dataset import SavableDataset
-from megatron.energon.rng import WorkerRng, WorkerRngMergedState, WorkerRngState
+from megatron.energon.rng import WorkerRng
 from megatron.energon.worker import WorkerConfig
-from megatron.energon.wrappers.base import (
-    BaseSingleWrapperDataset,
-    BaseSingleWrapperMergedState,
-    BaseSingleWrapperState,
-)
-from megatron.energon.wrappers.buffer import (
-    SampleBufferMergedState,
-    SampleBufferState,
-    SavableSampleBuffer,
-)
+from megatron.energon.wrappers.base import BaseWrapperDataset
+from megatron.energon.wrappers.buffer import SavableSampleBuffer
 
 T_sample = TypeVar("T_sample")
 
 
-@dataclass_slots
-class ShuffleBufferState(BaseSingleWrapperState):
-    buffer: SampleBufferState
-    rng: WorkerRngState
-
-
-@dataclass_slots
-class ShuffleBufferMergedState(BaseSingleWrapperMergedState):
-    buffer: SampleBufferMergedState
-    rng: WorkerRngMergedState
-
-
-class ShuffleBufferDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_sample]):
+class ShuffleBufferDataset(BaseWrapperDataset, Generic[T_sample]):
     """Shuffle buffer for the dataset."""
 
     size: int
     _worker_rng: WorkerRng
-
     _active_buffer: SavableSampleBuffer[T_sample]
+
+    _savable_fields = ["_active_buffer", "_worker_rng"]
 
     def __init__(
         self,
@@ -51,8 +31,12 @@ class ShuffleBufferDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic
         """Create a shuffle buffer for the dataset."""
         super().__init__(dataset, worker_config=worker_config)
         self.size = size
+        self.reset_state_own()
+
+    def reset_state_own(self) -> None:
         self._worker_rng = WorkerRng(self.worker_config)
-        self._active_buffer = SavableSampleBuffer(dataset, worker_config=worker_config)
+        # TODO: Former reset was via restore_state(None). Is this ok too?
+        self._active_buffer = SavableSampleBuffer(self.dataset, worker_config=self.worker_config)
 
     def __len__(self) -> int:
         return len(self.dataset)
@@ -72,23 +56,6 @@ class ShuffleBufferDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic
         while len(self._active_buffer) > 0:
             pop_idx = self._worker_rng.randbelow(len(self._active_buffer))
             yield self._active_buffer.pop(pop_idx)
-
-    def save_state(self) -> ShuffleBufferState:
-        return ShuffleBufferState.extend(
-            super().save_state(),
-            rng=self._worker_rng.save_state(),
-            buffer=self._active_buffer.save_state(),
-        )
-
-    def restore_state(self, state: Optional[ShuffleBufferMergedState]) -> None:
-        super().restore_state(state)
-        if state is None:
-            self._active_buffer.restore_state(None)
-            self._worker_rng.restore_state(None)
-        else:
-            assert isinstance(state, ShuffleBufferMergedState)
-            self._active_buffer.restore_state(state.buffer)
-            self._worker_rng.restore_state(state.rng)
 
     def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_sample:
         return self._active_buffer.restore_sample(index)
