@@ -43,7 +43,7 @@ class AVDecoder:
             key: media file extension
             data: raw media bytes
         """
-        extension = re.sub(r".*[.]", "", key)
+        extension = key.rsplit('.', 1)[-1]
         # TODO(jbarker): we should add a debug log here
         if extension in ("mov", "mp4", "webm", "mkv"):
             # TODO(jbarker): make the magic numbers configurable
