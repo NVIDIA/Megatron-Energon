@@ -149,15 +149,6 @@ class IterMapDataset(
             sample_index=self._sample_index.save_state(),
         )
 
-    def merge_states(self, states: List[IterMapState]) -> IterMapMergedState:
-        assert all(s is None or isinstance(s, IterMapState) for s in states)
-        return IterMapMergedState.extend(
-            super().merge_states(states),
-            sample_indexes=self._sample_index.merge_states(
-                [0 if state is None else state.sample_index for state in states]
-            ),
-        )
-
     def restore_state(self, state: Optional[IterMapMergedState]) -> None:
         super().restore_state(state)
         if state is None:
@@ -170,9 +161,9 @@ class IterMapDataset(
         return self.stateless_iter_fn and self.dataset.can_restore_sample()
 
     def assert_can_restore(self) -> None:
-        assert (
-            self.stateless_iter_fn
-        ), "IterMapDataset can only restore samples if iter_map_fn is stateless."
+        assert self.stateless_iter_fn, (
+            "IterMapDataset can only restore samples if iter_map_fn is stateless."
+        )
         self.dataset.assert_can_restore()
 
     def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_sample:

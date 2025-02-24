@@ -117,13 +117,6 @@ class LogSampleDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_s
             step=self._step[self.worker_config.rank_worker_id()],
         )
 
-    def merge_states(self, states: List[Optional[LogSampleState]]) -> LogSampleMergedState:
-        assert all(s is None or isinstance(s, LogSampleState) for s in states)
-        return LogSampleMergedState.extend(
-            super().merge_states(states),
-            step=[0 if state is None else state.step for state in states],
-        )
-
     def restore_state(self, state: Optional[LogSampleMergedState]) -> None:
         super().restore_state(state)
         if state is None:

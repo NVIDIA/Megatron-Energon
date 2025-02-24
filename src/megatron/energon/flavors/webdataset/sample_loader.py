@@ -521,23 +521,6 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
             epoch_sample_count=self._epoch_sample_count[worker_idx],
         )
 
-    def merge_states(self, states: List[SampleLoaderState]) -> SampleLoaderMergedState:
-        assert all(s is None or isinstance(s, SampleLoaderState) for s in states)
-        assert len(states) == max(self.worker_config.num_workers, 1)
-        return SampleLoaderMergedState(
-            rng=self._worker_rng.merge_states([None if s is None else s.rng for s in states]),
-            pending_slices_offset=[s.pending_slices_offset for s in states],
-            pending_slices_seed=self._worker_rng.merge_states(
-                [None if s is None else s.pending_slices_seed for s in states]
-            ),
-            active_slices=[
-                [None] * self.parallel_slice_iters if s is None else s.active_slices for s in states
-            ],
-            sample_count=[0 if s is None else s.sample_count for s in states],
-            epoch_count=[0 if s is None else s.epoch_count for s in states],
-            epoch_sample_count=[0 if s is None else s.epoch_sample_count for s in states],
-        )
-
     def restore_state(self, state: Optional[SampleLoaderMergedState]) -> None:
         if self.worker_config.should_log(level=3):
             self.worker_config.worker_log(
@@ -596,7 +579,9 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
                                 worker_slice_offsets[slice_state.index]
                                 <= slice_state.current
                                 < worker_slice_offsets[slice_state.index + 1]
-                            ), f"Invalid slice state: slice_offsets[{slice_state.index}] must hold {worker_slice_offsets[slice_state.index]} <= {slice_state.current} < {worker_slice_offsets[slice_state.index + 1]}"
+                            ), (
+                                f"Invalid slice state: slice_offsets[{slice_state.index}] must hold {worker_slice_offsets[slice_state.index]} <= {slice_state.current} < {worker_slice_offsets[slice_state.index + 1]}"
+                            )
 
     def config(self) -> Dict[str, Any]:
         return {

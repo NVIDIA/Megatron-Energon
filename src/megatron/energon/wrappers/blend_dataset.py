@@ -29,14 +29,10 @@ class BlendDatasetState(State):
     rng: WorkerRngState
 
 
-@dataclass_slots
-class BlendDatasetMergedState(MergedState):
-    #: States of the sub datasets
-    datasets: List[MergedState]
-    #: Whether the dataset is done
-    exhausted: List[List[bool]]
-    #: State of the worker rng
-    rng: WorkerRngMergedState
+"""
+exhausted=list(self.exhausted[self.worker_config.rank_worker_id()]),
+rng=self._worker_rng.save_state(),
+"""
 
 
 class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
@@ -130,26 +126,6 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
     def worker_has_samples(self) -> bool:
         return any(dataset.worker_has_samples() for dataset, _weight in self.dataset_weights)
 
-    def save_state(self) -> BlendDatasetState:
-        return BlendDatasetState(
-            datasets=[d.save_state() for d, _weight in self.dataset_weights],
-            # Need list() to create a copy
-            exhausted=list(self.exhausted[self.worker_config.rank_worker_id()]),
-            rng=self._worker_rng.save_state(),
-        )
-
-    def merge_states(self, states: List[BlendDatasetState]) -> BlendDatasetMergedState:
-        assert all(s is None or isinstance(s, BlendDatasetState) for s in states)
-        assert all(s is None or len(s.datasets) == len(self.dataset_weights) for s in states)
-        return BlendDatasetMergedState(
-            datasets=[
-                d.merge_states([None if s is None else s.datasets[ds_idx] for s in states])
-                for ds_idx, (d, _) in enumerate(self.dataset_weights)
-            ],
-            exhausted=[s.exhausted for s in states],
-            rng=self._worker_rng.merge_states([None if s is None else s.rng for s in states]),
-        )
-
     def restore_state(self, state: Optional[BlendDatasetMergedState]) -> None:
         if state is None:
             for dataset, _weight in self.dataset_weights:
@@ -161,9 +137,9 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
             ]
         else:
             assert isinstance(state, BlendDatasetMergedState)
-            assert len(state.datasets) == len(
-                self.dataset_weights
-            ), f"The {len(state.datasets)} datasets to be restored do not match the configured {len(self.dataset_weights)} datasets"
+            assert len(state.datasets) == len(self.dataset_weights), (
+                f"The {len(state.datasets)} datasets to be restored do not match the configured {len(self.dataset_weights)} datasets"
+            )
             for (dataset, _weight), dstate in zip(self.dataset_weights, state.datasets):
                 dataset.restore_state(dstate)
             self._worker_rng.restore_state(state.rng)

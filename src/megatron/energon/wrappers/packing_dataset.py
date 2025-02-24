@@ -213,9 +213,9 @@ class PackingDataset(
                 with self._final_packing_sample_index.ctx() as pack_idx:
                     final_packed_sample = self.final_packer(pack)
                 if isinstance(final_packed_sample, Generator):
-                    assert inspect.isgeneratorfunction(
-                        self.final_packer
-                    ), f"Generator in {self.final_packer} but not marked as such."
+                    assert inspect.isgeneratorfunction(self.final_packer), (
+                        f"Generator in {self.final_packer} but not marked as such."
+                    )
                     for pack_sub_idx, (pack_idx, inner_batch_sample) in enumerate(
                         self._final_packing_sample_index.iter_ctx(final_packed_sample, pack_idx)
                     ):
@@ -284,25 +284,6 @@ class PackingDataset(
             pre_packing_index=self._pre_packing_sample_index.save_state(),
         )
 
-    def merge_states(self, states: List[PackingState]) -> PackingMergedState:
-        assert all(s is None or isinstance(s, PackingState) for s in states)
-        return PackingMergedState.extend(
-            super().merge_states(states),
-            reading_buffer=self._reading_buffer.merge_states(
-                [None if s is None else s.reading_buffer for s in states]
-            ),
-            pre_packing_buffer=self._pre_packing_buffer.merge_states(
-                [None if s is None else s.pre_packing_buffer for s in states]
-            ),
-            pre_packing_lengths=[[0, 0] if s is None else s.pre_packing_lengths for s in states],
-            final_packing_index=self._final_packing_sample_index.merge_states(
-                [0 if state is None else state.final_packing_index for state in states]
-            ),
-            pre_packing_index=self._pre_packing_sample_index.merge_states(
-                [0 if state is None else state.pre_packing_index for state in states]
-            ),
-        )
-
     def restore_state(self, state: Optional[PackingMergedState]) -> None:
         super().restore_state(state)
         if state is None:
@@ -325,9 +306,9 @@ class PackingDataset(
         return self.final_packer_stateless and self.dataset.can_restore_sample()
 
     def assert_can_restore(self):
-        assert (
-            self.final_packer_stateless
-        ), f"Final packer {self.final_packer} must be stateless to restore samples."
+        assert self.final_packer_stateless, (
+            f"Final packer {self.final_packer} must be stateless to restore samples."
+        )
         self.dataset.assert_can_restore()
 
     def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_sample:
@@ -343,9 +324,9 @@ class PackingDataset(
         with self._final_packing_sample_index.ctx(pack_idx):
             final_pack = self.final_packer(batch)
         if isinstance(final_pack, Generator):
-            assert inspect.isgeneratorfunction(
-                self.final_packer
-            ), f"Generator in {self.final_packer} but not marked as such."
+            assert inspect.isgeneratorfunction(self.final_packer), (
+                f"Generator in {self.final_packer} but not marked as such."
+            )
             for cur_batch_sub_idx, (pack_idx, inner_batch_sample) in enumerate(
                 self._final_packing_sample_index.iter_ctx(final_pack, pack_idx)
             ):

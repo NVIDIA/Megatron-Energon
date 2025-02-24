@@ -124,12 +124,6 @@ class SavableSampleBuffer(BaseWrapperDataset[T_sample], Generic[T_sample]):
             buffer=list(self._restore_keys[self._rank_id]),
         )
 
-    def merge_states(self, states: List[Optional[SampleBufferState]]) -> SampleBufferMergedState:
-        assert all(s is None or isinstance(s, SampleBufferState) for s in states)
-        return SampleBufferMergedState(
-            buffer=[[] if s is None else s.buffer for s in states],
-        )
-
     def restore_state(self, state: Optional[SampleBufferMergedState]) -> None:
         if state is None:
             self._buffer = [[] for _ in range(max(self.worker_config.num_workers, 1))]

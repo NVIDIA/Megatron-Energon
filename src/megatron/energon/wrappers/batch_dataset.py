@@ -138,9 +138,9 @@ class BatchDataset(
             with self._sample_index.ctx(self._sample_index.current_idx) as sample_idx:
                 batch_sample = self.batcher(batch)
             assert isinstance(batch_sample, Generator)
-            assert inspect.isgeneratorfunction(
-                self.batcher
-            ), f"Generator in {self.batcher} but not marked as such."
+            assert inspect.isgeneratorfunction(self.batcher), (
+                f"Generator in {self.batcher} but not marked as such."
+            )
             target_offset = self._generator_offsets[worker_id]
             self._generator_offsets[worker_id] = 0
             for batch_sub_idx, (sample_idx, inner_batch_sample) in enumerate(
@@ -166,9 +166,9 @@ class BatchDataset(
                 with self._sample_index.ctx() as sample_idx:
                     batch_sample = self.batcher(batch)
                 if isinstance(batch_sample, Generator):
-                    assert inspect.isgeneratorfunction(
-                        self.batcher
-                    ), f"Generator in {self.batcher} but not marked as such."
+                    assert inspect.isgeneratorfunction(self.batcher), (
+                        f"Generator in {self.batcher} but not marked as such."
+                    )
                     self._generator_sample_keys[worker_id] = sample_restore_keys
                     self._generator_offsets[worker_id] = 0
                     for batch_sub_idx, (sample_idx, inner_batch_sample) in enumerate(
@@ -219,28 +219,6 @@ class BatchDataset(
             )
         return state
 
-    def merge_states(self, states: List[BatchState]) -> BatchMergedState:
-        assert all(s is None or isinstance(s, BatchState) for s in states)
-        state = BatchMergedState.extend(
-            super().merge_states(states),
-            sample_indexes=self._sample_index.merge_states(
-                [0 if state is None else state.sample_index for state in states]
-            ),
-        )
-        if any(isinstance(s, BatchGeneratorState) for s in states):
-            state = BatchGeneratorMergedState.extend(
-                state,
-                generator_sample_keys=[
-                    s.generator_sample_key if isinstance(s, BatchGeneratorState) else None
-                    for s in states
-                ],
-                generator_offsets=[
-                    s.generator_offset if isinstance(s, BatchGeneratorState) else None
-                    for s in states
-                ],
-            )
-        return state
-
     def restore_state(self, state: Optional[BatchMergedState]) -> None:
         super().restore_state(state)
         if state is None:
@@ -263,9 +241,9 @@ class BatchDataset(
         return self.batcher_stateless and self.dataset.can_restore_sample()
 
     def assert_can_restore(self) -> None:
-        assert (
-            self.batcher_stateless
-        ), f"Batcher {self.batcher} must be stateless to restore samples"
+        assert self.batcher_stateless, (
+            f"Batcher {self.batcher} must be stateless to restore samples"
+        )
         self.dataset.assert_can_restore()
 
     def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_batch:
@@ -281,9 +259,9 @@ class BatchDataset(
         with self._sample_index.ctx(sample_idx):
             batch_sample = self.batcher(batch)
         if isinstance(batch_sample, Generator):
-            assert inspect.isgeneratorfunction(
-                self.batcher
-            ), f"Generator in {self.batcher} but not marked as such."
+            assert inspect.isgeneratorfunction(self.batcher), (
+                f"Generator in {self.batcher} but not marked as such."
+            )
             for cur_batch_sub_idx, (sample_idx, inner_batch_sample) in enumerate(
                 self._sample_index.iter_ctx(batch_sample, sample_idx)
             ):

@@ -134,9 +134,9 @@ class GroupBatchDataset(
         self._group_key_sample_index = SampleIndex(worker_config, src=self)
         self._batch_sample_index = SampleIndex(worker_config, src=self)
         self._buckets = [{} for _ in range(max(self.worker_config.num_workers, 1))]
-        assert not inspect.isgeneratorfunction(
-            batcher
-        ), f"Batcher {batcher} must not be a generator function for grouped batching."
+        assert not inspect.isgeneratorfunction(batcher), (
+            f"Batcher {batcher} must not be a generator function for grouped batching."
+        )
 
     def __len__(self):
         # Return an upper bound. This is for sure not correct.
@@ -174,9 +174,9 @@ class GroupBatchDataset(
             try:
                 with self._batch_sample_index.ctx() as sample_idx:
                     batch_sample = self.batcher(batch_items)
-                    assert not isinstance(
-                        batch_sample, Generator
-                    ), f"Batcher {self.batcher} returned a generator, which is not supported for grouped batching yet."
+                    assert not isinstance(batch_sample, Generator), (
+                        f"Batcher {self.batcher} returned a generator, which is not supported for grouped batching yet."
+                    )
                 set_sample_restore_key(batch_sample, sample_idx, *sample_restore_keys, src=self)
                 yield batch_sample
             except SkipSample:
@@ -212,9 +212,9 @@ class GroupBatchDataset(
                     samples=SavableSampleBuffer(self.dataset, worker_config=self.worker_config),
                 )
             else:
-                assert (
-                    bucket.batch_size == batch_size
-                ), f"Got different batch size for group {bucket_key}: {bucket.batch_size} != {batch_size}."
+                assert bucket.batch_size == batch_size, (
+                    f"Got different batch size for group {bucket_key}: {bucket.batch_size} != {batch_size}."
+                )
             bucket.samples.append(sample)
             if len(bucket.samples) >= bucket.batch_size:
                 yield from flush(bucket)
@@ -244,19 +244,6 @@ class GroupBatchDataset(
                 if self._buckets[rank] is not None
                 else []
             ),
-        )
-
-    def merge_states(self, states: List[Optional[GroupBatchState]]) -> GroupBatchMergedState:
-        assert all(s is None or isinstance(s, GroupBatchState) for s in states)
-        return GroupBatchMergedState.extend(
-            super().merge_states(states),
-            bucket_sample_index=self._group_key_sample_index.merge_states(
-                [0 if s is None else s.bucket_sample_index for s in states]
-            ),
-            batch_sample_index=self._batch_sample_index.merge_states(
-                [0 if s is None else s.batch_sample_index for s in states]
-            ),
-            buckets=[(state.buckets if state else []) for state in states],
         )
 
     def restore_state(self, state: Optional[GroupBatchMergedState]) -> None:
@@ -300,9 +287,9 @@ class GroupBatchDataset(
         return self.batcher_stateless and self.dataset.can_restore_sample()
 
     def assert_can_restore(self) -> None:
-        assert (
-            self.batcher_stateless
-        ), f"Batcher {self.batcher} must be stateless to restore samples"
+        assert self.batcher_stateless, (
+            f"Batcher {self.batcher} must be stateless to restore samples"
+        )
         self.dataset.assert_can_restore()
 
     def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_batch:

@@ -64,9 +64,9 @@ class RepeatDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_samp
 
     def __iter__(self) -> Iterator[T_sample]:
         worker_idx = self.worker_config.rank_worker_id()
-        assert (
-            self.repeats is not None or self.dataset.worker_has_samples()
-        ), "Cannot repeat empty dataset indefinitely"
+        assert self.repeats is not None or self.dataset.worker_has_samples(), (
+            "Cannot repeat empty dataset indefinitely"
+        )
 
         ds_len = len(self.dataset)
 
@@ -113,14 +113,6 @@ class RepeatDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_samp
             super().save_state(),
             repetition=self._repetition[self.worker_config.rank_worker_id()],
             index=self._index[self.worker_config.rank_worker_id()],
-        )
-
-    def merge_states(self, states: List[RepeatState]) -> RepeatMergedState:
-        assert all(s is None or isinstance(s, RepeatState) for s in states)
-        return RepeatMergedState.extend(
-            super().merge_states(states),
-            repetition=[0 if state is None else state.repetition for state in states],
-            index=[0 if state is None else state.index for state in states],
         )
 
     def restore_state(self, state: Optional[RepeatMergedState]) -> None:

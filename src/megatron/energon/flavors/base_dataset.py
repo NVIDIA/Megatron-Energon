@@ -165,9 +165,9 @@ class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
         Returns:
             The joined constructed sample.
         """
-        assert (
-            len(kwargs) == 0
-        ), "Please specify joined datasets as list for the default joiner. Keyword arguments are confusing, because keys are ignored."
+        assert len(kwargs) == 0, (
+            "Please specify joined datasets as list for the default joiner. Keyword arguments are confusing, because keys are ignored."
+        )
         excluded_fields = set(field.name for field in dataclasses.fields(Sample))
         init_args = {}
         if len(args) > 0:
@@ -223,46 +223,6 @@ class State(ABC, ExtendableDataclassMixin):
     """
 
 
-@dataclass_slots
-class MergedState(ABC, ExtendableDataclassMixin):
-    """An abstract base class for the merged state of a dataset. See :class:`SavableDataset`.
-    The merged state is created in the :meth:`megatron.energon.SavableDataset.merge_states` method, and
-    represents the merged state of all worker processes (only workers, not ranks). It is required
-    to restore the state of the dataset in the :meth:`megatron.energon.SavableDataset.restore_state`
-    method for all workers before the workers are started.
-    Each dataset should derive a specific subclass as a `@dataclass` and add the fields as needed
-    for training.
-
-    To extend subclasses, use the .extend method. Example:
-    Example (see :meth:`megatron.energon.State` to complete the example)
-
-    .. code-block:: python
-
-        @dataclass
-        class MyMergedState(MergedState):
-            a: List[int]
-
-        @dataclass
-        class MyExtendedMergedState(MyMergedState):
-            # Add a new field `b` to the state
-            b: List[int]
-
-        class MyMergedStateSaver:
-            def merge_state(self, states: List[MyState]) -> MyMergedState:
-                return MyMergedState(a=[s.a for s in states])
-
-        class MyExtendedMergedStateSaver(MyMergedStateSaver):
-            def merge_state(self, states: List[MyExtendedState]) -> MyExtendedMergedState:
-                # Fetch state from super class, which is already a complete instance (cannot add
-                # new fields to it, type is fixed).
-                state: MyMergedState = super().merge_state(states)
-
-                # Now extend the state of the super class (of type `MyMergedState`) with the
-                # new field required to define `MyExtendedMergedState`.
-                return MyExtendedMergedState.extend(state, b=[s.b for s in states])
-    """
-
-
 class SavableDataset(IterableDataset[T_sample], Generic[T_sample], ABC):
     """A dataset that can be saved and restored (i.e. the random state, internal buffers, etc.).
     I.e. it can be resumed from a checkpoint.
@@ -295,19 +255,6 @@ class SavableDataset(IterableDataset[T_sample], Generic[T_sample], ABC):
 
         Returns:
             The state of the dataset as savable object (i.e. python basic types).
-        """
-        ...
-
-    @abstractmethod
-    def merge_states(self, states: List[Optional[State]]) -> MergedState:
-        """
-        Merges the states of all workers into one state. Restore state expects a merged state.
-
-        Args:
-            states: The states of the workers to merge.
-
-        Returns:
-            The merged state.
         """
         ...
 

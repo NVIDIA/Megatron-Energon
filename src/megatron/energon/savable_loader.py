@@ -87,9 +87,9 @@ class SimpleSavableDatasetWrapper(SavableDataset[Tuple[int, int, T]], Generic[T]
         self._sample_index = [0] * max(self.worker_config.num_workers, 1)
 
         # Check that the dataset worker config is the same as the wrapper worker config
-        assert (
-            self.dataset.worker_config == self.worker_config
-        ), "Dataset and wrapper worker configs must match."
+        assert self.dataset.worker_config == self.worker_config, (
+            "Dataset and wrapper worker configs must match."
+        )
 
     def __len__(self):
         return len(self.dataset)
@@ -123,9 +123,6 @@ class SimpleSavableDatasetWrapper(SavableDataset[Tuple[int, int, T]], Generic[T]
 
     def save_state(self) -> State:
         return self.dataset.save_state()
-
-    def merge_states(self, states: List[State]) -> MergedState:
-        return self.dataset.merge_states(states)
 
     def restore_state(self, state: MergedState):
         self.dataset.restore_state(state)
@@ -485,16 +482,6 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
             sample_index=self._sample_index,
         )
 
-    def _merge_states(self, states: List[SavableDatasetState]) -> SavableDatasetMergedState:
-        """Merges the internal state"""
-        assert torch.utils.data.get_worker_info() is None, "Cannot merge in worker process"
-        return SavableDatasetMergedState(
-            torch_rng=[None if s is None else s.torch_rng for s in states],
-            numpy_rng=[None if s is None else s.numpy_rng for s in states],
-            rng=[None if s is None else s.rng for s in states],
-            sample_index=[0 if s is None else s.sample_index for s in states],
-        )
-
     def _restore_state(self, state: SavableDatasetMergedState) -> None:
         """Restores the internal worker state"""
         assert torch.utils.data.get_worker_info() is not None, "Can only restore in worker process"
@@ -545,18 +532,6 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
                     offset=sample_index - checkpoint.sample_index,
                 )
         raise ValueError("No checkpoint found")
-
-    def merge_checkpoints(
-        self, checkpoints: List[SavableDatasetCheckpoint]
-    ) -> SavableDatasetMergedCheckpoint:
-        """Merges saved checkpoints from all worker processes."""
-        assert torch.utils.data.get_worker_info() is None, "Cannot merge in worker process"
-        assert all(isinstance(c, SavableDatasetCheckpoint) for c in checkpoints)
-        return SavableDatasetMergedCheckpoint(
-            dataset_state=self.dataset.merge_states([c.dataset_state for c in checkpoints]),
-            state=self._merge_states([c.state for c in checkpoints]),
-            offset=[c.offset for c in checkpoints],
-        )
 
     def restore_checkpoint(
         self,
@@ -617,7 +592,7 @@ class SavableDataLoaderState(State):
 
     #: The internal state of the dataset (i.e. for worker processes, this will be a
     # :class:`megatron.energon.SavableDatasetMergedState`, otherwise directly the inner dataset state)
-    dataset_state: Union[SavableDatasetMergedCheckpoint, MergedState]
+    dataset_state: Union[List[SavableDatasetCheckpoint], List[State]]
     #: Which worker will be the next to emit a sample. Used to restore the proper order
     next_worker_id: int
 
@@ -920,18 +895,16 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
             # No workers configured
             worker_states = [self.dataset.save_state()]
             assert self._next_worker_id == 0
-            merged_states = self.dataset.merge_states(worker_states)
         elif self._persistent_iterator is None:
             # Workers configured, but not started yet -> Initial state
             return None
         else:
             # Fetch from worker processes
             worker_states = self._worker_command("get_checkpoint", self._worker_sample_counters)
-            merged_states = self.dataset.merge_checkpoints(worker_states)
 
         # Merge the states
         merged_state = SavableDataLoaderState(
-            dataset_state=merged_states,
+            dataset_state=worker_states,
             next_worker_id=self._next_worker_id,
         )
 
@@ -1059,15 +1032,14 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
         # Otherwise treat as single rank state.
         if src_rank is None or self.worker_config.world_size == 1:
             assert isinstance(state, list), "State must be a list in distributed setup"
-            assert (
-                len(state) == self.worker_config.world_size
-            ), "State must be a list of size world_size"
+            assert len(state) == self.worker_config.world_size, (
+                "State must be a list of size world_size"
+            )
 
             # All ranks have the state
             # Select the state of the current rank
             rank_state = state[self.worker_config.rank]
         else:
-
             if self.worker_config.data_parallel_group is not None:
                 # Only the src_rank has the state within this dp group
                 try:
@@ -1090,9 +1062,9 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
                 state = [None] * self.worker_config.world_size
             else:
                 assert isinstance(state, list), "State must be a list in distributed setup"
-                assert (
-                    len(state) == self.worker_config.world_size
-                ), "State must be a list of size world_size"
+                assert len(state) == self.worker_config.world_size, (
+                    "State must be a list of size world_size"
+                )
 
             local_object = [None]
             torch.distributed.scatter_object_list(

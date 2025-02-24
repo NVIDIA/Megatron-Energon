@@ -80,16 +80,6 @@ class ShuffleBufferDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic
             buffer=self._active_buffer.save_state(),
         )
 
-    def merge_states(self, states: List[Optional[ShuffleBufferState]]) -> ShuffleBufferMergedState:
-        assert all(s is None or isinstance(s, ShuffleBufferState) for s in states)
-        return ShuffleBufferMergedState.extend(
-            super().merge_states(states),
-            rng=self._worker_rng.merge_states([None if s is None else s.rng for s in states]),
-            buffer=self._active_buffer.merge_states(
-                [None if s is None else s.buffer for s in states]
-            ),
-        )
-
     def restore_state(self, state: Optional[ShuffleBufferMergedState]) -> None:
         super().restore_state(state)
         if state is None:

@@ -31,20 +31,6 @@ class WorkerRngState(State):
             return f"WorkerRngState(rng={inner!r})"
 
 
-@dataclass_slots
-class WorkerRngMergedState(State):
-    """The state of a worker random generator."""
-
-    rng: List[Optional[bytes]]
-
-    def __repr__(self):
-        if self.rng is None:
-            return "WorkerRngMergedState(rng=None)"
-        else:
-            inner = [None if r is None else r[:3] + b"..." for r in self.rng]
-            return f"WorkerRngMergedState(rng={inner!r})"
-
-
 class WorkerRng:
     """Helper class for getting a worker random generator, which is still in itself deterministic.
     If not in a worker, uses the global random generator's seed to initialize a new rng."""
@@ -104,10 +90,6 @@ class WorkerRng:
         if self.rng is None:
             return WorkerRngState(rng=None)
         return WorkerRngState(rng=bytes(self.rng.get_state().tolist()))
-
-    def merge_states(self, states: List[Optional[WorkerRngState]]) -> WorkerRngMergedState:
-        assert all(s is None or isinstance(s, WorkerRngState) for s in states)
-        return WorkerRngMergedState(rng=[None if s is None else s.rng for s in states])
 
     def restore_state(self, state: Optional[WorkerRngMergedState]) -> None:
         if state is None:

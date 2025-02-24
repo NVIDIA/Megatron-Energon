@@ -66,9 +66,9 @@ class BaseWrapperDataset(SavableDataset[T_sample], Generic[T_sample]):
 
         for d in dataset:
             # Check that the dataset worker configs are the same as the wrapper worker config
-            assert (
-                d.worker_config == self.worker_config
-            ), "Dataset and wrapper worker configs must match."
+            assert d.worker_config == self.worker_config, (
+                "Dataset and wrapper worker configs must match."
+            )
 
 
 class BaseSingleWrapperDataset(
@@ -88,18 +88,6 @@ class BaseSingleWrapperDataset(
         return BaseSingleWrapperState(
             dataset_type=type(self).__name__,
             dataset_state=self.dataset.save_state(),
-        )
-
-    def merge_states(
-        self, states: Sequence[Optional[BaseSingleWrapperState]]
-    ) -> BaseSingleWrapperMergedState:
-        assert all(s is None or isinstance(s, BaseSingleWrapperState) for s in states)
-        assert all(s is None or s.dataset_type == type(self).__name__ for s in states)
-        return BaseSingleWrapperMergedState(
-            dataset_type=type(self).__name__,
-            dataset_state=self.dataset.merge_states(
-                [None if s is None else s.dataset_state for s in states]
-            ),
         )
 
     def restore_state(self, state: Optional[BaseSingleWrapperMergedState]) -> None:
@@ -189,9 +177,6 @@ class SampleIndex:
 
     def save_state(self) -> int:
         return self._sample_index[self._rank]
-
-    def merge_states(self, states: List[int]) -> List[int]:
-        return states
 
     def restore_state(self, state: Optional[List[int]]) -> None:
         if state is None:

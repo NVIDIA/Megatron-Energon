@@ -114,13 +114,6 @@ class EpochizeDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_sa
             super().save_state(), offset=self._offset[self.worker_config.rank_worker_id()]
         )
 
-    def merge_states(self, states: List[EpochizeState]) -> EpochizeMergedState:
-        assert all(s is None or isinstance(s, EpochizeState) for s in states)
-        return EpochizeMergedState.extend(
-            super().merge_states(states),
-            offset=[0 if state is None else state.offset for state in states],
-        )
-
     def restore_state(self, state: Optional[EpochizeMergedState]) -> None:
         super().restore_state(state)
         if state is None:

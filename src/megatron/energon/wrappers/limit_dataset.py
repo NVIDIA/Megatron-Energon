@@ -120,13 +120,6 @@ class LimitDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_sampl
             offset=self._current_offset[self.worker_config.rank_worker_id()],
         )
 
-    def merge_states(self, states: List[LimitState]) -> LimitMergedState:
-        assert all(s is None or isinstance(s, LimitState) for s in states)
-        return LimitMergedState.extend(
-            super().merge_states(states),
-            offset=[0 if s is None else s.offset for s in states],
-        )
-
     def restore_state(self, state: Optional[LimitMergedState]) -> None:
         super().restore_state(state)
         if state is None:

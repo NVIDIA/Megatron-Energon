@@ -73,15 +73,6 @@ class FilterDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_samp
             sample_index=self._sample_index.save_state(),
         )
 
-    def merge_states(self, states: List[FilterState]) -> FilterMergedState:
-        assert all(s is None or isinstance(s, FilterState) for s in states)
-        return FilterMergedState.extend(
-            super().merge_states(states),
-            sample_indexes=self._sample_index.merge_states(
-                [0 if state is None else state.sample_index for state in states]
-            ),
-        )
-
     def restore_state(self, state: Optional[FilterMergedState]) -> None:
         super().restore_state(state)
         if state is None:

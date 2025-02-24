@@ -67,18 +67,6 @@ class ConcatDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
             dataset_states=[dataset.save_state() for dataset in self.datasets],
         )
 
-    def merge_states(self, states: List[ConcatState]) -> ConcatMergedState:
-        assert all(s is None or isinstance(s, ConcatState) for s in states)
-        assert all(s is None or len(s.dataset_states) == len(self.datasets) for s in states)
-        return ConcatMergedState(
-            dataset_states=[
-                dataset.merge_states(
-                    [None if s is None else s.dataset_states[ds_idx] for s in states]
-                )
-                for ds_idx, dataset in enumerate(self.datasets)
-            ],
-        )
-
     def restore_state(self, state: Optional[ConcatMergedState]) -> None:
         if state is None:
             for dataset in self.datasets:
