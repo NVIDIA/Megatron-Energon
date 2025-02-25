@@ -11,7 +11,7 @@ from megatron.energon.wrappers.base import BaseWrapperDataset
 T_sample = TypeVar("T_sample")
 
 
-class RepeatDataset(BaseWrapperDataset, Generic[T_sample]):
+class RepeatDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
     """This dataset repeats the inner dataset indefinitely or a specific number of repeats."""
 
     repeats: Optional[Union[int, float]]

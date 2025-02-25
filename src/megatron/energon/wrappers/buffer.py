@@ -22,7 +22,7 @@ from megatron.energon.wrappers.base import BaseWrapperDataset, get_sample_restor
 T_sample = TypeVar("T_sample")
 
 
-class SavableSampleBuffer(BaseWrapperDataset, Generic[T_sample]):
+class SavableSampleBuffer(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
     """A buffer of samples, savable."""
 
     _buffer: List[T_sample]

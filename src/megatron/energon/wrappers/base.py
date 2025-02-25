@@ -33,26 +33,26 @@ class BaseSingleWrapperState(State):
     dataset_state: State
 
 
-class BaseWrapperDataset(SavableDataset, ABC):
+class BaseWrapperDataset(SavableDataset[T_sample_out], Generic[T_sample_in, T_sample_out], ABC):
     """Base class for dataset wrappers. All dataset wrappers should derive from this. A dataset
     wrapper takes one dataset and modifies its samples to make a new dataset. This can be for
     shuffling samples or applying custom functions to the data. Some wrappers only modify the
     length of the dataset or how it's repeated."""
 
-    datasets: Tuple[SavableDataset, ...]
+    datasets: Tuple[SavableDataset[T_sample_in], ...]
 
     def __init__(
         self,
-        datasets: Union[SavableDataset, Iterable[SavableDataset]],
+        datasets: Union[SavableDataset[T_sample_in], Iterable[SavableDataset[T_sample_in]]],
         *,
         worker_config: WorkerConfig,
     ):
         super().__init__(worker_config=worker_config)
 
         if isinstance(datasets, SavableDataset):
-            datasets = [datasets]
-
-        self.datasets = tuple(datasets)
+            self.datasets = (datasets,)
+        else:
+            self.datasets = tuple(datasets)
 
         for d in self.datasets:
             # Check that the dataset worker configs are the same as the wrapper worker config
@@ -77,7 +77,7 @@ class BaseWrapperDataset(SavableDataset, ABC):
     def worker_has_samples(self) -> bool:
         return any(ds.worker_has_samples() for ds in self.datasets)
 
-    def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]):
+    def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_sample_out:
         if len(self.datasets) == 1:
             return self.datasets[0].restore_sample(index)
         else:

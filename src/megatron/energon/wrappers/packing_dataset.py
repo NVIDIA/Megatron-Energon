@@ -28,7 +28,9 @@ T_sample = TypeVar("T_sample")
 T_batch_sample = TypeVar("T_batch_sample")
 
 
-class PackingDataset(BaseWrapperDataset, Generic[T_sample, T_batch_sample]):
+class PackingDataset(
+    BaseWrapperDataset[T_sample, T_batch_sample], Generic[T_sample, T_batch_sample]
+):
     """This dataset wrapper transforms samples of a dataset into chunks/packs of samples, which are
     then combined into a batch."""
 

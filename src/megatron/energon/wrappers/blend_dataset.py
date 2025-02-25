@@ -13,7 +13,7 @@ from megatron.energon.wrappers.base import BaseWrapperDataset
 T_sample = TypeVar("T_sample")
 
 
-class BlendDataset(BaseWrapperDataset):
+class BlendDataset(BaseWrapperDataset[T_sample, T_sample]):
     """
     This dataset wrapper blends multiple iterable datasets together give a weighting.
     The datasets may be infinite. This dataset is always infinite.

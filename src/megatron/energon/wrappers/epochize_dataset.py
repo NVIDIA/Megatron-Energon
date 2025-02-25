@@ -6,26 +6,12 @@ from typing import Any, Dict, Generic, Iterator, List, Optional, TypeVar
 from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.flavors.base_dataset import SavableDataset
 from megatron.energon.worker import WorkerConfig
-from megatron.energon.wrappers.base import (
-    BaseSingleWrapperDataset,
-    BaseSingleWrapperMergedState,
-    BaseSingleWrapperState,
-)
+from megatron.energon.wrappers.base import BaseWrapperDataset
 
 T_sample = TypeVar("T_sample")
 
 
-@dataclass_slots
-class EpochizeState(BaseSingleWrapperState):
-    offset: int
-
-
-@dataclass_slots
-class EpochizeMergedState(BaseSingleWrapperMergedState):
-    offset: List[int]
-
-
-class EpochizeDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_sample]):
+class EpochizeDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
     """
     Uses the base dataset, and creates one epoch, which has length samples. Keeps the underlying
     dataset iterator alive over epochs (i.e. if it is an infinite dataset, it will keep the state).
@@ -34,6 +20,9 @@ class EpochizeDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_sa
 
     length: int
     _active_iter: Optional[Iterator[T_sample]]
+    _offset: int
+
+    _savable_fields = ["_offset"]
 
     def __init__(
         self,
@@ -53,8 +42,12 @@ class EpochizeDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_sa
         """
         super().__init__(dataset, worker_config=worker_config)
         self.length = length
-        self._offset = [0] * max(self.worker_config.num_workers, 1)
         self._active_iter = None
+
+        self.reset_state_own()
+
+    def reset_state_own(self) -> None:
+        self._offset = 0
 
     def __iter__(self) -> Iterator[T_sample]:
         # Compute the local length for this worker, i.e. all worker's lengths sum up to the total
@@ -73,13 +66,13 @@ class EpochizeDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_sa
                     "t": "EpochizeDataset.epoch_start",
                     "r": self.worker_config.rank,
                     "w": self.worker_config.rank_worker_id(),
-                    "offset": self._offset[worker_idx],
+                    "offset": self._offset,
                     "local_length": local_length,
                     "length": self.length,
                 }
             )
 
-        offset_range = list(range(self._offset[worker_idx], local_length))
+        offset_range = list(range(self._offset, local_length))
 
         # Only iterate if there are samples to iterate
         if len(offset_range) > 0:
@@ -87,7 +80,7 @@ class EpochizeDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_sa
                 self._active_iter = iter(self.dataset)
 
             for idx in offset_range:
-                self._offset[worker_idx] = (idx + 1) % local_length
+                self._offset = (idx + 1) % local_length
                 try:
                     sample = next(self._active_iter)
                 except StopIteration:
@@ -100,7 +93,7 @@ class EpochizeDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_sa
                     "t": "EpochizeDataset.epoch_end",
                     "r": self.worker_config.rank,
                     "w": self.worker_config.rank_worker_id(),
-                    "offset": self._offset[worker_idx],
+                    "offset": self._offset,
                     "local_length": local_length,
                     "length": self.length,
                 }
@@ -108,19 +101,6 @@ class EpochizeDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_sa
 
     def __len__(self) -> int:
         return self.length
-
-    def save_state(self) -> EpochizeState:
-        return EpochizeState.extend(
-            super().save_state(), offset=self._offset[self.worker_config.rank_worker_id()]
-        )
-
-    def restore_state(self, state: Optional[EpochizeMergedState]) -> None:
-        super().restore_state(state)
-        if state is None:
-            self._offset = [0] * max(self.worker_config.num_workers, 1)
-        else:
-            assert isinstance(state, EpochizeMergedState)
-            self._offset = state.offset
 
     def config(self) -> Dict[str, Any]:
         return {

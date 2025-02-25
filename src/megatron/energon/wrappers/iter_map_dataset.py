@@ -26,7 +26,7 @@ T_sample = TypeVar("T_sample")
 T_sample_out = TypeVar("T_sample_out")
 
 
-class IterMapDataset(BaseWrapperDataset, Generic[T_sample, T_sample_out]):
+class IterMapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T_sample_out]):
     """This dataset wrapper applies a custom function to transform the stream of samples and yield
     a new stream of samples.
     If used in a savable dataset context, it is critical, that `iter_map_fn` is either stateless,

@@ -3,14 +3,9 @@
 
 from typing import Any, Callable, Dict, Generic, Iterator, List, Literal, Optional, TypeVar
 
-from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.flavors.base_dataset import SavableDataset
 from megatron.energon.worker import WorkerConfig
-from megatron.energon.wrappers.base import (
-    BaseSingleWrapperDataset,
-    BaseSingleWrapperMergedState,
-    BaseSingleWrapperState,
-)
+from megatron.energon.wrappers.base import BaseWrapperDataset
 
 T_sample = TypeVar("T_sample")
 
@@ -52,22 +47,14 @@ def default_get_keys(batch: Any) -> Optional[List[str]]:
     return None
 
 
-@dataclass_slots
-class LogSampleState(BaseSingleWrapperState):
-    step: int
-
-
-@dataclass_slots
-class LogSampleMergedState(BaseSingleWrapperMergedState):
-    step: List[int]
-
-
-class LogSampleDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_sample]):
+class LogSampleDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
     """This dataset logs every yielded sample to the debug logs."""
 
     get_keys_fn: Callable[[T_sample], Optional[List[str]]]
     mode: Literal["train", "val"]
-    _step: List[int]
+    _step: int
+
+    _savable_fields = ["_step"]
 
     def __init__(
         self,
@@ -84,7 +71,11 @@ class LogSampleDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_s
         super().__init__(dataset, worker_config=worker_config)
         self.get_keys_fn = get_keys_fn
         self.mode = mode
-        self._step = [0] * max(self.worker_config.num_workers, 1)
+
+        self.reset_state_own()
+
+    def reset_state_own(self) -> None:
+        self._step = 0
 
     def __len__(self):
         return len(self.dataset)
@@ -96,7 +87,7 @@ class LogSampleDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_s
                 "r": self.worker_config.rank,
                 "w": self.worker_config.global_worker_id(),
                 "m": self.mode,
-                "idx": self._step[self.worker_config.rank_worker_id()],
+                "idx": self._step,
             }
             keys = self.get_keys_fn(sample)
             if keys is not None:
@@ -105,25 +96,10 @@ class LogSampleDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_s
             self.worker_config.worker_log(log_entry)
 
     def __iter__(self) -> Iterator[T_sample]:
-        worker_id = self.worker_config.rank_worker_id()
         for sample in self.dataset:
             self._log(sample)
-            self._step[worker_id] += 1
+            self._step += 1
             yield sample
-
-    def save_state(self) -> LogSampleState:
-        return LogSampleState.extend(
-            super().save_state(),
-            step=self._step[self.worker_config.rank_worker_id()],
-        )
-
-    def restore_state(self, state: Optional[LogSampleMergedState]) -> None:
-        super().restore_state(state)
-        if state is None:
-            self._step = [0] * max(self.worker_config.num_workers, 1)
-        else:
-            assert isinstance(state, LogSampleMergedState)
-            self._step = state.step
 
     def config(self) -> Dict[str, Any]:
         # Transparent logger, it won't change the samples

@@ -38,7 +38,7 @@ T_sample_out = TypeVar("T_sample_out")
 #     generator_offset: int
 
 
-class MapDataset(BaseWrapperDataset, Generic[T_sample, T_sample_out]):
+class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T_sample_out]):
     """This dataset wrapper applies a custom function to transform each sample."""
 
     map_fn: Callable[[T_sample], Union[T_sample_out, Generator[T_sample_out, None, None]]]

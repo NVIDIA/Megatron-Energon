@@ -7,21 +7,11 @@ from typing import Any, Callable, Dict, Generator, Iterator, List, Optional, Seq
 import torch
 
 from megatron.energon.dataclass_slots import dataclass_slots
-from megatron.energon.flavors.base_dataset import MergedState, SavableDataset, State
+from megatron.energon.flavors.base_dataset import SavableDataset
 from megatron.energon.flavors.webdataset.itar_reader import ITarReader
 from megatron.energon.flavors.webdataset.structs import FilteredSample, reraise_exception
-from megatron.energon.rng import WorkerRng, WorkerRngMergedState, WorkerRngState
+from megatron.energon.rng import WorkerRng
 from megatron.energon.worker import WorkerConfig
-
-
-@dataclass_slots
-class SliceState:
-    """Represents the iteration state of a single slice slice to the index."""
-
-    #: The slice index of this slice state
-    index: int
-    #: The actual state: The global sample offset (`slice[index] <= offset < slice[index + 1]``)
-    current: int
 
 
 @dataclass_slots
@@ -34,52 +24,40 @@ class RawSampleData:
     data: Tuple[Optional[FilteredSample], ...]
 
 
-@dataclass_slots
-class SampleLoaderState(State):
-    """
-    The savable state for the wds sample loader. Contains the active and pending slices.
-    """
+# @dataclass_slots
+# class SliceState:
+#     """Represents the iteration state of a single slice slice to the index."""
 
-    #: Rng state
-    rng: WorkerRngState
-    #: The seed that was used to generate the current pending slices
-    pending_slices_seed: WorkerRngState
-    #: The number of slices that have already been opened / processed and thus been removed from the
-    # pending slices. None if starting a new epoch.
-    # Pending slices are the slices which have not yet been opened, but should be processed in the
-    # current epoch.
-    pending_slices_offset: Optional[int]
-    #: The active slices are the currently opened slices. May contain `None`, if there are fewer
-    # slices available (i.e. pending_slices empty) than parallel slice iterators requested.
-    active_slices: Optional[List[Optional[SliceState]]]
-    #: The total number of samples retrieved, it's just a monotonically increasing counter
-    sample_count: int
-    #: Number of epochs this dataset has been iterated over
-    epoch_count: int
-    #: Number of samples retrieved in current epoch
-    epoch_sample_count: int
+#     #: The slice index of this slice state
+#     index: int
+#     #: The actual state: The global sample offset (`slice[index] <= offset < slice[index + 1]``)
+#     current: int
 
 
-@dataclass_slots
-class SampleLoaderMergedState(MergedState):
-    #: Rng state
-    rng: WorkerRngMergedState
-    #: The seed that was used to generate the current pending slices
-    pending_slices_seed: WorkerRngMergedState
-    #: The number of slices that have already been opened / processed and thus been removed from the
-    # pending slices. None if starting a new epoch.
-    # Pending slices are the slices which have not yet been opened, but should be processed in the
-    # current epoch.
-    pending_slices_offset: List[Optional[int]]
-    #: The active slices are the currently opened slices. May contain `None`, if there are fewer
-    # slices available (i.e. pending_slices empty) than parallel slice iterators requested.
-    active_slices: List[Optional[List[Optional[SliceState]]]]
-    #: The total number of samples retrieved, it's just a monotonically increasing counter
-    sample_count: List[int]
-    #: Number of epochs this dataset has been iterated over
-    epoch_count: List[int]
-    #: The number of samples retrieved in current epoch
-    epoch_sample_count: List[int]
+# @dataclass_slots
+# class SampleLoaderState(State):
+#     """
+#     The savable state for the wds sample loader. Contains the active and pending slices.
+#     """
+
+#     #: Rng state
+#     rng: WorkerRngState
+#     #: The seed that was used to generate the current pending slices
+#     pending_slices_seed: WorkerRngState
+#     #: The number of slices that have already been opened / processed and thus been removed from the
+#     # pending slices. None if starting a new epoch.
+#     # Pending slices are the slices which have not yet been opened, but should be processed in the
+#     # current epoch.
+#     pending_slices_offset: Optional[int]
+#     #: The active slices are the currently opened slices. May contain `None`, if there are fewer
+#     # slices available (i.e. pending_slices empty) than parallel slice iterators requested.
+#     active_slices: Optional[List[Optional[SliceState]]]
+#     #: The total number of samples retrieved, it's just a monotonically increasing counter
+#     sample_count: int
+#     #: Number of epochs this dataset has been iterated over
+#     epoch_count: int
+#     #: Number of samples retrieved in current epoch
+#     epoch_sample_count: int
 
 
 class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):

@@ -12,7 +12,7 @@ from megatron.energon.wrappers.buffer import SavableSampleBuffer
 T_sample = TypeVar("T_sample")
 
 
-class ShuffleBufferDataset(BaseWrapperDataset, Generic[T_sample]):
+class ShuffleBufferDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
     """Shuffle buffer for the dataset."""
 
     size: int

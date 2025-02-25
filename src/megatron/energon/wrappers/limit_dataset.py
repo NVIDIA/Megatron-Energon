@@ -10,7 +10,7 @@ from megatron.energon.wrappers.base import BaseWrapperDataset
 T_sample = TypeVar("T_sample")
 
 
-class LimitDataset(BaseWrapperDataset, Generic[T_sample]):
+class LimitDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
     """Limits the length of the dataset."""
 
     length: int

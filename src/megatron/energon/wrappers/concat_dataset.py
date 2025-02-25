@@ -10,7 +10,7 @@ from megatron.energon.wrappers.base import BaseWrapperDataset
 T_sample = TypeVar("T_sample")
 
 
-class ConcatDataset(BaseWrapperDataset, Generic[T_sample]):
+class ConcatDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
     """
     This dataset wrapper concatenates multiple iterable datasets together. The datasets must be
     finite, otherwise not all datasets can be sampled. This is only useful for validation / test

@@ -62,7 +62,9 @@ class Bucket(Savable, Generic[T_batch_sample]):
         self.samples.restore_state(state["samples"])
 
 
-class GroupBatchDataset(BaseWrapperDataset, Generic[T_batch_sample, T_batch]):
+class GroupBatchDataset(
+    BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_sample, T_batch]
+):
     """This dataset wrapper transforms a dataset of samples into a dataset of batches, grouped by some criterion.
     The length is not correct, as this function can not predict the number of batches as there is no fixed batch size,
     instead it returns the inner dataset size.
@@ -221,10 +223,8 @@ class GroupBatchDataset(BaseWrapperDataset, Generic[T_batch_sample, T_batch]):
         self._group_key_sample_index.restore_state(state["bucket_sample_index"])
         self._batch_sample_index.restore_state(state["batch_sample_index"])
         for key, bucket_state in state["buckets"].items():
-            # TODO: I don't like that we have to build the bucket and
-            # then restore the state on top.
             self._buckets[key] = Bucket(
-                batch_size=bucket_state["batch_size"],
+                batch_size=-1,
                 samples=SavableSampleBuffer(self.dataset, worker_config=self.worker_config),
             )
             self._buckets[key].restore_state(bucket_state)
