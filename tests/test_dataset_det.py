@@ -285,6 +285,80 @@ class TestDataset(unittest.TestCase):
         locals().clear()
         gc.collect()
 
+    def test_determinism_taskencoder_save_restore(self):
+
+        class TestTaskEncoder(DefaultTaskEncoder):
+            @stateless(restore_seeds=True)
+            def encode_sample(self, sample: TextSample) -> TextSample:
+                rand_str = (
+                    f"_{torch.randint(0, 1000, (1,)).item()}_{random.randint(0, 1000)}"
+                    + f"_{self.current_batch_index}_{self.current_sample_index}"
+                )
+
+                return TextSample(
+                    __key__=sample.__key__,
+                    __restore_key__=sample.__restore_key__,
+                    __subflavor__=sample.__subflavor__,
+                    __subflavors__=sample.__subflavors__,
+                    text=sample.text + rand_str,
+                )
+
+        for num_workers in [1, 0]:
+            worker_config1 = WorkerConfig(rank=0, world_size=1, num_workers=num_workers)
+
+            # This seed is used by the dataset to shuffle the data
+            torch.manual_seed(42)
+            ds1a = get_train_dataset(
+                self.dataset_path,
+                split_part="train",
+                sample_type=TextSample,
+                worker_config=worker_config1,
+                batch_size=1,
+                shuffle_buffer_size=42,
+                max_samples_per_sequence=2,
+                task_encoder=TestTaskEncoder(),
+            )
+
+            torch.manual_seed(44)
+            ds1b = get_train_dataset(
+                self.dataset_path,
+                split_part="train",
+                sample_type=TextSample,
+                worker_config=worker_config1,
+                batch_size=1,
+                shuffle_buffer_size=42,
+                max_samples_per_sequence=2,
+                task_encoder=TestTaskEncoder(),
+            )
+
+            # Fork the dataset twice
+            loader1a = get_savable_loader(ds1a)
+            loader1b = get_savable_loader(ds1b)
+
+            # Load 7 samples
+            data_pre = [data.text[0] for idx, data in zip(range(7), loader1a)]
+
+            # Then save state
+            state = loader1a.save_state_rank()
+
+            # Load another 20 samples
+            data_post = [data.text[0] for idx, data in zip(range(20), loader1a)]
+
+            # Restore state
+            loader1b.restore_state_rank(state)
+
+            # Load 20 samples again
+            data_restored = [data.text[0] for idx, data in zip(range(20), loader1b)]
+
+            print("Data post:", data_post)
+            print("Data restored:", data_restored)
+
+            assert data_post == data_restored
+
+        # Delete all locals, otherwise loaders might be kept alive
+        locals().clear()
+        gc.collect()
+
     def test_restore_state(self):
         worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0)
 

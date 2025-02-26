@@ -40,7 +40,11 @@ from megatron.energon.flavors.base_dataset import (
 )
 from megatron.energon.rng import SystemRng
 from megatron.energon.worker import WorkerConfig
-from megatron.energon.wrappers.base import BaseSingleWrapperMergedState, BaseSingleWrapperState
+from megatron.energon.wrappers.base import (
+    BaseSingleWrapperDataset,
+    BaseSingleWrapperMergedState,
+    BaseSingleWrapperState,
+)
 from megatron.energon.wrappers.gc_dataset import GC_DEFAULT_EVERY_N_ITER, GcDataset, gc_init_worker
 from megatron.energon.wrappers.log_sample_dataset import default_get_keys
 
@@ -73,23 +77,21 @@ class SimpleSavableDatasetMergedState(BaseSingleWrapperMergedState):
     sample_indexes: List[int]
 
 
-class SimpleSavableDatasetWrapper(SavableDataset[Tuple[int, int, T]], Generic[T]):
+class SimpleSavableDatasetWrapper(BaseSingleWrapperDataset[T, Tuple[int, int, T]], Generic[T]):
     """Wrapper for non-multiprocessing savable datasets. Restarts the inner dataset. This class is
     not intended to be used directly."""
 
-    dataset: SavableDataset[T]
     _state_restored: bool = False
     _sample_indexes: List[int]
 
     def __init__(self, dataset: SavableDataset[T], worker_config: WorkerConfig):
-        super().__init__(worker_config=worker_config)
-        self.dataset = dataset
-        self._sample_index = [0] * max(self.worker_config.num_workers, 1)
+        super().__init__(dataset, worker_config=worker_config)
+        self._sample_indexes = [0] * max(self.worker_config.num_workers, 1)
 
         # Check that the dataset worker config is the same as the wrapper worker config
-        assert (
-            self.dataset.worker_config == self.worker_config
-        ), "Dataset and wrapper worker configs must match."
+        assert self.dataset.worker_config == self.worker_config, (
+            "Dataset and wrapper worker configs must match."
+        )
 
     def __len__(self):
         return len(self.dataset)
@@ -100,35 +102,51 @@ class SimpleSavableDatasetWrapper(SavableDataset[Tuple[int, int, T]], Generic[T]
         global_worker_id = self.worker_config.global_worker_id()
         while self._state_restored:
             self._state_restored = False
-            self.worker_config.worker_activate(self._sample_index[worker_id])
+            self.worker_config.worker_activate(self._sample_indexes[worker_id])
             worker_active = True
             try:
                 for src_data in self.dataset:
                     self.worker_config.worker_deactivate()
                     worker_active = False
-                    sample_index = self._sample_index[worker_id]
+                    sample_index = self._sample_indexes[worker_id]
                     src_data = add_sample_restore_key(
                         src_data, global_worker_id, sample_index, src=self
                     )
-                    self._sample_index[worker_id] += 1
+                    self._sample_indexes[worker_id] += 1
                     yield worker_id, sample_index, src_data
                     if self._state_restored:
                         # Restart iterator after restore
                         break
-                    self.worker_config.worker_activate(self._sample_index[worker_id])
+                    self.worker_config.worker_activate(self._sample_indexes[worker_id])
                     worker_active = True
             finally:
                 if worker_active:
                     self.worker_config.worker_deactivate()
 
-    def save_state(self) -> State:
-        return self.dataset.save_state()
+    def save_state(self) -> SimpleSavableDatasetState:
+        worker_idx = self.worker_config.rank_worker_id()
+        return SimpleSavableDatasetState.extend(
+            super().save_state(), sample_index=self._sample_indexes[worker_idx]
+        )
 
-    def merge_states(self, states: List[State]) -> MergedState:
-        return self.dataset.merge_states(states)
+    def merge_states(
+        self, states: List[SimpleSavableDatasetState]
+    ) -> SimpleSavableDatasetMergedState:
+        assert all(s is None or isinstance(s, SimpleSavableDatasetState) for s in states)
+        return SimpleSavableDatasetMergedState.extend(
+            super().merge_states(states),
+            sample_indexes=[0 if s is None else s.sample_index for s in states],
+        )
 
-    def restore_state(self, state: MergedState):
-        self.dataset.restore_state(state)
+    def restore_state(self, state: SimpleSavableDatasetMergedState):
+        super().restore_state(state)
+
+        if state is None:
+            self._sample_indexes = [0] * max(self.worker_config.num_workers, 1)
+        else:
+            assert isinstance(state, SimpleSavableDatasetMergedState)
+            self._sample_indexes = state.sample_indexes
+
         self._state_restored = True
 
     def can_restore_sample(self) -> bool:
@@ -1059,15 +1077,14 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
         # Otherwise treat as single rank state.
         if src_rank is None or self.worker_config.world_size == 1:
             assert isinstance(state, list), "State must be a list in distributed setup"
-            assert (
-                len(state) == self.worker_config.world_size
-            ), "State must be a list of size world_size"
+            assert len(state) == self.worker_config.world_size, (
+                "State must be a list of size world_size"
+            )
 
             # All ranks have the state
             # Select the state of the current rank
             rank_state = state[self.worker_config.rank]
         else:
-
             if self.worker_config.data_parallel_group is not None:
                 # Only the src_rank has the state within this dp group
                 try:
@@ -1090,9 +1107,9 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
                 state = [None] * self.worker_config.world_size
             else:
                 assert isinstance(state, list), "State must be a list in distributed setup"
-                assert (
-                    len(state) == self.worker_config.world_size
-                ), "State must be a list of size world_size"
+                assert len(state) == self.worker_config.world_size, (
+                    "State must be a list of size world_size"
+                )
 
             local_object = [None]
             torch.distributed.scatter_object_list(
