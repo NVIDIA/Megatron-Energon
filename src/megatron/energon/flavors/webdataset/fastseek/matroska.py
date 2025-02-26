@@ -26,4 +26,4 @@ def parse_matroska(file: BitsType) -> SortedList:
             stack.extend([c for c in el])
 
     ns_per_s: int = int(1e9)
-    return cue_times, Fraction(timescale, ns_per_s)
+    return cue_times, Fraction(int(timescale), ns_per_s)

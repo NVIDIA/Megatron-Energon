@@ -65,8 +65,9 @@ class AVDecoder:
         else:
             return None
         if media is not None:
+            frames = media[0].permute((0, 3, 1, 2)) if media[0] is not None else None
             return VideoData(
-                frames=media[0].permute((0, 3, 1, 2)),
+                frames=frames,
                 aframes=media[1],
                 info=media[2],
             )
