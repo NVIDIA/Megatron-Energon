@@ -267,7 +267,8 @@ class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC)
                 state[key] = attr.save_state()
             else:
                 # Check if this field is a simple python type or a user class
-                if attr.__module__ != "builtins":
+
+                if attr is not None and getattr(attr, "__module__", "builtins") != "builtins":
                     import warnings
 
                     warnings.warn(

@@ -40,8 +40,8 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
 
     _savable_fields = [
         "_sample_index",
-        "_generator_sample_keys",
-        "_generator_offsets",
+        "_generator_sample_key",
+        "_generator_offset",
     ]
 
     def __init__(
