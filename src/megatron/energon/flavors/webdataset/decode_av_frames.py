@@ -49,7 +49,7 @@ class AVDecoder:
                 out_frame_size=self.video_out_frame_size,
                 decode_audio=self.video_decode_audio,
             )
-        elif extension in ("flac, mp3"):
+        elif extension in ("flac", "mp3"):
             # TODO(jbarker): make the magic numbers configurable
             media = decode_audio_samples(
                 data,
