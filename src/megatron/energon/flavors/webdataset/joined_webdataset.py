@@ -99,9 +99,9 @@ class JoinedWebdatasetFactory(
             handler: Exception handler. Args: (exception, key).
         """
         self.__sample_type__ = joiner
-        assert all(
-            not hasattr(d, "dataset") for d in inner_datasets
-        ), "Inner dataset was not instantiated with _is_composed=True"
+        assert all(not hasattr(d, "dataset") for d in inner_datasets), (
+            "Inner dataset was not instantiated with _is_composed=True"
+        )
         if isinstance(joiner, type) and issubclass(joiner, Sample):
             joiner = joiner.from_joined
         else:
@@ -186,7 +186,7 @@ class JoinedWebdatasetFactory(
 
         dataset = WebdatasetSampleLoaderDataset(
             join_readers=itar_readers,
-            workers_sample_slice_offsets=workers_sample_slice_offsets,
+            sample_slice_offsets=workers_sample_slice_offsets,
             worker_config=self.worker_config,
             shuffle_over_epochs=self.shuffle_over_epochs if self.training else None,
             parallel_slice_iters=parallel_shard_iters,
