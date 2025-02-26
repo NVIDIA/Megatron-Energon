@@ -4,12 +4,10 @@
 import io
 from collections.abc import Collection, Iterator
 from fractions import Fraction
-import re
 
 import av
 import numpy as np
 import torch
-import torchaudio
 
 from megatron.energon.flavors.webdataset.fastseek import Fastseek
 from megatron.energon.flavors.webdataset.video_data import VideoData
