@@ -19,7 +19,6 @@ DEFAULT_AUDIO_FRAME_SHIFT_MS = 10  # in milliseconds
 class AVDecoder:
     def __init__(
             self,
-            audio_convert_to_melspec,
             audio_clip_duration,
             audio_num_clips,
             audio_target_rate,
@@ -27,7 +26,6 @@ class AVDecoder:
             video_num_frames,
             video_out_frame_size,
     ):
-            self.audio_convert_to_melspec = audio_convert_to_melspec
             self.audio_clip_duration = audio_clip_duration
             self.audio_num_clips = audio_num_clips
             self.audio_target_rate = audio_target_rate
@@ -43,9 +41,9 @@ class AVDecoder:
             key: media file extension
             data: raw media bytes
         """
-        extension = re.sub(r".*[.]", "", key)
+        extension = key.split('.', 1)[-1]
         # TODO(jbarker): we should add a debug log here
-        if extension in "mov mp4 webm mkv".split():
+        if extension in ("mov", "mp4", "webm", "mkv"):
             # TODO(jbarker): make the magic numbers configurable
             media = decode_video_frames(
                 data,
@@ -53,11 +51,10 @@ class AVDecoder:
                 out_frame_size=self.video_out_frame_size,
                 decode_audio=self.video_decode_audio,
             )
-        elif extension in "flac mp3".split():
+        elif extension in ("flac, mp3"):
             # TODO(jbarker): make the magic numbers configurable
             media = decode_audio_samples(
                 data,
-                convert_to_melspec=self.audio_convert_to_melspec,
                 num_clips=self.audio_num_clips,
                 clip_duration=self.audio_clip_duration,
                 target_rate=self.audio_target_rate,
@@ -73,34 +70,6 @@ class AVDecoder:
             )
         return None
 
-def waveform2melspec(waveform, sample_rate, num_mel_bins, target_length):
-    # Based on https://github.com/YuanGongND/ast/blob/d7d8b4b8e06cdaeb6c843cdb38794c1c7692234c/src/dataloader.py#L102
-    waveform -= waveform.mean()
-    fbank = torchaudio.compliance.kaldi.fbank(
-        waveform,
-        htk_compat=True,
-        sample_frequency=sample_rate,
-        use_energy=False,
-        window_type="hanning",
-        num_mel_bins=num_mel_bins,
-        dither=0.0,
-        frame_length=25,
-        frame_shift=DEFAULT_AUDIO_FRAME_SHIFT_MS,
-    )
-    # Convert to [mel_bins, num_frames] shape
-    fbank = fbank.transpose(0, 1)
-    # Pad to target_length
-    n_frames = fbank.size(1)
-    p = target_length - n_frames
-    # cut and pad
-    if p > 0:
-        fbank = torch.nn.functional.pad(fbank, (0, p), mode="constant", value=0)
-    elif p < 0:
-        fbank = fbank[:, 0:target_length]
-    # Convert to [1, mel_bins, num_frames] shape, essentially like a 1
-    # channel image
-    fbank = fbank.unsqueeze(0)
-    return fbank
 
 def frame_to_ts(frame: int, average_rate: Fraction, time_base: Fraction) -> int:
     return int(frame / average_rate / time_base)
@@ -197,7 +166,6 @@ def decode_video_frames(
     num_clips: int = 1,
     clip_duration: int = 1,
     target_rate: int = 16000,
-    convert_to_melspec: bool = False,
 ):
     byte_stream = io.BytesIO(data)
 
@@ -239,7 +207,6 @@ def decode_video_frames(
             io.BytesIO(data),
             clip_indices,
             target_rate=target_rate,
-            convert_to_melspec=convert_to_melspec,
         )
         # Merge any extra audio metadata
         metadata.update(audio_metadata)
@@ -251,7 +218,6 @@ def get_audio_batch(
     audio_file: io.BytesIO,
     clip_indices: list[list[int]],
     target_rate: int = 16000,
-    convert_to_melspec: bool = False,
 ) -> tuple[torch.Tensor, dict]:
     """
     Gets a batch of audio samples at the given indices from an audio file,
@@ -308,8 +274,6 @@ def get_audio_batch(
 
                 # Convert to torch
                 clip_tensor = torch.from_numpy(clip_all)
-                if convert_to_melspec:
-                    clip_tensor = waveform2melspec(clip_tensor.float()[None, :], 16000, 128, 204)[0]
                 clips.append(clip_tensor)
 
         return torch.stack(clips), metadata
@@ -317,8 +281,9 @@ def get_audio_batch(
 
 def get_clip_indices(sampling_rate, total_samples, num_clips, clip_duration_sec):
     clip_samples = int(sampling_rate * clip_duration_sec)
-    assert clip_samples <= total_samples, \
-        "Requested clip duration exceeds total samples."
+
+    if clip_samples < total_samples:
+        clip_samples = total_samples
 
     if num_clips == 1:
         return [np.arange(0, clip_samples)]
@@ -334,7 +299,7 @@ def get_clip_indices(sampling_rate, total_samples, num_clips, clip_duration_sec)
     return [np.arange(start, start + clip_samples) for start in start_indices]
 
 
-def decode_audio_samples(data: bytes, num_clips: int = 1, clip_duration: int = 1, target_rate: int = 16000, convert_to_melspec: bool = False):
+def decode_audio_samples(data: bytes, num_clips: int = 1, clip_duration: int = 1, target_rate: int = 16000):
 
     byte_stream = io.BytesIO(data)
 
@@ -348,6 +313,6 @@ def decode_audio_samples(data: bytes, num_clips: int = 1, clip_duration: int = 1
     else:
         clip_indices = get_clip_indices(sampling_rate, sample_count, num_clips, clip_duration)
 
-    audio_tensor, metadata = get_audio_batch(byte_stream, clip_indices, target_rate, convert_to_melspec)
+    audio_tensor, metadata = get_audio_batch(byte_stream, clip_indices, target_rate)
 
     return None, audio_tensor, metadata

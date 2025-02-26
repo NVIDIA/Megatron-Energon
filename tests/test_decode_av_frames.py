@@ -98,7 +98,6 @@ class TestVideoDecode(unittest.TestCase):
             num_clips = 5,
             clip_duration = 3,
             target_rate = 16000,
-            convert_to_melspec = True,
         )
 
         # get strided frames from baseline complete video tensor
@@ -177,21 +176,6 @@ class TestAudioDecode(unittest.TestCase):
         assert audio_tensor.shape == torch.Size([5, 48000]), \
             "Energon decoded audio clips have wrong size"
 
-    def test_decode_clips_melspec(self):
-        with open("tests/data/test_audio.flac", "rb") as f:
-            raw_bytes = f.read()
-
-        # Decode using fastseek Energon wrapper
-        _, audio_tensor, _ = decode_audio_samples(
-            data = raw_bytes,
-            num_clips = 5,
-            clip_duration = 3,
-            target_rate = 16000,
-            convert_to_melspec = True,
-        )
-
-        assert audio_tensor.shape == torch.Size([5, 128, 204]), \
-            "Energon decoded audio clip spectrograms have wrong size"
 
 if __name__ == "__main__":
 
