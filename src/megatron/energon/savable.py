@@ -3,7 +3,7 @@
 
 from abc import ABC, abstractmethod
 
-from megatron.energon.flavors.base_dataset import FlexState
+from megatron.energon.state import FlexState
 
 
 class Savable(ABC):

@@ -8,7 +8,7 @@ import torch
 
 from megatron.energon.flavors.base_dataset import SavableDataset
 from megatron.energon.worker import WorkerConfig
-from megatron.energon.wrappers.base import BaseSingleWrapperDataset
+from megatron.energon.wrappers.base import BaseWrapperDataset
 from megatron.energon.wrappers.batch_dataset import BatchDataset
 from megatron.energon.wrappers.blend_dataset import BlendDataset
 
@@ -72,7 +72,7 @@ def homogeneous_concat_mix(samples: List[T_batch_in]) -> T_batch:
     return generic_concat(samples)
 
 
-class MixBatchDataset(BaseSingleWrapperDataset[T_batch_in, T_batch], Generic[T_batch_in, T_batch]):
+class MixBatchDataset(BaseWrapperDataset[T_batch_in, T_batch], Generic[T_batch_in, T_batch]):
     """
     This dataset wrapper blends multiple iterable datasets together give a weight.
     The datasets may be infinite. This dataset is always infinite.

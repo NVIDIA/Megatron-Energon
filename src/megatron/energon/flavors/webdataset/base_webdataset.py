@@ -135,7 +135,7 @@ class BaseWebdatasetFactory(
 
         dataset = WebdatasetSampleLoaderDataset(
             join_readers=[itar_reader],
-            sample_slice_offsets=workers_sample_slice_offsets,
+            workers_sample_slice_offsets=workers_sample_slice_offsets,
             worker_config=self.worker_config,
             shuffle_over_epochs=self.shuffle_over_epochs if self.training else None,
             parallel_slice_iters=parallel_shard_iters,

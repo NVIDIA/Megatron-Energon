@@ -29,6 +29,7 @@ from typing_extensions import Self
 from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.epathlib import EPath
 from megatron.energon.savable import Savable
+from megatron.energon.state import FlexState
 from megatron.energon.worker import WorkerConfig
 
 T_sample = TypeVar("T_sample", covariant=True)
@@ -225,10 +226,6 @@ class State(ABC, ExtendableDataclassMixin):
     """
 
 
-class FlexState(dict):
-    pass
-
-
 class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC):
     """A dataset that can be saved and restored (i.e. the random state, internal buffers, etc.).
     I.e. it can be resumed from a checkpoint.
@@ -307,6 +304,10 @@ class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC)
     def reset_state_own(self) -> None:
         """Resets the state of the dataset to the initial state. Can only be called in a worker process."""
         ...
+
+    def reset_state_deep(self) -> None:
+        """Resets the state of the dataset to the initial state. Can only be called in a worker process."""
+        self.reset_state_own()
 
     @abstractmethod
     def worker_has_samples(self) -> bool:

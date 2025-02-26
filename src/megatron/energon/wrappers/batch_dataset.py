@@ -27,17 +27,6 @@ T_batch = TypeVar("T_batch", covariant=True)
 T_batch_sample = TypeVar("T_batch_sample", covariant=True)
 
 
-# @dataclass_slots
-# class BatchState(BaseSingleWrapperState):
-#     sample_index: int
-
-
-# @dataclass_slots
-# class BatchGeneratorState(BatchState):
-#     generator_sample_key: Any
-#     generator_offset: int
-
-
 class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_sample, T_batch]):
     """This dataset wrapper transforms a dataset of samples into a dataset of batches."""
 

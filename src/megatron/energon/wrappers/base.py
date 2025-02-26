@@ -3,14 +3,12 @@
 
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
-from typing import Any, Generator, Generic, Iterable, List, Optional, Tuple, TypeVar, Union
+from typing import Any, Generator, Generic, Iterable, Optional, Tuple, TypeVar, Union
 
-from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.flavors.base_dataset import (
     FlexState,
     Sample,
     SavableDataset,
-    State,
     add_sample_restore_key,
 )
 from megatron.energon.savable import Savable
@@ -20,17 +18,6 @@ T = TypeVar("T")
 T_sample = TypeVar("T_sample", covariant=True)
 T_sample_out = TypeVar("T_sample_out", covariant=True)
 T_sample_in = TypeVar("T_sample_in", covariant=True)
-
-
-@dataclass_slots
-class BaseSingleWrapperState(State):
-    """Base class for dataset states."""
-
-    #: The class name of the dataset saving this state for assertion
-    dataset_type: str
-
-    #: State of the inner dataset
-    dataset_state: State
 
 
 class BaseWrapperDataset(SavableDataset[T_sample_out], Generic[T_sample_in, T_sample_out], ABC):
