@@ -158,7 +158,7 @@ class TestDataset(unittest.TestCase):
 
         BaseWebdatasetFactory.prepare_dataset(
             path,
-            [f"parts/data-{{0..{total_shards-1}}}.tar"],
+            [f"parts/data-{{0..{total_shards - 1}}}.tar"],
             split_parts_ratio=[("train", 1.0)],
             shuffle_seed=None,
         )
@@ -566,7 +566,6 @@ class TestDataset(unittest.TestCase):
                     max_samples_per_sequence=None,
                     shuffle_over_epochs_multiplier=2,
                 ),
-                worker_config=worker_config,
             )
 
         # Train mode dataset
@@ -899,7 +898,6 @@ class TestDataset(unittest.TestCase):
                     shuffle_buffer_size=None,
                     max_samples_per_sequence=None,
                 ),
-                worker_config=worker_config,
                 checkpoint_every_sec=0.5,
                 checkpoint_every_min_n_samples=1,
                 n_checkpoints=5,
@@ -1032,7 +1030,6 @@ class TestDataset(unittest.TestCase):
                 shuffle_buffer_size=sbs,
                 max_samples_per_sequence=sbs,
             ),
-            worker_config=worker_config,
         )
         state_0 = loader.save_state_rank()
         order_1 = [data.text[0] for data in loader]
@@ -1052,7 +1049,6 @@ class TestDataset(unittest.TestCase):
                 shuffle_buffer_size=sbs,
                 max_samples_per_sequence=sbs,
             ),
-            worker_config=worker_config,
         )
         print("state_0:", _norng_state(state_0))
         loader.restore_state_rank(state_0)
@@ -1072,7 +1068,6 @@ class TestDataset(unittest.TestCase):
                 shuffle_buffer_size=sbs,
                 max_samples_per_sequence=sbs,
             ),
-            worker_config=worker_config,
         )
         print("state_1:", _norng_state(state_1))
         loader.restore_state_rank(state_1)
@@ -1092,7 +1087,6 @@ class TestDataset(unittest.TestCase):
                 shuffle_buffer_size=sbs,
                 max_samples_per_sequence=sbs,
             ),
-            worker_config=worker_config,
         )
         print("state_2:", _norng_state(state_2))
         loader.restore_state_rank(state_2)
@@ -1114,7 +1108,6 @@ class TestDataset(unittest.TestCase):
         # Train mode dataset
         loader = get_savable_loader(
             get_val_dataset(self.mds_path, worker_config=worker_config, batch_size=10),
-            worker_config=worker_config,
         )
         state_0 = loader.save_state_rank()
         order_1 = [data.text for idx, data in zip(range(55 * 20), loader)]
@@ -1124,7 +1117,6 @@ class TestDataset(unittest.TestCase):
 
         loader = get_savable_loader(
             get_val_dataset(self.mds_path, worker_config=worker_config, batch_size=10),
-            worker_config=worker_config,
         )
         loader.restore_state_rank(state_1)
         order_3 = [data.text for idx, data in zip(range(55 * 20), loader)]
@@ -1132,7 +1124,6 @@ class TestDataset(unittest.TestCase):
 
         loader = get_savable_loader(
             get_val_dataset(self.mds_path, worker_config=worker_config, batch_size=10),
-            worker_config=worker_config,
         )
         loader.restore_state_rank(state_0)
         order_4 = [data.text for idx, data in zip(range(55 * 20), loader)]
@@ -1144,7 +1135,6 @@ class TestDataset(unittest.TestCase):
         import numpy
 
         for num_workers in [0, 1, 2]:  # Especially also check the num_workers=0 case
-
             world_size = 4
             micro_batch_size = 1
             seed = 42
@@ -1180,9 +1170,9 @@ class TestDataset(unittest.TestCase):
             # Assert that all ranks got different data
             for i in range(len(all_ranks_subflavors)):
                 for j in range(i + 1, len(all_ranks_subflavors)):
-                    assert (
-                        all_ranks_subflavors[i] != all_ranks_subflavors[j]
-                    ), f"Rank {i} and rank {j} got the same subflavors."
+                    assert all_ranks_subflavors[i] != all_ranks_subflavors[j], (
+                        f"Rank {i} and rank {j} got the same subflavors."
+                    )
 
             # Delete all locals, otherwise loaders might be kept alive
             locals().clear()

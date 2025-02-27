@@ -175,7 +175,7 @@ class TestDataset(unittest.TestCase):
 
         BaseWebdatasetFactory.prepare_dataset(
             path,
-            [f"parts/data-{{0..{total_shards-1}}}.tar"],
+            [f"parts/data-{{0..{total_shards - 1}}}.tar"],
             split_parts_ratio=[("train", 1.0)],
             shuffle_seed=None,
         )
@@ -214,7 +214,6 @@ class TestDataset(unittest.TestCase):
         )
         loader = get_savable_loader(
             train_dataset,
-            worker_config=worker_config,
         )
 
         print(len(train_dataset))
@@ -254,7 +253,6 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
                 packing_buffer_size=2,
             ),
-            worker_config=worker_config,
             checkpoint_every_sec=0,
             checkpoint_every_min_n_samples=1,
             n_checkpoints=4,
@@ -278,7 +276,6 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
                 packing_buffer_size=2,
             ),
-            worker_config=worker_config,
             checkpoint_every_sec=0,
             checkpoint_every_min_n_samples=1,
             n_checkpoints=4,
@@ -308,7 +305,6 @@ class TestDataset(unittest.TestCase):
                 shuffle_buffer_size=None,
                 max_samples_per_sequence=None,
             ),
-            worker_config=worker_config,
             checkpoint_every_sec=0,
             checkpoint_every_min_n_samples=1,
             n_checkpoints=4,

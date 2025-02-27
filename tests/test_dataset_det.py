@@ -604,7 +604,7 @@ class TestDataset(unittest.TestCase):
             max_samples_per_sequence=2,
             parallel_shard_iters=psi,
         )
-        loader = get_savable_loader(ds, worker_config=worker_config, checkpoint_every_sec=ces)
+        loader = get_savable_loader(ds, checkpoint_every_sec=ces)
 
         # print("save state")
         state_0 = loader.save_state_rank()
@@ -639,7 +639,7 @@ class TestDataset(unittest.TestCase):
             max_samples_per_sequence=2,
             parallel_shard_iters=psi,
         )
-        loader = get_savable_loader(ds, worker_config=worker_config)
+        loader = get_savable_loader(ds)
         loader.restore_state_rank(state_0)
         order_6 = [data.text[0] for idx, data in zip(range(n1), loader)]
         print("order1", order_1)
@@ -658,7 +658,7 @@ class TestDataset(unittest.TestCase):
             max_samples_per_sequence=2,
             parallel_shard_iters=psi,
         )
-        loader = get_savable_loader(ds, worker_config=worker_config)
+        loader = get_savable_loader(ds)
         loader.restore_state_rank(state_1)
         order_7 = [data.text[0] for idx, data in zip(range(n2), loader)]
         print("order2", order_2[:100])
@@ -677,7 +677,7 @@ class TestDataset(unittest.TestCase):
             shuffle_buffer_size=sbs,
             parallel_shard_iters=psi,
         )
-        loader = get_savable_loader(ds, worker_config=worker_config)
+        loader = get_savable_loader(ds)
         loader.restore_state_rank(state_2)
         order_8 = [data.text[0] for idx, data in zip(range(n3), loader)]
         print("order3", order_3)
