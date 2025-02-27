@@ -60,13 +60,13 @@ class PackingDataset(
     #: Sample index for the final_packer
     _final_packing_sample_index: SampleIndex
 
-    _savable_fields = [
+    _savable_fields = (
         "_reading_buffer",
         "_pre_packing_buffer",
         "_pre_packing_lengths",
         "_pre_packing_sample_index",
         "_final_packing_sample_index",
-    ]
+    )
 
     def __init__(
         self,

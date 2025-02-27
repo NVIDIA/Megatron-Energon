@@ -40,7 +40,7 @@ class IterMapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sampl
     iter_map_fn_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]]
     _sample_index: SampleIndex
 
-    _savable_fields = ["_sample_index"]
+    _savable_fields = ("_sample_index",)
 
     def __init__(
         self,

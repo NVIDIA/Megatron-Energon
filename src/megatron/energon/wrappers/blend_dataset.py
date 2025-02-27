@@ -23,7 +23,7 @@ class BlendDataset(BaseWrapperDataset[T_sample, T_sample]):
     exhausted: List[bool]
     _worker_rng: WorkerRng
 
-    _savable_fields = ["exhausted", "_worker_rng"]
+    _savable_fields = ("exhausted", "_worker_rng")
 
     def __init__(
         self,

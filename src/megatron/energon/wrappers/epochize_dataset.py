@@ -1,9 +1,8 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from typing import Any, Dict, Generic, Iterator, List, Optional, TypeVar
+from typing import Any, Dict, Generic, Iterator, Optional, TypeVar
 
-from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.flavors.base_dataset import SavableDataset
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset
@@ -22,7 +21,7 @@ class EpochizeDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample])
     _active_iter: Optional[Iterator[T_sample]]
     _offset: int
 
-    _savable_fields = ["_offset"]
+    _savable_fields = ("_offset",)
 
     def __init__(
         self,
@@ -51,7 +50,6 @@ class EpochizeDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample])
 
     def __iter__(self) -> Iterator[T_sample]:
         # Compute the local length for this worker, i.e. all worker's lengths sum up to the total
-        worker_idx = self.worker_config.rank_worker_id()
 
         if self.worker_config.num_workers <= 1:
             local_length = self.length

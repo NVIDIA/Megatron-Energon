@@ -28,7 +28,7 @@ class SavableSampleBuffer(BaseWrapperDataset[T_sample, T_sample], Generic[T_samp
     _buffer: List[T_sample]
     _restore_keys: List[Tuple[Union[str, int, tuple], ...]]
 
-    _savable_fields = ["_restore_keys"]
+    _savable_fields = ("_restore_keys",)
     _restore_pending: bool = False
 
     def __init__(self, dataset: SavableDataset[T_sample], *, worker_config: WorkerConfig):

@@ -16,7 +16,7 @@ class LimitDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
     length: int
 
     current_offset: int
-    _savable_fields = ["current_offset"]
+    _savable_fields = ("current_offset",)
 
     def __init__(
         self,

@@ -54,7 +54,7 @@ class LogSampleDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]
     mode: Literal["train", "val"]
     _step: int
 
-    _savable_fields = ["_step"]
+    _savable_fields = ("_step",)
 
     def __init__(
         self,

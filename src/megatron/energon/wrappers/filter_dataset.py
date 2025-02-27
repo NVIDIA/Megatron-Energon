@@ -1,9 +1,8 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from typing import Any, Callable, Dict, Generic, Iterator, List, Optional, Tuple, TypeVar, Union
+from typing import Any, Callable, Dict, Generic, Iterator, Optional, Tuple, TypeVar, Union
 
-from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.flavors.base_dataset import SavableDataset
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset, SampleIndex
@@ -19,7 +18,7 @@ class FilterDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
     filter_fn_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]]
     _sample_index: SampleIndex
 
-    _savable_fields = ["_sample_index"]
+    _savable_fields = ("_sample_index",)
 
     def __init__(
         self,

@@ -31,20 +31,6 @@ T_batch = TypeVar("T_batch", covariant=True)
 T_batch_sample = TypeVar("T_batch_sample", covariant=True)
 
 
-# @dataclass_slots
-# class BucketState(State):
-#     key: Hashable
-#     batch_size: int
-#     samples: SampleBufferState
-
-
-# @dataclass_slots
-# class GroupBatchState(BaseSingleWrapperState):
-#     bucket_sample_index: int
-#     batch_sample_index: int
-#     buckets: List[BucketState]
-
-
 @dataclass_slots
 class Bucket(Savable, Generic[T_batch_sample]):
     batch_size: int

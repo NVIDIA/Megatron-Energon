@@ -19,7 +19,7 @@ class ShuffleBufferDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sam
     _worker_rng: WorkerRng
     _active_buffer: SavableSampleBuffer[T_sample]
 
-    _savable_fields = ["_active_buffer", "_worker_rng"]
+    _savable_fields = ("_active_buffer", "_worker_rng")
 
     def __init__(
         self,
@@ -35,7 +35,6 @@ class ShuffleBufferDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sam
 
     def reset_state_own(self) -> None:
         self._worker_rng = WorkerRng(self.worker_config)
-        # TODO: Former reset was via restore_state(None). Is this ok too?
         self._active_buffer = SavableSampleBuffer(self.dataset, worker_config=self.worker_config)
 
     def __len__(self) -> int:

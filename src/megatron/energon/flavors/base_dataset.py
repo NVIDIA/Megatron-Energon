@@ -245,7 +245,7 @@ class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC)
     worker_config: WorkerConfig
 
     #: List of names of the fields that are saved and restored in the state.
-    _savable_fields: ClassVar[List[str]] = []
+    _savable_fields: ClassVar[Tuple[str, ...]] = ()
 
     def __init__(self, worker_config: WorkerConfig):
         self.worker_config = worker_config
@@ -256,7 +256,7 @@ class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC)
     def save_state(self) -> FlexState:
         """
         Saves the state of the dataset. This will save and return the state of all fields
-        in the _savable_fields list.
+        in the _savable_fields tuple.
         Can only be called in a worker process.
         """
 
@@ -284,7 +284,7 @@ class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC)
     def restore_state(self, state: FlexState) -> None:
         """
         Restores the state of the dataset. This will restore the state of all fields
-        in the _savable_fields list.
+        in the _savable_fields tuple.
         Can only be called in a worker process.
 
         Args:

@@ -38,7 +38,7 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
     _generator_sample_keys: Optional[Any]
     _generator_offset: Optional[int]
 
-    _savable_fields = ["_sample_index", "_generator_sample_keys", "_generator_offset"]
+    _savable_fields = ("_sample_index", "_generator_sample_keys", "_generator_offset")
 
     def __init__(
         self,

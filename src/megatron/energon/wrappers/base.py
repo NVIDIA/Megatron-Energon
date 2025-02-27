@@ -108,26 +108,22 @@ class BaseWrapperDataset(SavableDataset[T_sample_out], Generic[T_sample_in, T_sa
 
 
 class SampleIndex(Savable):
-    """A simple class to hold the sample index for each worker."""
+    """A simple class to hold the sample index for one worker."""
 
     worker_config: WorkerConfig
-    _sample_index: int
+    current_idx: int
 
     actives = 0
 
     def __init__(self, worker_config: WorkerConfig, *, src: Any) -> None:
         self.worker_config = worker_config
-        self._sample_index = 0
+        self.current_idx = 0
         self.src = src
 
     def get_next(self) -> int:
-        res = self._sample_index
-        self._sample_index += 1
+        res = self.current_idx
+        self.current_idx += 1
         return res
-
-    @property
-    def current_idx(self) -> int:
-        return self._sample_index
 
     @contextmanager
     def ctx(self, sample_idx: Optional[int] = None):
@@ -165,13 +161,13 @@ class SampleIndex(Savable):
                 it.close()
 
     def save_state(self) -> int:
-        return self._sample_index
+        return self.current_idx
 
     def restore_state(self, state: Optional[int]) -> None:
         if state is None:
-            self._sample_index = 0
+            self.current_idx = 0
         else:
-            self._sample_index = state
+            self.current_idx = state
 
 
 def get_sample_restore_key(sample: Any) -> Optional[Union[str, int]]:

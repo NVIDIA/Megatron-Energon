@@ -70,7 +70,7 @@ class SimpleSavableDatasetWrapper(BaseWrapperDataset[T, Tuple[int, int, T]], Gen
     _state_restored: bool
     _sample_index: int
 
-    _savable_fields = ["_sample_index"]
+    _savable_fields = ("_sample_index",)
 
     def __init__(self, dataset: SavableDataset[T], worker_config: WorkerConfig):
         super().__init__(dataset, worker_config=worker_config)
@@ -493,37 +493,37 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
 
     def restore_checkpoint(
         self,
-        state_list: Optional[List[SavableDatasetCheckpoint]],
+        worker_states: Optional[List[SavableDatasetCheckpoint]],
         worker_offset: int,
     ) -> None:
         """
         Restores the merged checkpoint from all worker processes.
 
         Args:
-            state: The state to restore
+            worker_states: The state to restore for each worker
             worker_offset: The offset of the last worker which has emitted a sample. This will be
                 set in all worker processes to ensure the right worker starts as first.
         """
         assert torch.utils.data.get_worker_info() is None, "Cannot restore in worker process"
         num_workers = max(self.worker_config.num_workers, 1)
 
-        if state_list is None:
+        if worker_states is None:
             self._workers_restore_from = []
             assert worker_offset == 0
             self._worker_offset = 0
             self._workers_dataset_state = [None] * num_workers
             self._workers_skip_samples = [0] * num_workers
         else:
-            assert isinstance(state_list, list)
-            assert isinstance(state_list[0], SavableDatasetCheckpoint)
+            assert isinstance(worker_states, list)
+            assert isinstance(worker_states[0], SavableDatasetCheckpoint)
 
             self._worker_offset = worker_offset
 
             # Tear the state_list apart (which has len=num_workers)
             # and store the states in the internal arrays
-            self._workers_restore_from = [state.state for state in state_list]
-            self._workers_dataset_state = [state.dataset_state for state in state_list]
-            self._workers_skip_samples = [state.offset for state in state_list]
+            self._workers_restore_from = [state.state for state in worker_states]
+            self._workers_dataset_state = [state.dataset_state for state in worker_states]
+            self._workers_skip_samples = [state.offset for state in worker_states]
 
     def can_restore_sample(self) -> bool:
         return self.dataset.can_restore_sample()

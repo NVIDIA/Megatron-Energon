@@ -74,7 +74,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
     #: The number of samples retrieved in current epoch
     _epoch_sample_count: int
 
-    _savable_fields = [
+    _savable_fields = (
         "_worker_rng",
         "_pending_slices_offset",
         "_pending_slice_indexes",
@@ -82,7 +82,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
         "_sample_count",
         "_epoch_count",
         "_epoch_sample_count",
-    ]
+    )
 
     def __init__(
         self,

@@ -18,7 +18,7 @@ class RepeatDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
     _repetition: int
     _index: int
 
-    _savable_fields = ["_repetition", "_index"]
+    _savable_fields = ("_repetition", "_index")
 
     def __init__(
         self,

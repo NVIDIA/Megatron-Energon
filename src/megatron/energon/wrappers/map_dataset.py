@@ -9,7 +9,6 @@ from typing import (
     Generator,
     Generic,
     Iterator,
-    List,
     Optional,
     Tuple,
     TypeVar,
@@ -38,11 +37,11 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
     _generator_sample_key: Optional[Any]
     _generator_offset: Optional[int]
 
-    _savable_fields = [
+    _savable_fields = (
         "_sample_index",
         "_generator_sample_key",
         "_generator_offset",
-    ]
+    )
 
     def __init__(
         self,
