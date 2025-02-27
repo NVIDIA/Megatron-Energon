@@ -252,7 +252,7 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
         self.n_checkpoints = n_checkpoints
         self._last_checkpoints = [
             SavableCheckpoint(
-                state=None, dataset_state=None, checkpoint_time=time.perf_counter(), sample_index=0
+                state=None, dataset_state=None, checkpoint_time=time.perf_counter(), sample_index=-1
             )
         ]
         self._workers_skip_samples = [0] * num_workers
