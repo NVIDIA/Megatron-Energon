@@ -7,6 +7,7 @@ from fractions import Fraction
 
 import av
 import numpy as np
+import soundfile as sf
 import torch
 
 from megatron.energon.flavors.webdataset.fastseek import Fastseek
@@ -42,20 +43,19 @@ class AVDecoder:
         extension = key.split('.', 1)[-1]
         # TODO(jbarker): we should add a debug log here
         if extension in ("mov", "mp4", "webm", "mkv"):
-            # TODO(jbarker): make the magic numbers configurable
             media = decode_video_frames(
                 data,
                 num_frames=self.video_num_frames,
                 out_frame_size=self.video_out_frame_size,
                 decode_audio=self.video_decode_audio,
             )
-        elif extension in ("flac", "mp3"):
-            # TODO(jbarker): make the magic numbers configurable
+        elif extension in ("flac", "mp3", "wav"):
             media = decode_audio_samples(
                 data,
                 num_clips=self.audio_num_clips,
                 clip_duration=self.audio_clip_duration,
                 target_rate=self.audio_target_rate,
+                audio_format=extension,
             )
         else:
             return None
@@ -297,20 +297,35 @@ def get_clip_indices(sampling_rate, total_samples, num_clips, clip_duration_sec)
     return [np.arange(start, start + clip_samples) for start in start_indices]
 
 
-def decode_audio_samples(data: bytes, num_clips: int = 1, clip_duration: int = 1, target_rate: int = 16000):
+def decode_audio_samples(data: bytes, num_clips: int = 1, clip_duration: int = 1, target_rate: int = 16000, audio_format: str = "flac"):
 
     byte_stream = io.BytesIO(data)
 
-    with av.open(byte_stream) as input_container:
-        sample_count = input_container.streams.audio[0].duration
-        sampling_rate = input_container.streams.audio[0].rate
+    if audio_format == "wav":
 
-    if num_clips == -1:
-        num_clips = 1
-        clip_indices = [[0, sample_count - 1]]
+        with sf.SoundFile(byte_stream) as f:
+            sample_rate = f.samplerate
+            target_length_in_samples = min(f.frames, int(30 * sample_rate))
+
+            f.seek(0)
+            waveform = f.read(frames=target_length_in_samples, dtype='float32')
+            waveform = waveform / max(abs(waveform.max()), abs(waveform.min()))
+
+            metadata = {"audio_fps": f.samplerate}
+            audio_tensor = torch.from_numpy(waveform)
+
     else:
-        clip_indices = get_clip_indices(sampling_rate, sample_count, num_clips, clip_duration)
 
-    audio_tensor, metadata = get_audio_batch(byte_stream, clip_indices, target_rate)
+        with av.open(byte_stream) as input_container:
+            sample_count = input_container.streams.audio[0].duration
+            sampling_rate = input_container.streams.audio[0].rate
+
+        if num_clips == -1:
+            num_clips = 1
+            clip_indices = [[0, sample_count - 1]]
+        else:
+            clip_indices = get_clip_indices(sampling_rate, sample_count, num_clips, clip_duration)
+
+        audio_tensor, metadata = get_audio_batch(byte_stream, clip_indices, target_rate)
 
     return None, audio_tensor, metadata
