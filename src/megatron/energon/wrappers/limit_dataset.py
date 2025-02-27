@@ -1,37 +1,22 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from typing import Any, Dict, Generic, Iterator, List, Optional, TypeVar
+from typing import Any, Dict, Generic, Iterator, TypeVar
 
-from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.flavors.base_dataset import SavableDataset
 from megatron.energon.worker import WorkerConfig
-from megatron.energon.wrappers.base import (
-    BaseSingleWrapperDataset,
-    BaseSingleWrapperMergedState,
-    BaseSingleWrapperState,
-)
+from megatron.energon.wrappers.base import BaseWrapperDataset
 
 T_sample = TypeVar("T_sample")
 
 
-@dataclass_slots
-class LimitState(BaseSingleWrapperState):
-    offset: int
-
-
-@dataclass_slots
-class LimitMergedState(BaseSingleWrapperMergedState):
-    offset: List[int]
-
-
-class LimitDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_sample]):
+class LimitDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
     """Limits the length of the dataset."""
 
-    dataset: SavableDataset[T_sample]
     length: int
 
-    _current_offset: List[int]
+    current_offset: int
+    _savable_fields = ("current_offset",)
 
     def __init__(
         self,
@@ -53,7 +38,10 @@ class LimitDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_sampl
         super().__init__(dataset, worker_config=worker_config)
         self.length = length
         self.reset_after_epoch = reset_after_epoch
-        self._current_offset = [0] * max(self.worker_config.num_workers, 1)
+        self.reset_state_own()
+
+    def reset_state_own(self) -> None:
+        self.current_offset = 0
 
     def __len__(self) -> int:
         return min(self.length, len(self.dataset))
@@ -75,22 +63,20 @@ class LimitDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_sampl
                     "t": "LimitDataset.start",
                     "r": self.worker_config.rank,
                     "w": worker_id,
-                    "offset": self._current_offset[worker_id],
+                    "offset": self.current_offset,
                     "local_limit": local_limit,
                     "limit": self.length,
                 }
             )
 
-        offset_range = list(
-            range(self._current_offset[self.worker_config.rank_worker_id()], local_limit)
-        )
+        offset_range = list(range(self.current_offset, local_limit))
         # Only iterate self.dataset if there are samples to iterate
         if len(offset_range) > 0:
             for sample, offset in zip(
                 self.dataset,
                 offset_range,
             ):
-                self._current_offset[worker_id] = offset + 1
+                self.current_offset = offset + 1
                 yield sample
 
         if self.worker_config.should_log(level=2):
@@ -99,41 +85,20 @@ class LimitDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_sampl
                     "t": "LimitDataset.done",
                     "r": self.worker_config.rank,
                     "w": worker_id,
-                    "offset": self._current_offset[worker_id],
+                    "offset": self.current_offset,
                     "local_limit": local_limit,
                     "limit": self.length,
                 }
             )
 
         # Reset the inner dataset
-        self.dataset.restore_state(None)
-        self._current_offset = [0] * max(self.worker_config.num_workers, 1)
+        self.dataset.reset_state_deep()
+        self.current_offset = 0
         if self.reset_after_epoch:
-            self.dataset.restore_state(None)
+            self.dataset.reset_state_deep()
 
     def worker_has_samples(self) -> bool:
         return super().worker_has_samples() and self.length > 0
-
-    def save_state(self) -> LimitState:
-        return LimitState.extend(
-            super().save_state(),
-            offset=self._current_offset[self.worker_config.rank_worker_id()],
-        )
-
-    def merge_states(self, states: List[LimitState]) -> LimitMergedState:
-        assert all(s is None or isinstance(s, LimitState) for s in states)
-        return LimitMergedState.extend(
-            super().merge_states(states),
-            offset=[0 if s is None else s.offset for s in states],
-        )
-
-    def restore_state(self, state: Optional[LimitMergedState]) -> None:
-        super().restore_state(state)
-        if state is None:
-            self._current_offset = [0] * max(self.worker_config.num_workers, 1)
-        else:
-            assert isinstance(state, LimitMergedState)
-            self._current_offset = state.offset
 
     def config(self) -> Dict[str, Any]:
         return {

@@ -129,9 +129,9 @@ class JoinIndexWriter:
             self.join_index_file.write(struct.pack("q", len(columns)))
             self.num_columns = len(columns)
         else:
-            assert (
-                len(columns) == self.num_columns
-            ), f"Inconsistent number of keys: Had {self.num_columns} before, got {len(columns)}"
+            assert len(columns) == self.num_columns, (
+                f"Inconsistent number of keys: Had {self.num_columns} before, got {len(columns)}"
+            )
 
         # Write the columns
         for key in columns:
@@ -197,9 +197,9 @@ class JoinIndexReader:
         # Read the raw bytes for all N * 3 int64s.
         data = self.join_index_file.read()
         self.index_file_position = self.join_index_file.tell()
-        assert (
-            len(data) % (8 * 3) == 0
-        ), f"Index file reading: Expected multiple of 3 * 8 bytes, got {len(data)} bytes"
+        assert len(data) % (8 * 3) == 0, (
+            f"Index file reading: Expected multiple of 3 * 8 bytes, got {len(data)} bytes"
+        )
 
         return torch.frombuffer(data, dtype=torch.int64).view(-1, self.num_columns, 3)
 

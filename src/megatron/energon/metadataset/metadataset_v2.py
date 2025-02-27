@@ -121,17 +121,17 @@ class JoinDatasetReference(DatasetReference):
             raise FileNotFoundError(self.path)
 
     def prepare(self, split_part: Optional[str] = None):
-        assert (
-            False
-        ), "JoinDatasetReference should not be used directly, but only by MetadatasetJoin"
+        assert False, (
+            "JoinDatasetReference should not be used directly, but only by MetadatasetJoin"
+        )
 
     def get_datasets(
         self,
         **kwargs,
     ) -> Tuple[DatasetBlendMode, List[Tuple[BaseCoreDatasetFactory, Union[float, int, None]]]]:
-        assert (
-            False
-        ), "JoinDatasetReference should not be used directly, but only by MetadatasetJoin"
+        assert False, (
+            "JoinDatasetReference should not be used directly, but only by MetadatasetJoin"
+        )
 
 
 @dataclass_slots
@@ -152,9 +152,9 @@ class MetadatasetJoin(DatasetLoaderInterface):
         assert mds_path is not None
         assert self.join is not None
         assert self.joiner is not None, "Must set joiner for joining datasets"
-        assert (
-            self.dataset_config == "dataset.yaml"
-        ), "Cannot set dataset_config for joining datasets"
+        assert self.dataset_config == "dataset.yaml", (
+            "Cannot set dataset_config for joining datasets"
+        )
         if isinstance(self.join, list):
             inner_loaders = [
                 JoinedDatasetInfo(

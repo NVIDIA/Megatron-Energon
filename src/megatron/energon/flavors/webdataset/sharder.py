@@ -11,7 +11,6 @@ from megatron.energon.worker import WorkerConfig
 
 
 class Sharder:
-
     @staticmethod
     def _split_shard(
         start_offset: int,
@@ -198,7 +197,6 @@ class Sharder:
         *,
         rotation_offset: int = 0,
     ) -> Sequence[int]:
-
         # We split the total number of samples into the number of global workers across all ranks.
         # Note that the global number of workers intentionally stays the same if you
         # divide the number of ranks by N, and multiply the number of workers per rank by N.
@@ -262,9 +260,9 @@ class Sharder:
             worker_config.rank * num_workers : (worker_config.rank + 1) * num_workers + 1
         ]
 
-        assert (
-            len(local_worker_sample_split_offsets) == num_workers + 1
-        ), "If this fails, there's a bug in the code above."
+        assert len(local_worker_sample_split_offsets) == num_workers + 1, (
+            "If this fails, there's a bug in the code above."
+        )
 
         return local_worker_sample_split_offsets
 

@@ -93,9 +93,9 @@ class WorkerConfig:
         """Deactivates the worker config for the current worker and deactivates it for iterating.
         Must be called after next() call on the datasets."""
         if WorkerConfig.active_worker_config is not None:
-            assert (
-                len(WorkerConfig._sample_index_stack) == 1
-            ), f"Sample index stack not empty: {WorkerConfig._sample_index_stack}"
+            assert len(WorkerConfig._sample_index_stack) == 1, (
+                f"Sample index stack not empty: {WorkerConfig._sample_index_stack}"
+            )
             WorkerConfig._sample_index_stack = None
             WorkerConfig.active_worker_config = None
             WorkerConfig._worker_override_global_rank = None

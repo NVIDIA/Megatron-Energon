@@ -12,7 +12,7 @@ from torch.distributed.distributed_c10d import reduce_op
 
 from megatron.energon.flavors.base_dataset import SavableDataset
 from megatron.energon.worker import WorkerConfig
-from megatron.energon.wrappers.base import BaseSingleWrapperDataset
+from megatron.energon.wrappers.base import BaseWrapperDataset
 
 T_sample = TypeVar("T_sample")
 
@@ -57,7 +57,7 @@ def gc_init_worker(worker_id: int):
     _frozen_cuda_tensors_initialized = True
 
 
-class GcDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_sample]):
+class GcDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
     """Applies a garbage collection step. This is needed, because python garbage collection
     does not work well with very large objects, such as tensors. This case happens, if there are
     a few hundred objects created and released every epoch (some of them being (large) tensors),
@@ -93,6 +93,9 @@ class GcDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_sample])
         super().__init__(dataset, worker_config=worker_config)
         self.every_n_iter = every_n_iter
         self.freeze = freeze
+
+    def reset_state_own(self) -> None:
+        return
 
     def __len__(self):
         return len(self.dataset)
