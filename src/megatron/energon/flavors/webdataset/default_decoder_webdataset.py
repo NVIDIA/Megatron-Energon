@@ -6,11 +6,11 @@ from typing import Any, Callable, Dict, Generic, Literal, Optional, TypeVar
 import webdataset
 
 from megatron.energon.epathlib import EPath
+from megatron.energon.flavors.webdataset.decode_av_frames import AVDecoder
 from megatron.energon.flavors.webdataset.default_generic_webdataset import (
     DefaultGenericWebdatasetFactory,
 )
 from megatron.energon.flavors.webdataset.structs import FilteredSample
-from megatron.energon.flavors.webdataset.video_data import VideoData
 
 T_sample = TypeVar("T_sample", covariant=True)
 
@@ -56,6 +56,12 @@ class DefaultDecoderWebdatasetFactory(DefaultGenericWebdatasetFactory[T_sample],
         auto_decode: bool = True,
         image_decode: ImageDecoder = "torchrgb",
         ignore_decoder_errors: bool = False,
+        audio_clip_duration: int = 1,
+        audio_num_clips: int = -1,
+        audio_target_rate: int = 16000,
+        video_decode_audio: bool = False,
+        video_num_frames: int = 64,
+        video_out_frame_size: tuple = (224, 224),
         **kwargs,
     ):
         """
@@ -76,7 +82,14 @@ class DefaultDecoderWebdatasetFactory(DefaultGenericWebdatasetFactory[T_sample],
             self._decoder = webdataset.autodecode.Decoder(
                 [
                     webdataset.autodecode.imagehandler(self.image_decode),
-                    self._video_decoder,
+                    AVDecoder(
+                        audio_clip_duration=audio_clip_duration,
+                        audio_num_clips=audio_num_clips,
+                        audio_target_rate=audio_target_rate,
+                        video_decode_audio=video_decode_audio,
+                        video_num_frames=video_num_frames,
+                        video_out_frame_size=video_out_frame_size,
+                    ),
                 ]
             )
         else:
@@ -87,20 +100,6 @@ class DefaultDecoderWebdatasetFactory(DefaultGenericWebdatasetFactory[T_sample],
             return True
         raise exc
 
-    def _video_decoder(self, key, data):
-        """Extract the video data from default video extensions."""
-        # TODO: This function could be more efficient. It will write the data to `/tmp`,
-        # then load it using `torchvision.io.video.read_video` which uses `av.open` from pyav.
-        # pyav allows providing a file-like object, but torchvision does not expose that interface.
-        # (https://github.com/pytorch/vision/issues/8438)
-        video = webdataset.torch_video(key, data)
-        if video is not None:
-            return VideoData(
-                frames=video[0].permute((0, 3, 1, 2)),
-                aframes=video[1],
-                info=video[2],
-            )
-        return None
 
     def load_sample(self, sample: FilteredSample) -> T_sample:
         if self._decoder is not None:
