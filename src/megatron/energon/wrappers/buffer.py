@@ -94,8 +94,16 @@ class SavableSampleBuffer(BaseWrapperDataset[T_sample, T_sample], Generic[T_samp
     def __len__(self) -> int:
         return len(self._restore_keys)
 
+    def save_state(self) -> FlexState:
+        # Don't call super().save_state() because we don't want to save the wrapped datasets
+        # Just save the own state
+        return SavableDataset.save_state(self)
+
     def restore_state(self, state: FlexState) -> None:
-        super().restore_state(state)
+        # Don't call super().restore_state() because we don't want to restore the wrapped datasets
+        # Just restore the own state
+        SavableDataset.restore_state(self, state)
+
         self._restore_pending = True
 
     def restore_key(self) -> Tuple[Union[str, int], ...]:

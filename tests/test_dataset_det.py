@@ -96,7 +96,7 @@ class TestDataset(unittest.TestCase):
 
         BaseWebdatasetFactory.prepare_dataset(
             path,
-            [f"parts/data-{{0..{total_shards-1}}}.tar"],
+            [f"parts/data-{{0..{total_shards - 1}}}.tar"],
             split_parts_ratio=[("train", 1.0)],
             shuffle_seed=None,
         )
@@ -231,7 +231,6 @@ class TestDataset(unittest.TestCase):
         gc.collect()
 
     def test_determinism_taskencoder(self):
-
         class TestTaskEncoder(DefaultTaskEncoder):
             @stateless(restore_seeds=True)
             def encode_sample(self, sample: TextSample) -> TextSample:
@@ -286,7 +285,6 @@ class TestDataset(unittest.TestCase):
         gc.collect()
 
     def test_determinism_taskencoder_save_restore(self):
-
         class TestTaskEncoder(DefaultTaskEncoder):
             @stateless(restore_seeds=True)
             def encode_sample(self, sample: TextSample) -> TextSample:
@@ -383,8 +381,7 @@ class TestDataset(unittest.TestCase):
                 shuffle_buffer_size=sbs,
                 max_samples_per_sequence=2,
                 parallel_shard_iters=psi,
-            ),
-            worker_config=worker_config,
+            )
         )
 
         # print("save state")
@@ -412,8 +409,7 @@ class TestDataset(unittest.TestCase):
                 shuffle_buffer_size=sbs,
                 max_samples_per_sequence=2,
                 parallel_shard_iters=psi,
-            ),
-            worker_config=worker_config,
+            )
         )
         loader.restore_state_global(state_0, src_rank=None)
         order_45 = [data.text[0] for idx, data in zip(range(count1 + count2), loader)]
@@ -437,8 +433,7 @@ class TestDataset(unittest.TestCase):
                 shuffle_buffer_size=sbs,
                 max_samples_per_sequence=2,
                 parallel_shard_iters=psi,
-            ),
-            worker_config=worker_config,
+            )
         )
         # print("restore state")
         loader.restore_state_global(state_1, src_rank=None)
@@ -738,9 +733,9 @@ class TestDataset(unittest.TestCase):
 
         global_batches_per_scenario = []
         for scenario in scenarios:
-            assert (
-                scenario["global_batch_size"] % scenario["micro_batch_size"] == 0
-            ), "Global batch size must be a multiple of the micro-batch size."
+            assert scenario["global_batch_size"] % scenario["micro_batch_size"] == 0, (
+                "Global batch size must be a multiple of the micro-batch size."
+            )
 
             world_size = len(scenario["configs"])
             gradient_accum_steps = scenario["global_batch_size"] // (
@@ -802,9 +797,9 @@ class TestDataset(unittest.TestCase):
         # Assert that all global batches are the same
         for i in range(len(global_batches_per_scenario[0])):
             for scenerio_idx, global_batches in enumerate(global_batches_per_scenario):
-                assert (
-                    global_batches[i] == global_batches_per_scenario[0][i]
-                ), f"Global batch {i} of scenario {scenerio_idx} does not match."
+                assert global_batches[i] == global_batches_per_scenario[0][i], (
+                    f"Global batch {i} of scenario {scenerio_idx} does not match."
+                )
 
         # Delete all locals, otherwise loaders might be kept alive
         locals().clear()

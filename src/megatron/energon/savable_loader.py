@@ -890,7 +890,10 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
         assert isinstance(state, SavableDataLoaderState)
         if isinstance(self.dataset, SavableDataset):
             assert len(state.worker_states) == 1
-            self.dataset.restore_state(state.worker_states[0].dataset_state)
+            if isinstance(state.worker_states[0], FlexState):
+                self.dataset.restore_state(state.worker_states[0])
+            else:
+                self.dataset.restore_state(state.worker_states[0].dataset_state)
         else:
             assert isinstance(self.dataset, SavableDatasetWrapper)
             self.dataset.restore_checkpoint(state.worker_states, worker_offset=state.next_worker_id)

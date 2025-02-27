@@ -88,6 +88,8 @@ class BaseWrapperDataset(SavableDataset[T_sample_out], Generic[T_sample_in, T_sa
         for dataset, dstate in zip(self.datasets, state["datasets"]):
             dataset.restore_state(dstate)
 
+        super().restore_state(state)
+
     def reset_state_deep(self) -> None:
         """Resets the state of the inner datasets and then the own state."""
 
