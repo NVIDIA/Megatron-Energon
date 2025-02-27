@@ -25,28 +25,27 @@ class WorkerRng(Savable):
 
     _rng: Optional[torch.Generator] = None
 
-    _restore_states: Optional[List[Optional[bytes]]] = None
+    _restore_state: Optional[bytes] = None
 
     def __init__(self, worker_config: WorkerConfig):
         self.worker_config = worker_config
 
     @property
     def rng(self) -> torch.Generator:
-        if self._rng is None or self._restore_states is not None:
+        if self._rng is None or self._restore_state is not None:
             self.worker_config.assert_worker()
             self._rng = torch.Generator()
-            worker_idx = self.worker_config.rank_worker_id()
-            if self._restore_states is not None and self._restore_states[worker_idx] is not None:
+            if self._restore_state is not None:
                 self._rng.set_state(
                     torch.frombuffer(
-                        bytearray(self._restore_states[worker_idx]),
+                        bytearray(self._restore_state),
                         dtype=torch.uint8,
                     ).clone()
                 )
             else:
                 # Restore to initial state (either due to zero sized states, or just initial state)
                 self._rng.manual_seed(self.worker_config.worker_seed())
-            self._restore_states = None
+            self._restore_state = None
         return self._rng
 
     def randbelow(self, n: int) -> int:
@@ -77,9 +76,9 @@ class WorkerRng(Savable):
 
     def restore_state(self, state: FlexState):
         if state["rng"] is None:
-            self._restore_states = None
+            self._restore_state = None
         else:
-            self._restore_states = state["rng"]
+            self._restore_state = state["rng"]
 
 
 @dataclass_slots
