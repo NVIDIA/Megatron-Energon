@@ -26,6 +26,9 @@ class ConcatDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
         super().__init__(datasets, worker_config=worker_config)
         assert len(self) >= 0, "Datasets must be finite."
 
+    def reset_state_own(self) -> None:
+        return
+
     def __len__(self):
         return sum(len(dataset) for dataset in self.datasets)
 

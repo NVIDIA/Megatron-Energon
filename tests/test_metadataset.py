@@ -453,7 +453,7 @@ class TestDataset(unittest.TestCase):
                 # prints out when the dataset is built.
 
                 for ds, w in ds_weights:
-                    worker_slice_offsets = ds.dataset.dataset.worker_slice_offsets
+                    worker_slice_offsets = ds.dataset.dataset.workers_slice_offsets
                     assert len(worker_slice_offsets) == num_workers
 
                     for worker_idx, slice_offsets in enumerate(worker_slice_offsets):
