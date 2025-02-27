@@ -339,6 +339,9 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
                         self.dataset.restore_state(my_ds_state)
                     self._restore_state(my_state)
                     self._workers_restore_from = []
+                else:
+                    # Store the initial state of the worker if we stop before the first sample
+                    self._store_checkpoint()
                 # If skipping, also restart the iterator to reach the start of the restored
                 # checkpoint
                 last_was_skip = True
@@ -623,7 +626,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
     #: Instance of the current data iterator. There shall be only one active iterator, such that the
     # dataset is not iterated multiple times in parallel. The state will proceed.
     _persistent_iterator: Optional[Iterator[T]] = None
-    #: The index of the current worker
+    #: The index of the current worker. -1 if not started yet.
     _worker_sample_counters: List[int]
     #: Id of the next worker to retrieve data from
     _next_worker_id: int = 0
@@ -697,7 +700,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
         else:
             dataset = SimpleSavableDatasetWrapper(dataset, self.worker_config)
 
-        self._worker_sample_counters = [0] * max(self.worker_config.num_workers, 1)
+        self._worker_sample_counters = [-1] * max(self.worker_config.num_workers, 1)
 
         kwargs = {}
         if self.worker_config.num_workers > 0:
