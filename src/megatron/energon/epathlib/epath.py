@@ -368,9 +368,9 @@ class EPath:
 
         assert self.fs == other.fs, "Can only use relative_to within same FS"
         assert self.protocol == other.protocol, "Can only use relative_to within same FS"
-        assert (
-            self._internal_fs_path == other._internal_fs_path
-        ), "Can only use relative_to within same FS"
+        assert self._internal_fs_path == other._internal_fs_path, (
+            "Can only use relative_to within same FS"
+        )
 
         return str(self.internal_path.relative_to(other.internal_path))
 
@@ -404,9 +404,9 @@ class EPath:
         self.fork_guard()
         assert self.fs == other.fs, "Cannot compare paths from different file systems"
         assert self.protocol == other.protocol, "Cannot compare paths from different file systems"
-        assert (
-            self._internal_fs_path == other._internal_fs_path
-        ), "Cannot compare paths from different file systems"
+        assert self._internal_fs_path == other._internal_fs_path, (
+            "Cannot compare paths from different file systems"
+        )
 
         return self.internal_path < other.internal_path
 

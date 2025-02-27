@@ -108,7 +108,7 @@ def get_dataset_from_config(
     elif subflavors is not None:
         dataset.subflavors.update(subflavors)
     if sample_type is not None:
-        assert issubclass(
-            dataset.__sample_type__, sample_type
-        ), f"Sample of type {dataset.__sample_type__} is not a subclass of {sample_type}."
+        assert issubclass(dataset.__sample_type__, sample_type), (
+            f"Sample of type {dataset.__sample_type__} is not a subclass of {sample_type}."
+        )
     return dataset
