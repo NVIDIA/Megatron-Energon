@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import filetype
 from bitstring.bits import BitsType
 

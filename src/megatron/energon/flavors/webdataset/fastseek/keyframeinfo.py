@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 
 @dataclass
-class KeyframeInfo(object):
+class KeyframeInfo:
     """
     Information about a detected keyframe
 

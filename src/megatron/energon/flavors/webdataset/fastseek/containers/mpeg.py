@@ -1,4 +1,3 @@
-from base64 import decode
 from collections import defaultdict
 from itertools import accumulate
 from typing import Any, Generator, override
