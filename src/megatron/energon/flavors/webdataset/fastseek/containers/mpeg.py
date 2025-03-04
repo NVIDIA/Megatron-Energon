@@ -156,7 +156,7 @@ class MDAT(Atom):
             self.size = cbs.read("uint:64")
             seekto = self.size - 16
         else:
-            seekto = self.size - 4
+            seekto = self.size - 12
 
         if cbs.bytepos + seekto >= (cbs.len / 8):
             raise StopIteration()
