@@ -154,15 +154,23 @@ class MDAT(Atom):
         if self.size == 1:
             cbs.bytepos -= 4  # No version or flags for mdat
             self.size = cbs.read("uint:64")
-            cbs.bytepos += self.size - 16
+            seekto = self.size - 16
         else:
-            cbs.bytepos += self.size - 4
+            seekto = self.size - 4
+
+        if cbs.bytepos + seekto >= (cbs.len / 8):
+            raise StopIteration()
+
+        cbs.bytepos += seekto
 
 
 def parse_atoms(file: BitsType) -> Generator[Atom, None, None]:
     cbs = ConstBitStream(file)
     while cbs.pos < len(cbs):
-        yield Atom.make_atom(cbs)
+        try:
+            yield Atom.make_atom(cbs)
+        except StopIteration:
+            return
 
 
 def parse_mpeg(file: BitsType) -> dict[int, SortedList]:
