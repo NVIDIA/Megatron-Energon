@@ -31,6 +31,10 @@ class Fastseek:
             self.unit = "count"
         else:
             ftype = filetype.guess(file)
+
+            if ftype is None:
+                raise ValueError("Unable to determine file type")
+
             self.mime = ftype.mime
 
             if ftype.mime in ["video/mp4", "video/quicktime"]:
@@ -51,7 +55,10 @@ class Fastseek:
         return nearest_iframe if current < nearest_iframe.index <= target else None
 
     def nearest_keyframe(self, target: int, stream: int = 0) -> KeyframeInfo:
+        # HACK some videos don't report track ID correctly, so just use a list for now
         nearest_iframe_to_target_index: int = (
-            self.keyframes[stream].bisect_left(target) - 1
+            list(self.keyframes.values())[stream].bisect_left(target) - 1
         )
-        return self.keyframes[stream][max(0, nearest_iframe_to_target_index)]
+        return list(self.keyframes.values())[stream][
+            max(0, nearest_iframe_to_target_index)
+        ]
