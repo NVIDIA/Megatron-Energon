@@ -20,6 +20,7 @@ def get_savable_loader(
     checkpoint_every_min_n_samples: Optional[int] = None,
     n_checkpoints: int = 2,
     gc_collect_every_n_steps: int = GC_DEFAULT_EVERY_N_ITER,
+    prefetch_factor: int = 2,
 ) -> SavableDataLoader[T]:
     """
 
@@ -57,6 +58,7 @@ def get_savable_loader(
         checkpoint_every_min_n_samples=checkpoint_every_min_n_samples,
         n_checkpoints=n_checkpoints,
         gc_collect_every_n_steps=gc_collect_every_n_steps,
+        prefetch_factor=prefetch_factor,
     )
 
 
@@ -64,6 +66,7 @@ def get_loader(
     dataset: SavableDataset[T],
     *,
     worker_config: Optional[WorkerConfig] = None,
+    prefetch_factor: int = 2,
 ) -> BasicDataLoader[T]:
     """
     Get a dataloader for the given dataset.
@@ -86,4 +89,4 @@ def get_loader(
                 "Passing a worker_config to get_loader() is deprecated and will have no effect."
             )
 
-    return BasicDataLoader(dataset)
+    return BasicDataLoader(dataset, prefetch_factor=prefetch_factor)

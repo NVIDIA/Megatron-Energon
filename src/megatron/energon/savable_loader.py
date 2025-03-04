@@ -87,9 +87,9 @@ class SimpleSavableDatasetWrapper(SavableDataset[Tuple[int, int, T]], Generic[T]
         self._sample_index = [0] * max(self.worker_config.num_workers, 1)
 
         # Check that the dataset worker config is the same as the wrapper worker config
-        assert (
-            self.dataset.worker_config == self.worker_config
-        ), "Dataset and wrapper worker configs must match."
+        assert self.dataset.worker_config == self.worker_config, (
+            "Dataset and wrapper worker configs must match."
+        )
 
     def __len__(self):
         return len(self.dataset)
@@ -705,6 +705,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
         n_checkpoints: int = 2,
         gc_collect_every_n_steps: int = GC_DEFAULT_EVERY_N_ITER,
         gc_freeze_at_start: bool = True,
+        prefetch_factor: int = 2,
     ):
         """
         Create the dataloader supporting saving and restoring the state.
@@ -766,7 +767,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
         kwargs = {}
         if self.worker_config.num_workers > 0:
             kwargs["persistent_workers"] = True
-            kwargs["prefetch_factor"] = 2
+            kwargs["prefetch_factor"] = prefetch_factor
 
         # Compute seeds for each worker, based on current rank
         seed_per_worker = [
@@ -1059,15 +1060,14 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
         # Otherwise treat as single rank state.
         if src_rank is None or self.worker_config.world_size == 1:
             assert isinstance(state, list), "State must be a list in distributed setup"
-            assert (
-                len(state) == self.worker_config.world_size
-            ), "State must be a list of size world_size"
+            assert len(state) == self.worker_config.world_size, (
+                "State must be a list of size world_size"
+            )
 
             # All ranks have the state
             # Select the state of the current rank
             rank_state = state[self.worker_config.rank]
         else:
-
             if self.worker_config.data_parallel_group is not None:
                 # Only the src_rank has the state within this dp group
                 try:
@@ -1090,9 +1090,9 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
                 state = [None] * self.worker_config.world_size
             else:
                 assert isinstance(state, list), "State must be a list in distributed setup"
-                assert (
-                    len(state) == self.worker_config.world_size
-                ), "State must be a list of size world_size"
+                assert len(state) == self.worker_config.world_size, (
+                    "State must be a list of size world_size"
+                )
 
             local_object = [None]
             torch.distributed.scatter_object_list(
@@ -1141,6 +1141,7 @@ class BasicDataLoader(DataLoader[T], Generic[T]):
         dataset: SavableDataset[T],
         gc_collect_every_n_steps: int = GC_DEFAULT_EVERY_N_ITER,
         gc_freeze_at_start: bool = True,
+        prefetch_factor: int = 2,
     ):
         """
         Create the dataloader supporting saving and restoring the state.
@@ -1176,7 +1177,7 @@ class BasicDataLoader(DataLoader[T], Generic[T]):
         if self.worker_config.num_workers > 0:
             # These must not be specified for num_workers =0
             kwargs["persistent_workers"] = True
-            kwargs["prefetch_factor"] = 2
+            kwargs["prefetch_factor"] = prefetch_factor
 
         seed_per_worker = [
             self.worker_config.worker_seed(i) for i in range(self.worker_config.num_workers)
