@@ -15,22 +15,23 @@ from megatron.energon.flavors.webdataset.video_data import VideoData
 
 DEFAULT_AUDIO_FRAME_SHIFT_MS = 10  # in milliseconds
 
+
 class AVDecoder:
     def __init__(
-            self,
-            audio_clip_duration,
-            audio_num_clips,
-            audio_target_rate,
-            video_decode_audio,
-            video_num_frames,
-            video_out_frame_size,
+        self,
+        audio_clip_duration,
+        audio_num_clips,
+        audio_target_rate,
+        video_decode_audio,
+        video_num_frames,
+        video_out_frame_size,
     ):
-            self.audio_clip_duration = audio_clip_duration
-            self.audio_num_clips = audio_num_clips
-            self.audio_target_rate = audio_target_rate
-            self.video_decode_audio = video_decode_audio
-            self.video_num_frames = video_num_frames
-            self.video_out_frame_size = video_out_frame_size
+        self.audio_clip_duration = audio_clip_duration
+        self.audio_num_clips = audio_num_clips
+        self.audio_target_rate = audio_target_rate
+        self.video_decode_audio = video_decode_audio
+        self.video_num_frames = video_num_frames
+        self.video_out_frame_size = video_out_frame_size
 
     def __call__(self, key, data):
         """
@@ -40,7 +41,7 @@ class AVDecoder:
             key: media file extension
             data: raw media bytes
         """
-        extension = key.split('.', 1)[-1]
+        extension = key.split(".", 1)[-1]
         # TODO(jbarker): we should add a debug log here
         if extension in ("mov", "mp4", "webm", "mkv"):
             media = decode_video_frames(
@@ -124,9 +125,7 @@ def get_frame_batch(
         for target_frame_index in frame_indices:
             if (
                 iframe_info := seeker.should_seek(
-                    previous_frame_index,
-                    target_frame_index,
-                    input_container.streams.video[0].id,
+                    previous_frame_index, target_frame_index
                 )
             ) is not None:
                 input_container.seek(
@@ -266,9 +265,7 @@ def get_audio_batch(
         # Initialize resampler to convert each frame to target_rate
         if target_rate != orig_rate:
             resampler = av.audio.resampler.AudioResampler(
-                format=audio_stream.format,
-                layout=audio_stream.layout,
-                rate=target_rate
+                format=audio_stream.format, layout=audio_stream.layout, rate=target_rate
             )
 
         clips = []
@@ -295,7 +292,9 @@ def get_audio_batch(
 
             if decoded_samples:
                 # Combine all channels/samples into one array
-                clip_all = np.concatenate(decoded_samples, axis=-1)  # (channels, total_samples)
+                clip_all = np.concatenate(
+                    decoded_samples, axis=-1
+                )  # (channels, total_samples)
 
                 # Figure out how many samples in the target rate we want
                 clip_duration_s = (indices[-1] - indices[0] + 1) / orig_rate
@@ -331,25 +330,28 @@ def get_clip_indices(sampling_rate, total_samples, num_clips, clip_duration_sec)
     return [np.arange(start, start + clip_samples) for start in start_indices]
 
 
-def decode_audio_samples(data: bytes, num_clips: int = 1, clip_duration: int = 1, target_rate: int = 16000, audio_format: str = "flac"):
-
+def decode_audio_samples(
+    data: bytes,
+    num_clips: int = 1,
+    clip_duration: int = 1,
+    target_rate: int = 16000,
+    audio_format: str = "flac",
+):
     byte_stream = io.BytesIO(data)
 
     if audio_format == "wav":
-
         with sf.SoundFile(byte_stream) as f:
             sample_rate = f.samplerate
             target_length_in_samples = min(f.frames, int(30 * sample_rate))
 
             f.seek(0)
-            waveform = f.read(frames=target_length_in_samples, dtype='float32')
+            waveform = f.read(frames=target_length_in_samples, dtype="float32")
             waveform = waveform / max(abs(waveform.max()), abs(waveform.min()))
 
             metadata = {"audio_fps": f.samplerate}
             audio_tensor = torch.from_numpy(waveform)
 
     else:
-
         with av.open(byte_stream) as input_container:
             sample_count = input_container.streams.audio[0].duration
             sampling_rate = input_container.streams.audio[0].rate
@@ -358,7 +360,9 @@ def decode_audio_samples(data: bytes, num_clips: int = 1, clip_duration: int = 1
             num_clips = 1
             clip_indices = [[0, sample_count - 1]]
         else:
-            clip_indices = get_clip_indices(sampling_rate, sample_count, num_clips, clip_duration)
+            clip_indices = get_clip_indices(
+                sampling_rate, sample_count, num_clips, clip_duration
+            )
 
         audio_tensor, metadata = get_audio_batch(byte_stream, clip_indices, target_rate)
 
