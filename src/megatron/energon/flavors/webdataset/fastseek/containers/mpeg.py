@@ -1,6 +1,6 @@
 from collections import defaultdict
 from itertools import accumulate
-from typing import Any, Generator, override
+from typing import Any, Generator
 
 from bitstring import ConstBitStream
 from bitstring.bits import BitsType
@@ -58,7 +58,6 @@ class TKHD(Atom):
     Parses the track header atom, see https://developer.apple.com/documentation/quicktime-file-format/track_header_atom
     """
 
-    @override
     def _parse(self, cbs: ConstBitStream) -> None:
         cbs.bytepos += 8  # skip creation time and modification time
         self.track_id: int = cbs.read("uint:32")
@@ -72,7 +71,6 @@ class HDLR(Atom):
     NOTE: currently unused but could speed up parsing by skipping audio tracks
     """
 
-    @override
     def _parse(self, cbs: ConstBitStream) -> None:
         self.component_type = cbs.read("bytes:4").decode("ascii")
         self.component_subtype = cbs.read("bytes:4").decode("ascii")
@@ -87,7 +85,6 @@ class STSS(Atom):
     Parses the sync sample atom https://developer.apple.com/documentation/quicktime-file-format/sample_table_atom/sync_sample_atom
     """
 
-    @override
     def _parse(self, cbs: ConstBitStream) -> None:
         self.number_of_entries: int = cbs.read("uint:32")
         self.sync_sample_table: dict[str, Any] = parse_table(
@@ -100,7 +97,6 @@ class STTS(Atom):
     Parses the time to sample atom https://developer.apple.com/documentation/quicktime-file-format/time-to-sample_atom
     """
 
-    @override
     def _parse(self, cbs: ConstBitStream) -> None:
         self.number_of_entries: int = cbs.read("uint:32")
         self.time_to_sample_table: dict[str, Any] = parse_table(
@@ -115,7 +111,6 @@ class CTTS(Atom):
     Parses the composition offset atom https://developer.apple.com/documentation/quicktime-file-format/composition_offset_atom
     """
 
-    @override
     def _parse(self, cbs: ConstBitStream) -> None:
         self.number_of_entries: int = cbs.read("uint:32")
         self.composition_offset_table: dict[str, Any] = parse_table(
@@ -134,7 +129,6 @@ class ELST(Atom):
     Parses the edit list atom https://developer.apple.com/documentation/quicktime-file-format/edit_list_atom
     """
 
-    @override
     def _parse(self, cbs: ConstBitStream) -> None:
         self.number_of_entries: int = cbs.read("uint:32")
         self.edit_list_table: dict[str, Any] = parse_table(
@@ -156,7 +150,6 @@ class MDAT(Atom):
     then the actual size is stored as a 64 bit integer
     """
 
-    @override
     def _parse(self, cbs: ConstBitStream) -> None:
         if self.size == 1:
             cbs.bytepos -= 4  # No version or flags for mdat
