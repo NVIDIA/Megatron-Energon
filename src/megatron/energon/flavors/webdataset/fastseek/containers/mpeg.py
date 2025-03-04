@@ -183,7 +183,7 @@ def parse_mpeg(file: BitsType) -> dict[int, SortedList]:
         match a.name:
             case "tkhd":
                 a: TKHD
-                current_track = a.track_id - 1  # Change one-index to zero-index
+                current_track = a.track_id
 
             case "stts":
                 a: STTS

@@ -34,7 +34,7 @@ def parse_matroska(file: BitsType) -> SortedList:
         el = stack.pop()
         if el.name == "CuePoint":
             cue = CuePoint(el)
-            cues[cue.track_positions.track - 1].add(KeyframeInfo(cue.time, cue.time))
+            cues[cue.track_positions.track].add(KeyframeInfo(cue.time, cue.time))
         elif isinstance(el, MasterElement):
             stack.extend([c for c in el if c.name in ["Cues", "CuePoint"]])
 

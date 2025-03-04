@@ -124,7 +124,9 @@ def get_frame_batch(
         for target_frame_index in frame_indices:
             if (
                 iframe_info := seeker.should_seek(
-                    previous_frame_index, target_frame_index
+                    previous_frame_index,
+                    target_frame_index,
+                    input_container.streams.video[0].id,
                 )
             ) is not None:
                 input_container.seek(
