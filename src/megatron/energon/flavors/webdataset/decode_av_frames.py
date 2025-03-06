@@ -154,9 +154,18 @@ def get_frame_batch(
     video_file: io.BytesIO,
     frame_indices: Collection[int],
     out_frame_size: tuple = None,
+    seeker: Fastseek | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, dict]:
-    """Gets a batch of frames at the given indices from a video file."""
-    seeker: Fastseek = Fastseek(video_file)
+    """Gets a batch of frames at the given indices from a video file.
+
+    NOTE: indices should be expressed in the correct units:
+        - mp4/mov: frame number
+        - mkv/webm: time (in time_base units)
+        - other (probe mode): frame number
+    """
+    if seeker is None:
+        seeker: Fastseek = Fastseek(video_file)
+
     video_file.seek(
         0
     )  # Reset the video stream so that pyav can read the entire container
@@ -170,7 +179,9 @@ def get_frame_batch(
         video_stream.thread_type = 3
 
         # Collect metadata
-        video_fps = float(video_stream.average_rate) if video_stream.average_rate else 0.0
+        video_fps = (
+            float(video_stream.average_rate) if video_stream.average_rate else 0.0
+        )
         audio_fps = audio_stream.sample_rate or 0
         metadata = {"video_fps": video_fps, "audio_fps": audio_fps}
 
@@ -180,48 +191,51 @@ def get_frame_batch(
         average_frame_duration: int = int(1 / average_rate / time_base)
 
         frame_iterator: Iterator[av.VideoFrame] = input_container.decode(video=0)
-        previous_frame_number: int = 0
+        previous_frame_index: int = 0
 
         frames: list[torch.Tensor] = []
-                # Decode requested video frames
-        frames = []
-        for target_frame_number in frame_indices:
-            if seeker.mime in ["video/x-matroska", "video/webm"]:
-                # Matroska uses time rather than frame number
-                prev_frame_ts = frame_to_ts(
-                    previous_frame_number, average_rate, seeker.container_time_base
+        for target_frame_index in frame_indices:
+            if (
+                iframe_info := seeker.should_seek(
+                    previous_frame_index, target_frame_index
                 )
-                target_frame_ts = frame_to_ts(
-                    target_frame_number, average_rate, seeker.container_time_base
+            ) is not None:
+                input_container.seek(
+                    iframe_info.pts, stream=input_container.streams.video[0]
                 )
-            else:
-                prev_frame_ts = previous_frame_number
-                target_frame_ts = target_frame_number
+                previous_frame_index = iframe_info.index
 
-            target_pts = frame_to_ts(target_frame_number, average_rate, time_base)
-
-            if seeker.should_seek(prev_frame_ts, target_frame_ts):
-                input_container.seek(target_pts, stream=video_stream)
-
-            for frame in frame_iterator:
+            for i, frame in enumerate(frame_iterator):
+                # Container uses frame counts, we can find the exact target frame by counting from the iframe which is at a known offset
                 if (
-                    frame.pts
-                    <= target_pts + (average_frame_duration / 2)
-                    <= frame.pts + average_frame_duration
+                    seeker.unit == "count"
+                    and previous_frame_index + i == target_frame_index
                 ):
-                    if out_frame_size is not None:
-                        frame = frame.reformat(
-                            width=out_frame_size[0],
-                            height=out_frame_size[1],
-                            format="rgb24",
-                            interpolation="BILINEAR",
-                        )
-                    else:
-                        frame = frame.reformat(format="rgb24")
-                    frames.append(torch.from_numpy(frame.to_ndarray()))
                     break
 
-            previous_frame_number = target_frame_number
+                # Container uses time, the target frame might not correspond exactly to any metadata but the desired timestamp should
+                # fall within a frames display period
+                if (
+                    seeker.unit == "time"
+                    and frame.pts
+                    <= target_frame_index
+                    <= frame.pts + average_frame_duration
+                ):
+                    break
+
+            if out_frame_size is not None:
+                frame = frame.reformat(
+                    width=out_frame_size[0],
+                    height=out_frame_size[1],
+                    format="rgb24",
+                    interpolation="BILINEAR",
+                )
+            else:
+                frame = frame.reformat(format="rgb24")
+
+            frames.append(torch.from_numpy(frame.to_ndarray()))
+
+            previous_frame_index = target_frame_index + 1
 
     # Stack video frames along dim=0 => [batch_size, channels, height, width]
     video_tensor = torch.stack(frames)
@@ -237,20 +251,39 @@ def decode_video_frames(
     num_clips: int = 1,
     clip_duration: int = 1,
 ):
+    seeker: Fastseek = Fastseek(stream)
+    stream.seek(0)
+
     # --- First, decode video frames ---
     with av.open(stream) as input_container:
-        if input_container.streams.video[0].frames != 0:
-            frame_count = input_container.streams.video[0].frames
-        else:
-            frame_count = len([p for p in input_container.demux(video=0) if p.pts is not None])
+        if seeker.unit == "count":
+            if input_container.streams.video[0].frames != 0:
+                upper_bound = input_container.streams.video[0].frames - 1
+            else:  # Need to count
+                upper_bound = (
+                    len(
+                        [p for p in input_container.demux(video=0) if p.pts is not None]
+                    )
+                    - 1
+                )
+                frame_count = upper_bound + 1
+        elif seeker.unit == "time":
+            if input_container.streams.video[0].duration is not None:
+                upper_bound = input_container.streams.video[0].duration
+            else:
+                packets = [
+                    p for p in input_container.demux(video=0) if p.pts is not None
+                ]
+                upper_bound = packets[-1].pts + packets[-1].duration
+                frame_count = len(packets)
 
     if num_frames == -1:
         num_frames = frame_count
 
     # Pick which video frames to extract
-    frame_indices = np.linspace(0, frame_count - 1, num_frames, dtype=int).tolist()
+    frame_indices = np.linspace(0, upper_bound, num_frames, dtype=int).tolist()
     video_tensor, metadata = get_frame_batch(
-        stream, frame_indices, out_frame_size
+        stream, frame_indices, out_frame_size, seeker
     )
 
     # --- Then, if requested, decode audio using the same clip logic as decode_audio_samples ---
