@@ -28,7 +28,7 @@ class AVData:
     during initialization. It's particularly useful for cases where different samples may need different
     decoding parameters.
     """
-    def __init__(self, stream: io.BytesIO):
+    def __init__(self, stream: io.BytesIO) -> None:
         if not AV_DECODE_AVAILABLE:
             raise ImportError(
                 f"AV decoding is not available. Please install the required dependencies with:\n"
@@ -43,8 +43,8 @@ class AVData:
             audio_num_clips: int = -1,
             video_decode_audio: bool = False,
             video_num_frames: int = 64,
-            video_out_frame_size: tuple = (224, 224),
-        ) -> VideoData:
+            video_out_frame_size: tuple[int, int] = (224, 224),
+        ) -> VideoData | None:
         """Decode the audio/video data with the specified parameters.
 
         Args:
@@ -55,7 +55,7 @@ class AVData:
             video_out_frame_size: Output size for video frames (width, height)
 
         Returns:
-            VideoData containing the decoded frames and metadata
+            VideoData containing the decoded frames and metadata, or None if decoding failed
         """
         extension = self._get_extension()
         if extension in ("mov", "mp4", "webm", "mkv"):
@@ -86,7 +86,7 @@ class AVData:
             )
         return None
 
-    def _get_extension(self) -> str:
+    def _get_extension(self) -> str | None:
         """Get the file extension from the raw data."""
         # Try to guess the file type using the first few bytes
         self.stream.seek(0)  # Reset stream position before guessing
@@ -110,25 +110,28 @@ def read_av_data(key: str, data: bytes) -> AVData:
 class AVDecoder:
     def __init__(
             self,
-            audio_clip_duration,
-            audio_num_clips,
-            video_decode_audio,
-            video_num_frames,
-            video_out_frame_size,
-    ):
-            self.audio_clip_duration = audio_clip_duration
-            self.audio_num_clips = audio_num_clips
-            self.video_decode_audio = video_decode_audio
-            self.video_num_frames = video_num_frames
-            self.video_out_frame_size = video_out_frame_size
+            audio_clip_duration: int,
+            audio_num_clips: int,
+            video_decode_audio: bool,
+            video_num_frames: int,
+            video_out_frame_size: tuple[int, int],
+    ) -> None:
+        self.audio_clip_duration = audio_clip_duration
+        self.audio_num_clips = audio_num_clips
+        self.video_decode_audio = video_decode_audio
+        self.video_num_frames = video_num_frames
+        self.video_out_frame_size = video_out_frame_size
 
-    def __call__(self, key, data):
+    def __call__(self, key: str, data: bytes) -> VideoData | None:
         """
         Extract the video or audio data from default media extensions.
 
         Args:
             key: media file extension
             data: raw media bytes
+
+        Returns:
+            VideoData containing the decoded frames and metadata, or None if decoding failed
         """
         av_data = read_av_data(key, data)
         if av_data is None:
@@ -362,7 +365,23 @@ def get_audio_batch(
         return torch.stack(clips), metadata
 
 
-def get_clip_indices(sampling_rate, total_samples, num_clips, clip_duration_sec):
+def get_clip_indices(
+    sampling_rate: int,
+    total_samples: int,
+    num_clips: int,
+    clip_duration_sec: int,
+) -> list[np.ndarray]:
+    """Calculate indices for audio clips based on sampling rate and duration.
+
+    Args:
+        sampling_rate: The sampling rate of the audio in Hz
+        total_samples: Total number of samples in the audio
+        num_clips: Number of clips to extract
+        clip_duration_sec: Duration of each clip in seconds
+
+    Returns:
+        List of numpy arrays containing the sample indices for each clip
+    """
     clip_samples = int(sampling_rate * clip_duration_sec)
 
     if clip_samples < total_samples:
