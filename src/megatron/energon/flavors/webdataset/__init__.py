@@ -14,7 +14,7 @@ from megatron.energon.flavors.webdataset.empty_dataset_error import EmptyDataset
 from megatron.energon.flavors.webdataset.joined_webdataset import JoinedWebdatasetFactory
 from megatron.energon.flavors.webdataset.metadata import WebdatasetMeta
 from megatron.energon.flavors.webdataset.standard_webdataset import StandardWebdatasetFactory
-from megatron.energon.flavors.webdataset.video_data import VideoData
+from megatron.energon.av import VideoData
 
 __all__ = [
     "BaseWebdatasetFactory",

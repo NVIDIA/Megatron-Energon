@@ -28,8 +28,8 @@ from megatron.energon.flavors.webdataset import (
     ImageDecoder,
     JoinedWebdatasetFactory,
     StandardWebdatasetFactory,
-    VideoData,
     WebdatasetMeta,
+    MAIN_FOLDER_NAME,
 )
 
 __all__ = [
@@ -64,8 +64,5 @@ __all__ = [
     "VQASample",
     "VQAWebdataset",
     "VQAOCRWebdataset",
-    "VideoData",
-    "VidQASample",
-    "VidQAWebdataset",
     "WebdatasetMeta",
 ]

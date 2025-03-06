@@ -12,8 +12,8 @@ try:
     import soundfile as sf
     import torch
     import filetype
-    from megatron.energon.flavors.webdataset.fastseek import Fastseek
-    from megatron.energon.flavors.webdataset.video_data import VideoData
+    from megatron.energon.av.fastseek import Fastseek
+    from megatron.energon.av.video_data import VideoData
     AV_DECODE_AVAILABLE = True
 except ImportError as e:
     AV_DECODE_AVAILABLE = False
