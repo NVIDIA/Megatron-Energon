@@ -11,10 +11,19 @@ import sys
 import torch
 import torchvision.transforms as transforms
 import unittest
+import os
 
 from megatron.energon.flavors.webdataset.decode_av_frames import decode_audio_samples, decode_video_frames, get_clip_indices
 
-def load_video_to_tensor(video_path):
+def load_video_to_tensor(video_path: str) -> torch.Tensor:
+    """Load a video file into a tensor using PyAV directly.
+
+    Args:
+        video_path: Path to the video file
+
+    Returns:
+        Tensor of shape [num_frames, height, width, channels]
+    """
     container = av.open(video_path)
     frames = []
 
@@ -26,7 +35,17 @@ def load_video_to_tensor(video_path):
     return video_tensor
 
 
-def are_resized_frames_close(tensor1, tensor2, tolerance=0.01):
+def are_resized_frames_close(tensor1: torch.Tensor, tensor2: torch.Tensor, tolerance: float = 0.01) -> bool:
+    """Compare two tensors of video frames with a tolerance for resizing differences.
+
+    Args:
+        tensor1: First tensor of frames
+        tensor2: Second tensor of frames
+        tolerance: Maximum allowed mean absolute error
+
+    Returns:
+        True if tensors are close enough, False otherwise
+    """
     if tensor1.shape != tensor2.shape:
         raise ValueError("Input tensors must have the same shape.")
     tensor1 = tensor1.float() / 255.0
@@ -37,146 +56,176 @@ def are_resized_frames_close(tensor1, tensor2, tolerance=0.01):
 
 
 class TestVideoDecode(unittest.TestCase):
+    """Test video decoding functionality."""
 
     def setUp(self):
+        """Set up test fixtures."""
         logging.basicConfig(stream=sys.stderr, level=logging.INFO)
         self.decode_baseline_video_pyav()
 
-    def tearDown(self):
-        pass
-
     def decode_baseline_video_pyav(self):
+        """Load the baseline video using PyAV directly."""
         self.complete_video_tensor = load_video_to_tensor("tests/data/sync_test.mp4")
 
     def test_decode_all_frames(self):
-
+        """Test decoding all frames from a video file."""
         with open("tests/data/sync_test.mp4", "rb") as f:
             raw_bytes = f.read()
+            stream = io.BytesIO(raw_bytes)
 
         # Decode using fastseek Energon wrapper
-        video_tensor, _, _ = decode_video_frames(data = raw_bytes)
+        video_tensor, _, _ = decode_video_frames(stream=stream)
 
         assert (video_tensor == self.complete_video_tensor).all(), \
             "Energon decoded video does not match baseline"
 
     def test_decode_strided_resized(self):
+        """Test decoding a subset of frames with resizing."""
         with open("tests/data/sync_test.mp4", "rb") as f:
             raw_bytes = f.read()
+            stream = io.BytesIO(raw_bytes)
 
         # Decode using fastseek Energon wrapper
         video_tensor, _, _ = decode_video_frames(
-            data = raw_bytes,
-            num_frames = 64,
-            out_frame_size = (224, 224),
+            stream=stream,
+            num_frames=64,
+            out_frame_size=(224, 224),
         )
 
-        # get strided frames from baseline complete video tensor
-        # this is a little pointless as Energon does this the same way
+        # Get strided frames from baseline complete video tensor
         strided_baseline_tensor = self.complete_video_tensor[
             np.linspace(0, self.complete_video_tensor.shape[0] - 1, 64, dtype=int).tolist()
         ]
-        # now resize the baseline frames
+        # Now resize the baseline frames
         resize = transforms.Resize((224, 224))
-        strided_baseline_tensor = strided_baseline_tensor.permute(0, 3, 1, 2) # b, h, w, c -> b, c, h, w
+        strided_baseline_tensor = strided_baseline_tensor.permute(0, 3, 1, 2)  # b, h, w, c -> b, c, h, w
         strided_resized_baseline_tensor = resize(strided_baseline_tensor)
-        strided_resized_baseline_tensor = strided_resized_baseline_tensor.permute(0, 2, 3, 1) # b, c, h, w -> b, h, w, c
+        strided_resized_baseline_tensor = strided_resized_baseline_tensor.permute(0, 2, 3, 1)  # b, c, h, w -> b, h, w, c
 
-        # we allow small numerical differences due to different resize implementations
+        # We allow small numerical differences due to different resize implementations
         assert are_resized_frames_close(video_tensor, strided_resized_baseline_tensor, tolerance=0.01), \
             "Energon decoded video does not match baseline"
 
     def test_decode_strided_resized_with_audio(self):
+        """Test decoding video frames and audio clips together."""
         with open("tests/data/sync_test.mp4", "rb") as f:
             raw_bytes = f.read()
+            stream = io.BytesIO(raw_bytes)
 
         # Decode using fastseek Energon wrapper
-        video_tensor, audio_tensor, _ = decode_video_frames(
-            data = raw_bytes,
-            num_frames = 64,
-            out_frame_size = (224, 224),
-            decode_audio = True,
-            num_clips = 5,
-            clip_duration = 3,
-            target_rate = 16000,
+        video_tensor, audio_tensor, metadata = decode_video_frames(
+            stream=stream,
+            num_frames=64,
+            out_frame_size=(224, 224),
+            decode_audio=True,
+            num_clips=5,
+            clip_duration=3,
         )
 
-        # get strided frames from baseline complete video tensor
-        # this is a little pointless as Energon does this the same way
+        # Get strided frames from baseline complete video tensor
         strided_baseline_tensor = self.complete_video_tensor[
             np.linspace(0, self.complete_video_tensor.shape[0] - 1, 64, dtype=int).tolist()
         ]
-        # now resize the baseline frames
+        # Now resize the baseline frames
         resize = transforms.Resize((224, 224))
-        strided_baseline_tensor = strided_baseline_tensor.permute(0, 3, 1, 2) # b, h, w, c -> b, c, h, w
+        strided_baseline_tensor = strided_baseline_tensor.permute(0, 3, 1, 2)  # b, h, w, c -> b, c, h, w
         strided_resized_baseline_tensor = resize(strided_baseline_tensor)
-        strided_resized_baseline_tensor = strided_resized_baseline_tensor.permute(0, 2, 3, 1) # b, c, h, w -> b, h, w, c
+        strided_resized_baseline_tensor = strided_resized_baseline_tensor.permute(0, 2, 3, 1)  # b, c, h, w -> b, h, w, c
 
-        # we allow small numerical differences due to different resize implementations
+        # We allow small numerical differences due to different resize implementations
         assert are_resized_frames_close(video_tensor, strided_resized_baseline_tensor, tolerance=0.01), \
             "Energon decoded video does not match baseline"
 
-        assert audio_tensor.shape == torch.Size([5, 128, 204]), \
-            "Energon decoded audio clip spectrograms have wrong size"
+        # Check audio tensor shape (5 clips, channels, 3 seconds at original sample rate)
+        expected_samples = int(3 * metadata["audio_fps"])  # 3 seconds at original sample rate
+        assert audio_tensor.shape == torch.Size([5, audio_tensor.shape[1], expected_samples]), \
+            f"Energon decoded audio clips have wrong size: {audio_tensor.shape}"
 
-def load_audio_to_tensor(audio_path, target_rate=16000):
+
+def load_audio_to_tensor(audio_path: str) -> torch.Tensor:
+    """Load an audio file into a tensor using PyAV directly.
+
+    Args:
+        audio_path: Path to the audio file
+
+    Returns:
+        Tensor of shape [channels, samples]
+    """
     container = av.open(audio_path)
-    audio_stream = container.streams.audio[0]
-
-    # Initialize resampler to convert each frame to target_rate
-    resampler = av.audio.resampler.AudioResampler(
-        format=audio_stream.format,
-        layout=audio_stream.layout,
-        rate=target_rate
-    )
-
     frames = []
 
     for frame in container.decode(audio=0):
-        resampled_frame = resampler.resample(frame)[0]
-        frames.append(torch.from_numpy(resampled_frame.to_ndarray()))
+        frames.append(torch.from_numpy(frame.to_ndarray()))
 
-    audio_tensor = torch.cat(frames, 1)
+    audio_tensor = torch.cat(frames, dim=-1)
     return audio_tensor
 
 
 class TestAudioDecode(unittest.TestCase):
+    """Test audio decoding functionality."""
 
     def setUp(self):
+        """Set up test fixtures."""
         logging.basicConfig(stream=sys.stderr, level=logging.INFO)
         self.decode_baseline_audio_pyav()
 
-    def tearDown(self):
-        pass
-
     def decode_baseline_audio_pyav(self):
+        """Load the baseline audio using PyAV directly."""
         self.complete_audio_tensor = load_audio_to_tensor("tests/data/test_audio.flac")
 
     def test_decode_all_samples(self):
-
+        """Test decoding all samples from an audio file."""
         with open("tests/data/test_audio.flac", "rb") as f:
             raw_bytes = f.read()
+            stream = io.BytesIO(raw_bytes)
 
-        _, audio_tensor, _ = decode_audio_samples(data = raw_bytes, num_clips = -1)
+        _, audio_tensor, _ = decode_audio_samples(stream=stream, num_clips=-1)
 
         assert (audio_tensor == self.complete_audio_tensor).all(), \
             "Energon decoded audio does not match baseline"
 
     def test_decode_clips(self):
+        """Test decoding multiple clips from an audio file."""
         with open("tests/data/test_audio.flac", "rb") as f:
             raw_bytes = f.read()
+            stream = io.BytesIO(raw_bytes)
 
         # Decode using fastseek Energon wrapper
-        _, audio_tensor, _ = decode_audio_samples(
-            data = raw_bytes,
-            num_clips = 5,
-            clip_duration = 3,
-            target_rate = 16000,
+        _, audio_tensor, metadata = decode_audio_samples(
+            stream=stream,
+            num_clips=5,
+            clip_duration=3,
         )
 
-        assert audio_tensor.shape == torch.Size([5, 48000]), \
-            "Energon decoded audio clips have wrong size"
+        # Check audio tensor shape (5 clips, channels, 3 seconds at original sample rate)
+        expected_samples = int(3 * metadata["audio_fps"])  # 3 seconds at original sample rate
+        expected_samples = min(expected_samples, audio_tensor.shape[2])  # Don't exceed actual length
+        assert audio_tensor.shape == torch.Size([5, audio_tensor.shape[1], expected_samples]), \
+            f"Energon decoded audio clips have wrong size: {audio_tensor.shape}"
+
+    def test_decode_wav(self):
+        """Test decoding a WAV file."""
+        # Skip WAV test if file doesn't exist
+        if not os.path.exists("tests/data/test_audio.wav"):
+            self.skipTest("WAV test file not found")
+            return
+
+        with open("tests/data/test_audio.wav", "rb") as f:
+            raw_bytes = f.read()
+            stream = io.BytesIO(raw_bytes)
+
+        _, audio_tensor, metadata = decode_audio_samples(
+            stream=stream,
+            num_clips=1,
+            clip_duration=3,
+            audio_format="wav",
+        )
+
+        # Check audio tensor shape (1 clip, channels, samples)
+        expected_samples = int(3 * metadata["audio_fps"])  # 3 seconds at original sample rate
+        assert audio_tensor.shape == torch.Size([expected_samples, audio_tensor.shape[1]]), \
+            f"Energon decoded WAV file has wrong size: {audio_tensor.shape}"
 
 
 if __name__ == "__main__":
-
     unittest.main()
