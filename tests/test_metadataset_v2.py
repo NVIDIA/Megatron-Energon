@@ -195,7 +195,7 @@ class TestDataset(unittest.TestCase):
 
         BaseWebdatasetFactory.prepare_dataset(
             path,
-            [f"parts/data-{{0..{total_shards-1}}}.tar"],
+            [f"parts/data-{{0..{total_shards - 1}}}.tar"],
             split_parts_ratio=[("train", 1.0)],
             shuffle_seed=None,
         )
@@ -1031,17 +1031,17 @@ class TestDataset(unittest.TestCase):
 
         total_samples_save_restore = len(data1) + len(data2_restore)
 
-        assert total_samples_save_restore == len(
-            data
-        ), "Total number of samples do not match when using save/restore"
+        assert total_samples_save_restore == len(data), (
+            "Total number of samples do not match when using save/restore"
+        )
 
         sample_counts_save_restore = Counter(
             [int(s[1].text[0]) for d in [data1, data2_restore] for s in d]
         )
 
-        assert (
-            sample_counts_save_restore == sample_counts
-        ), "Sample counts do not match when using save/restore"
+        assert sample_counts_save_restore == sample_counts, (
+            "Sample counts do not match when using save/restore"
+        )
 
         # ===== Part 3: Check if the state is restored correctly when saving right at the end of a dataset =====
 
@@ -1095,17 +1095,17 @@ class TestDataset(unittest.TestCase):
 
         total_samples_save_restore = len(data1) + len(data2_restore)
 
-        assert total_samples_save_restore == len(
-            data
-        ), "Total number of samples do not match when using save/restore"
+        assert total_samples_save_restore == len(data), (
+            "Total number of samples do not match when using save/restore"
+        )
 
         sample_counts_save_restore = Counter(
             [int(s[1].text[0]) for d in [data1, data2_restore] for s in d]
         )
 
-        assert (
-            sample_counts_save_restore == sample_counts
-        ), "Sample counts do not match when using save/restore"
+        assert sample_counts_save_restore == sample_counts, (
+            "Sample counts do not match when using save/restore"
+        )
 
 
 if __name__ == "__main__":

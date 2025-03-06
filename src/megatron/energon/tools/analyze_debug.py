@@ -92,9 +92,7 @@ cpal = np.array(
 120 130 49
 0 255 198
 255 110 65
-232 94 190""".split(
-            "\n"
-        )
+232 94 190""".split("\n")
     ],
     dtype=np.int32,
 )
@@ -315,7 +313,9 @@ def command(
                         assert (
                             existing_loader_info.modality == loader_info.modality
                             and existing_loader_info.path == loader_info.path
-                        ), f"Found multiple loaders for {loader_id}: {existing_loader_info.modality, existing_loader_info.path} and {loader_info.modality, loader_info.path}"
+                        ), (
+                            f"Found multiple loaders for {loader_id}: {existing_loader_info.modality, existing_loader_info.path} and {loader_info.modality, loader_info.path}"
+                        )
                         existing_loader_info.global_count = max(
                             existing_loader_info.global_count, loader_info.global_count
                         )
@@ -578,9 +578,9 @@ class LoaderLogIter:
                 log_line["t"] in ("SavableDataLoader.yield", "BasicDataLoader.yield")
                 and log_line["id"] in loader_ids
             ):
-                assert (
-                    log_line["global_idx"] >= idx
-                ), f"Found entry {log_line} with wrong idx <{idx}"
+                assert log_line["global_idx"] >= idx, (
+                    f"Found entry {log_line} with wrong idx <{idx}"
+                )
                 while log_line["global_idx"] != idx:
                     yield None
                     idx += 1

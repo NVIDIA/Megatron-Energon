@@ -141,9 +141,9 @@ def join_multiple_indices(
     primary = meta_infos[0]
     secondaries = meta_infos[1:]
 
-    assert (
-        primary.nonmatch == "error"
-    ), "Primary join dataset must have nonmatch set 'error' (default)"
+    assert primary.nonmatch == "error", (
+        "Primary join dataset must have nonmatch set 'error' (default)"
+    )
 
     import sqlite3
 
@@ -236,7 +236,7 @@ def join_multiple_indices(
     # so we'll not include shards that come from other split parts
     sql = f"""
         SELECT
-            {', '.join(select_cols)}
+            {", ".join(select_cols)}
         FROM main_filtered
         {join_clauses}
         INNER JOIN primary_order o
@@ -300,9 +300,9 @@ def join_multiple_indices(
 
     if not any_skip:
         # If no dataset has skipping active, we can check that the number of rows matches the number of samples in the primary DB
-        assert (
-            num_rows == num_samples
-        ), f"Number of rows in join index ({num_rows}) does not match number of samples in primary DB ({num_samples})"
+        assert num_rows == num_samples, (
+            f"Number of rows in join index ({num_rows}) does not match number of samples in primary DB ({num_samples})"
+        )
 
         print(f"Joined all {num_rows} samples")
     else:
@@ -494,9 +494,9 @@ class JoinDatasetLoader(DatasetLoaderInterface):
                 )
                 for dataset in self.datasets
             ]
-            assert all(
-                isinstance(d, BaseWebdatasetFactory) for d in inner_datasets
-            ), "Can only merge webdatasets efficiently"
+            assert all(isinstance(d, BaseWebdatasetFactory) for d in inner_datasets), (
+                "Can only merge webdatasets efficiently"
+            )
         elif isinstance(self.datasets, dict):
             inner_datasets = {
                 key: dataset.dataset.get_dataset(
@@ -511,9 +511,9 @@ class JoinDatasetLoader(DatasetLoaderInterface):
                 )
                 for key, dataset in self.datasets.items()
             }
-            assert all(
-                isinstance(d, BaseWebdatasetFactory) for d in inner_datasets.values()
-            ), "Can only merge webdatasets efficiently"
+            assert all(isinstance(d, BaseWebdatasetFactory) for d in inner_datasets.values()), (
+                "Can only merge webdatasets efficiently"
+            )
         else:
             raise ValueError("Invalid join type")
         return JoinedWebdatasetFactory(

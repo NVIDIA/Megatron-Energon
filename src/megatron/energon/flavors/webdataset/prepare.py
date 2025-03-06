@@ -97,7 +97,6 @@ class SqliteIndexWriterAggregator(BaseAggregator):
 
 
 class WebdatasetPreparator:
-
     @staticmethod
     def _preprocess_tar(
         path: Union[str, EPath],
@@ -131,9 +130,10 @@ class WebdatasetPreparator:
             # files are used.
             tar: tarfile.TarFile
             with shard_info.path.open("rb") as f:
-                with tarfile.open(fileobj=f, mode="r:*") as tar, TarIndexWriter(
-                    shard_info.path
-                ) as iw:
+                with (
+                    tarfile.open(fileobj=f, mode="r:*") as tar,
+                    TarIndexWriter(shard_info.path) as iw,
+                ):
                     count = 0
                     parts = set()
                     last_base_name = None
@@ -314,17 +314,17 @@ class WebdatasetPreparator:
         if tar_index_only:
             return found_parts, duplicates
 
-        assert len(shards) == len(
-            shard_to_idx
-        ), f"Lengths of shards and shard_to_idx do not match: {len(shards)} != {len(shard_to_idx)}"
+        assert len(shards) == len(shard_to_idx), (
+            f"Lengths of shards and shard_to_idx do not match: {len(shards)} != {len(shard_to_idx)}"
+        )
 
         # Sort the shards according to the order in the input list
         shards.sort(key=lambda shard: shard_to_idx[shard.name])
 
         # Save info
-        assert [shard.name for shard in shards] == list(
-            shard_to_idx.keys()
-        ), "Shards are not in the same order as in the input list."
+        assert [shard.name for shard in shards] == list(shard_to_idx.keys()), (
+            "Shards are not in the same order as in the input list."
+        )
 
         info = WebdatasetInfo(
             shard_counts={shard.name: shard.count for shard in shards},
@@ -351,9 +351,9 @@ class WebdatasetPreparator:
                 split_shards[split_part] = [shard.name for shard in shards[split_offset:split_end]]
                 split_offset = split_end
         else:
-            assert (
-                split_parts_patterns is not None
-            ), "Require either split_parts_ratio or split_parts_patterns"
+            assert split_parts_patterns is not None, (
+                "Require either split_parts_ratio or split_parts_patterns"
+            )
             # Sample from shards based on the split patterns from split parts
             split_shards = {}
             for split_part, split_pattern in split_parts_patterns:

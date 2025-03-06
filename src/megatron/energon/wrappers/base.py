@@ -66,9 +66,9 @@ class BaseWrapperDataset(SavableDataset[T_sample], Generic[T_sample]):
 
         for d in dataset:
             # Check that the dataset worker configs are the same as the wrapper worker config
-            assert (
-                d.worker_config == self.worker_config
-            ), "Dataset and wrapper worker configs must match."
+            assert d.worker_config == self.worker_config, (
+                "Dataset and wrapper worker configs must match."
+            )
 
 
 class BaseSingleWrapperDataset(

@@ -115,9 +115,9 @@ class MapDataset(BaseSingleWrapperDataset[T_sample, T_sample_out], Generic[T_sam
             with self._sample_index.ctx(self._sample_index.current_idx) as sample_idx:
                 mapped_sample = self.map_fn(sample)
             assert isinstance(mapped_sample, Generator)
-            assert inspect.isgeneratorfunction(
-                self.map_fn
-            ), f"Generator in {self.map_fn} but not marked as such."
+            assert inspect.isgeneratorfunction(self.map_fn), (
+                f"Generator in {self.map_fn} but not marked as such."
+            )
             target_offset = self._generator_offsets[worker_id]
             self._generator_offsets[worker_id] = 0
             for idx, (sample_idx, inner_sample) in enumerate(
@@ -140,9 +140,9 @@ class MapDataset(BaseSingleWrapperDataset[T_sample, T_sample_out], Generic[T_sam
                 with self._sample_index.ctx() as sample_idx:
                     mapped_sample = self.map_fn(sample)
                 if isinstance(mapped_sample, Generator):
-                    assert inspect.isgeneratorfunction(
-                        self.map_fn
-                    ), f"Generator in {self.map_fn} but not marked as such."
+                    assert inspect.isgeneratorfunction(self.map_fn), (
+                        f"Generator in {self.map_fn} but not marked as such."
+                    )
                     self._generator_sample_keys[worker_id] = get_sample_restore_key(sample)
                     self._generator_offsets[worker_id] = 0
                     # In case of a generator, additionally store the index of the yielded samples
@@ -229,9 +229,9 @@ class MapDataset(BaseSingleWrapperDataset[T_sample, T_sample_out], Generic[T_sam
         return self.stateless_map_fn and self.dataset.can_restore_sample()
 
     def assert_can_restore(self) -> None:
-        assert (
-            self.stateless_map_fn
-        ), f"MapDataset can only restore samples if map_fn {self.map_fn} is stateless."
+        assert self.stateless_map_fn, (
+            f"MapDataset can only restore samples if map_fn {self.map_fn} is stateless."
+        )
         self.dataset.assert_can_restore()
 
     def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_sample_out:
@@ -249,17 +249,17 @@ class MapDataset(BaseSingleWrapperDataset[T_sample, T_sample_out], Generic[T_sam
         with self._sample_index.ctx(sample_idx):
             mapped_sample = self.map_fn(inner_sample)
         if isinstance(mapped_sample, Generator):
-            assert inspect.isgeneratorfunction(
-                self.map_fn
-            ), f"Generator in {self.map_fn} but not marked as such."
+            assert inspect.isgeneratorfunction(self.map_fn), (
+                f"Generator in {self.map_fn} but not marked as such."
+            )
             for idx, (sample_idx, res_sample) in enumerate(
                 self._sample_index.iter_ctx(mapped_sample, sample_idx)
             ):
                 if idx == local_idx:
                     return add_sample_restore_key(res_sample, sample_idx, local_idx, src=self)
-            assert (
-                False
-            ), "Generator did not yield enough samples, but is marked stateless/deterministic."
+            assert False, (
+                "Generator did not yield enough samples, but is marked stateless/deterministic."
+            )
         else:
             return add_sample_restore_key(mapped_sample, sample_idx, src=self)
 

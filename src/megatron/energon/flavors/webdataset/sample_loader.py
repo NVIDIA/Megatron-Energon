@@ -596,7 +596,9 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
                                 worker_slice_offsets[slice_state.index]
                                 <= slice_state.current
                                 < worker_slice_offsets[slice_state.index + 1]
-                            ), f"Invalid slice state: slice_offsets[{slice_state.index}] must hold {worker_slice_offsets[slice_state.index]} <= {slice_state.current} < {worker_slice_offsets[slice_state.index + 1]}"
+                            ), (
+                                f"Invalid slice state: slice_offsets[{slice_state.index}] must hold {worker_slice_offsets[slice_state.index]} <= {slice_state.current} < {worker_slice_offsets[slice_state.index + 1]}"
+                            )
 
     def config(self) -> Dict[str, Any]:
         return {
