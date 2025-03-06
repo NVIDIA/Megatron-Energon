@@ -131,9 +131,9 @@ class TestDataset(unittest.TestCase):
 
         entries = []
 
-        assert num_samples < len(animals) * len(
-            adjectives
-        ), "Cannot generate more samples than unique captions."
+        assert num_samples < len(animals) * len(adjectives), (
+            "Cannot generate more samples than unique captions."
+        )
 
         # Create num_samples unique captions
         captions = set()
@@ -173,7 +173,7 @@ class TestDataset(unittest.TestCase):
 
         BaseWebdatasetFactory.prepare_dataset(
             path,
-            [f"parts/data-{{0..{total_shards-1}}}.tar"],
+            [f"parts/data-{{0..{total_shards - 1}}}.tar"],
             split_parts_ratio=[("train", 1.0)],
         )
 
@@ -891,7 +891,6 @@ class TestDataset(unittest.TestCase):
         torch.manual_seed(42)
 
         class TestTaskEncoder(TaskEncoder):
-
             @stateless(restore_seeds=True)
             def encode_sample(self, sample):
                 # print("si stack:", WorkerConfig._sample_index_stack)
@@ -1103,7 +1102,6 @@ class TestDataset(unittest.TestCase):
         torch.manual_seed(42)
 
         class TestTaskEncoder(TaskEncoder):
-
             @stateless(restore_seeds=True)
             def encode_sample(self, sample):
                 # print("si stack:", WorkerConfig._sample_index_stack)

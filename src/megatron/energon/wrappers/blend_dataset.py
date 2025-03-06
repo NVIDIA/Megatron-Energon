@@ -161,9 +161,9 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
             ]
         else:
             assert isinstance(state, BlendDatasetMergedState)
-            assert len(state.datasets) == len(
-                self.dataset_weights
-            ), f"The {len(state.datasets)} datasets to be restored do not match the configured {len(self.dataset_weights)} datasets"
+            assert len(state.datasets) == len(self.dataset_weights), (
+                f"The {len(state.datasets)} datasets to be restored do not match the configured {len(self.dataset_weights)} datasets"
+            )
             for (dataset, _weight), dstate in zip(self.dataset_weights, state.datasets):
                 dataset.restore_state(dstate)
             self._worker_rng.restore_state(state.rng)

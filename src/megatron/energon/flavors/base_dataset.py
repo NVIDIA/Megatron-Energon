@@ -165,9 +165,9 @@ class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
         Returns:
             The joined constructed sample.
         """
-        assert (
-            len(kwargs) == 0
-        ), "Please specify joined datasets as list for the default joiner. Keyword arguments are confusing, because keys are ignored."
+        assert len(kwargs) == 0, (
+            "Please specify joined datasets as list for the default joiner. Keyword arguments are confusing, because keys are ignored."
+        )
         excluded_fields = set(field.name for field in dataclasses.fields(Sample))
         init_args = {}
         if len(args) > 0:

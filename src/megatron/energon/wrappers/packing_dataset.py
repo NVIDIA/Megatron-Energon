@@ -213,9 +213,9 @@ class PackingDataset(
                 with self._final_packing_sample_index.ctx() as pack_idx:
                     final_packed_sample = self.final_packer(pack)
                 if isinstance(final_packed_sample, Generator):
-                    assert inspect.isgeneratorfunction(
-                        self.final_packer
-                    ), f"Generator in {self.final_packer} but not marked as such."
+                    assert inspect.isgeneratorfunction(self.final_packer), (
+                        f"Generator in {self.final_packer} but not marked as such."
+                    )
                     for pack_sub_idx, (pack_idx, inner_batch_sample) in enumerate(
                         self._final_packing_sample_index.iter_ctx(final_packed_sample, pack_idx)
                     ):
@@ -325,9 +325,9 @@ class PackingDataset(
         return self.final_packer_stateless and self.dataset.can_restore_sample()
 
     def assert_can_restore(self):
-        assert (
-            self.final_packer_stateless
-        ), f"Final packer {self.final_packer} must be stateless to restore samples."
+        assert self.final_packer_stateless, (
+            f"Final packer {self.final_packer} must be stateless to restore samples."
+        )
         self.dataset.assert_can_restore()
 
     def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_sample:
@@ -343,9 +343,9 @@ class PackingDataset(
         with self._final_packing_sample_index.ctx(pack_idx):
             final_pack = self.final_packer(batch)
         if isinstance(final_pack, Generator):
-            assert inspect.isgeneratorfunction(
-                self.final_packer
-            ), f"Generator in {self.final_packer} but not marked as such."
+            assert inspect.isgeneratorfunction(self.final_packer), (
+                f"Generator in {self.final_packer} but not marked as such."
+            )
             for cur_batch_sub_idx, (pack_idx, inner_batch_sample) in enumerate(
                 self._final_packing_sample_index.iter_ctx(final_pack, pack_idx)
             ):

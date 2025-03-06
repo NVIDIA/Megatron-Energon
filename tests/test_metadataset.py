@@ -158,7 +158,7 @@ class TestDataset(unittest.TestCase):
 
         BaseWebdatasetFactory.prepare_dataset(
             path,
-            [f"parts/data-{{0..{total_shards-1}}}.tar"],
+            [f"parts/data-{{0..{total_shards - 1}}}.tar"],
             split_parts_ratio=[("train", 1.0)],
             shuffle_seed=None,
         )
@@ -1144,7 +1144,6 @@ class TestDataset(unittest.TestCase):
         import numpy
 
         for num_workers in [0, 1, 2]:  # Especially also check the num_workers=0 case
-
             world_size = 4
             micro_batch_size = 1
             seed = 42
@@ -1180,9 +1179,9 @@ class TestDataset(unittest.TestCase):
             # Assert that all ranks got different data
             for i in range(len(all_ranks_subflavors)):
                 for j in range(i + 1, len(all_ranks_subflavors)):
-                    assert (
-                        all_ranks_subflavors[i] != all_ranks_subflavors[j]
-                    ), f"Rank {i} and rank {j} got the same subflavors."
+                    assert all_ranks_subflavors[i] != all_ranks_subflavors[j], (
+                        f"Rank {i} and rank {j} got the same subflavors."
+                    )
 
             # Delete all locals, otherwise loaders might be kept alive
             locals().clear()

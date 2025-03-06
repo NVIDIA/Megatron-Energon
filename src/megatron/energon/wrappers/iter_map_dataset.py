@@ -170,9 +170,9 @@ class IterMapDataset(
         return self.stateless_iter_fn and self.dataset.can_restore_sample()
 
     def assert_can_restore(self) -> None:
-        assert (
-            self.stateless_iter_fn
-        ), "IterMapDataset can only restore samples if iter_map_fn is stateless."
+        assert self.stateless_iter_fn, (
+            "IterMapDataset can only restore samples if iter_map_fn is stateless."
+        )
         self.dataset.assert_can_restore()
 
     def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_sample:

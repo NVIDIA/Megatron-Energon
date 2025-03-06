@@ -220,9 +220,9 @@ class CachedItarOffsetReader:
             result_byte_offset = 0
         elif sample_offset == cache_entry.lookahead_offset:
             # Reuse the previously cached byte offset from the lookahead
-            assert (
-                cache_entry.lookahead_byteoffset is not None
-            ), "Lookahead offset matched but no lookahead byte offset found."
+            assert cache_entry.lookahead_byteoffset is not None, (
+                "Lookahead offset matched but no lookahead byte offset found."
+            )
             result_byte_offset = cache_entry.lookahead_byteoffset
         else:
             # Normal random access
