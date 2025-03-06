@@ -13,7 +13,7 @@ import torchvision.transforms as transforms
 import unittest
 import os
 
-from megatron.energon.flavors.webdataset.decode_av_frames import decode_audio_samples, decode_video_frames, get_clip_indices
+from megatron.energon.av import decode_audio_samples, decode_video_frames, get_clip_indices
 
 def load_video_to_tensor(video_path: str) -> torch.Tensor:
     """Load a video file into a tensor using PyAV directly.
