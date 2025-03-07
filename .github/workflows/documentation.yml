@@ -28,6 +28,8 @@ jobs:
   
       - name: Install just
         uses: ./.github/actions/setupjust
+        with:
+          just-version: 1.39.0
   
       - name: Install dependencies
         run: |
