@@ -64,14 +64,14 @@ class BaseWrapperDataset(SavableDataset[T_sample_out], Generic[T_sample_in, T_sa
     def worker_has_samples(self) -> bool:
         return any(ds.worker_has_samples() for ds in self.datasets)
 
-    def find_wrapped_dataset(self, cls: Type[SavableDataset]) -> Optional[SavableDataset]:
+    def _find_wrapped_dataset(self, cls: Type[SavableDataset]) -> Optional[SavableDataset]:
         """Find the outermost dataset wrapped in this dataset that is of type cls."""
 
         for ds in self.datasets:
             if isinstance(ds, cls):
                 return ds
             elif isinstance(ds, BaseWrapperDataset):
-                res = ds.find_wrapped_dataset(cls)
+                res = ds._find_wrapped_dataset(cls)
                 if res is not None:
                     return res
         return None

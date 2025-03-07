@@ -211,7 +211,7 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
     _worker_offset: int = 0
     _last_checkpoints: List[SavableCheckpoint]
 
-    _workers_restore_from: List[Optional[SavableDatasetState]] = []
+    _workers_restore_from: List[Optional[SavableDatasetState]] = list()
     _workers_dataset_state: List[Optional[FlexState]]
     _workers_skip_samples: List[int]
 
@@ -851,7 +851,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
                 raise r
         return res
 
-    def get_batch_size(self) -> Optional[int]:
+    def _get_batch_size(self) -> Optional[int]:
         """Try to infer micro batch size from the dataset"""
         if isinstance(self.dataset, SavableDatasetWrapper):
             dataset = self.dataset.dataset
@@ -860,7 +860,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
 
         if (
             isinstance(dataset, BaseWrapperDataset)
-            and (bds := dataset.find_wrapped_dataset(BatchDataset)) is not None
+            and (bds := dataset._find_wrapped_dataset(BatchDataset)) is not None
         ):
             assert isinstance(bds, BatchDataset)
             return bds.batch_size
@@ -892,7 +892,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
         merged_state = SavableDataLoaderState(
             worker_states=worker_states,
             next_worker_id=self._next_worker_id,
-            micro_batch_size=self.get_batch_size(),
+            micro_batch_size=self._get_batch_size(),
         )
 
         # Not distributed -> return the merged state
@@ -912,7 +912,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
         assert isinstance(state, SavableDataLoaderState)
 
         old_micro_batch_size = state.micro_batch_size
-        micro_batch_size = self.get_batch_size()
+        micro_batch_size = self._get_batch_size()
 
         if isinstance(self.dataset, SavableDataset):
             assert micro_batch_size == old_micro_batch_size, (
