@@ -3,18 +3,12 @@
 
 import logging
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 from typing import Any, Callable, Dict, Generic, List, Optional, Sequence, TypeVar
 
 import numpy as np
 
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.base_dataset import (
-    BaseCoreDatasetFactory,
-    MergedState,
-    SavableDataset,
-    State,
-)
+from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory, SavableDataset
 from megatron.energon.flavors.webdataset.error_handler import ErrorHandler
 from megatron.energon.flavors.webdataset.metadata import WebdatasetMeta
 from megatron.energon.flavors.webdataset.prepare import WebdatasetPreparator
@@ -31,16 +25,6 @@ T_sample = TypeVar("T_sample", covariant=True)
 T = TypeVar("T", covariant=True)
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class WebdatasetState(State):
-    dataset_state: State
-
-
-@dataclass
-class WebdatasetMergedState(MergedState):
-    dataset_state: MergedState
 
 
 class BaseWebdatasetFactory(

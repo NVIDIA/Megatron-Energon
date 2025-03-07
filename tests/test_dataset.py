@@ -1425,7 +1425,6 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
                 task_encoder=TestTaskEncoder(),
             ),
-            worker_config=worker_config_r0,
             checkpoint_every_min_n_samples=1,
             checkpoint_every_sec=0,
         )
@@ -1456,7 +1455,6 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
                 task_encoder=TestTaskEncoder(),
             ),
-            worker_config=worker_config_r0,
             checkpoint_every_min_n_samples=1,
             checkpoint_every_sec=0,
         )
@@ -1593,7 +1591,6 @@ class TestDataset(unittest.TestCase):
                 batch_size=5,
                 worker_config=worker_config,
             ),
-            worker_config=worker_config,
         )
 
         assert len(loader) == 10

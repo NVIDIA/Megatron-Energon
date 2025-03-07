@@ -826,7 +826,6 @@ class TestDataset(unittest.TestCase):
 
         train_loader = get_savable_loader(
             train_dataset,
-            worker_config=worker_config,
             checkpoint_every_sec=0,
             checkpoint_every_min_n_samples=1,
             n_checkpoints=5,
@@ -889,7 +888,6 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
                 repeat=False,
             ),
-            worker_config=worker_config,
             checkpoint_every_sec=0,
             checkpoint_every_min_n_samples=1,
             n_checkpoints=5,

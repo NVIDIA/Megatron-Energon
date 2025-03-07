@@ -11,41 +11,13 @@ import torch.distributed
 import torch.utils.data
 
 from megatron.energon.dataclass_slots import dataclass_slots
-from megatron.energon.flavors.base_dataset import State
+from megatron.energon.savable import FlexState, Savable
 from megatron.energon.worker import WorkerConfig
 
 T = TypeVar("T")
 
 
-@dataclass_slots
-class WorkerRngState(State):
-    """The state of a worker random generator."""
-
-    rng: Optional[bytes]
-
-    def __repr__(self):
-        if self.rng is None:
-            return "WorkerRngState(rng=None)"
-        else:
-            inner = None if self.rng is None else self.rng[:3] + b"..."
-            return f"WorkerRngState(rng={inner!r})"
-
-
-@dataclass_slots
-class WorkerRngMergedState(State):
-    """The state of a worker random generator."""
-
-    rng: List[Optional[bytes]]
-
-    def __repr__(self):
-        if self.rng is None:
-            return "WorkerRngMergedState(rng=None)"
-        else:
-            inner = [None if r is None else r[:3] + b"..." for r in self.rng]
-            return f"WorkerRngMergedState(rng={inner!r})"
-
-
-class WorkerRng:
+class WorkerRng(Savable):
     """Helper class for getting a worker random generator, which is still in itself deterministic.
     If not in a worker, uses the global random generator's seed to initialize a new rng."""
 
@@ -53,28 +25,27 @@ class WorkerRng:
 
     _rng: Optional[torch.Generator] = None
 
-    _restore_states: Optional[List[Optional[bytes]]] = None
+    _restore_state: Optional[bytes] = None
 
     def __init__(self, worker_config: WorkerConfig):
         self.worker_config = worker_config
 
     @property
     def rng(self) -> torch.Generator:
-        if self._rng is None or self._restore_states is not None:
+        if self._rng is None or self._restore_state is not None:
             self.worker_config.assert_worker()
             self._rng = torch.Generator()
-            worker_idx = self.worker_config.rank_worker_id()
-            if self._restore_states is not None and self._restore_states[worker_idx] is not None:
+            if self._restore_state is not None:
                 self._rng.set_state(
                     torch.frombuffer(
-                        bytearray(self._restore_states[worker_idx]),
+                        bytearray(self._restore_state),
                         dtype=torch.uint8,
                     ).clone()
                 )
             else:
                 # Restore to initial state (either due to zero sized states, or just initial state)
                 self._rng.manual_seed(self.worker_config.worker_seed())
-            self._restore_states = None
+            self._restore_state = None
         return self._rng
 
     def randbelow(self, n: int) -> int:
@@ -100,21 +71,14 @@ class WorkerRng:
     def rand_pop(self, l: List[T]) -> T:
         return l.pop(self.randbelow(len(l)))
 
-    def save_state(self) -> WorkerRngState:
-        if self.rng is None:
-            return WorkerRngState(rng=None)
-        return WorkerRngState(rng=bytes(self.rng.get_state().tolist()))
+    def save_state(self) -> FlexState:
+        return FlexState(rng=None if self.rng is None else bytes(self.rng.get_state().tolist()))
 
-    def merge_states(self, states: List[Optional[WorkerRngState]]) -> WorkerRngMergedState:
-        assert all(s is None or isinstance(s, WorkerRngState) for s in states)
-        return WorkerRngMergedState(rng=[None if s is None else s.rng for s in states])
-
-    def restore_state(self, state: Optional[WorkerRngMergedState]) -> None:
-        if state is None:
-            self._restore_states = None
+    def restore_state(self, state: FlexState):
+        if state["rng"] is None:
+            self._restore_state = None
         else:
-            assert isinstance(state, WorkerRngMergedState)
-            self._restore_states = state.rng
+            self._restore_state = state["rng"]
 
 
 @dataclass_slots
