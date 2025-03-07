@@ -3,7 +3,7 @@
 
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
-from typing import Any, Generator, Generic, Iterable, Optional, Tuple, TypeVar, Union
+from typing import Any, Generator, Generic, Iterable, Optional, Tuple, Type, TypeVar, Union
 
 from megatron.energon.flavors.base_dataset import (
     FlexState,
@@ -63,6 +63,18 @@ class BaseWrapperDataset(SavableDataset[T_sample_out], Generic[T_sample_in, T_sa
 
     def worker_has_samples(self) -> bool:
         return any(ds.worker_has_samples() for ds in self.datasets)
+
+    def find_wrapped_dataset(self, cls: Type[SavableDataset]) -> Optional[SavableDataset]:
+        """Find the outermost dataset wrapped in this dataset that is of type cls."""
+
+        for ds in self.datasets:
+            if isinstance(ds, cls):
+                return ds
+            elif isinstance(ds, BaseWrapperDataset):
+                res = ds.find_wrapped_dataset(cls)
+                if res is not None:
+                    return res
+        return None
 
     def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_sample_out:
         if len(self.datasets) == 1:

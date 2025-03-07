@@ -45,6 +45,9 @@ class RankStateIterable:
     def get_num_workers(self):
         return self.rank_num_workers[0]
 
+    def get_micro_batch_size(self):
+        return self.rank_states[0].micro_batch_size
+
     def __iter__(self):
         """Iterates the SavableDatasetCheckpoints of mulitple ranks in a round-robin fashion."""
         for rank, state in enumerate(self.rank_states):
@@ -134,6 +137,7 @@ def command_redist(
         SavableDataLoaderState(
             worker_states=new_rank_state,
             next_worker_id=0,  # Reset the next worker ID
+            micro_batch_size=rsi.get_micro_batch_size(),
         )
         for new_rank_state in new_rank_states
     ]

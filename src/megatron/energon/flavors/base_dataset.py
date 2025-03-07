@@ -261,6 +261,7 @@ class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC)
         """
 
         state = FlexState()
+        state["__class__"] = type(self).__name__
         for key in self._savable_fields:
             attr = getattr(self, key)
             if isinstance(attr, Savable):
@@ -290,6 +291,9 @@ class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC)
         Args:
             state: The state of the dataset as savable object. If None, restore initial state.
         """
+        assert state["__class__"] == type(self).__name__, (
+            f"Class name mismatch: {state['__class__']} != {type(self).__name__}"
+        )
 
         for key in self._savable_fields:
             assert key in state, f"Key {key} not in state {state}"

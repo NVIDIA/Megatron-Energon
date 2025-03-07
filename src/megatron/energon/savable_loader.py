@@ -41,6 +41,7 @@ from megatron.energon.flavors.base_dataset import (
 from megatron.energon.rng import SystemRng
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset
+from megatron.energon.wrappers.batch_dataset import BatchDataset
 from megatron.energon.wrappers.gc_dataset import GC_DEFAULT_EVERY_N_ITER, GcDataset, gc_init_worker
 from megatron.energon.wrappers.log_sample_dataset import default_get_keys
 
@@ -560,6 +561,10 @@ class SavableDataLoaderState(State):
     #: Which worker will be the next to emit a sample. Used to restore the proper order
     next_worker_id: int
 
+    #: The micro batch size that was used, if available.
+    #: On restore, this is used to compare the new and old micro batch size.
+    micro_batch_size: Optional[int]
+
 
 class SavableDataLoader(DataLoader[T], Generic[T]):
     """DataLoader that supports saving and restoring the state of the dataset.
@@ -846,6 +851,22 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
                 raise r
         return res
 
+    def get_batch_size(self) -> Optional[int]:
+        """Try to infer micro batch size from the dataset"""
+        if isinstance(self.dataset, SavableDatasetWrapper):
+            dataset = self.dataset.dataset
+        else:
+            dataset = self.dataset
+
+        if (
+            isinstance(dataset, BaseWrapperDataset)
+            and (bds := dataset.find_wrapped_dataset(BatchDataset)) is not None
+        ):
+            assert isinstance(bds, BatchDataset)
+            return bds.batch_size
+        else:
+            return None
+
     def save_state_rank(self) -> Optional[SavableDataLoaderState]:
         """
         Saves the state of the dataset for the current rank. Allows for restoring the state later
@@ -871,6 +892,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
         merged_state = SavableDataLoaderState(
             worker_states=worker_states,
             next_worker_id=self._next_worker_id,
+            micro_batch_size=self.get_batch_size(),
         )
 
         # Not distributed -> return the merged state
@@ -888,14 +910,49 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
             # Assume initial state
             return
         assert isinstance(state, SavableDataLoaderState)
+
+        old_micro_batch_size = state.micro_batch_size
+        micro_batch_size = self.get_batch_size()
+
         if isinstance(self.dataset, SavableDataset):
+            assert micro_batch_size == old_micro_batch_size, (
+                "Changing micro batch size is not allowed without workers"
+            )
+
             assert len(state.worker_states) == 1
-            if isinstance(state.worker_states[0], FlexState):
-                self.dataset.restore_state(state.worker_states[0])
-            else:
-                self.dataset.restore_state(state.worker_states[0].dataset_state)
+            assert isinstance(state.worker_states[0], FlexState)
+            self.dataset.restore_state(state.worker_states[0])
         else:
             assert isinstance(self.dataset, SavableDatasetWrapper)
+            assert all(isinstance(s, SavableDatasetCheckpoint) for s in state.worker_states)
+
+            # Check batch sizes (before and after)
+            if micro_batch_size != old_micro_batch_size:
+                assert micro_batch_size is not None and old_micro_batch_size is not None, (
+                    "Cannot resume with different batching mode "
+                    "(batching to non-batching or vice versa)"
+                )
+
+                if micro_batch_size > old_micro_batch_size:
+                    raise ValueError(
+                        "Resuming with larger micro batch size is not allowed: "
+                        f"{micro_batch_size} > {state.micro_batch_size}"
+                    )
+                elif (
+                    micro_batch_size < old_micro_batch_size
+                    and old_micro_batch_size % micro_batch_size != 0
+                ):
+                    raise ValueError(
+                        "Resuming with smaller micro batch size only allowed if the old "
+                        f"micro batch size is a multiple of the new one: {micro_batch_size} < {state.micro_batch_size}"
+                    )
+                batch_size_ratio = old_micro_batch_size // micro_batch_size
+                for worker_state in state.worker_states:
+                    assert isinstance(worker_state, SavableDatasetCheckpoint)
+                    # When resuming with a smaller micro batch size, the offset must be scaled
+                    # up to the new micro batch size to skip the same number of samples as before.
+                    worker_state.offset *= batch_size_ratio
+
             self.dataset.restore_checkpoint(state.worker_states, worker_offset=state.next_worker_id)
 
     @deprecated(
