@@ -24,6 +24,7 @@ from typing import (
 
 import torch
 
+from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.flavors.base_dataset import (
     BaseCoreDatasetFactory,
     PinMemoryMixin,
@@ -156,7 +157,6 @@ def stateless(
             inner_rand_state = None
 
             while True:
-
                 if inner_rand_state is not None:
                     # Restore inner random state before calling the generator
                     # This will not be done on the first iteration
@@ -218,7 +218,7 @@ def get_stateless(fn: Callable[..., T_sample]) -> bool:
     return getattr(fn, "__stateless__", False)
 
 
-@dataclasses.dataclass
+@dataclass_slots
 class Batch(PinMemoryMixin):
     """Base class for a batch dataclass. Provides a default implementation for pinning memory."""
 
@@ -381,9 +381,9 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 is not TaskEncoder.pack_selected_samples
             )
 
-            assert (
-                select_samples_to_pack_provided and pack_selected_samples_provided
-            ), "Both select_samples_to_pack and pack_selected_samples methods must be provided in the TaskEncoder when using packing_buffer_size"
+            assert select_samples_to_pack_provided and pack_selected_samples_provided, (
+                "Both select_samples_to_pack and pack_selected_samples methods must be provided in the TaskEncoder when using packing_buffer_size"
+            )
 
             dataset = PackingDataset(
                 dataset,
@@ -406,6 +406,14 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 drop_last=batch_drop_last,
                 worker_config=worker_config,
             )
+
+            if getattr(self.encode_batch, "__func__", None) is not TaskEncoder.encode_batch:
+                dataset = MapDataset(
+                    dataset,
+                    self.encode_batch,
+                    worker_config=worker_config,
+                    stateless_map_fn=get_stateless(self.encode_batch),
+                )
         else:
             # No grouping is active
 
@@ -427,12 +435,12 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                         stateless_map_fn=get_stateless(self.encode_batch),
                     )
             else:
-                assert (
-                    getattr(self.encode_batch, "__func__", None) is TaskEncoder.encode_batch
-                ), "batch_size is not set, but encode_batch is not the default."
-                assert (
-                    getattr(self.batch, "__func__", None) is TaskEncoder.batch
-                ), "batch_size is not set, but batch is not the default."
+                assert getattr(self.encode_batch, "__func__", None) is TaskEncoder.encode_batch, (
+                    "batch_size is not set, but encode_batch is not the default."
+                )
+                assert getattr(self.batch, "__func__", None) is TaskEncoder.batch, (
+                    "batch_size is not set, but batch is not the default."
+                )
 
         return dataset
 
@@ -529,7 +537,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 DatasetBlendMode.NONE,
                 DatasetBlendMode.SAMPLE_REPETITIONS,
             ) and all(
-                isinstance(repetitions, int) for _dataset, repetitions in datasets
+                isinstance(repetitions, (int, float)) for _dataset, repetitions in datasets
             ), "If repeat is False, the datasets must be repeated with integer weights."
             inner_datasets = [
                 (
@@ -538,11 +546,11 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                         if repetition is None or repetition == 1
                         else RepeatDataset(
                             dataset.build(worker_rotation_offset=worker_rotation_offset),
-                            repeats=int(repetition),
+                            repeats=repetition,
                             worker_config=worker_config,
                         )
                     ),
-                    len(dataset) * (1 if repetition is None else int(repetition)),
+                    len(dataset) * (1 if repetition is None else repetition),
                 )
                 for (dataset, repetition), worker_rotation_offset in zip(
                     datasets, worker_rotation_offsets
@@ -636,9 +644,9 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         """Returns the current index for the next batch yielded from the current worker. Each batch
         on the current rank will get a strictly increasing unique number. Counting happens on each
         rank separately (i.e. each rank will get the same numbers for same batch index)."""
-        assert (
-            WorkerConfig.active_worker_config is not None
-        ), "The batch_index can only be fetched within the worker, and to be usable, you must use the get_(savable_)loader methods provided from the package."
+        assert WorkerConfig.active_worker_config is not None, (
+            "The batch_index can only be fetched within the worker, and to be usable, you must use the get_(savable_)loader methods provided from the package."
+        )
         return WorkerConfig.active_worker_config.active_worker_batch_index
 
     @property
@@ -649,9 +657,9 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         unique, but it is not synced across workers, thus it may raise in different intervals (e.g.
         if batching does not work the same for all batches). When restoring a sample, this number is
         also restored and can be relied on for deterministic randomness reproduction of a sample."""
-        assert (
-            WorkerConfig.active_worker_config is not None
-        ), "The batch_index can only be fetched within the worker, and to be usable, you must use the get_(savable_)loader methods provided from the package."
+        assert WorkerConfig.active_worker_config is not None, (
+            "The batch_index can only be fetched within the worker, and to be usable, you must use the get_(savable_)loader methods provided from the package."
+        )
         return WorkerConfig.active_worker_config.active_worker_sample_index
 
 

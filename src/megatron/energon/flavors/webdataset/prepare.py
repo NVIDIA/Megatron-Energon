@@ -3,10 +3,10 @@
 
 import functools
 import logging
-import multiprocessing as mp
 import random
 import re
 import tarfile
+import uuid
 from pathlib import Path
 from typing import (
     Any,
@@ -14,7 +14,7 @@ from typing import (
     Container,
     Dict,
     Generator,
-    Iterable,
+    Iterator,
     List,
     Optional,
     Set,
@@ -27,7 +27,9 @@ import braceexpand
 import yaml
 
 from megatron.energon.epathlib import EPath
+from megatron.energon.flavors.webdataset.aggregator_pool import AggregatorPool, BaseAggregator
 from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME, skip_meta_re, split_name_re
+from megatron.energon.flavors.webdataset.indexing import SqliteIndexWriter
 from megatron.energon.flavors.webdataset.itar import TarIndexWriter
 from megatron.energon.flavors.webdataset.structs import ShardInfo, WebdatasetInfo, WebdatasetSplits
 from megatron.energon.typed_converter import to_json_object
@@ -37,12 +39,71 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T", covariant=True)
 
 
-class WebdatasetPreparator:
+class SqliteIndexWriterAggregator(BaseAggregator):
+    sqlite_path: EPath
+    total_tasks: int
+    progress_fn: Optional[Callable]
+    writer: Optional[SqliteIndexWriter]
+    had_update: bool
+    shards: List[ShardInfo]
+    found_parts: Set[str]
+    prog_iter: Optional[Iterator]
 
+    def __init__(
+        self,
+        sqlite_path: EPath,
+        total_tasks: int,
+        progress_fn: Optional[Callable[[Iterator[Any], int], Iterator[T]]] = None,
+    ):
+        self.sqlite_path = sqlite_path
+        self.total_tasks = total_tasks
+        self.progress_fn = progress_fn
+        self.writer = None
+        self.had_update = False
+        self.shards = []
+        self.found_parts = set()
+
+        if progress_fn is not None:
+            self.prog_iter = progress_fn(iter(range(self.total_tasks)), self.total_tasks)
+        else:
+            self.prog_iter = None
+
+    def on_start(self, aggregator_pool: AggregatorPool) -> None:
+        self.writer = SqliteIndexWriter(self.sqlite_path)
+
+    def on_item(self, item: Any, aggregator_pool: AggregatorPool) -> None:
+        assert self.writer is not None, "Writer is not initialized."
+        if isinstance(item, dict):
+            self.writer.append_sample(**item)
+            self.had_update = True
+        elif isinstance(item, tuple):
+            # This is a (shard_info, parts) tuple
+            if self.prog_iter is not None:
+                next(self.prog_iter)
+
+            shard_info, cur_parts = item
+            assert shard_info.count != 0, f"Shard {shard_info.name} has no samples."
+            self.shards.append(shard_info)
+            if len(self.found_parts) < 50:
+                self.found_parts.update(cur_parts)
+
+    def on_finish(self, aggregator_pool: AggregatorPool) -> None:
+        assert self.writer is not None, "Writer is not initialized."
+        self.writer.close()
+
+    def get_final_result_data(self) -> Any:
+        assert self.writer is not None, "Writer is not initialized."
+        return self.shards, self.found_parts, self.had_update, self.writer.duplicates
+
+
+class WebdatasetPreparator:
     @staticmethod
     def _preprocess_tar(
-        path: str, parent_path: EPath, max_parts: int
-    ) -> Tuple[ShardInfo, Set[str]]:
+        path: EPath,
+        shard_to_idx: Dict[str, int],
+        parent_path: EPath,
+        max_parts: int,
+    ) -> Generator[Tuple[ShardInfo, Set[str]], None, None]:
         """Process a single tar file, i.e. read the tarinfos, generate the tar index and return
         stats.
 
@@ -54,22 +115,29 @@ class WebdatasetPreparator:
         Returns:
             Tuple of shard info and found keys of the loaded dicts.
         """
-        assert not path.startswith("/"), f"Path must not start with '/': {path}"
-        abs_path = parent_path / path
-        shard_info = ShardInfo(name=path, path=abs_path, offset=0, count=0)
+        shard_info = ShardInfo(name=path.relpath, path=path, count=0)
+
+        if not shard_info.path.is_absolute():
+            parent_path = EPath(parent_path)
+            assert parent_path.is_absolute(), f"Parent path must be absolute: {parent_path}"
+            shard_info.path = parent_path / path
 
         try:
             # Note: Write to .tmp file first, then remove .tmp extension, to make sure only complete
             # files are used.
             tar: tarfile.TarFile
             with shard_info.path.open("rb") as f:
-                with tarfile.open(fileobj=f, mode="r:*") as tar, TarIndexWriter(
-                    shard_info.path
-                ) as iw:
+                with (
+                    tarfile.open(fileobj=f, mode="r:*") as tar,
+                    TarIndexWriter(shard_info.path) as iw,
+                ):
                     count = 0
                     parts = set()
                     last_base_name = None
                     member: tarfile.TarInfo
+
+                    next_index_sample = None
+
                     for member in tar:
                         if not member.isreg():
                             continue
@@ -88,14 +156,34 @@ class WebdatasetPreparator:
 
                         if last_base_name != base_name:
                             iw.append(member.offset)
+
+                            if next_index_sample is not None:
+                                next_index_sample["byte_size"] = (
+                                    member.offset - next_index_sample["byte_offset"]
+                                )
+                                yield next_index_sample
+
+                            next_index_sample = dict(
+                                tar_file_id=shard_to_idx[path.relpath],
+                                sample_key=base_name,
+                                sample_index=count,
+                                byte_offset=member.offset,
+                            )
                             last_base_name = base_name
                             count += 1
                     shard_info.count = count
                     iw.append(tar.offset)
-            return shard_info, parts
+                    if next_index_sample is not None:
+                        next_index_sample["byte_size"] = (
+                            tar.offset - next_index_sample["byte_offset"]
+                        )
+                        yield next_index_sample
+            yield shard_info, parts
+            return
         except BaseException:
             logger.exception(f"Shard failed to load: {path!r}. Skipping it.")
-            return shard_info, set()
+            yield shard_info, set()
+            return
 
     @staticmethod
     def iter_dataset_content(
@@ -152,10 +240,10 @@ class WebdatasetPreparator:
         info_config: str = ".info.yaml",
         split_config: str = "split.yaml",
         shuffle_seed: Optional[int] = 42,
-        progress_fn: Callable[[List[T], int], Iterable[T]] = (lambda x, l: x),
+        progress_fn: Callable[[Iterator[T], int], Iterator[T]] = (lambda x, l: x),
         workers: int = 32,
         tar_index_only: bool = False,
-    ) -> Set[str]:
+    ) -> Tuple[Set[str], List[Tuple[str, int]]]:
         """
         Preprocess the shards and write the split config. Preprocessing is done in parallel.
         Counts the number of samples in each shard.
@@ -178,34 +266,62 @@ class WebdatasetPreparator:
         """
         parent_path = EPath(parent_path)
 
-        found_parts = set()
         paths = [path for path in paths for path in braceexpand.braceexpand(path)]
-        shards: List[ShardInfo] = []
 
-        # use functools partial to pass parent_path to process_tar
+        # Construct a mapping from relative shard path to its index
+        shard_to_idx = {path: idx for idx, path in enumerate(paths)}
+
+        assert parent_path.is_absolute(), f"Parent path must be absolute: {parent_path}"
+
+        (parent_path / MAIN_FOLDER_NAME).mkdir(exist_ok=True)
+
+        aggregator = SqliteIndexWriterAggregator(
+            parent_path / MAIN_FOLDER_NAME / "index.sqlite", total_tasks=len(paths)
+        )
+
         process_tar = functools.partial(
             cls._preprocess_tar,
+            shard_to_idx=shard_to_idx,
             parent_path=parent_path,
             max_parts=50,
         )
 
-        with mp.Pool(workers) as pool:
-            shard_info: ShardInfo
-            cur_parts: Set[str]
-            for shard_info, cur_parts in progress_fn(pool.imap(process_tar, paths), len(paths)):
-                if shard_info.count == 0:
-                    # This shard failed to load. Skip it.
-                    continue
-                shards.append(shard_info)
-                if len(found_parts) < 50:
-                    found_parts.update(cur_parts)
+        pool = AggregatorPool(
+            num_workers=workers,
+            user_produce_data=process_tar,
+            aggregator=aggregator,
+        )
+
+        pool.start()
+
+        for path in paths:
+            pool.submit_task(path)
+
+        pool.close()
+
+        # Get final results
+        shards, found_parts, had_update, duplicates = pool.get_final_aggregator_data()
+
+        if had_update:
+            logger.info("Regenerating dataset UUID...")
+            with (parent_path / MAIN_FOLDER_NAME / "index.uuid").open("w") as f:
+                f.write(str(uuid.uuid4()))
 
         if tar_index_only:
-            return found_parts
+            return found_parts, duplicates
 
-        (parent_path / MAIN_FOLDER_NAME).mkdir(exist_ok=True)
+        assert len(shards) == len(shard_to_idx), (
+            f"Lengths of shards and shard_to_idx do not match: {len(shards)} != {len(shard_to_idx)}"
+        )
+
+        # Sort the shards according to the order in the input list
+        shards.sort(key=lambda shard: shard_to_idx[shard.name])
 
         # Save info
+        assert [shard.name for shard in shards] == list(shard_to_idx.keys()), (
+            "Shards are not in the same order as in the input list."
+        )
+
         info = WebdatasetInfo(
             shard_counts={shard.name: shard.count for shard in shards},
         )
@@ -232,9 +348,9 @@ class WebdatasetPreparator:
                 split_shards[split_part] = [shard.name for shard in shards[split_offset:split_end]]
                 split_offset = split_end
         else:
-            assert (
-                split_parts_patterns is not None
-            ), "Require either split_parts_ratio or split_parts_patterns"
+            assert split_parts_patterns is not None, (
+                "Require either split_parts_ratio or split_parts_patterns"
+            )
             # Sample from shards based on the split patterns from split parts
             split_shards = {}
             for split_part, split_pattern in split_parts_patterns:
@@ -251,4 +367,4 @@ class WebdatasetPreparator:
         with (parent_path / MAIN_FOLDER_NAME / split_config).open("w") as wf:
             yaml.dump(to_json_object(splits_config), wf)
 
-        return found_parts
+        return found_parts, duplicates

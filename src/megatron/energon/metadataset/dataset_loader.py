@@ -1,9 +1,9 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from dataclasses import dataclass
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
+from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.dataset_config import get_dataset_from_config
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import BaseCoreDatasetFactory
@@ -11,7 +11,7 @@ from megatron.energon.metadataset.loader_interface import DatasetBlendMode, Data
 from megatron.energon.worker import WorkerConfig
 
 
-@dataclass
+@dataclass_slots
 class DatasetLoader(DatasetLoaderInterface):
     """Loads a dataset from a path."""
 
@@ -19,9 +19,12 @@ class DatasetLoader(DatasetLoaderInterface):
     split_part: Optional[str] = None
     subflavor: Optional[str] = None
     subflavors: Optional[Dict[str, Any]] = None
-    shuffle_over_epochs_multiplier: int = 1
+    shuffle_over_epochs_multiplier: Optional[int] = 1
     dataset_config: str = "dataset.yaml"
     split_config: str = "split.yaml"
+
+    def post_initialize(self, mds_path: Optional[EPath] = None):
+        pass
 
     def get_dataset(
         self,
@@ -31,7 +34,7 @@ class DatasetLoader(DatasetLoaderInterface):
         worker_config: WorkerConfig,
         subflavor: Optional[str] = None,
         subflavors: Optional[Dict[str, Any]] = None,
-        shuffle_over_epochs: int = 1,
+        shuffle_over_epochs: Optional[int] = 1,
         split_config: Optional[str] = None,
         dataset_config: Optional[str] = None,
         **kwargs,
@@ -83,7 +86,7 @@ class DatasetLoader(DatasetLoaderInterface):
         worker_config: WorkerConfig,
         subflavor: Optional[str] = None,
         subflavors: Optional[Dict[str, Any]] = None,
-        shuffle_over_epochs_multiplier: int = 1,
+        shuffle_over_epochs_multiplier: Optional[int] = 1,
         **kwargs,
     ) -> Tuple[DatasetBlendMode, List[Tuple[BaseCoreDatasetFactory, Union[float, int, None]]]]:
         return DatasetBlendMode.NONE, [

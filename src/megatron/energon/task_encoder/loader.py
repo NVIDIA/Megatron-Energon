@@ -45,7 +45,7 @@ def get_train_dataset(
     shuffle_buffer_size: Optional[int],
     max_samples_per_sequence: Optional[int],
     virtual_epoch_length: int = 0,
-    shuffle_over_epochs_multiplier: int = 1,
+    shuffle_over_epochs_multiplier: Optional[int] = 1,
     task_encoder: TaskEncoder[Any, Any, Any, T] = DefaultTaskEncoder(),
     repeat: bool = True,
     **kwargs,

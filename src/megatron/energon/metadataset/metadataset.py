@@ -1,9 +1,9 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from dataclasses import dataclass
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
+from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.dataset_config import load_config
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory
@@ -13,13 +13,13 @@ from megatron.energon.metadataset.loader_interface import DatasetBlendMode, Data
 from megatron.energon.worker import WorkerConfig
 
 
-@dataclass
+@dataclass_slots
 class DatasetReference:
     path: Union[str, EPath]
     split_part: Optional[str] = None
     subflavor: Optional[str] = None
     subflavors: Optional[Dict[str, Any]] = None
-    shuffle_over_epochs_multiplier: int = 1
+    shuffle_over_epochs_multiplier: Optional[int] = 1
     dataset_config: str = "dataset.yaml"
     split_config: str = "split.yaml"
 
@@ -27,18 +27,19 @@ class DatasetReference:
 
     _dataset: Optional[DatasetLoaderInterface] = None
 
-    def post_initialize(self, parent_path: EPath):
+    def post_initialize(self, mds_path: Optional[EPath] = None):
+        assert mds_path is not None
         if not isinstance(self.path, EPath):
-            self.path = parent_path / self.path
+            self.path = mds_path.parent / self.path
         if self.path.is_file():
             assert self.dataset_config == "dataset.yaml", "Must not set dataset_config"
             assert self.split_config == "split.yaml", "Must not set split_config"
             self._dataset = load_config(
                 self.path,
                 default_type=Metadataset,
-                strict=True,
-                default_kwargs=dict(parent_path=self.path.parent),
+                default_kwargs=dict(path=self.path),
             )
+            self._dataset.post_initialize()
         elif (self.path / MAIN_FOLDER_NAME / ".info.yaml").is_file():
             self._dataset = DatasetLoader(
                 path=self.path,
@@ -49,6 +50,7 @@ class DatasetReference:
                 dataset_config=self.dataset_config,
                 split_config=self.split_config,
             )
+            self._dataset.post_initialize()
         else:
             raise FileNotFoundError(self.path)
 
@@ -60,7 +62,7 @@ class DatasetReference:
         worker_config: WorkerConfig,
         subflavor: Optional[str] = None,
         subflavors: Optional[Dict[str, Any]] = None,
-        shuffle_over_epochs_multiplier: int = 1,
+        shuffle_over_epochs_multiplier: Optional[int] = 1,
         **kwargs,
     ) -> Tuple[DatasetBlendMode, List[Tuple[BaseCoreDatasetFactory, Union[float, int, None]]]]:
         if self.subflavors is not None:
@@ -78,15 +80,16 @@ class DatasetReference:
         )
 
 
-@dataclass
+@dataclass_slots
 class MetadatasetBlender:
     """Internal blending of the dataset."""
 
     datasets: List[DatasetReference]
 
-    def post_initialize(self, parent_path: EPath):
+    def post_initialize(self, mds_path: Optional[EPath] = None):
+        assert mds_path is not None
         for dataset in self.datasets:
-            dataset.post_initialize(parent_path)
+            dataset.post_initialize(mds_path)
 
     def get_datasets(
         self,
@@ -96,7 +99,7 @@ class MetadatasetBlender:
         worker_config: WorkerConfig,
         subflavor: Optional[str] = None,
         subflavors: Optional[Dict[str, Any]] = None,
-        shuffle_over_epochs_multiplier: int = 1,
+        shuffle_over_epochs_multiplier: Optional[int] = 1,
         **kwargs,
     ) -> Tuple[DatasetBlendMode, List[Tuple[BaseCoreDatasetFactory, Union[float, int, None]]]]:
         sum_weight = sum(dataset.weight for dataset in self.datasets)
@@ -128,19 +131,22 @@ class MetadatasetBlender:
 class Metadataset(DatasetLoaderInterface):
     """Main entry for metadataset."""
 
+    _path: EPath
     _splits: Dict[str, MetadatasetBlender]
 
     def __init__(
         self,
-        parent_path: Union[EPath, str],
+        path: Union[EPath, str],
         splits: Dict[str, MetadatasetBlender],
     ):
         """Create the metadataset"""
-        parent_path = EPath(parent_path)
+        self._path = EPath(path)
         self._splits = splits
-        # Fix paths
-        for split in splits.values():
-            split.post_initialize(parent_path)
+
+    def post_initialize(self, mds_path: Optional[EPath] = None):
+        assert mds_path is None
+        for split in self._splits.values():
+            split.post_initialize(self._path)
 
     def get_datasets(
         self,
@@ -150,7 +156,7 @@ class Metadataset(DatasetLoaderInterface):
         worker_config: WorkerConfig,
         subflavor: Optional[str] = None,
         subflavors: Optional[Dict[str, Any]] = None,
-        shuffle_over_epochs_multiplier: int = 1,
+        shuffle_over_epochs_multiplier: Optional[int] = 1,
         **kwargs,
     ) -> Tuple[DatasetBlendMode, List[Tuple[BaseCoreDatasetFactory, Union[float, int, None]]]]:
         return self._splits[split_part].get_datasets(

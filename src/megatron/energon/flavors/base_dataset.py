@@ -5,7 +5,8 @@ import dataclasses
 import inspect
 import typing
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, is_dataclass
+from copy import deepcopy
+from dataclasses import is_dataclass
 from typing import (
     Any,
     Callable,
@@ -23,8 +24,12 @@ from typing import (
 
 import torch
 from torch.utils.data import IterableDataset
+from typing_extensions import Self
 
+from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.epathlib import EPath
+from megatron.energon.savable import Savable
+from megatron.energon.state import FlexState
 from megatron.energon.worker import WorkerConfig
 
 T_sample = TypeVar("T_sample", covariant=True)
@@ -58,7 +63,7 @@ class PinMemoryMixin:
         else:
             return batch
 
-    def pin_memory(self: T) -> T:
+    def pin_memory(self: Self) -> Self:
         return self._pin_memory(self)
 
 
@@ -103,7 +108,7 @@ class ExtendableDataclassMixin:
         return cls(**kwargs)
 
 
-@dataclass
+@dataclass_slots
 class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
     """An abstract base class for one element of a batch.
     Each task should derive a specific subclass as a `@dataclass`, like
@@ -163,9 +168,9 @@ class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
         Returns:
             The joined constructed sample.
         """
-        assert (
-            len(kwargs) == 0
-        ), "Please specify joined datasets as list for the default joiner. Keyword arguments are confusing, because keys are ignored."
+        assert len(kwargs) == 0, (
+            "Please specify joined datasets as list for the default joiner. Keyword arguments are confusing, because keys are ignored."
+        )
         excluded_fields = set(field.name for field in dataclasses.fields(Sample))
         init_args = {}
         if len(args) > 0:
@@ -184,7 +189,7 @@ class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
         return cls(**init_args)
 
 
-@dataclass
+@dataclass_slots
 class State(ABC, ExtendableDataclassMixin):
     """An abstract base class for the state of a dataset. See :class:`megatron.energon.SavableDataset`.
     The state of a dataset is used to save and restore the dataset state (i.e. random generators,
@@ -221,47 +226,7 @@ class State(ABC, ExtendableDataclassMixin):
     """
 
 
-@dataclass
-class MergedState(ABC, ExtendableDataclassMixin):
-    """An abstract base class for the merged state of a dataset. See :class:`SavableDataset`.
-    The merged state is created in the :meth:`megatron.energon.SavableDataset.merge_states` method, and
-    represents the merged state of all worker processes (only workers, not ranks). It is required
-    to restore the state of the dataset in the :meth:`megatron.energon.SavableDataset.restore_state`
-    method for all workers before the workers are started.
-    Each dataset should derive a specific subclass as a `@dataclass` and add the fields as needed
-    for training.
-
-    To extend subclasses, use the .extend method. Example:
-    Example (see :meth:`megatron.energon.State` to complete the example)
-
-    .. code-block:: python
-
-        @dataclass
-        class MyMergedState(MergedState):
-            a: List[int]
-
-        @dataclass
-        class MyExtendedMergedState(MyMergedState):
-            # Add a new field `b` to the state
-            b: List[int]
-
-        class MyMergedStateSaver:
-            def merge_state(self, states: List[MyState]) -> MyMergedState:
-                return MyMergedState(a=[s.a for s in states])
-
-        class MyExtendedMergedStateSaver(MyMergedStateSaver):
-            def merge_state(self, states: List[MyExtendedState]) -> MyExtendedMergedState:
-                # Fetch state from super class, which is already a complete instance (cannot add
-                # new fields to it, type is fixed).
-                state: MyMergedState = super().merge_state(states)
-
-                # Now extend the state of the super class (of type `MyMergedState`) with the
-                # new field required to define `MyExtendedMergedState`.
-                return MyExtendedMergedState.extend(state, b=[s.b for s in states])
-    """
-
-
-class SavableDataset(IterableDataset[T_sample], Generic[T_sample], ABC):
+class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC):
     """A dataset that can be saved and restored (i.e. the random state, internal buffers, etc.).
     I.e. it can be resumed from a checkpoint.
 
@@ -279,47 +244,75 @@ class SavableDataset(IterableDataset[T_sample], Generic[T_sample], ABC):
 
     worker_config: WorkerConfig
 
+    #: List of names of the fields that are saved and restored in the state.
+    _savable_fields: ClassVar[Tuple[str, ...]] = ()
+
     def __init__(self, worker_config: WorkerConfig):
         self.worker_config = worker_config
 
     @abstractmethod
     def __len__(self) -> int: ...
 
-    @abstractmethod
-    def save_state(self) -> State:
+    def save_state(self) -> FlexState:
         """
-        Saves the state of the dataset. This should include the random state, but not the data
-        itself. Can only be called in a worker process.
+        Saves the state of the dataset. This will save and return the state of all fields
+        in the _savable_fields tuple.
+        Can only be called in a worker process.
+        """
 
-        Returns:
-            The state of the dataset as savable object (i.e. python basic types).
-        """
-        ...
+        state = FlexState()
+        state["__class__"] = type(self).__name__
+        for key in self._savable_fields:
+            attr = getattr(self, key)
+            if isinstance(attr, Savable):
+                state[key] = attr.save_state()
+            else:
+                # Check if this field is a simple python type or a user class
 
-    @abstractmethod
-    def merge_states(self, states: List[Optional[State]]) -> MergedState:
+                if attr is not None and getattr(attr, "__module__", "builtins") != "builtins":
+                    import warnings
+
+                    warnings.warn(
+                        f"The savable attribute {key} of class {type(self)} does "
+                        "not inherit from Savable, nor it is a simple builtin type. Please double-check.",
+                        UserWarning,
+                    )
+
+                state[key] = deepcopy(getattr(self, key))
+
+        return state
+
+    def restore_state(self, state: FlexState) -> None:
         """
-        Merges the states of all workers into one state. Restore state expects a merged state.
+        Restores the state of the dataset. This will restore the state of all fields
+        in the _savable_fields tuple.
+        Can only be called in a worker process.
 
         Args:
-            states: The states of the workers to merge.
-
-        Returns:
-            The merged state.
+            state: The state of the dataset as savable object. If None, restore initial state.
         """
-        ...
+        assert state["__class__"] == type(self).__name__, (
+            f"Class name mismatch: {state['__class__']} != {type(self).__name__}"
+        )
+
+        for key in self._savable_fields:
+            assert key in state, f"Key {key} not in state {state}"
+            value = state.get(key)
+
+            assert hasattr(self, key), f"Savable field {key} not in dataset {self}"
+            if isinstance(getattr(self, key), Savable):
+                getattr(self, key).restore_state(value)
+            else:
+                setattr(self, key, value)
 
     @abstractmethod
-    def restore_state(self, state: Optional[MergedState]) -> None:
-        """
-        Restores the state of the dataset. This should include the random state, but not the data
-        itself. Can only be called in a worker process.
-
-        Args:
-            state: The state of the dataset as savable object (i.e. python basic types) as saved by
-                `save_state`. If None, restore initial state.
-        """
+    def reset_state_own(self) -> None:
+        """Resets the state of the dataset to the initial state. Can only be called in a worker process."""
         ...
+
+    def reset_state_deep(self) -> None:
+        """Resets the state of the dataset to the initial state. Can only be called in a worker process."""
+        self.reset_state_own()
 
     @abstractmethod
     def worker_has_samples(self) -> bool:
@@ -338,7 +331,9 @@ class SavableDataset(IterableDataset[T_sample], Generic[T_sample], ABC):
 
     @abstractmethod
     def config(self) -> Dict[str, Any]:
-        """Return a config dict that can be used to check if datasets have the same settings."""
+        """Return a config dict that can be used to check if datasets have the same settings.
+        Variables in dicts starting with "_" represent a possibly changable setting, like a full
+        path which may be changed."""
         return {
             "type": type(self).__qualname__,
         }

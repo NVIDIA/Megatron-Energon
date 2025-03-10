@@ -53,7 +53,7 @@ pip install git+https://github.com/NVIDIA/Megatron-Energon.git
 
 **NOTE**: We encourage you to install the package (and not just import a local copy). This will ensure you have all the needed dependencies and that you can use the command line tool.
 
-For more details on installing this package, see [here](https://nvidia.github.io/Megatron-Energon/installation.html).
+For more details on installing this package, see [here](https://nvidia.github.io/Megatron-Energon/intro/installation.html).
 
 ## Usage of command line tool
 
@@ -82,7 +82,7 @@ simple_worker_config = WorkerConfig(rank=0, world_size=1, num_workers=2)
 
 train_ds = get_train_dataset(
     '/my/dataset/path',
-    batch_size=32,
+    batch_size=2,
     shuffle_buffer_size=None,
     max_samples_per_sequence=None,
     worker_config=simple_worker_config,
@@ -97,5 +97,3 @@ for batch in train_loader:
 ```
 
 For more details, read the [documentation](https://nvidia.github.io/Megatron-Energon/).
-
-Most likely, you'll need your own [task encoder](https://nvidia.github.io/Megatron-Energon/task_encoders.html).

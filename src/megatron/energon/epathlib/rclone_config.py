@@ -30,7 +30,6 @@ def find_executable_path(executable_name):
 
 
 def get_rclone_config_path() -> Optional[Path]:
-
     # First check if rclone executable is in PATH, if yes, check if rclone.conf is in the same directory
     rclone_exe_path = find_executable_path("rclone")
     if rclone_exe_path is not None and rclone_exe_path.is_file():

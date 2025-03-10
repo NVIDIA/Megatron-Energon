@@ -8,10 +8,9 @@ from typing import (
     Dict,
     Generic,
     List,
-    Literal,
+    Mapping,
     Optional,
     Sequence,
-    Tuple,
     Type,
     TypeVar,
     Union,
@@ -26,9 +25,14 @@ from megatron.energon.flavors.base_dataset import (
 )
 from megatron.energon.flavors.webdataset.base_webdataset import BaseWebdatasetFactory
 from megatron.energon.flavors.webdataset.error_handler import ErrorHandler
-from megatron.energon.flavors.webdataset.sample_loader import WebdatasetSampleLoaderDataset
+from megatron.energon.flavors.webdataset.indexing import JoinIndexReader
+from megatron.energon.flavors.webdataset.itar_reader import JoinIndexFileITarReader
+from megatron.energon.flavors.webdataset.sample_loader import (
+    RawSampleData,
+    WebdatasetSampleLoaderDataset,
+)
 from megatron.energon.flavors.webdataset.sharder import Sharder
-from megatron.energon.flavors.webdataset.structs import FilteredSample, ShardInfo, reraise_exception
+from megatron.energon.flavors.webdataset.structs import ShardInfo, reraise_exception
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.map_dataset import MapDataset
 
@@ -44,11 +48,10 @@ class JoinedWebdatasetFactory(
 
     training: bool
     worker_config: WorkerConfig
-    shuffle_over_epochs: int = 1
+    shuffle_over_epochs: Optional[int] = 1
     parallel_shard_iters: Optional[int]
     max_samples_per_sequence: Optional[int]
-    part_filter: Optional[Callable[[str], bool]]
-    join_method: Literal["inner_match"]
+    join_index: EPath
     handler: Callable[[Exception, Optional[str]], None]
 
     shards: List[Sequence[ShardInfo]]
@@ -60,15 +63,14 @@ class JoinedWebdatasetFactory(
 
     def __init__(
         self,
-        inner_datasets: Union[List[BaseWebdatasetFactory], Dict[str, BaseWebdatasetFactory]],
+        inner_datasets: Union[Sequence[BaseWebdatasetFactory], Mapping[str, BaseWebdatasetFactory]],
         *,
         training: bool,
         worker_config: WorkerConfig,
-        shuffle_over_epochs: int = 1,
+        shuffle_over_epochs: Optional[int] = 1,
         parallel_shard_iters: Optional[int] = None,
         max_samples_per_sequence: Optional[int] = None,
-        part_filter: Optional[Callable[[str], bool]] = None,
-        join_method: Literal["inner_match"] = "inner_match",
+        join_index: EPath,
         joiner: Union[Type[T_sample], Callable[..., T_sample]],
         handler: Callable[[Exception, Optional[str]], None] = reraise_exception,
     ):
@@ -92,47 +94,30 @@ class JoinedWebdatasetFactory(
             parallel_shard_iters: Number of parallel opened shards per worker, shuffling between.
             max_samples_per_sequence: Maximum number of samples per sequence (=how many samples
                     will be sequentially iterated).
-            part_filter: (internal) Function for filtering tar files by dict keys
-            join_method: How to join the samples from the datasets.
-                inner_match: All samples must match 1:1 of the merged datasets.
-                This might be extended to further modes in the future, but those will require a new index, which
+            join_index: Path to the join index file. Only required for join_method="left".
             joiner: Type of the joined samples or a method for joining the samples.
             handler: Exception handler. Args: (exception, key).
         """
         self.__sample_type__ = joiner
-        assert all(
-            not hasattr(d, "dataset") for d in inner_datasets
-        ), "Inner dataset was not instantiated with _is_composed=True"
+        assert all(not hasattr(d, "dataset") for d in inner_datasets), (
+            "Inner dataset was not instantiated with _is_composed=True"
+        )
         if isinstance(joiner, type) and issubclass(joiner, Sample):
             joiner = joiner.from_joined
         else:
             assert callable(joiner), f"Joiner {joiner} must be a callable or a Sample subclass"
-        if isinstance(inner_datasets, dict):
+        if isinstance(inner_datasets, Mapping):
             inner_keys = list(inner_datasets.keys())
             self.inner_dataset_keys = inner_keys
             # Wrap the joiner to pass the samples as kwargs
             self._sample_joiner = lambda *samples: joiner(**dict(zip(inner_keys, samples)))
             inner_datasets = list(inner_datasets.values())
         else:
+            assert isinstance(inner_datasets, Sequence)
             self._sample_joiner = joiner
             self.inner_dataset_keys = None
-        assert all(
-            len(dataset.shards) == len(inner_datasets[0].shards) for dataset in inner_datasets[1:]
-        ), f"Dataset structures do not match, shards differ"
-        self.sample_exclude = inner_datasets[0].sample_excludes
-        assert all(
-            self.sample_exclude == dataset.sample_excludes for dataset in inner_datasets[1:]
-        ), f"Sample excludes must be the same for all paths"
 
-        if join_method == "inner_match":
-            assert all(
-                shard1.count == shard2.count
-                for dataset in inner_datasets[1:]
-                for shard1, shard2 in zip(dataset.shards, inner_datasets[0].shards)
-            ), "When joining datasets with the 'inner_match' method, all shards must have the same count"
-        else:
-            assert False, f"Invalid join method {join_method}"
-
+        self.join_index = join_index
         self.inner_datasets = inner_datasets
         self.shards = list(zip(*(dataset.shards for dataset in self.inner_datasets)))
         self.training = training
@@ -140,8 +125,6 @@ class JoinedWebdatasetFactory(
         self.shuffle_over_epochs = shuffle_over_epochs
         self.parallel_shard_iters = parallel_shard_iters
         self.max_samples_per_sequence = max_samples_per_sequence
-        self.part_filter = part_filter
-        self.join_method = join_method
         self.handler = handler
 
     def __len__(self) -> int:
@@ -157,42 +140,56 @@ class JoinedWebdatasetFactory(
         else:
             parallel_shard_iters = self.parallel_shard_iters
 
-        rank_shards = self.shard_workers(
-            self.shards,
-            self.worker_config,
+        # Get join index, get size, distribute samples
+        # Get samples for each worker on current rank
+        assert self.join_index.is_file(), (
+            f"Join index {self.join_index} does not exist, did you prepare the metadataset? "
+            "If you already prepared the metadataset, the join index might be outdated due to "
+            "modifications to the inner datasets. In this case, you need to re-prepare the metadataset."
+        )
+
+        with JoinIndexReader(self.join_index) as jir:
+            total_samples = len(jir)
+
+        workers_sample_slice_offsets = self.slice_workers(
+            total_samples,
+            worker_config=self.worker_config,
             max_samples_per_sequence=self.max_samples_per_sequence,
             rotation_offset=worker_rotation_offset,
         )
 
-        for rank_idx, shards in enumerate(rank_shards):
-            shards_text = ", ".join(
-                f"{subshard[0].name}[{subshard[0].offset}, {subshard[0].offset+subshard[0].count})"
-                for subshard in shards[:3]
-            )
-            if len(shards) > 6:
-                shards_text += f", ...<{len(shards) - 6}>, " + ", ".join(
-                    f"{subshards[0].name}[{subshards[0].offset}, {subshards[0].offset+subshards[0].count})"
-                    for subshards in shards[-3:]
-                )
-            elif len(shards) > 3:
-                shards_text += ", " + ", ".join(
-                    f"{subshards[0].name}[{subshards[0].offset}, {subshards[0].offset+subshards[0].count})"
-                    for subshards in shards[3:]
-                )
+        for worker_idx, sample_slice_offsets in enumerate(workers_sample_slice_offsets):
+            start_idx = sample_slice_offsets[0]
+            end_idx = sample_slice_offsets[-1]
+
+            if len(sample_slice_offsets) > 6:
+                offset_str = f"{', '.join(str(o) for o in sample_slice_offsets[:3])} ...<{len(sample_slice_offsets) - 6}> {', '.join(str(o) for o in sample_slice_offsets[-3:])}"
+            else:
+                offset_str = ", ".join(str(o) for o in sample_slice_offsets)
+
             print(
-                f"rank={self.worker_config.rank}, worker={rank_idx}: shard_range="
-                f"[{shards_text}] "
-                f"sum(count)={sum(subshards[0].count for subshards in shards)}"
+                f"rank={self.worker_config.rank}, worker={worker_idx}: sample_range=[{start_idx}, {end_idx}) in {len(sample_slice_offsets) - 1} slices, "
+                f"sum(count)={end_idx - start_idx}: [{offset_str}]"
             )
 
+        itar_readers = [
+            JoinIndexFileITarReader(
+                index_file=self.join_index,
+                column=col_idx,
+                tar_filenames=indexed_dataset.split_part_files,
+                base_path=indexed_dataset.path,
+                part_filter=indexed_dataset.part_filter,
+                itar_cache_size=parallel_shard_iters,
+            )
+            for col_idx, indexed_dataset in enumerate(self.inner_datasets)
+        ]
+
         dataset = WebdatasetSampleLoaderDataset(
-            rank_shards=rank_shards,
+            join_readers=itar_readers,
+            workers_sample_slice_offsets=workers_sample_slice_offsets,
             worker_config=self.worker_config,
-            part_filter=self.part_filter,
-            exclude=self.sample_exclude,
             shuffle_over_epochs=self.shuffle_over_epochs if self.training else None,
-            parallel_shard_iters=parallel_shard_iters,
-            dataset_join_method=self.join_method,
+            parallel_slice_iters=parallel_shard_iters,
             handler=self.sample_error_handler,
         )
         return self._process_samples(dataset)
@@ -201,9 +198,7 @@ class JoinedWebdatasetFactory(
     def paths(self) -> List[EPath]:
         return [dataset.path for dataset in self.inner_datasets]
 
-    def _process_samples(
-        self, dataset: SavableDataset[Tuple[Optional[FilteredSample], ...]]
-    ) -> SavableDataset[T_sample]:
+    def _process_samples(self, dataset: SavableDataset[RawSampleData]) -> SavableDataset[T_sample]:
         """Internally loads the sample."""
         return MapDataset(
             dataset,
@@ -214,28 +209,17 @@ class JoinedWebdatasetFactory(
             worker_config=self.worker_config,
         )
 
-    def load_sample(self, samples: Tuple[Optional[FilteredSample], ...]) -> T_sample:
-        assert len(samples) > 0 and samples[0] is not None, "Always need primary sample"
-        # Combine the restore key. This must be in accordance to the ShardReader's restore unpacking
-        restore_key = [
-            *samples[0]["__restore_key__"],
-        ]
-        for sample in samples[1:]:
-            if sample is None:
-                restore_key.append("")
-                restore_key.append(-1)
-            else:
-                restore_key.extend(sample["__restore_key__"][1:3])
-
+    def load_sample(self, samples: RawSampleData) -> T_sample:
+        assert len(samples.data) > 0 and samples.data[0] is not None, "Always need primary sample"
         # First call the loaders of all inner datasets
         loaded_samples = tuple(
             None if sample is None else dataset.load_sample(sample)
-            for dataset, sample in zip(self.inner_datasets, samples)
+            for dataset, sample in zip(self.inner_datasets, samples.data)
         )
         # Then combine the loaded smaples into the final type
         return set_sample_restore_key(
             self._sample_joiner(*loaded_samples),
-            *restore_key,
+            *samples.__restore_key__,
             src=self,
             fail_otherwise=True,
         )

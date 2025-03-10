@@ -3,8 +3,9 @@
 
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, Union
 
+from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory
 from megatron.energon.worker import WorkerConfig
 
@@ -24,6 +25,11 @@ class DatasetLoaderInterface(ABC):
     """General interface for a dataset loader."""
 
     @abstractmethod
+    def post_initialize(self, mds_path: Optional[EPath] = None):
+        """Called to finally initialize the dataset."""
+        ...
+
+    @abstractmethod
     def get_datasets(
         self,
         *,
@@ -32,7 +38,7 @@ class DatasetLoaderInterface(ABC):
         worker_config: WorkerConfig,
         subflavor: Optional[str] = None,
         subflavors: Optional[Dict[str, Any]] = None,
-        shuffle_over_epochs_multiplier: int = 1,
+        shuffle_over_epochs_multiplier: Optional[int] = 1,
         **kwargs,
     ) -> Tuple[DatasetBlendMode, List[Tuple[BaseCoreDatasetFactory, Union[float, int, None]]]]:
         """
@@ -59,3 +65,15 @@ class DatasetLoaderInterface(ABC):
             The dataset blending mode and the instantiated core datasets with their weights/repetitions.
         """
         ...
+
+    def prepare(self, split_part: Optional[str] = None) -> Sequence[EPath]:
+        """
+        Prepares the loader by creating caches and other necessary structures on disk.
+
+        Args:
+            split_part: Name of the split to load.
+
+        Returns:
+            List of paths to the cache paths. This is used for cleanup.
+        """
+        return ()

@@ -9,7 +9,7 @@ import yaml
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import BaseCoreDatasetFactory, StandardWebdatasetFactory
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
-from megatron.energon.typed_converter import raw_to_instance
+from megatron.energon.typed_converter import JsonParser
 from megatron.energon.worker import WorkerConfig
 
 T = TypeVar("T")
@@ -19,8 +19,8 @@ def load_config(
     path: Union[EPath, Dict[str, Any]],
     *,
     default_type: Type[T],
-    strict: bool = True,
     default_kwargs: Optional[Dict[str, Any]] = None,
+    parser: JsonParser = JsonParser(strict=True),
 ) -> T:
     """
     Loads a config from a file or directly from a dictionary.
@@ -28,7 +28,6 @@ def load_config(
     Args:
         path: Path to the config to load or a dictionary containing the config.
         default_type: If set, this is the type to use if no type is specified in the config.
-        strict: If true, don't allow additional attributes in the config.
         default_kwargs: Default kwargs to use, will be overridden by the config.
 
     Returns:
@@ -46,7 +45,7 @@ def load_config(
         new_data.update(data)
         data = new_data
 
-    return raw_to_instance(data, default_type, strict=strict)
+    return parser.raw_to_instance(data, default_type)
 
 
 T_sample = TypeVar("T_sample", covariant=True)
@@ -108,7 +107,7 @@ def get_dataset_from_config(
     elif subflavors is not None:
         dataset.subflavors.update(subflavors)
     if sample_type is not None:
-        assert issubclass(
-            dataset.__sample_type__, sample_type
-        ), f"Sample of type {dataset.__sample_type__} is not a subclass of {sample_type}."
+        assert issubclass(dataset.__sample_type__, sample_type), (
+            f"Sample of type {dataset.__sample_type__} is not a subclass of {sample_type}."
+        )
     return dataset
