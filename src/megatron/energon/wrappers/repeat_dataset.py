@@ -50,7 +50,7 @@ class RepeatDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
     def __len__(self):
         if self.repeats is None:
             return len(self.dataset)
-        return len(self.dataset) * self.repeats
+        return int(len(self.dataset) * self.repeats)
 
     def __iter__(self) -> Iterator[T_sample]:
         assert self.repeats is not None or self.dataset.worker_has_samples(), (
