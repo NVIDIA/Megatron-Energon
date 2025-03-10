@@ -14,7 +14,7 @@ import numpy as np
 import torch
 import torchvision.transforms as transforms
 
-from megatron.energon.av import decode_audio_samples, decode_video_frames
+from megatron.energon.av import AVData
 
 
 def load_video_to_tensor(video_path: str) -> torch.Tensor:
@@ -75,8 +75,9 @@ class TestVideoDecode(unittest.TestCase):
             raw_bytes = f.read()
             stream = io.BytesIO(raw_bytes)
 
-        # Decode using fastseek Energon wrapper
-        video_tensor, _, _ = decode_video_frames(stream=stream)
+        # Decode using AVData
+        av_data = AVData(stream)
+        video_tensor, _, _ = av_data.decode_video_frames()
 
         assert (video_tensor == self.complete_video_tensor).all(), \
             "Energon decoded video does not match baseline"
@@ -87,9 +88,9 @@ class TestVideoDecode(unittest.TestCase):
             raw_bytes = f.read()
             stream = io.BytesIO(raw_bytes)
 
-        # Decode using fastseek Energon wrapper
-        video_tensor, _, _ = decode_video_frames(
-            stream=stream,
+        # Decode using AVData
+        av_data = AVData(stream)
+        video_tensor, _, _ = av_data.decode_video_frames(
             num_frames=64,
             out_frame_size=(224, 224),
         )
@@ -114,9 +115,9 @@ class TestVideoDecode(unittest.TestCase):
             raw_bytes = f.read()
             stream = io.BytesIO(raw_bytes)
 
-        # Decode using fastseek Energon wrapper
-        video_tensor, audio_tensor, metadata = decode_video_frames(
-            stream=stream,
+        # Decode using AVData
+        av_data = AVData(stream)
+        video_tensor, audio_tensor, metadata = av_data.decode_video_frames(
             num_frames=64,
             out_frame_size=(224, 224),
             decode_audio=True,
@@ -181,7 +182,8 @@ class TestAudioDecode(unittest.TestCase):
             raw_bytes = f.read()
             stream = io.BytesIO(raw_bytes)
 
-        _, audio_tensor, _ = decode_audio_samples(stream=stream, num_clips=-1)
+        av_data = AVData(stream)
+        _, audio_tensor, _ = av_data.decode_audio_samples(num_clips=-1)
 
         assert (audio_tensor == self.complete_audio_tensor).all(), \
             "Energon decoded audio does not match baseline"
@@ -192,9 +194,9 @@ class TestAudioDecode(unittest.TestCase):
             raw_bytes = f.read()
             stream = io.BytesIO(raw_bytes)
 
-        # Decode using fastseek Energon wrapper
-        _, audio_tensor, metadata = decode_audio_samples(
-            stream=stream,
+        # Decode using AVData
+        av_data = AVData(stream)
+        _, audio_tensor, metadata = av_data.decode_audio_samples(
             num_clips=5,
             clip_duration=3,
         )
@@ -216,8 +218,8 @@ class TestAudioDecode(unittest.TestCase):
             raw_bytes = f.read()
             stream = io.BytesIO(raw_bytes)
 
-        _, audio_tensor, metadata = decode_audio_samples(
-            stream=stream,
+        av_data = AVData(stream)
+        _, audio_tensor, metadata = av_data.decode_audio_samples(
             num_clips=1,
             clip_duration=3,
             audio_format="wav",

@@ -17,6 +17,7 @@ from megatron.energon.flavors.similarity_interleaved import (
     SimilarityInterleavedWebdataset,
 )
 from megatron.energon.flavors.text import TextSample, TextWebdataset
+from megatron.energon.flavors.vid_qa import VidQASample, VidQAWebdataset
 from megatron.energon.flavors.vqa import VQASample, VQAWebdataset
 from megatron.energon.flavors.vqa_and_ocr import VQAOCRWebdataset
 from megatron.energon.flavors.webdataset import (
@@ -59,6 +60,8 @@ __all__ = [
     "StandardWebdatasetFactory",
     "TextSample",
     "TextWebdataset",
+    "VidQASample",
+    "VidQAWebdataset",
     "VQASample",
     "VQAWebdataset",
     "VQAOCRWebdataset",
