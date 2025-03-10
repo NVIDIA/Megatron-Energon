@@ -4,6 +4,7 @@
 import io
 from collections.abc import Collection, Iterator
 from fractions import Fraction
+from typing import Literal
 
 # Try importing optional dependencies
 try:
@@ -409,6 +410,8 @@ class AVDecoder:
         video_num_frames: Number of video frames to extract. If -1, extracts all frames.
         video_out_frame_size: Output size for video frames as (width, height). If None, frames
             are returned at their original resolution.
+        video_decode: If "AVData", returns an AVData instance for flexible decoding. If "torch",
+            returns decoded VideoData.
 
     Example:
         >>> decoder = AVDecoder(
@@ -427,12 +430,14 @@ class AVDecoder:
             video_decode_audio: bool,
             video_num_frames: int,
             video_out_frame_size: tuple[int, int],
+            video_decode: Literal["torch", "AVData"] = "torch",
     ) -> None:
         self.audio_clip_duration = audio_clip_duration
         self.audio_num_clips = audio_num_clips
         self.video_decode_audio = video_decode_audio
         self.video_num_frames = video_num_frames
         self.video_out_frame_size = video_out_frame_size
+        self.video_decode = video_decode
 
     def read_av_data(self, key: str, data: bytes) -> AVData:
         """Decoder function that returns an AVData object for flexible decoding.
@@ -446,7 +451,7 @@ class AVDecoder:
         """
         return AVData(io.BytesIO(data))
 
-    def __call__(self, key: str, data: bytes) -> VideoData | None:
+    def __call__(self, key: str, data: bytes) -> VideoData | AVData | None:
         """
         Extract the video or audio data from default media extensions.
 
@@ -455,13 +460,17 @@ class AVDecoder:
             data: raw media bytes
 
         Returns:
-            VideoData containing the decoded frames and metadata, or None if decoding failed
+            If video_decode is "torch", returns VideoData containing the decoded frames and metadata.
+            If video_decode is "AVData", returns an AVData instance for flexible decoding.
+            Returns None if decoding failed or file type is not supported.
         """
         if not any(key.endswith(ext) for ext in ("mp4", "mov", "webm", "mkv")):
             return None
         av_data = self.read_av_data(key, data)
         if av_data is None:
             return None
+        if self.video_decode == "AVData":
+            return av_data
         return av_data.get_frames(
             audio_clip_duration=self.audio_clip_duration,
             audio_num_clips=self.audio_num_clips,
