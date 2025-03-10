@@ -558,8 +558,6 @@ class TestDataset(unittest.TestCase):
 
         def init_process(rank, world_size, shared_dict, fn, backend="gloo"):
             """Initializes the distributed environment."""
-            EPath.prepare_forked_process()
-
             dist.init_process_group(
                 backend=backend,
                 init_method="tcp://127.0.0.1:12355",

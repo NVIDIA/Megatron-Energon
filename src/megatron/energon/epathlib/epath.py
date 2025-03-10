@@ -57,18 +57,14 @@ class MSCFileSystem:
 
 class EPath:
     """EPath work much like pathlib.Path but does support local as well as remote file systems.
-    To initialize a remote path, prepend the path with "rclone://". For example:
-
-        EPath("rclone://myrclonename/myfile.txt")
-
-    You will need to have your rclone configuration set up to access the remote file system.
-    Currently only S3-based rclone remotes are supported.
-
-    Alternatively, you can use Multi-Storage Client (MSC) to access the object stores in S3/GCP/OCI/Azure.
+    To initialize a remote path, prepend the path with "msc://" to use the Multi-Storage Client (MSC).
+    For example:
 
         EPath("msc://profilename/my_datasets/webdataset-000.tar")
 
-    You will need to have your MSC configuration (~/.msc_config.yaml) set up to access the object stores.
+    You will need to have your MSC configuration (~/.msc_config.yaml) set up to access the object stores
+    or use your rclone configuration. See https://nvidia.github.io/multi-storage-client/config/index.html
+    for more information.
     """
 
     # The path without the protocol. Can also be in S3 for example
@@ -85,7 +81,6 @@ class EPath:
         self,
         initial_path: Union[str, "EPath", PathlibPath],
     ) -> None:
-
         if isinstance(initial_path, EPath):
             self.internal_path = initial_path.internal_path
             self.profile = initial_path.profile

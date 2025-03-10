@@ -89,9 +89,6 @@ class TestEPath(unittest.TestCase):
                 "\n".join(
                     [
                         "[s3]",
-                        # TODO: Remove the next two lines, when MSC fixes the issue
-                        "base_path = /",
-                        # TODO: End remove
                         "type = s3",
                         "env_auth = false",
                         "access_key_id = dummy",
@@ -105,17 +102,24 @@ class TestEPath(unittest.TestCase):
         os.environ["XDG_CONFIG_HOME"] = "/tmp/XDG_CONFIG_HOME"
 
         # Test globbing
-        p = EPath("rclone://s3/tmp/path/subpath.txt")
-        assert str(p) == "rclone://s3/tmp/path/subpath.txt", str(p)
+        p = EPath("msc://s3/tmp/path/subpath.txt")
+        assert str(p) == "msc://s3/tmp/path/subpath.txt", str(p)
 
         p2 = p / ".." / "subpath2.txt"
-        assert str(p2) == "rclone://s3/tmp/path/subpath2.txt", str(p2)
+        assert str(p2) == "msc://s3/tmp/path/subpath2.txt", str(p2)
 
-        p3 = EPath("rclone://s3/tmp/path/.././subpath.txt")
-        assert str(p3) == "rclone://s3/tmp/subpath.txt", str(p3)
+        p3 = EPath("msc://s3/tmp/path/.././subpath.txt")
+        assert str(p3) == "msc://s3/tmp/subpath.txt", str(p3)
 
         p4 = p3.parent / "../bla/bla/bla/../../../no/../subpath2.txt"
-        assert str(p4) == "rclone://s3/subpath2.txt", str(p4)
+        assert str(p4) == "msc://s3/subpath2.txt", str(p4)
+
+        # Test warning for deprecated rclone protocol
+        with self.assertWarns((DeprecationWarning, FutureWarning)) as warning:
+            # Test rclone backwards compatibility
+            pr = EPath("rclone://s3/tmp/path/.././subpath.txt")
+            assert str(pr) == "msc://s3/tmp/subpath.txt", str(pr)
+        assert "deprecated" in str(warning.warnings[0].message)
 
         # Test pickle / unpickle
         p4serialized = pickle.dumps(p4)

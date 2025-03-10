@@ -361,7 +361,6 @@ class MetadatasetV2(DatasetLoaderInterface):
         str, Union[MetadatasetBlend, MetadatasetBlendEpochized, MetadatasetJoin, DatasetReference]
     ]
 
-
     def post_initialize(self, mds_path: Optional[EPath] = None):
         assert mds_path is None
         for split in self.splits.values():
