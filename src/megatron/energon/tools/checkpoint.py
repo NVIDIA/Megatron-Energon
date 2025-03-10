@@ -204,8 +204,6 @@ class RankStateIterable:
         return self.rank_num_workers[0]
 
     def get_micro_batch_size(self):
-        if not hasattr(self.rank_states[0], "micro_batch_size"):
-            return 1
         return self.rank_states[0].micro_batch_size
 
     def __iter__(self):
