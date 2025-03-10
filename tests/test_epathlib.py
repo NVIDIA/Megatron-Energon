@@ -12,7 +12,6 @@ import sys
 import unittest
 
 from megatron.energon.epathlib import EPath
-from megatron.energon.epathlib.rclone_config import ConfigEntry
 
 
 class TestEPath(unittest.TestCase):

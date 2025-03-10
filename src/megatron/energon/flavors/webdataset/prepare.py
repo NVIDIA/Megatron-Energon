@@ -99,7 +99,7 @@ class SqliteIndexWriterAggregator(BaseAggregator):
 class WebdatasetPreparator:
     @staticmethod
     def _preprocess_tar(
-        path: EPath,
+        path: str,
         shard_to_idx: Dict[str, int],
         parent_path: EPath,
         max_parts: int,
@@ -115,12 +115,7 @@ class WebdatasetPreparator:
         Returns:
             Tuple of shard info and found keys of the loaded dicts.
         """
-        shard_info = ShardInfo(name=path.relpath, path=path, count=0)
-
-        if not shard_info.path.is_absolute():
-            parent_path = EPath(parent_path)
-            assert parent_path.is_absolute(), f"Parent path must be absolute: {parent_path}"
-            shard_info.path = parent_path / path
+        shard_info = ShardInfo(name=path, path=parent_path / path, count=0)
 
         try:
             # Note: Write to .tmp file first, then remove .tmp extension, to make sure only complete
@@ -164,7 +159,7 @@ class WebdatasetPreparator:
                                 yield next_index_sample
 
                             next_index_sample = dict(
-                                tar_file_id=shard_to_idx[path.relpath],
+                                tar_file_id=shard_to_idx[path],
                                 sample_key=base_name,
                                 sample_index=count,
                                 byte_offset=member.offset,
@@ -270,8 +265,6 @@ class WebdatasetPreparator:
 
         # Construct a mapping from relative shard path to its index
         shard_to_idx = {path: idx for idx, path in enumerate(paths)}
-
-        assert parent_path.is_absolute(), f"Parent path must be absolute: {parent_path}"
 
         (parent_path / MAIN_FOLDER_NAME).mkdir(exist_ok=True)
 

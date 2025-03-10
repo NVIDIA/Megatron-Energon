@@ -43,12 +43,6 @@ class MSCFileSystem:
         self.storage_client.copy(path1, path2)
         self.storage_client.delete(path1)
 
-    def mkdir(self, path: str, create_parents: bool = True, **kwargs):
-        pass
-
-    def makedirs(self, path: str, exist_ok: bool = False):
-        pass
-
     def __eq__(self, other):
         if not isinstance(other, MSCFileSystem):
             return False
