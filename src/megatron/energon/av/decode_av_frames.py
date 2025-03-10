@@ -1,4 +1,4 @@
-# Copyright (c) 2024, NVIDIA CORPORATION.
+# Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
 import io
@@ -457,6 +457,8 @@ class AVDecoder:
         Returns:
             VideoData containing the decoded frames and metadata, or None if decoding failed
         """
+        if not any(key.endswith(ext) for ext in ("mp4", "mov", "webm", "mkv")):
+            return None
         av_data = self.read_av_data(key, data)
         if av_data is None:
             return None
