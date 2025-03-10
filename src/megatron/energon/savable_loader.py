@@ -4,7 +4,6 @@
 import gc
 import multiprocessing
 import queue
-import random
 import threading
 import time
 import traceback
@@ -242,9 +241,7 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
         self.checkpoint_every_min_n_samples = checkpoint_every_min_n_samples
         self.n_checkpoints = n_checkpoints
         self._last_checkpoints = [
-            SavableCheckpoint(
-                state=None, checkpoint_time=time.perf_counter(), sample_index=-1
-            )
+            SavableCheckpoint(state=None, checkpoint_time=time.perf_counter(), sample_index=-1)
         ]
         self._workers_skip_samples = [0] * num_workers
         self._cmd_queues = cmd_queues
@@ -437,7 +434,7 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
             SystemRng.seed(torch.initial_seed() & 0xFFFFFFFF)
         else:
             SystemRng.restore_state(state.rng)
-        
+
         self._sample_index = state.sample_index
         self._last_checkpoints = [
             SavableCheckpoint(
