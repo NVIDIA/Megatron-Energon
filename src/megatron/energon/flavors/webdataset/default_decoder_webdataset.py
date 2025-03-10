@@ -5,8 +5,8 @@ from typing import Any, Callable, Dict, Generic, Literal, Optional, TypeVar
 
 import webdataset
 
-from megatron.energon.epathlib import EPath
 from megatron.energon.av import AVDecoder
+from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.webdataset.default_generic_webdataset import (
     DefaultGenericWebdatasetFactory,
 )

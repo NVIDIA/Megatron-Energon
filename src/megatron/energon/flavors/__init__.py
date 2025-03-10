@@ -21,6 +21,7 @@ from megatron.energon.flavors.vid_qa import VidQASample, VidQAWebdataset
 from megatron.energon.flavors.vqa import VQASample, VQAWebdataset
 from megatron.energon.flavors.vqa_and_ocr import VQAOCRWebdataset
 from megatron.energon.flavors.webdataset import (
+    MAIN_FOLDER_NAME,
     BaseWebdatasetFactory,
     DefaultDecoderWebdatasetFactory,
     DefaultGenericWebdatasetFactory,
@@ -29,7 +30,6 @@ from megatron.energon.flavors.webdataset import (
     JoinedWebdatasetFactory,
     StandardWebdatasetFactory,
     WebdatasetMeta,
-    MAIN_FOLDER_NAME,
 )
 
 __all__ = [

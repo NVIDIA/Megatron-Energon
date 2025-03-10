@@ -3,17 +3,19 @@
 
 """This module tests video decoding."""
 
-import av
 import io
 import logging
-import numpy as np
+import os
 import sys
+import unittest
+
+import av
+import numpy as np
 import torch
 import torchvision.transforms as transforms
-import unittest
-import os
 
-from megatron.energon.av import decode_audio_samples, decode_video_frames, get_clip_indices
+from megatron.energon.av import decode_audio_samples, decode_video_frames
+
 
 def load_video_to_tensor(video_path: str) -> torch.Tensor:
     """Load a video file into a tensor using PyAV directly.

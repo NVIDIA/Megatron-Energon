@@ -5,12 +5,12 @@ from typing import List, Optional
 
 import torch
 
+from megatron.energon.av import VideoData
 from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.epathlib.epath import EPath
 from megatron.energon.errors import warn_deprecated
 from megatron.energon.flavors.base_dataset import Sample
 from megatron.energon.flavors.webdataset import DefaultDecoderWebdatasetFactory
-from megatron.energon.av import VideoData
 
 
 @dataclass_slots

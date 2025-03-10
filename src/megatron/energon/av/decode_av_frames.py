@@ -9,10 +9,11 @@ from typing import Literal
 # Try importing optional dependencies
 try:
     import av
+    import filetype
     import numpy as np
     import soundfile as sf
     import torch
-    import filetype
+
     from megatron.energon.av.fastseek import Fastseek
     from megatron.energon.av.video_data import VideoData
     AV_DECODE_AVAILABLE = True
