@@ -12,9 +12,10 @@ dev-sync:
 prod-sync:
     uv sync --all-extras --no-dev --cache-dir .uv_cache
 
-# Execute the ruff code formatter
-format:
+# Fix the code style and format
+fix:
     uv run ruff format
+    uv run ruff check --fix
 
 # Execute the ruff code linter and format checker
 check:
