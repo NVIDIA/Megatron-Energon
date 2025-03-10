@@ -14,12 +14,13 @@ try:
     import soundfile as sf
     import torch
 
-    from megatron.energon.av.fastseek import Fastseek
-    from megatron.energon.av.video_data import VideoData
     AV_DECODE_AVAILABLE = True
 except ImportError as e:
     AV_DECODE_AVAILABLE = False
     MISSING_DEPENDENCY = str(e)
+
+from megatron.energon.av.fastseek import Fastseek
+from megatron.energon.av.video_data import VideoData
 
 
 class AVData:
