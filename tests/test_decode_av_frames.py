@@ -16,6 +16,10 @@ import torchvision.transforms as transforms
 
 from megatron.energon.av import AVData
 
+# Set multiprocessing start method to 'spawn' on macOS to avoid DataLoader cleanup issues
+if sys.platform == 'darwin':
+    import multiprocessing
+    multiprocessing.set_start_method('spawn', force=True)
 
 def load_video_to_tensor(video_path: str) -> torch.Tensor:
     """Load a video file into a tensor using PyAV directly.
@@ -64,6 +68,19 @@ class TestVideoDecode(unittest.TestCase):
         """Set up test fixtures."""
         logging.basicConfig(stream=sys.stderr, level=logging.INFO)
         self.decode_baseline_video_pyav()
+        self.loaders = []  # Keep track of loaders for cleanup
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        # Clean up any loaders
+        for loader in self.loaders:
+            if hasattr(loader, '_iterator'):
+                loader._iterator = None
+            if hasattr(loader, '_shutdown_workers'):
+                try:
+                    loader._shutdown_workers()
+                except Exception:
+                    pass
 
     def decode_baseline_video_pyav(self):
         """Load the baseline video using PyAV directly."""
@@ -171,6 +188,19 @@ class TestAudioDecode(unittest.TestCase):
         """Set up test fixtures."""
         logging.basicConfig(stream=sys.stderr, level=logging.INFO)
         self.decode_baseline_audio_pyav()
+        self.loaders = []  # Keep track of loaders for cleanup
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        # Clean up any loaders
+        for loader in self.loaders:
+            if hasattr(loader, '_iterator'):
+                loader._iterator = None
+            if hasattr(loader, '_shutdown_workers'):
+                try:
+                    loader._shutdown_workers()
+                except Exception:
+                    pass
 
     def decode_baseline_audio_pyav(self):
         """Load the baseline audio using PyAV directly."""
