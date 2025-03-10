@@ -14,8 +14,8 @@ prod-sync:
 
 # Fix the code style and format
 fix:
-    uv run ruff format
     uv run ruff check --fix
+    uv run ruff format
 
 # Execute the ruff code linter and format checker
 check:
