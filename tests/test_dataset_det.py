@@ -931,6 +931,8 @@ class TestDataset(unittest.TestCase):
                     str(self.redist_dir),
                 ],
             )
+            print(result.output)
+            assert result.exception is None, result.exception
             assert result.exit_code == 0, "Redistribution failed"
 
             # Load state and check that the global batches are the same
