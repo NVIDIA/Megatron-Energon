@@ -94,7 +94,7 @@ class TestVideoDecode(unittest.TestCase):
 
         # Decode using AVData
         av_data = AVData(stream)
-        video_tensor, _, _ = av_data.decode_video_frames()
+        video_tensor, _, _ = av_data.decode_video_frames(stream)
 
         assert (video_tensor == self.complete_video_tensor).all(), \
             "Energon decoded video does not match baseline"
@@ -108,6 +108,7 @@ class TestVideoDecode(unittest.TestCase):
         # Decode using AVData
         av_data = AVData(stream)
         video_tensor, _, _ = av_data.decode_video_frames(
+            stream,
             num_frames=64,
             out_frame_size=(224, 224),
         )
@@ -135,6 +136,7 @@ class TestVideoDecode(unittest.TestCase):
         # Decode using AVData
         av_data = AVData(stream)
         video_tensor, audio_tensor, metadata = av_data.decode_video_frames(
+            stream,
             num_frames=64,
             out_frame_size=(224, 224),
             decode_audio=True,
@@ -213,7 +215,7 @@ class TestAudioDecode(unittest.TestCase):
             stream = io.BytesIO(raw_bytes)
 
         av_data = AVData(stream)
-        _, audio_tensor, _ = av_data.decode_audio_samples(num_clips=-1)
+        _, audio_tensor, _ = av_data.decode_audio_samples(stream, num_clips=-1)
 
         assert (audio_tensor == self.complete_audio_tensor).all(), \
             "Energon decoded audio does not match baseline"
@@ -227,6 +229,7 @@ class TestAudioDecode(unittest.TestCase):
         # Decode using AVData
         av_data = AVData(stream)
         _, audio_tensor, metadata = av_data.decode_audio_samples(
+            stream,
             num_clips=5,
             clip_duration=3,
         )
@@ -250,6 +253,7 @@ class TestAudioDecode(unittest.TestCase):
 
         av_data = AVData(stream)
         _, audio_tensor, metadata = av_data.decode_audio_samples(
+            stream,
             num_clips=1,
             clip_duration=3,
             audio_format="wav",
