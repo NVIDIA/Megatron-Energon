@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from megatron.energon.flavors.webdataset.base_webdataset import BaseWebdatasetFactory
-from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset.config import JOIN_INDEX_FILENAME, MAIN_FOLDER_NAME
 from megatron.energon.flavors.webdataset.default_decoder_webdataset import (
     DefaultDecoderWebdatasetFactory,
     ImageDecoder,
@@ -27,4 +27,5 @@ __all__ = [
     "VideoData",
     "WebdatasetMeta",
     "MAIN_FOLDER_NAME",
+    "JOIN_INDEX_FILENAME",
 ]

@@ -46,13 +46,13 @@ class DefaultGenericWebdatasetFactory(BaseWebdatasetFactory[T_sample], Generic[T
                 from a module, or a callable directly.
             **kwargs: Args passed to parent constructor.
         """
-        assert (field_map is None) != (
-            sample_loader is None
-        ), "Either field_map or sample_loader must be provided."
+        assert (field_map is None) != (sample_loader is None), (
+            "Either field_map or sample_loader must be provided."
+        )
         if sample_loader is not None:
-            assert (
-                part_filter is not None
-            ), "part_filter must be provided if sample_loader is provided."
+            assert part_filter is not None, (
+                "part_filter must be provided if sample_loader is provided."
+            )
             module_loader = ModuleLoader()
             if isinstance(sample_loader, str):
                 sample_loader = module_loader.get_function(
@@ -83,9 +83,9 @@ class DefaultGenericWebdatasetFactory(BaseWebdatasetFactory[T_sample], Generic[T
                 for field in dataclasses.fields(self.__sample_type__)
                 if field.default is not dataclasses.MISSING
                 and field.default_factory is not dataclasses.MISSING
-            ).issubset(
-                field_map.keys()
-            ), f"field_map does not map to type {self.__sample_type__.__name__} fields"
+            ).issubset(field_map.keys()), (
+                f"field_map does not map to type {self.__sample_type__.__name__} fields"
+            )
             self._sample_loader = lambda sample: {
                 k: field_access(sample, v) for k, v in fields.items()
             }

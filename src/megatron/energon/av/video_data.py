@@ -1,13 +1,14 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-import dataclasses
 from typing import Dict, Union
 
 import torch
 
+from megatron.energon.dataclass_slots import dataclass_slots
 
-@dataclasses.dataclass
+
+@dataclass_slots
 class VideoData:
     #: The input video tensor in the shape (frames, channel, h, w)
     frames: torch.Tensor

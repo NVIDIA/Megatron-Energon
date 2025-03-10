@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import inspect
-from dataclasses import dataclass
 from typing import (
     Any,
     Callable,
@@ -21,44 +20,16 @@ from megatron.energon.errors import SYSTEM_EXCEPTIONS, FatalSampleError
 from megatron.energon.flavors.base_dataset import SavableDataset, set_sample_restore_key
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers._log_exception import log_exception
-from megatron.energon.wrappers.base import (
-    BaseSingleWrapperDataset,
-    BaseSingleWrapperMergedState,
-    BaseSingleWrapperState,
-    SampleIndex,
-    get_sample_restore_key,
-)
-from megatron.energon.wrappers.buffer import (
-    SampleBufferMergedState,
-    SampleBufferState,
-    SavableSampleBuffer,
-)
+from megatron.energon.wrappers.base import BaseWrapperDataset, SampleIndex, get_sample_restore_key
+from megatron.energon.wrappers.buffer import SavableSampleBuffer
 from megatron.energon.wrappers.skip import SkipSample
 
 T_sample = TypeVar("T_sample")
 T_batch_sample = TypeVar("T_batch_sample")
 
 
-@dataclass
-class PackingState(BaseSingleWrapperState):
-    reading_buffer: SampleBufferState
-    pre_packing_buffer: SampleBufferState
-    pre_packing_lengths: List[int]
-    pre_packing_index: int
-    final_packing_index: int
-
-
-@dataclass
-class PackingMergedState(BaseSingleWrapperMergedState):
-    reading_buffer: SampleBufferMergedState
-    pre_packing_buffer: SampleBufferMergedState
-    pre_packing_lengths: List[List[int]]
-    pre_packing_index: List[int]
-    final_packing_index: List[int]
-
-
 class PackingDataset(
-    BaseSingleWrapperDataset[T_sample, T_batch_sample], Generic[T_sample, T_batch_sample]
+    BaseWrapperDataset[T_sample, T_batch_sample], Generic[T_sample, T_batch_sample]
 ):
     """This dataset wrapper transforms samples of a dataset into chunks/packs of samples, which are
     then combined into a batch."""
@@ -88,6 +59,14 @@ class PackingDataset(
 
     #: Sample index for the final_packer
     _final_packing_sample_index: SampleIndex
+
+    _savable_fields = (
+        "_reading_buffer",
+        "_pre_packing_buffer",
+        "_pre_packing_lengths",
+        "_pre_packing_sample_index",
+        "_final_packing_sample_index",
+    )
 
     def __init__(
         self,
@@ -131,11 +110,17 @@ class PackingDataset(
         self.final_packer_stateless = final_packer_stateless
         self.packer_config = packer_config
         self.error_handler = error_handler
-        self._reading_buffer = SavableSampleBuffer(dataset, worker_config=worker_config)
-        self._pre_packing_buffer = SavableSampleBuffer(dataset, worker_config=worker_config)
-        self._pre_packing_lengths = [[] for _ in range(max(worker_config.num_workers, 1))]
-        self._pre_packing_sample_index = SampleIndex(worker_config, src=self)
-        self._final_packing_sample_index = SampleIndex(worker_config, src=self)
+
+        self.reset_state_own()
+
+    def reset_state_own(self) -> None:
+        self._reading_buffer = SavableSampleBuffer(self.dataset, worker_config=self.worker_config)
+        self._pre_packing_buffer = SavableSampleBuffer(
+            self.dataset, worker_config=self.worker_config
+        )
+        self._pre_packing_lengths = []
+        self._pre_packing_sample_index = SampleIndex(self.worker_config, src=self)
+        self._final_packing_sample_index = SampleIndex(self.worker_config, src=self)
 
     def __len__(self):
         """The real length is unknown, since it depends on the packing function.
@@ -163,8 +148,7 @@ class PackingDataset(
         return True
 
     def __iter__(self) -> Iterator[T_batch_sample]:
-        worker_idx = self.worker_config.rank_worker_id()
-        pre_packing_lengths = self._pre_packing_lengths[worker_idx]
+        pre_packing_lengths = self._pre_packing_lengths
         # The source dataset
         src_iter = iter(self.dataset)
 
@@ -213,9 +197,9 @@ class PackingDataset(
                 with self._final_packing_sample_index.ctx() as pack_idx:
                     final_packed_sample = self.final_packer(pack)
                 if isinstance(final_packed_sample, Generator):
-                    assert inspect.isgeneratorfunction(
-                        self.final_packer
-                    ), f"Generator in {self.final_packer} but not marked as such."
+                    assert inspect.isgeneratorfunction(self.final_packer), (
+                        f"Generator in {self.final_packer} but not marked as such."
+                    )
                     for pack_sub_idx, (pack_idx, inner_batch_sample) in enumerate(
                         self._final_packing_sample_index.iter_ctx(final_packed_sample, pack_idx)
                     ):
@@ -272,63 +256,16 @@ class PackingDataset(
         while len(pre_packing_lengths) > 0:
             yield from next_final_pack()
 
-    def save_state(self) -> PackingState:
-        return PackingState.extend(
-            super().save_state(),
-            reading_buffer=self._reading_buffer.save_state(),
-            pre_packing_buffer=self._pre_packing_buffer.save_state(),
-            pre_packing_lengths=list(
-                self._pre_packing_lengths[self.worker_config.rank_worker_id()]
-            ),
-            final_packing_index=self._final_packing_sample_index.save_state(),
-            pre_packing_index=self._pre_packing_sample_index.save_state(),
-        )
-
-    def merge_states(self, states: List[PackingState]) -> PackingMergedState:
-        assert all(s is None or isinstance(s, PackingState) for s in states)
-        return PackingMergedState.extend(
-            super().merge_states(states),
-            reading_buffer=self._reading_buffer.merge_states(
-                [None if s is None else s.reading_buffer for s in states]
-            ),
-            pre_packing_buffer=self._pre_packing_buffer.merge_states(
-                [None if s is None else s.pre_packing_buffer for s in states]
-            ),
-            pre_packing_lengths=[[0, 0] if s is None else s.pre_packing_lengths for s in states],
-            final_packing_index=self._final_packing_sample_index.merge_states(
-                [0 if state is None else state.final_packing_index for state in states]
-            ),
-            pre_packing_index=self._pre_packing_sample_index.merge_states(
-                [0 if state is None else state.pre_packing_index for state in states]
-            ),
-        )
-
-    def restore_state(self, state: Optional[PackingMergedState]) -> None:
-        super().restore_state(state)
-        if state is None:
-            self._reading_buffer.restore_state(None)
-            self._pre_packing_buffer.restore_state(None)
-            self._pre_packing_lengths = [[] for _ in range(max(self.worker_config.num_workers, 1))]
-            self._pre_packing_sample_index.restore_state(None)
-            self._final_packing_sample_index.restore_state(None)
-        else:
-            assert isinstance(state, PackingMergedState)
-            self._reading_buffer.restore_state(state.reading_buffer)
-            self._pre_packing_buffer.restore_state(state.pre_packing_buffer)
-            self._pre_packing_lengths = state.pre_packing_lengths
-            self._pre_packing_sample_index.restore_state(state.pre_packing_index)
-            self._final_packing_sample_index.restore_state(state.final_packing_index)
-
     def can_restore_sample(self) -> bool:
         # Cannot really verify if the returned elements contain a __restore_key__.
         # If the user wants to use this, well...
-        return self.final_packer_stateless and self.dataset.can_restore_sample()
+        return super().can_restore_sample() and self.final_packer_stateless
 
     def assert_can_restore(self):
-        assert (
-            self.final_packer_stateless
-        ), f"Final packer {self.final_packer} must be stateless to restore samples."
-        self.dataset.assert_can_restore()
+        assert self.final_packer_stateless, (
+            f"Final packer {self.final_packer} must be stateless to restore samples."
+        )
+        super().assert_can_restore()
 
     def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_sample:
         # We need to store multiple indices to restore a batch.
@@ -343,9 +280,9 @@ class PackingDataset(
         with self._final_packing_sample_index.ctx(pack_idx):
             final_pack = self.final_packer(batch)
         if isinstance(final_pack, Generator):
-            assert inspect.isgeneratorfunction(
-                self.final_packer
-            ), f"Generator in {self.final_packer} but not marked as such."
+            assert inspect.isgeneratorfunction(self.final_packer), (
+                f"Generator in {self.final_packer} but not marked as such."
+            )
             for cur_batch_sub_idx, (pack_idx, inner_batch_sample) in enumerate(
                 self._final_packing_sample_index.iter_ctx(final_pack, pack_idx)
             ):

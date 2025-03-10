@@ -1,12 +1,11 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-import warnings
-from dataclasses import dataclass
 from typing import List, Optional
 
 import torch
 
+from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.epathlib.epath import EPath
 from megatron.energon.errors import warn_deprecated
 from megatron.energon.flavors.base_dataset import Sample
@@ -14,7 +13,7 @@ from megatron.energon.flavors.webdataset import DefaultDecoderWebdatasetFactory
 from megatron.energon.av import VideoData
 
 
-@dataclass
+@dataclass_slots
 class VidQASample(Sample):
     """Sample type for video question answering."""
 

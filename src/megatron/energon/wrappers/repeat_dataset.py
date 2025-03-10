@@ -2,37 +2,23 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import math
-from dataclasses import dataclass
-from typing import Any, Dict, Generic, Iterator, List, Optional, TypeVar, Union
+from typing import Any, Dict, Generic, Iterator, Optional, TypeVar, Union
 
 from megatron.energon.flavors.base_dataset import SavableDataset
 from megatron.energon.worker import WorkerConfig
-from megatron.energon.wrappers.base import (
-    BaseSingleWrapperDataset,
-    BaseSingleWrapperMergedState,
-    BaseSingleWrapperState,
-)
+from megatron.energon.wrappers.base import BaseWrapperDataset
 
 T_sample = TypeVar("T_sample")
 
 
-@dataclass
-class RepeatState(BaseSingleWrapperState):
-    repetition: int
-    index: int
-
-
-@dataclass
-class RepeatMergedState(BaseSingleWrapperMergedState):
-    repetition: List[int]
-    index: List[int]
-
-
-class RepeatDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_sample]):
+class RepeatDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
     """This dataset repeats the inner dataset indefinitely or a specific number of repeats."""
 
     repeats: Optional[Union[int, float]]
-    _repetition: List[int]
+    _repetition: int
+    _index: int
+
+    _savable_fields = ("_repetition", "_index")
 
     def __init__(
         self,
@@ -54,8 +40,12 @@ class RepeatDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_samp
         super().__init__(dataset, worker_config=worker_config)
         self.repeats = repeats
         self.restart = restart
-        self._repetition = [0] * max(self.worker_config.num_workers, 1)
-        self._index = [0] * max(self.worker_config.num_workers, 1)
+
+        self.reset_state_own()
+
+    def reset_state_own(self) -> None:
+        self._repetition = 0
+        self._index = 0
 
     def __len__(self):
         if self.repeats is None:
@@ -63,30 +53,27 @@ class RepeatDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_samp
         return len(self.dataset) * self.repeats
 
     def __iter__(self) -> Iterator[T_sample]:
-        worker_idx = self.worker_config.rank_worker_id()
-        assert (
-            self.repeats is not None or self.dataset.worker_has_samples()
-        ), "Cannot repeat empty dataset indefinitely"
+        assert self.repeats is not None or self.dataset.worker_has_samples(), (
+            "Cannot repeat empty dataset indefinitely"
+        )
 
         ds_len = len(self.dataset)
 
-        while self.repeats is None or self._repetition[worker_idx] < self.repeats:
-            if self.repeats is not None and self._repetition[worker_idx] == math.floor(
-                self.repeats
-            ):
+        while self.repeats is None or self._repetition < self.repeats:
+            if self.repeats is not None and self._repetition == math.floor(self.repeats):
                 # Last iteration, adjust the number of samples
                 fraction = self.repeats - math.floor(self.repeats)
                 stop_after = math.floor(ds_len * fraction)
-                if self._index[worker_idx] >= stop_after:
+                if self._index >= stop_after:
                     # We restored an index and it is already past the stop_after
                     break
             else:
                 stop_after = None
 
             for sample in self.dataset:
-                self._index[worker_idx] += 1
+                self._index += 1
                 yield sample
-                if stop_after is not None and self._index[worker_idx] >= stop_after:
+                if stop_after is not None and self._index >= stop_after:
                     break
 
             if self.worker_config.should_log(level=2):
@@ -95,43 +82,18 @@ class RepeatDataset(BaseSingleWrapperDataset[T_sample, T_sample], Generic[T_samp
                         "t": "RepeatDataset.repeat",
                         "r": self.worker_config.rank,
                         "w": self.worker_config.rank_worker_id(),
-                        "offset": self._repetition[worker_idx],
+                        "offset": self._repetition,
                         "repeats": self.repeats,
                     }
                 )
-            self._repetition[worker_idx] += 1
-            self._index[worker_idx] = 0
+            self._repetition += 1
+            self._index = 0
 
         if self.restart:
-            self._repetition[worker_idx] = 0
+            self._repetition = 0
         else:
             # No more repeats
-            self._repetition[worker_idx] = math.ceil(self.repeats)
-
-    def save_state(self) -> RepeatState:
-        return RepeatState.extend(
-            super().save_state(),
-            repetition=self._repetition[self.worker_config.rank_worker_id()],
-            index=self._index[self.worker_config.rank_worker_id()],
-        )
-
-    def merge_states(self, states: List[RepeatState]) -> RepeatMergedState:
-        assert all(s is None or isinstance(s, RepeatState) for s in states)
-        return RepeatMergedState.extend(
-            super().merge_states(states),
-            repetition=[0 if state is None else state.repetition for state in states],
-            index=[0 if state is None else state.index for state in states],
-        )
-
-    def restore_state(self, state: Optional[RepeatMergedState]) -> None:
-        super().restore_state(state)
-        if state is None:
-            self._repetition = [0] * max(self.worker_config.num_workers, 1)
-            self._index = [0] * max(self.worker_config.num_workers, 1)
-        else:
-            assert isinstance(state, RepeatMergedState)
-            self._repetition = state.repetition
-            self._index = state.index
+            self._repetition = math.ceil(self.repeats)
 
     def config(self) -> Dict[str, Any]:
         return {
