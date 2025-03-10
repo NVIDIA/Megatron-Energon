@@ -83,7 +83,8 @@ class TestEPath(unittest.TestCase):
 
     def test_s3_path_resolution(self):
         """Test s3 path resolution"""
-        with EPath("/tmp/XDG_CONFIG_HOME/rclone/rclone.conf").open("w") as f:
+        rclone_config_path = EPath("/tmp/XDG_CONFIG_HOME/rclone/rclone.conf")
+        with rclone_config_path.open("w") as f:
             f.write(
                 "\n".join(
                     [
@@ -98,32 +99,39 @@ class TestEPath(unittest.TestCase):
                 )
             )
 
+        orig_xdg_config_home = os.environ.get("XDG_CONFIG_HOME")
         os.environ["XDG_CONFIG_HOME"] = "/tmp/XDG_CONFIG_HOME"
+        try:
+            # Test globbing
+            p = EPath("msc://s3/tmp/path/subpath.txt")
+            assert str(p) == "msc://s3/tmp/path/subpath.txt", str(p)
 
-        # Test globbing
-        p = EPath("msc://s3/tmp/path/subpath.txt")
-        assert str(p) == "msc://s3/tmp/path/subpath.txt", str(p)
+            p2 = p / ".." / "subpath2.txt"
+            assert str(p2) == "msc://s3/tmp/path/subpath2.txt", str(p2)
 
-        p2 = p / ".." / "subpath2.txt"
-        assert str(p2) == "msc://s3/tmp/path/subpath2.txt", str(p2)
+            p3 = EPath("msc://s3/tmp/path/.././subpath.txt")
+            assert str(p3) == "msc://s3/tmp/subpath.txt", str(p3)
 
-        p3 = EPath("msc://s3/tmp/path/.././subpath.txt")
-        assert str(p3) == "msc://s3/tmp/subpath.txt", str(p3)
+            p4 = p3.parent / "../bla/bla/bla/../../../no/../subpath2.txt"
+            assert str(p4) == "msc://s3/subpath2.txt", str(p4)
 
-        p4 = p3.parent / "../bla/bla/bla/../../../no/../subpath2.txt"
-        assert str(p4) == "msc://s3/subpath2.txt", str(p4)
+            # Test warning for deprecated rclone protocol
+            with self.assertWarns((DeprecationWarning, FutureWarning)) as warning:
+                # Test rclone backwards compatibility
+                pr = EPath("rclone://s3/tmp/path/.././subpath.txt")
+                assert str(pr) == "msc://s3/tmp/subpath.txt", str(pr)
+            assert "deprecated" in str(warning.warnings[0].message)
 
-        # Test warning for deprecated rclone protocol
-        with self.assertWarns((DeprecationWarning, FutureWarning)) as warning:
-            # Test rclone backwards compatibility
-            pr = EPath("rclone://s3/tmp/path/.././subpath.txt")
-            assert str(pr) == "msc://s3/tmp/subpath.txt", str(pr)
-        assert "deprecated" in str(warning.warnings[0].message)
-
-        # Test pickle / unpickle
-        p4serialized = pickle.dumps(p4)
-        # No secret must be serialized
-        assert b"dummy" not in p4serialized
+            # Test pickle / unpickle
+            p4serialized = pickle.dumps(p4)
+            # No secret must be serialized
+            assert b"dummy" not in p4serialized
+        finally:
+            if orig_xdg_config_home is not None:
+                os.environ["XDG_CONFIG_HOME"] = orig_xdg_config_home
+            else:
+                del os.environ["XDG_CONFIG_HOME"]
+            rclone_config_path.unlink()
 
     def test_multi_storage_client(self):
         """Test the Multi-Storage Client integration"""

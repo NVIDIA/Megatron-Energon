@@ -4,49 +4,11 @@
 import re
 from pathlib import Path as PathlibPath
 from pathlib import PurePosixPath
-from typing import BinaryIO, Generator, List, Literal, Optional, TextIO, Tuple, Union, overload
+from typing import BinaryIO, Generator, Literal, Optional, TextIO, Tuple, Union, overload
 
 import multistorageclient as msc
 
 from megatron.energon.errors import warn_deprecated
-
-
-class MSCFileSystem:
-    """
-    A FileSystem wrapper around multistorageclient.StorageClient so that MSC
-    can be used interchangeably with other fsspec filesystems (e.g. LocalFileSystem, S3FileSystem).
-    """
-
-    def __init__(self, path: str, **kwargs):
-        super().__init__(**kwargs)
-        self.storage_client, _ = msc.resolve_storage_client(path)
-
-    def open(self, path: str, mode: str = "rb"):
-        return self.storage_client.open(path, mode)
-
-    def isfile(self, path: str) -> bool:
-        return self.storage_client.is_file(path)
-
-    def isdir(self, path: str) -> bool:
-        return self.storage_client.info(path).type == "directory"
-
-    def glob(self, path: str, **kwargs) -> List[str]:
-        return list(self.storage_client.glob(path))
-
-    def size(self, path: str) -> int:
-        return self.storage_client.info(path).content_length
-
-    def rm(self, path: str, recursive: bool = False, maxdepth: Optional[int] = None):
-        self.storage_client.delete(path)
-
-    def mv(self, path1: str, path2: str, **kwargs):
-        self.storage_client.copy(path1, path2)
-        self.storage_client.delete(path1)
-
-    def __eq__(self, other):
-        if not isinstance(other, MSCFileSystem):
-            return False
-        return self.storage_client.profile == other.storage_client.profile
 
 
 class EPath:
@@ -68,7 +30,7 @@ class EPath:
     # The file system
     fs: msc.StorageClient
     # Number of parts in the internal_path that are part of the file system specification
-    # Always use 2 for MSCFileSystem
+    # Always use 2
     num_fs_path_parts: int = 2
 
     def __init__(
@@ -190,10 +152,6 @@ class EPath:
 
     def glob(self, pattern) -> Generator["EPath", None, None]:
         search_path_pattern = (self / pattern)._internal_str_path
-
-        if search_path_pattern.startswith("/"):
-            # For some reason s3 glob does not like leading /
-            search_path_pattern = search_path_pattern[1:]
 
         for path in self.fs.glob(search_path_pattern):
             assert isinstance(path, str)
