@@ -55,7 +55,6 @@ av_decode = [
   "ebmlite>=3.3.1",
   "av>=13.0.0",
   "soundfile",
-  "librosa",
 ]
 
 [project.urls]

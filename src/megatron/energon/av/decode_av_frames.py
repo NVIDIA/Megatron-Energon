@@ -464,7 +464,7 @@ class AVDecoder:
             If video_decode is "AVData", returns an AVData instance for flexible decoding.
             Returns None if decoding failed or file type is not supported.
         """
-        if not any(key.endswith(ext) for ext in ("mp4", "mov", "webm", "mkv")):
+        if not any(key.endswith(ext) for ext in ("mp4", "mov", "webm", "mkv", "flac", "mp3", "wav")):
             return None
         av_data = self.read_av_data(key, data)
         if av_data is None:
