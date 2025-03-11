@@ -21,6 +21,10 @@ class SimilarityInterleavedSample(Sample):
     images: List[torch.Tensor]
     #: The texts of the sequence
     texts: List[str]
+    #: The optional audio samples of the sequence
+    audio: Optional[List[torch.Tensor]] = None
+    #: The optional video frames of the sequence
+    video: Optional[List[torch.Tensor]] = None
 
     #: Similarity matrix between image and text entries in the sequence
     similarity_matrix: Optional[torch.Tensor] = None

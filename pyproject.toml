@@ -64,6 +64,17 @@ oci = [
   "multi-storage-client[oci]",
 ]
 
+# Dependencies for video decoding
+av_decode = [
+  # needed for efficient audio and video file decoding
+  "bitstring>=4.2.3",
+  "sortedcontainers>=2.4.0",
+  "filetype>=1.2.0",
+  "ebmlite>=3.3.1",
+  "av>=13.0.0",
+  "soundfile",
+]
+
 [project.urls]
 Homepage = "https://github.com/NVIDIA/Megatron-Energon"
 

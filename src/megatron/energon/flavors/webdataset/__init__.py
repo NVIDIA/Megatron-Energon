@@ -1,6 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+from megatron.energon.av import VideoData
 from megatron.energon.flavors.webdataset.base_webdataset import BaseWebdatasetFactory
 from megatron.energon.flavors.webdataset.config import JOIN_INDEX_FILENAME, MAIN_FOLDER_NAME
 from megatron.energon.flavors.webdataset.default_decoder_webdataset import (
@@ -14,7 +15,6 @@ from megatron.energon.flavors.webdataset.empty_dataset_error import EmptyDataset
 from megatron.energon.flavors.webdataset.joined_webdataset import JoinedWebdatasetFactory
 from megatron.energon.flavors.webdataset.metadata import WebdatasetMeta
 from megatron.energon.flavors.webdataset.standard_webdataset import StandardWebdatasetFactory
-from megatron.energon.flavors.webdataset.video_data import VideoData
 
 __all__ = [
     "BaseWebdatasetFactory",
