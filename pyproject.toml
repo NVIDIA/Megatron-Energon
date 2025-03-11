@@ -25,7 +25,7 @@ dependencies = [
   "braceexpand",
   "click",
   "dataslots; python_version<'3.10'",
-  "multi-storage-client>=0.13.0",
+  "multi-storage-client>=0.16.0",
   "numpy",
   "pillow>=10.0.1",  # WEBP vulnerability fixed starting from 10.0.1
   "pyyaml",
@@ -55,6 +55,22 @@ av_decode = [
   "ebmlite>=3.3.1",
   "av>=13.0.0",
   "soundfile",
+
+# Storage services for MSC
+s3 = [
+  "multi-storage-client[boto3]",
+]
+aistore = [
+  "multi-storage-client[aistore]",
+]
+azure-storage-blob = [
+  "multi-storage-client[azure-storage-blob]",
+]
+google-cloud-storage = [
+  "multi-storage-client[google-cloud-storage]",
+]
+oci = [
+  "multi-storage-client[oci]",
 ]
 
 [project.urls]

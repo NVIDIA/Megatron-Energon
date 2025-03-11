@@ -3,6 +3,7 @@
 
 import sqlite3
 import struct
+from pathlib import Path
 from typing import BinaryIO, List, Optional, Tuple, Union
 
 from numpy import int8
@@ -31,7 +32,14 @@ class SqliteIndexWriter:
         self.sqlite_path = sqlite_path
 
         # Initialize SQLite connection
-        self.db = sqlite3.connect(str(self.sqlite_path))
+        path = str(self.sqlite_path)
+        # Only supporting local file system, because sqlite does not support remote file systems.
+        # TODO: Implement remote file systems. Maybe create locally in tmp then upload?
+        assert path.startswith("/"), (
+            f"SQLite path must be absolute local file system path: {self.sqlite_path}"
+        )
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        self.db = sqlite3.connect(path)
         self.db.execute("PRAGMA busy_timeout = 5000;")  # wait up to 5000ms when locked
         self.db.execute("PRAGMA journal_mode = WAL;")
 

@@ -3,6 +3,7 @@
 
 """This module defines tests for meta datasets."""
 
+import gc
 import logging
 import sys
 import tempfile
@@ -99,6 +100,7 @@ class TestDataset(unittest.TestCase):
 
     def tearDown(self):
         # Remove all temporary files
+        gc.collect()
         self.temp_dir.cleanup()
 
     @staticmethod

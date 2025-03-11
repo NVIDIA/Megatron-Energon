@@ -31,7 +31,8 @@ class DatasetReference(DatasetLoaderInterface):
 
     def post_initialize(self, mds_path: Optional[EPath] = None) -> None:
         assert mds_path is not None
-        self.path = mds_path.parent / self.path
+        if not isinstance(self.path, EPath):
+            self.path = mds_path.parent / self.path
         if self.path.is_file():
             assert self.dataset_config == "dataset.yaml", "Must not set dataset_config"
             assert self.split_config == "split.yaml", "Must not set split_config"
@@ -106,7 +107,8 @@ class JoinDatasetReference(DatasetReference):
         assert mds_path is not None
         # Override and disable another metadataset reference, only allow direct dataset references.
         # Do not store the loader, the parent MetadatasetJoin will do that.
-        self.path = mds_path.parent / self.path
+        if not isinstance(self.path, EPath):
+            self.path = mds_path.parent / self.path
         if (self.path / MAIN_FOLDER_NAME / ".info.yaml").is_file():
             return DatasetLoader(
                 path=self.path,
@@ -358,10 +360,6 @@ class MetadatasetV2(DatasetLoaderInterface):
     splits: Dict[
         str, Union[MetadatasetBlend, MetadatasetBlendEpochized, MetadatasetJoin, DatasetReference]
     ]
-
-    def __post_init__(self):
-        """Post-initialization to fix paths."""
-        self.path = EPath(self.path).absolute()
 
     def post_initialize(self, mds_path: Optional[EPath] = None):
         assert mds_path is None

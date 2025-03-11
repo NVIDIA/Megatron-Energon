@@ -133,9 +133,7 @@ def command(
     details.
     """
 
-    path = path.absolute()
-
-    if path.is_file() and str(path).endswith(".yaml"):
+    if path.is_file() and path.name.endswith(".yaml"):
         prepare_metadataset(path)
         return
 
