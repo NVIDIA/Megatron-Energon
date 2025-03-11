@@ -11,7 +11,6 @@ from .keyframeinfo import KeyframeInfo
 
 class Fastseek:
     """
-
     Gathers information from the video container file (e.g. metadata which requires minimal decoding)
     to find keyframes in the video for fast seeking.
 
@@ -28,6 +27,16 @@ class Fastseek:
     """
 
     def __init__(self, file: BitsType, probe: bool = False) -> None:
+        """Initialize the Fastseek object.
+
+        Args:
+            file (BitsType): The video file data as a bitstring BitsType object. This should contain the raw bytes of the video file.
+            probe (bool, optional): If True, use ffmpeg to probe the stream without decoding. This is slower but works with any container format.
+                                  If False (default), attempt to parse the container format directly. Only works with MP4/MOV and Matroska/WebM.
+
+        Raises:
+            ValueError: If the file type cannot be determined or if the container format is not supported (when probe=False).
+        """
         if probe:
             self.keyframes = parse_probe(file)
             self.unit = "count"
@@ -51,6 +60,28 @@ class Fastseek:
                 )
 
     def should_seek(self, current: int, target: int, stream: int = 0) -> KeyframeInfo | None:
+        """Determine if seeking to a keyframe is necessary to reach the target frame.
+
+        This method helps optimize video seeking by determining whether a seek operation
+        is needed to reach the target frame. It returns information about the nearest
+        keyframe only if seeking would be beneficial (i.e., if sequential decoding from
+        the current position would be less efficient).
+
+        Args:
+            current (int): The current frame number or timestamp (depending on container format)
+            target (int): The desired frame number or timestamp to seek to
+            stream (int, optional): The video stream index to use. Defaults to 0.
+
+        Returns:
+            KeyframeInfo | None: Information about the nearest keyframe if seeking would be beneficial,
+                               or None if sequential decoding from current position is more efficient.
+                               The KeyframeInfo contains the keyframe's position and timing information.
+
+        Note:
+            The units for current and target depend on the container format:
+            - For MP4/MOV: frame numbers (count-based)
+            - For Matroska/WebM: timestamps (time-based)
+        """
         nearest_iframe: int = self.nearest_keyframe(target, stream)
         return nearest_iframe if current < nearest_iframe.index <= target else None
 
