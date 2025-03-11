@@ -672,12 +672,22 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
         else:
             dataset = SimpleSavableDatasetWrapper(dataset, self.worker_config)
 
-        self._worker_sample_counters = [-1] * max(self.worker_config.num_workers, 1)
+        num_workers = max(self.worker_config.num_workers, 1)
+
+        self._worker_sample_counters = [-1] * num_workers
 
         kwargs = {}
         if self.worker_config.num_workers > 0:
             kwargs["persistent_workers"] = True
             kwargs["prefetch_factor"] = prefetch_factor
+
+        # Assert that prefetch_factor works well with num_checkpoints.
+        # This ensures that the oldest checkpoint is old enough to cover
+        # all the buffered samples in the torch dataloader.
+        assert prefetch_factor * num_workers + 1 <= n_checkpoints, (
+            "When increasing prefetch_factor, also increase n_checkpoints, so that "
+            "the number of checkpoints is at least as large as num_workers * prefetch_factor + 1"
+        )
 
         # Compute seeds for each worker, based on current rank
         seed_per_worker = [
