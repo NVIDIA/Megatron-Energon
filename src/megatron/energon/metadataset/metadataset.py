@@ -29,7 +29,8 @@ class DatasetReference:
 
     def post_initialize(self, mds_path: Optional[EPath] = None):
         assert mds_path is not None
-        self.path = mds_path.parent / self.path
+        if not isinstance(self.path, EPath):
+            self.path = mds_path.parent / self.path
         if self.path.is_file():
             assert self.dataset_config == "dataset.yaml", "Must not set dataset_config"
             assert self.split_config == "split.yaml", "Must not set split_config"
@@ -139,7 +140,7 @@ class Metadataset(DatasetLoaderInterface):
         splits: Dict[str, MetadatasetBlender],
     ):
         """Create the metadataset"""
-        self._path = EPath(path).absolute()
+        self._path = EPath(path)
         self._splits = splits
 
     def post_initialize(self, mds_path: Optional[EPath] = None):

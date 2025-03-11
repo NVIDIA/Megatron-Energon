@@ -91,7 +91,7 @@ class ITarReader(ABC):
         the global cache limit, close the least recently used file.
         """
         if tar_file_id not in self.itar_files_cache:
-            file_object = open(str(self.tar_filepaths[tar_file_id]), "rb")
+            file_object = self.tar_filepaths[tar_file_id].open(mode="rb")
             tar_file = ITarFile.open(fileobj=file_object, mode="r:")
             self.itar_files_cache[tar_file_id] = tar_file
 

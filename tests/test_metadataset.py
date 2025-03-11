@@ -453,7 +453,7 @@ class TestDataset(unittest.TestCase):
                 # prints out when the dataset is built.
 
                 for ds, w in ds_weights:
-                    worker_slice_offsets = ds.dataset.dataset.worker_slice_offsets
+                    worker_slice_offsets = ds.dataset.dataset.workers_slice_offsets
                     assert len(worker_slice_offsets) == num_workers
 
                     for worker_idx, slice_offsets in enumerate(worker_slice_offsets):
@@ -566,7 +566,6 @@ class TestDataset(unittest.TestCase):
                     max_samples_per_sequence=None,
                     shuffle_over_epochs_multiplier=2,
                 ),
-                worker_config=worker_config,
             )
 
         # Train mode dataset
@@ -899,7 +898,6 @@ class TestDataset(unittest.TestCase):
                     shuffle_buffer_size=None,
                     max_samples_per_sequence=None,
                 ),
-                worker_config=worker_config,
                 checkpoint_every_sec=0.5,
                 checkpoint_every_min_n_samples=1,
                 n_checkpoints=5,
@@ -1032,7 +1030,6 @@ class TestDataset(unittest.TestCase):
                 shuffle_buffer_size=sbs,
                 max_samples_per_sequence=sbs,
             ),
-            worker_config=worker_config,
         )
         state_0 = loader.save_state_rank()
         order_1 = [data.text[0] for data in loader]
@@ -1052,7 +1049,6 @@ class TestDataset(unittest.TestCase):
                 shuffle_buffer_size=sbs,
                 max_samples_per_sequence=sbs,
             ),
-            worker_config=worker_config,
         )
         print("state_0:", _norng_state(state_0))
         loader.restore_state_rank(state_0)
@@ -1072,7 +1068,6 @@ class TestDataset(unittest.TestCase):
                 shuffle_buffer_size=sbs,
                 max_samples_per_sequence=sbs,
             ),
-            worker_config=worker_config,
         )
         print("state_1:", _norng_state(state_1))
         loader.restore_state_rank(state_1)
@@ -1092,7 +1087,6 @@ class TestDataset(unittest.TestCase):
                 shuffle_buffer_size=sbs,
                 max_samples_per_sequence=sbs,
             ),
-            worker_config=worker_config,
         )
         print("state_2:", _norng_state(state_2))
         loader.restore_state_rank(state_2)
@@ -1114,7 +1108,6 @@ class TestDataset(unittest.TestCase):
         # Train mode dataset
         loader = get_savable_loader(
             get_val_dataset(self.mds_path, worker_config=worker_config, batch_size=10),
-            worker_config=worker_config,
         )
         state_0 = loader.save_state_rank()
         order_1 = [data.text for idx, data in zip(range(55 * 20), loader)]
@@ -1124,7 +1117,6 @@ class TestDataset(unittest.TestCase):
 
         loader = get_savable_loader(
             get_val_dataset(self.mds_path, worker_config=worker_config, batch_size=10),
-            worker_config=worker_config,
         )
         loader.restore_state_rank(state_1)
         order_3 = [data.text for idx, data in zip(range(55 * 20), loader)]
@@ -1132,7 +1124,6 @@ class TestDataset(unittest.TestCase):
 
         loader = get_savable_loader(
             get_val_dataset(self.mds_path, worker_config=worker_config, batch_size=10),
-            worker_config=worker_config,
         )
         loader.restore_state_rank(state_0)
         order_4 = [data.text for idx, data in zip(range(55 * 20), loader)]

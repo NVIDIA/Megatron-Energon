@@ -3,6 +3,7 @@
 
 """This module defines tests for meta datasets."""
 
+import gc
 import logging
 import sys
 import tempfile
@@ -99,6 +100,7 @@ class TestDataset(unittest.TestCase):
 
     def tearDown(self):
         # Remove all temporary files
+        gc.collect()
         self.temp_dir.cleanup()
 
     @staticmethod
@@ -167,7 +169,7 @@ class TestDataset(unittest.TestCase):
 
         # The middle dataset should have 0 samples assigned to this rank
         blend_ds = get_blend_dataset(train_dataset)
-        assert len(blend_ds.dataset_weights[1][0].dataset.dataset.worker_slice_offsets[0]) == 1
+        assert len(blend_ds.dataset_weights[1][0].dataset.dataset.workers_slice_offsets[0]) == 1
         assert len(blend_ds.dataset_weights[1][0].dataset.dataset) == 0
 
         train_loader = get_savable_loader(
