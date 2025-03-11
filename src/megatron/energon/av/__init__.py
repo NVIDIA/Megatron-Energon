@@ -9,8 +9,8 @@ from megatron.energon.av.fastseek import Fastseek
 from megatron.energon.av.video_data import VideoData
 
 __all__ = [
-    'AVData',
-    'AVDecoder',
-    'Fastseek',
-    'VideoData',
+    "AVData",
+    "AVDecoder",
+    "Fastseek",
+    "VideoData",
 ]

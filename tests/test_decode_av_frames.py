@@ -17,9 +17,11 @@ import torchvision.transforms as transforms
 from megatron.energon.av import AVData
 
 # Set multiprocessing start method to 'spawn' on macOS to avoid DataLoader cleanup issues
-if sys.platform == 'darwin':
+if sys.platform == "darwin":
     import multiprocessing
-    multiprocessing.set_start_method('spawn', force=True)
+
+    multiprocessing.set_start_method("spawn", force=True)
+
 
 def load_video_to_tensor(video_path: str) -> torch.Tensor:
     """Load a video file into a tensor using PyAV directly.
@@ -41,7 +43,9 @@ def load_video_to_tensor(video_path: str) -> torch.Tensor:
     return video_tensor
 
 
-def are_resized_frames_close(tensor1: torch.Tensor, tensor2: torch.Tensor, tolerance: float = 0.01) -> bool:
+def are_resized_frames_close(
+    tensor1: torch.Tensor, tensor2: torch.Tensor, tolerance: float = 0.01
+) -> bool:
     """Compare two tensors of video frames with a tolerance for resizing differences.
 
     Args:
@@ -74,9 +78,9 @@ class TestVideoDecode(unittest.TestCase):
         """Clean up test fixtures."""
         # Clean up any loaders
         for loader in self.loaders:
-            if hasattr(loader, '_iterator'):
+            if hasattr(loader, "_iterator"):
                 loader._iterator = None
-            if hasattr(loader, '_shutdown_workers'):
+            if hasattr(loader, "_shutdown_workers"):
                 try:
                     loader._shutdown_workers()
                 except Exception:
@@ -96,8 +100,9 @@ class TestVideoDecode(unittest.TestCase):
         av_data = AVData(stream)
         video_tensor, _, _ = av_data.decode_video_frames(stream)
 
-        assert (video_tensor == self.complete_video_tensor).all(), \
+        assert (video_tensor == self.complete_video_tensor).all(), (
             "Energon decoded video does not match baseline"
+        )
 
     def test_decode_strided_resized(self):
         """Test decoding a subset of frames with resizing."""
@@ -119,13 +124,18 @@ class TestVideoDecode(unittest.TestCase):
         ]
         # Now resize the baseline frames
         resize = transforms.Resize((224, 224))
-        strided_baseline_tensor = strided_baseline_tensor.permute(0, 3, 1, 2)  # b, h, w, c -> b, c, h, w
+        strided_baseline_tensor = strided_baseline_tensor.permute(
+            0, 3, 1, 2
+        )  # b, h, w, c -> b, c, h, w
         strided_resized_baseline_tensor = resize(strided_baseline_tensor)
-        strided_resized_baseline_tensor = strided_resized_baseline_tensor.permute(0, 2, 3, 1)  # b, c, h, w -> b, h, w, c
+        strided_resized_baseline_tensor = strided_resized_baseline_tensor.permute(
+            0, 2, 3, 1
+        )  # b, c, h, w -> b, h, w, c
 
         # We allow small numerical differences due to different resize implementations
-        assert are_resized_frames_close(video_tensor, strided_resized_baseline_tensor, tolerance=0.01), \
-            "Energon decoded video does not match baseline"
+        assert are_resized_frames_close(
+            video_tensor, strided_resized_baseline_tensor, tolerance=0.01
+        ), "Energon decoded video does not match baseline"
 
     def test_decode_strided_resized_with_audio(self):
         """Test decoding video frames and audio clips together."""
@@ -150,18 +160,24 @@ class TestVideoDecode(unittest.TestCase):
         ]
         # Now resize the baseline frames
         resize = transforms.Resize((224, 224))
-        strided_baseline_tensor = strided_baseline_tensor.permute(0, 3, 1, 2)  # b, h, w, c -> b, c, h, w
+        strided_baseline_tensor = strided_baseline_tensor.permute(
+            0, 3, 1, 2
+        )  # b, h, w, c -> b, c, h, w
         strided_resized_baseline_tensor = resize(strided_baseline_tensor)
-        strided_resized_baseline_tensor = strided_resized_baseline_tensor.permute(0, 2, 3, 1)  # b, c, h, w -> b, h, w, c
+        strided_resized_baseline_tensor = strided_resized_baseline_tensor.permute(
+            0, 2, 3, 1
+        )  # b, c, h, w -> b, h, w, c
 
         # We allow small numerical differences due to different resize implementations
-        assert are_resized_frames_close(video_tensor, strided_resized_baseline_tensor, tolerance=0.01), \
-            "Energon decoded video does not match baseline"
+        assert are_resized_frames_close(
+            video_tensor, strided_resized_baseline_tensor, tolerance=0.01
+        ), "Energon decoded video does not match baseline"
 
         # Check audio tensor shape (5 clips, channels, 3 seconds at original sample rate)
         expected_samples = int(3 * metadata["audio_fps"])  # 3 seconds at original sample rate
-        assert audio_tensor.shape == torch.Size([5, audio_tensor.shape[1], expected_samples]), \
+        assert audio_tensor.shape == torch.Size([5, audio_tensor.shape[1], expected_samples]), (
             f"Energon decoded audio clips have wrong size: {audio_tensor.shape}"
+        )
 
 
 def load_audio_to_tensor(audio_path: str) -> torch.Tensor:
@@ -196,9 +212,9 @@ class TestAudioDecode(unittest.TestCase):
         """Clean up test fixtures."""
         # Clean up any loaders
         for loader in self.loaders:
-            if hasattr(loader, '_iterator'):
+            if hasattr(loader, "_iterator"):
                 loader._iterator = None
-            if hasattr(loader, '_shutdown_workers'):
+            if hasattr(loader, "_shutdown_workers"):
                 try:
                     loader._shutdown_workers()
                 except Exception:
@@ -217,8 +233,9 @@ class TestAudioDecode(unittest.TestCase):
         av_data = AVData(stream)
         _, audio_tensor, _ = av_data.decode_audio_samples(stream, num_clips=-1)
 
-        assert (audio_tensor == self.complete_audio_tensor).all(), \
+        assert (audio_tensor == self.complete_audio_tensor).all(), (
             "Energon decoded audio does not match baseline"
+        )
 
     def test_decode_clips(self):
         """Test decoding multiple clips from an audio file."""
@@ -236,9 +253,12 @@ class TestAudioDecode(unittest.TestCase):
 
         # Check audio tensor shape (5 clips, channels, 3 seconds at original sample rate)
         expected_samples = int(3 * metadata["audio_fps"])  # 3 seconds at original sample rate
-        expected_samples = min(expected_samples, audio_tensor.shape[2])  # Don't exceed actual length
-        assert audio_tensor.shape == torch.Size([5, audio_tensor.shape[1], expected_samples]), \
+        expected_samples = min(
+            expected_samples, audio_tensor.shape[2]
+        )  # Don't exceed actual length
+        assert audio_tensor.shape == torch.Size([5, audio_tensor.shape[1], expected_samples]), (
             f"Energon decoded audio clips have wrong size: {audio_tensor.shape}"
+        )
 
     def test_decode_wav(self):
         """Test decoding a WAV file."""
@@ -261,9 +281,14 @@ class TestAudioDecode(unittest.TestCase):
 
         # Check audio tensor shape (1 clip, channels, samples)
         expected_samples = int(3 * metadata["audio_fps"])  # 3 seconds at original sample rate
-        assert audio_tensor.shape == torch.Size([expected_samples, audio_tensor.shape[1]]), \
+        assert audio_tensor.shape == torch.Size([expected_samples, audio_tensor.shape[1]]), (
             f"Energon decoded WAV file has wrong size: {audio_tensor.shape}"
+        )
 
 
 if __name__ == "__main__":
-    unittest.main()
+    # unittest.main()
+    tvd = TestVideoDecode()
+    tvd.setUp()
+    tvd.test_decode_all_frames()
+    tvd.tearDown()

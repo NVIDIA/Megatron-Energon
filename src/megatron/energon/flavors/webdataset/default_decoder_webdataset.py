@@ -126,7 +126,6 @@ class DefaultDecoderWebdatasetFactory(DefaultGenericWebdatasetFactory[T_sample],
             return True
         raise exc
 
-
     def load_sample(self, sample: FilteredSample) -> T_sample:
         if self._decoder is not None:
             sample = self._decoder(sample)
