@@ -99,7 +99,7 @@ class SqliteIndexWriterAggregator(BaseAggregator):
 class WebdatasetPreparator:
     @staticmethod
     def _preprocess_tar(
-        path: Union[str, EPath],
+        path: str,
         shard_to_idx: Dict[str, int],
         parent_path: EPath,
         max_parts: int,
@@ -115,15 +115,7 @@ class WebdatasetPreparator:
         Returns:
             Tuple of shard info and found keys of the loaded dicts.
         """
-        EPath.prepare_forked_process()  # Multiproc with fork
-
-        path = EPath(path)
-        shard_info = ShardInfo(name=path.relpath, path=path, count=0)
-
-        if not shard_info.path.is_absolute():
-            parent_path = EPath(parent_path)
-            assert parent_path.is_absolute(), f"Parent path must be absolute: {parent_path}"
-            shard_info.path = parent_path / path
+        shard_info = ShardInfo(name=path, path=parent_path / path, count=0)
 
         try:
             # Note: Write to .tmp file first, then remove .tmp extension, to make sure only complete
@@ -167,7 +159,7 @@ class WebdatasetPreparator:
                                 yield next_index_sample
 
                             next_index_sample = dict(
-                                tar_file_id=shard_to_idx[path.relpath],
+                                tar_file_id=shard_to_idx[path],
                                 sample_key=base_name,
                                 sample_index=count,
                                 byte_offset=member.offset,
@@ -267,14 +259,12 @@ class WebdatasetPreparator:
         Returns:
             The set of all parts found in the shards. But at most 50.
         """
-        parent_path = EPath(parent_path).absolute()
+        parent_path = EPath(parent_path)
 
         paths = [path for path in paths for path in braceexpand.braceexpand(path)]
 
         # Construct a mapping from relative shard path to its index
         shard_to_idx = {path: idx for idx, path in enumerate(paths)}
-
-        assert parent_path.is_absolute(), f"Parent path must be absolute: {parent_path}"
 
         (parent_path / MAIN_FOLDER_NAME).mkdir(exist_ok=True)
 
@@ -284,7 +274,6 @@ class WebdatasetPreparator:
 
         process_tar = functools.partial(
             cls._preprocess_tar,
-            # convert to url string, to avoid EPath in multiprocessing
             shard_to_idx=shard_to_idx,
             parent_path=parent_path,
             max_parts=50,
@@ -329,6 +318,7 @@ class WebdatasetPreparator:
         info = WebdatasetInfo(
             shard_counts={shard.name: shard.count for shard in shards},
         )
+        print(f"Saving info to {parent_path / MAIN_FOLDER_NAME / info_config}")
         with (parent_path / MAIN_FOLDER_NAME / info_config).open("w") as wf:
             yaml.dump(to_json_object(info), wf)
 

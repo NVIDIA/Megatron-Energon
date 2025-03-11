@@ -107,8 +107,6 @@ def pprint(idx: int, sample: Sample):
 def command(path: EPath, split_parts: str, dataset_config: str):
     """Preview samples of a dataset on the console."""
 
-    path = path.absolute()
-
     worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0)
 
     for split_part in split_parts.split(","):

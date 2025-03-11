@@ -37,7 +37,6 @@ def load_config(
         data = path
     else:
         # Read the config from a file
-        path = path.absolute()
         with path.open() as f:
             data: dict = yaml.safe_load(f)
 
@@ -83,7 +82,7 @@ def get_dataset_from_config(
     Returns:
         The instantiated dataset
     """
-    path = EPath(path).absolute()
+    path = EPath(path)
     if not (path / MAIN_FOLDER_NAME / ".info.yaml").is_file():
         raise ValueError(
             f"Path {path} does not contain a {MAIN_FOLDER_NAME}/.info.yaml file. Did you forget to "
