@@ -4,7 +4,6 @@
 import gc
 import multiprocessing
 import queue
-import random
 import threading
 import time
 import traceback
@@ -38,7 +37,7 @@ from megatron.energon.flavors.base_dataset import (
     State,
     add_sample_restore_key,
 )
-from megatron.energon.rng import SystemRng
+from megatron.energon.rng import SystemRng, SystemRngState
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset
 from megatron.energon.wrappers.batch_dataset import BatchDataset
@@ -136,20 +135,15 @@ class SavableDatasetState(State):
     sample to be returned from the dataset. This class is not intended to be used directly, but by
     :class:`megatron.energon.SavableDatasetWrapper`."""
 
-    #: The state of the torch random number generator
-    torch_rng: bytes
-    #: The state of the numpy random number generator
-    numpy_rng: Tuple[str, bytes, int, int, float]
-    #: The state of the python random number generator
-    rng: Any
+    #: The state of all the system random number generators
+    rng: SystemRngState
+    #: The state of the savable dataset
+    dataset_state: FlexState
     #: Index of the next sample to be returned from the dataset
     sample_index: int
 
     def __repr__(self):
-        tr = self.torch_rng[:3] + b"..."
-        nr = (self.numpy_rng[0], self.numpy_rng[1][:3] + b"...", *self.numpy_rng[2:])
-        r = (self.rng[0], self.rng[1] + ("...",), self.rng[2])
-        return f"SavableDatasetState(torch_rng={tr!r}, numpy_rng={nr!r}, rng={r!r}, sample_index={self.sample_index})"
+        return f"SavableDatasetState(rng={self.rng!r}, sample_index={self.sample_index})"
 
 
 @dataclass_slots
@@ -161,8 +155,6 @@ class SavableCheckpoint:
 
     #: The state of the wrapper
     state: Optional[SavableDatasetState]
-    #: The state of the inner dataset
-    dataset_state: Optional[FlexState]
     #: The time at which the checkpoint was created
     checkpoint_time: float
     #: Index of the next sample to be returned from the dataset after restoring the checkpoint
@@ -176,8 +168,6 @@ class SavableDatasetCheckpoint(State):
 
     #: The state of the wrapper at the sample index when the checkpoint was created.
     state: Optional[SavableDatasetState]
-    #: The state of the inner dataset at the sample index when the checkpoint was created.
-    dataset_state: Optional[FlexState]
     #: Offset of the checkpoint to the actual sample index to be restored.
     offset: int
 
@@ -208,7 +198,6 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
     _last_checkpoints: List[SavableCheckpoint]
 
     _workers_restore_from: List[Optional[SavableDatasetState]] = list()
-    _workers_dataset_state: List[Optional[FlexState]]
     _workers_skip_samples: List[int]
 
     _running: bool = False
@@ -248,12 +237,9 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
         self.checkpoint_every_min_n_samples = checkpoint_every_min_n_samples
         self.n_checkpoints = n_checkpoints
         self._last_checkpoints = [
-            SavableCheckpoint(
-                state=None, dataset_state=None, checkpoint_time=time.perf_counter(), sample_index=-1
-            )
+            SavableCheckpoint(state=None, checkpoint_time=time.perf_counter(), sample_index=-1)
         ]
         self._workers_skip_samples = [0] * num_workers
-        self._workers_dataset_state = [None] * num_workers
         self._cmd_queues = cmd_queues
         self._result_queues = result_queues
 
@@ -328,7 +314,7 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
             with self._command_lock:
                 if self._workers_restore_from:
                     my_state = self._workers_restore_from[self._worker_id]
-                    my_ds_state = self._workers_dataset_state[self._worker_id]
+                    my_ds_state = my_state.dataset_state
                     assert my_state is not None
                     if my_ds_state is None:
                         self.dataset.reset_state_deep()
@@ -415,7 +401,6 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
             self._last_checkpoints.append(
                 SavableCheckpoint(
                     state=self._save_state(),
-                    dataset_state=self.dataset.save_state(),
                     checkpoint_time=time.perf_counter(),
                     sample_index=self._sample_index,
                 )
@@ -433,35 +418,23 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
             cached_gaussian,
         ) = np.random.get_state()
         return SavableDatasetState(
-            torch_rng=bytes(torch.get_rng_state().tolist()),
-            numpy_rng=(np_tp, np_state.tobytes(), pos, has_gauss, cached_gaussian),
-            rng=random.getstate(),
+            rng=SystemRng.save_state(),
+            dataset_state=self.dataset.save_state(),
             sample_index=self._sample_index,
         )
 
     def _restore_state(self, state: SavableDatasetState) -> None:
         """Restores the internal worker state"""
         assert torch.utils.data.get_worker_info() is not None, "Can only restore in worker process"
-        if state.torch_rng is None:
-            torch.manual_seed(torch.initial_seed())
-        else:
-            torch.set_rng_state(
-                torch.frombuffer(bytearray(state.torch_rng), dtype=torch.uint8).clone()
-            )
-        if state.numpy_rng is None:
-            np.random.seed(torch.initial_seed() & 0xFFFFFFFF)
-        else:
-            np_tp, np_state, *np_rng = state.numpy_rng
-            np.random.set_state((np_tp, np.frombuffer(np_state, dtype=np.uint32), *np_rng))
         if state.rng is None:
-            random.seed(torch.initial_seed() & 0xFFFFFFFF)
+            SystemRng.seed(torch.initial_seed() & 0xFFFFFFFF)
         else:
-            random.setstate(state.rng)
+            SystemRng.restore_state(state.rng)
+
         self._sample_index = state.sample_index
         self._last_checkpoints = [
             SavableCheckpoint(
                 state=self._save_state(),
-                dataset_state=self.dataset.save_state(),
                 checkpoint_time=time.perf_counter(),
                 sample_index=self._sample_index,
             )
@@ -482,7 +455,6 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
             if checkpoint.sample_index <= sample_index:
                 # print(f"Found cp for {sample_index} at {checkpoint.sample_index}")
                 return SavableDatasetCheckpoint(
-                    dataset_state=checkpoint.dataset_state,
                     state=checkpoint.state,
                     offset=sample_index - checkpoint.sample_index,
                 )
@@ -508,7 +480,6 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
             self._workers_restore_from = []
             assert worker_offset == 0
             self._worker_offset = 0
-            self._workers_dataset_state = [None] * num_workers
             self._workers_skip_samples = [0] * num_workers
         else:
             assert isinstance(worker_states, list)
@@ -519,7 +490,6 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
             # Tear the state_list apart (which has len=num_workers)
             # and store the states in the internal arrays
             self._workers_restore_from = [state.state for state in worker_states]
-            self._workers_dataset_state = [state.dataset_state for state in worker_states]
             self._workers_skip_samples = [state.offset for state in worker_states]
 
     def can_restore_sample(self) -> bool:

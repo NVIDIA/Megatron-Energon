@@ -98,7 +98,7 @@ class SystemRngState:
     random: Any  # Currently a nested tuple
 
     def __repr__(self):
-        return f"SystemRngState(torch={self.torch[:3] + b'...'}, numpy={self.numpy!r}, random={self.random!r})"
+        return f"SystemRngState(torch={self.torch[:3]}..., numpy={self.numpy!r}, random={self.random!r})"
 
 
 class SystemRng:
