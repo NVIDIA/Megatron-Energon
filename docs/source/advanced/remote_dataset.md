@@ -8,7 +8,7 @@ This means you can train or validate with your data right from any storage by si
 
 ## Prerequisites
 
-For using a remote dataset, install one of the extras:
+For using a remote dataset, install one or more of the extras:
 * `s3`
 * `aistore`
 * `azure-blob-storage`

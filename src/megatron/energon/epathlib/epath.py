@@ -29,9 +29,6 @@ class EPath:
     profile: str
     # The file system
     fs: msc.StorageClient
-    # Number of parts in the internal_path that are part of the file system specification
-    # Always use 2
-    num_fs_path_parts: int = 2
 
     def __init__(
         self,
@@ -88,7 +85,7 @@ class EPath:
                     if len(new_parts) == 0:
                         raise ValueError(f"Path above root: {path}")
                     new_parts.pop()
-                elif path == ".":
+                elif part == ".":
                     pass
                 else:
                     new_parts.append(part)
