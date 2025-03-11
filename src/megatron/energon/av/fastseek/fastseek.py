@@ -86,6 +86,27 @@ class Fastseek:
         return nearest_iframe if current < nearest_iframe.index <= target else None
 
     def nearest_keyframe(self, target: int, stream: int = 0) -> KeyframeInfo:
+        """Find the nearest keyframe that comes before the target frame.
+
+        This method performs a binary search to find the keyframe that is closest to,
+        but not after, the target frame position. This is useful for determining the
+        optimal starting point for decoding to reach a specific frame.
+
+        Args:
+            target (int): The target frame number or timestamp to find the nearest keyframe for.
+                         The unit (frame count or timestamp) depends on the container format.
+            stream (int, optional): The video stream index to use. Defaults to 0.
+                                  Used when the container has multiple video streams.
+
+        Returns:
+            KeyframeInfo: Information about the nearest keyframe before the target position.
+                         Contains details like the keyframe's position, timestamp, and file offset.
+
+        Note:
+            The implementation currently uses a list-based approach for stream selection
+            as some video containers don't report track IDs correctly. This is a temporary
+            workaround and may be updated in the future.
+        """
         # HACK some videos don't report track ID correctly, so just use a list for now
         nearest_iframe_to_target_index: int = (
             list(self.keyframes.values())[stream].bisect_left(target) - 1
