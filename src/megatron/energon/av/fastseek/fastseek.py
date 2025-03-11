@@ -50,9 +50,7 @@ class Fastseek:
                     f"Unsupported container: {ftype.mime} (hint: try passing probe=True to the Fastseek constructor)"
                 )
 
-    def should_seek(
-        self, current: int, target: int, stream: int = 0
-    ) -> KeyframeInfo | None:
+    def should_seek(self, current: int, target: int, stream: int = 0) -> KeyframeInfo | None:
         nearest_iframe: int = self.nearest_keyframe(target, stream)
         return nearest_iframe if current < nearest_iframe.index <= target else None
 
@@ -61,6 +59,4 @@ class Fastseek:
         nearest_iframe_to_target_index: int = (
             list(self.keyframes.values())[stream].bisect_left(target) - 1
         )
-        return list(self.keyframes.values())[stream][
-            max(0, nearest_iframe_to_target_index)
-        ]
+        return list(self.keyframes.values())[stream][max(0, nearest_iframe_to_target_index)]

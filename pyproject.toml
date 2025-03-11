@@ -47,6 +47,23 @@ dev = [
 transforms = [
   "torchvision",  # Needed for megatron.energon.transforms
 ]
+# Storage services for MSC
+s3 = [
+  "multi-storage-client[boto3]",
+]
+aistore = [
+  "multi-storage-client[aistore]",
+]
+azure-storage-blob = [
+  "multi-storage-client[azure-storage-blob]",
+]
+google-cloud-storage = [
+  "multi-storage-client[google-cloud-storage]",
+]
+oci = [
+  "multi-storage-client[oci]",
+]
+# Dependencies for video decoding
 av_decode = [
   # needed for efficient audio and video file decoding
   "bitstring>=4.2.3",

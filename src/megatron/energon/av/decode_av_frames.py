@@ -30,6 +30,7 @@ class AVData:
     during initialization. It's particularly useful for cases where different samples may need different
     decoding parameters.
     """
+
     def __init__(self, stream: io.BytesIO) -> None:
         if not AV_DECODE_AVAILABLE:
             raise ImportError(
@@ -40,13 +41,13 @@ class AVData:
         self.stream = stream
 
     def get_frames(
-            self,
-            audio_clip_duration: int = 1,
-            audio_num_clips: int = -1,
-            video_decode_audio: bool = False,
-            video_num_frames: int = 64,
-            video_out_frame_size: tuple[int, int] = (224, 224),
-        ) -> VideoData | None:
+        self,
+        audio_clip_duration: int = 1,
+        audio_num_clips: int = -1,
+        video_decode_audio: bool = False,
+        video_num_frames: int = 64,
+        video_out_frame_size: tuple[int, int] = (224, 224),
+    ) -> VideoData | None:
         """Decode the audio/video data with the specified parameters.
 
         Args:
@@ -114,9 +115,7 @@ class AVData:
         if seeker is None:
             seeker: Fastseek = Fastseek(video_file)
 
-        video_file.seek(
-            0
-        )  # Reset the video stream so that pyav can read the entire container
+        video_file.seek(0)  # Reset the video stream so that pyav can read the entire container
 
         with av.open(video_file) as input_container:
             # Grab video & audio streams
@@ -127,9 +126,7 @@ class AVData:
             video_stream.thread_type = 3
 
             # Collect metadata
-            video_fps = (
-                float(video_stream.average_rate) if video_stream.average_rate else 0.0
-            )
+            video_fps = float(video_stream.average_rate) if video_stream.average_rate else 0.0
             audio_fps = audio_stream.sample_rate or 0
             metadata = {"video_fps": video_fps, "audio_fps": audio_fps}
 
@@ -144,30 +141,21 @@ class AVData:
             frames: list[torch.Tensor] = []
             for target_frame_index in frame_indices:
                 if (
-                    iframe_info := seeker.should_seek(
-                        previous_frame_index, target_frame_index
-                    )
+                    iframe_info := seeker.should_seek(previous_frame_index, target_frame_index)
                 ) is not None:
-                    input_container.seek(
-                        iframe_info.pts, stream=input_container.streams.video[0]
-                    )
+                    input_container.seek(iframe_info.pts, stream=input_container.streams.video[0])
                     previous_frame_index = iframe_info.index
 
                 for i, frame in enumerate(frame_iterator):
                     # Container uses frame counts, we can find the exact target frame by counting from the iframe which is at a known offset
-                    if (
-                        seeker.unit == "count"
-                        and previous_frame_index + i == target_frame_index
-                    ):
+                    if seeker.unit == "count" and previous_frame_index + i == target_frame_index:
                         break
 
                     # Container uses time, the target frame might not correspond exactly to any metadata but the desired timestamp should
                     # fall within a frames display period
                     if (
                         seeker.unit == "time"
-                        and frame.pts
-                        <= target_frame_index
-                        <= frame.pts + average_frame_duration
+                        and frame.pts <= target_frame_index <= frame.pts + average_frame_duration
                     ):
                         break
 
@@ -189,7 +177,6 @@ class AVData:
         video_tensor = torch.stack(frames)
 
         return video_tensor, metadata
-
 
     def decode_video_frames(
         self,
@@ -228,9 +215,7 @@ class AVData:
 
         # Pick which video frames to extract
         frame_indices = np.linspace(0, upper_bound, num_frames, dtype=int).tolist()
-        video_tensor, metadata = self.get_frame_batch(
-            stream, frame_indices, out_frame_size, seeker
-        )
+        video_tensor, metadata = self.get_frame_batch(stream, frame_indices, out_frame_size, seeker)
 
         # --- Then, if requested, decode audio using the same clip logic as decode_audio_samples ---
         audio_tensor = torch.empty(0)
@@ -260,7 +245,6 @@ class AVData:
             metadata.update(audio_metadata)
 
         return video_tensor, audio_tensor, metadata
-
 
     def get_clip_indices(
         self,
@@ -295,7 +279,6 @@ class AVData:
 
         return [[i * spacing, i * spacing + clip_samples - 1] for i in range(num_clips)]
 
-
     def get_audio_batch(
         self,
         audio_file: io.BytesIO,
@@ -321,7 +304,9 @@ class AVData:
             metadata = {"audio_fps": orig_rate}
 
             clips = []
-            expected_samples = clip_indices[0][1] - clip_indices[0][0] + 1  # Expected samples per clip
+            expected_samples = (
+                clip_indices[0][1] - clip_indices[0][0] + 1
+            )  # Expected samples per clip
 
             # First pass: decode all clips and find max length
             for start_idx, end_idx in clip_indices:
@@ -350,8 +335,10 @@ class AVData:
                         clip_all = clip_all[:, :expected_samples]
                     elif clip_all.shape[-1] < expected_samples:
                         # Pad with zeros if we got fewer samples than expected
-                        padded = np.zeros((clip_all.shape[0], expected_samples), dtype=clip_all.dtype)
-                        padded[:, :clip_all.shape[-1]] = clip_all
+                        padded = np.zeros(
+                            (clip_all.shape[0], expected_samples), dtype=clip_all.dtype
+                        )
+                        padded[:, : clip_all.shape[-1]] = clip_all
                         clip_all = padded
 
                     clips.append(clip_all)
@@ -359,13 +346,12 @@ class AVData:
             # Convert to torch and stack
             return torch.stack([torch.from_numpy(clip) for clip in clips]), metadata
 
-
     def decode_audio_samples(
-            self,
-            stream: io.BytesIO,
-            num_clips: int = 1,
-            clip_duration: int = 1,
-            audio_format: str = "flac",
+        self,
+        stream: io.BytesIO,
+        num_clips: int = 1,
+        clip_duration: int = 1,
+        audio_format: str = "flac",
     ) -> tuple[torch.Tensor, dict]:
         if audio_format == "wav":
             with sf.SoundFile(stream) as f:
@@ -373,7 +359,7 @@ class AVData:
                 target_length_in_samples = min(f.frames, int(clip_duration * sample_rate))
 
                 f.seek(0)
-                waveform = f.read(frames=target_length_in_samples, dtype='float32')
+                waveform = f.read(frames=target_length_in_samples, dtype="float32")
 
                 metadata = {"audio_fps": f.samplerate}
                 audio_tensor = torch.from_numpy(waveform)
@@ -387,7 +373,9 @@ class AVData:
                 num_clips = 1
                 clip_indices = [[0, sample_count - 1]]
             else:
-                clip_indices = self.get_clip_indices(sampling_rate, sample_count, num_clips, clip_duration)
+                clip_indices = self.get_clip_indices(
+                    sampling_rate, sample_count, num_clips, clip_duration
+                )
 
             stream.seek(0)  # Reset stream position
             audio_tensor, metadata = self.get_audio_batch(stream, clip_indices)
@@ -425,14 +413,15 @@ class AVDecoder:
         ... )
         >>> result = decoder("video.mp4", video_bytes)
     """
+
     def __init__(
-            self,
-            audio_clip_duration: int,
-            audio_num_clips: int,
-            video_decode_audio: bool,
-            video_num_frames: int,
-            video_out_frame_size: tuple[int, int],
-            video_decode: Literal["torch", "AVData"] = "torch",
+        self,
+        audio_clip_duration: int,
+        audio_num_clips: int,
+        video_decode_audio: bool,
+        video_num_frames: int,
+        video_out_frame_size: tuple[int, int],
+        video_decode: Literal["torch", "AVData"] = "torch",
     ) -> None:
         self.audio_clip_duration = audio_clip_duration
         self.audio_num_clips = audio_num_clips
@@ -466,7 +455,9 @@ class AVDecoder:
             If video_decode is "AVData", returns an AVData instance for flexible decoding.
             Returns None if decoding failed or file type is not supported.
         """
-        if not any(key.endswith(ext) for ext in ("mp4", "mov", "webm", "mkv", "flac", "mp3", "wav")):
+        if not any(
+            key.endswith(ext) for ext in ("mp4", "mov", "webm", "mkv", "flac", "mp3", "wav")
+        ):
             return None
         av_data = self.read_av_data(key, data)
         if av_data is None:
@@ -480,4 +471,3 @@ class AVDecoder:
             video_num_frames=self.video_num_frames,
             video_out_frame_size=self.video_out_frame_size,
         )
-

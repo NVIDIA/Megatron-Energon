@@ -13,9 +13,7 @@ from ..keyframeinfo import KeyframeInfo
 box_atoms = {"moov", "trak", "mdia", "minf", "stbl", "edts"}  # Non-exhaustive
 
 
-def parse_table(
-    cbs: ConstBitStream, table_size: int, struct: dict[str, str]
-) -> dict[str, Any]:
+def parse_table(cbs: ConstBitStream, table_size: int, struct: dict[str, str]) -> dict[str, Any]:
     return [
         dict(zip(struct.keys(), cbs.readlist(", ".join(struct.values()))))
         for _ in range(table_size)
@@ -213,9 +211,7 @@ def parse_mpeg(file: BitsType) -> dict[int, SortedList]:
 
             case "stss":
                 a: STSS
-                sync_samples[current_track] = [
-                    ss["number"] - 1 for ss in a.sync_sample_table
-                ]
+                sync_samples[current_track] = [ss["number"] - 1 for ss in a.sync_sample_table]
 
             case "elst":
                 # NOTE the "media_time" here is a "delay" between decoding and presenting the first sample.
