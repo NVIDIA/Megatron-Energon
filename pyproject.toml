@@ -74,10 +74,6 @@ av_decode = [
   "soundfile",
 ]
 
-# Storage services for MSC
-s3 = [
-  "multi-storage-client[boto3]",
-]
 aistore = [
   "multi-storage-client[aistore]",
 ]
