@@ -287,8 +287,4 @@ class TestAudioDecode(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    # unittest.main()
-    tvd = TestVideoDecode()
-    tvd.setUp()
-    tvd.test_decode_all_frames()
-    tvd.tearDown()
+    unittest.main()
