@@ -53,15 +53,11 @@ def _init_worker(seed_per_worker: List[int], worker_id: int):
 
     Sets the random seeds and prepare EPath for the forked worker process.
     """
-    from megatron.energon.epathlib import EPath
-
     gc_init_worker(worker_id)
 
     worker_seed = seed_per_worker[worker_id]
 
     SystemRng.seed(worker_seed)
-
-    EPath.prepare_forked_process()
 
 
 class SimpleSavableDatasetWrapper(BaseWrapperDataset[T, Tuple[int, int, T]], Generic[T]):

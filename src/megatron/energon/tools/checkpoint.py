@@ -240,11 +240,8 @@ def command_redist(
         raise click.ClickException("No input files provided")
 
     input_file_list = sorted(input_files, key=lambda x: natural_sort_key(x.name))
-    input_file_list = [input_file.absolute() for input_file in input_file_list]
 
     click.echo(f"Processing {len(input_file_list)} checkpoint files")
-
-    output_path = output_path.absolute()
 
     # Determine if we're processing a single global checkpoint or multiple rank files
     rsi = RankStateIterable(input_file_list)
