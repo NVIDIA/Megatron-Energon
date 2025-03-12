@@ -98,7 +98,7 @@ class TestVideoDecode(unittest.TestCase):
 
         # Decode using AVData
         av_data = AVData(stream)
-        video_tensor, _, _ = av_data.decode_video_frames(stream)
+        video_tensor, _, _ = av_data.decode_video_frames()
 
         assert (video_tensor == self.complete_video_tensor).all(), (
             "Energon decoded video does not match baseline"
@@ -113,7 +113,6 @@ class TestVideoDecode(unittest.TestCase):
         # Decode using AVData
         av_data = AVData(stream)
         video_tensor, _, _ = av_data.decode_video_frames(
-            stream,
             num_frames=64,
             out_frame_size=(224, 224),
         )
@@ -146,7 +145,6 @@ class TestVideoDecode(unittest.TestCase):
         # Decode using AVData
         av_data = AVData(stream)
         video_tensor, audio_tensor, metadata = av_data.decode_video_frames(
-            stream,
             num_frames=64,
             out_frame_size=(224, 224),
             decode_audio=True,
@@ -231,7 +229,7 @@ class TestAudioDecode(unittest.TestCase):
             stream = io.BytesIO(raw_bytes)
 
         av_data = AVData(stream)
-        _, audio_tensor, _ = av_data.decode_audio_samples(stream, num_clips=-1)
+        audio_tensor, _ = av_data.decode_audio_samples(num_clips=-1)
 
         assert (audio_tensor == self.complete_audio_tensor).all(), (
             "Energon decoded audio does not match baseline"
@@ -245,11 +243,7 @@ class TestAudioDecode(unittest.TestCase):
 
         # Decode using AVData
         av_data = AVData(stream)
-        _, audio_tensor, metadata = av_data.decode_audio_samples(
-            stream,
-            num_clips=5,
-            clip_duration=3,
-        )
+        audio_tensor, metadata = av_data.decode_audio_samples(num_clips=5, clip_duration=3)
 
         # Check audio tensor shape (5 clips, channels, 3 seconds at original sample rate)
         expected_samples = int(3 * metadata["audio_fps"])  # 3 seconds at original sample rate
@@ -272,8 +266,7 @@ class TestAudioDecode(unittest.TestCase):
             stream = io.BytesIO(raw_bytes)
 
         av_data = AVData(stream)
-        _, audio_tensor, metadata = av_data.decode_audio_samples(
-            stream,
+        audio_tensor, metadata = av_data.decode_audio_samples(
             num_clips=1,
             clip_duration=3,
             audio_format="wav",

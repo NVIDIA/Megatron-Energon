@@ -9,20 +9,25 @@ from sortedcontainers import SortedList
 from ..keyframeinfo import KeyframeInfo
 
 
+class CueTrackPositions:
+    track: int
+
+    def __init__(self, el: MasterElement) -> None:
+        for c in el:
+            if c.name == "CueTrack":
+                self.track = c.value
+
+
 class CuePoint:
+    time: int
+    track_positions: CueTrackPositions
+
     def __init__(self, el: MasterElement) -> None:
         for c in el:
             if c.name == "CueTime":
                 self.time = c.value
             if c.name == "CueTrackPositions":
                 self.track_positions = CueTrackPositions(c)
-
-
-class CueTrackPositions:
-    def __init__(self, el: MasterElement) -> None:
-        for c in el:
-            if c.name == "CueTrack":
-                self.track = c.value
 
 
 def parse_matroska(file: BitsType) -> SortedList:

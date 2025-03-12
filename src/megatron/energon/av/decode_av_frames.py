@@ -4,7 +4,7 @@
 import io
 from collections.abc import Collection, Iterator
 from fractions import Fraction
-from typing import Literal
+from typing import Literal, Optional, Union, overload
 
 # Try importing optional dependencies
 try:
@@ -47,7 +47,7 @@ class AVData:
         video_decode_audio: bool = False,
         video_num_frames: int = 64,
         video_out_frame_size: tuple[int, int] = (224, 224),
-    ) -> VideoData | None:
+    ) -> Optional[VideoData]:
         """Decode the audio/video data with the specified parameters.
 
         Args:
@@ -62,8 +62,7 @@ class AVData:
         """
         extension = self._get_extension()
         if extension in ("mov", "mp4", "webm", "mkv"):
-            media = self.decode_video_frames(
-                self.stream,
+            video, audio, metadata = self.decode_video_frames(
                 num_frames=video_num_frames,
                 out_frame_size=video_out_frame_size,
                 decode_audio=video_decode_audio,
@@ -71,8 +70,8 @@ class AVData:
                 clip_duration=audio_clip_duration,
             )
         elif extension in ("flac", "mp3", "wav"):
-            media = self.decode_audio_samples(
-                self.stream,
+            video = None
+            audio, metadata = self.decode_audio_samples(
                 num_clips=audio_num_clips,
                 clip_duration=audio_clip_duration,
                 audio_format=extension,
@@ -80,16 +79,14 @@ class AVData:
         else:
             return None
 
-        if media is not None:
-            frames = media[0].permute((0, 3, 1, 2)) if media[0] is not None else None
-            return VideoData(
-                frames=frames,
-                aframes=media[1],
-                info=media[2],
-            )
-        return None
+        video = video.permute((0, 3, 1, 2)) if video is not None else None
+        return VideoData(
+            frames=video,
+            aframes=audio,
+            info=metadata,
+        )
 
-    def _get_extension(self) -> str | None:
+    def _get_extension(self) -> Optional[str]:
         """Get the file extension from the raw data."""
         # Try to guess the file type using the first few bytes
         self.stream.seek(0)  # Reset stream position before guessing
@@ -100,12 +97,19 @@ class AVData:
 
     def get_frame_batch(
         self,
-        video_file: io.BytesIO,
         frame_indices: Collection[int],
-        out_frame_size: tuple = None,
-        seeker: Fastseek | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor, dict]:
+        out_frame_size: Optional[tuple[int, int]] = None,
+        seeker: Optional[Fastseek] = None,
+    ) -> tuple[torch.Tensor, dict]:
         """Gets a batch of frames at the given indices from a video file.
+
+        Args:
+            frame_indices: The indices of the frames to extract.
+            out_frame_size: The size of the output frames. If None, use the original frame size.
+            seeker: The seeker to use for seeking the video file. Defaults to a new seeker.
+
+        Returns:
+            A tuple containing the video frames and metadata
 
         NOTE: indices should be expressed in the correct units:
             - mp4/mov: frame number
@@ -113,11 +117,11 @@ class AVData:
             - other (probe mode): frame number
         """
         if seeker is None:
-            seeker: Fastseek = Fastseek(video_file)
+            seeker = Fastseek(self.stream)
 
-        video_file.seek(0)  # Reset the video stream so that pyav can read the entire container
+        self.stream.seek(0)  # Reset the video stream so that pyav can read the entire container
 
-        with av.open(video_file) as input_container:
+        with av.open(self.stream) as input_container:
             # Grab video & audio streams
             video_stream = input_container.streams.video[0]
             audio_stream = input_container.streams.audio[0]
@@ -178,15 +182,37 @@ class AVData:
 
         return video_tensor, metadata
 
+    @overload
     def decode_video_frames(
         self,
-        stream: io.BytesIO,
         num_frames: int = -1,
-        out_frame_size: tuple = None,
+        *,
+        out_frame_size: Optional[tuple[int, int]] = None,
+        decode_audio: Literal[True],
+        num_clips: int = 1,
+        clip_duration: int = 1,
+    ) -> tuple[torch.Tensor, torch.Tensor, dict]: ...
+
+    @overload
+    def decode_video_frames(
+        self,
+        num_frames: int = -1,
+        *,
+        out_frame_size: Optional[tuple[int, int]] = None,
+        decode_audio: Literal[False] = False,
+        num_clips: int = 1,
+        clip_duration: int = 1,
+    ) -> tuple[torch.Tensor, None, dict]: ...
+
+    def decode_video_frames(
+        self,
+        num_frames: int = -1,
+        *,
+        out_frame_size: Optional[tuple[int, int]] = None,
         decode_audio: bool = False,
         num_clips: int = 1,
         clip_duration: int = 1,
-    ):
+    ) -> tuple[torch.Tensor, Optional[torch.Tensor], dict]:
         """Decode video frames and optionally audio from a video file.
 
         This method extracts frames from a video file at evenly spaced intervals. If requested,
@@ -195,22 +221,17 @@ class AVData:
         seeking.
 
         Args:
-            stream (io.BytesIO): The video file data as a BytesIO stream.
-            num_frames (int, optional): Number of frames to extract. If -1, extracts all frames.
-                                      Defaults to -1.
-            out_frame_size (tuple, optional): Desired output frame size as (width, height).
-                                            If None, keeps original frame size. Defaults to None.
-            decode_audio (bool, optional): Whether to decode audio from the video.
-                                         Defaults to False.
-            num_clips (int, optional): Number of audio clips to extract if decode_audio is True.
-                                     If -1, extracts a single clip from the entire audio.
-                                     Defaults to 1.
-            clip_duration (int, optional): Duration of each audio clip in seconds.
-                                         Only used if decode_audio is True.
-                                         Defaults to 1.
+            num_frames: Number of frames to extract. If -1, extracts all frames. Defaults to -1.
+            out_frame_size: Desired output frame size as (width, height).
+                If None, keeps original frame size. Defaults to None.
+            decode_audio: Whether to decode audio from the video. Defaults to False.
+            num_clips: Number of audio clips to extract if decode_audio is True.
+                If -1, extracts a single clip from the entire audio. Defaults to 1.
+            clip_duration: Duration of each audio clip in seconds. Only used if decode_audio is
+                True. Defaults to 1.
 
         Returns:
-            tuple[torch.Tensor, torch.Tensor, dict]: A tuple containing:
+            A tuple containing:
                 - video_tensor: Tensor of shape [num_frames, height, width, channels] containing
                               the decoded video frames. Values are in range [0, 255].
                 - audio_tensor: Tensor containing the decoded audio clips if decode_audio is True,
@@ -221,11 +242,11 @@ class AVData:
             The method uses the Fastseek class to optimize frame seeking, which determines
             whether to use frame numbers or timestamps based on the container format.
         """
-        seeker: Fastseek = Fastseek(stream)
-        stream.seek(0)
+        seeker: Fastseek = Fastseek(self.stream)
+        self.stream.seek(0)
 
         # --- First, decode video frames ---
-        with av.open(stream) as input_container:
+        with av.open(self.stream) as input_container:
             if seeker.unit == "count":
                 if input_container.streams.video[0].frames != 0:
                     upper_bound = input_container.streams.video[0].frames - 1
@@ -249,14 +270,14 @@ class AVData:
 
         # Pick which video frames to extract
         frame_indices = np.linspace(0, upper_bound, num_frames, dtype=int).tolist()
-        video_tensor, metadata = self.get_frame_batch(stream, frame_indices, out_frame_size, seeker)
+        video_tensor, metadata = self.get_frame_batch(frame_indices, out_frame_size, seeker)
 
         # --- Then, if requested, decode audio using the same clip logic as decode_audio_samples ---
-        audio_tensor = torch.empty(0)
+        audio_tensor = None
         if decode_audio:
             # Open the container again to get sample_count and sampling_rate
-            stream.seek(0)  # Reset stream position
-            with av.open(stream) as input_container:
+            self.stream.seek(0)  # Reset stream position
+            with av.open(self.stream) as input_container:
                 audio_stream = input_container.streams.audio[0]
                 sample_count = audio_stream.duration
                 sampling_rate = audio_stream.rate
@@ -270,11 +291,8 @@ class AVData:
                 )
 
             # Actually read the audio clips
-            stream.seek(0)  # Reset stream position
-            audio_tensor, audio_metadata = self.get_audio_batch(
-                stream,
-                clip_indices,
-            )
+            self.stream.seek(0)  # Reset stream position
+            audio_tensor, audio_metadata = self.get_audio_batch(clip_indices)
             # Merge any extra audio metadata
             metadata.update(audio_metadata)
 
@@ -315,7 +333,6 @@ class AVData:
 
     def get_audio_batch(
         self,
-        audio_file: io.BytesIO,
         clip_indices: list[list[int]],
     ) -> tuple[torch.Tensor, dict]:
         """
@@ -323,15 +340,14 @@ class AVData:
         Indices correspond to the original sample rate.
 
         Args:
-            audio_file: The audio file as a BytesIO stream
             clip_indices: List of [start_idx, end_idx] pairs for each clip
 
         Returns:
             Tuple of (audio_tensor, metadata) where audio_tensor has shape [num_clips, channels, samples]
         """
-        audio_file.seek(0)
+        self.stream.seek(0)
 
-        with av.open(audio_file) as input_container:
+        with av.open(self.stream) as input_container:
             audio_stream = input_container.streams.audio[0]
             orig_rate = audio_stream.sample_rate
             duration_per_sample = 1 / orig_rate
@@ -382,7 +398,6 @@ class AVData:
 
     def decode_audio_samples(
         self,
-        stream: io.BytesIO,
         num_clips: int = 1,
         clip_duration: int = 1,
         audio_format: str = "flac",
@@ -394,15 +409,12 @@ class AVData:
         decoding. The method can extract multiple clips of specified duration from the audio.
 
         Args:
-            stream (io.BytesIO): The audio file data as a BytesIO stream.
-            num_clips (int, optional): Number of audio clips to extract. If -1, extracts a
-                                     single clip from the entire audio. Defaults to 1.
-            clip_duration (int, optional): Duration of each clip in seconds. Defaults to 1.
-            audio_format (str, optional): Format of the input audio file. Supported formats
-                                        are "wav", "flac", and "mp3". Defaults to "flac".
+            num_clips: Number of audio clips to extract. If -1, extracts a single clip from the entire audio. Defaults to 1.
+            clip_duration: Duration of each clip in seconds. Defaults to 1.
+            audio_format: Format of the input audio file. Supported formats are "wav", "flac", and "mp3". Defaults to "flac".
 
         Returns:
-            tuple[torch.Tensor, torch.Tensor, dict]: A tuple containing:
+            A tuple containing:
                 - video_tensor: None (since this is audio-only decoding)
                 - audio_tensor: Tensor of shape [num_clips, channels, samples] containing
                               the decoded audio clips. For WAV files, a single clip is
@@ -415,7 +427,7 @@ class AVData:
             and get_audio_batch to extract the clips.
         """
         if audio_format == "wav":
-            with sf.SoundFile(stream) as f:
+            with sf.SoundFile(self.stream) as f:
                 sample_rate = f.samplerate
                 target_length_in_samples = min(f.frames, int(clip_duration * sample_rate))
 
@@ -426,7 +438,7 @@ class AVData:
                 audio_tensor = torch.from_numpy(waveform)
 
         else:
-            with av.open(stream) as input_container:
+            with av.open(self.stream) as input_container:
                 sample_count = input_container.streams.audio[0].duration
                 sampling_rate = input_container.streams.audio[0].rate
 
@@ -438,10 +450,10 @@ class AVData:
                     sampling_rate, sample_count, num_clips, clip_duration
                 )
 
-            stream.seek(0)  # Reset stream position
-            audio_tensor, metadata = self.get_audio_batch(stream, clip_indices)
+            self.stream.seek(0)  # Reset stream position
+            audio_tensor, metadata = self.get_audio_batch(clip_indices)
 
-        return None, audio_tensor, metadata
+        return audio_tensor, metadata
 
 
 class AVDecoder:
@@ -503,7 +515,7 @@ class AVDecoder:
         """
         return AVData(io.BytesIO(data))
 
-    def __call__(self, key: str, data: bytes) -> VideoData | AVData | None:
+    def __call__(self, key: str, data: bytes) -> Optional[Union[VideoData, AVData]]:
         """
         Extract the video or audio data from default media extensions.
 
@@ -516,7 +528,10 @@ class AVDecoder:
             If video_decode is "AVData", returns an AVData instance for flexible decoding.
             Returns None if decoding failed or file type is not supported.
         """
-        if not any(key == ext or key.endswith("." + ext) for ext in ("mp4", "mov", "webm", "mkv", "flac", "mp3", "wav")):
+        if not any(
+            key == ext or key.endswith("." + ext)
+            for ext in ("mp4", "mov", "webm", "mkv", "flac", "mp3", "wav")
+        ):
             return None
         av_data = self.read_av_data(key, data)
         if av_data is None:

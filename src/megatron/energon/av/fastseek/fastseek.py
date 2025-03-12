@@ -1,5 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
+from typing import Literal, Optional
+
 import filetype
 from bitstring.bits import BitsType
 
@@ -26,13 +28,17 @@ class Fastseek:
     significantly faster than sequential decoding.
     """
 
+    keyframes: dict[int, list[KeyframeInfo]]
+    unit: Literal["count", "time"]
+    mime: str
+
     def __init__(self, file: BitsType, probe: bool = False) -> None:
         """Initialize the Fastseek object.
 
         Args:
-            file (BitsType): The video file data as a bitstring BitsType object. This should contain the raw bytes of the video file.
-            probe (bool, optional): If True, use ffmpeg to probe the stream without decoding. This is slower but works with any container format.
-                                  If False (default), attempt to parse the container format directly. Only works with MP4/MOV and Matroska/WebM.
+            file: The video file data as a bitstring BitsType object. This should contain the raw bytes of the video file.
+            probe: If True, use ffmpeg to probe the stream without decoding. This is slower but works with any container format.
+                   If False (default), attempt to parse the container format directly. Only works with MP4/MOV and Matroska/WebM.
 
         Raises:
             ValueError: If the file type cannot be determined or if the container format is not supported (when probe=False).
@@ -59,7 +65,7 @@ class Fastseek:
                     f"Unsupported container: {ftype.mime} (hint: try passing probe=True to the Fastseek constructor)"
                 )
 
-    def should_seek(self, current: int, target: int, stream: int = 0) -> KeyframeInfo | None:
+    def should_seek(self, current: int, target: int, stream: int = 0) -> Optional[KeyframeInfo]:
         """Determine if seeking to a keyframe is necessary to reach the target frame.
 
         This method helps optimize video seeking by determining whether a seek operation
@@ -68,21 +74,21 @@ class Fastseek:
         the current position would be less efficient).
 
         Args:
-            current (int): The current frame number or timestamp (depending on container format)
-            target (int): The desired frame number or timestamp to seek to
-            stream (int, optional): The video stream index to use. Defaults to 0.
+            current: The current frame number or timestamp (depending on container format)
+            target: The desired frame number or timestamp to seek to
+            stream: The video stream index to use. Defaults to 0.
 
         Returns:
-            KeyframeInfo | None: Information about the nearest keyframe if seeking would be beneficial,
-                               or None if sequential decoding from current position is more efficient.
-                               The KeyframeInfo contains the keyframe's position and timing information.
+            Information about the nearest keyframe if seeking would be beneficial,
+            or None if sequential decoding from current position is more efficient.
+            The KeyframeInfo contains the keyframe's position and timing information.
 
         Note:
             The units for current and target depend on the container format:
             - For MP4/MOV: frame numbers (count-based)
             - For Matroska/WebM: timestamps (time-based)
         """
-        nearest_iframe: int = self.nearest_keyframe(target, stream)
+        nearest_iframe: KeyframeInfo = self.nearest_keyframe(target, stream)
         return nearest_iframe if current < nearest_iframe.index <= target else None
 
     def nearest_keyframe(self, target: int, stream: int = 0) -> KeyframeInfo:
@@ -93,14 +99,14 @@ class Fastseek:
         optimal starting point for decoding to reach a specific frame.
 
         Args:
-            target (int): The target frame number or timestamp to find the nearest keyframe for.
-                         The unit (frame count or timestamp) depends on the container format.
-            stream (int, optional): The video stream index to use. Defaults to 0.
-                                  Used when the container has multiple video streams.
+            target: The target frame number or timestamp to find the nearest keyframe for.
+                The unit (frame count or timestamp) depends on the container format.
+            stream: The video stream index to use. Defaults to 0.
+                Used when the container has multiple video streams.
 
         Returns:
-            KeyframeInfo: Information about the nearest keyframe before the target position.
-                         Contains details like the keyframe's position, timestamp, and file offset.
+            Information about the nearest keyframe before the target position.
+            Contains details like the keyframe's position, timestamp, and file offset.
 
         Note:
             The implementation currently uses a list-based approach for stream selection
