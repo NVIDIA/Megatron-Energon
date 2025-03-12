@@ -1504,7 +1504,6 @@ class TestDataset(unittest.TestCase):
             ),
             checkpoint_every_min_n_samples=1,
             checkpoint_every_sec=0,
-            n_checkpoints=4,
         )
         batches = list(zip(range(40), loader))
         print([batch.__key__ for idx, batch in batches])
@@ -1525,7 +1524,6 @@ class TestDataset(unittest.TestCase):
             ),
             checkpoint_every_min_n_samples=1,
             checkpoint_every_sec=0,
-            n_checkpoints=4,
         )
 
         batches = list(zip(range(40), loader_r0))
@@ -1551,7 +1549,6 @@ class TestDataset(unittest.TestCase):
             ),
             checkpoint_every_min_n_samples=1,
             checkpoint_every_sec=0,
-            n_checkpoints=4,
         )
         loader_r0.restore_state_rank(state)
 

@@ -176,7 +176,6 @@ class TestDataset(unittest.TestCase):
             train_dataset,
             checkpoint_every_sec=0,
             checkpoint_every_min_n_samples=1,
-            n_checkpoints=5,
         )
 
         data1a = list(zip(train_loader, range(3)))  # noqa: F841. Load 3 samples
@@ -197,7 +196,6 @@ class TestDataset(unittest.TestCase):
             ),
             checkpoint_every_sec=0,
             checkpoint_every_min_n_samples=1,
-            n_checkpoints=5,
         )
         train_loader.restore_state_rank(state1)
         data2_restore = list(zip(train_loader, range(5)))  # Load 5 samples

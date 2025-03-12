@@ -357,7 +357,6 @@ class TestDataset(unittest.TestCase):
             train_dataset,
             checkpoint_every_sec=0,
             checkpoint_every_min_n_samples=1,
-            n_checkpoints=5,
         )
 
         data = list(zip(range(2 * 55), train_loader))
@@ -399,7 +398,6 @@ class TestDataset(unittest.TestCase):
             ),
             checkpoint_every_sec=0,
             checkpoint_every_min_n_samples=1,
-            n_checkpoints=5,
         )
 
         train_loader.restore_state_rank(state)
@@ -470,7 +468,6 @@ class TestDataset(unittest.TestCase):
             train_dataset,
             checkpoint_every_sec=0,
             checkpoint_every_min_n_samples=1,
-            n_checkpoints=5,
         )
 
         data = list(zip(range(2 * 55), train_loader))
@@ -551,7 +548,6 @@ class TestDataset(unittest.TestCase):
             train_dataset,
             checkpoint_every_sec=0,
             checkpoint_every_min_n_samples=1,
-            n_checkpoints=5,
         )
 
         data = list(zip(range(2 * 55), train_loader))
@@ -711,7 +707,6 @@ class TestDataset(unittest.TestCase):
             train_dataset,
             checkpoint_every_sec=0,
             checkpoint_every_min_n_samples=1,
-            n_checkpoints=5,
         )
 
         data = list(zip(range(2 * 55), train_loader))
@@ -828,7 +823,6 @@ class TestDataset(unittest.TestCase):
             train_dataset,
             checkpoint_every_sec=0,
             checkpoint_every_min_n_samples=1,
-            n_checkpoints=5,
         )
 
         data = list(enumerate(train_loader))
@@ -890,7 +884,6 @@ class TestDataset(unittest.TestCase):
             ),
             checkpoint_every_sec=0,
             checkpoint_every_min_n_samples=1,
-            n_checkpoints=5,
         )
         train_loader.restore_state_rank(state1)
         data2_restore = list(enumerate(train_loader))
@@ -966,7 +959,6 @@ class TestDataset(unittest.TestCase):
             train_dataset,
             checkpoint_every_sec=0,
             checkpoint_every_min_n_samples=1,
-            n_checkpoints=5,
         )
 
         data = list(enumerate(train_loader))
@@ -1003,7 +995,6 @@ class TestDataset(unittest.TestCase):
             ),
             checkpoint_every_sec=0,
             checkpoint_every_min_n_samples=1,
-            n_checkpoints=5,
         )
 
         data1 = list(zip(range(95), train_loader))
@@ -1022,7 +1013,6 @@ class TestDataset(unittest.TestCase):
             ),
             checkpoint_every_sec=0,
             checkpoint_every_min_n_samples=1,
-            n_checkpoints=5,
         )
         train_loader.restore_state_rank(state1)
         data2_restore = list(enumerate(train_loader))
@@ -1058,7 +1048,6 @@ class TestDataset(unittest.TestCase):
             ),
             checkpoint_every_sec=0,
             checkpoint_every_min_n_samples=1,
-            n_checkpoints=5,
         )
 
         ds1_counter = 0
@@ -1086,7 +1075,6 @@ class TestDataset(unittest.TestCase):
             ),
             checkpoint_every_sec=0,
             checkpoint_every_min_n_samples=1,
-            n_checkpoints=5,
         )
         train_loader.restore_state_rank(state1)
         data2_restore = list(enumerate(train_loader))

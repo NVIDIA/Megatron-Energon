@@ -255,7 +255,6 @@ class TestDataset(unittest.TestCase):
             ),
             checkpoint_every_sec=0,
             checkpoint_every_min_n_samples=1,
-            n_checkpoints=4,
         )
         samples = [s.__keys__ for idx, s in zip(range(100), loader)]
 
@@ -278,7 +277,6 @@ class TestDataset(unittest.TestCase):
             ),
             checkpoint_every_sec=0,
             checkpoint_every_min_n_samples=1,
-            n_checkpoints=4,
         )
 
         loader.restore_state_rank(state)
@@ -307,7 +305,6 @@ class TestDataset(unittest.TestCase):
             ),
             checkpoint_every_sec=0,
             checkpoint_every_min_n_samples=1,
-            n_checkpoints=4,
         )
         samples = [s.__keys__ for idx, s in zip(range(100), loader)]
 
