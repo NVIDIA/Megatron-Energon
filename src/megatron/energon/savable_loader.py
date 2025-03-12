@@ -659,12 +659,12 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
 
         num_procs = max(self.worker_config.num_workers, 1)
 
+        if n_checkpoints is None:
+            n_checkpoints = prefetch_factor * num_procs + 1
+
         if self.worker_config.num_workers > 0:
             if checkpoint_every_min_n_samples is None:
                 checkpoint_every_min_n_samples = self.worker_config.num_workers * 2
-
-            if n_checkpoints is None:
-                n_checkpoints = prefetch_factor * num_procs + 1
 
             dataset = SavableDatasetWrapper(
                 dataset,
