@@ -612,7 +612,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
         *,
         checkpoint_every_sec: float = 60,
         checkpoint_every_min_n_samples: Optional[int] = None,
-        n_checkpoints: int = 2,
+        n_checkpoints: Optional[int] = None,
         gc_collect_every_n_steps: int = GC_DEFAULT_EVERY_N_ITER,
         gc_freeze_at_start: bool = True,
         prefetch_factor: int = 2,
@@ -630,7 +630,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
             checkpoint_every_min_n_samples: Overwrites the minimum number of samples between
                 checkpoints. Defaults to `number of workers * 2`. Only applies if using workers.
             n_checkpoints: The number of checkpoints to keep in memory. Only applies if using
-                workers.
+                workers. If None, computes a suitable value.
             gc_collect_every_n_steps: The number of steps after which the garbage collector is
                 called. As we're usually handling large (but few) tensors here, and the python
                 garbage collection is already full of objects just by importing, this can improve
@@ -657,9 +657,15 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
             multiprocessing.Queue() for _ in range(self.worker_config.num_workers)
         ]
 
+        num_procs = max(self.worker_config.num_workers, 1)
+
         if self.worker_config.num_workers > 0:
             if checkpoint_every_min_n_samples is None:
                 checkpoint_every_min_n_samples = self.worker_config.num_workers * 2
+
+            if n_checkpoints is None:
+                n_checkpoints = prefetch_factor * num_procs + 2
+
             dataset = SavableDatasetWrapper(
                 dataset,
                 self.worker_config,
@@ -672,9 +678,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
         else:
             dataset = SimpleSavableDatasetWrapper(dataset, self.worker_config)
 
-        num_workers = max(self.worker_config.num_workers, 1)
-
-        self._worker_sample_counters = [-1] * num_workers
+        self._worker_sample_counters = [-1] * num_procs
 
         kwargs = {}
         if self.worker_config.num_workers > 0:
@@ -684,7 +688,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
         # Assert that prefetch_factor works well with num_checkpoints.
         # This ensures that the oldest checkpoint is old enough to cover
         # all the buffered samples in the torch dataloader.
-        assert prefetch_factor * num_workers + 1 <= n_checkpoints, (
+        assert prefetch_factor * num_procs + 1 <= n_checkpoints, (
             "When increasing prefetch_factor, also increase n_checkpoints, so that "
             "the number of checkpoints is at least as large as num_workers * prefetch_factor + 1"
         )
