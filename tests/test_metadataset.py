@@ -900,7 +900,6 @@ class TestDataset(unittest.TestCase):
                 ),
                 checkpoint_every_sec=0.5,
                 checkpoint_every_min_n_samples=1,
-                n_checkpoints=5,
             )
 
         # Train mode dataset
