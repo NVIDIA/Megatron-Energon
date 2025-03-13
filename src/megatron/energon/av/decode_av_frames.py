@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import io
-from collections.abc import Collection, Iterator
+from collections.abc import Iterator
 from fractions import Fraction
-from typing import Literal, Optional, Union, overload
+from typing import Literal, Optional, Sequence, Union, overload
 
 # Try importing optional dependencies
 try:
@@ -98,7 +98,7 @@ class AVData:
 
     def get_frame_batch(
         self,
-        frame_indices: Collection[int],
+        frame_indices: Sequence[int],
         out_frame_size: Optional[tuple[int, int]] = None,
         seeker: Optional[Fastseek] = None,
     ) -> tuple[torch.Tensor, dict]:
@@ -202,10 +202,10 @@ class AVData:
         num_frames: int = -1,
         *,
         out_frame_size: Optional[tuple[int, int]] = None,
-        decode_audio: Literal[False] = False,
+        decode_audio: bool = False,
         num_clips: int = 1,
         clip_duration: int = 1,
-    ) -> tuple[torch.Tensor, None, dict]: ...
+    ) -> tuple[torch.Tensor, Optional[torch.Tensor], dict]: ...
 
     def decode_video_frames(
         self,
@@ -284,10 +284,11 @@ class AVData:
                 audio_stream = input_container.streams.audio[0]
                 sample_count = audio_stream.duration
                 sampling_rate = audio_stream.rate
+                assert sample_count is not None
 
             if num_clips == -1:
                 # Single clip from the entire audio
-                clip_indices = [[0, sample_count - 1]]
+                clip_indices = [(0, sample_count - 1)]
             else:
                 clip_indices = self.get_clip_indices(
                     sampling_rate, sample_count, num_clips, clip_duration
@@ -307,7 +308,7 @@ class AVData:
         total_samples: int,
         num_clips: int,
         clip_duration_sec: int,
-    ) -> list[list[int]]:
+    ) -> list[tuple[int, int]]:
         """Calculate indices for audio clips based on sampling rate and duration.
 
         Args:
@@ -317,13 +318,13 @@ class AVData:
             clip_duration_sec: Duration of each clip in seconds
 
         Returns:
-            List of lists containing [start_idx, end_idx] for each clip
+            List of lists containing (start_idx, end_idx) for each clip
         """
         clip_samples = int(sampling_rate * clip_duration_sec)
         clip_samples = min(clip_samples, total_samples)  # Don't exceed total length
 
         if num_clips == 1:
-            return [[0, clip_samples - 1]]
+            return [(0, clip_samples - 1)]
 
         # If total length can accommodate all clips without overlap, space them out evenly
         if num_clips * clip_samples <= total_samples:
@@ -332,18 +333,18 @@ class AVData:
             # Overlap: distribute clips so first starts at 0 and last ends at total_samples - clip_samples
             spacing = (total_samples - clip_samples) // (num_clips - 1)
 
-        return [[i * spacing, i * spacing + clip_samples - 1] for i in range(num_clips)]
+        return [(i * spacing, i * spacing + clip_samples - 1) for i in range(num_clips)]
 
     def get_audio_batch(
         self,
-        clip_indices: list[list[int]],
+        clip_indices: list[tuple[int, int]],
     ) -> tuple[torch.Tensor, dict]:
         """
         Gets a batch of audio samples at the given indices from an audio file.
         Indices correspond to the original sample rate.
 
         Args:
-            clip_indices: List of [start_idx, end_idx] pairs for each clip
+            clip_indices: List of (start_idx, end_idx) pairs for each clip
 
         Returns:
             Tuple of (audio_tensor, metadata) where audio_tensor has shape [num_clips, channels, samples]
@@ -355,6 +356,10 @@ class AVData:
             orig_rate = audio_stream.sample_rate
             duration_per_sample = 1 / orig_rate
             metadata = {"audio_fps": orig_rate}
+
+            if len(clip_indices) == 0:
+                # Empty result
+                return torch.zeros(0, audio_stream.channels, 0), metadata
 
             clips = []
             expected_samples = (
@@ -444,10 +449,11 @@ class AVData:
             with av.open(self.stream) as input_container:
                 sample_count = input_container.streams.audio[0].duration
                 sampling_rate = input_container.streams.audio[0].rate
+                assert sample_count is not None
 
             if num_clips == -1:
                 num_clips = 1
-                clip_indices = [[0, sample_count - 1]]
+                clip_indices = [(0, sample_count - 1)]
             else:
                 clip_indices = self.get_clip_indices(
                     sampling_rate, sample_count, num_clips, clip_duration
