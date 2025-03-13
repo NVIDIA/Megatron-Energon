@@ -126,14 +126,18 @@ class AVData:
         with av.open(self.stream) as input_container:
             # Grab video & audio streams
             video_stream = input_container.streams.video[0]
-            audio_stream = input_container.streams.audio[0]
+            if len(input_container.streams.audio) > 0:
+                audio_stream = input_container.streams.audio[0]
+                audio_fps = audio_stream.sample_rate or 0
+            else:
+                audio_fps = 0
 
             # enable multi-threaded decode for video
             video_stream.thread_type = 3
 
             # Collect metadata
             video_fps = float(video_stream.average_rate) if video_stream.average_rate else 0.0
-            audio_fps = audio_stream.sample_rate or 0
+            
             metadata = {"video_fps": video_fps, "audio_fps": audio_fps}
 
             # Pre-calculate timing info for video
