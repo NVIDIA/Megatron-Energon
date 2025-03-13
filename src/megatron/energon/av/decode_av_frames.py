@@ -59,6 +59,8 @@ class AVData:
 
         Returns:
             VideoData containing the decoded frames and metadata, or None if decoding failed
+            The video tensor is in the shape (frames, channels, height, width)
+            The audio tensor is in the shape (channels, samples)
         """
         extension = self._get_extension()
         if extension in ("mov", "mp4", "webm", "mkv"):
@@ -79,7 +81,6 @@ class AVData:
         else:
             return None
 
-        video = video.permute((0, 3, 1, 2)) if video is not None else None
         return VideoData(
             frames=video,
             aframes=audio,
@@ -110,6 +111,7 @@ class AVData:
 
         Returns:
             A tuple containing the video frames and metadata
+            The video tensor is in the shape (frames, channels, height, width)
 
         NOTE: indices should be expressed in the correct units:
             - mp4/mov: frame number
@@ -177,9 +179,10 @@ class AVData:
 
                 previous_frame_index = target_frame_index + 1
 
-        # Stack video frames along dim=0 => [batch_size, channels, height, width]
+        # Stack video frames along dim=0 => [frames, channels, height, width]
         video_tensor = torch.stack(frames)
-
+        # Convert video tensor from (frames, height, width, channels) to (frames, channels, height, width)
+        video_tensor = video_tensor.permute((0, 3, 1, 2))
         return video_tensor, metadata
 
     @overload
@@ -232,7 +235,7 @@ class AVData:
 
         Returns:
             A tuple containing:
-                - video_tensor: Tensor of shape [num_frames, height, width, channels] containing
+                - video_tensor: Tensor of shape [num_frames, channels, height, width] containing
                               the decoded video frames. Values are in range [0, 255].
                 - audio_tensor: Tensor containing the decoded audio clips if decode_audio is True,
                               otherwise an empty tensor.

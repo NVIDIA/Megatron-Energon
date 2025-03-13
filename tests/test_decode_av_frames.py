@@ -30,7 +30,7 @@ def load_video_to_tensor(video_path: str) -> torch.Tensor:
         video_path: Path to the video file
 
     Returns:
-        Tensor of shape [num_frames, height, width, channels]
+        Tensor of shape [num_frames, channels, height, width]
     """
     container = av.open(video_path)
     frames = []
@@ -40,6 +40,7 @@ def load_video_to_tensor(video_path: str) -> torch.Tensor:
         frames.append(torch.from_numpy(frame.to_ndarray()))
 
     video_tensor = torch.stack(frames)
+    video_tensor = video_tensor.permute(0, 3, 1, 2)
     return video_tensor
 
 
@@ -100,6 +101,7 @@ class TestVideoDecode(unittest.TestCase):
         av_data = AVData(stream)
         video_tensor, _, _ = av_data.decode_video_frames()
 
+        print(video_tensor.shape)
         assert (video_tensor == self.complete_video_tensor).all(), (
             "Energon decoded video does not match baseline"
         )
@@ -123,13 +125,7 @@ class TestVideoDecode(unittest.TestCase):
         ]
         # Now resize the baseline frames
         resize = transforms.Resize((224, 224))
-        strided_baseline_tensor = strided_baseline_tensor.permute(
-            0, 3, 1, 2
-        )  # b, h, w, c -> b, c, h, w
         strided_resized_baseline_tensor = resize(strided_baseline_tensor)
-        strided_resized_baseline_tensor = strided_resized_baseline_tensor.permute(
-            0, 2, 3, 1
-        )  # b, c, h, w -> b, h, w, c
 
         # We allow small numerical differences due to different resize implementations
         assert are_resized_frames_close(
@@ -158,13 +154,7 @@ class TestVideoDecode(unittest.TestCase):
         ]
         # Now resize the baseline frames
         resize = transforms.Resize((224, 224))
-        strided_baseline_tensor = strided_baseline_tensor.permute(
-            0, 3, 1, 2
-        )  # b, h, w, c -> b, c, h, w
         strided_resized_baseline_tensor = resize(strided_baseline_tensor)
-        strided_resized_baseline_tensor = strided_resized_baseline_tensor.permute(
-            0, 2, 3, 1
-        )  # b, c, h, w -> b, h, w, c
 
         # We allow small numerical differences due to different resize implementations
         assert are_resized_frames_close(
