@@ -27,7 +27,7 @@ jobs:
       run: |
         uv python pin 3.9
 
-        - name: Install dependencies
+    - name: Install dependencies
       run: |
         just dev-sync
 
