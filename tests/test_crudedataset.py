@@ -3,6 +3,7 @@
 
 """This module defines tests for crude datasets."""
 
+import gc
 import logging
 import pickle
 import sys
@@ -149,6 +150,7 @@ class TestDataset(unittest.TestCase):
 
     def tearDown(self):
         # Remove all temporary files
+        gc.collect()
         self.temp_dir.cleanup()
 
     @staticmethod
