@@ -140,7 +140,7 @@ class AVData:
 
             # Collect metadata
             video_fps = float(video_stream.average_rate) if video_stream.average_rate else 0.0
-            
+
             metadata = {"video_fps": video_fps, "audio_fps": audio_fps}
 
             # Pre-calculate timing info for video
