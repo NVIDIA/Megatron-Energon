@@ -23,7 +23,11 @@ jobs:
     - name: Install just
       uses: ./.github/actions/setupjust
 
-    - name: Install dependencies
+    - name: Get min python version
+      run: |
+        uv python pin 3.9
+
+        - name: Install dependencies
       run: |
         just dev-sync
 
