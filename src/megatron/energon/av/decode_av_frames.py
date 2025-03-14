@@ -132,8 +132,11 @@ class AVData:
             else:
                 audio_fps = 0
 
-            # enable multi-threaded decode for video
-            video_stream.thread_type = 3
+            # Enable multi-threaded decode for video
+            # TODO: This causes a bug which leads to a deadlock in ffmpeg when deallocating the object.
+            # Thus, disable for now.
+            # video_stream.thread_type = 3
+            video_stream.thread_type = 0
 
             # Collect metadata
             video_fps = float(video_stream.average_rate) if video_stream.average_rate else 0.0
