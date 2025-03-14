@@ -30,7 +30,7 @@ def load_video_to_tensor(video_path: str) -> torch.Tensor:
         video_path: Path to the video file
 
     Returns:
-        Tensor of shape [num_frames, height, width, channels]
+        Tensor of shape [num_frames, channels, height, width]
     """
     container = av.open(video_path)
     frames = []
@@ -40,6 +40,7 @@ def load_video_to_tensor(video_path: str) -> torch.Tensor:
         frames.append(torch.from_numpy(frame.to_ndarray()))
 
     video_tensor = torch.stack(frames)
+    video_tensor = video_tensor.permute(0, 3, 1, 2)
     return video_tensor
 
 
@@ -98,8 +99,9 @@ class TestVideoDecode(unittest.TestCase):
 
         # Decode using AVData
         av_data = AVData(stream)
-        video_tensor, _, _ = av_data.decode_video_frames(stream)
+        video_tensor, _, _ = av_data.decode_video_frames()
 
+        print(video_tensor.shape)
         assert (video_tensor == self.complete_video_tensor).all(), (
             "Energon decoded video does not match baseline"
         )
@@ -113,7 +115,6 @@ class TestVideoDecode(unittest.TestCase):
         # Decode using AVData
         av_data = AVData(stream)
         video_tensor, _, _ = av_data.decode_video_frames(
-            stream,
             num_frames=64,
             out_frame_size=(224, 224),
         )
@@ -124,13 +125,7 @@ class TestVideoDecode(unittest.TestCase):
         ]
         # Now resize the baseline frames
         resize = transforms.Resize((224, 224))
-        strided_baseline_tensor = strided_baseline_tensor.permute(
-            0, 3, 1, 2
-        )  # b, h, w, c -> b, c, h, w
         strided_resized_baseline_tensor = resize(strided_baseline_tensor)
-        strided_resized_baseline_tensor = strided_resized_baseline_tensor.permute(
-            0, 2, 3, 1
-        )  # b, c, h, w -> b, h, w, c
 
         # We allow small numerical differences due to different resize implementations
         assert are_resized_frames_close(
@@ -146,7 +141,6 @@ class TestVideoDecode(unittest.TestCase):
         # Decode using AVData
         av_data = AVData(stream)
         video_tensor, audio_tensor, metadata = av_data.decode_video_frames(
-            stream,
             num_frames=64,
             out_frame_size=(224, 224),
             decode_audio=True,
@@ -160,13 +154,7 @@ class TestVideoDecode(unittest.TestCase):
         ]
         # Now resize the baseline frames
         resize = transforms.Resize((224, 224))
-        strided_baseline_tensor = strided_baseline_tensor.permute(
-            0, 3, 1, 2
-        )  # b, h, w, c -> b, c, h, w
         strided_resized_baseline_tensor = resize(strided_baseline_tensor)
-        strided_resized_baseline_tensor = strided_resized_baseline_tensor.permute(
-            0, 2, 3, 1
-        )  # b, c, h, w -> b, h, w, c
 
         # We allow small numerical differences due to different resize implementations
         assert are_resized_frames_close(
@@ -231,7 +219,7 @@ class TestAudioDecode(unittest.TestCase):
             stream = io.BytesIO(raw_bytes)
 
         av_data = AVData(stream)
-        _, audio_tensor, _ = av_data.decode_audio_samples(stream, num_clips=-1)
+        audio_tensor, _ = av_data.decode_audio_samples(num_clips=-1)
 
         assert (audio_tensor == self.complete_audio_tensor).all(), (
             "Energon decoded audio does not match baseline"
@@ -245,11 +233,7 @@ class TestAudioDecode(unittest.TestCase):
 
         # Decode using AVData
         av_data = AVData(stream)
-        _, audio_tensor, metadata = av_data.decode_audio_samples(
-            stream,
-            num_clips=5,
-            clip_duration=3,
-        )
+        audio_tensor, metadata = av_data.decode_audio_samples(num_clips=5, clip_duration=3)
 
         # Check audio tensor shape (5 clips, channels, 3 seconds at original sample rate)
         expected_samples = int(3 * metadata["audio_fps"])  # 3 seconds at original sample rate
@@ -272,8 +256,7 @@ class TestAudioDecode(unittest.TestCase):
             stream = io.BytesIO(raw_bytes)
 
         av_data = AVData(stream)
-        _, audio_tensor, metadata = av_data.decode_audio_samples(
-            stream,
+        audio_tensor, metadata = av_data.decode_audio_samples(
             num_clips=1,
             clip_duration=3,
             audio_format="wav",

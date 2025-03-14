@@ -180,47 +180,41 @@ def parse_mpeg(file: BitsType) -> dict[int, SortedList]:
     start_offsets = defaultdict(lambda: 0)
     current_track = -1
     for a in parse_atoms(file):
-        match a.name:
-            case "tkhd":
-                a: TKHD
-                current_track = a.track_id
-
-            case "stts":
-                a: STTS
-                decode_timestamps[current_track] = list(
-                    accumulate(
-                        sum(
-                            [
-                                [entry["sample_duration"]] * entry["sample_count"]
-                                for entry in a.time_to_sample_table
-                            ],
-                            [0],
-                        )
+        if a.name == "tkhd":
+            a: TKHD
+            current_track = a.track_id
+        elif a.name == "stts":
+            a: STTS
+            decode_timestamps[current_track] = list(
+                accumulate(
+                    sum(
+                        [
+                            [entry["sample_duration"]] * entry["sample_count"]
+                            for entry in a.time_to_sample_table
+                        ],
+                        [0],
                     )
                 )
-
-            case "ctts":
-                a: CTTS
-                presentation_time_offsets[current_track] = sum(
-                    [
-                        [entry["composition_offset"]] * entry["sample_count"]
-                        for entry in a.composition_offset_table
-                    ],
-                    [],
-                )
-
-            case "stss":
-                a: STSS
-                sync_samples[current_track] = [ss["number"] - 1 for ss in a.sync_sample_table]
-
-            case "elst":
-                # NOTE the "media_time" here is a "delay" between decoding and presenting the first sample.
-                # We follow the ffmpeg convention that the first frame displays at time 0 which means we should
-                # *subtract* this offset from the decoding time values rather than adding it to presentation time values
-                # TODO there can be more than one of these, figure out how to handle it
-                a: ELST
-                start_offsets[current_track] = -a.edit_list_table[0]["media_time"]
-
+            )
+        elif a.name == "ctts":
+            a: CTTS
+            presentation_time_offsets[current_track] = sum(
+                [
+                    [entry["composition_offset"]] * entry["sample_count"]
+                    for entry in a.composition_offset_table
+                ],
+                [],
+            )
+        elif a.name == "stss":
+            a: STSS
+            sync_samples[current_track] = [ss["number"] - 1 for ss in a.sync_sample_table]
+        elif a.name == "elst":
+            # NOTE the "media_time" here is a "delay" between decoding and presenting the first sample.
+            # We follow the ffmpeg convention that the first frame displays at time 0 which means we should
+            # *subtract* this offset from the decoding time values rather than adding it to presentation time values
+            # TODO there can be more than one of these, figure out how to handle it
+            a: ELST
+            start_offsets[current_track] = -a.edit_list_table[0]["media_time"]
     keyframes = defaultdict(lambda: SortedList())
     for track_id in sync_samples.keys():
         for keyframe_number in sync_samples[track_id]:
