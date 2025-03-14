@@ -18,8 +18,9 @@ def get_savable_loader(
     worker_config: Optional[WorkerConfig] = None,
     checkpoint_every_sec: float = 60,
     checkpoint_every_min_n_samples: Optional[int] = None,
-    n_checkpoints: int = 2,
+    n_checkpoints: Optional[int] = None,
     gc_collect_every_n_steps: int = GC_DEFAULT_EVERY_N_ITER,
+    prefetch_factor: int = 2,
 ) -> SavableDataLoader[T]:
     """
 
@@ -35,6 +36,7 @@ def get_savable_loader(
         checkpoint_every_min_n_samples: Overwrites the minimum number of samples between
             checkpoints. Defaults to `number of workers * 2`. Only applies if using workers.
         n_checkpoints: The number of internal checkpoints to keep. Only applies if using workers.
+            If None, computes a suitable value.
 
     Returns:
         The instantiated :class:`megatron.energon.SavableDataLoader`, yielding batches from the dataset,
@@ -57,6 +59,7 @@ def get_savable_loader(
         checkpoint_every_min_n_samples=checkpoint_every_min_n_samples,
         n_checkpoints=n_checkpoints,
         gc_collect_every_n_steps=gc_collect_every_n_steps,
+        prefetch_factor=prefetch_factor,
     )
 
 
@@ -64,6 +67,7 @@ def get_loader(
     dataset: SavableDataset[T],
     *,
     worker_config: Optional[WorkerConfig] = None,
+    prefetch_factor: int = 2,
 ) -> BasicDataLoader[T]:
     """
     Get a dataloader for the given dataset.
@@ -86,4 +90,4 @@ def get_loader(
                 "Passing a worker_config to get_loader() is deprecated and will have no effect."
             )
 
-    return BasicDataLoader(dataset)
+    return BasicDataLoader(dataset, prefetch_factor=prefetch_factor)

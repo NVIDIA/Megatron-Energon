@@ -1,53 +1,29 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from dataclasses import dataclass
-from typing import Any, Dict, Generic, Iterator, List, Optional, Tuple, TypeVar, Union
+from typing import Any, Dict, Iterator, List, Tuple, TypeVar
 
 import torch
 
-from megatron.energon.flavors.base_dataset import (
-    MergedState,
-    SavableDataset,
-    State,
-    add_sample_restore_key,
-)
-from megatron.energon.rng import WorkerRng, WorkerRngMergedState, WorkerRngState
+from megatron.energon.flavors.base_dataset import SavableDataset, add_sample_restore_key
+from megatron.energon.rng import WorkerRng
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset
 
 T_sample = TypeVar("T_sample")
 
 
-@dataclass
-class BlendDatasetState(State):
-    #: States of the sub datasets
-    datasets: List[State]
-    #: Whether the subdatasets are done
-    exhausted: List[bool]
-    #: State of the worker rng
-    rng: WorkerRngState
-
-
-@dataclass
-class BlendDatasetMergedState(MergedState):
-    #: States of the sub datasets
-    datasets: List[MergedState]
-    #: Whether the dataset is done
-    exhausted: List[List[bool]]
-    #: State of the worker rng
-    rng: WorkerRngMergedState
-
-
-class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
+class BlendDataset(BaseWrapperDataset[T_sample, T_sample]):
     """
     This dataset wrapper blends multiple iterable datasets together give a weighting.
     The datasets may be infinite. This dataset is always infinite.
     """
 
-    dataset_weights: Tuple[Tuple[SavableDataset[T_sample], float], ...]
-    exhausted: List[List[bool]]
+    weights: Tuple[float, ...]
+    exhausted: List[bool]
     _worker_rng: WorkerRng
+
+    _savable_fields = ("exhausted", "_worker_rng")
 
     def __init__(
         self,
@@ -62,14 +38,17 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
                 given probabilities.
             worker_config: Configuration for the workers.
         """
-        datasets = [dataset for dataset, _weight in dataset_weights]
-        super().__init__(datasets, worker_config=worker_config)
+        # datasets = [dataset for dataset, _weight in dataset_weights]
+        self.datasets, self.weights = zip(*dataset_weights)
+
+        super().__init__(self.datasets, worker_config=worker_config)
 
         self.dataset_weights = dataset_weights
+        self.reset_state_own()
+
+    def reset_state_own(self) -> None:
         self._worker_rng = WorkerRng(self.worker_config)
-        self.exhausted = [
-            [False] * len(dataset_weights) for _ in range(max(self.worker_config.num_workers, 1))
-        ]
+        self.exhausted = [False] * len(self.weights)
 
     def __len__(self) -> int:
         # Give the number of samples in inner datasets, disregarding the weight
@@ -102,7 +81,7 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
             )
 
         # Some may already be exhausted on this worker when restoring a state.
-        for idx, exhausted in enumerate(self.exhausted[self.worker_config.rank_worker_id()]):
+        for idx, exhausted in enumerate(self.exhausted):
             if exhausted:
                 weights[idx] = 0
                 dataset_iters[idx] = None
@@ -119,74 +98,13 @@ class BlendDataset(BaseWrapperDataset[T_sample], Generic[T_sample]):
             except StopIteration:
                 dataset_iters[ds_idx] = None
                 weights[ds_idx] = 0
-                self.exhausted[self.worker_config.rank_worker_id()][ds_idx] = True
+                self.exhausted[ds_idx] = True
                 if all(dataset_iter is None for dataset_iter in dataset_iters):
                     break
             else:
                 yield add_sample_restore_key(sample, ds_idx, src=self)
 
-        self.exhausted[self.worker_config.rank_worker_id()] = [False] * len(self.dataset_weights)
-
-    def worker_has_samples(self) -> bool:
-        return any(dataset.worker_has_samples() for dataset, _weight in self.dataset_weights)
-
-    def save_state(self) -> BlendDatasetState:
-        return BlendDatasetState(
-            datasets=[d.save_state() for d, _weight in self.dataset_weights],
-            # Need list() to create a copy
-            exhausted=list(self.exhausted[self.worker_config.rank_worker_id()]),
-            rng=self._worker_rng.save_state(),
-        )
-
-    def merge_states(self, states: List[BlendDatasetState]) -> BlendDatasetMergedState:
-        assert all(s is None or isinstance(s, BlendDatasetState) for s in states)
-        assert all(s is None or len(s.datasets) == len(self.dataset_weights) for s in states)
-        return BlendDatasetMergedState(
-            datasets=[
-                d.merge_states([None if s is None else s.datasets[ds_idx] for s in states])
-                for ds_idx, (d, _) in enumerate(self.dataset_weights)
-            ],
-            exhausted=[s.exhausted for s in states],
-            rng=self._worker_rng.merge_states([None if s is None else s.rng for s in states]),
-        )
-
-    def restore_state(self, state: Optional[BlendDatasetMergedState]) -> None:
-        if state is None:
-            for dataset, _weight in self.dataset_weights:
-                dataset.restore_state(None)
-            self._worker_rng.restore_state(None)
-            self.exhausted = [
-                [False] * len(self.dataset_weights)
-                for _ in range(max(self.worker_config.num_workers, 1))
-            ]
-        else:
-            assert isinstance(state, BlendDatasetMergedState)
-            assert len(state.datasets) == len(
-                self.dataset_weights
-            ), f"The {len(state.datasets)} datasets to be restored do not match the configured {len(self.dataset_weights)} datasets"
-            for (dataset, _weight), dstate in zip(self.dataset_weights, state.datasets):
-                dataset.restore_state(dstate)
-            self._worker_rng.restore_state(state.rng)
-            # Need [list() for ...] to create a deep copy
-            self.exhausted = [list(sub) for sub in state.exhausted]
-
-    def can_restore_sample(self) -> bool:
-        return all(dataset.can_restore_sample() for dataset, _weight in self.dataset_weights)
-
-    def assert_can_restore(self) -> None:
-        for dataset, _weight in self.dataset_weights:
-            dataset.assert_can_restore()
-
-    def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_sample:
-        id, ds_idx = index[:2]
-        assert id == type(self).__name__
-        index = index[2:]
-        assert isinstance(ds_idx, int)
-        return add_sample_restore_key(
-            self.dataset_weights[ds_idx][0].restore_sample(index),
-            ds_idx,
-            src=self,
-        )
+        self.exhausted = [False] * len(self.dataset_weights)
 
     def config(self) -> Dict[str, Any]:
         return {

@@ -3,13 +3,13 @@
 
 """This module defines tests for crude datasets."""
 
+import gc
 import logging
 import pickle
 import sys
 import tempfile
 import unittest
 import warnings
-from dataclasses import dataclass
 from pathlib import Path
 from typing import List
 
@@ -27,11 +27,12 @@ from megatron.energon import (
     get_train_dataset,
     stateless,
 )
+from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 from megatron.energon.flavors.webdataset.structs import reraise_exception
 
 
-@dataclass
+@dataclass_slots
 class TextBatch(Batch):
     __keys__: List[str]
     txts: List[str]
@@ -149,6 +150,7 @@ class TestDataset(unittest.TestCase):
 
     def tearDown(self):
         # Remove all temporary files
+        gc.collect()
         self.temp_dir.cleanup()
 
     @staticmethod
@@ -175,7 +177,7 @@ class TestDataset(unittest.TestCase):
 
         BaseWebdatasetFactory.prepare_dataset(
             path,
-            [f"parts/data-{{0..{total_shards-1}}}.tar"],
+            [f"parts/data-{{0..{total_shards - 1}}}.tar"],
             split_parts_ratio=[("train", 1.0)],
             shuffle_seed=None,
         )
@@ -214,7 +216,6 @@ class TestDataset(unittest.TestCase):
         )
         loader = get_savable_loader(
             train_dataset,
-            worker_config=worker_config,
         )
 
         print(len(train_dataset))
@@ -254,10 +255,8 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
                 packing_buffer_size=2,
             ),
-            worker_config=worker_config,
             checkpoint_every_sec=0,
             checkpoint_every_min_n_samples=1,
-            n_checkpoints=4,
         )
         samples = [s.__keys__ for idx, s in zip(range(100), loader)]
 
@@ -278,10 +277,8 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
                 packing_buffer_size=2,
             ),
-            worker_config=worker_config,
             checkpoint_every_sec=0,
             checkpoint_every_min_n_samples=1,
-            n_checkpoints=4,
         )
 
         loader.restore_state_rank(state)
@@ -308,10 +305,8 @@ class TestDataset(unittest.TestCase):
                 shuffle_buffer_size=None,
                 max_samples_per_sequence=None,
             ),
-            worker_config=worker_config,
             checkpoint_every_sec=0,
             checkpoint_every_min_n_samples=1,
-            n_checkpoints=4,
         )
         samples = [s.__keys__ for idx, s in zip(range(100), loader)]
 

@@ -3,6 +3,7 @@
 
 """This module defines tests for meta datasets."""
 
+import gc
 import logging
 import sys
 import tempfile
@@ -99,6 +100,7 @@ class TestDataset(unittest.TestCase):
 
     def tearDown(self):
         # Remove all temporary files
+        gc.collect()
         self.temp_dir.cleanup()
 
     @staticmethod
@@ -124,7 +126,7 @@ class TestDataset(unittest.TestCase):
 
         BaseWebdatasetFactory.prepare_dataset(
             path,
-            [f"parts/data-{{0..{total_shards-1}}}.tar"],
+            [f"parts/data-{{0..{total_shards - 1}}}.tar"],
             split_parts_ratio=[("train", 1.0)],
             shuffle_seed=None,
         )
@@ -167,16 +169,16 @@ class TestDataset(unittest.TestCase):
 
         # The middle dataset should have 0 samples assigned to this rank
         blend_ds = get_blend_dataset(train_dataset)
-        assert len(blend_ds.dataset_weights[1][0].dataset.dataset.shards[0]) == 0
+        assert len(blend_ds.dataset_weights[1][0].dataset.dataset.workers_slice_offsets[0]) == 1
+        assert len(blend_ds.dataset_weights[1][0].dataset.dataset) == 0
 
         train_loader = get_savable_loader(
             train_dataset,
             checkpoint_every_sec=0,
             checkpoint_every_min_n_samples=1,
-            n_checkpoints=5,
         )
 
-        data1a = list(zip(train_loader, range(3)))  # Load 3 samples
+        data1a = list(zip(train_loader, range(3)))  # noqa: F841. Load 3 samples
 
         # Save state mid epoch
         state1 = train_loader.save_state_rank()
@@ -194,7 +196,6 @@ class TestDataset(unittest.TestCase):
             ),
             checkpoint_every_sec=0,
             checkpoint_every_min_n_samples=1,
-            n_checkpoints=5,
         )
         train_loader.restore_state_rank(state1)
         data2_restore = list(zip(train_loader, range(5)))  # Load 5 samples

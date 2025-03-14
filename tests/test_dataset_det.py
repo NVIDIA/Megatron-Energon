@@ -15,6 +15,7 @@ from pathlib import Path
 
 import torch
 import webdataset as wds
+from click.testing import CliRunner
 
 from megatron.energon import (
     DefaultTaskEncoder,
@@ -27,6 +28,7 @@ from megatron.energon.dataset_config import get_dataset_from_config
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 from megatron.energon.loader import get_savable_loader
 from megatron.energon.task_encoder.base import stateless
+from megatron.energon.tools.checkpoint import command_redist
 
 
 def _norng_state(state):
@@ -63,10 +65,19 @@ class TestDataset(unittest.TestCase):
 
         # Create a small dummy captioning dataset
         self.create_text_test_dataset(self.dataset_path)
+
+        # Create temporary directories for checkpoint files
+        self.checkpoint_dir = Path(self.temp_dir.name) / "checkpoints"
+        self.checkpoint_dir.mkdir(exist_ok=True, parents=True)
+
+        self.redist_dir = Path(self.temp_dir.name) / "redist_checkpoints"
+        self.redist_dir.mkdir(exist_ok=True, parents=True)
+
         print(self.dataset_path)
 
     def tearDown(self):
         # Remove all temporary files
+        gc.collect()
         self.temp_dir.cleanup()
 
     @staticmethod
@@ -95,7 +106,7 @@ class TestDataset(unittest.TestCase):
 
         BaseWebdatasetFactory.prepare_dataset(
             path,
-            [f"parts/data-{{0..{total_shards-1}}}.tar"],
+            [f"parts/data-{{0..{total_shards - 1}}}.tar"],
             split_parts_ratio=[("train", 1.0)],
             shuffle_seed=None,
         )
@@ -230,7 +241,6 @@ class TestDataset(unittest.TestCase):
         gc.collect()
 
     def test_determinism_taskencoder(self):
-
         class TestTaskEncoder(DefaultTaskEncoder):
             @stateless(restore_seeds=True)
             def encode_sample(self, sample: TextSample) -> TextSample:
@@ -284,6 +294,79 @@ class TestDataset(unittest.TestCase):
         locals().clear()
         gc.collect()
 
+    def test_determinism_taskencoder_save_restore(self):
+        class TestTaskEncoder(DefaultTaskEncoder):
+            @stateless(restore_seeds=True)
+            def encode_sample(self, sample: TextSample) -> TextSample:
+                rand_str = (
+                    f"_{torch.randint(0, 1000, (1,)).item()}_{random.randint(0, 1000)}"
+                    + f"_{self.current_batch_index}_{self.current_sample_index}"
+                )
+
+                return TextSample(
+                    __key__=sample.__key__,
+                    __restore_key__=sample.__restore_key__,
+                    __subflavor__=sample.__subflavor__,
+                    __subflavors__=sample.__subflavors__,
+                    text=sample.text + rand_str,
+                )
+
+        for num_workers in [1, 0]:
+            worker_config1 = WorkerConfig(rank=0, world_size=1, num_workers=num_workers)
+
+            # This seed is used by the dataset to shuffle the data
+            torch.manual_seed(42)
+            ds1a = get_train_dataset(
+                self.dataset_path,
+                split_part="train",
+                sample_type=TextSample,
+                worker_config=worker_config1,
+                batch_size=1,
+                shuffle_buffer_size=42,
+                max_samples_per_sequence=2,
+                task_encoder=TestTaskEncoder(),
+            )
+
+            torch.manual_seed(44)
+            ds1b = get_train_dataset(
+                self.dataset_path,
+                split_part="train",
+                sample_type=TextSample,
+                worker_config=worker_config1,
+                batch_size=1,
+                shuffle_buffer_size=42,
+                max_samples_per_sequence=2,
+                task_encoder=TestTaskEncoder(),
+            )
+
+            # Fork the dataset twice
+            loader1a = get_savable_loader(ds1a)
+            loader1b = get_savable_loader(ds1b)
+
+            # Load 7 samples
+            data_pre = [data.text[0] for idx, data in zip(range(7), loader1a)]
+
+            # Then save state
+            state = loader1a.save_state_rank()
+
+            # Load another 20 samples
+            data_post = [data.text[0] for idx, data in zip(range(20), loader1a)]
+
+            # Restore state
+            loader1b.restore_state_rank(state)
+
+            # Load 20 samples again
+            data_restored = [data.text[0] for idx, data in zip(range(20), loader1b)]
+
+            print("Data post:", data_post)
+            print("Data restored:", data_restored)
+
+            assert data_post == data_restored
+
+        # Delete all locals, otherwise loaders might be kept alive
+        locals().clear()
+        gc.collect()
+
     def test_restore_state(self):
         worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0)
 
@@ -308,8 +391,7 @@ class TestDataset(unittest.TestCase):
                 shuffle_buffer_size=sbs,
                 max_samples_per_sequence=2,
                 parallel_shard_iters=psi,
-            ),
-            worker_config=worker_config,
+            )
         )
 
         # print("save state")
@@ -337,8 +419,7 @@ class TestDataset(unittest.TestCase):
                 shuffle_buffer_size=sbs,
                 max_samples_per_sequence=2,
                 parallel_shard_iters=psi,
-            ),
-            worker_config=worker_config,
+            )
         )
         loader.restore_state_global(state_0, src_rank=None)
         order_45 = [data.text[0] for idx, data in zip(range(count1 + count2), loader)]
@@ -362,8 +443,7 @@ class TestDataset(unittest.TestCase):
                 shuffle_buffer_size=sbs,
                 max_samples_per_sequence=2,
                 parallel_shard_iters=psi,
-            ),
-            worker_config=worker_config,
+            )
         )
         # print("restore state")
         loader.restore_state_global(state_1, src_rank=None)
@@ -532,7 +612,7 @@ class TestDataset(unittest.TestCase):
             max_samples_per_sequence=2,
             parallel_shard_iters=psi,
         )
-        loader = get_savable_loader(ds, worker_config=worker_config, checkpoint_every_sec=ces)
+        loader = get_savable_loader(ds, checkpoint_every_sec=ces)
 
         # print("save state")
         state_0 = loader.save_state_rank()
@@ -567,7 +647,7 @@ class TestDataset(unittest.TestCase):
             max_samples_per_sequence=2,
             parallel_shard_iters=psi,
         )
-        loader = get_savable_loader(ds, worker_config=worker_config)
+        loader = get_savable_loader(ds)
         loader.restore_state_rank(state_0)
         order_6 = [data.text[0] for idx, data in zip(range(n1), loader)]
         print("order1", order_1)
@@ -586,7 +666,7 @@ class TestDataset(unittest.TestCase):
             max_samples_per_sequence=2,
             parallel_shard_iters=psi,
         )
-        loader = get_savable_loader(ds, worker_config=worker_config)
+        loader = get_savable_loader(ds)
         loader.restore_state_rank(state_1)
         order_7 = [data.text[0] for idx, data in zip(range(n2), loader)]
         print("order2", order_2[:100])
@@ -605,7 +685,7 @@ class TestDataset(unittest.TestCase):
             shuffle_buffer_size=sbs,
             parallel_shard_iters=psi,
         )
-        loader = get_savable_loader(ds, worker_config=worker_config)
+        loader = get_savable_loader(ds)
         loader.restore_state_rank(state_2)
         order_8 = [data.text[0] for idx, data in zip(range(n3), loader)]
         print("order3", order_3)
@@ -661,9 +741,9 @@ class TestDataset(unittest.TestCase):
 
         global_batches_per_scenario = []
         for scenario in scenarios:
-            assert (
-                scenario["global_batch_size"] % scenario["micro_batch_size"] == 0
-            ), "Global batch size must be a multiple of the micro-batch size."
+            assert scenario["global_batch_size"] % scenario["micro_batch_size"] == 0, (
+                "Global batch size must be a multiple of the micro-batch size."
+            )
 
             world_size = len(scenario["configs"])
             gradient_accum_steps = scenario["global_batch_size"] // (
@@ -725,9 +805,212 @@ class TestDataset(unittest.TestCase):
         # Assert that all global batches are the same
         for i in range(len(global_batches_per_scenario[0])):
             for scenerio_idx, global_batches in enumerate(global_batches_per_scenario):
-                assert (
-                    global_batches[i] == global_batches_per_scenario[0][i]
-                ), f"Global batch {i} of scenario {scenerio_idx} does not match."
+                assert global_batches[i] == global_batches_per_scenario[0][i], (
+                    f"Global batch {i} of scenario {scenerio_idx} does not match."
+                )
+
+        # Delete all locals, otherwise loaders might be kept alive
+        locals().clear()
+        gc.collect()
+
+    def test_redist(self):
+        scenarios = [
+            dict(
+                configs=(
+                    WorkerConfig(rank=0, world_size=2, num_workers=2),
+                    WorkerConfig(rank=1, world_size=2, num_workers=2),
+                ),
+                micro_batch_size=2,
+                global_batch_size=8,
+            ),
+            dict(
+                configs=(WorkerConfig(rank=0, world_size=1, num_workers=4),),
+                micro_batch_size=2,
+                global_batch_size=8,
+            ),
+            dict(
+                configs=(
+                    WorkerConfig(rank=0, world_size=4, num_workers=1),
+                    WorkerConfig(rank=1, world_size=4, num_workers=1),
+                    WorkerConfig(rank=2, world_size=4, num_workers=1),
+                    WorkerConfig(rank=3, world_size=4, num_workers=1),
+                ),
+                micro_batch_size=2,
+                global_batch_size=8,
+            ),
+            dict(
+                configs=(
+                    WorkerConfig(rank=0, world_size=2, num_workers=2),
+                    WorkerConfig(rank=1, world_size=2, num_workers=2),
+                ),
+                micro_batch_size=1,  # Micro-batch 1, more accum
+                global_batch_size=8,
+            ),
+            dict(  # Same as original
+                configs=(
+                    WorkerConfig(rank=0, world_size=2, num_workers=2),
+                    WorkerConfig(rank=1, world_size=2, num_workers=2),
+                ),
+                micro_batch_size=2,
+                global_batch_size=8,
+            ),
+        ]
+
+        # === Stage 1 first generate a saved state using scenario 0
+        checkpoint_files = []
+
+        global_batches_per_scenario = []
+        scenario = scenarios[0]
+
+        world_size = len(scenario["configs"])
+        gradient_accum_steps = scenario["global_batch_size"] // (
+            scenario["micro_batch_size"] * world_size
+        )
+
+        batches_per_rank = []
+
+        for rank_config in scenario["configs"]:
+            loader = get_savable_loader(
+                get_train_dataset(
+                    self.dataset_path,
+                    split_part="train",
+                    sample_type=TextSample,
+                    worker_config=rank_config,
+                    batch_size=scenario["micro_batch_size"],
+                    shuffle_buffer_size=42,
+                    max_samples_per_sequence=2,
+                )
+            )
+
+            # Throw away some samples to advance the loader state
+            num_pre_samples = 20
+            for _ in zip(range(num_pre_samples), loader):
+                pass
+
+            # Save the state to a file
+            checkpoint_file = self.checkpoint_dir / f"state_rank{rank_config.rank}.pt"
+            state = loader.save_state_rank()
+            torch.save(state, str(checkpoint_file))
+            checkpoint_files.append(checkpoint_file)
+
+            # Now capture the next micro-batches
+            micro_batches = [
+                data.text
+                for idx, data in zip(
+                    range(55 * 8 // (world_size * scenario["micro_batch_size"])), loader
+                )
+            ]
+            batches_per_rank.append(micro_batches)
+
+        # Compose global batches
+        global_batches_cur_rank = []
+        batch_index = 0
+        while batch_index < len(batches_per_rank[0]):
+            global_batch = []
+            for _ in range(gradient_accum_steps):
+                for rank_batches in batches_per_rank:
+                    global_batch.extend(rank_batches[batch_index])
+                batch_index += 1
+                if batch_index >= len(batches_per_rank[0]):
+                    # last global batch may be smaller
+                    break
+            global_batches_cur_rank.append(sorted(global_batch))
+
+        global_batches_per_scenario.append(global_batches_cur_rank)
+
+        # === Stage 2: Now check that the global batches are the same after redistribution
+
+        for scenario in scenarios[1:]:
+            # Redistribute the saved state
+            runner = CliRunner()
+            result = runner.invoke(
+                command_redist,
+                [
+                    "--new-world-size",
+                    str(len(scenario["configs"])),
+                    *[str(cpt) for cpt in checkpoint_files],
+                    str(self.redist_dir),
+                ],
+            )
+            print(result.output)
+            assert result.exception is None, result.exception
+            assert result.exit_code == 0, "Redistribution failed"
+
+            # Load state and check that the global batches are the same
+            assert scenario["global_batch_size"] % scenario["micro_batch_size"] == 0, (
+                "Global batch size must be a multiple of the micro-batch size."
+            )
+
+            world_size = len(scenario["configs"])
+            gradient_accum_steps = scenario["global_batch_size"] // (
+                scenario["micro_batch_size"] * world_size
+            )
+
+            batches_per_rank = []
+
+            for rank_config in scenario["configs"]:
+                loader = get_savable_loader(
+                    get_train_dataset(
+                        self.dataset_path,
+                        split_part="train",
+                        sample_type=TextSample,
+                        worker_config=rank_config,
+                        batch_size=scenario["micro_batch_size"],
+                        shuffle_buffer_size=42,
+                        max_samples_per_sequence=2,
+                    )
+                )
+
+                state = torch.load(
+                    str(self.redist_dir / f"state_rank{rank_config.rank}.pt"), weights_only=False
+                )
+                loader.restore_state_rank(state)
+
+                micro_batches = [
+                    data.text
+                    for idx, data in zip(
+                        range(55 * 8 // (world_size * scenario["micro_batch_size"])), loader
+                    )
+                ]
+                batches_per_rank.append(micro_batches)
+
+            # Compose global batches
+            global_batches_cur_rank = []
+            batch_index = 0
+            while batch_index < len(batches_per_rank[0]):
+                global_batch = []
+                for _ in range(gradient_accum_steps):
+                    for rank_batches in batches_per_rank:
+                        global_batch.extend(rank_batches[batch_index])
+                    batch_index += 1
+                    if batch_index >= len(batches_per_rank[0]):
+                        # last global batch may be smaller
+                        break
+                global_batches_cur_rank.append(sorted(global_batch))
+
+            global_batches_per_scenario.append(global_batches_cur_rank)
+
+        # Check that the global batches are the same
+
+        print()
+
+        # Assert that all scenarios produced the same global batches
+        assert all(
+            len(global_batches) == len(global_batches_per_scenario[0])
+            for global_batches in global_batches_per_scenario
+        ), "Number of global batches per scenario does not match."
+
+        for global_batches in global_batches_per_scenario:
+            print("= Global batches per scenario")
+            for global_batch in global_batches:
+                print("  Global batch: ", global_batch)
+
+        # Assert that all global batches are the same
+        for i in range(len(global_batches_per_scenario[0])):
+            for scenerio_idx, global_batches in enumerate(global_batches_per_scenario):
+                assert global_batches[i] == global_batches_per_scenario[0][i], (
+                    f"Global batch {i} of scenario {scenerio_idx} does not match."
+                )
 
         # Delete all locals, otherwise loaders might be kept alive
         locals().clear()

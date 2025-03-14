@@ -3,20 +3,19 @@
 
 import logging
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from typing import Any, Callable, Dict, Generic, List, Optional, Sequence, Tuple, TypeVar
+from typing import Any, Callable, Dict, Generic, List, Optional, Sequence, TypeVar
+
+import numpy as np
 
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.base_dataset import (
-    BaseCoreDatasetFactory,
-    MergedState,
-    SavableDataset,
-    State,
-)
+from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory, SavableDataset
 from megatron.energon.flavors.webdataset.error_handler import ErrorHandler
 from megatron.energon.flavors.webdataset.metadata import WebdatasetMeta
 from megatron.energon.flavors.webdataset.prepare import WebdatasetPreparator
-from megatron.energon.flavors.webdataset.sample_loader import WebdatasetSampleLoaderDataset
+from megatron.energon.flavors.webdataset.sample_loader import (
+    RawSampleData,
+    WebdatasetSampleLoaderDataset,
+)
 from megatron.energon.flavors.webdataset.sharder import Sharder
 from megatron.energon.flavors.webdataset.structs import FilteredSample, ShardInfo, reraise_exception
 from megatron.energon.worker import WorkerConfig
@@ -26,16 +25,6 @@ T_sample = TypeVar("T_sample", covariant=True)
 T = TypeVar("T", covariant=True)
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class WebdatasetState(State):
-    dataset_state: State
-
-
-@dataclass
-class WebdatasetMergedState(MergedState):
-    dataset_state: MergedState
 
 
 class BaseWebdatasetFactory(
@@ -104,6 +93,7 @@ class BaseWebdatasetFactory(
         self.paths = [path]
         self.shards = wds_meta.shards
         self.sample_excludes = wds_meta.sample_excludes
+        self.split_part_files = wds_meta.split_part_files
         self.training = training
         self.worker_config = worker_config
         self.shuffle_over_epochs = shuffle_over_epochs
@@ -116,6 +106,8 @@ class BaseWebdatasetFactory(
         return sum(shard.count for shard in self.shards)
 
     def build(self, worker_rotation_offset: int = 0) -> SavableDataset[T_sample]:
+        from megatron.energon.flavors.webdataset.itar_reader import ShardInfosITarReader
+
         if self.parallel_shard_iters is None:
             if self.training:
                 # 16 seems to be a good choice since we don't want too many file handles open
@@ -125,40 +117,28 @@ class BaseWebdatasetFactory(
         else:
             parallel_shard_iters = self.parallel_shard_iters
 
-        rank_shards = self.shard_workers(
-            [(shard,) for shard in self.shards],
-            self.worker_config,
+        workers_sample_slice_offsets = self.shard_workers(
+            self.shards,
+            worker_config=self.worker_config,
             max_samples_per_sequence=self.max_samples_per_sequence,
             rotation_offset=worker_rotation_offset,
         )
-        for rank_idx, inner_shards in enumerate(rank_shards):
-            shards_text = ", ".join(
-                f"{subshard[0].name}[{subshard[0].offset}, {subshard[0].offset+subshard[0].count})"
-                for subshard in inner_shards[:3]
-            )
-            if len(inner_shards) > 6:
-                shards_text += f", ...<{len(inner_shards) - 6}>, " + ", ".join(
-                    f"{subshards[0].name}[{subshards[0].offset}, {subshards[0].offset+subshards[0].count})"
-                    for subshards in inner_shards[-3:]
-                )
-            elif len(inner_shards) > 3:
-                shards_text += ", " + ", ".join(
-                    f"{subshards[0].name}[{subshards[0].offset}, {subshards[0].offset+subshards[0].count})"
-                    for subshards in inner_shards[3:]
-                )
-            print(
-                f"rank={self.worker_config.rank}, worker={rank_idx}: shard_range="
-                f"[{shards_text}] "
-                f"sum(count)={sum(subshards[0].count for subshards in inner_shards)}"
-            )
+        _print_shard_slices(self.worker_config, self.shards, workers_sample_slice_offsets)
+
+        itar_reader = ShardInfosITarReader(
+            self.path,
+            self.shards,
+            part_filter=self.part_filter,
+            sample_filter=self.sample_filter,
+            itar_cache_size=parallel_shard_iters,
+        )
 
         dataset = WebdatasetSampleLoaderDataset(
-            rank_shards=rank_shards,
+            join_readers=[itar_reader],
+            workers_sample_slice_offsets=workers_sample_slice_offsets,
             worker_config=self.worker_config,
-            part_filter=self.part_filter,
-            exclude=self.sample_excludes,
             shuffle_over_epochs=self.shuffle_over_epochs if self.training else None,
-            parallel_shard_iters=parallel_shard_iters,
+            parallel_slice_iters=parallel_shard_iters,
             handler=self.sample_error_handler,
         )
         return MapDataset(
@@ -170,10 +150,13 @@ class BaseWebdatasetFactory(
             worker_config=self.worker_config,
         )
 
-    def _load_sample_raw(self, sample: Tuple[Optional[FilteredSample], ...]) -> T_sample:
+    def sample_filter(self, key: str) -> bool:
+        return key not in self.sample_excludes
+
+    def _load_sample_raw(self, raw_sample: RawSampleData) -> T_sample:
         # Just a wrapper for the inner tuple. Tuple should be of length 1.
-        assert len(sample) == 1 and sample[0] is not None
-        return self.load_sample(sample[0])
+        assert len(raw_sample.data) == 1 and raw_sample.data[0] is not None
+        return self.load_sample(raw_sample.data[0])
 
     @abstractmethod
     def load_sample(self, raw_data: FilteredSample) -> T_sample:
@@ -184,7 +167,16 @@ class BaseWebdatasetFactory(
         return dict(
             type=type(self).__qualname__,
             training=self.training,
-            path=str(self.path),
+            _path=str(self.path),
+            shards=[
+                dict(
+                    name=shard.name,
+                    count=shard.count,
+                    _path=str(shard.path),
+                )
+                for shard in self.shards
+            ],
+            sample_excludes=list(self.sample_excludes),
             shuffle_over_epochs=self.shuffle_over_epochs,
             parallel_shard_iters=self.parallel_shard_iters,
             max_samples_per_sequence=self.max_samples_per_sequence,
@@ -192,3 +184,67 @@ class BaseWebdatasetFactory(
 
     def __str__(self):
         return f"{type(self).__name__}(path={self.path})"
+
+
+def _print_shard_slices(
+    worker_config: WorkerConfig, shards: List[ShardInfo], slice_offsets: Sequence[Sequence[int]]
+):
+    shard_starts = np.cumsum([0] + [shard.count for shard in shards])
+
+    def shard_range_info(start: int, end: int) -> str:
+        start_shard_idx = np.searchsorted(shard_starts, start, side="right") - 1
+        end_shard_idx = np.searchsorted(shard_starts, end, side="left") - 1
+        if start_shard_idx == end_shard_idx:
+            shard = shards[start_shard_idx]
+            if start - shard_starts[start_shard_idx] == 0:
+                start_str = "(start)"
+            else:
+                start_str = ""
+            if end - shard_starts[start_shard_idx] == shard.count:
+                end_str = "(end)"
+            else:
+                end_str = ""
+            return f"{shard.name}[{start - shard_starts[start_shard_idx]}{start_str}, {end - shard_starts[start_shard_idx]}{end_str}]"
+        else:
+            start_shard = shards[start_shard_idx]
+            end_shard = shards[end_shard_idx]
+            if start - shard_starts[start_shard_idx] == 0:
+                start_str = "(start)"
+            else:
+                start_str = ""
+            if end - shard_starts[end_shard_idx] == end_shard.count:
+                end_str = "(end)"
+            else:
+                end_str = ""
+            return f"{start_shard.name}[{start - shard_starts[start_shard_idx]}{start_str},]-{end_shard.name}[,{end - shard_starts[end_shard_idx]}{end_str}]"
+
+    for worker_idx, sample_slice_offsets in enumerate(slice_offsets):
+        start_idx = sample_slice_offsets[0]
+        end_idx = sample_slice_offsets[-1]
+
+        if len(sample_slice_offsets) > 6:
+            offset_str = f"{', '.join(str(o) for o in sample_slice_offsets[:3])} ...<{len(sample_slice_offsets) - 6}> {', '.join(str(o) for o in sample_slice_offsets[-3:])}"
+        else:
+            offset_str = ", ".join(str(o) for o in sample_slice_offsets)
+        if len(sample_slice_offsets) > 6:
+            slices_str = (
+                ", ".join(
+                    shard_range_info(start, end)
+                    for start, end in zip(sample_slice_offsets[:3], sample_slice_offsets[1:4])
+                )
+                + f" ...<{len(sample_slice_offsets) - 6}> "
+                + ", ".join(
+                    shard_range_info(start, end)
+                    for start, end in zip(sample_slice_offsets[-4:-1], sample_slice_offsets[-3:])
+                )
+            )
+        else:
+            slices_str = ", ".join(
+                shard_range_info(start, end)
+                for start, end in zip(sample_slice_offsets[:-1], sample_slice_offsets[1:])
+            )
+
+        print(
+            f"rank={worker_config.rank}, worker={worker_idx}: sample_range=[{start_idx}, {end_idx}] in {len(sample_slice_offsets) - 1} slices, "
+            f"sum(count)={end_idx - start_idx}: indexes=[{offset_str}] slices=[{slices_str}]"
+        )

@@ -6,6 +6,7 @@
 import click
 
 from megatron.energon.tools.analyze_debug import command as analyze_debug_command
+from megatron.energon.tools.checkpoint import command as checkpoint_command
 from megatron.energon.tools.info import command as info_command
 from megatron.energon.tools.lint import command as lint_command
 from megatron.energon.tools.prepare import command as prepare_command
@@ -27,6 +28,7 @@ def main(ctx):
 
 
 main.add_command(analyze_debug_command)
+main.add_command(checkpoint_command)
 main.add_command(lint_command)
 main.add_command(info_command)
 main.add_command(prepare_command)

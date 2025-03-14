@@ -28,7 +28,6 @@ from megatron.energon.flavors.webdataset import (
     ImageDecoder,
     JoinedWebdatasetFactory,
     StandardWebdatasetFactory,
-    VideoData,
     WebdatasetMeta,
 )
 
@@ -61,11 +60,10 @@ __all__ = [
     "StandardWebdatasetFactory",
     "TextSample",
     "TextWebdataset",
+    "VidQASample",
+    "VidQAWebdataset",
     "VQASample",
     "VQAWebdataset",
     "VQAOCRWebdataset",
-    "VideoData",
-    "VidQASample",
-    "VidQAWebdataset",
     "WebdatasetMeta",
 ]

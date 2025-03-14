@@ -4,6 +4,7 @@
 """This module defines tests for the dataset."""
 
 import dataclasses
+import gc
 import io
 import json
 import logging
@@ -13,7 +14,7 @@ import sys
 import tempfile
 import unittest
 import warnings
-from dataclasses import dataclass
+from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, Hashable, List, Tuple, Type, Union
 
@@ -42,6 +43,7 @@ from megatron.energon import (
     get_val_dataset,
     homogeneous_concat_mix,
 )
+from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.dataset_config import get_dataset_from_config
 from megatron.energon.flavors import BaseWebdatasetFactory
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
@@ -57,14 +59,14 @@ DATASET_SIZE = 50
 no_worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0)
 
 
-@dataclass
+@dataclass_slots
 class ExtendedCaptioningSample(CaptioningSample):
     batch_index: int
     sample_index: int
     rand_num: int
 
 
-@dataclass
+@dataclass_slots
 class EncodedCaptioningSample:
     __key__: str
     __restore_key__: Tuple[Union[str, int, tuple], ...]
@@ -72,12 +74,12 @@ class EncodedCaptioningSample:
     caption: torch.Tensor
 
 
-@dataclass
+@dataclass_slots
 class CaptioningEncodedBatch(CaptioningSample):
     pass
 
 
-@dataclass
+@dataclass_slots
 class CaptioningBatch(Batch):
     __key__: List[str]
     __restore_key__: Tuple[Union[str, int, tuple], ...]
@@ -104,6 +106,7 @@ class TestDataset(unittest.TestCase):
 
     def tearDown(self):
         # Remove all temporary files
+        gc.collect()
         self.temp_dir.cleanup()
 
     @staticmethod
@@ -130,9 +133,9 @@ class TestDataset(unittest.TestCase):
 
         entries = []
 
-        assert num_samples < len(animals) * len(
-            adjectives
-        ), "Cannot generate more samples than unique captions."
+        assert num_samples < len(animals) * len(adjectives), (
+            "Cannot generate more samples than unique captions."
+        )
 
         # Create num_samples unique captions
         captions = set()
@@ -172,7 +175,7 @@ class TestDataset(unittest.TestCase):
 
         BaseWebdatasetFactory.prepare_dataset(
             path,
-            [f"parts/data-{{0..{total_shards-1}}}.tar"],
+            [f"parts/data-{{0..{total_shards - 1}}}.tar"],
             split_parts_ratio=[("train", 1.0)],
         )
 
@@ -446,7 +449,7 @@ class TestDataset(unittest.TestCase):
         keys = [entry.__key__ for entry in get_loader(ds.build())]
         assert keys == [
             f"parts/data-1.tar/{i:06d}" for i in list(range(30, 35)) + list(range(40, 50))
-        ]
+        ], keys
 
     def test_loader(self):
         torch.manual_seed(42)
@@ -460,7 +463,7 @@ class TestDataset(unittest.TestCase):
                     __key__=sample.__key__,
                     __restore_key__=sample.__restore_key__,
                     image=sample.image,
-                    caption=torch.frombuffer(sample.caption.encode(), dtype=torch.uint8),
+                    caption=torch.frombuffer(bytearray(sample.caption.encode()), dtype=torch.uint8),
                 )
 
         loader = get_loader(
@@ -480,9 +483,8 @@ class TestDataset(unittest.TestCase):
 
         def hist(data):
             """Histogram function"""
-            r = {}
+            r = defaultdict(lambda: 0)
             for k in data:
-                r.setdefault(k, 0)
                 r[k] += 1
             return r
 
@@ -490,10 +492,13 @@ class TestDataset(unittest.TestCase):
         keys = [key for _ in range(100) for batch in loader for key in batch.__key__]
         # 100 iterations, 2 virtual epoch size, batch size 10
         print(len(keys), keys)
+        keyhist = hist(keys)
+        print(sorted(keyhist.items()))
+        print(sorted(keyhist.items(), key=lambda x: (x[1], x[0])))
         assert len(keys) == 100 * 2 * 10
         # Data should be approximately sampled uniformly (40+-1 samples per key)
-        assert all(v in (39, 40, 41) for v in hist(keys).values())
-        assert len(hist(keys)) == 50
+        assert len(keyhist) == 50
+        assert all(v in (39, 40, 41) for v in keyhist.values())
 
         loader2 = get_loader(
             get_val_dataset(
@@ -666,7 +671,7 @@ class TestDataset(unittest.TestCase):
 
         torch.manual_seed(42)
 
-        @dataclass
+        @dataclass_slots
         class WeightedCaptioningBatch(Batch):
             __key__: List[str]
             __restore_key__: Tuple[Union[str, int], ...]
@@ -730,7 +735,7 @@ class TestDataset(unittest.TestCase):
         assert 750 <= bs_hist[20] <= 850
 
     def test_mixing_homogeneous(self):
-        @dataclass
+        @dataclass_slots
         class TestBatch(Batch):
             __key__: List[str]
             __restore_key__: Tuple[Union[str, int], ...]
@@ -786,7 +791,7 @@ class TestDataset(unittest.TestCase):
         assert 7500 <= source_hist[1] <= 8500
 
     def test_mixing_heterogeneous(self):
-        @dataclass
+        @dataclass_slots
         class TestBatch1(Batch):
             __key__: List[str]
             __restore_key__: Tuple[Union[str, int], ...]
@@ -796,7 +801,7 @@ class TestDataset(unittest.TestCase):
             caption: List[str]
             source: int
 
-        @dataclass
+        @dataclass_slots
         class TestBatch2(TestBatch1):
             pass
 
@@ -888,7 +893,6 @@ class TestDataset(unittest.TestCase):
         torch.manual_seed(42)
 
         class TestTaskEncoder(TaskEncoder):
-
             @stateless(restore_seeds=True)
             def encode_sample(self, sample):
                 # print("si stack:", WorkerConfig._sample_index_stack)
@@ -1100,7 +1104,6 @@ class TestDataset(unittest.TestCase):
         torch.manual_seed(42)
 
         class TestTaskEncoder(TaskEncoder):
-
             @stateless(restore_seeds=True)
             def encode_sample(self, sample):
                 # print("si stack:", WorkerConfig._sample_index_stack)
@@ -1424,7 +1427,6 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
                 task_encoder=TestTaskEncoder(),
             ),
-            worker_config=worker_config_r0,
             checkpoint_every_min_n_samples=1,
             checkpoint_every_sec=0,
         )
@@ -1455,7 +1457,6 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
                 task_encoder=TestTaskEncoder(),
             ),
-            worker_config=worker_config_r0,
             checkpoint_every_min_n_samples=1,
             checkpoint_every_sec=0,
         )
@@ -1505,7 +1506,6 @@ class TestDataset(unittest.TestCase):
             ),
             checkpoint_every_min_n_samples=1,
             checkpoint_every_sec=0,
-            n_checkpoints=4,
         )
         batches = list(zip(range(40), loader))
         print([batch.__key__ for idx, batch in batches])
@@ -1526,7 +1526,6 @@ class TestDataset(unittest.TestCase):
             ),
             checkpoint_every_min_n_samples=1,
             checkpoint_every_sec=0,
-            n_checkpoints=4,
         )
 
         batches = list(zip(range(40), loader_r0))
@@ -1552,7 +1551,6 @@ class TestDataset(unittest.TestCase):
             ),
             checkpoint_every_min_n_samples=1,
             checkpoint_every_sec=0,
-            n_checkpoints=4,
         )
         loader_r0.restore_state_rank(state)
 
@@ -1592,7 +1590,6 @@ class TestDataset(unittest.TestCase):
                 batch_size=5,
                 worker_config=worker_config,
             ),
-            worker_config=worker_config,
         )
 
         assert len(loader) == 10

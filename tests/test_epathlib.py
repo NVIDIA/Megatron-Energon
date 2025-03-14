@@ -4,12 +4,14 @@
 """This module tests the EPath class, our custom version of pathlib.Path"""
 
 import logging
+import multiprocessing
+import os
+import pickle
 import struct
 import sys
 import unittest
 
 from megatron.energon.epathlib import EPath
-from megatron.energon.epathlib.rclone_config import ConfigEntry
 
 
 class TestEPath(unittest.TestCase):
@@ -26,16 +28,10 @@ class TestEPath(unittest.TestCase):
         p_abs = EPath("/tmp")
 
         p_comb = p_abs / p_rel
-        # logging.info(f"p_comb: {p_comb}")
-        # logging.info(f"p_comb: {p_comb.internal_path}")
-
-        # We don't want to work on relative paths
-        self.assertRaises(AssertionError, lambda: p_rel.is_file())
-
         # Those should not raise:
-        assert p_comb.is_absolute()
-        _ = p_comb.is_file()
-        _ = p_abs.is_file()
+        assert not p_comb.is_file()
+        assert not p_abs.is_file()
+        assert p_abs.is_dir()
 
     def test_contextman(self):
         """Test the context manager"""
@@ -47,6 +43,7 @@ class TestEPath(unittest.TestCase):
 
         # Test context manager reading
         p = EPath(tmp_file_path).open("rb")
+        print(p)
         with p:
             b = p.read()
             assert isinstance(b, bytes)
@@ -56,14 +53,42 @@ class TestEPath(unittest.TestCase):
             assert num == 1337
             assert data == b"1234567890"
 
-            assert not p.closed
-
-        assert p.closed
-
         # Test context manager writing
         tmp_file_path2 = "/tmp/testfile2.bin"
         with EPath(tmp_file_path2).open("wb") as p:
             p.write(struct.pack("H10s", 1337, b"1234567890"))
+
+    def test_localfs(self):
+        """Test the local filesystem"""
+        p = EPath("/tmp/testfile.bin")
+        with p.open("wb") as f:
+            f.write(b"dummycontent")
+        assert p.is_file()
+        assert p.size() == 12
+        with p.open("rb") as f:
+            assert f.read() == b"dummycontent"
+
+        # Test relative paths
+        revert_dir = os.getcwd()
+        try:
+            os.chdir("/tmp")
+            p = EPath("testfile.bin")
+            assert str(p) == "/tmp/testfile.bin"
+            assert p.is_file()
+            assert p.size() == 12
+            with p.open("rb") as f:
+                assert f.read() == b"dummycontent"
+
+            p = EPath("nonexisting/../testfile.bin")
+            assert str(p) == "/tmp/testfile.bin"
+
+            p = EPath("../tmp/testfile.bin")
+            assert str(p) == "/tmp/testfile.bin"
+        finally:
+            os.chdir(revert_dir)
+
+        p.unlink()
+        assert p.is_file() is False
 
     def test_glob(self):
         """Test the glob functionality"""
@@ -90,40 +115,65 @@ class TestEPath(unittest.TestCase):
 
     def test_s3_path_resolution(self):
         """Test s3 path resolution"""
-        config_override = {
-            "s3": ConfigEntry(
-                name="s3",
-                type="s3",
-                provider="s3",
-                access_key_id="dummy",
-                secret_access_key="dummy",
-                region="dummy",
-                endpoint="https://localhost",
+        rclone_config_path = EPath("/tmp/XDG_CONFIG_HOME/rclone/rclone.conf")
+        with rclone_config_path.open("w") as f:
+            f.write(
+                "\n".join(
+                    [
+                        "[s3]",
+                        "type = s3",
+                        "env_auth = false",
+                        "access_key_id = dummy",
+                        "secret_access_key = dummy",
+                        "region = dummy",
+                        "endpoint = https://localhost",
+                    ]
+                )
             )
-        }
 
-        # Test globbing
-        p = EPath("rclone://s3/tmp/path/subpath.txt", config_override=config_override)
-        assert str(p) == "rclone://s3/tmp/path/subpath.txt", str(p)
+        orig_xdg_config_home = os.environ.get("XDG_CONFIG_HOME")
+        os.environ["XDG_CONFIG_HOME"] = "/tmp/XDG_CONFIG_HOME"
+        try:
+            # Test globbing
+            p = EPath("msc://s3/tmp/path/subpath.txt")
+            assert str(p) == "msc://s3/tmp/path/subpath.txt", str(p)
 
-        p2 = p / ".." / "subpath2.txt"
-        assert str(p2) == "rclone://s3/tmp/path/subpath2.txt", str(p2)
+            p2 = p / ".." / "subpath2.txt"
+            assert str(p2) == "msc://s3/tmp/path/subpath2.txt", str(p2)
 
-        p3 = EPath("rclone://s3/tmp/path/.././subpath.txt", config_override=config_override)
-        assert str(p3) == "rclone://s3/tmp/subpath.txt", str(p3)
+            p3 = EPath("msc://s3/tmp/path/.././subpath.txt")
+            assert str(p3) == "msc://s3/tmp/subpath.txt", str(p3)
 
-        p4 = p3.parent / "../bla/bla/bla/../../../no/../subpath2.txt"
-        assert str(p4) == "rclone://s3/subpath2.txt", str(p4)
+            p4 = p3.parent / "../bla/bla/bla/../../../no/../subpath2.txt"
+            assert str(p4) == "msc://s3/subpath2.txt", str(p4)
+
+            # Test warning for deprecated rclone protocol
+            with self.assertWarns((DeprecationWarning, FutureWarning)) as warning:
+                # Test rclone backwards compatibility
+                pr = EPath("rclone://s3/tmp/path/.././subpath.txt")
+                assert str(pr) == "msc://s3/tmp/subpath.txt", str(pr)
+            assert "deprecated" in str(warning.warnings[0].message)
+
+            # Test pickle / unpickle
+            p4serialized = pickle.dumps(p4)
+            # No secret must be serialized
+            assert b"dummy" not in p4serialized
+        finally:
+            if orig_xdg_config_home is not None:
+                os.environ["XDG_CONFIG_HOME"] = orig_xdg_config_home
+            else:
+                del os.environ["XDG_CONFIG_HOME"]
+            rclone_config_path.unlink()
 
     def test_multi_storage_client(self):
         """Test the Multi-Storage Client integration"""
         # Test path handling
         p = EPath("msc://default/etc/resolv.conf")
-        assert str(p) == "msc://default/etc/resolv.conf", str(p)
+        assert str(p) == "/etc/resolv.conf", str(p)
         assert p.is_file()
 
         p2 = p / ".." / "hosts"
-        assert str(p2) == "msc://default/etc/hosts", str(p2)
+        assert str(p2) == "/etc/hosts", str(p2)
 
         # Test glob
         p3 = EPath("msc://default/etc/")
@@ -150,6 +200,66 @@ class TestEPath(unittest.TestCase):
         assert p4.is_file() is False
         p5.unlink()
         assert p5.is_file() is False
+
+        # Test pickle / unpickle
+        p5serialized = pickle.dumps(p5)
+        p5unserialized = pickle.loads(p5serialized)
+        assert p5unserialized == p5
+        assert str(p5unserialized) == str(p5)
+
+    def test_multiprocessing(self):
+        """Test EPath in multiprocessing context"""
+        p = EPath("/tmp/path/subpath.txt")
+
+        orig_start_method = multiprocessing.get_start_method()
+        try:
+            multiprocessing.set_start_method("spawn", force=True)
+
+            proc = multiprocessing.Process(target=_multiproc_test_func, args=(p, True))
+            proc.start()
+            proc.join()
+            assert proc.exitcode == 0
+
+            multiprocessing.set_start_method("fork", force=True)
+
+            proc = multiprocessing.Process(target=_multiproc_test_func, args=(p, True))
+            proc.start()
+            proc.join()
+            assert proc.exitcode == 0
+        finally:
+            multiprocessing.set_start_method(orig_start_method, force=True)
+
+    def test_multiprocessing_msc(self):
+        """Test EPath in multiprocessing context"""
+        p = EPath("msc://default/tmp/random_file_0001")
+        with p.open("w") as fp:
+            fp.write("*****")
+
+        orig_start_method = multiprocessing.get_start_method()
+        try:
+            multiprocessing.set_start_method("spawn", force=True)
+
+            proc = multiprocessing.Process(target=_multiproc_test_func, args=(p, True))
+            proc.start()
+            proc.join()
+            assert proc.exitcode == 0
+
+            multiprocessing.set_start_method("fork", force=True)
+
+            proc = multiprocessing.Process(target=_multiproc_test_func, args=(p, True))
+            proc.start()
+            proc.join()
+            assert proc.exitcode == 0
+        finally:
+            multiprocessing.set_start_method(orig_start_method, force=True)
+            p.unlink()
+
+
+def _multiproc_test_func(p: EPath, test_function: bool):
+    """Helper function for multiprocessing test"""
+    print(f"str: {str(p)}")
+    if test_function:
+        print(f"is_file: {p.is_file()}")
 
 
 if __name__ == "__main__":
