@@ -58,6 +58,38 @@ class TestEPath(unittest.TestCase):
         with EPath(tmp_file_path2).open("wb") as p:
             p.write(struct.pack("H10s", 1337, b"1234567890"))
 
+    def test_localfs(self):
+        """Test the local filesystem"""
+        p = EPath("/tmp/testfile.bin")
+        with p.open("wb") as f:
+            f.write(b"dummycontent")
+        assert p.is_file()
+        assert p.size() == 12
+        with p.open("rb") as f:
+            assert f.read() == b"dummycontent"
+
+        # Test relative paths
+        revert_dir = os.getcwd()
+        try:
+            os.chdir("/tmp")
+            p = EPath("testfile.bin")
+            assert str(p) == "/tmp/testfile.bin"
+            assert p.is_file()
+            assert p.size() == 12
+            with p.open("rb") as f:
+                assert f.read() == b"dummycontent"
+
+            p = EPath("nonexisting/../testfile.bin")
+            assert str(p) == "/tmp/testfile.bin"
+
+            p = EPath("../tmp/testfile.bin")
+            assert str(p) == "/tmp/testfile.bin"
+        finally:
+            os.chdir(revert_dir)
+
+        p.unlink()
+        assert p.is_file() is False
+
     def test_glob(self):
         """Test the glob functionality"""
 
