@@ -46,6 +46,7 @@ class EPath:
                 protocol, profile, path = self._split_protocol(initial_path)
                 if protocol is None or protocol == "file":
                     profile = "default"
+                    path = str(PathlibPath(path).absolute())
                 elif protocol == "rclone":
                     warn_deprecated("rclone:// protocol is deprecated. Use msc:// instead.")
                 else:
