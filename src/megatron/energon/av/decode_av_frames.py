@@ -6,20 +6,22 @@ from collections.abc import Iterator
 from fractions import Fraction
 from typing import Literal, Optional, Sequence, Union, overload
 
+import numpy as np
+import torch
+
 # Try importing optional dependencies
 try:
     import av
     import filetype
-    import numpy as np
     import soundfile as sf
-    import torch
+
+    from megatron.energon.av.fastseek import Fastseek
 
     AV_DECODE_AVAILABLE = True
 except ImportError as e:
     AV_DECODE_AVAILABLE = False
     MISSING_DEPENDENCY = str(e)
 
-from megatron.energon.av.fastseek import Fastseek
 from megatron.energon.av.video_data import VideoData
 
 
@@ -100,7 +102,7 @@ class AVData:
         self,
         frame_indices: Sequence[int],
         out_frame_size: Optional[tuple[int, int]] = None,
-        seeker: Optional[Fastseek] = None,
+        seeker: Optional["Fastseek"] = None,
     ) -> tuple[torch.Tensor, dict]:
         """Gets a batch of frames at the given indices from a video file.
 
@@ -252,7 +254,7 @@ class AVData:
             The method uses the Fastseek class to optimize frame seeking, which determines
             whether to use frame numbers or timestamps based on the container format.
         """
-        seeker: Fastseek = Fastseek(self.stream)
+        seeker: "Fastseek" = Fastseek(self.stream)
         self.stream.seek(0)
 
         # --- First, decode video frames ---
@@ -512,6 +514,13 @@ class AVDecoder:
         video_out_frame_size: tuple[int, int],
         video_decode: Literal["torch", "AVData"] = "torch",
     ) -> None:
+        if not AV_DECODE_AVAILABLE:
+            raise ImportError(
+                f"AV decoding is not available. Please install the required dependencies with:\n"
+                f"pip install megatron-energon[av_decode]\n"
+                f"Missing dependency: {MISSING_DEPENDENCY}"
+            )
+
         self.audio_clip_duration = audio_clip_duration
         self.audio_num_clips = audio_num_clips
         self.video_decode_audio = video_decode_audio
