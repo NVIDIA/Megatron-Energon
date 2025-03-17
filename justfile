@@ -32,4 +32,5 @@ docs:
 # Build the release package
 build:
     rm -rf dist
-    uv build
+    uv build --wheel
+    uv build --sdist
