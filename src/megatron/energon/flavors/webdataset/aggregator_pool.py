@@ -111,28 +111,31 @@ class AggregatorPool:
         self.aggregator.on_start(self)
 
         local_finished_workers = 0
+        final_result_data = None
+        try:
+            while True:
+                item = self.result_queue.get()
+                if item is None:
+                    # A worker has finished all of its tasks
+                    local_finished_workers += 1
+                    with self._finished_workers.get_lock():
+                        self._finished_workers.value = local_finished_workers
 
-        while True:
-            item = self.result_queue.get()
-            if item is None:
-                # A worker has finished all of its tasks
-                local_finished_workers += 1
-                with self._finished_workers.get_lock():
-                    self._finished_workers.value = local_finished_workers
-
-                # Check if all workers are done
-                if local_finished_workers == self.num_workers:
-                    break
-            else:
-                # Process the item in the aggregator
-                self.aggregator.on_item(item, self)
-
-        # All workers done, aggregator can finalize
-        self.aggregator.on_finish(self)
-
-        # After finishing, serialize the aggregator's final data
-        final_result_data = self.aggregator.get_final_result_data()
-        self._send_final_aggregator_data(final_result_data)
+                    # Check if all workers are done
+                    if local_finished_workers == self.num_workers:
+                        break
+                else:
+                    # Process the item in the aggregator
+                    self.aggregator.on_item(item, self)
+            
+            # All workers done, aggregator can finalize
+            self.aggregator.on_finish(self)
+            
+            # After finishing, serialize the aggregator's final data
+            final_result_data = self.aggregator.get_final_result_data()            
+        finally:
+            # Always send something back to the main process
+            self._send_final_aggregator_data(final_result_data)
 
     def _send_final_aggregator_data(self, data: Any) -> None:
         """
@@ -185,10 +188,13 @@ class AggregatorPool:
 
         # Now wait for aggregator to finish reading the queue
         if self.aggregator_process is not None:
+            # Retrieve aggregator final data from the queue (if aggregator posted any)
+            # We only expect one item in this queue: the aggregator's final data.
+            self._aggregator_final_result_data = self._final_result_data_queue.get()
+            self._final_result_data_queue.close()
+            self._final_result_data_queue.join_thread()
             self.aggregator_process.join()
 
-        # Retrieve aggregator final data from the queue (if aggregator posted any)
-        # We only expect one item in this queue: the aggregator's final data.
         if not self._final_result_data_queue.empty():
             self._aggregator_final_result_data = self._final_result_data_queue.get()
 
