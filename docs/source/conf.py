@@ -59,7 +59,7 @@ extensions = [
 autodoc_mock_imports = [
     "braceexpand",
     "fsspec",
-    "torch",
+    # "torch",
     "webdataset",
     "tqdm",
     "numpy",
