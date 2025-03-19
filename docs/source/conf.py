@@ -1,10 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 # -*- coding: utf-8 -*-
-# Copyright (c) 2024, NVIDIA CORPORATION.
-# SPDX-License-Identifier: BSD-3-Clause
 
-#
 # Configuration file for the Sphinx documentation builder.
 #
 # This file does only contain a selection of the most common options. For a
