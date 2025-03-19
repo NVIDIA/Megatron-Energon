@@ -434,26 +434,48 @@ class AVData:
             A tuple containing:
                 - video_tensor: None (since this is audio-only decoding)
                 - audio_tensor: Tensor of shape [num_clips, channels, samples] containing
-                              the decoded audio clips. For WAV files, a single clip is
-                              returned as [channels, samples].
+                              the decoded audio clips.
                 - metadata: Dictionary containing audio metadata (sample rate, etc.)
-
-        Note:
-            For WAV files, the entire requested duration is read at once using soundfile.
-            For other formats, the method uses get_clip_indices to determine clip positions
-            and get_audio_batch to extract the clips.
         """
         if audio_format == "wav":
             with sf.SoundFile(self.stream) as f:
                 sample_rate = f.samplerate
-                target_length_in_samples = min(f.frames, int(clip_duration * sample_rate))
+                total_samples = f.frames
 
-                f.seek(0)
-                waveform = f.read(frames=target_length_in_samples, dtype="float32")
+                # Determine clip indices in one pass
+                if num_clips == -1:
+                    num_clips = 1
+                    clip_indices = [(0, total_samples - 1)]
+                else:
+                    clip_indices = self.get_clip_indices(
+                        sampling_rate=sample_rate,
+                        total_samples=total_samples,
+                        num_clips=num_clips,
+                        clip_duration_sec=clip_duration,
+                    )
 
-                metadata = {"audio_fps": f.samplerate}
-                audio_tensor = torch.from_numpy(waveform)
+                # Read each clip based on its (start_idx, end_idx) range
+                clips = []
+                for start_idx, end_idx in clip_indices:
+                    f.seek(start_idx)  # move file pointer to the start of this clip
+                    n_read = end_idx - start_idx + 1
 
+                    # Always read in 2D shape: (samples, channels)
+                    waveform = f.read(frames=n_read, dtype="float32", always_2d=True)
+
+                    # If the file is shorter than expected, pad with zeros
+                    if waveform.shape[0] < n_read:
+                        padded = np.zeros((n_read, waveform.shape[1]), dtype=waveform.dtype)
+                        padded[: waveform.shape[0], :] = waveform
+                        waveform = padded
+
+                    # Transpose to (channels, samples)
+                    waveform = waveform.transpose()
+                    clips.append(torch.from_numpy(waveform))
+
+            # Stack all clips into shape [num_clips, channels, samples]
+            audio_tensor = torch.stack(clips, dim=0)
+            metadata = {"audio_fps": sample_rate}
         else:
             with av.open(self.stream) as input_container:
                 sample_count = input_container.streams.audio[0].duration
