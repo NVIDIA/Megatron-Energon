@@ -226,7 +226,7 @@ class State(ABC, ExtendableDataclassMixin):
     """
 
 
-class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC):
+class SavableDataset(IterableDataset[T_sample], Savable, ABC):
     """A dataset that can be saved and restored (i.e. the random state, internal buffers, etc.).
     I.e. it can be resumed from a checkpoint.
 
