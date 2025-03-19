@@ -572,11 +572,12 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
     3. The state is merged using :meth:`megatron.energon.SavableDatasetWrapper.merge_checkpoints`. This
        merges the states of all workers and returns a single state that can be used to restore the
        state of the dataset.
-    3. The state can be restored using :meth:`megatron.energon.SavableDatasetWrapper.restore_state`
+    4. The state can be restored using :meth:`megatron.energon.SavableDatasetWrapper.restore_state`
        before a worker is started, such that all workers initially receive the same state array.
        The worker firstly sets the worker index offset, then uses its (shifted) own index to get its
        required state from the merged state array.
 
+    .
     """
 
     #: The worker config
