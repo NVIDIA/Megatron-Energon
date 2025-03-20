@@ -12,7 +12,11 @@ from megatron.energon.dataclass_slots import dataclass_slots
 class VideoData:
     #: The input video tensor in the shape (frames, channel, h, w)
     frames: Optional[torch.Tensor]
+    #: The timestamps for the video frames. List of timestamps in seconds.
+    video_timestamps: Optional[list[float]]
     #: The input audio frames in the shape (number of channels, number of points)
     aframes: Optional[torch.Tensor]
+    #: The timestamps for the audio clips. List of tuples (start, end) in seconds
+    audio_timestamps: Optional[list[tuple[float, float]]]
     #: Metadata for the video and audio. Can contain the fields video_fps (float) and audio_fps (int)
     info: Dict[str, Union[bool, int, float, str]]
