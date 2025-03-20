@@ -506,6 +506,7 @@ class AVData:
             with sf.SoundFile(self.stream) as f:
                 sample_rate = f.samplerate
                 total_samples = f.frames
+                timebase = 1 / sample_rate
 
                 # Determine clip indices in one pass
                 if num_clips == -1:
@@ -545,6 +546,7 @@ class AVData:
             with av.open(self.stream) as input_container:
                 sample_count = input_container.streams.audio[0].duration
                 sampling_rate = input_container.streams.audio[0].rate
+                timebase = input_container.streams.audio[0].time_base
                 assert sample_count is not None
 
             if num_clips == -1:
@@ -558,14 +560,13 @@ class AVData:
             self.stream.seek(0)  # Reset stream position
             audio_tensor, metadata = self.get_audio_batch(clip_indices)
 
-        audio_timestamps = []
-        for clip_start, clip_end in clip_indices:
-            audio_timestamps.extend(
-                (
-                    clip_start * audio_stream.time_base,
-                    clip_end * audio_stream.time_base,
-                )
+        audio_timestamps = [
+            (
+                clip_start * timebase,
+                clip_end * timebase,
             )
+            for clip_start, clip_end in clip_indices
+        ]
 
         return audio_tensor, audio_timestamps, metadata
 
