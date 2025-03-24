@@ -588,7 +588,7 @@ class AVWebdatasetDecoder:
         video_num_frames: Number of video frames to extract. If -1, extracts all frames.
         video_out_frame_size: Output size for video frames as (width, height). If None, frames
             are returned at their original resolution.
-        video_decode: If "AVData", returns an AVData instance for flexible decoding. If "torch",
+        av_decode: If "AVDecoder", returns an AVDecoder instance for flexible decoding. If "torch",
             returns decoded VideoData.
 
     Example:
@@ -605,7 +605,7 @@ class AVWebdatasetDecoder:
     def __init__(
         self,
         video_decode_audio: bool,
-        video_decode: Literal["torch", "AVDecoder"] = "AVDecoder",
+        av_decode: Literal["torch", "AVDecoder"] = "AVDecoder",
     ) -> None:
         if not AV_DECODE_AVAILABLE:
             raise ImportError(
@@ -615,7 +615,7 @@ class AVWebdatasetDecoder:
             )
 
         self.video_decode_audio = video_decode_audio
-        self.video_decode = video_decode
+        self.av_decode = av_decode
 
     def read_av_data(self, key: str, data: bytes) -> AVDecoder:
         """Decoder function that returns an AVData object for flexible decoding.
@@ -638,8 +638,8 @@ class AVWebdatasetDecoder:
             data: raw media bytes
 
         Returns:
-            If video_decode is "torch", returns VideoData containing the decoded frames and metadata.
-            If video_decode is "AVData", returns an AVData instance for flexible decoding.
+            If av_decode is "torch", returns VideoData containing the decoded frames and metadata.
+            If av_decode is "AVDecoder", returns an AVDecoder instance for flexible decoding.
             Returns None if decoding failed or file type is not supported.
         """
         if not any(
@@ -650,7 +650,7 @@ class AVWebdatasetDecoder:
         av_decoder = self.read_av_data(key, data)
         if av_decoder is None:
             return None
-        if self.video_decode == "AVDecoder":
+        if self.av_decode == "AVDecoder":
             return av_decoder
         return av_decoder.get_frames(
             audio_clip_duration=self.audio_clip_duration,
