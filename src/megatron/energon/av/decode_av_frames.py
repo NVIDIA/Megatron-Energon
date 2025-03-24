@@ -34,6 +34,8 @@ class AVDecoder:
     decoding parameters.
     """
 
+    _seeker: Optional["Fastseek"]
+
     def __init__(self, stream: io.BytesIO) -> None:
         if not AV_DECODE_AVAILABLE:
             raise ImportError(
@@ -42,6 +44,163 @@ class AVDecoder:
                 f"Missing dependency: {MISSING_DEPENDENCY}"
             )
         self.stream = stream
+        self._seeker = None
+
+    def ensure_seeker(self) -> None:
+        if self._seeker is None:
+            self._seeker = Fastseek(self.stream)
+
+    def get_clips(
+        self,
+        video_clips: Optional[list[tuple[int, int]]] = None,
+        audio_clips: Optional[list[tuple[int, int]]] = None,
+        video_unit: Literal["frames", "seconds"] = "seconds",
+        audio_unit: Literal["frames", "seconds"] = "seconds",
+        video_out_frame_size: Optional[tuple[int, int]] = None,
+    ) -> AVData:
+        """Get clips from the video and/or audio streams.
+        Given a list of (start, end) tuples, this method will decode the video and/or audio clips
+        at the specified start and end times. The units of the start and end times are specified by
+        the `video_unit` and `audio_unit` arguments.
+
+        Args:
+            video_clips: List of video clip start and end indices
+            audio_clips: List of audio clip start and end indices
+            video_unit: Unit of the video clips ("count" for frame number, "time" for timestamp)
+            audio_unit: Unit of the audio clips ("count" for sample number, "time" for timestamp)
+
+        Returns:
+            AVData containing the decoded video and audio clips
+        """
+        self.ensure_seeker()
+        assert self._seeker is not None
+
+        self.stream.seek(0)  # Reset the video stream so that pyav can read the entire container
+
+        with av.open(self.stream) as input_container:
+            # Grab video & audio streams
+            video_stream = input_container.streams.video[0]
+            if len(input_container.streams.audio) > 0:
+                audio_stream = input_container.streams.audio[0]
+                audio_fps = audio_stream.sample_rate or 0
+            else:
+                audio_fps = 0
+
+            # Enable multi-threaded decode for video
+            # TODO: This causes a bug which leads to a deadlock in ffmpeg when deallocating the object.
+            # Thus, disable for now.
+            # video_stream.thread_type = 3
+            video_stream.thread_type = 0
+
+            # Collect metadata
+            video_fps = float(video_stream.average_rate) if video_stream.average_rate else 0.0
+
+            metadata = {"video_fps": video_fps, "audio_fps": audio_fps}
+
+            # Pre-calculate timing info for video
+            average_rate: Fraction = video_stream.average_rate
+            time_base: Fraction = video_stream.time_base
+            average_frame_duration: int = int(1 / average_rate / time_base)
+
+            if video_clips is not None and video_unit != self._seeker.unit:
+                # Convert video_clips to video_unit
+                if video_unit == "frames":
+                    # Convert from frames to seconds
+                    video_clips = [
+                        (
+                            int(clip[0] / video_fps),
+                            int(clip[1] / video_fps),
+                        )
+                        for clip in video_clips
+                    ]
+                else:
+                    # Convert from seconds to frames
+                    video_clips = [
+                        (
+                            int(clip[0] * video_fps),
+                            int(clip[1] * video_fps),
+                        )
+                        for clip in video_clips
+                    ]
+
+            if audio_clips is not None and audio_unit != self._seeker.unit:
+                # Convert audio_clips to audio_unit
+                if audio_unit == "frames":
+                    # Convert from frames to seconds
+                    audio_clips = [
+                        (
+                            int(clip[0] / audio_fps),
+                            int(clip[1] / audio_fps),
+                        )
+                        for clip in audio_clips
+                    ]
+                else:
+                    # Convert from seconds to frames
+                    audio_clips = [
+                        (
+                            int(clip[0] * audio_fps),
+                            int(clip[1] * audio_fps),
+                        )
+                        for clip in audio_clips
+                    ]
+
+            frame_iterator: Iterator[av.VideoFrame] = input_container.decode(video=0)
+            previous_frame_index: int = 0
+
+            video_frames: list[torch.Tensor] = []
+            audio_frames: list[torch.Tensor] = []
+            if video_clips is None:
+                video_clips = []
+
+            for video_clip in video_clips:
+                start_frame_index, end_frame_index = video_clip
+                clip_frames: list[torch.Tensor] = []
+
+                # Find start frame
+                if (
+                    iframe_info := self._seeker.should_seek(previous_frame_index, start_frame_index)
+                ) is not None:
+                    input_container.seek(iframe_info.pts, stream=input_container.streams.video[0])
+                    previous_frame_index = iframe_info.index
+
+                for i, frame in enumerate(frame_iterator):
+                    take_frame = False
+
+                    # Container uses frame counts, we can find the exact target frame by counting from the iframe which is at a known offset
+                    if self._seeker.unit == "count":
+                        if previous_frame_index + i >= start_frame_index:
+                            take_frame = True
+                        if previous_frame_index + i >= end_frame_index:
+                            break
+
+                    # Container uses time, the target frame might not correspond exactly to any metadata but the desired timestamp should
+                    # fall within a frames display period
+                    if self._seeker.unit == "time":
+                        if start_frame_index <= frame.pts + average_frame_duration:
+                            take_frame = True
+                        if end_frame_index <= frame.pts + average_frame_duration:
+                            break
+
+                    if take_frame:
+                        if video_out_frame_size is not None:
+                            frame = frame.reformat(
+                                width=video_out_frame_size[0],
+                                height=video_out_frame_size[1],
+                                format="rgb24",
+                                interpolation="BILINEAR",
+                            )
+                        else:
+                            frame = frame.reformat(format="rgb24")
+
+                        clip_frames.append(torch.from_numpy(frame.to_ndarray()))
+
+                previous_frame_index = end_frame_index
+
+        # TODO
+        # gather frames. Handle audio
+
+        # Stack video frames along dim=0 => [frames, channels, height, width]
+        # video_tensor = torch.stack(frames)
 
     def get_frames(
         self,
@@ -106,7 +265,6 @@ class AVDecoder:
         self,
         frame_indices: Sequence[int],
         out_frame_size: Optional[tuple[int, int]] = None,
-        seeker: Optional["Fastseek"] = None,
     ) -> tuple[torch.Tensor, dict]:
         """Gets a batch of frames at the given indices from a video file.
 
@@ -124,8 +282,8 @@ class AVDecoder:
             - mkv/webm: time (in time_base units)
             - other (probe mode): frame number
         """
-        if seeker is None:
-            seeker = Fastseek(self.stream)
+        self.ensure_seeker()
+        assert self._seeker is not None
 
         self.stream.seek(0)  # Reset the video stream so that pyav can read the entire container
 
@@ -160,20 +318,25 @@ class AVDecoder:
             frames: list[torch.Tensor] = []
             for target_frame_index in frame_indices:
                 if (
-                    iframe_info := seeker.should_seek(previous_frame_index, target_frame_index)
+                    iframe_info := self._seeker.should_seek(
+                        previous_frame_index, target_frame_index
+                    )
                 ) is not None:
                     input_container.seek(iframe_info.pts, stream=input_container.streams.video[0])
                     previous_frame_index = iframe_info.index
 
                 for i, frame in enumerate(frame_iterator):
                     # Container uses frame counts, we can find the exact target frame by counting from the iframe which is at a known offset
-                    if seeker.unit == "count" and previous_frame_index + i == target_frame_index:
+                    if (
+                        self._seeker.unit == "count"
+                        and previous_frame_index + i == target_frame_index
+                    ):
                         break
 
                     # Container uses time, the target frame might not correspond exactly to any metadata but the desired timestamp should
                     # fall within a frames display period
                     if (
-                        seeker.unit == "time"
+                        self._seeker.unit == "time"
                         and frame.pts <= target_frame_index <= frame.pts + average_frame_duration
                     ):
                         break
@@ -579,25 +742,15 @@ class AVWebdatasetDecoder:
     configurable parameters for frame extraction, resizing, and audio clip extraction.
 
     Args:
-        audio_clip_duration: Duration of each audio clip in seconds. Used when decoding audio from
-            video files or standalone audio files.
-        audio_num_clips: Number of audio clips to extract. If -1, extracts a single clip from the
-            entire audio duration.
         video_decode_audio: Whether to decode audio from video files. If True, audio will be
             extracted alongside video frames.
-        video_num_frames: Number of video frames to extract. If -1, extracts all frames.
-        video_out_frame_size: Output size for video frames as (width, height). If None, frames
-            are returned at their original resolution.
         av_decode: If "AVDecoder", returns an AVDecoder instance for flexible decoding. If "torch",
             returns decoded VideoData.
 
     Example:
         >>> decoder = AVWebdatasetDecoder(
-        ...     audio_clip_duration=3,
-        ...     audio_num_clips=5,
         ...     video_decode_audio=True,
-        ...     video_num_frames=64,
-        ...     video_out_frame_size=(224, 224)
+        ...     av_decode="AVDecoder"
         ... )
         >>> result = decoder("video.mp4", video_bytes)
     """
