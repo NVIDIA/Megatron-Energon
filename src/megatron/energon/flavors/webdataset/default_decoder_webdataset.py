@@ -5,7 +5,7 @@ from typing import Any, Callable, Dict, Generic, Literal, Optional, TypeVar
 
 import webdataset
 
-from megatron.energon.av import AVDecoder
+from megatron.energon.av import AVWebdatasetDecoder
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.webdataset.default_generic_webdataset import (
     DefaultGenericWebdatasetFactory,
@@ -45,9 +45,9 @@ class DefaultDecoderWebdatasetFactory(DefaultGenericWebdatasetFactory[T_sample],
     image_decode: ImageDecoder
     #: If true, ignore errors when decoding.
     ignore_decoder_errors: bool
-    #: If "AVData", returns an AVData instance for flexible decoding. If "torch",
+    #: If "AVDecoder", returns an AVDecoder instance for flexible decoding. If "torch",
     #: returns decoded VideoData.
-    video_decode: Literal["torch", "AVData"]
+    video_decode: Literal["torch", "AVDecoder"]
     #: Whether to decode audio from video files.
     video_decode_audio: bool
     #: Number of video frames to extract.
@@ -71,7 +71,7 @@ class DefaultDecoderWebdatasetFactory(DefaultGenericWebdatasetFactory[T_sample],
         ignore_decoder_errors: bool = False,
         audio_clip_duration: int = 1,
         audio_num_clips: int = -1,
-        video_decode: Literal["torch", "AVData"] = "torch",
+        video_decode: Literal["torch", "AVDecoder"] = "AVDecoder",
         video_decode_audio: bool = False,
         video_num_frames: int = 64,
         video_out_frame_size: tuple = (224, 224),
@@ -87,7 +87,7 @@ class DefaultDecoderWebdatasetFactory(DefaultGenericWebdatasetFactory[T_sample],
             ignore_decoder_errors: If true, ignore errors when decoding.
             audio_clip_duration: Duration of each audio clip in seconds.
             audio_num_clips: Number of audio clips to extract (-1 for all).
-            video_decode: If "AVData", returns an AVData instance for flexible decoding. If "torch",
+            video_decode: If "AVDecoder", returns an AVDecoder instance for flexible decoding. If "torch",
                 returns decoded VideoData.
             video_decode_audio: Whether to decode audio from video files.
             video_num_frames: Number of video frames to extract.
@@ -108,12 +108,8 @@ class DefaultDecoderWebdatasetFactory(DefaultGenericWebdatasetFactory[T_sample],
             self._decoder = webdataset.autodecode.Decoder(
                 [
                     webdataset.autodecode.imagehandler(self.image_decode),
-                    AVDecoder(
-                        audio_clip_duration=audio_clip_duration,
-                        audio_num_clips=audio_num_clips,
+                    AVWebdatasetDecoder(
                         video_decode_audio=video_decode_audio,
-                        video_num_frames=video_num_frames,
-                        video_out_frame_size=video_out_frame_size,
                         video_decode=video_decode,
                     ),
                 ]

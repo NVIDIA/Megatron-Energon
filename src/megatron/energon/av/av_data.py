@@ -9,7 +9,7 @@ from megatron.energon.dataclass_slots import dataclass_slots
 
 
 @dataclass_slots
-class VideoData:
+class AVData:
     #: The input video tensor in the shape (frames, channel, h, w)
     frames: Optional[torch.Tensor]
     #: The timestamps for the video frames. List of timestamps in seconds.

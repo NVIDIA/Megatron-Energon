@@ -23,10 +23,10 @@ except ImportError as e:
     AV_DECODE_AVAILABLE = False
     MISSING_DEPENDENCY = str(e)
 
-from megatron.energon.av.video_data import VideoData
+from megatron.energon.av.av_data import AVData
 
 
-class AVData:
+class AVDecoder:
     """A class that provides a flexible interface for decoding audio and video data.
 
     This class allows users to control decoding parameters at runtime rather than having them fixed
@@ -50,7 +50,7 @@ class AVData:
         video_decode_audio: bool = False,
         video_num_frames: int = 64,
         video_out_frame_size: tuple[int, int] = (224, 224),
-    ) -> Optional[VideoData]:
+    ) -> Optional[AVData]:
         """Decode the audio/video data with the specified parameters.
 
         Args:
@@ -85,7 +85,7 @@ class AVData:
         else:
             return None
 
-        return VideoData(
+        return AVData(
             frames=video,
             aframes=audio,
             video_timestamps=video_timestamps,
@@ -571,7 +571,7 @@ class AVData:
         return audio_tensor, audio_timestamps, metadata
 
 
-class AVDecoder:
+class AVWebdatasetDecoder:
     """A decoder class for audio and video data that provides a consistent interface for decoding media files.
 
     This class encapsulates the decoding parameters and provides a callable interface that can be used
@@ -592,7 +592,7 @@ class AVDecoder:
             returns decoded VideoData.
 
     Example:
-        >>> decoder = AVDecoder(
+        >>> decoder = AVWebdatasetDecoder(
         ...     audio_clip_duration=3,
         ...     audio_num_clips=5,
         ...     video_decode_audio=True,
@@ -604,12 +604,8 @@ class AVDecoder:
 
     def __init__(
         self,
-        audio_clip_duration: int,
-        audio_num_clips: int,
         video_decode_audio: bool,
-        video_num_frames: int,
-        video_out_frame_size: tuple[int, int],
-        video_decode: Literal["torch", "AVData"] = "torch",
+        video_decode: Literal["torch", "AVDecoder"] = "AVDecoder",
     ) -> None:
         if not AV_DECODE_AVAILABLE:
             raise ImportError(
@@ -618,14 +614,10 @@ class AVDecoder:
                 f"Missing dependency: {MISSING_DEPENDENCY}"
             )
 
-        self.audio_clip_duration = audio_clip_duration
-        self.audio_num_clips = audio_num_clips
         self.video_decode_audio = video_decode_audio
-        self.video_num_frames = video_num_frames
-        self.video_out_frame_size = video_out_frame_size
         self.video_decode = video_decode
 
-    def read_av_data(self, key: str, data: bytes) -> AVData:
+    def read_av_data(self, key: str, data: bytes) -> AVDecoder:
         """Decoder function that returns an AVData object for flexible decoding.
 
         Args:
@@ -635,9 +627,9 @@ class AVDecoder:
         Returns:
             AVData object that can be used to decode the media with custom parameters
         """
-        return AVData(io.BytesIO(data))
+        return AVDecoder(io.BytesIO(data))
 
-    def __call__(self, key: str, data: bytes) -> Optional[Union[VideoData, AVData]]:
+    def __call__(self, key: str, data: bytes) -> Optional[Union[AVData, AVDecoder]]:
         """
         Extract the video or audio data from default media extensions.
 
@@ -655,12 +647,12 @@ class AVDecoder:
             for ext in ("mp4", "mov", "webm", "mkv", "flac", "mp3", "wav")
         ):
             return None
-        av_data = self.read_av_data(key, data)
-        if av_data is None:
+        av_decoder = self.read_av_data(key, data)
+        if av_decoder is None:
             return None
-        if self.video_decode == "AVData":
-            return av_data
-        return av_data.get_frames(
+        if self.video_decode == "AVDecoder":
+            return av_decoder
+        return av_decoder.get_frames(
             audio_clip_duration=self.audio_clip_duration,
             audio_num_clips=self.audio_num_clips,
             video_decode_audio=self.video_decode_audio,

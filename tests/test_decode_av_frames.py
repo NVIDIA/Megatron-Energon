@@ -14,7 +14,7 @@ import numpy as np
 import torch
 import torchvision.transforms as transforms
 
-from megatron.energon.av import AVData
+from megatron.energon.av import AVDecoder
 
 # Set multiprocessing start method to 'spawn' on macOS to avoid DataLoader cleanup issues
 if sys.platform == "darwin":
@@ -98,7 +98,7 @@ class TestVideoDecode(unittest.TestCase):
             stream = io.BytesIO(raw_bytes)
 
         # Decode using AVData
-        av_data = AVData(stream)
+        av_data = AVDecoder(stream)
         video_tensor, _, _ = av_data.decode_video_frames()
 
         print(video_tensor.shape)
@@ -113,7 +113,7 @@ class TestVideoDecode(unittest.TestCase):
             stream = io.BytesIO(raw_bytes)
 
         # Decode using AVData
-        av_data = AVData(stream)
+        av_data = AVDecoder(stream)
         video_tensor, _, _ = av_data.decode_video_frames(
             num_frames=64,
             out_frame_size=(224, 224),
@@ -139,7 +139,7 @@ class TestVideoDecode(unittest.TestCase):
             stream = io.BytesIO(raw_bytes)
 
         # Decode using AVData
-        av_data = AVData(stream)
+        av_data = AVDecoder(stream)
         video_tensor, audio_tensor, metadata = av_data.decode_video_frames(
             num_frames=64,
             out_frame_size=(224, 224),
@@ -218,7 +218,7 @@ class TestAudioDecode(unittest.TestCase):
             raw_bytes = f.read()
             stream = io.BytesIO(raw_bytes)
 
-        av_data = AVData(stream)
+        av_data = AVDecoder(stream)
         audio_tensor, _ = av_data.decode_audio_samples(num_clips=-1)
 
         assert (audio_tensor == self.complete_audio_tensor).all(), (
@@ -232,7 +232,7 @@ class TestAudioDecode(unittest.TestCase):
             stream = io.BytesIO(raw_bytes)
 
         # Decode using AVData
-        av_data = AVData(stream)
+        av_data = AVDecoder(stream)
         audio_tensor, metadata = av_data.decode_audio_samples(num_clips=5, clip_duration=3)
 
         # Check audio tensor shape (5 clips, channels, 3 seconds at original sample rate)
@@ -255,7 +255,7 @@ class TestAudioDecode(unittest.TestCase):
             raw_bytes = f.read()
             stream = io.BytesIO(raw_bytes)
 
-        av_data = AVData(stream)
+        av_data = AVDecoder(stream)
         audio_tensor, metadata = av_data.decode_audio_samples(
             num_clips=3,
             clip_duration=3,
