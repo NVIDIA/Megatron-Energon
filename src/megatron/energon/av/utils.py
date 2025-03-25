@@ -40,8 +40,8 @@ def get_clips_uniform(
     ]
 
     return av_decoder.get_clips(
-        video_clips=clips if request_video else None,
-        audio_clips=clips if request_audio else None,
+        video_clip_ranges=clips if request_video else None,
+        audio_clip_ranges=clips if request_audio else None,
         video_unit="seconds",
         audio_unit="seconds",
         video_out_frame_size=video_out_frame_size,

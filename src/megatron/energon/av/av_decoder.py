@@ -4,7 +4,7 @@
 import io
 from collections.abc import Iterator
 from fractions import Fraction
-from typing import Literal, Optional, Sequence, Union
+from typing import Literal, Optional, Sequence, Union, overload
 
 import numpy as np
 import torch
@@ -40,7 +40,7 @@ class AVDecoder:
             raise ImportError(
                 f"AV decoding is not available. Please install the required dependencies with:\n"
                 f"pip install megatron-energon[av_decode]\n"
-                f"Missing dependency: {MISSING_DEPENDENCY}"
+                f"Missing dependency: {MISSING_DEPENDENCY}. Install megatron-energon[av_decode] to use AVDecoder."
             )
         self.stream = stream
         self._seeker = None
@@ -53,14 +53,14 @@ class AVDecoder:
 
     def get_video_clips(
         self,
-        video_clips: Optional[Sequence[tuple[float, float]]] = None,
+        video_clip_ranges: Optional[Sequence[tuple[float, float]]] = None,
         video_unit: Literal["frames", "seconds"] = "seconds",
         video_out_frame_size: Optional[tuple[int, int]] = None,
     ) -> tuple[list[torch.Tensor], list[tuple[float, float]]]:
         """Get video clips from the video stream.
 
         Args:
-            video_clips: List of video clip start and end positions in the given unit (see video_unit)
+            video_clip_ranges: List of video clip start and end positions in the given unit (see video_unit)
             video_unit: Unit of the video clip positions ("frames" for frame number, "seconds" for timestamp)
             video_out_frame_size: Output size for video frames (width, height), or None to use the original frame size
 
@@ -72,7 +72,7 @@ class AVDecoder:
 
         assert video_unit in ("frames", "seconds")
 
-        if video_clips is None:
+        if video_clip_ranges is None:
             return [], []
 
         self.stream.seek(0)  # Reset the video stream so that pyav can read the entire container
@@ -98,25 +98,25 @@ class AVDecoder:
             time_base: Fraction = video_stream.time_base
             average_frame_duration: int = int(1 / average_rate / time_base)
 
-            if video_clips is not None and video_unit != self.seeker.unit:
-                # Convert video_clips to video_unit
+            if video_clip_ranges is not None and video_unit != self.seeker.unit:
+                # Convert video_clip_ranges to video_unit
                 if video_unit == "frames":
                     # Convert from frames to seconds
-                    video_clips = [
+                    video_clip_ranges = [
                         (
                             int(clip[0] / video_fps),
                             int(clip[1] / video_fps),
                         )
-                        for clip in video_clips
+                        for clip in video_clip_ranges
                     ]
                 else:
                     # Convert from seconds to frames
-                    video_clips = [
+                    video_clip_ranges = [
                         (
                             int(clip[0] * video_fps),
                             int(clip[1] * video_fps),
                         )
-                        for clip in video_clips
+                        for clip in video_clip_ranges
                     ]
 
             frame_iterator: Iterator[av.VideoFrame] = input_container.decode(video=0)
@@ -125,8 +125,8 @@ class AVDecoder:
             video_clips_frames: list[list[torch.Tensor]] = []
             video_clips_timestamps: list[tuple[float, float]] = []
 
-            for video_clip in video_clips:
-                start_frame_index, end_frame_index = video_clip
+            for video_clip_range in video_clip_ranges:
+                start_frame_index, end_frame_index = video_clip_range
                 clip_frames: list[torch.Tensor] = []
                 clip_timestamp_start = None
                 clip_timestamp_end = None
@@ -191,13 +191,13 @@ class AVDecoder:
 
     def get_audio_clips(
         self,
-        audio_clips: Optional[Sequence[tuple[float, float]]] = None,
+        audio_clip_ranges: Optional[Sequence[tuple[float, float]]] = None,
         audio_unit: Literal["samples", "seconds"] = "seconds",
     ) -> tuple[list[torch.Tensor], list[tuple[float, float]]]:
         """Get audio clips from the audio stream.
 
         Args:
-            audio_clips: List of audio clip start and end positions in the given unit (see audio_unit)
+            audio_clip_ranges: List of audio clip start and end positions in the given unit (see audio_unit)
             audio_unit: Unit of the audio clip positions ("samples" for sample number, "seconds" for timestamp)
 
         Returns:
@@ -208,7 +208,7 @@ class AVDecoder:
 
         assert audio_unit in ("samples", "seconds")
 
-        if audio_clips is None:
+        if audio_clip_ranges is None:
             return [], []
 
         self.stream.seek(0)  # Reset the video stream so that pyav can read the entire container
@@ -225,18 +225,18 @@ class AVDecoder:
 
             if audio_unit == "samples":
                 # Convert from samples to seconds
-                audio_clips = [
+                audio_clip_ranges = [
                     (
                         int(clip[0] / audio_sample_rate),
                         int(clip[1] / audio_sample_rate),
                     )
-                    for clip in audio_clips
+                    for clip in audio_clip_ranges
                 ]
 
             out_audio_clips: list[torch.Tensor] = []
             out_audio_clips_timestamps: list[tuple[float, float]] = []
 
-            for start_time, end_time in audio_clips:
+            for start_time, end_time in audio_clip_ranges:
                 # Seek near start time, but rounded down to the nearest frame
                 input_container.seek(int(start_time // av.time_base))
 
@@ -271,8 +271,8 @@ class AVDecoder:
 
     def get_clips(
         self,
-        video_clips: Optional[Sequence[tuple[float, float]]] = None,
-        audio_clips: Optional[Sequence[tuple[float, float]]] = None,
+        video_clip_ranges: Optional[Sequence[tuple[float, float]]] = None,
+        audio_clip_ranges: Optional[Sequence[tuple[float, float]]] = None,
         video_unit: Literal["frames", "seconds"] = "seconds",
         audio_unit: Literal["samples", "seconds"] = "seconds",
         video_out_frame_size: Optional[tuple[int, int]] = None,
@@ -283,8 +283,8 @@ class AVDecoder:
         the `video_unit` and `audio_unit` arguments.
 
         Args:
-            video_clips: List of video clip start and end positions in the given unit (see video_unit)
-            audio_clips: List of audio clip start and end positions in the given unit (see audio_unit)
+            video_clip_ranges: List of video clip start and end positions in the given unit (see video_unit)
+            audio_clip_ranges: List of audio clip start and end positions in the given unit (see audio_unit)
             video_unit: Unit of the video clip positions ("frames" for frame number, "seconds" for timestamp)
             audio_unit: Unit of the audio clip positions ("samples" for sample number, "seconds" for timestamp)
             video_out_frame_size: Output size for video frames (width, height), or None to use the original frame size
@@ -292,30 +292,27 @@ class AVDecoder:
         Returns:
             AVData containing the decoded video and audio clips
         """
-        if video_clips is not None:
+        if video_clip_ranges is not None:
             ret_video_clips, ret_video_clips_timestamps = self.get_video_clips(
-                video_clips, video_unit, video_out_frame_size
+                video_clip_ranges, video_unit, video_out_frame_size
             )
         else:
             ret_video_clips = []
             ret_video_clips_timestamps = []
 
-        if audio_clips is not None:
+        if audio_clip_ranges is not None:
             ret_audio_clips, ret_audio_clips_timestamps = self.get_audio_clips(
-                audio_clips, audio_unit
+                audio_clip_ranges, audio_unit
             )
         else:
             ret_audio_clips = []
             ret_audio_clips_timestamps = []
-
-        metadata = {}
 
         return AVData(
             video_clips=ret_video_clips,
             video_timestamps=ret_video_clips_timestamps,
             audio_clips=ret_audio_clips,
             audio_timestamps=ret_audio_clips_timestamps,
-            info=metadata,
         )
 
     def get_frames(
@@ -338,22 +335,22 @@ class AVDecoder:
         """
         extension = self._get_extension()
         if extension in ("mov", "mp4", "webm", "mkv"):
-            video_clips = [(0, float("inf"))]
+            video_clip_ranges = [(0, float("inf"))]
 
             if video_decode_audio:
-                audio_clips = [(0, float("inf"))]
+                audio_clip_ranges = [(0, float("inf"))]
             else:
-                audio_clips = None
+                audio_clip_ranges = None
 
             return self.get_clips(
-                video_clips=video_clips,
+                video_clip_ranges=video_clip_ranges,
                 video_unit="frames",
-                audio_clips=audio_clips,
+                audio_clip_ranges=audio_clip_ranges,
                 audio_unit="samples",
             )
         elif extension in ("flac", "mp3", "wav"):
             return self.get_clips(
-                audio_clips=[(0, float("inf"))],
+                audio_clip_ranges=[(0, float("inf"))],
                 audio_unit="samples",
             )
         else:
@@ -367,6 +364,12 @@ class AVDecoder:
         if ftype is None:
             return None
         return ftype.extension
+
+    @overload
+    def get_duration(self, get_frame_count: Literal[True]) -> tuple[float, int]: ...
+
+    @overload
+    def get_duration(self, get_frame_count: bool = False) -> tuple[float, Optional[int]]: ...
 
     def get_duration(self, get_frame_count: bool = False) -> tuple[float, Optional[int]]:
         """Get the duration of the video and/or audio stream. If both lengths are found, the maximum is returned.
@@ -452,13 +455,6 @@ class AVWebdatasetDecoder:
         video_decode_audio: bool,
         av_decode: Literal["torch", "AVDecoder"] = "AVDecoder",
     ) -> None:
-        if not AV_DECODE_AVAILABLE:
-            raise ImportError(
-                f"AV decoding is not available. Please install the required dependencies with:\n"
-                f"pip install megatron-energon[av_decode]\n"
-                f"Missing dependency: {MISSING_DEPENDENCY}. Install megatron-energon[av_decode] to use AVWebdatasetDecoder."
-            )
-
         self.video_decode_audio = video_decode_audio
         self.av_decode = av_decode
 

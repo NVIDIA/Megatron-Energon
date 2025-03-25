@@ -18,5 +18,3 @@ class AVData:
     audio_clips: Optional[list[torch.Tensor]]
     #: The timestamps for the audio clips. List of tuples (start, end) in seconds
     audio_timestamps: Optional[list[tuple[float, float]]]
-    #: Metadata for the video and audio. Can contain the fields video_fps (float) and audio_fps (int)
-    info: Dict[str, Union[bool, int, float, str]]
