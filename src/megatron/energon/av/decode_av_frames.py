@@ -284,10 +284,11 @@ class AVDecoder:
         the `video_unit` and `audio_unit` arguments.
 
         Args:
-            video_clips: List of video clip start and end indices
-            audio_clips: List of audio clip start and end indices
-            video_unit: Unit of the video clips ("count" for frame number, "time" for timestamp)
-            audio_unit: Unit of the audio clips ("count" for sample number, "time" for timestamp)
+            video_clips: List of video clip start and end positions in the given unit (see video_unit)
+            audio_clips: List of audio clip start and end positions in the given unit (see audio_unit)
+            video_unit: Unit of the video clip positions ("frames" for frame number, "seconds" for timestamp)
+            audio_unit: Unit of the audio clip positions ("samples" for sample number, "seconds" for timestamp)
+            video_out_frame_size: Output size for video frames (width, height), or None to use the original frame size
 
         Returns:
             AVData containing the decoded video and audio clips
@@ -369,6 +370,15 @@ class AVDecoder:
         return ftype.extension
 
     def get_duration(self, get_frame_count: bool = False) -> tuple[float, Optional[int]]:
+        """Get the duration of the video and/or audio stream. If both lengths are found, the maximum is returned.
+
+        Args:
+            get_frame_count: Whether to return the number of frames in the video. This is a more costly operation.
+
+        Returns:
+            A tuple containing the duration in seconds, and the number of frames in the video
+        """
+
         video_duration = None
         audio_duration = None
         num_frames = None
@@ -447,7 +457,7 @@ class AVWebdatasetDecoder:
             raise ImportError(
                 f"AV decoding is not available. Please install the required dependencies with:\n"
                 f"pip install megatron-energon[av_decode]\n"
-                f"Missing dependency: {MISSING_DEPENDENCY}"
+                f"Missing dependency: {MISSING_DEPENDENCY}. Install megatron-energon[av_decode] to use AVWebdatasetDecoder."
             )
 
         self.video_decode_audio = video_decode_audio
@@ -483,11 +493,12 @@ class AVWebdatasetDecoder:
             for ext in ("mp4", "mov", "webm", "mkv", "flac", "mp3", "wav")
         ):
             return None
+
         av_decoder = self.read_av_data(key, data)
-        if av_decoder is None:
-            return None
+
         if self.av_decode == "AVDecoder":
             return av_decoder
+
         return av_decoder.get_frames(
             video_decode_audio=self.video_decode_audio,
         )
