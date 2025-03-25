@@ -4,7 +4,7 @@
 import io
 from collections.abc import Iterator
 from fractions import Fraction
-from typing import Literal, Optional, Sequence, Union, overload
+from typing import Literal, Optional, Sequence, Union
 
 import numpy as np
 import torch
@@ -14,7 +14,6 @@ try:
     import av
     import av.container
     import filetype
-    import soundfile as sf
 
     from megatron.energon.av.fastseek import Fastseek
 
