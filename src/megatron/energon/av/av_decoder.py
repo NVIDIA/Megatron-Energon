@@ -385,6 +385,8 @@ class AVDecoder:
         audio_duration = None
         num_frames = None
 
+        self.stream.seek(0)  # Reset the video stream so that pyav can read the entire container
+
         with av.open(self.stream) as input_container:
             if input_container.streams.video:
                 video_stream = input_container.streams.video[0]
