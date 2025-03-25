@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from megatron.energon.av.av_data import AVData
-from megatron.energon.av.decode_av_frames import (
+from megatron.energon.av.av_decoder import (
     AVDecoder,
     AVWebdatasetDecoder,
 )

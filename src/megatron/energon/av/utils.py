@@ -2,7 +2,7 @@ from typing import Optional
 
 import numpy as np
 
-from megatron.energon.av.decode_av_frames import AVData, AVDecoder
+from megatron.energon.av.av_decoder import AVData, AVDecoder
 
 
 def get_clips_uniform(
