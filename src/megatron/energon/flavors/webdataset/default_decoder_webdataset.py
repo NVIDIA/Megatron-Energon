@@ -47,7 +47,7 @@ class DefaultDecoderWebdatasetFactory(DefaultGenericWebdatasetFactory[T_sample],
     ignore_decoder_errors: bool
     #: If "AVDecoder", returns an AVDecoder instance for flexible decoding. If "torch",
     #: returns decoded VideoData.
-    av_decode: Literal["torch", "AVDecoder"]
+    av_decode: Literal["torch", "AVDecoder", "pyav"]
     #: Whether to decode audio from video files.
     video_decode_audio: bool
 
@@ -61,7 +61,7 @@ class DefaultDecoderWebdatasetFactory(DefaultGenericWebdatasetFactory[T_sample],
         auto_decode: bool = True,
         image_decode: ImageDecoder = "torchrgb",
         ignore_decoder_errors: bool = False,
-        av_decode: Literal["torch", "AVDecoder"] = "AVDecoder",
+        av_decode: Literal["torch", "AVDecoder", "pyav"] = "AVDecoder",
         video_decode_audio: bool = False,
         **kwargs,
     ):

@@ -453,7 +453,7 @@ class AVWebdatasetDecoder:
     def __init__(
         self,
         video_decode_audio: bool,
-        av_decode: Literal["torch", "AVDecoder"] = "AVDecoder",
+        av_decode: Literal["torch", "AVDecoder", "pyav"] = "AVDecoder",
     ) -> None:
         self.video_decode_audio = video_decode_audio
         self.av_decode = av_decode
@@ -470,7 +470,11 @@ class AVWebdatasetDecoder:
         """
         return AVDecoder(io.BytesIO(data))
 
-    def __call__(self, key: str, data: bytes) -> Optional[Union[AVData, AVDecoder]]:
+    def __call__(
+        self, key: str, data: bytes
+    ) -> Optional[
+        Union[AVData, AVDecoder, "av.container.InputContainer", "av.container.OutputContainer"]
+    ]:
         """
         Extract the video or audio data from default media extensions.
 
@@ -481,6 +485,7 @@ class AVWebdatasetDecoder:
         Returns:
             If av_decode is "torch", returns VideoData containing the decoded frames and metadata.
             If av_decode is "AVDecoder", returns an AVDecoder instance for flexible decoding.
+            If av_decode is "pyav", returns an av.container.InputContainer or av.container.OutputContainer instance.
             Returns None if decoding failed or file type is not supported.
         """
         if not any(
@@ -493,7 +498,11 @@ class AVWebdatasetDecoder:
 
         if self.av_decode == "AVDecoder":
             return av_decoder
-
-        return av_decoder.get_frames(
-            video_decode_audio=self.video_decode_audio,
-        )
+        elif self.av_decode == "pyav":
+            return av.open(av_decoder.stream)
+        elif self.av_decode == "torch":
+            return av_decoder.get_frames(
+                video_decode_audio=self.video_decode_audio,
+            )
+        else:
+            raise ValueError(f"Invalid av_decode value: {self.av_decode}")
