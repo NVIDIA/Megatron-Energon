@@ -46,9 +46,11 @@ class AVDecoder:
         self.stream = stream
         self._seeker = None
 
-    def ensure_seeker(self) -> None:
+    @property
+    def seeker(self) -> Fastseek:
         if self._seeker is None:
             self._seeker = Fastseek(self.stream)
+        return self._seeker
 
     def get_video_clips(
         self,
@@ -70,9 +72,6 @@ class AVDecoder:
         """
 
         assert video_unit in ("frames", "seconds")
-
-        self.ensure_seeker()
-        assert self._seeker is not None
 
         if video_clips is None:
             return [], []
@@ -100,7 +99,7 @@ class AVDecoder:
             time_base: Fraction = video_stream.time_base
             average_frame_duration: int = int(1 / average_rate / time_base)
 
-            if video_clips is not None and video_unit != self._seeker.unit:
+            if video_clips is not None and video_unit != self.seeker.unit:
                 # Convert video_clips to video_unit
                 if video_unit == "frames":
                     # Convert from frames to seconds
@@ -135,7 +134,7 @@ class AVDecoder:
 
                 # Find start frame
                 if (
-                    iframe_info := self._seeker.should_seek(previous_frame_index, start_frame_index)
+                    iframe_info := self.seeker.should_seek(previous_frame_index, start_frame_index)
                 ) is not None:
                     input_container.seek(iframe_info.pts, stream=input_container.streams.video[0])
                     previous_frame_index = iframe_info.index
@@ -145,7 +144,7 @@ class AVDecoder:
                     last_frame = False
 
                     # Container uses frame counts, we can find the exact target frame by counting from the iframe which is at a known offset
-                    if self._seeker.unit == "count":
+                    if self.seeker.unit == "count":
                         if previous_frame_index + i >= start_frame_index:
                             take_frame = True
                         if previous_frame_index + i >= end_frame_index:
@@ -153,7 +152,7 @@ class AVDecoder:
 
                     # Container uses time, the target frame might not correspond exactly to any metadata but the desired timestamp should
                     # fall within a frames display period
-                    if self._seeker.unit == "time":
+                    if self.seeker.unit == "time":
                         if start_frame_index <= frame.pts + average_frame_duration:
                             take_frame = True
                         if end_frame_index <= frame.pts + average_frame_duration:
