@@ -142,13 +142,14 @@ class AVDecoder:
 
                 for i, frame in enumerate(frame_iterator):
                     take_frame = False
+                    last_frame = False
 
                     # Container uses frame counts, we can find the exact target frame by counting from the iframe which is at a known offset
                     if self._seeker.unit == "count":
                         if previous_frame_index + i >= start_frame_index:
                             take_frame = True
                         if previous_frame_index + i >= end_frame_index:
-                            break
+                            last_frame = True
 
                     # Container uses time, the target frame might not correspond exactly to any metadata but the desired timestamp should
                     # fall within a frames display period
@@ -156,7 +157,7 @@ class AVDecoder:
                         if start_frame_index <= frame.pts + average_frame_duration:
                             take_frame = True
                         if end_frame_index <= frame.pts + average_frame_duration:
-                            break
+                            last_frame = True
 
                     if take_frame:
                         if video_out_frame_size is not None:
@@ -176,6 +177,9 @@ class AVDecoder:
                         clip_timestamp_end = float(
                             frame.pts * frame.time_base + average_frame_duration
                         )
+
+                    if last_frame:
+                        break
 
                 previous_frame_index = end_frame_index
 
@@ -205,9 +209,6 @@ class AVDecoder:
         """
 
         assert audio_unit in ("samples", "seconds")
-
-        self.ensure_seeker()
-        assert self._seeker is not None
 
         if audio_clips is None:
             return [], []
@@ -368,55 +369,53 @@ class AVDecoder:
             return None
         return ftype.extension
 
-    @staticmethod
-    def get_duration(
-        input_container: av.container.InputContainer, get_frame_count: bool = False
-    ) -> tuple[float, int]:
+    def get_duration(self, get_frame_count: bool = False) -> tuple[float, Optional[int]]:
         video_duration = None
         audio_duration = None
         num_frames = None
 
-        if input_container.streams.video:
-            video_stream = input_container.streams.video[0]
-            assert video_stream.time_base is not None
+        with av.open(self.stream) as input_container:
+            if input_container.streams.video:
+                video_stream = input_container.streams.video[0]
+                assert video_stream.time_base is not None
 
-            video_start_pts = video_stream.start_time
-            if video_start_pts is None:
-                video_start_pts = 0.0
+                video_start_pts = video_stream.start_time
+                if video_start_pts is None:
+                    video_start_pts = 0.0
 
-            video_duration = video_stream.duration
+                video_duration = video_stream.duration
 
-        if input_container.streams.audio:
-            audio_time_base = input_container.streams.audio[0].time_base
-            audio_start_pts = input_container.streams.audio[0].start_time
-            if audio_start_pts is None:
-                audio_start_pts = 0.0
+            if input_container.streams.audio:
+                audio_time_base = input_container.streams.audio[0].time_base
+                audio_start_pts = input_container.streams.audio[0].start_time
+                if audio_start_pts is None:
+                    audio_start_pts = 0.0
 
-            audio_duration = input_container.streams.audio[0].duration
+                audio_duration = input_container.streams.audio[0].duration
 
-        if audio_duration is None and video_duration is None:
-            # If duration isn't found in header the whole video is decoded to
-            # determine the duration.
-            packets = [p for p in input_container.demux(video=0) if p.pts is not None]
-            num_frames = len(packets)
-            video_duration = packets[-1].pts + packets[-1].duration
+            if audio_duration is None and video_duration is None:
+                # If duration isn't found in header the whole video is decoded to
+                # determine the duration.
+                packets = [p for p in input_container.demux(video=0) if p.pts is not None]
+                num_frames = len(packets)
+                video_duration = packets[-1].pts + packets[-1].duration
 
-        # Take the largest duration of either video or audio duration
-        if audio_duration is not None and video_duration is not None:
-            duration = max(
-                int(video_duration - video_start_pts) * video_stream.time_base,
-                int(audio_duration - audio_start_pts) * audio_time_base,
-            )
-        elif video_duration is not None:
-            duration = int(video_duration - video_start_pts) * video_stream.time_base
-        elif audio_duration is not None:
-            duration = int(audio_duration - audio_start_pts) * audio_time_base
+            # Take the largest duration of either video or audio duration
+            if audio_duration is not None and video_duration is not None:
+                duration = max(
+                    int(video_duration - video_start_pts) * video_stream.time_base,
+                    int(audio_duration - audio_start_pts) * audio_time_base,
+                )
+            elif video_duration is not None:
+                duration = int(video_duration - video_start_pts) * video_stream.time_base
+            elif audio_duration is not None:
+                duration = int(audio_duration - audio_start_pts) * audio_time_base
 
-        if get_frame_count and num_frames is None:
-            packets = [p for p in input_container.demux(video=0) if p.pts is not None]
-            num_frames = len(packets)
+            if get_frame_count and num_frames is None:
+                packets = [p for p in input_container.demux(video=0) if p.pts is not None]
+                num_frames = len(packets)
 
-        return duration, num_frames
+        return float(duration), num_frames
 
 
 class AVWebdatasetDecoder:
