@@ -143,7 +143,7 @@ class AVDecoder:
                     last_frame = False
 
                     # Container uses frame counts, we can find the exact target frame by counting from the iframe which is at a known offset
-                    if self.seeker.unit == "count":
+                    if self.seeker.unit == "frames":
                         if previous_frame_index + i >= start_frame_index:
                             take_frame = True
                         if previous_frame_index + i >= end_frame_index:
@@ -151,7 +151,7 @@ class AVDecoder:
 
                     # Container uses time, the target frame might not correspond exactly to any metadata but the desired timestamp should
                     # fall within a frames display period
-                    if self.seeker.unit == "time":
+                    if self.seeker.unit == "seconds":
                         if start_frame_index <= frame.pts + average_frame_duration:
                             take_frame = True
                         if end_frame_index <= frame.pts + average_frame_duration:

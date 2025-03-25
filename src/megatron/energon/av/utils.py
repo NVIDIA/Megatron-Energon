@@ -38,7 +38,7 @@ def get_clips_uniform(
 
     last_start_time = total_duration - clip_duration_seconds
     clips = [
-        (start_time, start_time + clip_duration_seconds)
+        (float(start_time), float(start_time + clip_duration_seconds))
         for start_time in np.linspace(0, last_start_time, num_clips)
     ]
 
