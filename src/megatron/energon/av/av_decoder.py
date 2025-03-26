@@ -90,13 +90,12 @@ class AVDecoder:
             # video_stream.thread_type = 3
             video_stream.thread_type = 0
 
-            # Collect metadata
-            video_fps = float(video_stream.average_rate) if video_stream.average_rate else 0.0
-
             # Pre-calculate timing info for video
-            average_rate: Fraction = video_stream.average_rate
-            time_base: Fraction = video_stream.time_base
-            average_frame_duration: int = int(1 / average_rate / time_base)
+            average_rate: Fraction = video_stream.average_rate  # Frames per second
+            assert average_rate, "Video stream has no FPS."
+
+            time_base: Fraction = video_stream.time_base  # Seconds per PTS unit
+            average_frame_duration: int = int(1 / average_rate / time_base)  # PTS units per frame
 
             if video_clip_ranges is not None and video_unit != self.seeker.unit:
                 # Convert video_clip_ranges to video_unit
@@ -104,8 +103,8 @@ class AVDecoder:
                     # Convert from frames to seconds
                     video_clip_ranges = [
                         (
-                            int(clip[0] / video_fps),
-                            int(clip[1] / video_fps),
+                            int(clip[0] / average_rate),
+                            int(clip[1] / average_rate),
                         )
                         for clip in video_clip_ranges
                     ]
@@ -113,8 +112,8 @@ class AVDecoder:
                     # Convert from seconds to frames
                     video_clip_ranges = [
                         (
-                            int(clip[0] * video_fps),
-                            int(clip[1] * video_fps),
+                            int(clip[0] * average_rate),
+                            int(clip[1] * average_rate),
                         )
                         for clip in video_clip_ranges
                     ]
@@ -173,7 +172,7 @@ class AVDecoder:
                             clip_timestamp_start = float(frame.pts * frame.time_base)
 
                         clip_timestamp_end = float(
-                            frame.pts * frame.time_base + average_frame_duration
+                            (frame.pts + average_frame_duration) * frame.time_base
                         )
 
                     if last_frame:
@@ -364,6 +363,22 @@ class AVDecoder:
         if ftype is None:
             return None
         return ftype.extension
+
+    def get_video_fps(self) -> float:
+        """Get the FPS of the video stream."""
+        self.stream.seek(0)
+        with av.open(self.stream) as input_container:
+            video_stream = input_container.streams.video[0]
+            assert video_stream.average_rate is not None
+            return float(video_stream.average_rate)
+
+    def get_audio_samples_per_second(self) -> int:
+        """Get the number of samples per second of the audio stream."""
+        self.stream.seek(0)
+        with av.open(self.stream) as input_container:
+            audio_stream = input_container.streams.audio[0]
+            assert audio_stream.sample_rate is not None
+            return int(audio_stream.sample_rate)
 
     @overload
     def get_duration(self, get_frame_count: Literal[True]) -> tuple[float, int]: ...
