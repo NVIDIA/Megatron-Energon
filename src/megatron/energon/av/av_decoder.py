@@ -185,7 +185,9 @@ class AVDecoder:
                     video_clips_timestamps.append((clip_timestamp_start, clip_timestamp_end))
 
         # Stack frames within each clip
-        out_video_clips = [torch.stack(clip_frames) for clip_frames in video_clips_frames]
+        out_video_clips = [
+            torch.stack(clip_frames).permute((0, 3, 1, 2)) for clip_frames in video_clips_frames
+        ]
         return out_video_clips, video_clips_timestamps
 
     def get_audio_clips(
@@ -226,8 +228,8 @@ class AVDecoder:
                 # Convert from samples to seconds
                 audio_clip_ranges = [
                     (
-                        int(clip[0] / audio_sample_rate),
-                        int(clip[1] / audio_sample_rate),
+                        float(clip[0] / audio_sample_rate),
+                        float(clip[1] / audio_sample_rate),
                     )
                     for clip in audio_clip_ranges
                 ]
@@ -237,27 +239,52 @@ class AVDecoder:
 
             for start_time, end_time in audio_clip_ranges:
                 # Seek near start time, but rounded down to the nearest frame
-                input_container.seek(int(start_time // av.time_base))
+                input_container.seek(int(start_time * av.time_base))
 
                 clip_start_time = None
                 clip_end_time = None
 
                 decoded_samples = []
+                previous_frame = None
                 for frame in input_container.decode(audio=0):
                     assert frame.pts is not None, "Audio frame has no PTS timestamp"
                     cur_frame_time = float(frame.pts * frame.time_base)
+                    cur_frame_duration = float(frame.samples / audio_sample_rate)
+
+                    if cur_frame_time < start_time:
+                        # Skip frames before the start time
+                        previous_frame = frame
+                        continue
 
                     if clip_start_time is None:
-                        clip_start_time = cur_frame_time
+                        # This is our first matching frame
+                        if previous_frame is not None:
+                            # We have a previous frame that we need to crop to the start time
+                            prev_start_time = float(previous_frame.pts * previous_frame.time_base)
+                            prev_frame_array = previous_frame.to_ndarray()
+                            prev_frame_array = prev_frame_array[
+                                :, int((start_time - prev_start_time) * audio_sample_rate + 0.5) :
+                            ]
+                            decoded_samples.append(prev_frame_array)
+                            clip_start_time = start_time
+                            clip_end_time = prev_start_time + cur_frame_duration
+                        else:
+                            clip_start_time = cur_frame_time
 
-                    # Stop decoding if we've passed the end
-                    if cur_frame_time >= end_time:
+                    # Stop decoding if the end of the frame is past the end time
+                    if cur_frame_time + cur_frame_duration >= end_time:
+                        # Crop the last frame to the end time
+                        last_frame_array = frame.to_ndarray()
+                        last_frame_array = last_frame_array[
+                            :, : int((end_time - cur_frame_time) * audio_sample_rate + 0.5)
+                        ]
+                        decoded_samples.append(last_frame_array)
+                        clip_end_time = end_time
                         break
 
                     frame_nd = frame.to_ndarray()  # (channels, samples)
                     decoded_samples.append(frame_nd)
-
-                clip_end_time = cur_frame_time
+                    clip_end_time = cur_frame_time + cur_frame_duration
 
                 if decoded_samples:
                     # Combine all channels/samples along samples axis

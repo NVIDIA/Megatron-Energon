@@ -4,6 +4,7 @@
 from typing import Optional
 
 import numpy as np
+import torch
 
 from megatron.energon.av.av_decoder import AVData, AVDecoder
 
@@ -61,7 +62,7 @@ def get_single_frames_uniform(
     av_decoder: AVDecoder,
     num_frames: int,
     video_out_frame_size: Optional[tuple[int, int]] = None,
-) -> AVData:
+) -> torch.Tensor:
     """Generates a sequence of (start, -1) clips, such that each clip contains
     only a single frame and the clips are equidistant from each other.
 
@@ -74,7 +75,7 @@ def get_single_frames_uniform(
         An AVData object containing the extracted images.
     """
 
-    return get_clips_uniform(
+    av_data = get_clips_uniform(
         av_decoder=av_decoder,
         clip_duration_seconds=0,
         num_clips=num_frames,
@@ -82,3 +83,7 @@ def get_single_frames_uniform(
         request_audio=False,
         video_out_frame_size=video_out_frame_size,
     )
+
+    # Concatenate all video single-frame clips to form a single tensor
+    video_tensor = torch.cat(av_data.video_clips, dim=0)
+    return video_tensor

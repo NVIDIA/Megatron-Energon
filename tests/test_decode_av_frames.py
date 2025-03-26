@@ -14,7 +14,7 @@ import numpy as np
 import torch
 import torchvision.transforms as transforms
 
-from megatron.energon.av import AVDecoder
+from megatron.energon.av import AVDecoder, get_clips_uniform, get_single_frames_uniform
 
 # Set multiprocessing start method to 'spawn' on macOS to avoid DataLoader cleanup issues
 if sys.platform == "darwin":
@@ -98,8 +98,9 @@ class TestVideoDecode(unittest.TestCase):
             stream = io.BytesIO(raw_bytes)
 
         # Decode using AVData
-        av_data = AVDecoder(stream)
-        video_tensor, _, _ = av_data.decode_video_frames()
+        av_decoder = AVDecoder(stream)
+        av_data = av_decoder.get_frames()
+        video_tensor = av_data.video_clips[0]
 
         print(video_tensor.shape)
         assert (video_tensor == self.complete_video_tensor).all(), (
@@ -113,10 +114,9 @@ class TestVideoDecode(unittest.TestCase):
             stream = io.BytesIO(raw_bytes)
 
         # Decode using AVData
-        av_data = AVDecoder(stream)
-        video_tensor, _, _ = av_data.decode_video_frames(
-            num_frames=64,
-            out_frame_size=(224, 224),
+        av_decoder = AVDecoder(stream)
+        video_tensor = get_single_frames_uniform(
+            av_decoder=av_decoder, num_frames=64, video_out_frame_size=(224, 224)
         )
 
         # Get strided frames from baseline complete video tensor
@@ -218,8 +218,10 @@ class TestAudioDecode(unittest.TestCase):
             raw_bytes = f.read()
             stream = io.BytesIO(raw_bytes)
 
-        av_data = AVDecoder(stream)
-        audio_tensor, _ = av_data.decode_audio_samples(num_clips=-1)
+        av_decoder = AVDecoder(stream)
+        # audio_tensor, _ = av_data.decode_audio_samples(num_clips=-1)
+        av_data = av_decoder.get_clips(audio_clip_ranges=[(0, float("inf"))], audio_unit="samples")
+        audio_tensor = av_data.audio_clips[0]
 
         assert (audio_tensor == self.complete_audio_tensor).all(), (
             "Energon decoded audio does not match baseline"
@@ -232,17 +234,18 @@ class TestAudioDecode(unittest.TestCase):
             stream = io.BytesIO(raw_bytes)
 
         # Decode using AVData
-        av_data = AVDecoder(stream)
-        audio_tensor, metadata = av_data.decode_audio_samples(num_clips=5, clip_duration=3)
+        av_decoder = AVDecoder(stream)
+        av_data = get_clips_uniform(
+            av_decoder=av_decoder, num_clips=5, clip_duration_seconds=3, request_audio=True
+        )
+        audio_tensor = av_data.audio_clips[0]
+        audio_sps = av_decoder.get_audio_samples_per_second()
 
         # Check audio tensor shape (5 clips, channels, 3 seconds at original sample rate)
-        expected_samples = int(3 * metadata["audio_fps"])  # 3 seconds at original sample rate
-        expected_samples = min(
-            expected_samples, audio_tensor.shape[2]
-        )  # Don't exceed actual length
-        assert audio_tensor.shape == torch.Size([5, audio_tensor.shape[1], expected_samples]), (
-            f"Energon decoded audio clips have wrong size: {audio_tensor.shape}"
-        )
+        assert len(av_data.audio_clips) == 5
+        assert len(av_data.audio_timestamps) == 5
+        assert audio_tensor.shape[1] >= int(3 * audio_sps)
+        assert audio_tensor.shape[1] <= int(4 * audio_sps)
 
     def test_decode_wav(self):
         """Test decoding a WAV file."""
