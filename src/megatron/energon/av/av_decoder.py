@@ -178,7 +178,8 @@ class AVDecoder:
                     if last_frame:
                         break
 
-                previous_frame_index = end_frame_index
+                # Add the number of frames we iterated over to the previous frame index
+                previous_frame_index += i + 1
 
                 if clip_timestamp_start is not None and clip_timestamp_end is not None:
                     video_clips_frames.append(clip_frames)

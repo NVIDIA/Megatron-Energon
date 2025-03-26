@@ -89,7 +89,11 @@ class Fastseek:
             - For Matroska/WebM: timestamps (time-based)
         """
         nearest_iframe: KeyframeInfo = self.nearest_keyframe(target, stream)
-        return nearest_iframe if current < nearest_iframe.index <= target else None
+        return (
+            nearest_iframe
+            if (current < nearest_iframe.index <= target) or (target < current)
+            else None
+        )
 
     def nearest_keyframe(self, target: int, stream: int = 0) -> KeyframeInfo:
         """Find the nearest keyframe that comes before the target frame.

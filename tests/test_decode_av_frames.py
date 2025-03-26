@@ -44,10 +44,8 @@ def load_video_to_tensor(video_path: str) -> torch.Tensor:
     return video_tensor
 
 
-def are_resized_frames_close(
-    tensor1: torch.Tensor, tensor2: torch.Tensor, tolerance: float = 0.01
-) -> bool:
-    """Compare two tensors of video frames with a tolerance for resizing differences.
+def tensors_close(tensor1: torch.Tensor, tensor2: torch.Tensor, tolerance: float = 0.01) -> bool:
+    """Compare two tensors with a tolerance.
 
     Args:
         tensor1: First tensor of frames
@@ -97,7 +95,6 @@ class TestVideoDecode(unittest.TestCase):
             raw_bytes = f.read()
             stream = io.BytesIO(raw_bytes)
 
-        # Decode using AVData
         av_decoder = AVDecoder(stream)
         av_data = av_decoder.get_frames()
         video_tensor = av_data.video_clips[0]
@@ -113,7 +110,6 @@ class TestVideoDecode(unittest.TestCase):
             raw_bytes = f.read()
             stream = io.BytesIO(raw_bytes)
 
-        # Decode using AVData
         av_decoder = AVDecoder(stream)
         video_tensor = get_single_frames_uniform(
             av_decoder=av_decoder, num_frames=64, video_out_frame_size=(224, 224)
@@ -128,44 +124,54 @@ class TestVideoDecode(unittest.TestCase):
         strided_resized_baseline_tensor = resize(strided_baseline_tensor)
 
         # We allow small numerical differences due to different resize implementations
-        assert are_resized_frames_close(
-            video_tensor, strided_resized_baseline_tensor, tolerance=0.01
-        ), "Energon decoded video does not match baseline"
+        assert tensors_close(video_tensor, strided_resized_baseline_tensor, tolerance=0.01), (
+            "Energon decoded video does not match baseline"
+        )
 
-    def test_decode_strided_resized_with_audio(self):
+    def test_video_audio_sync(self):
         """Test decoding video frames and audio clips together."""
         with open("tests/data/sync_test.mp4", "rb") as f:
             raw_bytes = f.read()
             stream = io.BytesIO(raw_bytes)
 
-        # Decode using AVData
-        av_data = AVDecoder(stream)
-        video_tensor, audio_tensor, metadata = av_data.decode_video_frames(
-            num_frames=64,
-            out_frame_size=(224, 224),
-            decode_audio=True,
-            num_clips=5,
-            clip_duration=3,
+        av_decoder = AVDecoder(stream)
+
+        # Extract a single frame every 2 seconds and an audio clip (0.05 seconds long) at the same time.
+        # We extract the frames from the sync video that shows the full white circle on the left,
+        # when the click sound occurs.
+        # Note that the click sound is actually off by 0.022 secs in the original video,
+        # I verified this in Davinci Resolve.
+        av_data = av_decoder.get_clips(
+            video_clip_ranges=[(a * 2 + 1 / 30, a * 2 + 1 / 30) for a in range(65)],
+            audio_clip_ranges=[(a * 2 + 1 / 30, a * 2 + 1 / 30 + 0.05) for a in range(65)],
+            video_unit="seconds",
+            audio_unit="seconds",
+            video_out_frame_size=None,
         )
 
-        # Get strided frames from baseline complete video tensor
-        strided_baseline_tensor = self.complete_video_tensor[
-            np.linspace(0, self.complete_video_tensor.shape[0] - 1, 64, dtype=int).tolist()
-        ]
-        # Now resize the baseline frames
-        resize = transforms.Resize((224, 224))
-        strided_resized_baseline_tensor = resize(strided_baseline_tensor)
-
-        # We allow small numerical differences due to different resize implementations
-        assert are_resized_frames_close(
-            video_tensor, strided_resized_baseline_tensor, tolerance=0.01
-        ), "Energon decoded video does not match baseline"
-
-        # Check audio tensor shape (5 clips, channels, 3 seconds at original sample rate)
-        expected_samples = int(3 * metadata["audio_fps"])  # 3 seconds at original sample rate
-        assert audio_tensor.shape == torch.Size([5, audio_tensor.shape[1], expected_samples]), (
-            f"Energon decoded audio clips have wrong size: {audio_tensor.shape}"
+        # We drop the first two extracted frames because the click sequence hasn't started yet
+        video_clips = av_data.video_clips[2:]
+        audio_clips = av_data.audio_clips[2:]
+        # Then we check that the first extracted frame is all white in the area (18, 18, 55, 55)
+        # Image.fromarray(video_clips[0][0, :, 18:55, 18:55].numpy().transpose(1,2,0)).save('circ.png')
+        assert (video_clips[0][0, :, 18:55, 18:55] > 250).all(), (
+            "First extracted frame is not all white in the area (18, 18, 55, 55)"
         )
+
+        # Check that all the video frames are the same (close value)
+        for video_clip in video_clips:
+            assert tensors_close(video_clip, video_clips[0], tolerance=0.01), (
+                "All video frames are not the same"
+            )
+
+        # Check that the first audio clip has the click sound
+        assert (audio_clips[0] > 0.5).any(), "Audio click not found"
+
+        # Check that all the audio clips are the same (close value)
+        for audio_clip in audio_clips:
+            assert tensors_close(audio_clip, audio_clips[0], tolerance=0.01), (
+                "All audio clips are not the same"
+            )
 
 
 def load_audio_to_tensor(audio_path: str) -> torch.Tensor:
@@ -233,7 +239,6 @@ class TestAudioDecode(unittest.TestCase):
             raw_bytes = f.read()
             stream = io.BytesIO(raw_bytes)
 
-        # Decode using AVData
         av_decoder = AVDecoder(stream)
         av_data = get_clips_uniform(
             av_decoder=av_decoder, num_clips=5, clip_duration_seconds=3, request_audio=True
