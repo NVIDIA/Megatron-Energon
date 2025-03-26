@@ -237,6 +237,17 @@ class AVDecoder:
             out_audio_clips: list[torch.Tensor] = []
             out_audio_clips_timestamps: list[tuple[float, float]] = []
 
+            def audio_frame_array(frame: av.AudioFrame) -> np.ndarray:
+                if frame.format.is_planar:
+                    arr_processed = frame.to_ndarray()  # Already (channels, samples)
+                else:
+                    # Calculate the number of channels and samples
+                    channels = int(frame.layout.nb_channels)
+                    samples = int(frame.samples)
+                    # Reshape the interleaved data to (channels, samples)
+                    arr_processed = np.reshape(frame.to_ndarray(), (channels, samples))
+                return arr_processed
+
             for start_time, end_time in audio_clip_ranges:
                 # Seek near start time, but rounded down to the nearest frame
                 input_container.seek(int(start_time * av.time_base))
@@ -261,7 +272,7 @@ class AVDecoder:
                         if previous_frame is not None:
                             # We have a previous frame that we need to crop to the start time
                             prev_start_time = float(previous_frame.pts * previous_frame.time_base)
-                            prev_frame_array = previous_frame.to_ndarray()
+                            prev_frame_array = audio_frame_array(previous_frame)
                             prev_frame_array = prev_frame_array[
                                 :, int((start_time - prev_start_time) * audio_sample_rate + 0.5) :
                             ]
@@ -274,7 +285,7 @@ class AVDecoder:
                     # Stop decoding if the end of the frame is past the end time
                     if cur_frame_time + cur_frame_duration >= end_time:
                         # Crop the last frame to the end time
-                        last_frame_array = frame.to_ndarray()
+                        last_frame_array = audio_frame_array(frame)
                         last_frame_array = last_frame_array[
                             :, : int((end_time - cur_frame_time) * audio_sample_rate + 0.5)
                         ]
@@ -282,7 +293,7 @@ class AVDecoder:
                         clip_end_time = end_time
                         break
 
-                    frame_nd = frame.to_ndarray()  # (channels, samples)
+                    frame_nd = audio_frame_array(frame)  # (channels, samples)
                     decoded_samples.append(frame_nd)
                     clip_end_time = cur_frame_time + cur_frame_duration
 

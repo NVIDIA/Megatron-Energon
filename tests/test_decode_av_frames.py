@@ -258,18 +258,18 @@ class TestAudioDecode(unittest.TestCase):
             raw_bytes = f.read()
             stream = io.BytesIO(raw_bytes)
 
-        av_data = AVDecoder(stream)
-        audio_tensor, metadata = av_data.decode_audio_samples(
-            num_clips=3,
-            clip_duration=3,
-            audio_format="wav",
+        av_decoder = AVDecoder(stream)
+        av_data = get_clips_uniform(
+            av_decoder=av_decoder, num_clips=3, clip_duration_seconds=3, request_audio=True
         )
+        audio_sps = av_decoder.get_audio_samples_per_second()
 
         # Check audio tensor shape (3 clips, 2 channels, samples)
-        expected_samples = int(3 * metadata["audio_fps"])  # 3 seconds at original sample rate
-        assert audio_tensor.shape == torch.Size([3, 2, expected_samples]), (
-            f"Energon decoded WAV file has wrong size: {audio_tensor.shape}"
-        )
+        expected_samples = int(3 * audio_sps)  # 3 seconds at original sample rate
+        assert all(
+            audio_tensor.shape == torch.Size([2, expected_samples])
+            for audio_tensor in av_data.audio_clips
+        ), "Energon decoded WAV file has wrong shape."
 
 
 if __name__ == "__main__":
