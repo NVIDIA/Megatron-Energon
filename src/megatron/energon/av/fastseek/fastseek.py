@@ -23,13 +23,13 @@ class Fastseek:
     - MP4/MOV: frames are indexed by number and frame counting can be used to get the exact frame
     - Matroska/WebM: frames are indexed by time and inter-frame duration must be accounted for to get to the right frame
 
-    If your container is not list above, pass "probe=True" to the constructor, this will use ffmpeg to parse the stream
+    If your container is not listed above, pass "probe=True" to the constructor, this will use ffmpeg to parse the stream
     without decoding it. Frames will be indexed by number. This is not as fast as using a supported container but is still
     significantly faster than sequential decoding.
     """
 
     keyframes: dict[int, list[KeyframeInfo]]
-    unit: Literal["count", "time"]
+    unit: Literal["frames", "seconds"]
     mime: str
 
     def __init__(self, file: BitsType, probe: bool = False) -> None:
@@ -45,7 +45,7 @@ class Fastseek:
         """
         if probe:
             self.keyframes = parse_probe(file)
-            self.unit = "count"
+            self.unit = "frames"
         else:
             ftype = filetype.guess(file)
 
@@ -56,10 +56,10 @@ class Fastseek:
 
             if ftype.mime in ["video/mp4", "video/quicktime"]:
                 self.keyframes = parse_mpeg(file)
-                self.unit = "count"
+                self.unit = "frames"
             elif ftype.mime in ["video/x-matroska", "video/webm"]:
                 self.keyframes = parse_matroska(file)
-                self.unit = "time"
+                self.unit = "seconds"
             else:
                 raise ValueError(
                     f"Unsupported container: {ftype.mime} (hint: try passing probe=True to the Fastseek constructor)"
@@ -89,7 +89,11 @@ class Fastseek:
             - For Matroska/WebM: timestamps (time-based)
         """
         nearest_iframe: KeyframeInfo = self.nearest_keyframe(target, stream)
-        return nearest_iframe if current < nearest_iframe.index <= target else None
+        return (
+            nearest_iframe
+            if (current < nearest_iframe.index <= target) or (target < current)
+            else None
+        )
 
     def nearest_keyframe(self, target: int, stream: int = 0) -> KeyframeInfo:
         """Find the nearest keyframe that comes before the target frame.
