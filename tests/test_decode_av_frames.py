@@ -7,6 +7,7 @@ import io
 import logging
 import os
 import sys
+import time
 import unittest
 
 import av
@@ -275,6 +276,82 @@ class TestAudioDecode(unittest.TestCase):
             audio_tensor.shape == torch.Size([2, expected_samples])
             for audio_tensor in av_data.audio_clips
         ), "Energon decoded WAV file has wrong shape."
+
+    def test_wav_decode_against_soundfile(self):
+        """Test decoding a WAV file against the soundfile library."""
+
+        try:
+            import soundfile
+        except ImportError:
+            self.skipTest("soundfile library not found")
+
+        with open("tests/data/test_audio.wav", "rb") as f:
+            raw_bytes = f.read()
+            stream = io.BytesIO(raw_bytes)
+
+        av_decoder = AVDecoder(stream)
+        av_data = av_decoder.get_clips(audio_clip_ranges=[(0, float("inf"))], audio_unit="samples")
+        audio_tensor = av_data.audio_clips[0]
+
+        # Load the same audio file using soundfile
+
+        audio_data, _ = soundfile.read("tests/data/test_audio.wav", dtype="int16")
+        audio_tensor_soundfile = torch.from_numpy(audio_data).transpose(0, 1)
+
+        # Check that the two tensors are close
+        assert tensors_close(audio_tensor, audio_tensor_soundfile, tolerance=0.01), (
+            "Energon decoded audio does not match baseline"
+        )
+
+        # Now check partial extraction in the middle of the audio
+        av_data = av_decoder.get_clips(audio_clip_ranges=[(0.5, 1.0)], audio_unit="seconds")
+        audio_tensor = av_data.audio_clips[0]
+        audio_sps = av_decoder.get_audio_samples_per_second()
+        audio_tensor_soundfile = torch.from_numpy(
+            audio_data[int(0.5 * audio_sps) : int(1.0 * audio_sps)]
+        ).transpose(0, 1)
+
+        # Check that the two tensors are close
+        assert tensors_close(audio_tensor, audio_tensor_soundfile, tolerance=0.01), (
+            "Energon decoded audio does not match baseline"
+        )
+
+        # Now compare the speed of the two implementations by repeatedly decoding the same audio
+        num_trials = 100
+
+        start_time = time.perf_counter()
+        for _ in range(num_trials):
+            av_data = av_decoder.get_clips(
+                audio_clip_ranges=[(0, float("inf"))], audio_unit="samples"
+            )
+            audio_tensor = av_data.audio_clips[0]
+        end_time = time.perf_counter()
+        print(f"AVDecoder time: {end_time - start_time} seconds")
+
+        # Now do the same with soundfile
+        start_time = time.perf_counter()
+        for _ in range(num_trials):
+            audio_data, _ = soundfile.read("tests/data/test_audio.wav", dtype="int16")
+            audio_tensor_soundfile = torch.from_numpy(audio_data).transpose(0, 1)
+        end_time = time.perf_counter()
+        print(f"Soundfile time: {end_time - start_time} seconds")
+
+        start_time = time.perf_counter()
+        for _ in range(num_trials):
+            av_data = av_decoder.get_clips(
+                audio_clip_ranges=[(0, float("inf"))], audio_unit="samples"
+            )
+            audio_tensor = av_data.audio_clips[0]
+        end_time = time.perf_counter()
+        print(f"AVDecoder time: {end_time - start_time} seconds")
+
+        # Now do the same with soundfile
+        start_time = time.perf_counter()
+        for _ in range(num_trials):
+            audio_data, _ = soundfile.read("tests/data/test_audio.wav", dtype="int16")
+            audio_tensor_soundfile = torch.from_numpy(audio_data).transpose(0, 1)
+        end_time = time.perf_counter()
+        print(f"Soundfile time: {end_time - start_time} seconds")
 
 
 if __name__ == "__main__":

@@ -245,8 +245,10 @@ class AVDecoder:
                     # Calculate the number of channels and samples
                     channels = int(frame.layout.nb_channels)
                     samples = int(frame.samples)
-                    # Reshape the interleaved data to (channels, samples)
-                    arr_processed = np.reshape(frame.to_ndarray(), (channels, samples))
+                    # Reshape the interleaved data to (samples, channels), then transpose to (channels, samples)
+                    arr_processed = np.reshape(frame.to_ndarray(), (samples, channels)).transpose(
+                        1, 0
+                    )
                 return arr_processed
 
             for start_time, end_time in audio_clip_ranges:
