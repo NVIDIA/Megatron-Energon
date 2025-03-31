@@ -51,9 +51,20 @@ class AVDecoder:
             self._seeker = Fastseek(self.stream)
         return self._seeker
 
+    def get_video(self) -> AVData:
+        """Get the entire video data from the stream (without audio)."""
+
+        video_clips, video_timestamps = self.get_video_clips(video_clip_ranges=[(0, float("inf"))])
+        return AVData(
+            video_clips=video_clips,
+            video_timestamps=video_timestamps,
+            audio_clips=[],
+            audio_timestamps=[],
+        )
+
     def get_video_clips(
         self,
-        video_clip_ranges: Optional[Sequence[tuple[float, float]]] = None,
+        video_clip_ranges: Sequence[tuple[float, float]],
         video_unit: Literal["frames", "seconds"] = "seconds",
         video_out_frame_size: Optional[tuple[int, int]] = None,
     ) -> tuple[list[torch.Tensor], list[tuple[float, float]]]:
@@ -71,9 +82,6 @@ class AVDecoder:
         """
 
         assert video_unit in ("frames", "seconds")
-
-        if video_clip_ranges is None:
-            return [], []
 
         self.stream.seek(0)  # Reset the video stream so that pyav can read the entire container
 
@@ -191,9 +199,19 @@ class AVDecoder:
         ]
         return out_video_clips, video_clips_timestamps
 
+    def get_audio(self) -> AVData:
+        """Get the entire audio data from the stream."""
+        audio_clips, audio_timestamps = self.get_audio_clips(audio_clip_ranges=[(0, float("inf"))])
+        return AVData(
+            video_clips=[],
+            video_timestamps=[],
+            audio_clips=audio_clips,
+            audio_timestamps=audio_timestamps,
+        )
+
     def get_audio_clips(
         self,
-        audio_clip_ranges: Optional[Sequence[tuple[float, float]]] = None,
+        audio_clip_ranges: Sequence[tuple[float, float]],
         audio_unit: Literal["samples", "seconds"] = "seconds",
     ) -> tuple[list[torch.Tensor], list[tuple[float, float]]]:
         """Get audio clips from the audio stream.
@@ -209,9 +227,6 @@ class AVDecoder:
         """
 
         assert audio_unit in ("samples", "seconds")
-
-        if audio_clip_ranges is None:
-            return [], []
 
         self.stream.seek(0)  # Reset the video stream so that pyav can read the entire container
 
@@ -309,6 +324,15 @@ class AVDecoder:
 
         return out_audio_clips, out_audio_clips_timestamps
 
+    def get_video_with_audio(self) -> AVData:
+        """Get the entire video and audio data from the stream."""
+        return self.get_clips(
+            video_clip_ranges=[(0, float("inf"))],
+            audio_clip_ranges=[(0, float("inf"))],
+            video_unit="seconds",
+            audio_unit="seconds",
+        )
+
     def get_clips(
         self,
         video_clip_ranges: Optional[Sequence[tuple[float, float]]] = None,
@@ -375,24 +399,12 @@ class AVDecoder:
         """
         extension = self._get_extension()
         if extension in ("mov", "mp4", "webm", "mkv"):
-            video_clip_ranges = [(0, float("inf"))]
-
             if video_decode_audio:
-                audio_clip_ranges = [(0, float("inf"))]
+                return self.get_video_with_audio()
             else:
-                audio_clip_ranges = None
-
-            return self.get_clips(
-                video_clip_ranges=video_clip_ranges,
-                video_unit="frames",
-                audio_clip_ranges=audio_clip_ranges,
-                audio_unit="samples",
-            )
+                return self.get_video()
         elif extension in ("flac", "mp3", "wav"):
-            return self.get_clips(
-                audio_clip_ranges=[(0, float("inf"))],
-                audio_unit="samples",
-            )
+            return self.get_audio()
         else:
             return None
 

@@ -226,8 +226,7 @@ class TestAudioDecode(unittest.TestCase):
             stream = io.BytesIO(raw_bytes)
 
         av_decoder = AVDecoder(stream)
-        # audio_tensor, _ = av_data.decode_audio_samples(num_clips=-1)
-        av_data = av_decoder.get_clips(audio_clip_ranges=[(0, float("inf"))], audio_unit="samples")
+        av_data = av_decoder.get_audio()
         audio_tensor = av_data.audio_clips[0]
 
         assert (audio_tensor == self.complete_audio_tensor).all(), (
