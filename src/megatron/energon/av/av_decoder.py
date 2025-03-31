@@ -111,8 +111,8 @@ class AVDecoder:
                     # Convert from frames to seconds
                     video_clip_ranges = [
                         (
-                            int(clip[0] / average_rate),
-                            int(clip[1] / average_rate),
+                            clip[0] / average_rate,
+                            clip[1] / average_rate,
                         )
                         for clip in video_clip_ranges
                     ]
@@ -120,8 +120,8 @@ class AVDecoder:
                     # Convert from seconds to frames
                     video_clip_ranges = [
                         (
-                            int(clip[0] * average_rate),
-                            int(clip[1] * average_rate),
+                            clip[0] * average_rate,
+                            clip[1] * average_rate,
                         )
                         for clip in video_clip_ranges
                     ]
@@ -134,6 +134,11 @@ class AVDecoder:
 
             for video_clip_range in video_clip_ranges:
                 start_frame_index, end_frame_index = video_clip_range
+
+                # Convert to int if possible, set end to None if infinite
+                start_frame_index = int(start_frame_index)
+                end_frame_index = int(end_frame_index) if end_frame_index != float("inf") else None
+
                 clip_frames: list[torch.Tensor] = []
                 clip_timestamp_start = None
                 clip_timestamp_end = None
@@ -153,7 +158,10 @@ class AVDecoder:
                     if self.seeker.unit == "frames":
                         if previous_frame_index + i >= start_frame_index:
                             take_frame = True
-                        if previous_frame_index + i >= end_frame_index:
+                        if (
+                            end_frame_index is not None
+                            and previous_frame_index + i >= end_frame_index
+                        ):
                             last_frame = True
 
                     # Container uses time, the target frame might not correspond exactly to any metadata but the desired timestamp should
@@ -161,7 +169,10 @@ class AVDecoder:
                     if self.seeker.unit == "seconds":
                         if start_frame_index <= frame.pts + average_frame_duration:
                             take_frame = True
-                        if end_frame_index <= frame.pts + average_frame_duration:
+                        if (
+                            end_frame_index is not None
+                            and end_frame_index <= frame.pts + average_frame_duration
+                        ):
                             last_frame = True
 
                     if take_frame:
