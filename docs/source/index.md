@@ -32,6 +32,7 @@ maxdepth: 2
 ---
 basic/quickstart
 basic/data_prep
+basic/data_decoding
 basic/basics_flow
 basic/task_encoder
 basic/metadataset
