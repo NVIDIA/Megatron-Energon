@@ -41,6 +41,7 @@ dev = [
   "sphinxcontrib-napoleon",
   "sphinx",
   "myst-parser",
+  "soundfile",
   "sphinx-rtd-theme",
   "sphinx-click",
 ]
@@ -72,7 +73,6 @@ av_decode = [
   "filetype>=1.2.0",
   "ebmlite>=3.3.1",
   "av>=13.0.0",
-  "soundfile",
 ]
 
 [project.urls]
