@@ -228,6 +228,7 @@ These are the possible integrated types you can currently choose from:
       * {py:attr}`words_text: list[str] | None <megatron.energon.VQAOCRSample.words_text>`: The text content of the text words
 
 
+(sample-loading)=
 ### Sample Loading
 
 There are multiple options for how to convert the data stored in the tar files to an instance of one of the sample types above.

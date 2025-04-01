@@ -13,4 +13,14 @@ SPDX-License-Identifier: BSD-3-Clause -->
     :members:
     :undoc-members:
     :show-inheritance:
+
+```
+
+# megatron.energon.av
+
+```{eval-rst}
+.. automodule:: megatron.energon.av
+    :members:
+    :undoc-members:
+    :show-inheritance:
 ```

@@ -17,7 +17,7 @@ def get_clips_uniform(
     request_audio: bool = False,
     video_out_frame_size: Optional[tuple[int, int]] = None,
 ) -> AVData:
-    """Generates a sequence of (start, end) clips, such that each clip is of
+    """Extracts a sequence of clips, such that each clip is of
     equal duration and the clips are equidistant from each other.
 
     Args:
@@ -63,8 +63,8 @@ def get_single_frames_uniform(
     num_frames: int,
     video_out_frame_size: Optional[tuple[int, int]] = None,
 ) -> torch.Tensor:
-    """Generates a sequence of (start, -1) clips, such that each clip contains
-    only a single frame and the clips are equidistant from each other.
+    """Extracts a sequence of clips, such that each clip contains
+    only a single frame and the frames are equidistant from each other.
 
     Args:
         av_decoder: An AVDecoder instance.
@@ -72,7 +72,7 @@ def get_single_frames_uniform(
         video_out_frame_size: The size of the video frames to output, or None to use the original size.
 
     Returns:
-        An AVData object containing the extracted images.
+        A tensor of shape (num_frames, channels, height, width) containing the extracted frames.
     """
 
     av_data = get_clips_uniform(

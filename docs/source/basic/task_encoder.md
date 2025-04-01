@@ -6,7 +6,7 @@ SPDX-License-Identifier: BSD-3-Clause -->
 The "Task Encoder" is an Energon-specific concept. It is a class that describes how each sample is going to be processed at different stages of the pipeline.
 Please also take a look at [](basics_flow) to see the pipeline.
 
-If you don't specify any task encoder, a default version, the {py:meth}`DefaultTaskEncoder <megatron.energon.DefaultTaskEncoder>` will be used.
+If you don't specify any task encoder, a default version, the {py:class}`DefaultTaskEncoder <megatron.energon.DefaultTaskEncoder>` will be used.
 
 For writing your own task encoder, create a class based on {py:class}`DefaultTaskEncoder <megatron.energon.DefaultTaskEncoder>`
 and override one or more of the following methods. The data flow of {py:func}`get_train_dataset <megatron.energon.get_train_dataset>` or {py:func}`get_val_dataset <megatron.energon.get_val_dataset>` is as follows:
