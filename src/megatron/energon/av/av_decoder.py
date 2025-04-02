@@ -4,7 +4,7 @@
 import io
 from collections.abc import Iterator
 from fractions import Fraction
-from typing import Literal, Optional, Sequence, Union, overload, BinaryIO
+from typing import BinaryIO, Literal, Optional, Sequence, Union, overload
 
 import numpy as np
 import torch
