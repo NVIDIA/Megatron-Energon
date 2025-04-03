@@ -130,7 +130,6 @@ class BaseWebdatasetFactory(
             self.shards,
             part_filter=self.part_filter,
             sample_filter=self.sample_filter,
-            itar_cache_size=parallel_shard_iters,
         )
 
         dataset = WebdatasetSampleLoaderDataset(

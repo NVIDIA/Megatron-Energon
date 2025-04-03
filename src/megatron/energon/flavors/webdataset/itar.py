@@ -5,45 +5,112 @@ import contextlib
 import struct
 import tarfile
 from types import TracebackType
-from typing import BinaryIO, Dict, Generator, Optional, Tuple, Type, Union
+from typing import BinaryIO, Generator, Optional, Tuple, Type, Union
 
-from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.epathlib import EPath
+from megatron.energon.flavors.webdataset.fast_read import FileRandomReadPool
 from megatron.energon.retry_stream import RetryReadStream
 
 ITAR_SUFFIX = ".tar.idx"
 
 
+STATS_NUMBER_OF_SEEKS = 0
+STATS_NUMBER_OF_OPENS = 0
+STATS_NUMBER_OF_READS = 0
+STATS_BYTES_READ = 0
+
+
 class TarIndexReader:
     def __init__(self, tar_path: Union[EPath, str]):
+        global STATS_NUMBER_OF_OPENS
         tar_path = EPath(tar_path)
         self.itar = (tar_path.with_suffix(ITAR_SUFFIX)).open("rb")
+        STATS_NUMBER_OF_OPENS += 1
         self._length = len(self)
 
-    def __getitem__(self, index: int) -> int:
+    def get_start_end(self, index: int) -> Tuple[int, int]:
+        global STATS_NUMBER_OF_SEEKS
+        global STATS_BYTES_READ
         if index >= self._length or index < 0:
             raise IndexError(f"Index {index} out of range")
 
         if self.itar.tell() != 8 * index:
             self.itar.seek(8 * index)
+            STATS_NUMBER_OF_SEEKS += 1
+        STATS_BYTES_READ += 16
+        start, end = struct.unpack("QQ", self.itar.read(16))
+        return start, end
 
+    def __getitem__(self, index: int) -> int:
+        global STATS_NUMBER_OF_SEEKS
+        global STATS_BYTES_READ
+        if index >= self._length or index < 0:
+            raise IndexError(f"Index {index} out of range")
+
+        if self.itar.tell() != 8 * index:
+            self.itar.seek(8 * index)
+            STATS_NUMBER_OF_SEEKS += 1
+        STATS_BYTES_READ += 8
         return struct.unpack("Q", self.itar.read(8))[0]
 
     def __iter__(self) -> Generator[int, None, None]:
+        global STATS_NUMBER_OF_READS
+        global STATS_BYTES_READ
         self.itar.seek(0)
         while True:
             raw = self.itar.read(8)
             if len(raw) == 0:
                 break
             assert len(raw) == 8
+            STATS_NUMBER_OF_READS += 1
+            STATS_BYTES_READ += 8
             yield struct.unpack("Q", raw)[0]
 
     def __len__(self) -> int:
+        global STATS_NUMBER_OF_SEEKS
         self.itar.seek(0, 2)
+        STATS_NUMBER_OF_SEEKS += 1
         return self.itar.tell() // 8
 
     def close(self):
         self.itar.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+
+class TarIndexReader2:
+    def __init__(self, tar_path: Union[EPath, str]):
+        tar_path = EPath(tar_path)
+        self.pool = FileRandomReadPool()
+        self.mmap = self.pool.mmap(str(tar_path.with_suffix(ITAR_SUFFIX)))
+        self._length = len(self)
+
+    def get_start_end(self, index: int) -> Tuple[int, int]:
+        if index >= self._length or index < 0:
+            raise IndexError(f"Index {index} out of range")
+
+        start, end = struct.unpack("QQ", self.mmap[index * 8 : (index + 2) * 8])
+        return start, end
+
+    def __getitem__(self, index: int) -> int:
+        if index >= self._length or index < 0:
+            raise IndexError(f"Index {index} out of range")
+
+        return struct.unpack("Q", self.mmap[index * 8 : (index + 1) * 8])[0]
+
+    def __iter__(self) -> Generator[int, None, None]:
+        for i in range(self._length):
+            yield self[i]
+
+    def __len__(self) -> int:
+        return self.mmap.size() // 8
+
+    def close(self):
+        self.pool.close()
 
     def __enter__(self):
         return self
@@ -134,24 +201,6 @@ class SubFileReader(BinaryIO):
         return False
 
 
-def get_itar_byte_offset(
-    path: Union[str, EPath],
-    sample_offset: int = 0,
-) -> int:
-    """Gets the byte offset from sample offsets."""
-    if sample_offset == 0:
-        return 0
-    with TarIndexReader(path) as itar:
-        return itar[sample_offset]
-
-
-@dataclass_slots
-class CacheEntry:
-    tar_index_reader: TarIndexReader
-    lookahead_offset: Optional[int] = None
-    lookahead_byteoffset: Optional[int] = None
-
-
 class CachedItarOffsetReader:
     """
     This class is a high-level wrapper around TarIndexReader that caches some
@@ -163,87 +212,10 @@ class CachedItarOffsetReader:
         cache_size: The number of entries to keep in the cache. By default, we keep 32.
     """
 
-    def __init__(self, cache_size: int = 32):
-        # Maps (tar_file, current_offset) -> CacheEntry
-        self.tar_index_reader_cache: Dict[Tuple[str, int], CacheEntry] = {}
-        self.cache_size = cache_size
+    pool: FileRandomReadPool
 
-    def _find_or_create_entry(
-        self,
-        tar_file: Union[str, "EPath"],
-        sample_offset: int,
-    ) -> Tuple[Tuple[str, int], CacheEntry]:
-        """
-        1. If we already have a key == (tar_file, sample_offset), return it.
-        2. Otherwise, create a new entry (and evict if necessary).
-        """
-        tar_file = str(tar_file)
-        key = (tar_file, sample_offset)
-
-        # Direct hit in the cache?
-        if key in self.tar_index_reader_cache:
-            return key, self.tar_index_reader_cache[key]
-
-        # We didn't find an existing entry. Create a new one.
-        # Evict if needed.
-        if len(self.tar_index_reader_cache) >= self.cache_size:
-            self._evict_one_entry()
-
-        new_reader = TarIndexReader(tar_file)
-        cache_entry = CacheEntry(tar_index_reader=new_reader)
-        self.tar_index_reader_cache[key] = cache_entry
-        return key, cache_entry
-
-    def _evict_one_entry(self):
-        """
-        Evict the 'oldest' item in the cache. Here we just pop the first item
-        returned by iter(...) in Python 3.7+ which *should* be insertion order,
-        but not strictly an LRU. For true LRU, you can use OrderedDict or similar.
-        """
-        oldest_key = next(iter(self.tar_index_reader_cache))
-        oldest_entry = self.tar_index_reader_cache.pop(oldest_key)
-        oldest_entry.tar_index_reader.close()
-
-    def _get_itar_byte_offset_with_entry(
-        self,
-        cache_entry: CacheEntry,
-        sample_offset: int,
-    ) -> Tuple[int, int]:
-        """
-        Return (start_byte_offset, length_to_next),
-        possibly using per-entry lookahead for speed.
-        """
-        tar_index_reader = cache_entry.tar_index_reader
-
-        # If offset=0, define the result as byte offset=0 for convenience
-        if sample_offset == 0:
-            result_byte_offset = 0
-        elif sample_offset == cache_entry.lookahead_offset:
-            # Reuse the previously cached byte offset from the lookahead
-            assert cache_entry.lookahead_byteoffset is not None, (
-                "Lookahead offset matched but no lookahead byte offset found."
-            )
-            result_byte_offset = cache_entry.lookahead_byteoffset
-        else:
-            # Normal random access
-            result_byte_offset = tar_index_reader[sample_offset]
-
-        # Prepare the lookahead for (sample_offset+1)
-        next_offset = sample_offset + 1
-        try:
-            cache_entry.lookahead_byteoffset = tar_index_reader[next_offset]
-            cache_entry.lookahead_offset = next_offset
-        except IndexError:
-            cache_entry.lookahead_offset = None
-            cache_entry.lookahead_byteoffset = None
-
-        # length = difference to the next offset, or 0 if none
-        if cache_entry.lookahead_byteoffset is not None:
-            length = cache_entry.lookahead_byteoffset - result_byte_offset
-        else:
-            length = 0
-
-        return result_byte_offset, length
+    def __init__(self):
+        self.pool = FileRandomReadPool()
 
     def get_itar_byte_offset(
         self,
@@ -255,18 +227,13 @@ class CachedItarOffsetReader:
         """
 
         # Find or create the suitable CacheEntry
-        key, entry = self._find_or_create_entry(tar_file, sample_offset)
+        mm = self.pool.mmap(str(EPath(tar_file).with_suffix(ITAR_SUFFIX)))
 
-        # Use (and update) the per-entry lookahead logic
-        result_byte_offset, length = self._get_itar_byte_offset_with_entry(entry, sample_offset)
-
-        # Update cache entry with the new offset
-        self.tar_index_reader_cache.pop(key)
-        if entry.lookahead_offset is not None:
-            new_key = (str(tar_file), entry.lookahead_offset)
-            self.tar_index_reader_cache[new_key] = entry
-
-        return result_byte_offset, length
+        start = struct.unpack("Q", mm[sample_offset * 8 : (sample_offset + 1) * 8])[0]
+        end = struct.unpack("Q", mm[(sample_offset + 1) * 8 : (sample_offset + 2) * 8])[0]
+        # start, end = struct.unpack("QQ", mm[sample_offset * 8:(sample_offset + 2) * 8])
+        assert end > start, f"start: {start}, end: {end}"
+        return start, end - start
 
 
 class ITarFile(tarfile.TarFile):
@@ -292,6 +259,10 @@ class ITarFile(tarfile.TarFile):
             self.in_init = False
 
     def next(self):
+        global STATS_NUMBER_OF_READS
+        global STATS_NUMBER_OF_SEEKS
+        global STATS_BYTES_READ
+
         if self.in_init:
             # Don't automatically read the first member
             return None
@@ -299,8 +270,13 @@ class ITarFile(tarfile.TarFile):
         if self.offset != self.fileobj.tell():
             # This prevents tarfile from reading the one byte before
             self.fileobj.seek(self.offset)
+            STATS_NUMBER_OF_SEEKS += 1
 
-        return super().next()
+        start_offset = self.offset
+        res = super().next()
+        STATS_NUMBER_OF_READS += 1
+        STATS_BYTES_READ += self.offset - start_offset
+        return res
 
 
 @contextlib.contextmanager
@@ -315,6 +291,7 @@ def open_itar(path: Union[str, EPath], byte_offset: int = 0, byte_size: Optional
     Returns:
         The opened tarfile
     """
+    global STATS_NUMBER_OF_OPENS, STATS_NUMBER_OF_SEEKS
     path = EPath(path)
 
     # TODO: if tar file startswith(b"\x1f\x8b\x08") -> Seekable gzip file
@@ -327,14 +304,17 @@ def open_itar(path: Union[str, EPath], byte_offset: int = 0, byte_size: Optional
         if byte_size is None:
             byte_size = path.size() - byte_offset
         with RetryReadStream(path) as stream:
+            STATS_NUMBER_OF_OPENS += 1
             with SubFileReader(
                 stream,
                 offset=byte_offset,
                 size=byte_size,
             ) as fileobj:
+                STATS_NUMBER_OF_SEEKS += 1
                 with ITarFile.open(fileobj=fileobj, mode="r:") as f:
                     yield f
     else:
         with RetryReadStream(path) as fileobj:
+            STATS_NUMBER_OF_OPENS += 1
             with ITarFile.open(fileobj=fileobj, mode="r:") as f:
                 yield f
