@@ -200,8 +200,7 @@ def command(
                 show_pos=True,
                 length=length,
             ) as bar:
-                for el in bar:
-                    yield el
+                yield from bar
 
     else:
 

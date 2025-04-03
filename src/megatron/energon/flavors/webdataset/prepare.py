@@ -57,7 +57,6 @@ class SqliteIndexWriterAggregator(BaseAggregator):
     ):
         self.sqlite_path = sqlite_path
         self.total_tasks = total_tasks
-        self.progress_fn = progress_fn
         self.writer = None
         self.had_update = False
         self.shards = []
@@ -66,7 +65,7 @@ class SqliteIndexWriterAggregator(BaseAggregator):
         if progress_fn is not None:
             self.prog_iter = progress_fn(iter(range(self.total_tasks)), self.total_tasks)
         else:
-            self.prog_iter = None
+            self.prog_iter = iter(range(self.total_tasks))
 
     def on_start(self, aggregator_pool: AggregatorPool) -> None:
         self.writer = SqliteIndexWriter(self.sqlite_path)
@@ -78,8 +77,7 @@ class SqliteIndexWriterAggregator(BaseAggregator):
             self.had_update = True
         elif isinstance(item, tuple):
             # This is a (shard_info, parts) tuple
-            if self.prog_iter is not None:
-                next(self.prog_iter)
+            next(self.prog_iter)
 
             shard_info, cur_parts = item
             assert shard_info.count != 0, f"Shard {shard_info.name} has no samples."
@@ -235,7 +233,7 @@ class WebdatasetPreparator:
         info_config: str = ".info.yaml",
         split_config: str = "split.yaml",
         shuffle_seed: Optional[int] = 42,
-        progress_fn: Callable[[Iterator[T], int], Iterator[T]] = (lambda x, l: x),
+        progress_fn: Callable[[Iterator[Any], int], Iterator[T]] = (lambda x, y: x),
         workers: int = 32,
         tar_index_only: bool = False,
     ) -> Tuple[Set[str], List[Tuple[str, int]]]:
@@ -269,7 +267,9 @@ class WebdatasetPreparator:
         (parent_path / MAIN_FOLDER_NAME).mkdir(exist_ok=True)
 
         aggregator = SqliteIndexWriterAggregator(
-            parent_path / MAIN_FOLDER_NAME / "index.sqlite", total_tasks=len(paths)
+            parent_path / MAIN_FOLDER_NAME / "index.sqlite",
+            total_tasks=len(paths),
+            progress_fn=progress_fn,
         )
 
         process_tar = functools.partial(
@@ -285,12 +285,10 @@ class WebdatasetPreparator:
             aggregator=aggregator,
         )
 
-        pool.start()
-
         for path in paths:
             pool.submit_task(path)
 
-        pool.close()
+        pool.process()
 
         # Get final results
         shards, found_parts, had_update, duplicates = pool.get_final_aggregator_data()
