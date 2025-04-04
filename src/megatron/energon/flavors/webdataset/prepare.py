@@ -39,7 +39,11 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T", covariant=True)
 
 
-class SqliteIndexWriterAggregator(BaseAggregator):
+class SqliteIndexWriterAggregator(
+    BaseAggregator[
+        Tuple[ShardInfo, Set[str]], Tuple[List[ShardInfo], Set[str], bool, List[Tuple[str, int]]]
+    ]
+):
     sqlite_path: EPath
     total_tasks: int
     progress_fn: Optional[Callable]
@@ -47,7 +51,7 @@ class SqliteIndexWriterAggregator(BaseAggregator):
     had_update: bool
     shards: List[ShardInfo]
     found_parts: Set[str]
-    prog_iter: Optional[Iterator]
+    prog_iter: Iterator
 
     def __init__(
         self,
@@ -70,7 +74,11 @@ class SqliteIndexWriterAggregator(BaseAggregator):
     def on_start(self, aggregator_pool: AggregatorPool) -> None:
         self.writer = SqliteIndexWriter(self.sqlite_path)
 
-    def on_item(self, item: Any, aggregator_pool: AggregatorPool) -> None:
+    def on_item(
+        self,
+        item: Union[Dict[str, Any], Tuple[ShardInfo, Set[str]]],
+        aggregator_pool: AggregatorPool,
+    ) -> None:
         assert self.writer is not None, "Writer is not initialized."
         if isinstance(item, dict):
             self.writer.append_sample(**item)
@@ -89,7 +97,9 @@ class SqliteIndexWriterAggregator(BaseAggregator):
         assert self.writer is not None, "Writer is not initialized."
         self.writer.close()
 
-    def get_final_result_data(self) -> Any:
+    def get_final_result_data(
+        self,
+    ) -> Tuple[List[ShardInfo], Set[str], bool, List[Tuple[str, int]]]:
         assert self.writer is not None, "Writer is not initialized."
         return self.shards, self.found_parts, self.had_update, self.writer.duplicates
 
@@ -288,10 +298,7 @@ class WebdatasetPreparator:
         for path in paths:
             pool.submit_task(path)
 
-        pool.process()
-
-        # Get final results
-        shards, found_parts, had_update, duplicates = pool.get_final_aggregator_data()
+        shards, found_parts, had_update, duplicates = pool.process()
 
         if had_update:
             logger.info("Regenerating dataset UUID...")
