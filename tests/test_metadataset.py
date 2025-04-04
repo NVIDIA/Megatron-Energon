@@ -1180,6 +1180,33 @@ class TestDataset(unittest.TestCase):
             locals().clear()
             gc.collect()
 
+    def test_slice_iter_shuffle_over_epochs(self):
+        torch.manual_seed(42)
+
+        worker_config = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=0,
+            seed_offset=42,
+        )
+
+        def new_loader():
+            return get_savable_loader(
+                get_train_dataset(
+                    self.mds_path,
+                    worker_config=worker_config,
+                    batch_size=10,
+                    parallel_shard_iters=2,
+                    shuffle_buffer_size=None,
+                    max_samples_per_sequence=None,
+                    shuffle_over_epochs_multiplier=-1,
+                ),
+            )
+
+        # Train mode dataset
+        loader = new_loader()
+        _ = [data.text for idx, data in zip(range(1000), loader)]
+
 
 if __name__ == "__main__":
     unittest.main()

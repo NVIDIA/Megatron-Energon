@@ -333,7 +333,8 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
                         self._pending_slices_offset += 1
                     else:
                         # Randomly select a new slice directly (with replacement)
-                        next_idx = self._worker_rng.randbelow(len(self.slice_offsets))
+                        num_slices = len(self.slice_offsets) - 1
+                        next_idx = self._worker_rng.randbelow(num_slices)
                     next_slice_state = slice_at(next_idx)
                     active_slice_probs[slice_idx] = (
                         self.slice_offsets[next_slice_state.index + 1]
