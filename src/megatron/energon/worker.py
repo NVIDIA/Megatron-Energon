@@ -11,7 +11,6 @@ import torch.distributed
 import torch.utils.data
 
 from megatron.energon.dataclass_slots import dataclass_slots
-from megatron.energon.epathlib import EPath
 
 __all__ = ("WorkerConfig",)
 
