@@ -145,7 +145,7 @@ def get_val_dataset(
         training=False, split_part=split_part, worker_config=worker_config, **kwargs
     )
     return task_encoder.build_val_datasets(
-        datasets=[dataset.dataset for dataset in datasets.datasets],
+        datasets=datasets.datasets,
         worker_config=worker_config,
         batch_size=batch_size,
         batch_drop_last=batch_drop_last,
@@ -197,7 +197,7 @@ def get_val_datasets(
     return [
         (
             task_encoder.build_val_datasets(
-                datasets=[dataset.dataset],
+                datasets=[dataset],
                 worker_config=worker_config,
                 batch_size=batch_size,
                 batch_drop_last=batch_drop_last,
