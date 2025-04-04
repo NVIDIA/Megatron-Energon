@@ -1,6 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+import io
 from abc import ABC, abstractmethod
 from bisect import bisect_right
 from typing import Callable, Dict, List, Optional, Tuple, Union, overload
@@ -8,7 +9,7 @@ from typing import Callable, Dict, List, Optional, Tuple, Union, overload
 from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.webdataset.config import skip_meta_re, split_name_re
-from megatron.energon.flavors.webdataset.indexing import JoinIndexReader
+from megatron.energon.flavors.webdataset.indexing import JoinIndexReader, SqliteIndexReader
 from megatron.energon.flavors.webdataset.itar import CachedItarOffsetReader, ITarFile
 from megatron.energon.flavors.webdataset.structs import FilteredSample, ShardInfo
 
@@ -372,3 +373,116 @@ class ShardInfosITarReader(ITarReader):
             f"len(shards)={len(self.tar_filenames)}, "
             f"shards=[{self.tar_filenames[0] if self.tar_filenames else 'N/A'}, ...])"
         )
+
+
+class SqliteITarReader:
+    """
+    An ITarReader that uses a SQLite database to look up samples by name.
+
+    The SQLite database is expected to be at `dataset_path / MAIN_FOLDER_NAME / "index.sqlite"`.
+
+    Args:
+        dataset_path: Path to the dataset
+        tar_filenames: List of tar file names
+        base_path: Base path for the relative tar_filepaths
+        part_filter: Optional filter function to select parts of the samples
+        itar_cache_size: Number of tar readers to keep open at the same time
+        sample_filter: Optional filter function to select samples
+    """
+
+    sqlite_reader: SqliteIndexReader
+
+    def __init__(
+        self,
+        dataset_path: EPath,
+        tar_filenames: List[str],
+        base_path: EPath,
+        part_filter: Optional[Callable[[str], bool]] = None,
+        itar_cache_size: int = 5,
+        sample_filter: Optional[Callable[[str], bool]] = None,
+    ):
+        from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
+        from megatron.energon.flavors.webdataset.indexing import SqliteIndexReader
+
+        # Create the full path to each tar file
+        self.tar_filepaths = [base_path / fn for fn in tar_filenames]
+
+        # Initialize the SQLite reader
+        sqlite_path = dataset_path / MAIN_FOLDER_NAME / "index.sqlite"
+        self.sqlite_reader = SqliteIndexReader(sqlite_path)
+
+        # super().__init__(
+        #     base_path=base_path,
+        #     tar_filenames=tar_filenames,
+        #     tar_filepaths=tar_filepaths,
+        #     part_filter=part_filter,
+        #     itar_cache_size=itar_cache_size,
+        #     sample_filter=sample_filter,
+        # )
+
+    def get_bytes_by_filename(self, fname: str) -> bytes:
+        """
+        Get a sample by its key name.
+
+        Args:
+            key: The sample key to look up
+
+        Returns:
+            The sample, or None if not found or filtered out
+        """
+
+        m = split_name_re.match(fname)
+        if not m:
+            raise ValueError(f"Invalid file name: {fname}")
+
+        sample_key, _ = m.groups()
+
+        itar_sample_ptr = self.sqlite_reader.get_sample_pointer_by_key(sample_key)
+
+        with self.tar_filepaths[itar_sample_ptr.tar_file_id].open("rb") as f:
+            f.seek(itar_sample_ptr.byte_offset)
+            raw_tar_bytes = f.read(itar_sample_ptr.byte_size)
+
+        tar_file = ITarFile.open(fileobj=io.BytesIO(raw_tar_bytes), mode="r:")
+
+        while tar_file.offset < itar_sample_ptr.byte_size:
+            tarinfo = tar_file.next()
+            if tarinfo is None:
+                raise ValueError("Unexpected end of tar file")
+            if not tarinfo.isfile() or tarinfo.name is None:
+                continue
+            if tarinfo.name == fname:
+                return tar_file.extractfile(tarinfo).read()
+        raise ValueError(f"File not found in tar file: {fname}")
+
+    def __len__(self) -> int:
+        """Return the total number of samples in the database."""
+        return self.sqlite_reader.get_sample_count()
+
+    def __str__(self) -> str:
+        """Return a descriptive string of this reader."""
+        return (
+            f"SqliteITarReader("
+            f"len={len(self)}, base_path={self.base_path}, "
+            f"len(shards)={len(self.tar_filenames)}, "
+            f"shards=[{self.tar_filenames[0] if self.tar_filenames else 'N/A'}, ...])"
+        )
+
+    def close(self):
+        """Close the SQLite reader and any open ITarFiles."""
+        # Close the SQLite reader
+        if hasattr(self, "sqlite_reader") and self.sqlite_reader is not None:
+            self.sqlite_reader.close()
+
+        # Close any open ITarFiles (using parent class implementation)
+        for tar_file_id in list(self.itar_files_cache.keys()):
+            tar_file = self.itar_files_cache[tar_file_id]
+            if (
+                tar_file is not None
+                and hasattr(tar_file, "fileobj")
+                and tar_file.fileobj is not None
+            ):
+                tar_file.fileobj.close()
+            if tar_file is not None and hasattr(tar_file, "close"):
+                tar_file.close()
+            del self.itar_files_cache[tar_file_id]
