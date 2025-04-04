@@ -7,7 +7,6 @@ from typing import Any, List, Literal, Optional, Tuple, TypeVar, Union
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import BaseCoreDatasetFactory, SavableDataset
 from megatron.energon.metadataset import load_dataset
-from megatron.energon.metadataset.loader_interface import DatasetBlendMode
 from megatron.energon.task_encoder.base import DefaultTaskEncoder, TaskEncoder, WorkerConfig
 
 T = TypeVar("T", covariant=True)
@@ -84,7 +83,7 @@ def get_train_dataset(
     """
 
     loader = load_dataset(path, **_split_kwargs(kwargs))
-    blend_mode, datasets = loader.get_datasets(
+    datasets = loader.get_datasets(
         training=True,
         split_part=split_part,
         worker_config=worker_config,
@@ -92,22 +91,15 @@ def get_train_dataset(
         shuffle_over_epochs_multiplier=shuffle_over_epochs_multiplier,
         **kwargs,
     )
-    assert isinstance(blend_mode, DatasetBlendMode)
-    assert isinstance(datasets, list)
-    assert all(isinstance(d, tuple) and len(d) == 2 for d in datasets)
-    assert all(
-        isinstance(dataset, BaseCoreDatasetFactory) and isinstance(value, (type(None), int, float))
-        for dataset, value in datasets
-    )
     return task_encoder.build_train_datasets(
-        datasets=datasets,
+        datasets=datasets.datasets,
         worker_config=worker_config,
         batch_size=batch_size,
         batch_drop_last=batch_drop_last,
         packing_buffer_size=packing_buffer_size,
         virtual_epoch_length=virtual_epoch_length,
         shuffle_buffer_size=shuffle_buffer_size,
-        blend_mode=blend_mode,
+        blend_mode=datasets.blend_mode,
         repeat=repeat,
     )
 
@@ -149,18 +141,11 @@ def get_val_dataset(
         The loaded dataset.
     """
     loader = load_dataset(path, **_split_kwargs(kwargs))
-    _blend_mode, datasets = loader.get_datasets(
+    datasets = loader.get_datasets(
         training=False, split_part=split_part, worker_config=worker_config, **kwargs
     )
-    assert isinstance(_blend_mode, DatasetBlendMode)
-    assert isinstance(datasets, list)
-    assert all(isinstance(d, tuple) and len(d) == 2 for d in datasets)
-    assert all(
-        isinstance(dataset, BaseCoreDatasetFactory) and isinstance(value, (type(None), int, float))
-        for dataset, value in datasets
-    )
     return task_encoder.build_val_datasets(
-        datasets=[dataset for dataset, _weight in datasets],
+        datasets=[dataset.dataset for dataset in datasets.datasets],
         worker_config=worker_config,
         batch_size=batch_size,
         batch_drop_last=batch_drop_last,
@@ -206,27 +191,20 @@ def get_val_datasets(
         The loaded val datasets, with the source datasets.
     """
     loader = load_dataset(path, **_split_kwargs(kwargs))
-    _blend_mode, datasets = loader.get_datasets(
+    datasets = loader.get_datasets(
         training=False, split_part=split_part, worker_config=worker_config, **kwargs
-    )
-    assert isinstance(_blend_mode, DatasetBlendMode)
-    assert isinstance(datasets, list)
-    assert all(isinstance(d, tuple) and len(d) == 2 for d in datasets)
-    assert all(
-        isinstance(dataset, BaseCoreDatasetFactory) and isinstance(value, (type(None), int, float))
-        for dataset, value in datasets
     )
     return [
         (
             task_encoder.build_val_datasets(
-                datasets=[dataset],
+                datasets=[dataset.dataset],
                 worker_config=worker_config,
                 batch_size=batch_size,
                 batch_drop_last=batch_drop_last,
                 packing_buffer_size=packing_buffer_size,
                 limit=limit,
             ),
-            dataset,
+            dataset.dataset,
         )
-        for dataset, _weight in datasets
+        for dataset in datasets.datasets
     ]

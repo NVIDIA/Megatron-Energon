@@ -378,6 +378,15 @@ class BaseCoreDatasetFactory(Generic[T_sample], ABC):
         ...
 
 
+class RandomAccessDataset(ABC, Generic[T_sample]):
+    """Base type for a dataset that can be accessed randomly by sample key."""
+
+    @abstractmethod
+    def __getitem__(self, key: str) -> T_sample:
+        """Returns the data for the given key."""
+        ...
+
+
 def add_sample_restore_key(
     sample: T_sample, *key: Union[int, str], src: Any, fail_otherwise: bool = False
 ) -> T_sample:

@@ -27,7 +27,12 @@ from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
 from megatron.energon.flavors.webdataset.indexing import JoinIndexWriter
 from megatron.energon.flavors.webdataset.metadata import WebdatasetMeta
 from megatron.energon.metadataset.dataset_loader import DatasetLoader
-from megatron.energon.metadataset.loader_interface import DatasetBlendMode, DatasetLoaderInterface
+from megatron.energon.metadataset.loader_interface import (
+    DatasetBlendMode,
+    DatasetLoaderInterface,
+    LoadedDataset,
+    LoadedDatasetList,
+)
 from megatron.energon.worker import WorkerConfig
 
 
@@ -536,18 +541,21 @@ class JoinDatasetLoader(DatasetLoaderInterface):
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: Optional[int] = 1,
         **kwargs,
-    ) -> Tuple[DatasetBlendMode, List[Tuple[BaseCoreDatasetFactory, Union[float, int, None]]]]:
-        return DatasetBlendMode.NONE, [
-            (
-                self.get_dataset(
-                    training=training,
-                    split_part=split_part,
-                    worker_config=worker_config,
-                    subflavor=subflavor,
-                    subflavors=subflavors,
-                    shuffle_over_epochs=shuffle_over_epochs_multiplier,
-                    **kwargs,
-                ),
-                None,
-            )
-        ]
+    ) -> LoadedDatasetList:
+        return LoadedDatasetList(
+            blend_mode=DatasetBlendMode.NONE,
+            datasets=[
+                LoadedDataset(
+                    dataset=self.get_dataset(
+                        training=training,
+                        split_part=split_part,
+                        worker_config=worker_config,
+                        subflavor=subflavor,
+                        subflavors=subflavors,
+                        shuffle_over_epochs=shuffle_over_epochs_multiplier,
+                        **kwargs,
+                    ),
+                    weight=None,
+                )
+            ],
+        )

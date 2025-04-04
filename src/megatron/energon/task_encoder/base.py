@@ -28,11 +28,12 @@ from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.flavors.base_dataset import (
     BaseCoreDatasetFactory,
     PinMemoryMixin,
+    RandomAccessDataset,
     Sample,
     SavableDataset,
 )
 from megatron.energon.flavors.crude import CrudeSample, CrudeWebdataset
-from megatron.energon.metadataset.loader_interface import DatasetBlendMode
+from megatron.energon.metadataset.loader_interface import DatasetBlendMode, LoadedDataset
 from megatron.energon.rng import SystemRng
 from megatron.energon.task_encoder.cooking import Cooker
 from megatron.energon.worker import WorkerConfig
@@ -449,31 +450,54 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         dataset: SavableDataset[Union[T_sample, dict]],
         *,
         worker_config: WorkerConfig,
+        subflavors: Dict[str, Any],
+        aux: Optional[Dict[str, RandomAccessDataset]] = None,
     ) -> SavableDataset[T_sample]:
         """Applies the sample cooker to the dataset if we have cookers registered."""
-        if (
-            self.cookers
-            or getattr(self.build_cook_crude_sample, "__func__", None)
-            is not TaskEncoder.build_cook_crude_sample
-        ):
-            dataset = MapDataset(
-                dataset,
-                self.cook_crude_sample,
+
+        assert self.cookers, "No cookers registered, but got crude dataset."
+        for cooker in self.cookers:
+            if cooker.is_match(subflavors):
+                break
+        else:
+            raise ValueError(f"No cooker found for subflavors {subflavors}.")
+        if aux is not None:
+            cook_fn = functools.partial(cooker.cook, **aux)
+        else:
+            cook_fn = cooker.cook
+        assert get_stateless(cooker.cook), "Cooker must be stateless"
+        return MapDataset(
+            dataset,
+            cook_fn,
+            worker_config=worker_config,
+            stateless_map_fn=True,
+            map_fn_config=dict(
+                cookers=[
+                    dict(
+                        cook=SavableDataset._function_config(cooker.cook),
+                        has_subflavors=cooker.has_subflavors,
+                        condition=cooker.condition,
+                    )
+                    for cooker in self.cookers
+                ],
+                subflavors=subflavors,
+            ),
+        )
+
+    def _load_train_dataset(
+        self, dataset: LoadedDataset, worker_rotation_offset: int, worker_config: WorkerConfig
+    ) -> SavableDataset[T_sample]:
+        """Loads a train dataset, optionally cooking the samples."""
+        if dataset.dataset.__sample_type__ == CrudeSample:
+            return self.build_cook_crude_sample(
+                dataset.dataset.build(worker_rotation_offset=worker_rotation_offset),
                 worker_config=worker_config,
-                stateless_map_fn=get_stateless(self.cook_crude_sample),
-                map_fn_config=dict(
-                    cookers=[
-                        dict(
-                            cook=SavableDataset._function_config(cooker.cook),
-                            is_subflavor=cooker.is_subflavor,
-                            has_subflavors=cooker.has_subflavors,
-                            condition=cooker.condition,
-                        )
-                        for cooker in self.cookers
-                    ]
-                ),
+                subflavors=dataset.dataset.subflavors,
+                aux=dataset.aux,
             )
-        return dataset
+        else:
+            assert dataset.aux is None, "Aux is not supported for non-crude datasets."
+            return dataset.dataset.build(worker_rotation_offset=worker_rotation_offset)
 
     def build_encode_sample(
         self,
@@ -494,7 +518,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
     def build_train_datasets(
         self,
         *,
-        datasets: List[Tuple[BaseCoreDatasetFactory[T_sample], Union[float, int, None]]],
+        datasets: List[LoadedDataset],
         worker_config: WorkerConfig,
         batch_size: Optional[int],
         batch_drop_last: bool = False,
@@ -507,12 +531,12 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         """Combines train datasets to a single dataset."""
 
         # Check if there's a CrudeWebdataset but no cookers
-        for dataset, _ in datasets:
-            if isinstance(dataset, CrudeWebdataset):
+        for dataset in datasets:
+            if isinstance(dataset.dataset, CrudeWebdataset):
                 assert self.cookers, "CrudeWebdataset found, but no cookers registered."
 
         global_workers = max(1, worker_config.num_workers) * worker_config.world_size
-        rotation_lengths = [len(dataset) for dataset, _ in datasets]
+        rotation_lengths = [len(dataset.dataset) for dataset in datasets]
         for i in range(1, len(rotation_lengths)):
             rotation_lengths[i] += rotation_lengths[i - 1]
         worker_rotation_offsets = [
@@ -523,45 +547,46 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             inner_datasets = [
                 (
                     RepeatDataset(
-                        dataset.build(worker_rotation_offset=worker_rotation_offset),
+                        self._load_train_dataset(
+                            dataset, worker_rotation_offset, worker_config=worker_config
+                        ),
                         worker_config=worker_config,
                     ),
-                    1.0 if weight is None else float(weight),
+                    1.0 if dataset.weight is None else float(dataset.weight),
                 )
-                for (dataset, weight), worker_rotation_offset in zip(
-                    datasets, worker_rotation_offsets
-                )
+                for dataset, worker_rotation_offset in zip(datasets, worker_rotation_offsets)
             ]
         else:
             assert blend_mode in (
                 DatasetBlendMode.NONE,
                 DatasetBlendMode.SAMPLE_REPETITIONS,
-            ) and all(
-                isinstance(repetitions, (int, float)) for _dataset, repetitions in datasets
-            ), "If repeat is False, the datasets must be repeated with integer weights."
+            ), "If repeat is False, the datasets can only be repeated or have no mode."
             inner_datasets = [
                 (
                     (
-                        dataset.build(worker_rotation_offset=worker_rotation_offset)
-                        if repetition is None or repetition == 1
+                        self._load_train_dataset(
+                            dataset, worker_rotation_offset, worker_config=worker_config
+                        )
+                        if dataset.repetitions is None or dataset.repetitions == 1
                         else RepeatDataset(
-                            dataset.build(worker_rotation_offset=worker_rotation_offset),
-                            repeats=repetition,
+                            self._load_train_dataset(
+                                dataset, worker_rotation_offset, worker_config=worker_config
+                            ),
+                            repeats=dataset.repetitions,
                             worker_config=worker_config,
                         )
                     ),
-                    len(dataset) * (1 if repetition is None else repetition),
+                    len(dataset.dataset)
+                    * (1 if dataset.repetitions is None else dataset.repetitions),
                 )
-                for (dataset, repetition), worker_rotation_offset in zip(
-                    datasets, worker_rotation_offsets
-                )
+                for dataset, worker_rotation_offset in zip(datasets, worker_rotation_offsets)
             ]
 
         if len(inner_datasets) > 1:
             # The worker offset for each dataset is the cumsum of the dataset lengths, but modulo the
             # global number of workers.
             dataset = BlendDataset(
-                *inner_datasets,
+                *[inner_dataset[:2] for inner_dataset in inner_datasets],
                 worker_config=worker_config,
             )
         elif len(datasets) == 1:
@@ -574,7 +599,6 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 size=shuffle_buffer_size,
                 worker_config=worker_config,
             )
-        dataset = self.build_cook_crude_sample(dataset, worker_config=worker_config)
         dataset = self.build_encode_sample(dataset, worker_config=worker_config)
         dataset = self.build_batch(
             dataset,

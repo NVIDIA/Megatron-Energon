@@ -3,10 +3,9 @@
 
 import dataclasses
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Any, Callable, Dict, Optional
 
 from megatron.energon.flavors.base_dataset import Sample
-from megatron.energon.flavors.crude import CrudeSample
 
 
 @dataclass
@@ -24,27 +23,19 @@ class Cooker:
 
     # If multiple of the following conditions are provided
     # then the sample must satisfy all of them.
-    is_subflavor: Optional[str] = None
     has_subflavors: Optional[dict] = None
     condition: Optional[Callable[[dict], bool]] = None
 
-    def is_match(self, crude_sample: CrudeSample) -> bool:
-        if self.is_subflavor is not None:
-            if crude_sample["__subflavor__"] != self.is_subflavor:
-                return False
-
+    def is_match(self, subflavors: Dict[str, Any]) -> bool:
         if self.has_subflavors is not None:
             # Checks if the dict entries provided as a filter all match
             # the ones in the sample. The sample may have additional entries.
             for k, v in self.has_subflavors.items():
-                if (
-                    k not in crude_sample["__subflavors__"]
-                    or crude_sample["__subflavors__"][k] != v
-                ):
+                if k not in subflavors or subflavors[k] != v:
                     return False
 
         if self.condition is not None:
-            if not self.condition(crude_sample):
+            if not self.condition(subflavors):
                 return False
 
         return True
