@@ -13,7 +13,6 @@ from megatron.energon.epathlib.epath import EPath
 from megatron.energon.flavors.base_dataset import RandomAccessDataset
 from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME, split_name_re
 from megatron.energon.flavors.webdataset.default_decoder_webdataset import ImageDecoder
-from megatron.energon.flavors.webdataset.fast_read import FileRandomReadPool
 from megatron.energon.flavors.webdataset.itar import ITarFile
 from megatron.energon.flavors.webdataset.metadata import WebdatasetMeta
 from megatron.energon.worker import WorkerConfig
@@ -30,7 +29,6 @@ class RandomAccessWebdataset(RandomAccessDataset[bytes]):
     dataset_path: EPath
     worker_config: WorkerConfig
     metadata: WebdatasetMeta
-    _read_pool: FileRandomReadPool
     _sqlite_index: sqlite3.Connection | None = None
     _sqlite_cursor: sqlite3.Cursor | None = None
 
@@ -60,8 +58,6 @@ class RandomAccessWebdataset(RandomAccessDataset[bytes]):
             split_config=split_config,
         )
 
-        self._read_pool = FileRandomReadPool()
-
     def _get_subtar(self, fname: str) -> Tuple[ITarFile, int]:
         m = split_name_re.match(fname)
         if not m:
@@ -85,7 +81,9 @@ class RandomAccessWebdataset(RandomAccessDataset[bytes]):
         tar_file_id, sample_index, byte_offset, byte_size = result
         shard = self.metadata.shards[tar_file_id]
 
-        raw_tar_bytes = self._read_pool.read(str(shard.path), byte_offset, byte_size)
+        with shard.path.open("rb") as f:
+            f.seek(byte_offset)
+            raw_tar_bytes = f.read(byte_size)
         return ITarFile.open(fileobj=io.BytesIO(raw_tar_bytes), mode="r:"), byte_size
 
     def __getitem__(self, fname: str) -> bytes:
@@ -145,7 +143,7 @@ class RandomAccessDecoderWebdataset(RandomAccessDataset[Any]):
                 "__key__": cur_base_name,
                 ext: self._inner_reader[fname],
             }
-        )
+        )[ext]
 
 
 class LazyRandomAccessDecoderWebdataset(RandomAccessDataset[Future[Any]]):
@@ -222,7 +220,7 @@ class LazyRandomAccessDecoderWebdataset(RandomAccessDataset[Future[Any]]):
                         "__key__": cur_base_name,
                         ext: raw,
                     }
-                )
+                )[ext]
                 STATS_DECODE_TIME_NS += time.perf_counter_ns() - start_time
             except Exception as e:
                 future.set_exception(e)

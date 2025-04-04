@@ -49,11 +49,14 @@ class AuxDatasetReference:
             return RandomAccessWebdataset(self.path, worker_config=worker_config)
         elif self.mode == "decoded":
             # Additionally pass decoder args.
-            return RandomAccessDecoderWebdataset(self.path, worker_config=worker_config, **kwargs)
+            # Get matching kwargs
+            decoder_kwargs = {k: v for k, v in kwargs.items() if "decode" in k}
+            return RandomAccessDecoderWebdataset(self.path, worker_config=worker_config, **decoder_kwargs)
         elif self.mode == "lazy_decoded":
             # Additionally pass decoder args.
+            decoder_kwargs = {k: v for k, v in kwargs.items() if "decode" in k}
             return LazyRandomAccessDecoderWebdataset(
-                self.path, worker_config=worker_config, **kwargs
+                self.path, worker_config=worker_config, **decoder_kwargs
             )
         else:
             raise ValueError(f"Invalid mode: {self.mode}")

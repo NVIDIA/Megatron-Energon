@@ -26,7 +26,6 @@ import torch
 
 from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.flavors.base_dataset import (
-    BaseCoreDatasetFactory,
     PinMemoryMixin,
     RandomAccessDataset,
     Sample,
@@ -484,7 +483,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             ),
         )
 
-    def _load_train_dataset(
+    def _load_dataset(
         self, dataset: LoadedDataset, worker_rotation_offset: int, worker_config: WorkerConfig
     ) -> SavableDataset[T_sample]:
         """Loads a train dataset, optionally cooking the samples."""
@@ -547,7 +546,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             inner_datasets = [
                 (
                     RepeatDataset(
-                        self._load_train_dataset(
+                        self._load_dataset(
                             dataset, worker_rotation_offset, worker_config=worker_config
                         ),
                         worker_config=worker_config,
@@ -564,12 +563,12 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             inner_datasets = [
                 (
                     (
-                        self._load_train_dataset(
+                        self._load_dataset(
                             dataset, worker_rotation_offset, worker_config=worker_config
                         )
                         if dataset.repetitions is None or dataset.repetitions == 1
                         else RepeatDataset(
-                            self._load_train_dataset(
+                            self._load_dataset(
                                 dataset, worker_rotation_offset, worker_config=worker_config
                             ),
                             repeats=dataset.repetitions,
@@ -620,7 +619,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
     def build_val_datasets(
         self,
         *,
-        datasets: List[BaseCoreDatasetFactory[T_sample]],
+        datasets: List[LoadedDataset],
         worker_config: WorkerConfig,
         batch_size: int,
         batch_drop_last: bool = False,
@@ -634,16 +633,23 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             if isinstance(dataset, CrudeWebdataset):
                 assert self.cookers, "CrudeWebdataset found, but no cookers registered."
 
+        global_workers = max(1, worker_config.num_workers) * worker_config.world_size
+        rotation_lengths = [len(dataset.dataset) for dataset in datasets]
+        for i in range(1, len(rotation_lengths)):
+            rotation_lengths[i] += rotation_lengths[i - 1]
+        worker_rotation_offsets = [
+            rotation_length % global_workers for rotation_length in [0] + rotation_lengths[:-1]
+        ]
+
         if len(datasets) > 1:
             dataset = ConcatDataset(
-                *[dataset.build() for dataset in datasets],
+                *[self._load_dataset(dataset, worker_rotation_offset, worker_config) for dataset, worker_rotation_offset in zip(datasets, worker_rotation_offsets)],
                 worker_config=worker_config,
             )
         elif len(datasets) == 1:
-            dataset = datasets[0].build()
+            dataset = self._load_dataset(datasets[0], worker_rotation_offsets[0], worker_config)
         else:
             raise ValueError("No datasets given.")
-        dataset = self.build_cook_crude_sample(dataset, worker_config=worker_config)
         dataset = self.build_encode_sample(dataset, worker_config=worker_config)
         dataset = self.build_batch(
             dataset,

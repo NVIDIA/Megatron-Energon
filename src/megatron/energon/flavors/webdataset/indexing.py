@@ -4,12 +4,11 @@
 import sqlite3
 import struct
 from pathlib import Path
-from typing import BinaryIO, List, Optional, Tuple, Union
+from typing import Any, BinaryIO, List, Optional, Tuple, Union
 
 from numpy import int8
 
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.webdataset.itar_reader import ITarSamplePointer
 
 
 class SqliteIndexWriter:
@@ -203,7 +202,7 @@ class SqliteIndexReader:
         count = self.db.execute("SELECT COUNT(*) FROM samples").fetchone()
         return count[0] if count else 0
 
-    def get_sample_by_index(self, idx: int) -> ITarSamplePointer:
+    def get_sample_by_index(self, idx: int) -> Any:
         """Get a sample by its numeric index.
 
         Args:
@@ -230,7 +229,7 @@ class SqliteIndexReader:
             byte_size=sample[4],
         )
 
-    def get_sample_pointer_by_key(self, key: str) -> ITarSamplePointer:
+    def get_sample_pointer_by_key(self, key: str) -> Any:
         """Get a sample by its key name.
 
         Args:
