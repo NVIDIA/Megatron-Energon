@@ -1202,7 +1202,7 @@ requires-dist = [
     { name = "dataslots", marker = "python_full_version < '3.10'" },
     { name = "ebmlite", marker = "extra == 'av-decode'", specifier = ">=3.3.1" },
     { name = "filetype", marker = "extra == 'av-decode'", specifier = ">=1.2.0" },
-    { name = "multi-storage-client", specifier = ">=0.16.0" },
+    { name = "multi-storage-client", specifier = ">=0.18.0" },
     { name = "multi-storage-client", extras = ["aistore"], marker = "extra == 'aistore'" },
     { name = "multi-storage-client", extras = ["azure-storage-blob"], marker = "extra == 'azure-storage-blob'" },
     { name = "multi-storage-client", extras = ["boto3"], marker = "extra == 's3'" },
@@ -1281,7 +1281,7 @@ wheels = [
 
 [[package]]
 name = "multi-storage-client"
-version = "0.16.0"
+version = "0.18.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "filelock" },
@@ -1291,7 +1291,7 @@ dependencies = [
     { name = "pyyaml" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/dd/f3/841cfe988454b7533cf9da3ed68a82a0c7f50ea928be73c0d1e2e89a5eb7/multi_storage_client-0.16.0-py3-none-any.whl", hash = "sha256:acb814335f848d9978bc1a807abd3e19c7b3a2762b51ce36100df6e73e65cb1e", size = 104343 },
+    { url = "https://files.pythonhosted.org/packages/8f/d7/b3c2ded99a3ecd4b0123f643d2f620077060c3efb14c901c29e94c359474/multi_storage_client-0.18.0-py3-none-any.whl", hash = "sha256:e4872b9f14336047f371e34c17dc87669dd95b611c67389e9e62f1e4e888bdd0", size = 112769 },
 ]
 
 [package.optional-dependencies]

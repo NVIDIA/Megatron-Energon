@@ -4,7 +4,7 @@
 import io
 from collections.abc import Iterator
 from fractions import Fraction
-from typing import Literal, Optional, Sequence, Union, overload
+from typing import BinaryIO, Literal, Optional, Sequence, Union, overload
 
 import numpy as np
 import torch
@@ -35,7 +35,7 @@ class AVDecoder:
 
     _seeker: Optional["Fastseek"]
 
-    def __init__(self, stream: io.BytesIO) -> None:
+    def __init__(self, stream: BinaryIO) -> None:
         if not AV_DECODE_AVAILABLE:
             raise ImportError(
                 f"AV decoding is not available. Please install the required dependencies with:\n"

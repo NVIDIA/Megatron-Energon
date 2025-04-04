@@ -4,13 +4,13 @@
 import hashlib
 import json
 import multiprocessing
+from pathlib import Path
 from typing import Any, ClassVar, Dict, List, Optional, TextIO, TypeVar
 
 import torch.distributed
 import torch.utils.data
 
 from megatron.energon.dataclass_slots import dataclass_slots
-from megatron.energon.epathlib import EPath
 
 __all__ = ("WorkerConfig",)
 
@@ -253,7 +253,7 @@ class WorkerConfig:
             if self._worker_debug_file is None or self._worker_debug_file_worker_id != worker_id:
                 if self._worker_debug_file is not None:
                     self._worker_debug_file.close()
-                path = EPath(
+                path = Path(
                     self.worker_debug_path.format(
                         worker_id=worker_id, pid=multiprocessing.current_process().ident
                     )

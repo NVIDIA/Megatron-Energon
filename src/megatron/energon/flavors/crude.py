@@ -46,6 +46,10 @@ class CrudeWebdataset(DefaultDecoderWebdatasetFactory[CrudeSample]):
             **kwargs: Additional arguments to the BaseWebdataset constructor.
         """
         # We skip the parent class __init__ and call the BaseWebdataset.__init__ directly
+
+        if "sample_loader" in kwargs:
+            raise ValueError("sample_loader is not allowed to be set when using CrudeWebdataset")
+
         super().__init__(
             path,
             auto_decode=auto_decode,
