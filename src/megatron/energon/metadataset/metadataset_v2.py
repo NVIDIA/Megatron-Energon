@@ -11,8 +11,6 @@ from megatron.energon.flavors import Sample
 from megatron.energon.flavors.base_dataset import RandomAccessDataset
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 from megatron.energon.flavors.webdataset.random_access_dataset import (
-    LazyRandomAccessDecoderWebdataset,
-    RandomAccessDecoderWebdataset,
     RandomAccessWebdataset,
 )
 from megatron.energon.metadataset.dataset_loader import DatasetLoader
@@ -30,8 +28,6 @@ from megatron.energon.worker import WorkerConfig
 class AuxDatasetReference:
     path: Union[str, EPath]
 
-    mode: Literal["raw", "decoded", "lazy_decoded"] = "decoded"
-
     def post_initialize(self, mds_path: Optional[EPath] = None) -> None:
         assert mds_path is not None
         if not isinstance(self.path, EPath):
@@ -43,21 +39,9 @@ class AuxDatasetReference:
             "Auxiliary datasets must be prepared Energon dataset"
         )
 
-    def get_dataset(self, **kwargs) -> RandomAccessDataset:
+    def get_dataset(self) -> RandomAccessDataset:
         assert isinstance(self.path, EPath), "Missing call to post_initialize"
-        if self.mode == "raw":
-            return RandomAccessWebdataset(self.path)
-        elif self.mode == "decoded":
-            # Additionally pass decoder args.
-            # Get matching kwargs
-            decoder_kwargs = {k: v for k, v in kwargs.items() if "decode" in k}
-            return RandomAccessDecoderWebdataset(self.path, **decoder_kwargs)
-        elif self.mode == "lazy_decoded":
-            # Additionally pass decoder args.
-            decoder_kwargs = {k: v for k, v in kwargs.items() if "decode" in k}
-            return LazyRandomAccessDecoderWebdataset(self.path, **decoder_kwargs)
-        else:
-            raise ValueError(f"Invalid mode: {self.mode}")
+        return RandomAccessWebdataset(self.path)
 
 
 @dataclass_slots
@@ -149,7 +133,7 @@ class DatasetReference(DatasetLoaderInterface):
             **kwargs,
         )
         if self.aux is not None:
-            aux = {k: v.get_dataset(**kwargs) for k, v in self.aux.items()}
+            aux = {k: v.get_dataset() for k, v in self.aux.items()}
             for loaded_dataset in result.datasets:
                 if loaded_dataset.aux is None:
                     loaded_dataset.aux = aux

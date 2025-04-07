@@ -174,7 +174,6 @@ class TestDataset(unittest.TestCase):
                         "    aux:",
                         "      pkl_source:",
                         "        path: ds2",
-                        "        mode: decoded",
                         "    subflavors:",
                         "      crude_type: aux_random_access",
                     ]

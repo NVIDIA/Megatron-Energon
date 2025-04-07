@@ -20,9 +20,11 @@ from typing import (
     Type,
     TypeVar,
     Union,
+    overload,
 )
 
 import torch
+from typing_extensions import ParamSpec
 
 from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.flavors.base_dataset import (
@@ -32,6 +34,7 @@ from megatron.energon.flavors.base_dataset import (
     SavableDataset,
 )
 from megatron.energon.flavors.crude import CrudeSample, CrudeWebdataset
+from megatron.energon.flavors.webdataset.random_access_dataset import RandomAccessDecoderDataset
 from megatron.energon.metadataset.loader_interface import DatasetBlendMode, LoadedDataset
 from megatron.energon.rng import SystemRng
 from megatron.energon.task_encoder.cooking import Cooker
@@ -52,7 +55,7 @@ from megatron.energon.wrappers.repeat_dataset import RepeatDataset
 
 T = TypeVar("T")
 V = TypeVar("V")
-T_sample = TypeVar("T_sample")
+T_sample = TypeVar("T_sample", bound=Sample)
 T_encoded_sample = TypeVar("T_encoded_sample")
 T_raw_batch = TypeVar("T_raw_batch")
 T_batch = TypeVar("T_batch")
@@ -107,9 +110,22 @@ def batch_list(batch: List[Any]) -> Any:
     return batch
 
 
+P = ParamSpec("P")
+
+
+@overload
 def stateless(
-    fn: Optional[Callable[..., T_sample]] = None, *, restore_seeds: bool = False
-) -> Callable[..., T_sample]:
+    fn: None = None, *, restore_seeds: bool = False
+) -> Callable[[Callable[P, T]], Callable[P, T]]: ...
+
+
+@overload
+def stateless(fn: Callable[P, T], *, restore_seeds: bool = False) -> Callable[P, T]: ...
+
+
+def stateless(
+    fn: Optional[Callable[..., T]] = None, *, restore_seeds: bool = False
+) -> Union[Callable[[Callable[..., T]], Callable[..., T]], Callable[..., T]]:
     """Decorator to mark a function of the task encoder as restorable.
 
     Args:
@@ -236,15 +252,38 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
       5. resulting encoded batch is passed to the network
     """
 
-    cookers: Sequence[Cooker] = ()
+    cookers: Sequence[Cooker[T_sample]] = ()
 
     @stateless
-    def cook_crude_sample(self, sample: Union[T_sample, CrudeSample], **aux) -> T_sample:
+    def cook_crude_sample(
+        self, sample: Union[T_sample, CrudeSample], **aux: RandomAccessDataset
+    ) -> T_sample:
+        """
+        Cooks a crude sample.
+
+        Args:
+            sample: The sample to cook.
+            **aux: The auxiliary side dishes to use for cooking.
+
+        Returns: The cooked sample.
+        """
         if isinstance(sample, CrudeSample):
             for cooker in self.cookers:
                 if cooker.is_match(sample):
                     assert get_stateless(cooker.cook), "Cooker must be stateless"
-                    return cooker.cook(sample, **aux)
+                    if cooker._decoder is not None:
+                        return cooker.cook(
+                            sample,
+                            **{
+                                k: RandomAccessDecoderDataset(
+                                    v,
+                                    decoder=cooker._decoder,
+                                )
+                                for k, v in aux.items()
+                            },
+                        )
+                    else:
+                        return cooker.cook(sample, **aux)
 
             raise NotImplementedError(
                 "You are using crude samples but not providing a way to cook them: "
@@ -287,7 +326,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
 
     def _batch(
         self,
-        samples: List[T_sample],
+        samples: List[T_encoded_sample],
         result_type: Type[T_raw_batch],
         actions: Optional[Dict[str, FeatureBatcher]] = None,
         default_action: FeatureBatcher = generic_batch,
@@ -337,7 +376,9 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         else:
             raise ValueError("Unrecognized result type.")
 
-    def select_samples_to_pack(self, samples: List[T_sample]) -> List[List[T_sample]]:
+    def select_samples_to_pack(
+        self, samples: List[T_encoded_sample]
+    ) -> List[List[T_encoded_sample]]:
         """
         For packing, selects the samples to be packed together.
         Packing is only active when packing_buffer_size is set.
@@ -350,7 +391,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         """
         raise NotImplementedError("Packing only effective when overridden.")
 
-    def pack_selected_samples(self, samples: List[T_sample]) -> T_sample:
+    def pack_selected_samples(self, samples: List[T_encoded_sample]) -> T_encoded_sample:
         """
         Given one set of samples to pack, returns the final packed sample.
         Packing is only active when packing_buffer_size is set.
