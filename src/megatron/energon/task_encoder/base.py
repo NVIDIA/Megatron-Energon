@@ -239,14 +239,17 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
     cookers: Sequence[Cooker] = ()
 
     @stateless
-    def cook_crude_sample(self, sample: Union[T_sample, CrudeSample]) -> T_sample:
+    def cook_crude_sample(self, sample: Union[T_sample, CrudeSample], **aux) -> T_sample:
         if isinstance(sample, CrudeSample):
             for cooker in self.cookers:
                 if cooker.is_match(sample):
-                    return cooker.cook(sample)
+                    assert get_stateless(cooker.cook), "Cooker must be stateless"
+                    return cooker.cook(sample, **aux)
 
             raise NotImplementedError(
-                "You are using crude samples but not providing a way to cook them."
+                "You are using crude samples but not providing a way to cook them: "
+                f"Sample {sample}, "
+                f"self.cookers={self.cookers}"
             )
         else:
             assert isinstance(sample, Sample), "Sample must be a complete Sample or a CrudeSample"
@@ -455,16 +458,12 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         """Applies the sample cooker to the dataset if we have cookers registered."""
 
         assert self.cookers, "No cookers registered, but got crude dataset."
-        for cooker in self.cookers:
-            if cooker.is_match(subflavors):
-                break
-        else:
-            raise ValueError(f"No cooker found for subflavors {subflavors}.")
+
         if aux is not None:
-            cook_fn = functools.partial(cooker.cook, **aux)
+            cook_fn = functools.partial(self.cook_crude_sample, **aux)
         else:
-            cook_fn = cooker.cook
-        assert get_stateless(cooker.cook), "Cooker must be stateless"
+            cook_fn = self.cook_crude_sample
+
         return MapDataset(
             dataset,
             cook_fn,
@@ -643,7 +642,10 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
 
         if len(datasets) > 1:
             dataset = ConcatDataset(
-                *[self._load_dataset(dataset, worker_rotation_offset, worker_config) for dataset, worker_rotation_offset in zip(datasets, worker_rotation_offsets)],
+                *[
+                    self._load_dataset(dataset, worker_rotation_offset, worker_config)
+                    for dataset, worker_rotation_offset in zip(datasets, worker_rotation_offsets)
+                ],
                 worker_config=worker_config,
             )
         elif len(datasets) == 1:
