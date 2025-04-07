@@ -1,3 +1,6 @@
+# Copyright (c) 2025, NVIDIA CORPORATION.
+# SPDX-License-Identifier: BSD-3-Clause
+
 import threading
 import time
 from concurrent.futures import Future
