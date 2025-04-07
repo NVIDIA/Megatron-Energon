@@ -264,25 +264,25 @@ class TestDataset(unittest.TestCase):
 
         dataset = load_dataset(self.nested_mds_path)
 
-        blend_mode, raw_datasets = dataset.get_datasets(
+        raw_datasets = dataset.get_datasets(
             training=False, split_part="train", worker_config=worker_config
         )
-        assert blend_mode == DatasetBlendMode.DATASET_WEIGHT
-        assert [weight for _raw_dataset, weight in raw_datasets] == [0.4, 0.4, 0.1, 0.1]
-        assert [raw_dataset.paths[0].name for raw_dataset, _weight in raw_datasets] == [
+        assert raw_datasets.blend_mode == DatasetBlendMode.DATASET_WEIGHT
+        assert [raw_dataset.weight for raw_dataset in raw_datasets.datasets] == [0.4, 0.4, 0.1, 0.1]
+        assert [raw_dataset.dataset.paths[0].name for raw_dataset in raw_datasets.datasets] == [
             "ds1",
             "ds2",
             "ds1",
             "ds2",
         ]
-        assert [raw_dataset.subflavor for raw_dataset, _weight in raw_datasets] == [
+        assert [raw_dataset.dataset.subflavor for raw_dataset in raw_datasets.datasets] == [
             "train",
             "train",
             None,
             None,
         ]
-        print([raw_dataset.subflavors for raw_dataset, _weight in raw_datasets])
-        assert [raw_dataset.subflavors for raw_dataset, _weight in raw_datasets] == [
+        print([raw_dataset.dataset.subflavors for raw_dataset in raw_datasets.datasets])
+        assert [raw_dataset.dataset.subflavors for raw_dataset in raw_datasets.datasets] == [
             {
                 "source": "nested_metadataset.yaml",
                 "dataset.yaml": True,
