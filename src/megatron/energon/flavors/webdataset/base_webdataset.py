@@ -3,6 +3,7 @@
 
 import logging
 from abc import ABC, abstractmethod
+import time
 from typing import Any, Callable, Dict, Generic, List, Optional, Sequence, TypeVar
 
 import numpy as np
@@ -25,6 +26,8 @@ T_sample = TypeVar("T_sample", covariant=True)
 T = TypeVar("T", covariant=True)
 
 logger = logging.getLogger(__name__)
+
+STATS_DECODE_TIME_NS = 0
 
 
 class BaseWebdatasetFactory(
@@ -153,9 +156,13 @@ class BaseWebdatasetFactory(
         return key not in self.sample_excludes
 
     def _load_sample_raw(self, raw_sample: RawSampleData) -> T_sample:
+        global STATS_DECODE_TIME_NS
+        start = time.perf_counter_ns()
         # Just a wrapper for the inner tuple. Tuple should be of length 1.
         assert len(raw_sample.data) == 1 and raw_sample.data[0] is not None
-        return self.load_sample(raw_sample.data[0])
+        res = self.load_sample(raw_sample.data[0])
+        STATS_DECODE_TIME_NS += time.perf_counter_ns() - start
+        return res
 
     @abstractmethod
     def load_sample(self, raw_data: FilteredSample) -> T_sample:

@@ -1,6 +1,8 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+from queue import Queue
+import threading
 from typing import Any, Callable, Dict, Generator, Iterator, List, Optional, Sequence, Tuple, Union
 
 import torch
@@ -11,6 +13,9 @@ from megatron.energon.flavors.webdataset.itar_reader import ITarReader
 from megatron.energon.flavors.webdataset.structs import FilteredSample, reraise_exception
 from megatron.energon.rng import WorkerRng
 from megatron.energon.worker import WorkerConfig
+
+
+STATS_CURRENT_QUEUE_SIZE = 0
 
 
 @dataclass_slots
@@ -41,6 +46,9 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
 
     #: The offsets of the slice slices to iterate over for the current worker
     slice_offsets: Optional[Sequence[int]]
+
+    #: The number of samples to read ahead
+    reading_pipelining: int
 
     # If = 1, every sample is seen exactly once per epoch. If > 1, samples
     # (or rather slice slices) are shuffled within this number of epochs (i.e. randomly
@@ -74,6 +82,11 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
     #: The number of samples retrieved in current epoch
     _epoch_sample_count: int
 
+    #: The reading queue for reading files asynchronously
+    _reading_thread: threading.Thread
+    #: The queue for the reading thread to put the read files into
+    _reading_queue: Queue
+
     _savable_fields = (
         "_worker_rng",
         "_pending_slices_offset",
@@ -93,6 +106,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
         shuffle_over_epochs: Optional[int] = None,
         parallel_slice_iters: int = 1,
         handler: Callable[[Exception, Optional[str]], None] = reraise_exception,
+        reading_pipelining: int = 5,
     ):
         """
         The webdataset loader. Iterates over the slice infos and yields the samples.
@@ -111,6 +125,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
                 This will not impact performance, but increase randomness. If = 1, the slices are
                 iterated in order.
             handler: Exception handler. Args: (exception, key).
+            reading_pipelining: If > 1, read multiple samples in parallel.
         """
         super().__init__(worker_config=worker_config)
 
@@ -123,6 +138,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
         # The slices for the current worker, will have to be extracted from this list later
         self.workers_slice_offsets = workers_sample_slice_offsets
         self.slice_offsets = None
+        self.reading_pipelining = reading_pipelining
 
         self.reset_state_own()
 
@@ -418,6 +434,13 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
         assert self.slice_offsets is not None
         return len(self.slice_offsets) > 1
 
+    def _reading_thread_main(self) -> None:
+        assert self.reading_pipelining > 0
+        while True:
+            for entry in self._slices_iter():
+                self._reading_queue.put(entry)
+            self._reading_queue.put(None)
+
     def __iter__(self) -> Iterator[RawSampleData]:
         self.worker_config.assert_worker()
 
@@ -439,7 +462,26 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
         if len(self.slice_offsets) <= 1:
             return
 
-        yield from self._slices_iter()
+        if self.reading_pipelining > 0:
+            if not hasattr(self, '_reading_thread'):
+                self._reading_thread = threading.Thread(target=self._reading_thread_main, daemon=True, name="read-samples-thread")
+                self._reading_queue = Queue(maxsize=self.reading_pipelining)
+                self._reading_thread.start()
+                print(f"Started reading thread for {self.worker_config.rank}:{self.worker_config.rank_worker_id()}")
+
+            global STATS_CURRENT_QUEUE_SIZE
+
+            i = 0
+            while True:
+                STATS_CURRENT_QUEUE_SIZE = self._reading_queue.qsize()
+                entry = self._reading_queue.get()
+                if entry is None:
+                    break
+                yield entry
+                self._reading_queue.task_done()
+                i += 1
+        else:
+            yield from self._slices_iter()
 
     def can_restore_sample(self) -> bool:
         return True

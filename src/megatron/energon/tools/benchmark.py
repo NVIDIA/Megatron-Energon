@@ -1,6 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+from concurrent.futures import Future
 import json
 import logging
 import time
@@ -11,11 +12,15 @@ import click
 import tqdm
 import yaml
 
-import megatron.energon.flavors.webdataset.fast_read as fast_read
 from megatron.energon import WorkerConfig, get_loader, get_train_dataset
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.webdataset.empty_dataset_error import EmptyDatasetError
 from megatron.energon.flavors.webdataset.itar import TarIndexReader2
+from megatron.energon.flavors.webdataset import fast_read
+from megatron.energon.flavors.webdataset import sample_loader
+from megatron.energon.flavors.webdataset import base_webdataset
+from megatron.energon.flavors.webdataset import random_access
+from megatron.energon.wrappers import map_dataset
 
 
 def check_index(dataset_path: EPath):
@@ -82,6 +87,12 @@ class BenchmarkWriter:
         self.cur_sample["n_reads"] = fast_read.NUMBER_OF_READS
         self.cur_sample["bytes_read"] = fast_read.READ_BYTES
         self.cur_sample["read_time_ns"] = fast_read.READ_TIME_NS
+        self.cur_sample["queue_size"] = sample_loader.STATS_CURRENT_QUEUE_SIZE
+        self.cur_sample["queue_size2"] = map_dataset.STATS_PREFETCH_PIPELINE_SIZE
+        self.cur_sample["queue_size3"] = random_access.STATS_LOAD_QUEUE_SIZE
+        self.cur_sample["queue_size4"] = random_access.STATS_DECODE_QUEUE_SIZE
+        # self.cur_sample["decode_time_ns"] = base_webdataset.STATS_DECODE_TIME_NS
+        self.cur_sample["decode_time_ns"] = base_webdataset.STATS_DECODE_TIME_NS + random_access.STATS_DECODE_TIME_NS
         self._write(self.cur_sample)
         self.cur_sample.clear()
         if self.idx % 1000 == 0:
@@ -183,19 +194,27 @@ def command(
                 writer = BenchmarkWriter(output)
             start = time.time()
             i = 0
+            last_sample = None
             if writer is not None:
                 writer.sample_start()
-            for _ in tqdm.tqdm(get_loader(dataset)):
+            for sample_batch in tqdm.tqdm(get_loader(dataset)):
+                if last_sample is not None:
+                    for packed_sample_batch in last_sample.samples:
+                        for packed_sample in packed_sample_batch:
+                            for img in packed_sample.images:
+                                if isinstance(img, Future):
+                                    img.result()
+                    last_sample = sample_batch
                 if writer is not None:
                     writer.sample_end()
                 if i == 0:
                     print(f"Time taken to load first sample: {time.time() - start}")
                     start = time.time()
+                if writer is not None:
+                    writer.sample_start()
                 if limit is not None and i == limit + 1:
                     break
                 i += 1
-                if writer is not None:
-                    writer.sample_start()
             if writer is not None:
                 writer.sample_end()
                 writer.close()

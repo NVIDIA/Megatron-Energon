@@ -19,6 +19,9 @@ class FileRandomReadPool:
         global NUMBER_OF_OPENS
         NUMBER_OF_OPENS += 1
         fd = os.open(path, os.O_RDONLY | os.O_DIRECT)
+        # TODO: Remove for optimizations. Discard the cache for benchmarking.
+        os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
+        # Advide that access is random.
         os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_RANDOM)
         self.pool[path] = fd
         # self.mmap_cache[path] = mm = mmap.mmap(fd, length=0, offset=0, prot=mmap.PROT_READ)
