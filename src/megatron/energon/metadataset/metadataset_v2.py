@@ -43,21 +43,19 @@ class AuxDatasetReference:
             "Auxiliary datasets must be prepared Energon dataset"
         )
 
-    def get_dataset(self, worker_config: WorkerConfig, **kwargs) -> RandomAccessDataset:
+    def get_dataset(self, **kwargs) -> RandomAccessDataset:
         assert isinstance(self.path, EPath), "Missing call to post_initialize"
         if self.mode == "raw":
-            return RandomAccessWebdataset(self.path, worker_config=worker_config)
+            return RandomAccessWebdataset(self.path)
         elif self.mode == "decoded":
             # Additionally pass decoder args.
             # Get matching kwargs
             decoder_kwargs = {k: v for k, v in kwargs.items() if "decode" in k}
-            return RandomAccessDecoderWebdataset(self.path, worker_config=worker_config, **decoder_kwargs)
+            return RandomAccessDecoderWebdataset(self.path, **decoder_kwargs)
         elif self.mode == "lazy_decoded":
             # Additionally pass decoder args.
             decoder_kwargs = {k: v for k, v in kwargs.items() if "decode" in k}
-            return LazyRandomAccessDecoderWebdataset(
-                self.path, worker_config=worker_config, **decoder_kwargs
-            )
+            return LazyRandomAccessDecoderWebdataset(self.path, **decoder_kwargs)
         else:
             raise ValueError(f"Invalid mode: {self.mode}")
 
@@ -151,7 +149,7 @@ class DatasetReference(DatasetLoaderInterface):
             **kwargs,
         )
         if self.aux is not None:
-            aux = {k: v.get_dataset(worker_config, **kwargs) for k, v in self.aux.items()}
+            aux = {k: v.get_dataset(**kwargs) for k, v in self.aux.items()}
             for loaded_dataset in result.datasets:
                 if loaded_dataset.aux is None:
                     loaded_dataset.aux = aux

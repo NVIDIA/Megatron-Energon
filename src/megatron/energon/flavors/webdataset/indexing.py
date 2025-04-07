@@ -9,7 +9,7 @@ from typing import Any, BinaryIO, List, Optional, Tuple, Union
 from numpy import int8
 
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.webdataset.itar_reader import ITarSamplePointer
+from megatron.energon.flavors.webdataset.itar import ITarSamplePointer
 
 
 class SqliteIndexWriter:

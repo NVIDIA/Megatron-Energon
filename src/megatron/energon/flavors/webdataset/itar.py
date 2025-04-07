@@ -14,6 +14,18 @@ from megatron.energon.retry_stream import RetryReadStream
 ITAR_SUFFIX = ".tar.idx"
 
 
+@dataclass_slots
+class ITarSamplePointer:
+    """
+    Points to a sample inside some tar file on disk.
+    The tar_file_id refers to the tar_filenames in the reader.
+    """
+
+    tar_file_id: int
+    byte_offset: int
+    byte_size: int
+
+
 class TarIndexReader:
     def __init__(self, tar_path: Union[EPath, str]):
         tar_path = EPath(tar_path)

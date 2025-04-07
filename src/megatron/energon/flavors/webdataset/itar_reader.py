@@ -1,32 +1,22 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-import io
 from abc import ABC, abstractmethod
 from bisect import bisect_right
 from typing import Any, Callable, Dict, Generic, List, Optional, Tuple, TypeVar, Union, overload
 
-from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.webdataset.config import skip_meta_re, split_name_re
 from megatron.energon.flavors.webdataset.indexing import JoinIndexReader, SqliteIndexReader
-from megatron.energon.flavors.webdataset.itar import CachedItarOffsetReader, ITarFile
+from megatron.energon.flavors.webdataset.itar import (
+    CachedItarOffsetReader,
+    ITarFile,
+    ITarSamplePointer,
+)
 from megatron.energon.flavors.webdataset.metadata import get_info_shard_files
 from megatron.energon.flavors.webdataset.structs import FilteredSample, ShardInfo
 
 T_index = TypeVar("T_index", covariant=False)
-
-
-@dataclass_slots
-class ITarSamplePointer:
-    """
-    Points to a sample inside some tar file on disk.
-    The tar_file_id refers to the tar_filenames in the reader.
-    """
-
-    tar_file_id: int
-    byte_offset: int
-    byte_size: int
 
 
 class ITarReader(ABC, Generic[T_index]):
@@ -181,14 +171,11 @@ class ITarReader(ABC, Generic[T_index]):
         )
 
     @overload
-    @abstractmethod
     def __getitem__(self, key: T_index) -> Optional[FilteredSample]: ...
 
     @overload
-    @abstractmethod
     def __getitem__(self, key: slice) -> "ITarReader": ...
 
-    @abstractmethod
     def __getitem__(self, key: Union[slice, T_index]) -> Union["ITarReader", FilteredSample, None]:
         """
         Get a sample from the dataset or slice it.
@@ -400,15 +387,10 @@ class ShardInfosITarReader(ITarReader[int]):
         )
 
 
-class SqliteITarReader(ITarReader[str]):
+class SqliteITarEntryReader(ITarReader[str]):
     """
-    A concrete ITarReader that constructs its internal sample list from a list of ShardInfos.
+    A concrete ITarReader that constructs its internal sample list from a SQLite database.
     """
-
-    shard_infos: List[ShardInfo]
-    shard_tar_file_idxs: List[int]
-    shard_count_cumsum: List[int]
-    cached_offset_reader: CachedItarOffsetReader
 
     sqlite_reader: SqliteIndexReader
 
@@ -418,6 +400,7 @@ class SqliteITarReader(ITarReader[str]):
         part_filter: Optional[Callable[[str], bool]] = None,
         itar_cache_size: int = 5,
         sample_filter: Optional[Callable[[str], bool]] = None,
+        key_is_full_entryname: bool = False,
     ):
         from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
         from megatron.energon.flavors.webdataset.indexing import SqliteIndexReader
@@ -429,6 +412,8 @@ class SqliteITarReader(ITarReader[str]):
         # Initialize the SQLite reader
         sqlite_path = base_path / MAIN_FOLDER_NAME / "index.sqlite"
         self.sqlite_reader = SqliteIndexReader(sqlite_path)
+
+        self.key_is_full_entryname = key_is_full_entryname
 
         super().__init__(
             base_path=base_path,
@@ -447,17 +432,15 @@ class SqliteITarReader(ITarReader[str]):
         return self.sqlite_reader.get_sample_pointer_by_key(sample_key)
 
     @overload
-    @abstractmethod
-    def __getitem__(self, key: str) -> Optional[FilteredSample]: ...
+    def __getitem__(self, key: str) -> Optional[Union[FilteredSample, bytes]]: ...
 
     @overload
-    @abstractmethod
     def __getitem__(self, key: slice) -> "ITarReader": ...
 
-    @abstractmethod
-    def __getitem__(self, key: Union[slice, str]) -> Union["ITarReader", FilteredSample, None]:
+    def __getitem__(self, key: Union[slice, str]) -> Union[FilteredSample, bytes, ITarReader, None]:
         """
-        Get a sample from the dataset or slice it.
+        Either get a sample from the dataset by the sample key including all its entries,
+        or get the bytes of a specific entry by the full filename of the entry inside the tar.
         """
 
         if isinstance(key, slice):
@@ -468,17 +451,30 @@ class SqliteITarReader(ITarReader[str]):
         else:
             raise TypeError("Invalid argument type for __getitem__")
 
-        m = split_name_re.match(key)
-        if not m:
-            raise ValueError(f"Invalid file name: {key}")
+        if self.key_is_full_entryname:
+            m = split_name_re.match(key)
+            if not m:
+                raise ValueError(f"Invalid file name: {key}")
 
-        sample_key, sample_ext = m.groups()
+            sample_key, sample_ext = m.groups()
+            entry_match_fn = lambda fname: key == fname
+        else:
+            sample_key = key
+            sample_ext = None
+            entry_match_fn = None
 
         sample_pointer = self._get_itar_sample_pointer(sample_key)
 
-        entry_match_fn = lambda fname: key == fname
+        sample = self._get_item_by_sample_pointer(
+            sample_pointer, idx, entry_match_fn=entry_match_fn
+        )
+        assert sample is not None, f"Sample not found: {sample_key}"
 
-        return self._get_item_by_sample_pointer(sample_pointer, idx, entry_match_fn=entry_match_fn)
+        if self.key_is_full_entryname:
+            assert isinstance(sample_ext, str)
+            return sample[sample_ext]  # Return the bytes directly
+        else:
+            return sample  # Return the FilteredSample
 
     def __len__(self) -> int:
         """Return the total number of samples in the database."""
@@ -487,7 +483,7 @@ class SqliteITarReader(ITarReader[str]):
     def __str__(self) -> str:
         """Return a descriptive string of this reader."""
         return (
-            f"SqliteITarReader("
+            f"SqliteITarEntryReader("
             f"len={len(self)}, base_path={self.base_path}, "
             f"len(shards)={len(self.tar_filenames)}, "
             f"shards=[{self.tar_filenames[0] if self.tar_filenames else 'N/A'}, ...])"
