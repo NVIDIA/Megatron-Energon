@@ -3,6 +3,8 @@
 
 from abc import ABC, abstractmethod
 from bisect import bisect_right
+import os
+import time
 from typing import Callable, Dict, List, Optional, Tuple, Union, overload
 
 from megatron.energon.dataclass_slots import dataclass_slots
@@ -10,6 +12,7 @@ from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.webdataset.config import skip_meta_re, split_name_re
 from megatron.energon.flavors.webdataset.indexing import JoinIndexReader
 from megatron.energon.flavors.webdataset.itar import CachedItarOffsetReader, ITarFile
+from megatron.energon.flavors.webdataset import itar
 from megatron.energon.flavors.webdataset.structs import FilteredSample, ShardInfo
 
 
@@ -91,8 +94,13 @@ class ITarReader(ABC):
         the global cache limit, close the least recently used file.
         """
         if tar_file_id not in self.itar_files_cache:
+            start_time = time.perf_counter_ns()
             file_object = self.tar_filepaths[tar_file_id].open(mode="rb")
+            os.posix_fadvise(file_object.fileno(), 0, 0, os.POSIX_FADV_DONTNEED)
+            os.posix_fadvise(file_object.fileno(), 0, 0, os.POSIX_FADV_NORMAL)
             tar_file = ITarFile.open(fileobj=file_object, mode="r:")
+            itar.STATS_OPEN_TIME_NS += time.perf_counter_ns() - start_time
+            itar.STATS_NUMBER_OF_OPENS += 1
             self.itar_files_cache[tar_file_id] = tar_file
 
         # If we hit the limit of open files, close the least recently used file
@@ -167,7 +175,7 @@ class ITarReader(ABC):
                     )
 
             if self.part_filter is None or self.part_filter(cur_ext):
-                member_bytes = tar_file.extractfile(tarinfo).read()
+                member_bytes = tar_file.read_bytes(tarinfo)
                 group_parts[cur_ext] = member_bytes
 
         if sample_base_name is None:

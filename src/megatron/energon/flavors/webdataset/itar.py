@@ -2,8 +2,10 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import contextlib
+import os
 import struct
 import tarfile
+import time
 from types import TracebackType
 from typing import BinaryIO, Dict, Generator, Optional, Tuple, Type, Union
 
@@ -14,32 +16,58 @@ from megatron.energon.retry_stream import RetryReadStream
 ITAR_SUFFIX = ".tar.idx"
 
 
+STATS_NUMBER_OF_SEEKS = 0
+STATS_NUMBER_OF_OPENS = 0
+STATS_NUMBER_OF_READS = 0
+STATS_BYTES_READ = 0
+STATS_OPEN_TIME_NS = 0
+STATS_READ_TIME_NS = 0
+
+
 class TarIndexReader:
     def __init__(self, tar_path: Union[EPath, str]):
+        global STATS_NUMBER_OF_OPENS, STATS_OPEN_TIME_NS
         tar_path = EPath(tar_path)
+        start_time = time.perf_counter_ns()
         self.itar = (tar_path.with_suffix(ITAR_SUFFIX)).open("rb")
+        os.posix_fadvise(self.itar.fileno(), 0, 0, os.POSIX_FADV_DONTNEED)
+        os.posix_fadvise(self.itar.fileno(), 0, 0, os.POSIX_FADV_NORMAL)
+        STATS_OPEN_TIME_NS += time.perf_counter_ns() - start_time
+        STATS_NUMBER_OF_OPENS += 1
         self._length = len(self)
 
     def __getitem__(self, index: int) -> int:
+        global STATS_NUMBER_OF_SEEKS, STATS_READ_TIME_NS, STATS_BYTES_READ
         if index >= self._length or index < 0:
             raise IndexError(f"Index {index} out of range")
 
         if self.itar.tell() != 8 * index:
             self.itar.seek(8 * index)
-
-        return struct.unpack("Q", self.itar.read(8))[0]
+            STATS_NUMBER_OF_SEEKS += 1
+        STATS_BYTES_READ += 8
+        start_time = time.perf_counter_ns()
+        raw = self.itar.read(8)
+        STATS_READ_TIME_NS += time.perf_counter_ns() - start_time
+        return struct.unpack("Q", raw)[0]
 
     def __iter__(self) -> Generator[int, None, None]:
+        global STATS_NUMBER_OF_READS, STATS_READ_TIME_NS, STATS_BYTES_READ
         self.itar.seek(0)
         while True:
+            start_time = time.perf_counter_ns()
             raw = self.itar.read(8)
+            STATS_READ_TIME_NS += time.perf_counter_ns() - start_time
             if len(raw) == 0:
                 break
             assert len(raw) == 8
+            STATS_NUMBER_OF_READS += 1
+            STATS_BYTES_READ += 8
             yield struct.unpack("Q", raw)[0]
 
     def __len__(self) -> int:
+        global STATS_NUMBER_OF_SEEKS
         self.itar.seek(0, 2)
+        STATS_NUMBER_OF_SEEKS += 1
         return self.itar.tell() // 8
 
     def close(self):
@@ -292,6 +320,8 @@ class ITarFile(tarfile.TarFile):
             self.in_init = False
 
     def next(self):
+        global STATS_NUMBER_OF_READS, STATS_READ_TIME_NS, STATS_BYTES_READ, STATS_NUMBER_OF_SEEKS
+
         if self.in_init:
             # Don't automatically read the first member
             return None
@@ -299,8 +329,25 @@ class ITarFile(tarfile.TarFile):
         if self.offset != self.fileobj.tell():
             # This prevents tarfile from reading the one byte before
             self.fileobj.seek(self.offset)
+            STATS_NUMBER_OF_SEEKS += 1
 
-        return super().next()
+        start_offset = self.offset
+        start_time = time.perf_counter_ns()
+        res = super().next()
+        STATS_NUMBER_OF_READS += 1
+        STATS_BYTES_READ += self.offset - start_offset
+        STATS_READ_TIME_NS += time.perf_counter_ns() - start_time
+        return res
+
+    def read_bytes(self, tarinfo: tarfile.TarInfo) -> bytes:
+        global STATS_NUMBER_OF_READS, STATS_READ_TIME_NS, STATS_BYTES_READ
+        start_time = time.perf_counter_ns()
+        with self.extractfile(tarinfo) as rf:
+            res = rf.read()
+        STATS_READ_TIME_NS += time.perf_counter_ns() - start_time
+        STATS_NUMBER_OF_READS += 1
+        STATS_BYTES_READ += len(res)
+        return res
 
 
 @contextlib.contextmanager
@@ -315,6 +362,7 @@ def open_itar(path: Union[str, EPath], byte_offset: int = 0, byte_size: Optional
     Returns:
         The opened tarfile
     """
+    global STATS_NUMBER_OF_OPENS, STATS_NUMBER_OF_SEEKS
     path = EPath(path)
 
     # TODO: if tar file startswith(b"\x1f\x8b\x08") -> Seekable gzip file
@@ -327,14 +375,17 @@ def open_itar(path: Union[str, EPath], byte_offset: int = 0, byte_size: Optional
         if byte_size is None:
             byte_size = path.size() - byte_offset
         with RetryReadStream(path) as stream:
+            STATS_NUMBER_OF_OPENS += 1
             with SubFileReader(
                 stream,
                 offset=byte_offset,
                 size=byte_size,
             ) as fileobj:
+                STATS_NUMBER_OF_SEEKS += 1
                 with ITarFile.open(fileobj=fileobj, mode="r:") as f:
                     yield f
     else:
         with RetryReadStream(path) as fileobj:
+            STATS_NUMBER_OF_OPENS += 1
             with ITarFile.open(fileobj=fileobj, mode="r:") as f:
                 yield f
