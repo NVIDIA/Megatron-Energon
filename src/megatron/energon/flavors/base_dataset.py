@@ -34,6 +34,7 @@ from megatron.energon.worker import WorkerConfig
 
 T_sample = TypeVar("T_sample", covariant=True)
 T = TypeVar("T", covariant=True)
+T_data = TypeVar("T_data", covariant=True)
 
 
 class PinMemoryMixin:
@@ -378,11 +379,11 @@ class BaseCoreDatasetFactory(Generic[T_sample], ABC):
         ...
 
 
-class RandomAccessDataset(ABC, Generic[T_sample]):
+class RandomAccessDataset(ABC, Generic[T_data]):
     """Base type for a dataset that can be accessed randomly by sample key."""
 
     @abstractmethod
-    def __getitem__(self, key: str) -> T_sample:
+    def __getitem__(self, key: str) -> T_data:
         """Returns the data for the given key."""
         ...
 
