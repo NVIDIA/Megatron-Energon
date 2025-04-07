@@ -89,6 +89,7 @@ class CookingTaskEncoder(DefaultTaskEncoder[TextSample, TextSample, TextBatch, T
     def pack_selected_samples(self, samples):
         return samples[0]
 
+
 class GenericCookingTaskEncoder(DefaultTaskEncoder[TextSample, TextSample, TextBatch, TextBatch]):
     """A simple task encoder for captioning."""
 
@@ -214,6 +215,7 @@ class TestDataset(unittest.TestCase):
             [f"parts/data-{{0..{total_shards - 1}}}.tar"],
             split_parts_ratio=[("train", 1.0)],
             shuffle_seed=None,
+            workers=1,
         )
 
         with open(path / MAIN_FOLDER_NAME / "dataset.yaml", "w") as f:
@@ -381,7 +383,6 @@ class TestDataset(unittest.TestCase):
         print(samples_restored)
 
         assert all([a == b for a, b in zip(samples_after, samples_restored)])
-
 
     def test_nomds(self):
         torch.manual_seed(42)
