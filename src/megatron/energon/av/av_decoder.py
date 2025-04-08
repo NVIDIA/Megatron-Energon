@@ -147,7 +147,9 @@ class AVDecoder:
 
                 # Find start frame
                 if (
-                    iframe_info := self.seeker.should_seek(previous_frame_index, start_frame_index)
+                    iframe_info := self.seeker.should_seek(
+                        previous_frame_index, start_frame_index, input_container.streams.video[0].id
+                    )
                 ) is not None:
                     input_container.seek(iframe_info.pts, stream=input_container.streams.video[0])
                     previous_frame_index = iframe_info.index
