@@ -234,6 +234,7 @@ def command(
             # print(f"Read time: {fast_read.READ_TIME_NS / 1e9}")
             print(f"Number of opens: {itar.STATS_NUMBER_OF_OPENS}")
             print(f"Number of reads: {itar.STATS_NUMBER_OF_READS}")
+            print(f"Number of seeks: {itar.STATS_NUMBER_OF_SEEKS}")
             print(f"Bytes read: {itar.STATS_BYTES_READ}")
             print(f"Read time: {itar.STATS_READ_TIME_NS / 1e9}")
             print(f"Open time: {itar.STATS_OPEN_TIME_NS / 1e9}")

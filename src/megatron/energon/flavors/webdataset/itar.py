@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import contextlib
+import io
 import os
 import struct
 import tarfile
@@ -319,7 +320,7 @@ class ITarFile(tarfile.TarFile):
         finally:
             self.in_init = False
 
-    def next(self):
+    def next(self) -> Optional[tarfile.TarInfo]:
         global STATS_NUMBER_OF_READS, STATS_READ_TIME_NS, STATS_BYTES_READ, STATS_NUMBER_OF_SEEKS
 
         if self.in_init:
@@ -327,9 +328,11 @@ class ITarFile(tarfile.TarFile):
             return None
 
         if self.offset != self.fileobj.tell():
+            relative_seek = self.offset - self.fileobj.tell()
             # This prevents tarfile from reading the one byte before
             self.fileobj.seek(self.offset)
-            STATS_NUMBER_OF_SEEKS += 1
+            if relative_seek > io.DEFAULT_BUFFER_SIZE or relative_seek < 0:
+                STATS_NUMBER_OF_SEEKS += 1
 
         start_offset = self.offset
         start_time = time.perf_counter_ns()

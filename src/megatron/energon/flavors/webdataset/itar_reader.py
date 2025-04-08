@@ -87,7 +87,7 @@ class ITarReader(ABC):
         """
         raise NotImplementedError
 
-    def _get_itarfile_cached(self, tar_file_id: int, offset: int) -> Tuple[Tuple[int, int], ITarFile]:
+    def _get_itarfile_cached(self, tar_file_id: int, offset: int, size: int) -> ITarFile:
         """
         Get the ITarFile object for the given tar file id.
         If the file is not already open, open it. If we exceed
@@ -113,10 +113,11 @@ class ITarReader(ABC):
             self.itar_files_cache[lru_key].close()
             del self.itar_files_cache[lru_key]
 
-        tar_file = self.itar_files_cache[key]
+        tar_file = self.itar_files_cache.pop(key)
         # Position the tar file at the correct offset
         tar_file.offset = offset
-        return key, tar_file
+        self.itar_files_cache[(tar_file_id, offset + size)] = tar_file
+        return tar_file
 
     @overload
     def __getitem__(self, key: int) -> Optional[FilteredSample]: ...
@@ -140,52 +141,47 @@ class ITarReader(ABC):
         sample = self._get_itar_sample_pointer(idx)
 
         # Open the tar file (cached)
-        key, tar_file = self._get_itarfile_cached(sample.tar_file_id, sample.byte_offset)
+        tar_file = self._get_itarfile_cached(sample.tar_file_id, sample.byte_offset, sample.byte_size)
         shard_name = self.tar_filenames[sample.tar_file_id]
         sample_base_name = None
         sample_name = None
         group_parts: Dict[str, bytes] = {}
 
-        try:
-            while tar_file.offset < sample.byte_offset + sample.byte_size:
-                tarinfo = tar_file.next()
-                if tarinfo is None:
-                    raise ValueError(
-                        f"Unexpected end of tar file: {self.tar_filenames[sample.tar_file_id]}"
-                    )
-                fname = tarinfo.name
-                if not tarinfo.isfile() or fname is None:
-                    continue
-                if skip_meta_re.match(fname):
-                    continue
+        while tar_file.offset < sample.byte_offset + sample.byte_size:
+            tarinfo = tar_file.next()
+            if tarinfo is None:
+                raise ValueError(
+                    f"Unexpected end of tar file: {self.tar_filenames[sample.tar_file_id]}"
+                )
+            fname = tarinfo.name
+            if not tarinfo.isfile() or fname is None:
+                continue
+            if skip_meta_re.match(fname):
+                continue
 
-                # Extract the base_name and extension
-                m = split_name_re.match(fname)
-                if not m:
-                    continue
-                cur_base_name, cur_ext = m.groups()
-
-                if sample_base_name is None:
-                    sample_base_name = cur_base_name
-                    sample_name = f"{shard_name}/{cur_base_name}"
-                    if self.sample_filter is not None and not self.sample_filter(sample_name):
-                        return None
-                else:
-                    if sample_base_name != cur_base_name:
-                        raise ValueError(
-                            f"Inconsistent sample base name: {sample_base_name} vs {cur_base_name}"
-                        )
-
-                if self.part_filter is None or self.part_filter(cur_ext):
-                    member_bytes = tar_file.read_bytes(tarinfo)
-                    group_parts[cur_ext] = member_bytes
+            # Extract the base_name and extension
+            m = split_name_re.match(fname)
+            if not m:
+                continue
+            cur_base_name, cur_ext = m.groups()
 
             if sample_base_name is None:
-                raise ValueError(f"No valid files found in sample {idx}")
-        finally:
-            # Update the cache to the new offset
-            del self.itar_files_cache[key]
-            self.itar_files_cache[(sample.tar_file_id, sample.byte_offset + sample.byte_size)] = tar_file
+                sample_base_name = cur_base_name
+                sample_name = f"{shard_name}/{cur_base_name}"
+                if self.sample_filter is not None and not self.sample_filter(sample_name):
+                    return None
+            else:
+                if sample_base_name != cur_base_name:
+                    raise ValueError(
+                        f"Inconsistent sample base name: {sample_base_name} vs {cur_base_name}"
+                    )
+
+            if self.part_filter is None or self.part_filter(cur_ext):
+                member_bytes = tar_file.read_bytes(tarinfo)
+                group_parts[cur_ext] = member_bytes
+
+        if sample_base_name is None:
+            raise ValueError(f"No valid files found in sample {idx}")
 
         return FilteredSample(
             __key__=f"{shard_name}/{sample_base_name}",
