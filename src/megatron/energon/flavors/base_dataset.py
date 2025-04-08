@@ -387,6 +387,11 @@ class RandomAccessDataset(ABC, Generic[T_data]):
         """Returns the data for the given key."""
         ...
 
+    @abstractmethod
+    def get_path(self) -> str:
+        """Returns the path to the dataset."""
+        ...
+
 
 def add_sample_restore_key(
     sample: T_sample, *key: Union[int, str], src: Any, fail_otherwise: bool = False

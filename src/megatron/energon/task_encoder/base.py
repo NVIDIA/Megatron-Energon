@@ -35,6 +35,7 @@ from megatron.energon.flavors.base_dataset import (
 )
 from megatron.energon.flavors.crude import CrudeSample, CrudeWebdataset
 from megatron.energon.flavors.webdataset.random_access_dataset import RandomAccessDecoderDataset
+from megatron.energon.flavors.webdataset.random_access_pool import RandomAccessDatasetCachePool
 from megatron.energon.metadataset.loader_interface import DatasetBlendMode, LoadedDataset
 from megatron.energon.rng import SystemRng
 from megatron.energon.task_encoder.cooking import Cooker
@@ -778,6 +779,8 @@ class DefaultTaskEncoder(
         self._encoded_sample_type = encoded_sample_type
         self._raw_batch_type = raw_batch_type
         self._batch_type = batch_type
+
+        self.cache = RandomAccessDatasetCachePool()
 
     @stateless
     def encode_sample(
