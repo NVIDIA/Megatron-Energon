@@ -1,16 +1,11 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-import threading
-import time
-from concurrent.futures import Future
-from queue import Queue
-from typing import Any, Literal
+from typing import Any
 
 from megatron.energon.epathlib.epath import EPath
 from megatron.energon.flavors.base_dataset import RandomAccessDataset
 from megatron.energon.flavors.webdataset.config import split_name_re
-from megatron.energon.flavors.webdataset.default_decoder_webdataset import ImageDecoder
 from megatron.energon.flavors.webdataset.itar_reader import SqliteITarEntryReader
 from megatron.energon.flavors.webdataset.sample_decoder import SampleDecoder
 
