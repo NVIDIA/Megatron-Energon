@@ -14,7 +14,6 @@ try:
     import av
     import av.container
     import filetype
-
     from megatron.energon.av.fastseek import Fastseek
 
     AV_DECODE_AVAILABLE = True
@@ -48,7 +47,10 @@ class AVDecoder:
     @property
     def seeker(self) -> Fastseek:
         if self._seeker is None:
-            self._seeker = Fastseek(self.stream)
+            try:
+                self._seeker = Fastseek(self.stream)
+            except ValueError:
+                self._seeker = Fastseek(self.stream, probe=True)
         return self._seeker
 
     def get_video(self) -> AVData:
