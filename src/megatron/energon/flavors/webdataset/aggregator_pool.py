@@ -7,12 +7,12 @@ import multiprocessing
 from abc import ABC, abstractmethod
 from typing import Any, Callable, Generic, Iterable, List, Optional, TypeVar
 
-TResult = TypeVar("TResult")
-TAggregationData = TypeVar("TAggregationData")
-TInputData = TypeVar("TInputData")
+T_result = TypeVar("T_result")
+T_aggregation_data = TypeVar("T_aggregation_data")
+T_input_data = TypeVar("T_input_data")
 
 
-class BaseAggregator(ABC, Generic[TAggregationData, TResult]):
+class BaseAggregator(ABC, Generic[T_aggregation_data, T_result]):
     """
     Base class for a user-defined aggregator.
     Implement on_start, on_item, and on_finish to handle aggregator logic.
@@ -26,7 +26,7 @@ class BaseAggregator(ABC, Generic[TAggregationData, TResult]):
         ...
 
     @abstractmethod
-    def on_item(self, item: TAggregationData, aggregator_pool: AggregatorPool) -> None:
+    def on_item(self, item: T_aggregation_data, aggregator_pool: AggregatorPool) -> None:
         """
         Called for each item produced by the workers.
         """
@@ -40,14 +40,14 @@ class BaseAggregator(ABC, Generic[TAggregationData, TResult]):
         ...
 
     @abstractmethod
-    def get_final_result_data(self) -> TResult:
+    def get_final_result_data(self) -> T_result:
         """
         Called after on_finish to retrieve any final data produced by the aggregator.
         """
         ...
 
 
-class AggregatorPool(Generic[TInputData, TAggregationData, TResult]):
+class AggregatorPool(Generic[T_input_data, T_aggregation_data, T_result]):
     """
     A pool that manages multiple worker processes sending results to
     a single aggregator process.
@@ -59,17 +59,17 @@ class AggregatorPool(Generic[TInputData, TAggregationData, TResult]):
     """
 
     num_workers: int
-    user_produce_data: Callable[[TInputData], Iterable[Any]]
-    aggregator: BaseAggregator[TAggregationData, TResult]
+    user_produce_data: Callable[[T_input_data], Iterable[Any]]
+    aggregator: BaseAggregator[T_aggregation_data, T_result]
 
-    task_queue: multiprocessing.Queue[Optional[TInputData]]
-    result_queue: multiprocessing.Queue[Optional[TAggregationData]]
+    task_queue: multiprocessing.Queue[Optional[T_input_data]]
+    result_queue: multiprocessing.Queue[Optional[T_aggregation_data]]
 
     def __init__(
         self,
         num_workers: int,
-        user_produce_data: Callable[[TInputData], Iterable[Any]],
-        aggregator: BaseAggregator[TAggregationData, TResult],
+        user_produce_data: Callable[[T_input_data], Iterable[Any]],
+        aggregator: BaseAggregator[T_aggregation_data, T_result],
     ) -> None:
         """
         Args:
@@ -106,7 +106,7 @@ class AggregatorPool(Generic[TInputData, TAggregationData, TResult]):
         # After finishing all tasks, send a sentinel to the aggregator
         self.result_queue.put(None)
 
-    def _aggregator_run(self) -> TResult:
+    def _aggregator_run(self) -> T_result:
         """
         Function that runs in the aggregator process.
         Keeps reading items from result_queue.
@@ -133,13 +133,13 @@ class AggregatorPool(Generic[TInputData, TAggregationData, TResult]):
         # After finishing, serialize the aggregator's final data
         return self.aggregator.get_final_result_data()
 
-    def submit_task(self, task: TInputData) -> None:
+    def submit_task(self, task: T_input_data) -> None:
         """
         Submit a task to be processed by a worker.
         """
         self.task_queue.put(task)
 
-    def process(self) -> TResult:
+    def process(self) -> T_result:
         """
         Starts the worker processes and runs the aggregation in the main process.
         Waits for all workers to finish and retrieves the aggregator's final data.
