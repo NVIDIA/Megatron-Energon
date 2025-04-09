@@ -33,7 +33,7 @@ class AVDecoder:
     decoding parameters.
     """
 
-    _seeker: Optional["Fastseek"]
+    seeker: "Fastseek"
 
     def __init__(self, stream: BinaryIO) -> None:
         if not AV_DECODE_AVAILABLE:
@@ -43,16 +43,13 @@ class AVDecoder:
                 f"Missing dependency: {MISSING_DEPENDENCY}. Install megatron-energon[av_decode] to use AVDecoder."
             )
         self.stream = stream
-        self._seeker = None
 
-    @property
-    def seeker(self) -> Fastseek:
-        if self._seeker is None:
-            try:
-                self._seeker = Fastseek(self.stream)
-            except ValueError:
-                self._seeker = Fastseek(self.stream, probe=True)
-        return self._seeker
+        try:
+            self.seeker = Fastseek(self.stream)
+        except ValueError:
+            self.seeker = Fastseek(self.stream, probe=True)
+
+        self.stream.seek(0)
 
     def get_video(self) -> AVData:
         """Get the entire video data from the stream (without audio)."""
