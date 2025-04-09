@@ -10,6 +10,7 @@ from numpy import int8
 
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.webdataset.itar import ITarSamplePointer
+from megatron.energon.flavors.webdataset.thread_local_sqlite import ThreadLocalSqlite
 
 
 class SqliteIndexWriter:
@@ -170,7 +171,7 @@ class SqliteIndexReader:
     """
 
     sqlite_path: EPath
-    db: Optional[sqlite3.Connection]
+    db: ThreadLocalSqlite
 
     def __init__(self, sqlite_path: EPath):
         """Initialize the SQLite database reader.
@@ -187,20 +188,19 @@ class SqliteIndexReader:
             f"SQLite path must be absolute local file system path: {self.sqlite_path}"
         )
 
-        self.db = sqlite3.connect(path)
-        self.db.execute("PRAGMA busy_timeout = 5000;")  # wait up to 5000ms when locked
+        self.db = ThreadLocalSqlite(path)
 
         # Verify the table exists
-        result = self.db.execute(
+        result = self.db.select_one(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='samples'"
-        ).fetchone()
+        )
         assert result is not None, f"Database {sqlite_path} does not contain 'samples' table"
 
     def get_sample_count(self) -> int:
         """Get the total number of samples in the database."""
         assert self.db is not None, "Database is closed"
 
-        count = self.db.execute("SELECT COUNT(*) FROM samples").fetchone()
+        count = self.db.select_one("SELECT COUNT(*) FROM samples")
         return count[0] if count else 0
 
     def get_sample_by_index(self, idx: int) -> Any:
@@ -215,11 +215,11 @@ class SqliteIndexReader:
         assert self.db is not None, "Database is closed"
 
         # SQLite uses 1-based indexing for ROWID, so add 1 to idx
-        sample = self.db.execute(
+        sample = self.db.select_one(
             "SELECT tar_file_id, sample_key, sample_index, byte_offset, byte_size "
             "FROM samples WHERE id = ?",
             (idx + 1,),
-        ).fetchone()
+        )
 
         if sample is None:
             raise IndexError(f"Sample index out of bounds: {idx}")
@@ -241,11 +241,11 @@ class SqliteIndexReader:
         """
         assert self.db is not None, "Database is closed"
 
-        sample = self.db.execute(
+        sample = self.db.select_one(
             "SELECT tar_file_id, sample_key, sample_index, byte_offset, byte_size "
             "FROM samples WHERE sample_key = ?",
             (key,),
-        ).fetchone()
+        )
 
         if sample is None:
             raise KeyError(f"Sample key not found: {key}")
@@ -267,7 +267,7 @@ class SqliteIndexReader:
         """
         assert self.db is not None, "Database is closed"
 
-        result = self.db.execute("SELECT id FROM samples WHERE sample_key = ?", (key,)).fetchone()
+        result = self.db.select_one("SELECT id FROM samples WHERE sample_key = ?", (key,))
 
         if result is None:
             raise KeyError(f"Sample key not found: {key}")
@@ -279,7 +279,7 @@ class SqliteIndexReader:
         """Close the database connection."""
         if self.db is not None:
             self.db.close()
-            self.db = None
+            del self.db
 
     def __enter__(self):
         return self
