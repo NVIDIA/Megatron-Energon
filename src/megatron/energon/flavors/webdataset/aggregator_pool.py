@@ -18,12 +18,11 @@ class BaseAggregator(ABC, Generic[T_aggregation_data, T_result]):
     Implement on_start, on_item, and on_finish to handle aggregator logic.
     """
 
-    @abstractmethod
     def on_start(self, aggregator_pool: AggregatorPool) -> None:
         """
         Called exactly once in the aggregator process before receiving any items.
         """
-        ...
+        pass
 
     @abstractmethod
     def on_item(self, item: T_aggregation_data, aggregator_pool: AggregatorPool) -> None:
@@ -32,19 +31,17 @@ class BaseAggregator(ABC, Generic[T_aggregation_data, T_result]):
         """
         ...
 
-    @abstractmethod
     def on_finish(self, aggregator_pool: AggregatorPool) -> None:
         """
         Called once when all workers have signaled completion (i.e. all items are processed).
         """
-        ...
+        pass
 
-    @abstractmethod
     def get_final_result_data(self) -> T_result:
         """
         Called after on_finish to retrieve any final data produced by the aggregator.
         """
-        ...
+        return None
 
 
 class AggregatorPool(Generic[T_input_data, T_aggregation_data, T_result]):
