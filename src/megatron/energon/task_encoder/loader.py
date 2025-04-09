@@ -48,6 +48,8 @@ def get_train_dataset(
     shuffle_over_epochs_multiplier: Optional[int] = 1,
     task_encoder: TaskEncoder[Any, Any, Any, T] = DefaultTaskEncoder(),
     repeat: bool = True,
+    watchdog_timeout_seconds: float = 60,
+    fail_on_timeout: bool = False,
     **kwargs,
 ) -> SavableDataset[T]:
     """
@@ -109,6 +111,8 @@ def get_train_dataset(
         shuffle_buffer_size=shuffle_buffer_size,
         blend_mode=blend_mode,
         repeat=repeat,
+        watchdog_timeout_seconds=watchdog_timeout_seconds,
+        fail_on_timeout=fail_on_timeout,
     )
 
 
@@ -121,6 +125,8 @@ def get_val_dataset(
     batch_drop_last: bool = False,
     packing_buffer_size: Optional[int] = None,
     limit: Optional[int] = None,
+    watchdog_timeout_seconds: float = 60,
+    fail_on_timeout: bool = False,
     task_encoder: TaskEncoder[Any, Any, Any, T] = DefaultTaskEncoder(),
     **kwargs,
 ) -> SavableDataset[T]:
@@ -166,6 +172,8 @@ def get_val_dataset(
         batch_drop_last=batch_drop_last,
         packing_buffer_size=packing_buffer_size,
         limit=limit,
+        watchdog_timeout_seconds=watchdog_timeout_seconds,
+        fail_on_timeout=fail_on_timeout,
     )
 
 
@@ -178,6 +186,8 @@ def get_val_datasets(
     batch_drop_last: bool = False,
     packing_buffer_size: Optional[int] = None,
     limit: Optional[int] = None,
+    watchdog_timeout_seconds: float = 60,
+    fail_on_timeout: bool = False,
     task_encoder: TaskEncoder[Any, Any, Any, T] = DefaultTaskEncoder(),
     **kwargs,
 ) -> List[Tuple[SavableDataset[T], BaseCoreDatasetFactory]]:
@@ -225,6 +235,8 @@ def get_val_datasets(
                 batch_drop_last=batch_drop_last,
                 packing_buffer_size=packing_buffer_size,
                 limit=limit,
+                watchdog_timeout_seconds=watchdog_timeout_seconds,
+                fail_on_timeout=fail_on_timeout,
             ),
             dataset,
         )
