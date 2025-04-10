@@ -70,9 +70,9 @@ class AggregatorPool(Generic[T_input_data, T_aggregation_data, T_result]):
     ) -> None:
         """
         Args:
-            num_workers: number of worker processes
-            user_produce_data: function(task) -> yields items (the "large" data stream)
-            aggregator: an instance of a user-defined class for handling aggregator logic
+            num_workers: Number of worker processes.
+            user_produce_data: Function that takes a task and yields items (the "large" data stream).
+            aggregator: An instance of a user-defined class for handling aggregator logic.
         """
         self.num_workers = num_workers
         self.user_produce_data = user_produce_data
