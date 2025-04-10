@@ -79,6 +79,10 @@ def get_train_dataset(
         repeat: By default, the inner datasets will loop. If set to False, stop iteration after
             one epoch. Must only be set to False in conjunction with blend_epochized in the
             metadataset if one is used.
+        watchdog_timeout_seconds: If set, the dataset will be wrapped in a watchdog. If the dataset
+            inner takes longer than this many seconds for a sample to load, a stack trace will be
+            printed. If None, the watchdog is disabled.
+        fail_on_timeout: If True, stops the whole process upon timeout. Otherwise, issue a warning.
         **kwargs: Additional arguments to the dataset constructor.
 
     Returns:
@@ -148,6 +152,10 @@ def get_val_dataset(
         batch_size: Size of a batch
         batch_drop_last: If true, drop the last batch if it is smaller than `batch_size`.
         limit: If set, limit the number of batches loaded from the dataset to this.
+        watchdog_timeout_seconds: If set, the dataset will be wrapped in a watchdog. If the dataset
+            inner takes longer than this many seconds for a sample to load, a stack trace will be
+            printed. If None, the watchdog is disabled.
+        fail_on_timeout: If True, stops the whole process upon timeout. Otherwise, issue a warning.
         task_encoder: Task encoder to use.
         **kwargs: Additional arguments to the dataset constructor.
 
@@ -209,6 +217,10 @@ def get_val_datasets(
         batch_size: Size of a batch
         batch_drop_last: If true, drop the last batch if it is smaller than `batch_size`.
         limit: If set, limit the number of batches loaded from the dataset to this.
+        watchdog_timeout_seconds: If set, the dataset will be wrapped in a watchdog. If the dataset
+            inner takes longer than this many seconds for a sample to load, a stack trace will be
+            printed. If None, the watchdog is disabled.
+        fail_on_timeout: If True, stops the whole process upon timeout. Otherwise, issue a warning.
         task_encoder: Task encoder to use.
         **kwargs: Additional arguments to the dataset constructor.
 
