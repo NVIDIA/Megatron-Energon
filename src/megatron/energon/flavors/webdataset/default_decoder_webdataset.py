@@ -86,4 +86,5 @@ class DefaultDecoderWebdatasetFactory(DefaultGenericWebdatasetFactory[T_sample],
         return dict(
             **super().config(),
             **(self._decoder.config() if self._decoder is not None else {}),
+            ignore_decoder_errors=self.ignore_decoder_errors,
         )

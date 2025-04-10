@@ -12,7 +12,8 @@ import unittest
 import warnings
 from collections import Counter
 from pathlib import Path
-from typing import Iterable
+from pprint import pprint
+from typing import Any, Iterable
 
 import torch
 import webdataset as wds
@@ -47,6 +48,60 @@ def _norng_state(state):
         return type(state)(_norng_state(v) for v in state)
     else:
         return state
+
+
+def assert_nested_equal(a: Any, b: Any, path: str = "") -> None:
+    """
+    Recursively checks that two nested data structures (consisting of dicts, lists, tuples,
+    and other basic types) are equal. If they are not equal, prints the path of the first mismatch
+    and raises an AssertionError.
+
+    :param a: First nested structure to compare.
+    :param b: Second nested structure to compare.
+    :param path: Internal parameter used to pass the current traversal path (do not set this manually).
+    :raises AssertionError: If a mismatch is found.
+    """
+    # Check if types differ
+    if type(a) is not type(b):
+        mismatch_details = f"Type mismatch at {path or '<root>'}: {type(a)} != {type(b)}"
+        print(mismatch_details)
+        raise AssertionError(mismatch_details)
+
+    # If they are both dictionaries, compare each key and value
+    if isinstance(a, dict):
+        # Check if they have the same keys
+        a_keys = set(a.keys())
+        b_keys = set(b.keys())
+        if a_keys != b_keys:
+            missing_in_a = b_keys - a_keys
+            missing_in_b = a_keys - b_keys
+            mismatch_details = (
+                f"Key mismatch at {path or '<root>'}:\n"
+                f"Missing in first object: {missing_in_a}\n"
+                f"Missing in second object: {missing_in_b}"
+            )
+            print(mismatch_details)
+            raise AssertionError(mismatch_details)
+        for key in a:
+            sub_path = f"{path}['{key}']" if path else f"['{key}']"
+            assert_nested_equal(a[key], b[key], sub_path)
+
+    # If they are lists (or tuples), compare elements in order
+    elif isinstance(a, (list, tuple)):
+        if len(a) != len(b):
+            mismatch_details = f"Length mismatch at {path or '<root>'}: {len(a)} != {len(b)}"
+            print(mismatch_details)
+            raise AssertionError(mismatch_details)
+        for index, (item_a, item_b) in enumerate(zip(a, b)):
+            sub_path = f"{path}[{index}]" if path else f"[{index}]"
+            assert_nested_equal(item_a, item_b, sub_path)
+
+    # Otherwise, compare values directly
+    else:
+        if a != b:
+            mismatch_details = f"Value mismatch at {path or '<root>'}: {repr(a)} != {repr(b)}"
+            print(mismatch_details)
+            raise AssertionError(mismatch_details)
 
 
 class TestDataset(unittest.TestCase):
@@ -663,8 +718,10 @@ class TestDataset(unittest.TestCase):
             "num_workers": 0,
             "data_parallel_group": None,
         }
-        print(loader.config())
-        assert loader.config() == {
+        print("loader.config():")
+        pprint(loader.config(), indent=4)
+        print()
+        reference_config = {
             "type": "SavableDataLoader",
             "num_workers": 0,
             "persistent_workers": False,
@@ -769,6 +826,7 @@ class TestDataset(unittest.TestCase):
                                                 "image_decode": "torchrgb",
                                                 "ignore_decoder_errors": False,
                                                 "av_decode": "AVDecoder",
+                                                "video_decode_audio": False,
                                             },
                                             "map_fn_stateless": True,
                                         },
@@ -861,6 +919,7 @@ class TestDataset(unittest.TestCase):
                                                 "image_decode": "torchrgb",
                                                 "ignore_decoder_errors": False,
                                                 "av_decode": "AVDecoder",
+                                                "video_decode_audio": False,
                                             },
                                             "map_fn_stateless": True,
                                         },
@@ -880,6 +939,8 @@ class TestDataset(unittest.TestCase):
                 "map_fn_stateless": True,
             },
         }
+        print("Comparing dataset configs in test_save_restore_state_train.")
+        assert_nested_equal(loader.config(), reference_config)
 
     def test_save_restore_state_train_workers(self):
         torch.manual_seed(42)
