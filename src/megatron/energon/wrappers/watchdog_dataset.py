@@ -58,7 +58,7 @@ class WatchdogDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample])
         yield from watchdog.watch_iter(self.dataset)
 
     def config(self) -> Dict[str, Any]:
-        # Transparent logger, it won't change the samples
+        # Watchdog is transparent, it won't change the samples
         return self.dataset.config()
 
     def __str__(self):
