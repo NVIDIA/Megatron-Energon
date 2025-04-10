@@ -11,7 +11,8 @@ import traceback
 from time import perf_counter
 from typing import Any, Callable, Iterable, Iterator, Optional, TypeVar
 
-T = TypeVar("T")  # for the watch_iter type
+# For the watch_iter type
+T = TypeVar("T")
 
 
 class Watchdog:
@@ -75,13 +76,13 @@ class Watchdog:
                 remaining = self._deadline - perf_counter()
                 if remaining <= 0:
                     # We have timed out
-                    self._trigger()
+                    self._on_timeout()
                     return
                 else:
                     # Wait until either the deadline or a state change
                     self._cv.wait(timeout=remaining)
 
-    def _trigger(self) -> None:
+    def _on_timeout(self) -> None:
         """
         Called exactly once if the watchdog times out.
         1) Optionally dumps stacks,
@@ -121,7 +122,11 @@ class Watchdog:
         """
         Dump stacks of all threads in a style reminiscent of py-spy, from
         innermost (current) to outermost. Skip the watchdog's own thread if given.
+
+        Args:
+            skip_thread_id: If given, skip this thread's stack.
         """
+
         frames = sys._current_frames()  # thread_id -> frame
         # We gather known threads to print their names
         all_threads = {t.ident: t for t in threading.enumerate()}
@@ -257,7 +262,14 @@ class Watchdog:
           - enable() -> sets/extends deadline
           - next(...) -> measured portion
           - disable() -> stops timer
+
+        Args:
+            iterable: The iterable to wrap and watch.
+
+        Returns:
+            An iterator that wraps the input iterable and watches for timeouts.
         """
+
         it = iter(iterable)
         while True:
             # Automatically resets timer
