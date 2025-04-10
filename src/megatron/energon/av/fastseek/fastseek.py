@@ -4,6 +4,7 @@ from typing import Literal, Optional
 
 import filetype
 from bitstring.bits import BitsType
+from sortedcontainers import SortedList
 
 from .containers.matroska import parse_matroska
 from .containers.mpeg import parse_mpeg
@@ -28,7 +29,7 @@ class Fastseek:
     significantly faster than sequential decoding.
     """
 
-    keyframes: dict[int, list[KeyframeInfo]]
+    keyframes: dict[int, SortedList[KeyframeInfo]]
     unit: Literal["frames", "seconds"]
     mime: str
 
@@ -118,7 +119,6 @@ class Fastseek:
             workaround and may be updated in the future.
         """
         # HACK some videos don't report track ID correctly, so just use a list for now
-        nearest_iframe_to_target_index: int = (
-            list(self.keyframes.values())[stream].bisect_left(target) - 1
-        )
-        return list(self.keyframes.values())[stream][max(0, nearest_iframe_to_target_index)]
+        stream_id = list(self.keyframes.keys())[stream]
+        nearest_iframe_to_target_index: int = self.keyframes[stream_id].bisect_left(target) - 1
+        return self.keyframes[stream_id][max(0, nearest_iframe_to_target_index)]
