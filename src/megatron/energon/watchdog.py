@@ -34,10 +34,11 @@ class Watchdog:
         enabled: bool = True,
     ) -> None:
         """
-        :param timeout: Number of seconds before the watchdog fires if not reset/disabled.
-        :param callback: Optional function to call upon timeout.
-        :param dump_stacks: If True, print full stack traces for all threads on timeout (except watchdog's own thread).
-        :param enabled: If False, watchdog starts disabled until enable() is called.
+        Args:
+            timeout: Number of seconds before the watchdog fires if not reset/disabled.
+            callback: Optional function to call upon timeout.
+            dump_stacks: If True, print full stack traces for all threads on timeout (except watchdog's own thread).
+            enabled: If False, watchdog starts disabled until enable() is called.
         """
         self._timeout = timeout
         self._callback = callback
@@ -259,7 +260,8 @@ class Watchdog:
         """
         it = iter(iterable)
         while True:
-            self.enable()  # automatically resets timer
+            # Automatically resets timer
+            self.enable()
             try:
                 item = next(it)
             except StopIteration:

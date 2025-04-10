@@ -60,9 +60,10 @@ class AggregatorPool:
         aggregator: BaseAggregator,
     ) -> None:
         """
-        :param num_workers: number of worker processes
-        :param user_produce_data: function(task) -> yields items (the "large" data stream)
-        :param aggregator: an instance of a user-defined class for handling aggregator logic
+        Args:
+            num_workers: Number of worker processes.
+            user_produce_data: Function that takes a task and yields items (the "large" data stream).
+            aggregator: An instance of a user-defined class for handling aggregator logic.
         """
         self.num_workers: int = num_workers
         self.user_produce_data: Callable[[Any], Iterable[Any]] = user_produce_data

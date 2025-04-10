@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import warnings
-from typing import Any, Dict, Generic, Iterator, TypeVar
+from typing import Any, Dict, Generic, Iterator, Optional, TypeVar
 
 from megatron.energon.flavors.base_dataset import SavableDataset
 from megatron.energon.watchdog import Watchdog
@@ -19,7 +19,7 @@ class WatchdogDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample])
         self,
         dataset: SavableDataset[T_sample],
         worker_config: WorkerConfig,
-        timeout_seconds: float = 60,
+        timeout_seconds: Optional[float] = 60,
         fail_on_timeout: bool = False,
     ):
         """Construct the watchdog dataset, which wraps another dataset and watches
@@ -28,6 +28,8 @@ class WatchdogDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample])
         Args:
             dataset: The input dataset to wrap
             worker_config: The worker configuration
+            timeout_seconds: The timeout in seconds. If None, the watchdog is disabled.
+            fail_on_timeout: If True, stops the whole process upon timeout, after printing a stack trace.
         """
         super().__init__(dataset, worker_config=worker_config)
         self.timeout_seconds = timeout_seconds
@@ -52,10 +54,13 @@ class WatchdogDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample])
             )
 
     def __iter__(self) -> Iterator[T_sample]:
-        watchdog = Watchdog(
-            timeout=self.timeout_seconds, callback=self._watchdog_trigger, enabled=False
-        )
-        yield from watchdog.watch_iter(self.dataset)
+        if self.timeout_seconds is None:
+            yield from self.dataset
+        else:
+            watchdog = Watchdog(
+                timeout=self.timeout_seconds, callback=self._watchdog_trigger, enabled=False
+            )
+            yield from watchdog.watch_iter(self.dataset)
 
     def config(self) -> Dict[str, Any]:
         # Watchdog is transparent, it won't change the samples
