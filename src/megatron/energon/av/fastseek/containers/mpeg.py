@@ -29,6 +29,11 @@ class Atom:
         name: str = cbs.read("bytes:4").decode("ascii")
         box: bool = name in box_atoms
 
+        if size == 0:
+            raise RuntimeError(
+                "MPEG parser detected a zero byte atom, this likely indicates a corrupt video."
+            )
+
         subclass_list = [c for c in Atom.__subclasses__() if c.__name__ == name.upper()]
         atom_class: type = Atom
         if len(subclass_list) > 0:
