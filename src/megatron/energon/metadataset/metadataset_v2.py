@@ -8,10 +8,10 @@ from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.dataset_config import load_config
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import Sample
-from megatron.energon.flavors.base_dataset import RandomAccessDataset
+from megatron.energon.flavors.base_dataset import FileStore
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
-from megatron.energon.flavors.webdataset.random_access_dataset import (
-    RandomAccessWebdataset,
+from megatron.energon.flavors.webdataset.file_store import (
+    WebdatasetFileStore,
 )
 from megatron.energon.metadataset.dataset_loader import DatasetLoader
 from megatron.energon.metadataset.join_dataset_loader import JoinDatasetLoader, JoinedDatasetInfo
@@ -39,9 +39,9 @@ class AuxDatasetReference:
             "Auxiliary datasets must be prepared Energon dataset"
         )
 
-    def get_dataset(self) -> RandomAccessDataset:
+    def get_file_store(self) -> FileStore:
         assert isinstance(self.path, EPath), "Missing call to post_initialize"
-        return RandomAccessWebdataset(self.path)
+        return WebdatasetFileStore(self.path)
 
 
 @dataclass_slots
@@ -133,7 +133,7 @@ class DatasetReference(DatasetLoaderInterface):
             **kwargs,
         )
         if self.aux is not None:
-            aux = {k: v.get_dataset() for k, v in self.aux.items()}
+            aux = {k: v.get_file_store() for k, v in self.aux.items()}
             for loaded_dataset in result.datasets:
                 if loaded_dataset.aux is None:
                     loaded_dataset.aux = aux

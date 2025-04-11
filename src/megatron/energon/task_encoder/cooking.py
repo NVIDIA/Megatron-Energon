@@ -2,35 +2,67 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import dataclasses
+import functools
 from dataclasses import dataclass
-from typing import Callable, Generic, Optional, Protocol, TypeVar
+from typing import Callable, Generic, Optional, TypeVar, Union, overload
 
-from megatron.energon.flavors.base_dataset import RandomAccessDataset, Sample
+from megatron.energon.flavors.base_dataset import Sample
 from megatron.energon.flavors.crude import CrudeSample
-from megatron.energon.flavors.webdataset.sample_decoder import (
-    AVDecoder,
-    ImageDecoder,
-    SampleDecoder,
-)
 
 T_sample = TypeVar("T_sample", bound=Sample, covariant=True)
 
+F = TypeVar("F", bound=Callable[..., Sample])
 
-class CookerCallable(Protocol[T_sample]):
-    """A protocol for the callable that performs the cooking."""
 
-    def __call__(self, raw_sample: CrudeSample, **aux: RandomAccessDataset) -> T_sample:
-        """
-        Cooks the sample.
+@overload
+def cooker(
+    fn: None = None,
+) -> Callable[[F], F]: ...
 
-        Args:
-            raw_sample: The crude sample to cook.
-            **aux: The auxiliary side dishes to use for cooking.
 
-        Returns:
-            The cooked sample.
-        """
-        ...
+@overload
+def cooker(
+    *,
+    need_cache: bool = False,
+    need_primary: bool = False,
+) -> Callable[[F], F]: ...
+
+
+def cooker(
+    fn: Optional[F] = None,
+    *,
+    need_cache: bool = False,
+    need_primary: bool = False,
+) -> Union[
+    F,
+    Callable[[F], F],
+]:
+    """Decorator to mark a function as a cooker, optionally enabling cache and primary dataset
+    arguments."""
+    if fn is None:
+        return functools.partial(
+            cooker,
+            need_cache=need_cache,
+            need_primary=need_primary,
+        )
+
+    @functools.wraps(fn)
+    def fn_wrapper(*args, **kwargs):
+        return fn(*args, **kwargs)
+
+    setattr(fn_wrapper, "__cooker_need_cache__", need_cache)
+    setattr(fn_wrapper, "__cooker_need_primary__", need_primary)
+    return fn_wrapper
+
+
+def get_cooker_need_cache(fn: Callable[..., T_sample]) -> bool:
+    """Get whether a function is a cooker."""
+    return getattr(fn, "__cooker_need_cache__", False)
+
+
+def get_cooker_need_primary(fn: Callable[..., T_sample]) -> bool:
+    """Get whether a function is a cooker."""
+    return getattr(fn, "__cooker_need_primary__", False)
 
 
 @dataclass
@@ -43,8 +75,11 @@ class Cooker(Generic[T_sample]):
     """
 
     #: The callable that performs the cooking (i.e. loading / transforming the crude sample).
-    # Signature is: (raw_sample: dict, **aux: RandomAccessDataset) -> Sample
-    cook: CookerCallable[T_sample]
+    # Signature is:
+    # `(/, raw_sample: dict, *, primary?: RandomAccessDataset, **aux: RandomAccessDataset, cache?: Cache) -> Sample`.
+    # `primary` is passed only if want_primary_random_access is true.
+    # `cache` is passed only if want_cache is true.
+    cook: Callable[..., T_sample]
 
     #: (Deprecated) The subflavor to check for a sample to be cooked by this cooker.
     # Use `has_subflavors` instead.
@@ -59,25 +94,13 @@ class Cooker(Generic[T_sample]):
     # If combined with `is_subflavor` or `has_subflavors`, all must be satisfied.
     condition: Optional[Callable[[CrudeSample], bool]] = None
 
-    #: If true, the auxiliary loaders are decoded by default.
-    auto_decode: bool = True
-    #: The image decoder to use for auxiliary loaders.
-    image_decode: ImageDecoder = "torchrgb"
-    #: The AV decoder to use for auxiliary loaders.
-    av_decode: AVDecoder = "AVDecoder"
-    #: Whether to decode audio from video files for auxiliary loaders.
-    video_decode_audio: bool = False
+    @property
+    def need_primary(self) -> bool:
+        return get_cooker_need_primary(self.cook)
 
-    #: Internal: The decoder to use for auxiliary loaders.
-    _decoder: Optional[SampleDecoder] = None
-
-    def __post_init__(self):
-        if self.auto_decode:
-            self._decoder = SampleDecoder(
-                image_decode=self.image_decode,
-                av_decode=self.av_decode,
-                video_decode_audio=self.video_decode_audio,
-            )
+    @property
+    def need_cache(self) -> bool:
+        return get_cooker_need_cache(self.cook)
 
     def is_match(self, crude_sample: CrudeSample) -> bool:
         if self.is_subflavor is not None:

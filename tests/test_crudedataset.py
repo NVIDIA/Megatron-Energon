@@ -29,9 +29,18 @@ from megatron.energon import (
     stateless,
 )
 from megatron.energon.dataclass_slots import dataclass_slots
-from megatron.energon.flavors.base_dataset import RandomAccessDataset
+from megatron.energon.flavors.base_dataset import FileStore, Sample
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset.cache_pool import FileStoreCachePool, Lazy
+from megatron.energon.flavors.webdataset.sample_decoder import SampleDecoder
 from megatron.energon.flavors.webdataset.structs import reraise_exception
+from megatron.energon.task_encoder.cooking import cooker
+
+
+@dataclass_slots
+class LazyTextSample(Sample):
+    txt: str
+    next_txt: Lazy[str]
 
 
 @dataclass_slots
@@ -58,7 +67,7 @@ def cook_other(sample: dict) -> TextSample:
 
 
 @stateless
-def cook_aux(sample: dict, pkl_source: RandomAccessDataset) -> TextSample:
+def cook_aux(sample: dict, pkl_source: FileStore) -> TextSample:
     # ds2 is offset by 100
     d = pkl_source[f"{int(sample['txt']) + 100:06d}.txt"]
     return TextSample(
@@ -88,6 +97,48 @@ class CookingTaskEncoder(DefaultTaskEncoder[TextSample, TextSample, TextBatch, T
     @stateless
     def pack_selected_samples(self, samples):
         return samples[0]
+
+
+@stateless
+@cooker(need_cache=True, need_primary=True)
+def cook_aux_primary_cache(
+    sample: dict, primary: FileStore, pkl_source: FileStore, cache: FileStoreCachePool
+) -> LazyTextSample:
+    # ds2 is offset by 100
+    d = pkl_source[f"{int(sample['txt']) + 100:06d}.txt"]
+    my_lazy_next_txt = cache.get_lazy(primary, f"{(int(sample['txt']) + 1) % 55:06d}.txt")
+    return LazyTextSample(
+        **basic_sample_keys(sample),
+        txt=f"<{sample['txt']}|aux|{d}>",
+        next_txt=my_lazy_next_txt,
+    )
+
+
+class LazyCookingTaskEncoder(
+    DefaultTaskEncoder[LazyTextSample, LazyTextSample, TextBatch, TextBatch]
+):
+    # Classvar is fine here.
+    decoder = SampleDecoder(image_decode="pilrgb")
+
+    cookers = [
+        Cooker(cook_aux_primary_cache, has_subflavors={"crude_type": "aux_random_access"}),
+    ]
+
+    def select_samples_to_pack(self, samples: List[LazyTextSample]) -> List[List[LazyTextSample]]:
+        return [[sample] for sample in samples]
+
+    @stateless
+    def pack_selected_samples(self, samples: List[LazyTextSample]) -> TextSample:
+        return TextSample.derive_from(
+            samples[0],
+            text=samples[0].txt + "|" + samples[0].next_txt.get(),
+        )
+
+    def batch(self, samples: List[TextSample]) -> TextBatch:
+        return TextBatch(
+            __keys__=[sample.__key__ for sample in samples],
+            txts=[sample.text for sample in samples],
+        )
 
 
 class GenericCookingTaskEncoder(DefaultTaskEncoder[TextSample, TextSample, TextBatch, TextBatch]):
@@ -354,6 +405,72 @@ class TestDataset(unittest.TestCase):
                 m = re.fullmatch(r"<([0-9]*)\|aux\|([0-9]*)>", txt)
                 assert m, f"Invalid aux text: {txt}"
                 assert int(m.group(2)) == int(m.group(1)) + 100
+
+        print(samples)
+
+        state = loader.save_state_rank()
+
+        samples_after = [s.__keys__ for idx, s in zip(range(100, 200), loader)]
+        print(samples_after)
+
+        loader = get_savable_loader(
+            get_train_dataset(
+                self.aux_mds_path,
+                batch_size=2,
+                worker_config=worker_config,
+                task_encoder=CookingTaskEncoder(),
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                packing_buffer_size=2,
+            ),
+            checkpoint_every_sec=0,
+            checkpoint_every_min_n_samples=1,
+        )
+
+        loader.restore_state_rank(state)
+
+        samples_restored = [s.__keys__ for idx, s in zip(range(100, 200), loader)]
+        print(samples_restored)
+
+        assert all([a == b for a, b in zip(samples_after, samples_restored)])
+
+    def test_aux_random_access_with_cache(self):
+        torch.manual_seed(42)
+        worker_config = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=2,
+        )
+
+        print("Initializing dataset")
+
+        loader = get_savable_loader(
+            get_train_dataset(
+                self.aux_mds_path,
+                batch_size=2,
+                worker_config=worker_config,
+                task_encoder=LazyCookingTaskEncoder(
+                    cache=FileStoreCachePool(
+                        parent_cache_dir=self.dataset_path / "cache",
+                        num_workers=1,
+                    )
+                ),
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                packing_buffer_size=2,
+            ),
+            checkpoint_every_sec=0,
+            checkpoint_every_min_n_samples=1,
+        )
+
+        print("Iterating from dataset")
+        samples = [s.txts for idx, s in zip(range(100), loader)]
+        for idx, txts in enumerate(samples):
+            for txt in txts:
+                m = re.fullmatch(r"<([0-9]*)\|aux\|([0-9]*)>\|([0-9]*)", txt)
+                assert m, f"Invalid aux text: {txt}"
+                assert int(m.group(2)) == int(m.group(1)) + 100
+                assert int(m.group(3)) == (int(m.group(1)) + 1) % 55
 
         print(samples)
 

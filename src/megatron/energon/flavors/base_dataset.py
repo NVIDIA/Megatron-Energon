@@ -371,7 +371,14 @@ class BaseCoreDatasetFactory(Generic[T_sample], ABC):
     subflavors: Dict[str, Any]
 
     @abstractmethod
-    def build(self, worker_rotation_offset: int = 0) -> SavableDataset[T_sample]: ...
+    def build(self, worker_rotation_offset: int = 0) -> SavableDataset[T_sample]:
+        """Builds the dataset."""
+        ...
+
+    @abstractmethod
+    def as_file_store(self) -> "FileStore":
+        """Returns the dataset as a random access dataset."""
+        ...
 
     @abstractmethod
     def __len__(self) -> int:
@@ -379,7 +386,7 @@ class BaseCoreDatasetFactory(Generic[T_sample], ABC):
         ...
 
 
-class RandomAccessDataset(ABC, Generic[T_data]):
+class FileStore(ABC, Generic[T_data]):
     """Base type for a dataset that can be accessed randomly by sample key."""
 
     @abstractmethod

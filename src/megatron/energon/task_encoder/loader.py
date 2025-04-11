@@ -5,7 +5,9 @@ from pathlib import Path
 from typing import Any, List, Literal, Optional, Tuple, TypeVar, Union
 
 from megatron.energon.epathlib import EPath
+from megatron.energon.errors import warn_deprecated
 from megatron.energon.flavors import BaseCoreDatasetFactory, SavableDataset
+from megatron.energon.flavors.webdataset.sample_decoder import SampleDecoder
 from megatron.energon.metadataset import load_dataset
 from megatron.energon.task_encoder.base import DefaultTaskEncoder, TaskEncoder, WorkerConfig
 
@@ -31,6 +33,38 @@ def _split_kwargs(kwargs: dict) -> dict:
     except KeyError:
         pass
     return loader_kwargs
+
+
+def _split_deprecated_decoder_kwargs(kwargs: dict, task_encoder: TaskEncoder) -> None:
+    """
+    auto_decode: bool = True,
+    image_decode: ImageDecoder = "torchrgb",
+    ignore_decoder_errors: bool = False,
+    av_decode: AVDecoder = "AVDecoder",
+    video_decode_audio: bool = False,
+    """
+    decoder_kwargs = {}
+    if "auto_decode" in kwargs:
+        decoder_kwargs["auto_decode"] = kwargs.pop("auto_decode")
+    if "image_decode" in kwargs:
+        decoder_kwargs["image_decode"] = kwargs.pop("image_decode")
+    if "ignore_decoder_errors" in kwargs:
+        decoder_kwargs["ignore_decoder_errors"] = kwargs.pop("ignore_decoder_errors")
+    if "av_decode" in kwargs:
+        decoder_kwargs["av_decode"] = kwargs.pop("av_decode")
+    if "video_decode_audio" in kwargs:
+        decoder_kwargs["video_decode_audio"] = kwargs.pop("video_decode_audio")
+    if len(decoder_kwargs) > 0:
+        warn_deprecated(
+            "The following decoder kwargs are deprecated and will be removed in a future version: "
+            + ", ".join(decoder_kwargs.keys())
+            + ". Instead, set the decoder directly in your task encoder."
+        )
+        assert (
+            not hasattr(task_encoder, "decoder")
+            or task_encoder.decoder is DefaultTaskEncoder.decoder
+        ), "Task encoder already has a decoder, and setting using deprecated kwargs is not allowed."
+        task_encoder.decoder = SampleDecoder(**decoder_kwargs)
 
 
 def get_train_dataset(
@@ -83,12 +117,15 @@ def get_train_dataset(
     """
 
     loader = load_dataset(path, **_split_kwargs(kwargs))
+    _split_deprecated_decoder_kwargs(kwargs, task_encoder)
+
     datasets = loader.get_datasets(
         training=True,
         split_part=split_part,
         worker_config=worker_config,
         max_samples_per_sequence=max_samples_per_sequence,
         shuffle_over_epochs_multiplier=shuffle_over_epochs_multiplier,
+        decoder=task_encoder.decoder,
         **kwargs,
     )
     return task_encoder.build_train_datasets(
@@ -140,6 +177,7 @@ def get_val_dataset(
     Returns:
         The loaded dataset.
     """
+    _split_deprecated_decoder_kwargs(kwargs, task_encoder)
     loader = load_dataset(path, **_split_kwargs(kwargs))
     datasets = loader.get_datasets(
         training=False, split_part=split_part, worker_config=worker_config, **kwargs
@@ -190,6 +228,7 @@ def get_val_datasets(
     Returns:
         The loaded val datasets, with the source datasets.
     """
+    _split_deprecated_decoder_kwargs(kwargs, task_encoder)
     loader = load_dataset(path, **_split_kwargs(kwargs))
     datasets = loader.get_datasets(
         training=False, split_part=split_part, worker_config=worker_config, **kwargs

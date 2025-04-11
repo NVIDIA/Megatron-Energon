@@ -6,23 +6,56 @@ from __future__ import annotations
 
 import hashlib
 import os
+import pickle
 import random
 import string
 import tempfile
 import threading
+from abc import ABC, abstractmethod
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Generic, Optional, Tuple, TypeVar
 
-from megatron.energon.flavors.base_dataset import RandomAccessDataset
+from megatron.energon.dataclass_slots import dataclass_slots
+from megatron.energon.flavors.base_dataset import FileStore
+
+T = TypeVar("T")
 
 
-# -----------------------------------------------------------------------
-# Lazy
-# -----------------------------------------------------------------------
-@dataclass
-class Lazy:
+class Lazy(ABC, Generic[T]):
+    """
+    Abstract base class for lazy references to data.
+    """
+
+    @abstractmethod
+    def get(self) -> T:
+        """
+        Get the lazy data now.
+        """
+        ...
+
+
+@dataclass_slots
+class DirectLazy(Lazy[T]):
+    """
+    This is not really lazy, it will just defer the dataset access to the first get().
+    """
+
+    ds: FileStore
+    fname: str
+    pool: CachePool
+
+    _data: Optional[T] = None
+
+    def get(self) -> T:
+        if self._data is None:
+            self._data = self.pool.get(self.ds, self.fname)
+        assert self._data is not None
+        return self._data
+
+
+@dataclass_slots
+class FileCacheLazy(Lazy[T]):
     """
     Represents a reference to a background prefetch. Each Lazy has:
       - The dataset (`ds`)
@@ -32,13 +65,13 @@ class Lazy:
       - A key for looking up the shared future+refcount in `_pending_tasks`.
     """
 
-    ds: RandomAccessDataset
+    ds: FileStore
     fname: str
     cache_path: Path
-    pool: RandomAccessDatasetCachePool
-    key: Tuple[RandomAccessDataset, str]
+    pool: FileStoreCachePool
+    key: Tuple[FileStore, str]
 
-    def get(self) -> bytes:
+    def get(self) -> T:
         """
         Returns the data. If the background job hasn't started, we cancel it,
         do a direct read, and remove ourselves from the pool's references.
@@ -48,26 +81,28 @@ class Lazy:
             entry = self.pool._pending_tasks.get(self.key)
             if not entry:
                 # Should not normally happen, but fallback to direct read
-                return self.ds[self.fname]
+                return self.pool.get(self.ds, self.fname)
 
             future = entry.future
 
             # Attempt to cancel if the job hasn't started
             if future.cancel():
                 # Cancelled => job never ran. We'll do a direct read.
-                data = self.ds[self.fname]
+                res = self.pool.get(self.ds, self.fname)
                 # Decrement refcount and possibly remove from pool
                 self._decrement_refcount_and_cleanup()
-                return data
+                return res
             else:
                 # Future is already running or done.
                 # Release the lock so the background job can proceed,
                 # then reacquire it after waiting. Otherwise we might block the worker.
                 self.pool._lock.release()
 
-                future.result()  # can raise exception if job fails
+                try:
+                    future.result()  # can raise exception if job fails
+                finally:
+                    self.pool._lock.acquire()
 
-                self.pool._lock.acquire()
                 # The job is complete; read from cache
                 data = self.pool._read_from_cache(self.cache_path)
 
@@ -95,20 +130,56 @@ class Lazy:
                 self.pool._remove_cached_file(entry.cache_path)
 
 
-# -----------------------------------------------------------------------
-# Dataclass for storing a pending background task
-# -----------------------------------------------------------------------
-@dataclass
-class PendingTask:
+class CachePool(ABC):
+    """
+    Abstract base class for cache pools.
+    """
+
+    @abstractmethod
+    def get(self, ds: FileStore, fname: str) -> Any:
+        """
+        Get the data for a given file.
+        """
+        ...
+
+    @abstractmethod
+    def get_lazy(self, ds: FileStore, fname: str) -> Lazy:
+        """
+        Get a lazy reference to the data for a given file.
+        """
+        ...
+
+    @abstractmethod
+    def close(self) -> None:
+        """
+        Close the cache pool.
+        """
+        ...
+
+
+class NoCachePool(CachePool):
+    """A pass-through cache pool that does not cache anything."""
+
+    def get(self, ds: FileStore, fname: str) -> Any:
+        return ds[fname]
+
+    def get_lazy(self, ds: FileStore, fname: str) -> DirectLazy:
+        return DirectLazy(ds=ds, fname=fname, pool=self)
+
+    def close(self) -> None:
+        pass
+
+
+@dataclass_slots
+class _PendingTask:
+    """Dataclass for storing a pending background task"""
+
     future: Future
     refcount: int
     cache_path: Path
 
 
-# -----------------------------------------------------------------------
-# RandomAccessDatasetCachePool
-# -----------------------------------------------------------------------
-class RandomAccessDatasetCachePool:
+class FileStoreCachePool(CachePool):
     """
     Manages a thread pool to pre-fetch data onto an SSD cache.
     Each (ds, fname) has one Future (one read). Multiple requests
@@ -120,11 +191,18 @@ class RandomAccessDatasetCachePool:
 
     def __init__(
         self,
+        *,
         parent_cache_dir: Optional[Path] = None,
         num_workers: int = 8,
-        max_cache_size_gbytes: int = 1024,  # 1 TB
-        max_cache_count: int = 10_000_000,  # 10 M files
+        max_cache_size_gbytes: float = 1024,
+        max_cache_count: int = 10_000_000,
     ):
+        """
+        Initialize the cache pool.
+
+        Args:
+            config: A CachePoolConfig instance.
+        """
         # If no parent directory is given, create a temp directory
         if parent_cache_dir is None:
             parent_cache_dir = Path(tempfile.gettempdir())
@@ -140,10 +218,10 @@ class RandomAccessDatasetCachePool:
 
         # We'll store _pending_tasks in the form:
         #   (ds, fname) -> PendingTask
-        self._pending_tasks: Dict[Tuple[RandomAccessDataset, str], PendingTask] = {}
+        self._pending_tasks: Dict[Tuple[FileStore, str], _PendingTask] = {}
 
         # Cache size management
-        self.max_cache_size = max_cache_size_gbytes * (1024**3)
+        self.max_cache_size = int(max_cache_size_gbytes * (1024**3))
         self.max_cache_count = max_cache_count
         self.current_cache_size: int = 0
         self.current_cache_count: int = 0
@@ -155,13 +233,13 @@ class RandomAccessDatasetCachePool:
         # A lock to protect all shared structures
         self._lock = threading.Lock()
 
-    def get(self, ds: RandomAccessDataset, fname: str) -> bytes:
+    def get(self, ds: FileStore, fname: str) -> Any:
         """
         Synchronous read from the dataset (no cache usage).
         """
         return ds[fname]
 
-    def get_lazy(self, ds: RandomAccessDataset, fname: str) -> Lazy:
+    def get_lazy(self, ds: FileStore, fname: str) -> FileCacheLazy:
         """
         Schedule a background pre-fetch. If multiple calls come in for the same (ds, fname),
         they'll share the same Future and increment reference counts.
@@ -196,13 +274,13 @@ class RandomAccessDatasetCachePool:
                         self.current_cache_count += 1
 
                 future = self.worker_pool.submit(background_task)
-                self._pending_tasks[key] = PendingTask(
+                self._pending_tasks[key] = _PendingTask(
                     future=future,
                     refcount=1,
                     cache_path=cache_path,
                 )
 
-        return Lazy(ds=ds, fname=fname, cache_path=cache_path, pool=self, key=key)
+        return FileCacheLazy(ds=ds, fname=fname, cache_path=cache_path, pool=self, key=key)
 
     def close(self) -> None:
         """
@@ -218,19 +296,19 @@ class RandomAccessDatasetCachePool:
     # Internal cache management
     # ------------------------------------------------------------------------
 
-    def _make_cache_path(self, ds: RandomAccessDataset, fname: str) -> Path:
+    def _make_cache_path(self, ds: FileStore, fname: str) -> Path:
         ds_hash = hashlib.md5(ds.get_path().encode("utf-8")).hexdigest()
         fn_hash = hashlib.md5(fname.encode("utf-8")).hexdigest()
         return self.cache_dir / f"{ds_hash}_{fn_hash}.bin"
 
-    def _write_to_cache(self, path: Path, data: bytes) -> None:
+    def _write_to_cache(self, path: Path, data: Any) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "wb") as f:
-            f.write(data)
+            pickle.dump(data, f)
 
-    def _read_from_cache(self, path: Path) -> bytes:
+    def _read_from_cache(self, path: Path) -> Any:
         with open(path, "rb") as f:
-            return f.read()
+            return pickle.load(f)
 
     def _remove_cached_file(self, path: Path) -> None:
         """

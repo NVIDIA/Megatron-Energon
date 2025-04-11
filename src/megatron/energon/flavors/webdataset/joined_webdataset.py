@@ -19,6 +19,7 @@ from typing import (
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.base_dataset import (
     BaseCoreDatasetFactory,
+    FileStore,
     Sample,
     SavableDataset,
     set_sample_restore_key,
@@ -193,6 +194,9 @@ class JoinedWebdatasetFactory(
             handler=self.sample_error_handler,
         )
         return self._process_samples(dataset)
+
+    def as_file_store(self) -> FileStore:
+        raise NotImplementedError("Not supported on joined datasets")
 
     @property
     def paths(self) -> List[EPath]:

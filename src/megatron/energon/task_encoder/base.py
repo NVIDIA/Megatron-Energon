@@ -27,15 +27,18 @@ import torch
 from typing_extensions import ParamSpec
 
 from megatron.energon.dataclass_slots import dataclass_slots
-from megatron.energon.flavors.base_dataset import (
+from megatron.energon.flavors import (
+    CachePool,
+    CrudeSample,
+    CrudeWebdataset,
+    DecodeFileStore,
+    FileStore,
+    NoCachePool,
     PinMemoryMixin,
-    RandomAccessDataset,
     Sample,
+    SampleDecoder,
     SavableDataset,
 )
-from megatron.energon.flavors.crude import CrudeSample, CrudeWebdataset
-from megatron.energon.flavors.webdataset.random_access_dataset import RandomAccessDecoderDataset
-from megatron.energon.flavors.webdataset.random_access_pool import RandomAccessDatasetCachePool
 from megatron.energon.metadataset.loader_interface import DatasetBlendMode, LoadedDataset
 from megatron.energon.rng import SystemRng
 from megatron.energon.task_encoder.cooking import Cooker
@@ -115,13 +118,11 @@ P = ParamSpec("P")
 
 
 @overload
-def stateless(
-    fn: None = None, *, restore_seeds: bool = False
-) -> Callable[[Callable[P, T]], Callable[P, T]]: ...
+def stateless(*, restore_seeds: bool = False) -> Callable[[Callable[P, T]], Callable[P, T]]: ...
 
 
 @overload
-def stateless(fn: Callable[P, T], *, restore_seeds: bool = False) -> Callable[P, T]: ...
+def stateless(fn: Callable[P, T]) -> Callable[P, T]: ...
 
 
 def stateless(
@@ -254,16 +255,39 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
     """
 
     cookers: Sequence[Cooker[T_sample]] = ()
+    #: Internal: List of registered cookers. Will be the same as `cookers` after registering cookers.
+    _registered_cookers: List[Cooker[T_sample]]
+
+    #: The decoder to use for decoding samples. Set manually as needed to override options.
+    decoder: SampleDecoder
+    #: The cache to use for caching out sample data to disk (for use with cookers / aux file stores).
+    # This is set and configured externally by the loader.
+    cache: CachePool
+
+    def __init__(self, cache: Optional[CachePool] = None):
+        """
+        Initialize the task encoder.
+
+        Args:
+            cache: Cache pool to use for caching. If not provided, a no-op cache pool will be used.
+        """
+        if cache is None:
+            cache = NoCachePool()
+        self.cache = cache
 
     @stateless
     def cook_crude_sample(
-        self, sample: Union[T_sample, CrudeSample], **aux: RandomAccessDataset
+        self,
+        sample: Union[T_sample, CrudeSample],
+        get_primary_aux: Callable[[], FileStore],
+        **aux: FileStore,
     ) -> T_sample:
         """
         Cooks a crude sample.
 
         Args:
             sample: The sample to cook.
+            get_primary_aux: A function that returns the (cached) primary auxiliary dataset.
             **aux: The auxiliary side dishes to use for cooking.
 
         Returns: The cooked sample.
@@ -272,19 +296,16 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             for cooker in self.cookers:
                 if cooker.is_match(sample):
                     assert get_stateless(cooker.cook), "Cooker must be stateless"
-                    if cooker._decoder is not None:
-                        return cooker.cook(
-                            sample,
-                            **{
-                                k: RandomAccessDecoderDataset(
-                                    v,
-                                    decoder=cooker._decoder,
-                                )
-                                for k, v in aux.items()
-                            },
-                        )
+                    if not cooker.need_primary and not cooker.need_cache:
+                        kwargs = aux
                     else:
-                        return cooker.cook(sample, **aux)
+                        kwargs: dict = {}
+                        if cooker.need_primary:
+                            kwargs["primary"] = get_primary_aux()
+                        kwargs.update(aux)
+                        if cooker.need_cache:
+                            kwargs["cache"] = self.cache
+                    return cooker.cook(sample, **kwargs)
 
             raise NotImplementedError(
                 "You are using crude samples but not providing a way to cook them: "
@@ -495,16 +516,41 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         *,
         worker_config: WorkerConfig,
         subflavors: Dict[str, Any],
-        aux: Optional[Dict[str, RandomAccessDataset]] = None,
+        get_primary_aux: Callable[[], FileStore],
+        aux: Optional[Dict[str, FileStore]] = None,
     ) -> SavableDataset[T_sample]:
         """Applies the sample cooker to the dataset if we have cookers registered."""
 
         assert self.cookers, "No cookers registered, but got crude dataset."
 
+        if aux is not None and self.decoder is not None:
+            aux = {k: DecodeFileStore(v, decoder=self.decoder) for k, v in aux.items()}
+
+        # Cache the primary auxiliary dataset for this dataset, i.e. construct it once when needed
+        primary_aux = None
+
+        def _get_primary_aux():
+            nonlocal primary_aux
+            if primary_aux is None:
+                try:
+                    if aux is not None:
+                        primary_aux = aux.get("primary")
+                    if primary_aux is None:
+                        primary_aux = get_primary_aux()
+                    assert primary_aux is not None, "Primary auxiliary dataset must always exist"
+                    if self.decoder is not None:
+                        primary_aux = DecodeFileStore(primary_aux, decoder=self.decoder)
+                except Exception as e:
+                    # Make the exception throw through for the sample being loaded
+                    raise SystemError("Error getting primary auxiliary dataset") from e
+            return primary_aux
+
         if aux is not None:
-            cook_fn = functools.partial(self.cook_crude_sample, **aux)
+            cook_fn = functools.partial(
+                self.cook_crude_sample, get_primary_aux=_get_primary_aux, **aux
+            )
         else:
-            cook_fn = self.cook_crude_sample
+            cook_fn = functools.partial(self.cook_crude_sample, get_primary_aux=_get_primary_aux)
 
         return MapDataset(
             dataset,
@@ -533,6 +579,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 dataset.dataset.build(worker_rotation_offset=worker_rotation_offset),
                 worker_config=worker_config,
                 subflavors=dataset.dataset.subflavors,
+                get_primary_aux=dataset.dataset.as_file_store,
                 aux=dataset.aux,
             )
         else:
@@ -755,12 +802,16 @@ class DefaultTaskEncoder(
     _raw_batch_type: Optional[Type[T_raw_batch]]
     _batch_type: Optional[Type[T_batch]]
 
+    #: The default decoder, may be overridden by the user.
+    decoder = SampleDecoder()
+
     def __init__(
         self,
         *,
         encoded_sample_type: Optional[Type[T_encoded_sample]] = None,
         raw_batch_type: Optional[Type[T_raw_batch]] = None,
         batch_type: Optional[Type[T_batch]] = None,
+        cache: Optional[CachePool] = None,
     ):
         """
         Initialize the default task encoder.
@@ -775,12 +826,12 @@ class DefaultTaskEncoder(
             encoded_sample_type: Type of encoded samples (before batching)
             raw_batch_type: Type of the batched samples (after batching)
             batch_type: Type of the encoded batched samples
+            cache: Cache pool to use for caching. If not provided, a no-op cache pool will be used.
         """
+        super().__init__(cache=cache)
         self._encoded_sample_type = encoded_sample_type
         self._raw_batch_type = raw_batch_type
         self._batch_type = batch_type
-
-        self.cache = RandomAccessDatasetCachePool()
 
     @stateless
     def encode_sample(

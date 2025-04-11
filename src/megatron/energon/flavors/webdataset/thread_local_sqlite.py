@@ -69,6 +69,11 @@ class ThreadLocalStorage:
         """Check if the thread has been initialized."""
         return getattr(self._storage, "__initialized__", False)
 
+    def thread_close(self):
+        """Close the thread-local storage."""
+        if self._thread_initialized:
+            delattr(self._storage, "__initialized__")
+
     def __thread_init__(self):
         """Called when the data on a thread is accessed for the first time, to
         set the initial value of that data."""
@@ -112,11 +117,12 @@ class ThreadLocalSqlite(ThreadLocalStorage):
         self.cursor.execute(query, params)
         return self.cursor.fetchall()
 
-    def close(self):
+    def thread_close(self):
         """Close the connection and cursor."""
         if self._thread_initialized:
             self.cursor.close()
             self.connection.close()
+            super().thread_close()
 
 
 def main():

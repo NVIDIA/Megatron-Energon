@@ -190,12 +190,6 @@ class SqliteIndexReader:
 
         self.db = ThreadLocalSqlite(path)
 
-        # Verify the table exists
-        result = self.db.select_one(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='samples'"
-        )
-        assert result is not None, f"Database {sqlite_path} does not contain 'samples' table"
-
     def get_sample_count(self) -> int:
         """Get the total number of samples in the database."""
         assert self.db is not None, "Database is closed"

@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Literal, Optional, Sequence, Union
 
 from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory, RandomAccessDataset
+from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory, FileStore
 from megatron.energon.worker import WorkerConfig
 
 
@@ -27,7 +27,7 @@ class LoadedDataset:
     dataset: BaseCoreDatasetFactory
     weight: Union[float, int, None] = None
     repetitions: Union[float, int, None] = None
-    aux: Optional[Dict[str, RandomAccessDataset]] = None
+    aux: Optional[Dict[str, FileStore]] = None
 
 
 @dataclass_slots

@@ -6,8 +6,9 @@ from typing import Literal
 import webdataset
 
 from megatron.energon.av import AVWebdatasetDecoder
+from megatron.energon.flavors.webdataset.config import split_name_re
 
-ImageDecoder = Literal[
+ImageDecoderType = Literal[
     "l8",
     "rgb8",
     "rgba8",
@@ -27,7 +28,7 @@ ImageDecoder = Literal[
     "pilrgba",
 ]
 
-AVDecoder = Literal["torch", "AVDecoder", "pyav"]
+AVDecoderType = Literal["torch", "AVDecoder", "pyav"]
 
 
 class SampleDecoder:
@@ -36,8 +37,8 @@ class SampleDecoder:
     def __init__(
         self,
         *,
-        image_decode: ImageDecoder = "torchrgb",
-        av_decode: AVDecoder = "AVDecoder",
+        image_decode: ImageDecoderType = "torchrgb",
+        av_decode: AVDecoderType = "AVDecoder",
         video_decode_audio: bool = False,
     ):
         """
@@ -61,6 +62,29 @@ class SampleDecoder:
                 ),
             ]
         )
+
+    def decode(self, fname: str, raw: bytes) -> "SampleDecoder":
+        """
+        Decode the specified file (i.e. path/key.ext). The extension is used to select the decoder.
+
+        Args:
+            fname: The file name of the file to decode.
+            raw: The raw bytes of the file to decode.
+
+        Returns:
+            The decoded field's data.
+        """
+        m = split_name_re.match(fname)
+        if not m:
+            raise ValueError(f"Invalid file name: {fname}")
+        cur_base_name, ext = m.groups()
+
+        return self(
+            {
+                "__key__": cur_base_name,
+                ext: raw,
+            }
+        )[ext]
 
     def __call__(self, sample: dict) -> dict:
         return self._decoder(sample)

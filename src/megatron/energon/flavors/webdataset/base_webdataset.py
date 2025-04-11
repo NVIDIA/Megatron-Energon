@@ -8,8 +8,9 @@ from typing import Any, Callable, Dict, Generic, List, Optional, Sequence, TypeV
 import numpy as np
 
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory, SavableDataset
+from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory, FileStore, SavableDataset
 from megatron.energon.flavors.webdataset.error_handler import ErrorHandler
+from megatron.energon.flavors.webdataset.file_store import WebdatasetFileStore
 from megatron.energon.flavors.webdataset.metadata import WebdatasetMeta
 from megatron.energon.flavors.webdataset.prepare import WebdatasetPreparator
 from megatron.energon.flavors.webdataset.sample_loader import (
@@ -149,6 +150,9 @@ class BaseWebdatasetFactory(
             map_fn_config=self.config,
             worker_config=self.worker_config,
         )
+
+    def as_file_store(self) -> FileStore:
+        return WebdatasetFileStore(self.path)
 
     def sample_filter(self, key: str) -> bool:
         return key not in self.sample_excludes
