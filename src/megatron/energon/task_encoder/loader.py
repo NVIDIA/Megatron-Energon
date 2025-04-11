@@ -180,7 +180,11 @@ def get_val_dataset(
     _split_deprecated_decoder_kwargs(kwargs, task_encoder)
     loader = load_dataset(path, **_split_kwargs(kwargs))
     datasets = loader.get_datasets(
-        training=False, split_part=split_part, worker_config=worker_config, **kwargs
+        training=False,
+        split_part=split_part,
+        worker_config=worker_config,
+        decoder=task_encoder.decoder,
+        **kwargs,
     )
     return task_encoder.build_val_datasets(
         datasets=datasets.datasets,
@@ -231,7 +235,11 @@ def get_val_datasets(
     _split_deprecated_decoder_kwargs(kwargs, task_encoder)
     loader = load_dataset(path, **_split_kwargs(kwargs))
     datasets = loader.get_datasets(
-        training=False, split_part=split_part, worker_config=worker_config, **kwargs
+        training=False,
+        split_part=split_part,
+        worker_config=worker_config,
+        decoder=task_encoder.decoder,
+        **kwargs,
     )
     return [
         (
