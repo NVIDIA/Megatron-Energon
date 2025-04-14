@@ -28,10 +28,10 @@ from megatron.energon import (
     get_train_dataset,
     stateless,
 )
+from megatron.energon.cache import FileStore, FileStoreCachePool, Lazy
 from megatron.energon.dataclass_slots import dataclass_slots
-from megatron.energon.flavors.base_dataset import FileStore, Sample
+from megatron.energon.flavors.base_dataset import Sample
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
-from megatron.energon.flavors.webdataset.cache_pool import FileStoreCachePool, Lazy
 from megatron.energon.flavors.webdataset.sample_decoder import SampleDecoder
 from megatron.energon.flavors.webdataset.structs import reraise_exception
 from megatron.energon.task_encoder.cooking import cooker
@@ -449,18 +449,17 @@ class TestDataset(unittest.TestCase):
                 self.aux_mds_path,
                 batch_size=2,
                 worker_config=worker_config,
-                task_encoder=LazyCookingTaskEncoder(
-                    cache=FileStoreCachePool(
-                        parent_cache_dir=self.dataset_path / "cache",
-                        num_workers=1,
-                    )
-                ),
+                task_encoder=LazyCookingTaskEncoder(),
                 shuffle_buffer_size=None,
                 max_samples_per_sequence=None,
                 packing_buffer_size=2,
             ),
             checkpoint_every_sec=0,
             checkpoint_every_min_n_samples=1,
+            cache_pool=FileStoreCachePool(
+                parent_cache_dir=self.dataset_path / "cache",
+                num_workers=1,
+            ),
         )
 
         print("Iterating from dataset")
@@ -491,6 +490,10 @@ class TestDataset(unittest.TestCase):
             ),
             checkpoint_every_sec=0,
             checkpoint_every_min_n_samples=1,
+            cache_pool=FileStoreCachePool(
+                parent_cache_dir=self.dataset_path / "cache",
+                num_workers=1,
+            ),
         )
 
         loader.restore_state_rank(state)

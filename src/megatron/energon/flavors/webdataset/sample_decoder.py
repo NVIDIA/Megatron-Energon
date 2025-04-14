@@ -1,11 +1,12 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from typing import Literal
+from typing import Any, Literal
 
 import webdataset
 
 from megatron.energon.av import AVWebdatasetDecoder
+from megatron.energon.cache import FileStoreDecoder
 from megatron.energon.flavors.webdataset.config import split_name_re
 
 ImageDecoderType = Literal[
@@ -31,7 +32,7 @@ ImageDecoderType = Literal[
 AVDecoderType = Literal["torch", "AVDecoder", "pyav"]
 
 
-class SampleDecoder:
+class SampleDecoder(FileStoreDecoder):
     """The default decoder for webdataset samples."""
 
     def __init__(
@@ -63,17 +64,7 @@ class SampleDecoder:
             ]
         )
 
-    def decode(self, fname: str, raw: bytes) -> "SampleDecoder":
-        """
-        Decode the specified file (i.e. path/key.ext). The extension is used to select the decoder.
-
-        Args:
-            fname: The file name of the file to decode.
-            raw: The raw bytes of the file to decode.
-
-        Returns:
-            The decoded field's data.
-        """
+    def decode(self, fname: str, raw: bytes) -> Any:
         m = split_name_re.match(fname)
         if not m:
             raise ValueError(f"Invalid file name: {fname}")

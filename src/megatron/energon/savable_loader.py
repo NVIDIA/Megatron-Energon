@@ -29,6 +29,7 @@ import torch.distributed
 import torch.multiprocessing
 from torch.utils.data import DataLoader, IterableDataset
 
+from megatron.energon.cache import CachePool
 from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.errors import deprecated
 from megatron.energon.flavors.base_dataset import (
@@ -63,13 +64,25 @@ class SimpleSavableDatasetWrapper(BaseWrapperDataset[T, Tuple[int, int, T]], Gen
     """Wrapper for non-multiprocessing savable datasets. Restarts the inner dataset. This class is
     not intended to be used directly."""
 
+    #: The cache pool to use for the dataset.
+    cache_pool: CachePool
+
     _state_restored: bool
     _sample_index: int
 
     _savable_fields = ("_sample_index",)
 
-    def __init__(self, dataset: SavableDataset[T], worker_config: WorkerConfig):
+    def __init__(
+        self, dataset: SavableDataset[T], worker_config: WorkerConfig, cache_pool: CachePool
+    ):
+        """
+        Args:
+            dataset: The dataset to wrap.
+            worker_config: The worker config to use for the dataset.
+            cache_pool: The cache pool to use for the dataset.
+        """
         super().__init__(dataset, worker_config=worker_config)
+        self.cache_pool = cache_pool
 
         self.reset_state_own()
 
@@ -86,7 +99,7 @@ class SimpleSavableDatasetWrapper(BaseWrapperDataset[T, Tuple[int, int, T]], Gen
         global_worker_id = self.worker_config.global_worker_id()
         while self._state_restored:
             self._state_restored = False
-            self.worker_config.worker_activate(self._sample_index)
+            self.worker_config.worker_activate(self._sample_index, cache_pool=self.cache_pool)
             worker_active = True
             try:
                 for src_data in self.dataset:
@@ -101,7 +114,9 @@ class SimpleSavableDatasetWrapper(BaseWrapperDataset[T, Tuple[int, int, T]], Gen
                     if self._state_restored:
                         # Restart iterator after restore
                         break
-                    self.worker_config.worker_activate(self._sample_index)
+                    self.worker_config.worker_activate(
+                        self._sample_index, cache_pool=self.cache_pool
+                    )
                     worker_active = True
             finally:
                 if worker_active:
@@ -111,7 +126,9 @@ class SimpleSavableDatasetWrapper(BaseWrapperDataset[T, Tuple[int, int, T]], Gen
         id, global_worker_id, sample_idx = index[:3]
         assert id == type(self).__name__
         index = index[3:]
-        self.worker_config.worker_activate(sample_idx, override_global_rank=global_worker_id)
+        self.worker_config.worker_activate(
+            sample_idx, override_global_rank=global_worker_id, cache_pool=self.cache_pool
+        )
         try:
             return add_sample_restore_key(
                 self.dataset.restore_sample(index),
@@ -188,6 +205,8 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
     checkpoint_every_min_n_samples: int
     #: The number of checkpoints to keep in memory, before discarding. Should be 2.
     n_checkpoints: int
+    #: The cache pool to use for the dataset.
+    cache_pool: CachePool
     #: The queue of the worker process to receive commands from the `SavableDataLoader`.
     _cmd_queues: List[torch.multiprocessing.Queue]
     #: The queue of the worker process to send results to the `SavableDataLoader`.
@@ -214,6 +233,7 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
         *,
         cmd_queues: List[torch.multiprocessing.Queue],
         result_queues: List[torch.multiprocessing.Queue],
+        cache_pool: CachePool,
     ):
         """
         Create the savable dataset wrapper for multiprocessing data loading.
@@ -228,6 +248,7 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
             n_checkpoints: Number of checkpoints to keep.
             cmd_queues: The command queues for communicating with the worker processes.
             result_queues: The result queues for communicating with the worker processes.
+            cache_pool: The cache pool to use for the dataset.
         """
         num_workers = max(worker_config.num_workers, 1)
 
@@ -242,6 +263,7 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
         self._workers_skip_samples = [0] * num_workers
         self._cmd_queues = cmd_queues
         self._result_queues = result_queues
+        self.cache_pool = cache_pool
 
     @staticmethod
     def _command_thread(self: "SavableDatasetWrapper"):
@@ -330,7 +352,9 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
                 last_was_skip = True
                 while last_was_skip:
                     dataset_has_samples = False
-                    self.worker_config.worker_activate(self._sample_index)
+                    self.worker_config.worker_activate(
+                        self._sample_index, cache_pool=self.cache_pool
+                    )
                     worker_active = True
                     try:
                         for src_data in self.dataset:
@@ -343,7 +367,9 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
                                 self._workers_skip_samples[self._worker_id] -= 1
                                 self._sample_index += 1
                                 last_was_skip = True
-                                self.worker_config.worker_activate(self._sample_index)
+                                self.worker_config.worker_activate(
+                                    self._sample_index, cache_pool=self.cache_pool
+                                )
                                 worker_active = True
                                 continue
                             last_was_skip = False
@@ -364,7 +390,9 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
                                 # print(f"{id(self)}:{multiprocessing.current_process().ident} Lock acquiring")
                                 self._command_lock.acquire()
                                 # print(f"{id(self)}:{multiprocessing.current_process().ident} Lock acquired")
-                            self.worker_config.worker_activate(self._sample_index)
+                            self.worker_config.worker_activate(
+                                self._sample_index, cache_pool=self.cache_pool
+                            )
                             worker_active = True
                     finally:
                         if worker_active:
@@ -616,6 +644,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
         gc_collect_every_n_steps: int = GC_DEFAULT_EVERY_N_ITER,
         gc_freeze_at_start: bool = True,
         prefetch_factor: int = 2,
+        cache_pool: Optional[CachePool] = None,
     ):
         """
         Create the dataloader supporting saving and restoring the state.
@@ -640,6 +669,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
                 processes. This improves the garbage collection performance by a lot.
                 In rare cases, this may cause issues and can be disabled. Keep enabled if you
                 experience no issues.
+            cache_pool: If set, the cache pool to use for the dataset.
         """
         self.worker_config = dataset.worker_config
         self.id = self.next_id()
@@ -674,9 +704,12 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
                 n_checkpoints=n_checkpoints,
                 cmd_queues=self.cmd_queues,
                 result_queues=self.result_queues,
+                cache_pool=cache_pool,
             )
         else:
-            dataset = SimpleSavableDatasetWrapper(dataset, self.worker_config)
+            dataset = SimpleSavableDatasetWrapper(
+                dataset, self.worker_config, cache_pool=cache_pool
+            )
 
         self._worker_sample_counters = [-1] * num_procs
 
@@ -1120,6 +1153,7 @@ class BasicDataLoader(DataLoader[T], Generic[T]):
         gc_collect_every_n_steps: int = GC_DEFAULT_EVERY_N_ITER,
         gc_freeze_at_start: bool = True,
         prefetch_factor: int = 2,
+        cache_pool: Optional[CachePool] = None,
     ):
         """
         Create the dataloader supporting saving and restoring the state.
@@ -1135,6 +1169,7 @@ class BasicDataLoader(DataLoader[T], Generic[T]):
                 processes. This improves the garbage collection performance by a lot.
                 In rare cases, this may cause issues and can be disabled. Keep enabled if you
                 experience no issues.
+            cache_pool: If set, the cache pool to use for the dataset.
         """
         self.worker_config = dataset.worker_config
 
@@ -1147,7 +1182,10 @@ class BasicDataLoader(DataLoader[T], Generic[T]):
                 every_n_iter=gc_collect_every_n_steps,
                 freeze=gc_freeze_at_start,
             )
-        dataset = SimpleSavableDatasetWrapper(dataset, worker_config=self.worker_config)
+
+        dataset = SimpleSavableDatasetWrapper(
+            dataset, worker_config=self.worker_config, cache_pool=cache_pool
+        )
 
         self._worker_sample_counters = [0] * max(self.worker_config.num_workers, 1)
 

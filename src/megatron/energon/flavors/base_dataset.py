@@ -26,6 +26,7 @@ import torch
 from torch.utils.data import IterableDataset
 from typing_extensions import Self
 
+from megatron.energon.cache import FileStore
 from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.epathlib import EPath
 from megatron.energon.savable import Savable
@@ -34,7 +35,6 @@ from megatron.energon.worker import WorkerConfig
 
 T_sample = TypeVar("T_sample", covariant=True)
 T = TypeVar("T", covariant=True)
-T_data = TypeVar("T_data", covariant=True)
 
 
 class PinMemoryMixin:
@@ -383,20 +383,6 @@ class BaseCoreDatasetFactory(Generic[T_sample], ABC):
     @abstractmethod
     def __len__(self) -> int:
         """Returns the length of the dataset across all ranks."""
-        ...
-
-
-class FileStore(ABC, Generic[T_data]):
-    """Base type for a dataset that can be accessed randomly by sample key."""
-
-    @abstractmethod
-    def __getitem__(self, key: str) -> T_data:
-        """Returns the data for the given key."""
-        ...
-
-    @abstractmethod
-    def get_path(self) -> str:
-        """Returns the path to the dataset."""
         ...
 
 

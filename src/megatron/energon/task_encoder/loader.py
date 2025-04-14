@@ -116,6 +116,7 @@ def get_train_dataset(
             inner takes longer than this many seconds for a sample to load, a stack trace will be
             printed. If None, the watchdog is disabled.
         fail_on_timeout: If True, stops the whole process upon timeout. Otherwise, issue a warning.
+        cache_pool: If set, the cache pool to use for the dataset.
         **kwargs: Additional arguments to the dataset constructor.
 
     Returns:

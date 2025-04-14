@@ -1,58 +1,21 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-
-from __future__ import annotations
-
 import hashlib
 import pickle
 import random
 import string
 import tempfile
 import threading
-from abc import ABC, abstractmethod
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Dict, Generic, Literal, Optional, Tuple, TypeVar
+from typing import Any, Dict, Literal, Optional, Tuple, TypeVar
 
+from megatron.energon.cache.base import CachePool, FileStore, Lazy
+from megatron.energon.cache.file_store import DecodeFileStore
 from megatron.energon.dataclass_slots import dataclass_slots
-from megatron.energon.flavors.base_dataset import FileStore
-from megatron.energon.flavors.webdataset.file_store import DecodeFileStore
 
 T = TypeVar("T")
-
-
-@dataclass_slots
-class Lazy(ABC, Generic[T]):
-    """
-    Abstract base class for lazy references to data.
-    """
-
-    ds: FileStore
-    fname: str
-    pool: CachePool
-
-    @abstractmethod
-    def get(self) -> T:
-        """
-        Get the lazy data now.
-        """
-        ...
-
-
-@dataclass_slots
-class DirectLazy(Lazy[T]):
-    """
-    This is not really lazy, it will just defer the dataset access to the first get().
-    """
-
-    _data: Optional[T] = None
-
-    def get(self) -> T:
-        if self._data is None:
-            self._data = self.pool.get(self.ds, self.fname)
-        assert self._data is not None
-        return self._data
 
 
 @dataclass_slots
@@ -62,9 +25,9 @@ class FileCacheLazy(Lazy[T]):
     """
 
     # The cache pool that we're using.
-    pool: FileStoreCachePool
+    pool: "FileStoreCachePool"
     # The entry in the cache pool that we're using.
-    entry: _PendingTask
+    entry: "_PendingTask"
 
     # If get() was called, this will be the data (uncached).
     _data: Optional[T] = None
@@ -80,46 +43,6 @@ class FileCacheLazy(Lazy[T]):
         self._data = self.pool._get_data(self.ds, self.fname, self.entry)
         assert self._data is not None
         return self._data
-
-
-class CachePool(ABC):
-    """
-    Abstract base class for cache pools.
-    """
-
-    @abstractmethod
-    def get(self, ds: FileStore, fname: str) -> Any:
-        """
-        Get the data for a given file.
-        """
-        ...
-
-    @abstractmethod
-    def get_lazy(self, ds: FileStore, fname: str) -> Lazy:
-        """
-        Get a lazy reference to the data for a given file.
-        """
-        ...
-
-    @abstractmethod
-    def close(self) -> None:
-        """
-        Close the cache pool.
-        """
-        ...
-
-
-class NoCachePool(CachePool):
-    """A pass-through cache pool that does not cache anything."""
-
-    def get(self, ds: FileStore, fname: str) -> Any:
-        return ds[fname]
-
-    def get_lazy(self, ds: FileStore, fname: str) -> DirectLazy:
-        return DirectLazy(ds=ds, fname=fname, pool=self)
-
-    def close(self) -> None:
-        pass
 
 
 @dataclass_slots

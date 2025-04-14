@@ -16,10 +16,10 @@ from typing import (
     Union,
 )
 
+from megatron.energon.cache import FileStore
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.base_dataset import (
     BaseCoreDatasetFactory,
-    FileStore,
     Sample,
     SavableDataset,
     set_sample_restore_key,

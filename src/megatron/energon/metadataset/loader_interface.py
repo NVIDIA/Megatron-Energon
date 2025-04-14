@@ -5,9 +5,10 @@ from abc import ABC, abstractmethod
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Sequence, Union
 
+from megatron.energon.cache import FileStore
 from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory, FileStore
+from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory
 from megatron.energon.worker import WorkerConfig
 
 

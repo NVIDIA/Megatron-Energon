@@ -7,8 +7,9 @@ from typing import Any, Callable, Dict, Generic, List, Optional, Sequence, TypeV
 
 import numpy as np
 
+from megatron.energon.cache import FileStore
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory, FileStore, SavableDataset
+from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory, SavableDataset
 from megatron.energon.flavors.webdataset.error_handler import ErrorHandler
 from megatron.energon.flavors.webdataset.file_store import WebdatasetFileStore
 from megatron.energon.flavors.webdataset.metadata import WebdatasetMeta

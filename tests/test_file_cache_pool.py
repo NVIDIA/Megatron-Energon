@@ -1,3 +1,6 @@
+# Copyright (c) 2025, NVIDIA CORPORATION.
+# SPDX-License-Identifier: BSD-3-Clause
+
 import tempfile
 import threading
 import time
@@ -5,9 +8,7 @@ import unittest
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from megatron.energon.flavors.base_dataset import FileStore
-from megatron.energon.flavors.webdataset.cache_pool import FileCacheLazy, FileStoreCachePool
-from megatron.energon.flavors.webdataset.file_store import DecodeFileStore
+from megatron.energon.cache import DecodeFileStore, FileCacheLazy, FileStore, FileStoreCachePool
 from megatron.energon.flavors.webdataset.sample_decoder import SampleDecoder
 
 

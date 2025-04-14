@@ -3,12 +3,6 @@
 
 from megatron.energon.av import AVData, AVDecoder
 from megatron.energon.flavors.webdataset.base_webdataset import BaseWebdatasetFactory
-from megatron.energon.flavors.webdataset.cache_pool import (
-    CachePool,
-    FileStoreCachePool,
-    Lazy,
-    NoCachePool,
-)
 from megatron.energon.flavors.webdataset.config import JOIN_INDEX_FILENAME, MAIN_FOLDER_NAME
 from megatron.energon.flavors.webdataset.default_decoder_webdataset import (
     DefaultDecoderWebdatasetFactory,
@@ -17,7 +11,7 @@ from megatron.energon.flavors.webdataset.default_generic_webdataset import (
     DefaultGenericWebdatasetFactory,
 )
 from megatron.energon.flavors.webdataset.empty_dataset_error import EmptyDatasetError
-from megatron.energon.flavors.webdataset.file_store import DecodeFileStore, WebdatasetFileStore
+from megatron.energon.flavors.webdataset.file_store import WebdatasetFileStore
 from megatron.energon.flavors.webdataset.joined_webdataset import JoinedWebdatasetFactory
 from megatron.energon.flavors.webdataset.metadata import WebdatasetMeta
 from megatron.energon.flavors.webdataset.sample_decoder import (
@@ -32,18 +26,13 @@ __all__ = [
     "AVDecoder",
     "AVDecoderType",
     "BaseWebdatasetFactory",
-    "CachePool",
     "DefaultDecoderWebdatasetFactory",
     "DefaultGenericWebdatasetFactory",
-    "DecodeFileStore",
     "EmptyDatasetError",
-    "FileStoreCachePool",
     "ImageDecoderType",
     "JOIN_INDEX_FILENAME",
     "JoinedWebdatasetFactory",
-    "Lazy",
     "MAIN_FOLDER_NAME",
-    "NoCachePool",
     "SampleDecoder",
     "StandardWebdatasetFactory",
     "WebdatasetFileStore",

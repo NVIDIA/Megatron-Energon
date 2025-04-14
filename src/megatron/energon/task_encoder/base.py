@@ -26,14 +26,11 @@ from typing import (
 import torch
 from typing_extensions import ParamSpec
 
+from megatron.energon.cache import CachePool, DecodeFileStore, FileStore
 from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.flavors import (
-    CachePool,
     CrudeSample,
     CrudeWebdataset,
-    DecodeFileStore,
-    FileStore,
-    NoCachePool,
     PinMemoryMixin,
     Sample,
     SampleDecoder,
@@ -261,20 +258,6 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
 
     #: The decoder to use for decoding samples. Set manually as needed to override options.
     decoder: SampleDecoder
-    #: The cache to use for caching out sample data to disk (for use with cookers / aux file stores).
-    # This is set and configured externally by the loader.
-    cache: CachePool
-
-    def __init__(self, cache: Optional[CachePool] = None):
-        """
-        Initialize the task encoder.
-
-        Args:
-            cache: Cache pool to use for caching. If not provided, a no-op cache pool will be used.
-        """
-        if cache is None:
-            cache = NoCachePool()
-        self.cache = cache
 
     @stateless
     def cook_crude_sample(
@@ -801,6 +784,18 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         )
         return WorkerConfig.active_worker_config.active_worker_sample_index
 
+    @property
+    def cache(self) -> CachePool:
+        """Returns the cache pool to use for caching out sample data to disk (for use with cookers / aux file stores).
+        This is set and configured externally by the loader."""
+        assert WorkerConfig.active_worker_config is not None, (
+            "The cache can only be fetched within the worker, and to be usable, you must use the get_(savable_)loader methods provided from the package."
+        )
+        assert WorkerConfig.active_worker_config._cache_pool is not None, (
+            "Cache pool must be set by the loader."
+        )
+        return WorkerConfig.active_worker_config._cache_pool
+
 
 class DefaultTaskEncoder(
     TaskEncoder[T_sample, T_encoded_sample, T_raw_batch, T_batch],
@@ -829,7 +824,6 @@ class DefaultTaskEncoder(
         encoded_sample_type: Optional[Type[T_encoded_sample]] = None,
         raw_batch_type: Optional[Type[T_raw_batch]] = None,
         batch_type: Optional[Type[T_batch]] = None,
-        cache: Optional[CachePool] = None,
     ):
         """
         Initialize the default task encoder.
@@ -846,7 +840,6 @@ class DefaultTaskEncoder(
             batch_type: Type of the encoded batched samples
             cache: Cache pool to use for caching. If not provided, a no-op cache pool will be used.
         """
-        super().__init__(cache=cache)
         self._encoded_sample_type = encoded_sample_type
         self._raw_batch_type = raw_batch_type
         self._batch_type = batch_type

@@ -3,8 +3,9 @@
 
 from typing import Optional, TypeVar
 
+from megatron.energon.cache import CachePool
 from megatron.energon.errors import warn_deprecated
-from megatron.energon.flavors.base_dataset import SavableDataset
+from megatron.energon.flavors import SavableDataset
 from megatron.energon.savable_loader import BasicDataLoader, SavableDataLoader
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.gc_dataset import GC_DEFAULT_EVERY_N_ITER
@@ -21,6 +22,7 @@ def get_savable_loader(
     n_checkpoints: Optional[int] = None,
     gc_collect_every_n_steps: int = GC_DEFAULT_EVERY_N_ITER,
     prefetch_factor: int = 2,
+    cache_pool: Optional[CachePool] = None,
 ) -> SavableDataLoader[T]:
     """
 
@@ -37,6 +39,7 @@ def get_savable_loader(
             checkpoints. Defaults to `number of workers * 2`. Only applies if using workers.
         n_checkpoints: The number of internal checkpoints to keep. Only applies if using workers.
             If None, computes a suitable value.
+        cache_pool: If set, the cache pool to use for the dataset.
 
     Returns:
         The instantiated :class:`megatron.energon.SavableDataLoader`, yielding batches from the dataset,
@@ -60,6 +63,7 @@ def get_savable_loader(
         n_checkpoints=n_checkpoints,
         gc_collect_every_n_steps=gc_collect_every_n_steps,
         prefetch_factor=prefetch_factor,
+        cache_pool=cache_pool,
     )
 
 
@@ -68,6 +72,7 @@ def get_loader(
     *,
     worker_config: Optional[WorkerConfig] = None,
     prefetch_factor: int = 2,
+    cache_pool: Optional[CachePool] = None,
 ) -> BasicDataLoader[T]:
     """
     Get a dataloader for the given dataset.
@@ -75,7 +80,7 @@ def get_loader(
     Args:
         dataset: The dataset to create a loader for.
         worker_config: Deprecated. Please pass this to the dataset instead.
-
+        cache_pool: If set, the cache pool to use for the dataset.
     Returns:
         The instantiated :class:`torch.data.DataLoader`, yielding batches from the dataset.
     """
@@ -90,4 +95,4 @@ def get_loader(
                 "Passing a worker_config to get_loader() is deprecated and will have no effect."
             )
 
-    return BasicDataLoader(dataset, prefetch_factor=prefetch_factor)
+    return BasicDataLoader(dataset, prefetch_factor=prefetch_factor, cache_pool=cache_pool)
