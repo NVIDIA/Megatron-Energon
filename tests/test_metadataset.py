@@ -19,6 +19,7 @@ import torch
 import webdataset as wds
 
 from megatron.energon import (
+    SavableDataset,
     WorkerConfig,
     get_loader,
     get_savable_loader,
@@ -48,6 +49,16 @@ def _norng_state(state):
         return type(state)(_norng_state(v) for v in state)
     else:
         return state
+
+
+def get_blend_dataset(ds: SavableDataset):
+    if isinstance(ds, BlendDataset):
+        return ds
+    else:
+        if hasattr(ds, "dataset"):
+            return get_blend_dataset(ds.dataset)
+        else:
+            raise ValueError("No blend dataset found")
 
 
 def assert_nested_equal(a: Any, b: Any, path: str = "") -> None:
@@ -498,7 +509,7 @@ class TestDataset(unittest.TestCase):
                     max_samples_per_sequence=None,
                 )
 
-                blend_dataset = train_dataset.dataset.dataset.dataset
+                blend_dataset = get_blend_dataset(train_dataset)
                 assert isinstance(blend_dataset, BlendDataset)
 
                 ds_weights = blend_dataset.dataset_weights

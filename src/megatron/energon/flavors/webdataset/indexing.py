@@ -60,8 +60,6 @@ class SqliteIndexWriter:
             )
         """
         )
-        # Index on sample_key for fast lookups
-        self.db.execute("CREATE INDEX IF NOT EXISTS idx_samples_sample_key ON samples(sample_key)")
 
         self.duplicates = []
 
@@ -92,6 +90,10 @@ class SqliteIndexWriter:
         renamed to the final name, overwriting if necessary.
         """
         assert self.db is not None, "Database is closed"
+
+        # Create the index after adding all the samples for better speed
+        # Index on sample_key for fast lookups
+        self.db.execute("CREATE INDEX IF NOT EXISTS idx_samples_sample_key ON samples(sample_key)")
 
         # Check if sample_key are all unique
         # self.db.execute("CREATE TEMP TABLE temp AS SELECT sample_key, COUNT(*) AS c FROM samples GROUP BY sample_key HAVING c > 1")

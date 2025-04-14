@@ -232,9 +232,6 @@ class PackingDataset(
             # Fill a portion of the buffer
             if not self._fill_reading_buffer(src_iter):
                 # Break out of the main loop when the source is exhausted.
-                # But yield the remaining packs first.
-                if len(self._reading_buffer) > 0:
-                    next_pre_pack()
                 break
 
             # Create new pre packs if necessary
@@ -251,6 +248,15 @@ class PackingDataset(
                 pre_pack_round = 0
 
             yield from next_final_pack()
+
+        # Yield the remaining packs, flushing the collecting buffer
+        while len(pre_packing_lengths) > 0:
+            yield from next_final_pack()
+
+        # If there are still samples in the partial reading buffer, pre-pack them and yield the
+        # resulting (partial) packs
+        if len(self._reading_buffer) > 0:
+            next_pre_pack()
 
         # Yield the remaining packs, flushing the collecting buffer
         while len(pre_packing_lengths) > 0:

@@ -13,6 +13,7 @@ import warnings
 from collections import Counter
 from pathlib import Path
 from typing import Iterable
+from unittest.mock import patch
 
 import torch
 import webdataset as wds
@@ -31,6 +32,8 @@ from megatron.energon.epathlib.epath import EPath
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 from megatron.energon.metadataset.loader import prepare_metadataset
 from megatron.energon.metadataset.loader_interface import DatasetBlendMode
+from megatron.energon.task_encoder.base import DefaultTaskEncoder
+from megatron.energon.wrappers.watchdog_dataset import WatchdogDataset
 
 
 def _norng_state(state):
@@ -1097,6 +1100,52 @@ class TestDataset(unittest.TestCase):
         assert sample_counts_save_restore == sample_counts, (
             "Sample counts do not match when using save/restore"
         )
+
+    @patch.object(WatchdogDataset, "_watchdog_trigger")
+    def test_watchdog_dataset(self, mock_watchdog_trigger):
+        class TestTaskEncoder(DefaultTaskEncoder):
+            def __init__(self):
+                super().__init__()
+                self.did_sleep = False
+
+            def encode_sample(self, sample: TextSample) -> TextSample:
+                if sample.text == "13":
+                    import time
+
+                    if not self.did_sleep:
+                        print("Sleeping for 5 seconds on encode_sample to simulate stuck worker")
+                        time.sleep(5)
+                        self.did_sleep = True
+
+                return sample
+
+        worker_config = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=0,
+            seed_offset=42,
+        )
+
+        # Train mode dataset
+        train_dataset = get_train_dataset(
+            self.mds_path,
+            worker_config=worker_config,
+            batch_size=1,
+            shuffle_buffer_size=None,
+            max_samples_per_sequence=None,
+            task_encoder=TestTaskEncoder(),
+            watchdog_timeout_seconds=3,
+            fail_on_timeout=False,
+        )
+
+        train_loader = get_loader(train_dataset)
+
+        for idx, data in enumerate(train_loader):
+            print(idx, data.text[0])
+            if idx > 255:
+                break
+
+        mock_watchdog_trigger.assert_called()
 
 
 if __name__ == "__main__":
