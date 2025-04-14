@@ -1473,6 +1473,87 @@ class TestDataset(unittest.TestCase):
 
         assert all(s0.__key__ == s1.__key__ for s0, s1 in zip(samples_r0_cmp, samples_r0_restored))
 
+    def test_packing_val(self):
+        torch.manual_seed(42)
+
+        class TestTaskEncoder(DefaultTaskEncoder):
+            def __init__(self):
+                super().__init__(raw_batch_type=CaptioningBatch)
+
+            @stateless
+            def encode_sample(self, sample: CaptioningSample) -> EncodedCaptioningSample:
+                return EncodedCaptioningSample(
+                    __key__=sample.__key__,
+                    __restore_key__=sample.__restore_key__,
+                    image=sample.image,
+                    caption=torch.frombuffer(sample.caption.encode(), dtype=torch.uint8),
+                )
+
+            def select_samples_to_pack(
+                self, samples: List[EncodedCaptioningSample]
+            ) -> List[List[EncodedCaptioningSample]]:
+                assert len(samples) in (1 + 3 + 5 + 2, 50 % 11)
+                if len(samples) < 11:
+                    return []
+                return [
+                    samples[1 + 3 + 5 : 1 + 3 + 5 + 2],
+                    samples[1 + 3 : 1 + 3 + 5],
+                    samples[1 : 1 + 3],
+                    samples[:1],
+                ]
+
+            @stateless
+            def pack_selected_samples(
+                self, samples: List[EncodedCaptioningSample]
+            ) -> EncodedCaptioningSample:
+                return EncodedCaptioningSample(
+                    __key__=",".join([sample.__key__ for sample in samples]),
+                    __restore_key__=(),
+                    image=torch.stack([sample.image for sample in samples]),
+                    caption=torch.cat([sample.caption for sample in samples]),
+                )
+
+        loader = get_loader(
+            get_val_dataset(
+                self.dataset_path,
+                batch_size=2,
+                packing_buffer_size=11,
+                worker_config=no_worker_config,
+                task_encoder=TestTaskEncoder(),
+                split_part="train",
+            )
+        )
+
+        assert len(loader) == 25, f"len(loader) == {len(loader)}"
+
+        samples = list(loader)
+
+        print([batch.__key__ for batch in samples])
+        print([batch.__restore_key__ for batch in samples])
+        print([len(batch.__key__) for batch in samples])
+        print([[len(batch_key.split(",")) for batch_key in batch.__key__] for batch in samples])
+
+        # Each batch should have 2 samples
+        assert [len(batch.__key__) for batch in samples] == [
+            2,
+            2,
+            2,
+            2,
+            2,
+            2,
+            2,
+            2,
+        ]
+
+        # The packs of lengths 1, 4, 16 should be unrolled repeatedly across the batches of size 2
+        assert [
+            [len(batch_key.split(",")) for batch_key in batch.__key__] for batch in samples
+        ] == [[2, 5], [3, 1], [2, 5], [3, 1], [2, 5], [3, 1], [2, 5], [3, 1]]
+
+        restored_sample_1 = loader.restore_sample(samples[1].__restore_key__)
+        assert restored_sample_1.__key__ == samples[1].__key__
+        assert restored_sample_1.__restore_key__ == samples[1].__restore_key__
+
     def test_group_batch(self):
         class GroupingTaskEncoder(
             TaskEncoder[CaptioningSample, CaptioningSample, CaptioningSample, CaptioningSample]
