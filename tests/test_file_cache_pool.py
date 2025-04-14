@@ -180,18 +180,50 @@ class TestFileStoreCachePool(unittest.TestCase):
             lazy2_2 = pool.get_lazy(mock_raw_file_store, "large_file2")
             lazy2_3 = pool.get_lazy(mock_raw_file_store, "large_file2")
             lazy3_2 = pool.get_lazy(mock_raw_file_store, "large_file3")
-            lazy5 = pool.get_lazy(mock_raw_file_store, "large_file4")
-            lazy6 = pool.get_lazy(mock_raw_file_store, "large_file5")
+            lazy5 = pool.get_lazy(mock_raw_file_store, "large_file5")
+            lazy6 = pool.get_lazy(mock_raw_file_store, "large_file6")
 
             def status():
                 return [
-                    lazy1.entry.send_to_cache_future.done(),
-                    lazy2.entry.send_to_cache_future.done(),
-                    lazy3.entry.send_to_cache_future.done(),
-                    lazy4.entry.send_to_cache_future.done(),
-                    lazy5.entry.send_to_cache_future.done(),
-                    lazy6.entry.send_to_cache_future.done(),
+                    (
+                        name,
+                        lazy.entry.refcount,
+                        "consumed"
+                        if lazy._data
+                        else ("cached" if lazy.entry.send_to_cache_future.done() else "pending"),
+                    )
+                    for lazy, name in [
+                        (lazy1, "1"),
+                        (lazy2, "2"),
+                        (lazy2_2, "2_2"),
+                        (lazy2_3, "2_3"),
+                        (lazy3, "3"),
+                        (lazy3_2, "3_2"),
+                        (lazy4, "4"),
+                        (lazy5, "5"),
+                        (lazy6, "6"),
+                    ]
                 ]
+
+            def txt_status():
+                out = []
+                for lazy in [lazy1, lazy2, lazy2_2, lazy2_3, lazy3, lazy3_2, lazy4, lazy5, lazy6]:
+                    if lazy._data is not None:
+                        out.append(
+                            f" - {lazy.fname} [{lazy.entry.data_size}b, {lazy.entry.refcount}refs] consumed"
+                        )
+                    elif lazy.entry.send_to_cache_future.done():
+                        out.append(
+                            f" - {lazy.fname} [{lazy.entry.data_size}b, {lazy.entry.refcount}refs] cached"
+                        )
+                    else:
+                        out.append(
+                            f" - {lazy.fname} [{lazy.entry.data_size}b, {lazy.entry.refcount}refs] pending"
+                        )
+                return (
+                    f"Cached Count: {pool.current_cache_count}, Cache size: {pool.current_cache_size}\n"
+                    + "\n".join(out)
+                )
 
             # lazy2_2 and lazy2_3 should share the same entry as lazy2
             assert lazy2_2.entry is lazy2.entry
@@ -203,7 +235,18 @@ class TestFileStoreCachePool(unittest.TestCase):
 
             print("Checking cache status")
             # They should not be able to finish, because the cache is full
-            assert status() == [True, False, False, False, False, False], status()
+            # Queue state: [2<50>, 3<50>, 4<25>, 5<25>, 6<25>], cached out: [1<50>], removed: []
+            assert status() == [
+                ("1", 1, "cached"),
+                ("2", 3, "pending"),
+                ("2_2", 3, "pending"),
+                ("2_3", 3, "pending"),
+                ("3", 2, "pending"),
+                ("3_2", 2, "pending"),
+                ("4", 1, "pending"),
+                ("5", 1, "pending"),
+                ("6", 1, "pending"),
+            ], txt_status()
 
             # Check cache count and size before second file
             assert pool.current_cache_count == 1, pool.current_cache_count
@@ -216,9 +259,19 @@ class TestFileStoreCachePool(unittest.TestCase):
             assert result2_3 == b"b" * 50_000
 
             # They should not be able to finish, because the cache is full
-            assert status() == [True, False, False, False, False, False], status()
+            # Queue state: [3<50>, 4<25>, 5<25>, 6<25>, 2<50>], cached out: [1<50>], removed: []
+            assert status() == [
+                ("1", 1, "cached"),
+                ("2", 2, "pending"),
+                ("2_2", 2, "pending"),
+                ("2_3", 2, "consumed"),
+                ("3", 2, "pending"),
+                ("3_2", 2, "pending"),
+                ("4", 1, "pending"),
+                ("5", 1, "pending"),
+                ("6", 1, "pending"),
+            ], txt_status()
 
-            print("Fetching lazy1")
             # Fetch
             result1 = lazy1.get()
             assert result1 == b"a" * 50_000
@@ -229,33 +282,83 @@ class TestFileStoreCachePool(unittest.TestCase):
 
             # Second file is now queued at the end.
             # File 3 and 4 should now be cached.
-            assert status() == [True, False, True, True, False, False], status()
-
-            print("Fetching lazy3")
+            # Queue state: [5<25>, 6<25>, 2<50>], cached out: [3<50>, 4<25>], removed: [1<50>]
+            assert status() == [
+                ("1", 0, "consumed"),
+                ("2", 2, "pending"),
+                ("2_2", 2, "pending"),
+                ("2_3", 2, "consumed"),
+                ("3", 2, "cached"),
+                ("3_2", 2, "cached"),
+                ("4", 1, "cached"),
+                ("5", 1, "pending"),
+                ("6", 1, "pending"),
+            ], txt_status()
             assert pool.current_cache_count == 2
-            assert pool.current_cache_size == 50_000
+            assert pool.current_cache_size == 75_000
+
             result3 = lazy3.get()
             assert result3 == b"c" * 50_000
 
             time.sleep(0.5)
 
             # Space by large_file3 is still occupied in cache
-            assert status() == [True, False, True, True, False, False], status()
+            # Queue state: [5<25>, 6<25>, 2<50>], cached out: [3<50>, 4<25>], removed: [1<50>]
+            assert status() == [
+                ("1", 0, "consumed"),
+                ("2", 2, "pending"),
+                ("2_2", 2, "pending"),
+                ("2_3", 2, "consumed"),
+                ("3", 1, "consumed"),
+                ("3_2", 1, "cached"),
+                ("4", 1, "cached"),
+                ("5", 1, "pending"),
+                ("6", 1, "pending"),
+            ], txt_status()
+            assert pool.current_cache_count == 2
+            assert pool.current_cache_size == 75_000
 
             result3_2 = lazy3_2.get()
-            assert result3_2 == b"b" * 50_000
+            assert result3_2 == b"c" * 50_000
 
             time.sleep(0.5)
 
             # Space by large_file3 was freed now, 4, 5, and 6 should fit now, large_file2 not yet
-            assert status() == [True, False, True, True, True, True], status()
+            # Queue state: [6<25>, 2<50>], cached out: [5<25>, 4<25>], removed: [1<50>, 3<50>]
+            assert status() == [
+                ("1", 0, "consumed"),
+                ("2", 2, "pending"),
+                ("2_2", 2, "pending"),
+                ("2_3", 2, "consumed"),
+                ("3", 0, "consumed"),
+                ("3_2", 0, "consumed"),
+                ("4", 1, "cached"),
+                ("5", 1, "cached"),
+                ("6", 1, "pending"),
+            ], txt_status()
+            assert pool.current_cache_count == 2
+            assert pool.current_cache_size == 50_000
 
             result4 = lazy4.get()
             assert result4 == b"d" * 25_000
 
             time.sleep(0.5)
+
             # Nothing changed, no space for large_file2 still
-            assert status() == [True, False, True, True, True, True], status()
+            # Queue state: [6<25>, 2<50>], cached out: [5<25>, 4<25>], removed: [1<50>, 3<50>, 4<25>]
+            assert status() == [
+                ("1", 0, "consumed"),
+                ("2", 2, "pending"),
+                ("2_2", 2, "pending"),
+                ("2_3", 2, "consumed"),
+                ("3", 0, "consumed"),
+                ("3_2", 0, "consumed"),
+                ("4", 0, "consumed"),
+                ("5", 1, "cached"),
+                ("6", 1, "cached"),
+            ], txt_status()
+            assert pool.current_cache_count == 2
+            assert pool.current_cache_size == 50_000
 
             result5 = lazy5.get()
             assert result5 == b"e" * 25_000
@@ -263,16 +366,74 @@ class TestFileStoreCachePool(unittest.TestCase):
             time.sleep(0.5)
 
             # Now large_file2 can be cached
-            assert status() == [True, True, True, True, True, True], status()
+            # Queue state: [], cached out: [6<25>, 2<50>], removed: [1<50>, 3<50>, 4<25>, 5<25>]
+            assert status() == [
+                ("1", 0, "consumed"),
+                ("2", 2, "cached"),
+                ("2_2", 2, "cached"),
+                ("2_3", 2, "consumed"),
+                ("3", 0, "consumed"),
+                ("3_2", 0, "consumed"),
+                ("4", 0, "consumed"),
+                ("5", 0, "consumed"),
+                ("6", 1, "cached"),
+            ], txt_status()
+            assert pool.current_cache_count == 2
+            assert pool.current_cache_size == 75_000
 
             result6 = lazy6.get()
             assert result6 == b"f" * 25_000
 
+            # Queue state: [], cached out: [2<50>], removed: [1<50>, 3<50>, 4<25>, 5<25>, 6<25>]
+            assert status() == [
+                ("1", 0, "consumed"),
+                ("2", 2, "cached"),
+                ("2_2", 2, "cached"),
+                ("2_3", 2, "consumed"),
+                ("3", 0, "consumed"),
+                ("3_2", 0, "consumed"),
+                ("4", 0, "consumed"),
+                ("5", 0, "consumed"),
+                ("6", 0, "consumed"),
+            ], txt_status()
+            assert pool.current_cache_count == 1
+            assert pool.current_cache_size == 50_000
+
             result2 = lazy2.get()
             assert result2 == b"b" * 50_000
 
+            # Queue state: [], cached out: [2<50>], removed: [1<50>, 3<50>, 4<25>, 5<25>, 6<25>]
+            assert status() == [
+                ("1", 0, "consumed"),
+                ("2", 1, "consumed"),
+                ("2_2", 1, "cached"),
+                ("2_3", 1, "consumed"),
+                ("3", 0, "consumed"),
+                ("3_2", 0, "consumed"),
+                ("4", 0, "consumed"),
+                ("5", 0, "consumed"),
+                ("6", 0, "consumed"),
+            ], txt_status()
+            assert pool.current_cache_count == 1
+            assert pool.current_cache_size == 50_000
+
+            result2_2 = lazy2_2.get()
+            assert result2_2 == b"b" * 50_000
+
             # Cache should be empty now
-            assert pool.current_cache_count == 0
+            # Queue state: [], cached out: [], removed: [1<50>, 3<50>, 4<25>, 5<25>, 6<25>, 2<50>]
+            assert status() == [
+                ("1", 0, "consumed"),
+                ("2", 0, "consumed"),
+                ("2_2", 0, "consumed"),
+                ("2_3", 0, "consumed"),
+                ("3", 0, "consumed"),
+                ("3_2", 0, "consumed"),
+                ("4", 0, "consumed"),
+                ("5", 0, "consumed"),
+                ("6", 0, "consumed"),
+            ], txt_status()
+            assert pool.current_cache_count == 0, txt_status()
             assert pool.current_cache_size == 0
         finally:
             pool.close()
@@ -307,7 +468,7 @@ class TestFileStoreCachePool(unittest.TestCase):
         pool = FileStoreCachePool(parent_cache_dir=self.temp_path, method="pickle")
         mock_raw_file_store = MockFileStore(
             {
-                "complex": b"test data 1",
+                "file1": b"test data 1",
             }
         )
         mock_decode_file_store = DecodeFileStore(

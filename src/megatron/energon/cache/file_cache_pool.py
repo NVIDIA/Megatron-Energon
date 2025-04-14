@@ -214,6 +214,10 @@ class FileStoreCachePool(CachePool):
             return result
 
     def _cache_out_task(self, ds: FileStore, fname: str, entry: _PendingTask) -> bool:
+        with self._lock:
+            if self._shutting_down:
+                return False
+
         # Perform the data read
         if self.method == "raw":
             if isinstance(ds, DecodeFileStore):
@@ -244,6 +248,9 @@ class FileStoreCachePool(CachePool):
             self.current_cache_size += file_size
             self.current_cache_count += 1
 
+            if self._shutting_down:
+                return False
+
         try:
             # Write to cache
             self._write_to_cache(entry.cache_path, data)
@@ -265,6 +272,7 @@ class FileStoreCachePool(CachePool):
         """
         key = (ds, fname)
         with self._lock:
+            assert not self._shutting_down, "Cache pool is shutting down"
             entry = self._pending_tasks.get(key)
             if entry:
                 # Already have a background task for this (ds, fname)
@@ -297,6 +305,8 @@ class FileStoreCachePool(CachePool):
         """
         with self._lock:
             self._shutting_down = True
+            for entry in self._pending_tasks.values():
+                entry.send_to_cache_future.cancel()
             self._cache_space_available.notify_all()
         self._worker_pool.shutdown(wait=True)
         with self._lock:
