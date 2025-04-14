@@ -1,7 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from typing import Any
+from typing import Any, Optional
 
 from megatron.energon.epathlib.epath import EPath
 from megatron.energon.flavors.base_dataset import FileStore
@@ -20,6 +20,34 @@ class WebdatasetFileStore(SqliteITarEntryReader, FileStore[bytes]):
 
     def get_path(self) -> str:
         return str(self.base_path)
+
+
+class SystemFileStore(FileStore[bytes]):
+    """A FileStore that reads files directly from the file system."""
+
+    def __init__(self, base_dir: Optional[EPath | str] = None):
+        """
+        Args:
+            base_dir: The base directory to use for relative paths. If None, you should only pass
+                absolute paths to __getitem__.
+        """
+
+        self.base_dir = EPath(base_dir) if base_dir is not None else None
+
+    def __getitem__(self, key: str) -> bytes:
+        # Construct the full path from the dataset path and the file key
+        if self.base_dir is None:
+            file_path = EPath(key)
+        else:
+            file_path = self.base_dir / key
+
+        # Read and return the file contents as bytes
+        with file_path.open("rb") as f:
+            return f.read()
+
+    def get_path(self) -> str:
+        """Returns the path to the dataset."""
+        return str(self.base_dir)
 
 
 class DecodeFileStore(FileStore[Any]):

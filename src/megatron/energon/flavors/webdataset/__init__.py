@@ -17,7 +17,11 @@ from megatron.energon.flavors.webdataset.default_generic_webdataset import (
     DefaultGenericWebdatasetFactory,
 )
 from megatron.energon.flavors.webdataset.empty_dataset_error import EmptyDatasetError
-from megatron.energon.flavors.webdataset.file_store import DecodeFileStore, WebdatasetFileStore
+from megatron.energon.flavors.webdataset.file_store import (
+    DecodeFileStore,
+    SystemFileStore,
+    WebdatasetFileStore,
+)
 from megatron.energon.flavors.webdataset.joined_webdataset import JoinedWebdatasetFactory
 from megatron.energon.flavors.webdataset.metadata import WebdatasetMeta
 from megatron.energon.flavors.webdataset.sample_decoder import (
@@ -46,6 +50,7 @@ __all__ = [
     "NoCachePool",
     "SampleDecoder",
     "StandardWebdatasetFactory",
+    "SystemFileStore",
     "WebdatasetFileStore",
     "WebdatasetMeta",
 ]

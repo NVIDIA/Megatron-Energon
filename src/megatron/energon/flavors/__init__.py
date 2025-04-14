@@ -43,6 +43,7 @@ from megatron.energon.flavors.webdataset import (
     NoCachePool,
     SampleDecoder,
     StandardWebdatasetFactory,
+    SystemFileStore,
     WebdatasetMeta,
 )
 
@@ -84,6 +85,7 @@ __all__ = [
     "SimilarityInterleavedSample",
     "SimilarityInterleavedWebdataset",
     "StandardWebdatasetFactory",
+    "SystemFileStore",
     "TextSample",
     "TextWebdataset",
     "VidQASample",
