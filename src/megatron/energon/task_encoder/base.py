@@ -245,11 +245,15 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
 
     Task encoding follows these steps:
       0. Data comes from the dataset
-      1. :meth:`megatron.energon.TaskEncoder.encode_sample` is called on each sample
-      2. :meth:`megatron.energon.TaskEncoder.batch` is called on the list of encoded samples
-      3. :meth:`megatron.energon.TaskEncoder.encode_batch` is called on the batch
-      4. :meth:`megatron.energon.TaskEncoder.to_device` is called on the encoded batch
-      5. resulting encoded batch is passed to the network
+      1. :meth:`megatron.energon.TaskEncoder.encode_sample` / :meth:`megatron.energon.TaskEncoder.preencode_sample` is called on each sample
+      2. :meth:`megatron.energon.TaskEncoder.select_samples_to_pack` is called on the buffer of samples
+      3. :meth:`megatron.energon.TaskEncoder.postencode_sample` is called on each sample of the current pack
+      4. :meth:`megatron.energon.TaskEncoder.pack_selected_samples` is called on the selected sample pack
+      5. :meth:`megatron.energon.TaskEncoder.batch` is called on the list of encoded samples
+      6. :meth:`megatron.energon.TaskEncoder.encode_batch` is called on the batch
+      7. yield to main process
+      8. :meth:`megatron.energon.Batch.to_device` is called on the encoded batch
+      9. resulting encoded batch is passed to the network
     """
 
     cookers: Sequence[Cooker[T_sample]] = ()
@@ -305,7 +309,31 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         self, sample: T_sample
     ) -> Union[T_encoded_sample, Generator[T_encoded_sample, None, None]]:
         """Encode a single sample. May raise :exc:`megatron.energon.SkipSample` to skip a sample.
-        Alternatively, this can be a generator that yields (or ignores) new samples."""
+        Alternatively, this can be a generator that yields (or ignores) new samples.
+        If this is defined, :func:`preencode_sample` and :func:`postencode_sample` must not be defined.
+        """
+        return sample
+
+    @stateless
+    def preencode_sample(
+        self, sample: T_sample
+    ) -> Union[T_sample, Generator[T_sample, None, None]]:
+        """Pre-encode a single sample. May raise :exc:`megatron.energon.SkipSample` to skip a sample.
+        Alternatively, this can be a generator that yields (or ignores) new samples.
+        Use in conjunction with packing and caching.
+        If this is defined, :func:`encode_sample` must not be defined.
+        """
+        return sample
+
+    @stateless
+    def postencode_sample(
+        self, sample: T_sample
+    ) -> Union[T_encoded_sample, Generator[T_encoded_sample, None, None]]:
+        """Post-encode a single sample. May raise :exc:`megatron.energon.SkipSample` to skip a sample.
+        Alternatively, this can be a generator that yields (or ignores) new samples.
+        Use in conjunction with packing and caching.
+        If this is defined, :func:`encode_sample` must not be defined.
+        """
         return sample
 
     @stateless
@@ -421,6 +449,8 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
     ) -> SavableDataset[T_raw_batch]:
         """Applies the batcher to the dataset."""
 
+        dataset: SavableDataset[Any]
+
         if packing_buffer_size is not None:
             select_samples_to_pack_provided = (
                 getattr(self.select_samples_to_pack, "__func__", None)
@@ -435,13 +465,32 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 "Both select_samples_to_pack and pack_selected_samples methods must be provided in the TaskEncoder when using packing_buffer_size"
             )
 
+            if (
+                getattr(self.postencode_sample, "__func__", None)
+                is not TaskEncoder.postencode_sample
+            ):
+                post_encode_fn = self.postencode_sample
+            else:
+                post_encode_fn = None
+
             dataset = PackingDataset(
                 dataset,
                 buffer_size=packing_buffer_size,
                 pre_packer=self.select_samples_to_pack,
                 final_packer=self.pack_selected_samples,
                 final_packer_stateless=get_stateless(self.pack_selected_samples),
+                sample_encoder=post_encode_fn,
+                sample_encoder_stateless=True
+                if post_encode_fn is None
+                else get_stateless(post_encode_fn),
                 worker_config=worker_config,
+            )
+        elif getattr(self.postencode_sample, "__func__", None) is not TaskEncoder.postencode_sample:
+            dataset = MapDataset(
+                dataset,
+                self.postencode_sample,
+                worker_config=worker_config,
+                stateless_map_fn=get_stateless(self.postencode_sample),
             )
 
         if (
@@ -577,12 +626,22 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         worker_config: WorkerConfig,
     ) -> SavableDataset[T_encoded_sample]:
         """Applies the sample encoder to the dataset."""
-        if getattr(self.encode_sample, "__func__", None) is not TaskEncoder.encode_sample:
+        if getattr(self.preencode_sample, "__func__", None) is not TaskEncoder.preencode_sample:
+            pre_encode_fn = self.preencode_sample
+            assert getattr(self.encode_sample, "__func__", None) in (
+                TaskEncoder.encode_sample,
+                DefaultTaskEncoder.encode_sample,
+            ), "Cannot have both pre- and post-encode functions defined."
+        elif getattr(self.encode_sample, "__func__", None) is not TaskEncoder.encode_sample:
+            pre_encode_fn = self.encode_sample
+        else:
+            pre_encode_fn = None
+        if pre_encode_fn is not None:
             dataset = MapDataset(
                 dataset,
-                self.encode_sample,
+                pre_encode_fn,
                 worker_config=worker_config,
-                stateless_map_fn=get_stateless(self.encode_sample),
+                stateless_map_fn=get_stateless(pre_encode_fn),
             )
         return dataset
 

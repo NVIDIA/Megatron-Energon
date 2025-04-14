@@ -129,10 +129,44 @@ class LazyCookingTaskEncoder(
 
     @stateless
     def pack_selected_samples(self, samples: List[LazyTextSample]) -> TextSample:
+        assert len(samples) == 1, f"Expected 1 sample, got {len(samples)}"
         return TextSample.derive_from(
             samples[0],
             text=samples[0].txt + "|" + samples[0].next_txt.get(),
         )
+
+    def batch(self, samples: List[TextSample]) -> TextBatch:
+        return TextBatch(
+            __keys__=[sample.__key__ for sample in samples],
+            txts=[sample.text for sample in samples],
+        )
+
+
+class LazyCookingTaskEncoderWithPostencode(
+    DefaultTaskEncoder[LazyTextSample, LazyTextSample, TextBatch, TextBatch]
+):
+    # Classvar is fine here.
+    decoder = SampleDecoder(image_decode="pilrgb")
+
+    cookers = [
+        Cooker(cook_aux_primary_cache, has_subflavors={"crude_type": "aux_random_access"}),
+    ]
+
+    @stateless
+    def postencode_sample(self, sample: LazyTextSample) -> TextSample:
+        assert isinstance(sample, LazyTextSample)
+        return TextSample.derive_from(
+            sample,
+            text=sample.txt + "|" + sample.next_txt.get(),
+        )
+
+    def select_samples_to_pack(self, samples: List[LazyTextSample]) -> List[List[LazyTextSample]]:
+        return [[sample] for sample in samples]
+
+    @stateless
+    def pack_selected_samples(self, samples: List[TextSample]) -> TextSample:
+        assert len(samples) == 1
+        return samples[0]
 
     def batch(self, samples: List[TextSample]) -> TextBatch:
         return TextBatch(
@@ -484,6 +518,75 @@ class TestDataset(unittest.TestCase):
                 batch_size=2,
                 worker_config=worker_config,
                 task_encoder=CookingTaskEncoder(),
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                packing_buffer_size=2,
+            ),
+            checkpoint_every_sec=0,
+            checkpoint_every_min_n_samples=1,
+            cache_pool=FileStoreCachePool(
+                parent_cache_dir=self.dataset_path / "cache",
+                num_workers=1,
+            ),
+        )
+
+        loader.restore_state_rank(state)
+
+        samples_restored = [s.__keys__ for idx, s in zip(range(100, 200), loader)]
+        print(samples_restored)
+
+        assert all([a == b for a, b in zip(samples_after, samples_restored)])
+
+    def test_aux_random_access_with_cache_and_postencode(self):
+        torch.manual_seed(42)
+        worker_config = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=2,
+        )
+
+        print("Initializing dataset")
+
+        loader = get_savable_loader(
+            get_train_dataset(
+                self.aux_mds_path,
+                batch_size=2,
+                worker_config=worker_config,
+                task_encoder=LazyCookingTaskEncoderWithPostencode(),
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                packing_buffer_size=2,
+            ),
+            checkpoint_every_sec=0,
+            checkpoint_every_min_n_samples=1,
+            cache_pool=FileStoreCachePool(
+                parent_cache_dir=self.dataset_path / "cache",
+                num_workers=1,
+            ),
+        )
+
+        print("Iterating from dataset")
+        samples = [s.txts for idx, s in zip(range(100), loader)]
+        for idx, txts in enumerate(samples):
+            for txt in txts:
+                m = re.fullmatch(r"<([0-9]*)\|aux\|([0-9]*)>\|([0-9]*)", txt)
+                assert m, f"Invalid aux text: {txt}"
+                assert int(m.group(2)) == int(m.group(1)) + 100
+                assert int(m.group(3)) == (int(m.group(1)) + 1) % 55
+
+        print(samples)
+
+        state = loader.save_state_rank()
+
+        samples_after = [s.__keys__ for idx, s in zip(range(100, 200), loader)]
+        print(samples_after)
+
+        loader = get_savable_loader(
+            get_train_dataset(
+                self.aux_mds_path,
+                batch_size=2,
+                worker_config=worker_config,
+                task_encoder=LazyCookingTaskEncoderWithPostencode(),
                 shuffle_buffer_size=None,
                 max_samples_per_sequence=None,
                 packing_buffer_size=2,
