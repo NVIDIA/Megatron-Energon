@@ -21,6 +21,7 @@ try:
 except ImportError as e:
     AV_DECODE_AVAILABLE = False
     MISSING_DEPENDENCY = str(e)
+    Fastseek = None
 
 from megatron.energon.av.av_data import AVData
 
