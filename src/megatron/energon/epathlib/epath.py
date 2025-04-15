@@ -125,6 +125,10 @@ class EPath:
         with self.open("rb") as f:
             return f.read()
 
+    def write_bytes(self, data: bytes) -> None:
+        with self.open("wb") as f:
+            f.write(data)
+
     @property
     def name(self) -> str:
         return self.internal_path.name

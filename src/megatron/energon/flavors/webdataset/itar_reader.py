@@ -1,16 +1,34 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+import io
+import os
+import time
 from abc import ABC, abstractmethod
 from bisect import bisect_right
 from typing import Callable, Dict, List, Optional, Tuple, Union, overload
 
 from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.epathlib import EPath
+from megatron.energon.flavors.webdataset import itar
 from megatron.energon.flavors.webdataset.config import skip_meta_re, split_name_re
+from megatron.energon.flavors.webdataset.fast_read import FileRandomReadPool
 from megatron.energon.flavors.webdataset.indexing import JoinIndexReader
-from megatron.energon.flavors.webdataset.itar import CachedItarOffsetReader, ITarFile
+from megatron.energon.flavors.webdataset.itar import (
+    CachedItarOffsetReader,
+    DirectCachedItarOffsetReader,
+    ITarFile,
+)
 from megatron.energon.flavors.webdataset.structs import FilteredSample, ShardInfo
+
+CLEAR_OS_FS_CACHE = os.environ.get("CLEAR_OS_FS_CACHE", "0") == "1"
+ITAR_CACHE_WITH_OFFSET = os.environ.get("ITAR_CACHE_WITH_OFFSET", "0") == "1"
+FAST_READ_ENABLED = os.environ.get("FAST_READ_ENABLED", "0") == "1"
+DISABLE_FILE_HANDLE_CACHE = os.environ.get("DISABLE_FILE_HANDLE_CACHE", "0") == "1"
+
+STATS_TOTAL_READ_TIME_NS = 0
+STATS_TOTAL_FILES_COUNT = 0
+STATS_TOTAL_CONTENT_BYTES_READ = 0
 
 
 @dataclass_slots
@@ -63,8 +81,9 @@ class ITarReader(ABC):
         self.tar_filenames = tar_filenames
         self.tar_filepaths = tar_filepaths
         self.part_filter = part_filter
+        self.read_pool = FileRandomReadPool(cache_size=1 if DISABLE_FILE_HANDLE_CACHE else None)
         self.itar_files_cache = {}
-        self.itar_cache_size = itar_cache_size
+        self.itar_cache_size = 1 if DISABLE_FILE_HANDLE_CACHE else itar_cache_size
         self.sample_filter = sample_filter
 
     @abstractmethod
@@ -84,16 +103,27 @@ class ITarReader(ABC):
         """
         raise NotImplementedError
 
-    def _get_itarfile_cached(self, tar_file_id: int) -> ITarFile:
+    def _get_itarfile_cached(self, tar_file_id: int, offset: int, size: int) -> ITarFile:
         """
         Get the ITarFile object for the given tar file id.
         If the file is not already open, open it. If we exceed
         the global cache limit, close the least recently used file.
         """
-        if tar_file_id not in self.itar_files_cache:
+        if ITAR_CACHE_WITH_OFFSET:
+            key = (tar_file_id, offset)
+        else:
+            key = tar_file_id
+        tar_file = self.itar_files_cache.get(key)
+        if tar_file is None:
+            start_time = time.perf_counter_ns()
             file_object = self.tar_filepaths[tar_file_id].open(mode="rb")
+            if CLEAR_OS_FS_CACHE:
+                os.posix_fadvise(file_object.fileno(), 0, 0, os.POSIX_FADV_DONTNEED)
+                os.posix_fadvise(file_object.fileno(), 0, 0, os.POSIX_FADV_NORMAL)
             tar_file = ITarFile.open(fileobj=file_object, mode="r:")
-            self.itar_files_cache[tar_file_id] = tar_file
+            itar.STATS_OPEN_TIME_NS += time.perf_counter_ns() - start_time
+            itar.STATS_NUMBER_OF_OPENS += 1
+            self.itar_files_cache[key] = tar_file
 
         # If we hit the limit of open files, close the least recently used file
         while len(self.itar_files_cache) > self.itar_cache_size:
@@ -104,7 +134,15 @@ class ITarReader(ABC):
             self.itar_files_cache[lru_key].close()
             del self.itar_files_cache[lru_key]
 
-        return self.itar_files_cache[tar_file_id]
+        if ITAR_CACHE_WITH_OFFSET:
+            tar_file = self.itar_files_cache.pop(key)
+            # Position the tar file at the correct offset
+            tar_file.offset = offset
+            self.itar_files_cache[(tar_file_id, offset + size)] = tar_file
+        else:
+            tar_file = self.itar_files_cache[tar_file_id]
+        tar_file.offset = offset
+        return tar_file
 
     @overload
     def __getitem__(self, key: int) -> Optional[FilteredSample]: ...
@@ -125,19 +163,32 @@ class ITarReader(ABC):
         else:
             raise TypeError("Invalid argument type for __getitem__")
 
+        global STATS_TOTAL_READ_TIME_NS, STATS_TOTAL_FILES_COUNT, STATS_TOTAL_CONTENT_BYTES_READ
+
+        start_time = time.perf_counter_ns()
+
         sample = self._get_itar_sample_pointer(idx)
 
         # Open the tar file (cached)
-        tar_file = self._get_itarfile_cached(sample.tar_file_id)
+        if FAST_READ_ENABLED:
+            sample_data = self.read_pool.read(
+                str(self.tar_filepaths[sample.tar_file_id]), sample.byte_offset, sample.byte_size
+            )
+            assert len(sample_data) == sample.byte_size
+            tar_file = ITarFile.open(fileobj=io.BytesIO(sample_data), mode="r:")
+            byte_end = len(sample_data)
+        else:
+            tar_file = self._get_itarfile_cached(
+                sample.tar_file_id, sample.byte_offset, sample.byte_size
+            )
+            byte_end = sample.byte_offset + sample.byte_size
         shard_name = self.tar_filenames[sample.tar_file_id]
         sample_base_name = None
         sample_name = None
         group_parts: Dict[str, bytes] = {}
 
         # Position the tar file at the correct offset
-        tar_file.offset = sample.byte_offset
-
-        while tar_file.offset < sample.byte_offset + sample.byte_size:
+        while tar_file.offset < byte_end:
             tarinfo = tar_file.next()
             if tarinfo is None:
                 raise ValueError(
@@ -167,8 +218,12 @@ class ITarReader(ABC):
                     )
 
             if self.part_filter is None or self.part_filter(cur_ext):
-                member_bytes = tar_file.extractfile(tarinfo).read()
+                member_bytes = tar_file.read_bytes(tarinfo)
                 group_parts[cur_ext] = member_bytes
+
+        STATS_TOTAL_READ_TIME_NS += time.perf_counter_ns() - start_time
+        STATS_TOTAL_FILES_COUNT += len(group_parts)
+        STATS_TOTAL_CONTENT_BYTES_READ += sum(len(v) for v in group_parts.values())
 
         if sample_base_name is None:
             raise ValueError(f"No valid files found in sample {idx}")
@@ -324,7 +379,14 @@ class ShardInfosITarReader(ITarReader):
         tar_filepaths = [p[1] for p in cur_tar_files.values()]
 
         # Instantiate cached reader for the .tar.idx files
-        self.cached_offset_reader = CachedItarOffsetReader(cache_size=itar_cache_size)
+        if FAST_READ_ENABLED:
+            self.cached_offset_reader = DirectCachedItarOffsetReader(
+                cache_size=1 if DISABLE_FILE_HANDLE_CACHE else None
+            )
+        else:
+            self.cached_offset_reader = CachedItarOffsetReader(
+                cache_size=1 if DISABLE_FILE_HANDLE_CACHE else itar_cache_size
+            )
 
         super().__init__(
             base_path=base_path,
@@ -355,6 +417,7 @@ class ShardInfosITarReader(ITarReader):
         byte_offset, byte_size = self.cached_offset_reader.get_itar_byte_offset(
             shard.path, sample_idx_in_shard_file
         )
+        assert byte_size > 0
 
         return ITarSamplePointer(
             tar_file_id=self.shard_tar_file_idxs[shard_idx],

@@ -67,6 +67,7 @@ def get_loader(
     dataset: SavableDataset[T],
     *,
     worker_config: Optional[WorkerConfig] = None,
+    gc_collect_every_n_steps: int = GC_DEFAULT_EVERY_N_ITER,
     prefetch_factor: int = 2,
 ) -> BasicDataLoader[T]:
     """
@@ -90,4 +91,8 @@ def get_loader(
                 "Passing a worker_config to get_loader() is deprecated and will have no effect."
             )
 
-    return BasicDataLoader(dataset, prefetch_factor=prefetch_factor)
+    return BasicDataLoader(
+        dataset,
+        gc_collect_every_n_steps=gc_collect_every_n_steps,
+        prefetch_factor=prefetch_factor,
+    )
