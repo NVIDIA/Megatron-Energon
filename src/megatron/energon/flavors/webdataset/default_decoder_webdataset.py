@@ -26,7 +26,7 @@ class DefaultDecoderWebdatasetFactory(DefaultGenericWebdatasetFactory[T_sample],
         self,
         path: EPath,
         *,
-        decoder: Optional[SampleDecoder] = None,
+        decoder: Optional[SampleDecoder] = SampleDecoder(),
         **kwargs,
     ):
         """

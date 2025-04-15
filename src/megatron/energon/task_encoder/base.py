@@ -261,7 +261,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
     _registered_cookers: List[Cooker[T_sample]]
 
     #: The decoder to use for decoding samples. Set manually as needed to override options.
-    decoder: SampleDecoder
+    decoder: Optional[SampleDecoder] = SampleDecoder()
 
     @stateless
     def cook_crude_sample(
@@ -874,9 +874,6 @@ class DefaultTaskEncoder(
     _raw_batch_type: Optional[Type[T_raw_batch]]
     _batch_type: Optional[Type[T_batch]]
 
-    #: The default decoder, may be overridden by the user.
-    decoder = SampleDecoder()
-
     def __init__(
         self,
         *,
@@ -984,6 +981,10 @@ class AugmentTaskEncoder(
             task_encoder: The delegate task encoder. All calls will by default be forwarded to this.
         """
         self._task_encoder = task_encoder
+
+    @property
+    def decoder(self) -> SampleDecoder:
+        return self._task_encoder.decoder
 
     def encode_sample(self, sample: T_sample) -> T_encoded_sample:
         return self._task_encoder.encode_sample(sample)
