@@ -280,8 +280,12 @@ class AVDecoder:
             for start_time, end_time in audio_clip_ranges:
                 # Seek near start time, but rounded down to the nearest frame
                 input_container.seek(int(start_time * av.time_base))
-                desired_duration = end_time - start_time
-                desired_sample_count = int(desired_duration * audio_sample_rate + 0.5)
+
+                if end_time != float("inf"):
+                    desired_duration = end_time - start_time
+                    desired_sample_count = int(desired_duration * audio_sample_rate + 0.5)
+                else:
+                    desired_sample_count = None
 
                 clip_start_time = None
                 clip_end_time = None
@@ -326,7 +330,10 @@ class AVDecoder:
                         projected_total_samples = decoded_sample_count + additional_samples
                         projected_total_samples = decoded_sample_count + additional_samples
 
-                        if 0 < abs(projected_total_samples - desired_sample_count) < 2:
+                        if (
+                            desired_sample_count is not None
+                            and 0 < abs(projected_total_samples - desired_sample_count) < 2
+                        ):
                             # We are within 2 samples of the desired duration, let's adjust
                             # the last frame so that we get the desired duration
                             additional_samples = desired_sample_count - decoded_sample_count
