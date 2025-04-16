@@ -276,6 +276,35 @@ class TestAudioDecode(unittest.TestCase):
             for audio_tensor in av_data.audio_clips
         ), "Energon decoded WAV file has wrong shape."
 
+    def test_decode_wav_same_shape(self):
+        """Test decoding a WAV file."""
+        # Skip WAV test if file doesn't exist
+        if not os.path.exists("tests/data/test_audio.wav"):
+            self.skipTest("WAV test file not found")
+            return
+
+        with open("tests/data/test_audio.wav", "rb") as f:
+            raw_bytes = f.read()
+            stream = io.BytesIO(raw_bytes)
+
+        av_decoder = AVDecoder(stream)
+        av_data = get_clips_uniform(
+            av_decoder=av_decoder,
+            num_clips=10,
+            clip_duration_seconds=0.9954783485892385,
+            request_audio=True,
+        )
+        audio_sps = av_decoder.get_audio_samples_per_second()
+
+        print(f"SPS: {audio_sps}")
+        for audio_tensor in av_data.audio_clips:
+            print(audio_tensor.shape)
+
+        assert all(
+            audio_tensor.shape == av_data.audio_clips[0].shape
+            for audio_tensor in av_data.audio_clips
+        ), "Audio clips have different shapes"
+    
     def test_wav_decode_against_soundfile(self):
         """Test decoding a WAV file against the soundfile library."""
 

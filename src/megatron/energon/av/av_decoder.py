@@ -281,10 +281,18 @@ class AVDecoder:
                 # Seek near start time, but rounded down to the nearest frame
                 input_container.seek(int(start_time * av.time_base))
 
+                if end_time != float("inf"):
+                    desired_duration = end_time - start_time
+                    desired_sample_count = int(desired_duration * audio_sample_rate + 0.5)
+                else:
+                    desired_sample_count = None
+
                 clip_start_time = None
                 clip_end_time = None
 
                 decoded_samples = []
+                decoded_sample_count = 0
+
                 previous_frame = None
                 for frame in input_container.decode(audio=0):
                     assert frame.pts is not None, "Audio frame has no PTS timestamp"
@@ -306,6 +314,7 @@ class AVDecoder:
                                 :, int((start_time - prev_start_time) * audio_sample_rate + 0.5) :
                             ]
                             decoded_samples.append(prev_frame_array)
+                            decoded_sample_count += prev_frame_array.shape[1]
                             clip_start_time = start_time
                             clip_end_time = prev_start_time + cur_frame_duration
                         else:
@@ -315,15 +324,29 @@ class AVDecoder:
                     if cur_frame_time + cur_frame_duration >= end_time:
                         # Crop the last frame to the end time
                         last_frame_array = audio_frame_array(frame)
-                        last_frame_array = last_frame_array[
-                            :, : int((end_time - cur_frame_time) * audio_sample_rate + 0.5)
-                        ]
+                        additional_samples = int(
+                            (end_time - cur_frame_time) * audio_sample_rate + 0.5
+                        )
+                        projected_total_samples = decoded_sample_count + additional_samples
+                        projected_total_samples = decoded_sample_count + additional_samples
+
+                        if (
+                            desired_sample_count is not None
+                            and 0 < abs(projected_total_samples - desired_sample_count) < 2
+                        ):
+                            # We are within 2 samples of the desired duration, let's adjust
+                            # the last frame so that we get the desired duration
+                            additional_samples = desired_sample_count - decoded_sample_count
+
+                        last_frame_array = last_frame_array[:, :additional_samples]
                         decoded_samples.append(last_frame_array)
+                        decoded_sample_count += last_frame_array.shape[1]
                         clip_end_time = end_time
                         break
 
                     frame_nd = audio_frame_array(frame)  # (channels, samples)
                     decoded_samples.append(frame_nd)
+                    decoded_sample_count += frame_nd.shape[1]
                     clip_end_time = cur_frame_time + cur_frame_duration
 
                 if decoded_samples:
@@ -444,6 +467,18 @@ class AVDecoder:
             assert audio_stream.sample_rate is not None
             return int(audio_stream.sample_rate)
 
+    def has_audio_stream(self) -> bool:
+        """Check if the stream has an audio stream."""
+        self.stream.seek(0)
+        with av.open(self.stream) as input_container:
+            return len(input_container.streams.audio) > 0
+
+    def has_video_stream(self) -> bool:
+        """Check if the stream has a video stream."""
+        self.stream.seek(0)
+        with av.open(self.stream) as input_container:
+            return len(input_container.streams.video) > 0
+
     @overload
     def get_duration(self, get_frame_count: Literal[True]) -> tuple[float, int]: ...
 
@@ -509,6 +544,9 @@ class AVDecoder:
 
         return float(duration), num_frames
 
+    def __repr__(self):
+        return f"AVDecoder(stream={self.stream!r})"
+
 
 class AVWebdatasetDecoder:
     """A decoder class for audio and video data that provides a consistent interface for decoding media files.
@@ -571,7 +609,7 @@ class AVWebdatasetDecoder:
         """
         if not any(
             key == ext or key.endswith("." + ext)
-            for ext in ("mp4", "mov", "webm", "mkv", "flac", "mp3", "wav")
+            for ext in ("mp4", "avi", "mov", "webm", "mkv", "flac", "mp3", "wav")
         ):
             return None
 
