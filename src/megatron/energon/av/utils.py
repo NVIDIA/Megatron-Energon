@@ -1,7 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from typing import Optional
+from typing import Optional, Union
 
 import numpy as np
 import torch
@@ -63,7 +63,7 @@ def get_single_frames_uniform(
     num_frames: int,
     video_out_frame_size: Optional[tuple[int, int]] = None,
     return_timestamps: bool = False,
-) -> torch.Tensor | tuple[torch.Tensor, list[float]]:
+) -> Union[torch.Tensor, tuple[torch.Tensor, list[float]]]:
     """Extracts a sequence of clips, such that each clip contains
     only a single frame and the frames are equidistant from each other.
 
