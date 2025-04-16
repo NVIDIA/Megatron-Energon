@@ -281,7 +281,7 @@ class AVDecoder:
                 # Seek near start time, but rounded down to the nearest frame
                 input_container.seek(int(start_time * av.time_base))
                 desired_duration = end_time - start_time
-                desired_sample_count = int(desired_duration * audio_sample_rate)
+                desired_sample_count = int(desired_duration * audio_sample_rate + 0.5)
 
                 clip_start_time = None
                 clip_end_time = None
