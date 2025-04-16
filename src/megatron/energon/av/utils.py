@@ -1,7 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from typing import Optional, Union
+from typing import List, Literal, Optional, Tuple, Union, overload
 
 import numpy as np
 import torch
@@ -58,9 +58,30 @@ def get_clips_uniform(
     )
 
 
+@overload
+def get_single_frames_uniform(
+    av_decoder: "AVDecoder",
+    num_frames: int,
+    *,
+    video_out_frame_size: Optional[Tuple[int, int]] = None,
+    return_timestamps: Literal[False] = False,
+) -> torch.Tensor: ...
+
+
+@overload
+def get_single_frames_uniform(
+    av_decoder: "AVDecoder",
+    num_frames: int,
+    *,
+    video_out_frame_size: Optional[Tuple[int, int]] = None,
+    return_timestamps: Literal[True],
+) -> Tuple[torch.Tensor, List[float]]: ...
+
+
 def get_single_frames_uniform(
     av_decoder: AVDecoder,
     num_frames: int,
+    *,
     video_out_frame_size: Optional[tuple[int, int]] = None,
     return_timestamps: bool = False,
 ) -> Union[torch.Tensor, tuple[torch.Tensor, list[float]]]:
