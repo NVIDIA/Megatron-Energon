@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from abc import ABC, abstractmethod
-from typing import Any, Generic, TypeVar
+from typing import Any, Callable, Generic, TypeVar
 
 from megatron.energon.dataclass_slots import dataclass_slots
 
@@ -39,6 +39,31 @@ class Lazy(Generic[T]):
         Get the lazy data now.
         """
         ...
+
+
+@dataclass_slots
+class MockLazy(Lazy[T]):
+    """
+    Mock object,
+    """
+
+    ds: FileStore
+    fname: str
+    pool: "CachePool"
+
+    get_fn: Callable[[str], T]
+
+    def __init__(self, fname: str, get_fn: Callable[[str], T]):
+        self.ds = None
+        self.fname = fname
+        self.pool = None
+        self.get_fn = get_fn
+
+    def get(self) -> T:
+        """
+        Get the lazy data now.
+        """
+        return self.get_fn(self.fname)
 
 
 class CachePool(ABC):

@@ -374,3 +374,6 @@ class FileStoreCachePool(CachePool):
             self.current_cache_count -= 1
             # Notify waiting threads that space is now available
             self._cache_space_available.notify_all()
+
+    def __str__(self):
+        return f"FileStoreCachePool(cache_dir={self.cache_dir}, max_cache_size={self.max_cache_size}, max_cache_count={self.max_cache_count}, method={self.method}, current_cache_size={self.current_cache_size}, current_cache_count={self.current_cache_count})"

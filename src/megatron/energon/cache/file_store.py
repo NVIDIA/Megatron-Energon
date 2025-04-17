@@ -25,6 +25,9 @@ class DecodeFileStore(FileStore[Any]):
     def get_path(self) -> str:
         return self.inner_reader.get_path()
 
+    def __str__(self):
+        return f"DecodeFileStore(inner_reader={self.inner_reader}, decoder={self.decoder})"
+
 
 class SystemFileStore(FileStore[bytes]):
     """A FileStore that reads files directly from the file system."""
@@ -52,3 +55,6 @@ class SystemFileStore(FileStore[bytes]):
     def get_path(self) -> str:
         """Returns the path to the dataset."""
         return str(self.base_dir)
+
+    def __str__(self):
+        return f"SystemFileStore(base_dir={self.base_dir})"
