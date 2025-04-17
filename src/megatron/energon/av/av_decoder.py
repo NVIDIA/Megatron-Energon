@@ -538,7 +538,6 @@ class AVDecoder:
                     video_start_pts = 0.0
 
                 video_duration = video_stream.duration
-                print(f"Video duration: {video_duration}")
 
             if video_duration is None:
                 # If duration isn't found in header the whole video is decoded to
