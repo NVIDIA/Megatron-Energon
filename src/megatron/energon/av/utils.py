@@ -58,7 +58,7 @@ def get_clips_uniform(
         # Special case of single frames: End point should be start of last frame
         video_fps = av_decoder.get_video_fps()
         video_spf = 1 / video_fps
-        last_start_time = total_duration - video_spf * 1.5
+        last_start_time = total_duration - video_spf * 0.9
     else:
         last_start_time = total_duration - clip_duration_seconds
     clips = [
