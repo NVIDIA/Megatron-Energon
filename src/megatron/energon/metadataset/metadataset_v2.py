@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Literal, Optional, Sequence, Type, Union
 
 from megatron.energon.cache import FileStore
+from megatron.energon.cache.file_store import SystemFileStore
 from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.dataset_config import load_config
 from megatron.energon.epathlib import EPath
@@ -45,6 +46,20 @@ class AuxDatasetReference:
 
 
 @dataclass_slots
+class AuxFilesystemReference:
+    fs_path: Union[str, EPath]
+
+    def post_initialize(self, mds_path: Optional[EPath] = None) -> None:
+        assert mds_path is not None
+        if not isinstance(self.fs_path, EPath):
+            self.fs_path = mds_path.parent / self.fs_path
+
+    def get_file_store(self) -> FileStore:
+        assert isinstance(self.fs_path, EPath), "Missing call to post_initialize"
+        return SystemFileStore(self.fs_path)
+
+
+@dataclass_slots
 class DatasetReference(DatasetLoaderInterface):
     path: Union[str, EPath]
 
@@ -56,8 +71,9 @@ class DatasetReference(DatasetLoaderInterface):
     split_config: str = "split.yaml"
 
     #: Auxiliary datasets. May only be specified for crude datasets for cooking. Cooking will get
-    # these references to load data from.
-    aux: Optional[Dict[str, AuxDatasetReference]] = None
+    # these references to load data from. If specified as string, it will be interpreted as a
+    # dataset path.
+    aux: Optional[Dict[str, Union[str, AuxDatasetReference, AuxFilesystemReference]]] = None
 
     _dataset: Optional[DatasetLoaderInterface] = None
 
@@ -88,8 +104,15 @@ class DatasetReference(DatasetLoaderInterface):
             )
             self._dataset.post_initialize()
             if self.aux is not None:
+                new_aux = {}
                 for k, v in self.aux.items():
+                    if isinstance(v, str):
+                        v = AuxDatasetReference(fs_path=v)
+                    else:
+                        assert isinstance(v, (AuxDatasetReference, AuxFilesystemReference))
+                    new_aux[k] = v
                     v.post_initialize(mds_path)
+                self.aux = new_aux
         else:
             raise FileNotFoundError(self.path)
 
