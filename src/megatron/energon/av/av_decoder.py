@@ -542,16 +542,22 @@ class AVDecoder:
             if video_duration is None:
                 # If duration isn't found in header the whole video is decoded to
                 # determine the duration.
-                packets = [p for p in input_container.demux(video=0) if p.pts is not None]
-                num_frames = len(packets)
-                video_duration = packets[-1].pts + packets[-1].duration
+                num_frames = 0
+                last_packet = None
+                for packet in input_container.demux(video=0):
+                    if packet.pts is not None:
+                        num_frames += 1
+                        last_packet = packet
+
+                if last_packet is not None and last_packet.duration is not None:
+                    assert last_packet.pts is not None
+                    video_duration = last_packet.pts + last_packet.duration
 
             if video_duration is not None and video_stream.time_base is not None:
                 duration = int(video_duration - video_start_pts) * video_stream.time_base
 
             if get_frame_count and num_frames is None:
-                packets = [p for p in input_container.demux(video=0) if p.pts is not None]
-                num_frames = len(packets)
+                num_frames = sum(1 for p in input_container.demux(video=0) if p.pts is not None)
 
         return float(duration) if duration is not None else None, num_frames
 
