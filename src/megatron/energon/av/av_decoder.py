@@ -479,14 +479,41 @@ class AVDecoder:
         with av.open(self.stream) as input_container:
             return len(input_container.streams.video) > 0
 
-    @overload
-    def get_duration(self, get_frame_count: Literal[True]) -> tuple[float, int]: ...
+    def get_audio_duration(self) -> Optional[float]:
+        """Get the duration of the audio stream.
+
+        Returns:
+            The duration of the audio stream in seconds
+        """
+
+        self.stream.seek(0)
+
+        with av.open(self.stream) as input_container:
+            if input_container.streams.audio:
+                audio_time_base = input_container.streams.audio[0].time_base
+                audio_start_pts = input_container.streams.audio[0].start_time
+                if audio_start_pts is None:
+                    audio_start_pts = 0.0
+
+                audio_duration = input_container.streams.audio[0].duration
+                if audio_time_base is not None and audio_duration is not None:
+                    duration = int(audio_duration - audio_start_pts) * audio_time_base
+                    return float(duration)
+
+        return None
 
     @overload
-    def get_duration(self, get_frame_count: bool = False) -> tuple[float, Optional[int]]: ...
+    def get_video_duration(self, get_frame_count: Literal[True]) -> tuple[Optional[float], int]: ...
 
-    def get_duration(self, get_frame_count: bool = False) -> tuple[float, Optional[int]]:
-        """Get the duration of the video and/or audio stream. If both lengths are found, the maximum is returned.
+    @overload
+    def get_video_duration(
+        self, get_frame_count: bool = False
+    ) -> tuple[Optional[float], Optional[int]]: ...
+
+    def get_video_duration(
+        self, get_frame_count: bool = False
+    ) -> tuple[Optional[float], Optional[int]]:
+        """Get the duration of the video stream.
 
         Args:
             get_frame_count: Whether to return the number of frames in the video. This is a more costly operation.
@@ -496,8 +523,8 @@ class AVDecoder:
         """
 
         video_duration = None
-        audio_duration = None
         num_frames = None
+        duration = None
 
         self.stream.seek(0)  # Reset the video stream so that pyav can read the entire container
 
@@ -511,38 +538,23 @@ class AVDecoder:
                     video_start_pts = 0.0
 
                 video_duration = video_stream.duration
+                print(f"Video duration: {video_duration}")
 
-            if input_container.streams.audio:
-                audio_time_base = input_container.streams.audio[0].time_base
-                audio_start_pts = input_container.streams.audio[0].start_time
-                if audio_start_pts is None:
-                    audio_start_pts = 0.0
-
-                audio_duration = input_container.streams.audio[0].duration
-
-            if audio_duration is None and video_duration is None:
+            if video_duration is None:
                 # If duration isn't found in header the whole video is decoded to
                 # determine the duration.
                 packets = [p for p in input_container.demux(video=0) if p.pts is not None]
                 num_frames = len(packets)
                 video_duration = packets[-1].pts + packets[-1].duration
 
-            # Take the largest duration of either video or audio duration
-            if audio_duration is not None and video_duration is not None:
-                duration = max(
-                    int(video_duration - video_start_pts) * video_stream.time_base,
-                    int(audio_duration - audio_start_pts) * audio_time_base,
-                )
-            elif video_duration is not None:
+            if video_duration is not None and video_stream.time_base is not None:
                 duration = int(video_duration - video_start_pts) * video_stream.time_base
-            elif audio_duration is not None:
-                duration = int(audio_duration - audio_start_pts) * audio_time_base
 
             if get_frame_count and num_frames is None:
                 packets = [p for p in input_container.demux(video=0) if p.pts is not None]
                 num_frames = len(packets)
 
-        return float(duration), num_frames
+        return float(duration) if duration is not None else None, num_frames
 
     def __repr__(self):
         return f"AVDecoder(stream={self.stream!r})"
