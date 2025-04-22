@@ -25,13 +25,6 @@ except ImportError as e:
 from megatron.energon.av.av_data import AVData
 
 
-def initialize_av_container(input_container: av.container.InputContainer) -> None:
-    for stream in input_container.streams:
-        cc = stream.codec_context
-        cc.thread_type = "NONE"
-        cc.thread_count = 0
-
-
 class AVDecoder:
     """A class that provides a flexible interface for decoding audio and video data.
 
@@ -655,3 +648,18 @@ class AVWebdatasetDecoder:
             )
         else:
             raise ValueError(f"Invalid av_decode value: {self.av_decode}")
+
+
+def initialize_av_container(input_container: av.container.InputContainer) -> None:
+    """Every PyAV container should be initialized with this function.
+
+    This function ensures that no additional threads are created.
+    This is to avoid deadlocks in ffmpeg when when deallocating the container.
+    Furthermore, we cannot have multiple threads before forking the process when
+    using torch data loaders with multiple workers.
+    """
+
+    for stream in input_container.streams:
+        cc = stream.codec_context
+        cc.thread_type = "NONE"
+        cc.thread_count = 0
