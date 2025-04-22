@@ -12,7 +12,6 @@ import unittest
 import warnings
 from collections import Counter
 from pathlib import Path
-from pprint import pprint
 from typing import Any, Iterable
 
 import torch
@@ -730,7 +729,7 @@ class TestDataset(unittest.TestCase):
             "data_parallel_group": None,
         }
         print("loader.config():")
-        pprint(loader.config(), indent=4)
+        print(loader.config())
         print()
         reference_config = {
             "type": "SavableDataLoader",
@@ -835,7 +834,6 @@ class TestDataset(unittest.TestCase):
                                                 },
                                                 "sample_loader": "megatron.energon.flavors.webdataset.default_generic_webdataset.DefaultGenericWebdatasetFactory.__init__.<locals>.<lambda>",
                                                 "image_decode": "torchrgb",
-                                                "ignore_decoder_errors": False,
                                                 "av_decode": "AVDecoder",
                                                 "video_decode_audio": False,
                                             },
@@ -928,7 +926,6 @@ class TestDataset(unittest.TestCase):
                                                 },
                                                 "sample_loader": "megatron.energon.flavors.webdataset.default_generic_webdataset.DefaultGenericWebdatasetFactory.__init__.<locals>.<lambda>",
                                                 "image_decode": "torchrgb",
-                                                "ignore_decoder_errors": False,
                                                 "av_decode": "AVDecoder",
                                                 "video_decode_audio": False,
                                             },
