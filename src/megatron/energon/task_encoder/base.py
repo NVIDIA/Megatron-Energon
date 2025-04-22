@@ -297,7 +297,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
 
             raise NotImplementedError(
                 "You are using crude samples but not providing a way to cook them: "
-                f"Sample {sample}, "
+                f"Sample key={sample['__key__']}, subflavors={sample['__subflavors__']}, "
                 f"self.cookers={self.cookers}"
             )
         else:
