@@ -75,23 +75,8 @@ class TestVideoDecode(unittest.TestCase):
 
     def setUp(self):
         """Set up test fixtures."""
-        import inspect
-
-        import psutil
-
-        print(
-            f"Threads at line {inspect.currentframe().f_lineno}:",
-            [thread.id for thread in psutil.Process().threads()],
-        )
-
         logging.basicConfig(stream=sys.stderr, level=logging.INFO)
         self.decode_baseline_video_pyav()
-
-        print(
-            f"Threads at line {inspect.currentframe().f_lineno}:",
-            [thread.id for thread in psutil.Process().threads()],
-        )
-
         self.loaders = []  # Keep track of loaders for cleanup
 
     def tearDown(self):
@@ -151,27 +136,11 @@ class TestVideoDecode(unittest.TestCase):
 
     def test_video_audio_sync(self):
         """Test decoding video frames and audio clips together."""
-        import inspect
-
-        import psutil
-
-        print(
-            f"Threads at line {inspect.currentframe().f_lineno}:",
-            [thread.id for thread in psutil.Process().threads()],
-        )
-
-        print_python_thread_stacks()
-
         with open("tests/data/sync_test.mp4", "rb") as f:
             raw_bytes = f.read()
             stream = io.BytesIO(raw_bytes)
 
         av_decoder = AVDecoder(stream)
-
-        print(
-            f"Threads at line {inspect.currentframe().f_lineno}:",
-            [thread.id for thread in psutil.Process().threads()],
-        )
 
         # Extract a single frame every 2 seconds and an audio clip (0.05 seconds long) at the same time.
         # We extract the frames from the sync video that shows the full white circle on the left,
@@ -184,11 +153,6 @@ class TestVideoDecode(unittest.TestCase):
             video_unit="seconds",
             audio_unit="seconds",
             video_out_frame_size=None,
-        )
-
-        print(
-            f"Threads at line {inspect.currentframe().f_lineno}:",
-            [thread.id for thread in psutil.Process().threads()],
         )
 
         # We drop the first two extracted frames because the click sequence hasn't started yet
@@ -208,11 +172,6 @@ class TestVideoDecode(unittest.TestCase):
 
         # Check that the first audio clip has the click sound
         assert (audio_clips[0] > 0.5).any(), "Audio click not found"
-
-        print(
-            f"Threads at line {inspect.currentframe().f_lineno}:",
-            [thread.id for thread in psutil.Process().threads()],
-        )
 
         # Check that all the audio clips are the same (close value)
         for audio_clip in audio_clips:
