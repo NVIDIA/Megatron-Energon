@@ -35,13 +35,30 @@ def get_clips_uniform(
     if not request_video and not request_audio:
         raise ValueError("You must request at least one of video or audio")
 
-    total_duration, _ = av_decoder.get_duration()
+    video_duration = float("inf")
+    audio_duration = float("inf")
+
+    if request_video:
+        video_duration, _ = av_decoder.get_video_duration()
+        if video_duration is None:
+            raise ValueError("No video duration found")
+
+    if request_audio:
+        audio_duration = av_decoder.get_audio_duration()
+        if audio_duration is None:
+            raise ValueError("No audio duration found")
+
+    # Typically, audio and video don't have the exact same duration, so we take the minimum
+    # so that we can safely extract clips of equal duration.
+    total_duration = min(video_duration, audio_duration)
+
+    assert total_duration != float("inf")
 
     if clip_duration_seconds == 0:
         # Special case of single frames: End point should be start of last frame
         video_fps = av_decoder.get_video_fps()
         video_spf = 1 / video_fps
-        last_start_time = total_duration - video_spf * 1.5
+        last_start_time = total_duration - video_spf * 0.9
     else:
         last_start_time = total_duration - clip_duration_seconds
     clips = [

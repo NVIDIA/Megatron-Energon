@@ -34,6 +34,11 @@ def load_video_to_tensor(video_path: str) -> torch.Tensor:
         Tensor of shape [num_frames, channels, height, width]
     """
     container = av.open(video_path)
+    for stream in container.streams:
+        cc = stream.codec_context
+        cc.thread_type = "NONE"
+        cc.thread_count = 0
+
     frames = []
 
     for frame in container.decode(video=0):
@@ -304,7 +309,7 @@ class TestAudioDecode(unittest.TestCase):
             audio_tensor.shape == av_data.audio_clips[0].shape
             for audio_tensor in av_data.audio_clips
         ), "Audio clips have different shapes"
-    
+
     def test_wav_decode_against_soundfile(self):
         """Test decoding a WAV file against the soundfile library."""
 
