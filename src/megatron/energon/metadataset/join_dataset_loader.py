@@ -521,6 +521,8 @@ class JoinDatasetLoader(DatasetLoaderInterface):
             )
         else:
             raise ValueError("Invalid join type")
+        # Remove decoder from kwargs, it is already handled by the inner datasets
+        kwargs.pop("decoder", None)
         return JoinedWebdatasetFactory(
             inner_datasets=inner_datasets,
             training=training,
