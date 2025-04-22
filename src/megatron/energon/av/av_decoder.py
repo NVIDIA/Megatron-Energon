@@ -25,6 +25,13 @@ except ImportError as e:
 from megatron.energon.av.av_data import AVData
 
 
+def initialize_av_container(input_container: av.container.InputContainer) -> None:
+    for stream in input_container.streams:
+        cc = stream.codec_context
+        cc.thread_type = "NONE"
+        cc.thread_count = 0
+
+
 class AVDecoder:
     """A class that provides a flexible interface for decoding audio and video data.
 
@@ -86,17 +93,13 @@ class AVDecoder:
         self.stream.seek(0)  # Reset the video stream so that pyav can read the entire container
 
         with av.open(self.stream) as input_container:
+            initialize_av_container(input_container)
+
             assert len(input_container.streams.video) > 0, (
                 "No video stream found, but video_clips are requested"
             )
 
             video_stream = input_container.streams.video[0]
-
-            # Enable multi-threaded decode for video
-            # TODO: This causes a bug which leads to a deadlock in ffmpeg when deallocating the object.
-            # Thus, disable for now.
-            # video_stream.thread_type = 3
-            video_stream.thread_type = 0
 
             # Pre-calculate timing info for video
             average_rate: Fraction = video_stream.average_rate  # Frames per second
@@ -242,11 +245,13 @@ class AVDecoder:
         self.stream.seek(0)  # Reset the video stream so that pyav can read the entire container
 
         with av.open(self.stream) as input_container:
+            initialize_av_container(input_container)
             assert len(input_container.streams.audio) > 0, (
                 "No audio stream found, but audio_clips are requested"
             )
 
             audio_stream = input_container.streams.audio[0]
+
             audio_sample_rate = audio_stream.sample_rate
 
             assert audio_sample_rate, "Audio streams without sample rate are not supported"
@@ -455,6 +460,7 @@ class AVDecoder:
         """Get the FPS of the video stream."""
         self.stream.seek(0)
         with av.open(self.stream) as input_container:
+            initialize_av_container(input_container)
             video_stream = input_container.streams.video[0]
             assert video_stream.average_rate is not None
             return float(video_stream.average_rate)
@@ -463,6 +469,7 @@ class AVDecoder:
         """Get the number of samples per second of the audio stream."""
         self.stream.seek(0)
         with av.open(self.stream) as input_container:
+            initialize_av_container(input_container)
             audio_stream = input_container.streams.audio[0]
             assert audio_stream.sample_rate is not None
             return int(audio_stream.sample_rate)
@@ -471,12 +478,14 @@ class AVDecoder:
         """Check if the stream has an audio stream."""
         self.stream.seek(0)
         with av.open(self.stream) as input_container:
+            initialize_av_container(input_container)
             return len(input_container.streams.audio) > 0
 
     def has_video_stream(self) -> bool:
         """Check if the stream has a video stream."""
         self.stream.seek(0)
         with av.open(self.stream) as input_container:
+            initialize_av_container(input_container)
             return len(input_container.streams.video) > 0
 
     def get_audio_duration(self) -> Optional[float]:
@@ -489,6 +498,7 @@ class AVDecoder:
         self.stream.seek(0)
 
         with av.open(self.stream) as input_container:
+            initialize_av_container(input_container)
             if input_container.streams.audio:
                 audio_time_base = input_container.streams.audio[0].time_base
                 audio_start_pts = input_container.streams.audio[0].start_time
@@ -529,6 +539,7 @@ class AVDecoder:
         self.stream.seek(0)  # Reset the video stream so that pyav can read the entire container
 
         with av.open(self.stream) as input_container:
+            initialize_av_container(input_container)
             if input_container.streams.video:
                 video_stream = input_container.streams.video[0]
                 assert video_stream.time_base is not None
@@ -635,7 +646,9 @@ class AVWebdatasetDecoder:
         if self.av_decode == "AVDecoder":
             return av_decoder
         elif self.av_decode == "pyav":
-            return av.open(av_decoder.stream)
+            input_container = av.open(av_decoder.stream)
+            initialize_av_container(input_container)
+            return input_container
         elif self.av_decode == "torch":
             return av_decoder.get_frames(
                 video_decode_audio=self.video_decode_audio,
