@@ -29,6 +29,7 @@ from megatron.energon import (
     stateless,
 )
 from megatron.energon.cache import FileStore, FileStoreCachePool, Lazy
+from megatron.energon.cache.base import CachePool
 from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.flavors.base_dataset import Sample
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
@@ -102,7 +103,7 @@ class CookingTaskEncoder(DefaultTaskEncoder[TextSample, TextSample, TextBatch, T
 @stateless
 @cooker(need_cache=True, need_primary=True)
 def cook_aux_primary_cache(
-    sample: dict, primary: FileStore, pkl_source: FileStore, cache: FileStoreCachePool
+    sample: dict, primary: FileStore, pkl_source: FileStore, cache: CachePool
 ) -> LazyTextSample:
     # ds2 is offset by 100
     d = pkl_source[f"{int(sample['txt']) + 100:06d}.txt"]

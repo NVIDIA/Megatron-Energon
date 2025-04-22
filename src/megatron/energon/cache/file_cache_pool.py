@@ -44,6 +44,11 @@ class FileCacheLazy(Lazy[T]):
         assert self._data is not None
         return self._data
 
+    def __del__(self):
+        if self._data is None:
+            # Data was never fetched, still decrement refcount to delete the cache entry
+            self.pool._decrement_refcount_and_cleanup((self.ds, self.fname))
+
 
 @dataclass_slots
 class _PendingTask:
@@ -248,7 +253,8 @@ class FileStoreCachePool(CachePool):
             self.current_cache_size += file_size
             self.current_cache_count += 1
 
-            if self._shutting_down:
+            if self._shutting_down or entry.refcount <= 0:
+                # No more references to this background job, don't write to cache
                 return False
 
         try:
