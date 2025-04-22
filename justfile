@@ -23,7 +23,7 @@ check: dev-sync
 
 # Execute all unit tests
 test: dev-sync
-    uv run -m unittest discover -s tests
+    uv run -m unittest discover -v -s tests
 
 # Build the docs
 docs: dev-sync
