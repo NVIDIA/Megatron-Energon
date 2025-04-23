@@ -68,7 +68,11 @@ class MockLazy(Lazy[T]):
 
 class CachePool(ABC):
     """
-    Abstract base class for cache pools.
+    A cache pool allows to load the needed data in the background and access it later.
+    The most important example being `FileStoreCachePool` which caches data on a local SSD disk.
+
+    To request data, use `get_lazy` to get a `Lazy` object.
+    Then, call `Lazy.get()` to get the data later on.
     """
 
     @abstractmethod

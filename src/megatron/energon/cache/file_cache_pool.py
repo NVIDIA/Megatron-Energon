@@ -278,7 +278,8 @@ class FileStoreCachePool(CachePool):
         """
         key = (ds, fname)
         with self._lock:
-            assert not self._shutting_down, "Cache pool is shutting down"
+            if self._shutting_down:
+                raise RuntimeError("Cache pool is already shutting down")
             entry = self._pending_tasks.get(key)
             if entry:
                 # Already have a background task for this (ds, fname)

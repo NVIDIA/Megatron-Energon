@@ -42,9 +42,7 @@ class PackingDataset(
 
     buffer_size: int
     pre_packer: Callable[[List[T_sample]], List[List[T_sample]]]
-    # TODO: The sample encoder is essentially the same as MapDataset. It's hard to bring this there
-    # though, so it's effectively copied code.
-    sample_encoder: Optional[Callable[[List[T_sample]], T_encoded_sample]]
+    sample_encoder: Optional[Callable[[T_sample], T_encoded_sample]]
     sample_encoder_stateless: bool
     final_packer: Callable[[List[T_encoded_sample]], T_batch_sample]
     final_packer_stateless: bool
@@ -325,35 +323,6 @@ class PackingDataset(
             f"Final packer {self.final_packer} and sample encoder {self.sample_encoder} must be stateless to restore samples."
         )
         super().assert_can_restore()
-
-    def _restored_encode_pack(
-        self, pack: List[T_sample], restore_keys: Tuple[Union[str, int, tuple], ...]
-    ) -> List[T_encoded_sample]:
-        # Apply the sample encoder to the pack
-        if self.sample_encoder is None:
-            return pack
-        encoded_pack = []
-        for sample in pack:
-            try:
-                with self._sample_encoder_sample_index.ctx() as encode_idx:
-                    encoded_sample = self.sample_encoder(sample)
-                assert not inspect.isgeneratorfunction(self.sample_encoder), (
-                    "Generator in sample encoder not supported"
-                )
-                encoded_pack.append(
-                    set_sample_restore_key(
-                        encoded_sample,
-                        encode_idx,
-                        src=self,
-                    )
-                )
-            except SkipSample:
-                pass
-            except SYSTEM_EXCEPTIONS:
-                raise FatalSampleError.from_sample(pack)
-            except Exception as e:
-                self.error_handler(e, pack)
-        return encoded_pack
 
     def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_sample:
         # We need to store multiple indices to restore a batch.
