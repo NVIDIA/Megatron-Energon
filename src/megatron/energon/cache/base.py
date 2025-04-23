@@ -44,7 +44,8 @@ class Lazy(Generic[T]):
 @dataclass_slots
 class MockLazy(Lazy[T]):
     """
-    Mock object,
+    Mock object, which can be used as a Lazy. Allows the user to set the function to retrieve the
+    data. May be used to create a Lazy that is initialized from a function.
     """
 
     ds: FileStore
