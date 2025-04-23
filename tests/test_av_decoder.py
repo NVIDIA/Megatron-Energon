@@ -120,7 +120,6 @@ class TestVideoDecode(unittest.TestCase):
 
             av_decoder = AVDecoder(stream)
             video_duration, frame_count = av_decoder.get_video_duration(get_frame_count=True)
-            fps = av_decoder.get_video_fps()
 
             video_tensor = get_single_frames_uniform(
                 av_decoder=av_decoder,
