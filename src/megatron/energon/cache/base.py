@@ -55,6 +55,13 @@ class MockLazy(Lazy[T]):
     get_fn: Callable[[str], T]
 
     def __init__(self, fname: str, get_fn: Callable[[str], T]):
+        """
+        Initialize the MockLazy object.
+
+        Args:
+            fname: The file name of the mock object (may be used by the user).
+            get_fn: The function to retrieve/generate the data.
+        """
         self.ds = None
         self.fname = fname
         self.pool = None
