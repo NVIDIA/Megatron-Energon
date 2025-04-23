@@ -30,7 +30,7 @@ class Fastseek:
     """
 
     keyframes: dict[int, SortedList[KeyframeInfo]]
-    unit: Literal["frames", "seconds"]
+    unit: Literal["frames", "pts"]
     mime: str
 
     def __init__(self, file: BitsType, probe: bool = False) -> None:
@@ -60,7 +60,7 @@ class Fastseek:
                 self.unit = "frames"
             elif ftype.mime in ["video/x-matroska", "video/webm"]:
                 self.keyframes = parse_matroska(file)
-                self.unit = "seconds"
+                self.unit = "pts"
             else:
                 raise ValueError(
                     f"Unsupported container: {ftype.mime} (hint: try passing probe=True to the Fastseek constructor)"

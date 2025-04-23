@@ -101,18 +101,18 @@ class AVDecoder:
             time_base: Fraction = video_stream.time_base  # Seconds per PTS unit
             average_frame_duration: int = int(1 / average_rate / time_base)  # PTS units per frame
 
-            if video_clip_ranges is not None and video_unit != self.seeker.unit:
-                # Convert video_clip_ranges to video_unit
-                if video_unit == "frames":
-                    # Convert from frames to seconds
+            if video_clip_ranges is not None:
+                # Convert video_clip_ranges to seeker unit
+                if video_unit == "frames" and self.seeker.unit == "pts":
+                    # Convert from frames to pts units
                     video_clip_ranges = [
                         (
-                            clip[0] / average_rate,
-                            clip[1] / average_rate,
+                            clip[0] / average_rate / time_base,
+                            clip[1] / average_rate / time_base,
                         )
                         for clip in video_clip_ranges
                     ]
-                else:
+                elif video_unit == "seconds" and self.seeker.unit == "frames":
                     # Convert from seconds to frames
                     video_clip_ranges = [
                         (
@@ -120,6 +120,11 @@ class AVDecoder:
                             clip[1] * average_rate,
                         )
                         for clip in video_clip_ranges
+                    ]
+                elif video_unit == "seconds" and self.seeker.unit == "pts":
+                    # Convert from seconds to pts units
+                    video_clip_ranges = [
+                        (clip[0] / time_base, clip[1] / time_base) for clip in video_clip_ranges
                     ]
 
             frame_iterator: Iterator[av.VideoFrame] = input_container.decode(video=0)
@@ -162,7 +167,7 @@ class AVDecoder:
 
                     # Container uses time, the target frame might not correspond exactly to any metadata but the desired timestamp should
                     # fall within a frames display period
-                    if self.seeker.unit == "seconds":
+                    if self.seeker.unit == "pts":
                         if start_frame_index <= frame.pts + average_frame_duration:
                             take_frame = True
                         if (

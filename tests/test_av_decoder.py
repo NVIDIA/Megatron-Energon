@@ -112,27 +112,34 @@ class TestVideoDecode(unittest.TestCase):
 
     def test_decode_strided_resized(self):
         """Test decoding a subset of frames with resizing."""
-        with open("tests/data/sync_test.mp4", "rb") as f:
-            raw_bytes = f.read()
-            stream = io.BytesIO(raw_bytes)
+        for video_file in ["tests/data/sync_test.mkv", "tests/data/sync_test.mp4"]:
+            print(f"================= Testing {video_file} ==================")
+            with open(video_file, "rb") as f:
+                raw_bytes = f.read()
+                stream = io.BytesIO(raw_bytes)
 
-        av_decoder = AVDecoder(stream)
-        video_tensor = get_single_frames_uniform(
-            av_decoder=av_decoder, num_frames=64, video_out_frame_size=(224, 224)
-        )
+            av_decoder = AVDecoder(stream)
+            video_duration, frame_count = av_decoder.get_video_duration(get_frame_count=True)
+            fps = av_decoder.get_video_fps()
 
-        # Get strided frames from baseline complete video tensor
-        strided_baseline_tensor = self.complete_video_tensor[
-            np.linspace(0, self.complete_video_tensor.shape[0] - 1, 64, dtype=int).tolist()
-        ]
-        # Now resize the baseline frames
-        resize = transforms.Resize((224, 224))
-        strided_resized_baseline_tensor = resize(strided_baseline_tensor)
+            video_tensor = get_single_frames_uniform(
+                av_decoder=av_decoder,
+                num_frames=64,
+                video_out_frame_size=(224, 224),
+            )
 
-        # We allow small numerical differences due to different resize implementations
-        assert tensors_close(video_tensor, strided_resized_baseline_tensor, tolerance=0.01), (
-            "Energon decoded video does not match baseline"
-        )
+            # Get strided frames from baseline complete video tensor
+            strided_baseline_tensor = self.complete_video_tensor[
+                np.linspace(0, self.complete_video_tensor.shape[0] - 1, 64, dtype=int).tolist()
+            ]
+            # Now resize the baseline frames
+            resize = transforms.Resize((224, 224))
+            strided_resized_baseline_tensor = resize(strided_baseline_tensor)
+
+            # We allow small numerical differences due to different resize implementations
+            assert tensors_close(video_tensor, strided_resized_baseline_tensor, tolerance=0.01), (
+                "Energon decoded video does not match baseline"
+            )
 
     def test_video_audio_sync(self):
         """Test decoding video frames and audio clips together."""
