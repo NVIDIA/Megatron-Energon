@@ -178,7 +178,7 @@ class PackingDataset(
                     encoded_sample = self.sample_encoder(sample)
                 assert not isinstance(encoded_sample, Generator), "Generator not supported"
                 encoded_pack.append(
-                    set_sample_restore_key(
+                    add_sample_restore_key(
                         encoded_sample,
                         encode_idx,
                         src=self,
@@ -324,26 +324,21 @@ class PackingDataset(
         )
         super().assert_can_restore()
 
-    def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_sample:
+    def restore_sample(self, restore_key: Any) -> T_sample:
         # We need to store multiple indices to restore a batch.
         self.assert_can_restore()
         if inspect.isgeneratorfunction(self.final_packer):
-            id, pack_idx, pack_sub_idx, *pack_restore_keys = index
+            id, pack_idx, pack_sub_idx, *pack_restore_keys = restore_key
             assert id == type(self).__name__
         else:
-            id, pack_idx, *pack_restore_keys = index
+            id, pack_idx, *pack_restore_keys = restore_key
             assert id == type(self).__name__
 
         pack = []
         for inner_idx in pack_restore_keys:
             if self.sample_encoder is not None:
-                if inspect.isgeneratorfunction(self._sample_encoder_sample_index):
-                    id, sample_idx, local_idx, *inner_idx = index
-                    assert id == type(self).__name__
-                    assert isinstance(local_idx, int)
-                else:
-                    id, sample_idx, *inner_idx = index
-                    assert id == type(self).__name__
+                id, sample_idx, *inner_idx = inner_idx
+                assert id == type(self).__name__
                 assert isinstance(sample_idx, int)
             sample = self.dataset.restore_sample(inner_idx)
             if self.sample_encoder is not None:
