@@ -35,7 +35,7 @@ When calling {py:func}`get_train_dataset <megatron.energon.get_train_dataset>` o
 * `av_decode` (str)
     * Can be one of `AVDecoder`, `torch`, `pyav`. The default is `AVDecoder` which is explained [below](av-decoder).
     * The option `torch` would decode video and audio entirely and return them as tensors.
-    * The `pyav` is for advanced use cases where you need direct access to the object returned by `av.open()`
+    * The `pyav` option is for advanced use cases where you need direct access to the object returned by `av.open()`
 * `video_decode_audio` (bool)
     * If `True`, videos that have an audio track will decode both the video and the audio. Otherwise, only the video frames are decoded.
 

@@ -5,6 +5,7 @@ SPDX-License-Identifier: BSD-3-Clause -->
 
 ![energon data flow](../images/data_flow.png)
 
+The steps of how the data flows through those task encoder methods is explained in [](task_encoder).
 
 (flavors_general)=
 ## Dataset Flavors
