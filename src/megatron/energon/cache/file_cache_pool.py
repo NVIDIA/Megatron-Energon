@@ -46,8 +46,9 @@ class FileCacheLazy(Lazy[T]):
 
     def __del__(self):
         if self._data is None:
-            # Data was never fetched, still decrement refcount to delete the cache entry
-            self.pool._decrement_refcount_and_cleanup((self.ds, self.fname))
+            with self.pool._lock:
+                # Data was never fetched, still decrement refcount to delete the cache entry
+                self.pool._decrement_refcount_and_cleanup((self.ds, self.fname))
 
 
 @dataclass_slots
