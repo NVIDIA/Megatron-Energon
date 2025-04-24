@@ -8,7 +8,7 @@ from megatron.energon.epathlib import EPath
 
 
 class DecodeFileStore(FileStore[Any]):
-    """This dataset will directly read files from the dataset tar files from a prepared energon dataset and decode them."""
+    """Used to wrap a FileStore and decode the data on access."""
 
     def __init__(
         self,
@@ -16,6 +16,12 @@ class DecodeFileStore(FileStore[Any]):
         *,
         decoder: FileStoreDecoder,
     ):
+        """
+        Args:
+            inner_reader: The FileStore to wrap.
+            decoder: The decoder to apply to every item read from the FileStore.
+        """
+
         self.inner_reader = inner_reader
         self.decoder = decoder
 

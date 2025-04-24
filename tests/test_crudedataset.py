@@ -68,7 +68,7 @@ def cook_other(sample: dict) -> TextSample:
 
 
 @stateless
-def cook_aux(sample: dict, pkl_source: FileStore) -> TextSample:
+def cook_aux(sample: dict, pkl_source: FileStore, fs_source: FileStore) -> TextSample:
     # ds2 is offset by 100
     d = pkl_source[f"{int(sample['txt']) + 100:06d}.txt"]
     return TextSample(
@@ -98,6 +98,23 @@ class CookingTaskEncoder(DefaultTaskEncoder[TextSample, TextSample, TextBatch, T
     @stateless
     def pack_selected_samples(self, samples):
         return samples[0]
+
+
+@stateless
+def cook_aux_filesystem_reference(
+    sample: dict, pkl_source: FileStore, fs_source: FileStore
+) -> TextSample:
+    d = fs_source["aux_metadataset.yaml"][:25].decode()
+    return TextSample(
+        **basic_sample_keys(sample),
+        text=f"<{sample['txt']}|aux|{d}>",
+    )
+
+
+class CookingTaskEncoderWithAuxFilesystemReference(CookingTaskEncoder):
+    cookers = [
+        Cooker(cook_aux_filesystem_reference, has_subflavors={"crude_type": "aux_random_access"}),
+    ]
 
 
 @stateless
@@ -258,8 +275,8 @@ class TestDataset(unittest.TestCase):
                         "  train:",
                         "    path: ds1",
                         "    aux:",
-                        "      pkl_source:",
-                        "        path: ds2",
+                        "      pkl_source: ds2",
+                        "      fs_source: file://.",
                         "    subflavors:",
                         "      crude_type: aux_random_access",
                     ]
@@ -606,6 +623,29 @@ class TestDataset(unittest.TestCase):
         print(samples_restored)
 
         assert all([a == b for a, b in zip(samples_after, samples_restored)])
+
+    def test_aux_filesystem_reference(self):
+        torch.manual_seed(42)
+        worker_config = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=0,
+        )
+
+        loader = get_savable_loader(
+            get_train_dataset(
+                self.aux_mds_path,
+                batch_size=1,
+                worker_config=worker_config,
+                task_encoder=CookingTaskEncoderWithAuxFilesystemReference(),
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+            ),
+        )
+
+        sample = next(iter(loader))
+
+        assert sample.txts[0].endswith("|aux|__module__: megatron.ener>")
 
     def test_nomds(self):
         torch.manual_seed(42)

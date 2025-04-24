@@ -1,6 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+import re
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Literal, Optional, Sequence, Type, Union
 
@@ -23,6 +24,9 @@ from megatron.energon.metadataset.loader_interface import (
 )
 from megatron.energon.metadataset.metadataset import Metadataset
 from megatron.energon.worker import WorkerConfig
+
+# Regex for any URL-like string (any protocol)
+url_regex = re.compile(r"^(?P<protocol>[a-z][a-z0-9+.-]*)://(?P<path>.*)", re.IGNORECASE)
 
 
 @dataclass_slots
@@ -73,7 +77,7 @@ class DatasetReference(DatasetLoaderInterface):
     #: Auxiliary datasets. May only be specified for crude datasets for cooking. Cooking will get
     # these references to load data from. If specified as string, it will be interpreted as a
     # dataset path.
-    aux: Optional[Dict[str, Union[str, AuxDatasetReference, AuxFilesystemReference]]] = None
+    aux: Optional[Dict[str, str]] = None
 
     _dataset: Optional[DatasetLoaderInterface] = None
 
@@ -106,12 +110,15 @@ class DatasetReference(DatasetLoaderInterface):
             if self.aux is not None:
                 new_aux = {}
                 for k, v in self.aux.items():
-                    if isinstance(v, str):
-                        v = AuxDatasetReference(fs_path=v)
+                    if m := url_regex.match(v):
+                        if m.group("protocol") == "file":
+                            new_aux[k] = AuxFilesystemReference(fs_path=m.group("path"))
+                        else:
+                            raise ValueError(f"Unsupported protocol: {m.group('protocol')}")
                     else:
-                        assert isinstance(v, (AuxDatasetReference, AuxFilesystemReference))
-                    new_aux[k] = v
-                    v.post_initialize(mds_path)
+                        new_aux[k] = AuxDatasetReference(path=v)
+
+                    new_aux[k].post_initialize(mds_path)
                 self.aux = new_aux
         else:
             raise FileNotFoundError(self.path)
