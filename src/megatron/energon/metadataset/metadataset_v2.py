@@ -111,7 +111,7 @@ class DatasetReference(DatasetLoaderInterface):
                 new_aux = {}
                 for k, v in self.aux.items():
                     if m := url_regex.match(v):
-                        if m.group("protocol") == "file":
+                        if m.group("protocol") == "filesystem":
                             new_aux[k] = AuxFilesystemReference(fs_path=m.group("path"))
                         else:
                             raise ValueError(f"Unsupported protocol: {m.group('protocol')}")
