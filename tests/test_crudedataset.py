@@ -120,7 +120,7 @@ class CookingTaskEncoderWithAuxFilesystemReference(CookingTaskEncoder):
 @stateless
 @cooker(need_cache=True, need_primary=True)
 def cook_aux_primary_cache(
-    sample: dict, primary: FileStore, pkl_source: FileStore, cache: CachePool
+    sample: dict, primary: FileStore, pkl_source: FileStore, fs_source: FileStore, cache: CachePool
 ) -> LazyTextSample:
     # ds2 is offset by 100
     d = pkl_source[f"{int(sample['txt']) + 100:06d}.txt"]
