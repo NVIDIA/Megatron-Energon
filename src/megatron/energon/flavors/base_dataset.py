@@ -227,6 +227,20 @@ class State(ABC, ExtendableDataclassMixin):
     """
 
 
+@dataclass_slots
+class SourceInfo:
+    """Information about the source of a sample, i.e. where the data was loaded from."""
+
+    #: The path to the dataset
+    dataset_path: EPath
+    #: The index of the sample in the dataset
+    index: int
+    #: The name of the shard tar file
+    shard_name: str
+    #: The names of the files in the shard used to create the sample
+    file_names: list[str]
+
+
 class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC):
     """A dataset that can be saved and restored (i.e. the random state, internal buffers, etc.).
     I.e. it can be resumed from a checkpoint.
@@ -347,7 +361,7 @@ class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC)
         """Asserts that the dataset can restore a sample from a key."""
         assert self.can_restore_sample(), "This dataset cannot restore samples."
 
-    def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_sample:
+    def restore_sample(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> T_sample:
         """
         Generic key type, because it might be either an integer (for a core dataset), or something
         more complex (e.g. for blended datasets).
@@ -358,6 +372,16 @@ class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC)
         raise NotImplementedError(
             "This dataset does not support indexing, because it is not safely deterministic."
         )
+
+    @abstractmethod
+    def get_sample_sources(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> list[SourceInfo]:
+        """
+        Get the sources of the sample references by the restore key.
+
+        Returns a list of tuples (for each source sample needed to restore the sample, e.g. for a batch of samples),
+        where each tuple contains (path to the dataset, index of the sample, shard name, filenames in the shard).
+        """
+        ...
 
 
 class BaseCoreDatasetFactory(Generic[T_sample], ABC):

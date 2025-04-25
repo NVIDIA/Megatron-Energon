@@ -6,6 +6,7 @@ from bisect import bisect_right
 from typing import Any, Callable, Dict, Generic, List, Optional, Tuple, TypeVar, Union, overload
 
 from megatron.energon.epathlib import EPath
+from megatron.energon.flavors.base_dataset import SourceInfo
 from megatron.energon.flavors.webdataset.config import skip_meta_re, split_name_re
 from megatron.energon.flavors.webdataset.indexing import JoinIndexReader, SqliteIndexReader
 from megatron.energon.flavors.webdataset.itar import (
@@ -192,6 +193,61 @@ class ITarReader(ABC, Generic[T_index]):
         sample_pointer = self._get_itar_sample_pointer(idx)
 
         return self._get_item_by_sample_pointer(sample_pointer, idx)
+    
+    def get_sample_source(self, idx: int) -> SourceInfo:
+        """
+        Get the source of the sample at the given index.
+        """
+        sample_pointer = self._get_itar_sample_pointer(idx)
+        tar_file = self._get_itarfile_cached(sample_pointer.tar_file_id)
+        shard_name = self.tar_filenames[sample_pointer.tar_file_id]
+        sample_base_name = None
+        # Position the tar file at the correct offset
+        tar_file.offset = sample_pointer.byte_offset
+
+        file_names = []
+
+        while tar_file.offset < sample_pointer.byte_offset + sample_pointer.byte_size:
+            tarinfo = tar_file.next()
+            if tarinfo is None:
+                raise ValueError(
+                    f"Unexpected end of tar file: {self.tar_filenames[sample_pointer.tar_file_id]}"
+                )
+            fname = tarinfo.name
+            if not tarinfo.isfile() or fname is None:
+                continue
+            if skip_meta_re.match(fname):
+                continue
+
+            # Extract the base_name and extension
+            m = split_name_re.match(fname)
+            if not m:
+                continue
+            cur_base_name, cur_ext = m.groups()
+
+            if sample_base_name is None:
+                sample_base_name = cur_base_name
+            else:
+                if sample_base_name != cur_base_name:
+                    raise ValueError(
+                        f"Inconsistent sample base name: {sample_base_name} vs {cur_base_name}"
+                    )
+
+            # If no entry_match_fn is provided, use the part_filter to determine if we should take this entry
+            take_entry = self.part_filter is None or self.part_filter(cur_ext)
+
+            if take_entry:
+                file_names.append(fname)
+        
+        if len(file_names) == 0:
+            raise ValueError(f"No valid files found in sample {sample_pointer}")
+
+        return SourceInfo(
+            dataset_path=self.base_path,
+            index=idx,
+            shard_name=shard_name,
+            file_names=file_names,
+        )
 
 
 class JoinIndexFileITarReader(ITarReader[int]):

@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Tuple, TypedDict
 
 from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.epathlib import EPath
+from megatron.energon.flavors.base_dataset import SourceInfo
 
 
 @dataclass_slots
@@ -53,8 +54,10 @@ class FilteredSample(TypedDict):
     __restore_key__: Tuple[str, int]
 
 
-def reraise_exception(exc: Exception, key: Optional[str]) -> None:
-    if key:
+def reraise_exception(exc: Exception, key: Optional[str], sources: Optional[list[SourceInfo]] = None) -> None:
+    if sources:
+        raise Exception(f"For sample {key!r} from {', '.join(f'{source.dataset_path}[{source.index}] {source.shard_name}{source.file_names!r}' for source in sources)}") from exc
+    elif key:
         raise Exception(f"For sample {key!r}") from exc
     else:
         raise

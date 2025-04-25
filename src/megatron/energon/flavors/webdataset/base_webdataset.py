@@ -9,7 +9,7 @@ import numpy as np
 
 from megatron.energon.cache import FileStore
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory, SavableDataset
+from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory, SavableDataset, SourceInfo
 from megatron.energon.flavors.webdataset.error_handler import ErrorHandler
 from megatron.energon.flavors.webdataset.file_store import WebdatasetFileStore
 from megatron.energon.flavors.webdataset.metadata import WebdatasetMeta
@@ -62,7 +62,7 @@ class BaseWebdatasetFactory(
         info_config: str = ".info.yaml",
         split_config: str = "split.yaml",
         part_filter: Optional[Callable[[str], bool]] = None,
-        handler: Callable[[Exception, Optional[str]], None] = reraise_exception,
+        handler: Callable[[Exception, Optional[str], Optional[list[SourceInfo]]], None] = reraise_exception,
     ):
         """
         Base factory for the webdataset sample loader.
@@ -141,7 +141,6 @@ class BaseWebdatasetFactory(
             worker_config=self.worker_config,
             shuffle_over_epochs=self.shuffle_over_epochs if self.training else None,
             parallel_slice_iters=parallel_shard_iters,
-            handler=self.sample_error_handler,
         )
         return MapDataset(
             dataset,

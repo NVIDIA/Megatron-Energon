@@ -17,7 +17,7 @@ from typing import (
 from torch.utils.data import IterableDataset
 
 from megatron.energon.errors import SYSTEM_EXCEPTIONS, FatalSampleError
-from megatron.energon.flavors.base_dataset import SavableDataset, set_sample_restore_key
+from megatron.energon.flavors.base_dataset import SavableDataset, SourceInfo, set_sample_restore_key
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers._log_exception import log_exception
 from megatron.energon.wrappers.base import BaseWrapperDataset, SampleIndex, get_sample_restore_key
@@ -35,7 +35,7 @@ class IterMapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sampl
 
     iter_map_fn: Callable[[Iterator[T_sample]], Iterator[T_sample_out]]
     len_map_fn: Callable[[int], int]
-    error_handler: Callable[[Exception, Optional[T_sample]], None]
+    error_handler: Callable[[Exception, Optional[T_sample], list[SourceInfo]], None]
     stateless_iter_fn: bool
     iter_map_fn_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]]
     _sample_index: SampleIndex
@@ -48,7 +48,7 @@ class IterMapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sampl
         iter_map_fn: Callable[[Iterator[T_sample]], Iterator[T_sample_out]],
         *,
         len_map_fn: Callable[[int], int] = lambda x: x,
-        error_handler: Callable[[Exception, Optional[T_sample]], None] = log_exception,
+        error_handler: Callable[[Exception, Optional[T_sample], list[SourceInfo]], None] = log_exception,
         stateless_iter_fn: bool = False,
         iter_map_fn_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]] = None,
         worker_config: WorkerConfig,
@@ -125,7 +125,8 @@ class IterMapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sampl
             except SYSTEM_EXCEPTIONS:
                 raise FatalSampleError.from_sample(last_sample_wrapper.last_sample)
             except Exception as e:
-                self.error_handler(e, last_sample_wrapper.last_sample)
+                restore_key = get_sample_restore_key(last_sample_wrapper.last_sample)
+                self.error_handler(e, last_sample_wrapper.last_sample, self.dataset.get_sample_sources(restore_key) if restore_key is not None else None)
             else:
                 break
 
@@ -138,9 +139,9 @@ class IterMapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sampl
         )
         super().assert_can_restore()
 
-    def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_sample:
+    def restore_sample(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> T_sample:
         self.assert_can_restore()
-        id, sample_idx, iter_idx, *sample_restore_keys = index
+        id, sample_idx, iter_idx, *sample_restore_keys = restore_key
         assert id == type(self).__name__
         assert isinstance(iter_idx, int)
         inner_iter = iter(
@@ -171,6 +172,15 @@ class IterMapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sampl
             # Properly close if it's a generator
             if hasattr(inner_iter, "close"):
                 inner_iter.close()
+
+    def get_sample_sources(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> list[SourceInfo]:
+        id, sample_idx, iter_idx, *sample_restore_keys = restore_key
+        assert id == type(self).__name__
+        return sum(
+            (
+                self.dataset.get_sample_sources(inner_idx)  
+                for inner_idx in sample_restore_keys
+            ), start=[])
 
     def config(self) -> Dict[str, Any]:
         return {

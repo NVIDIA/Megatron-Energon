@@ -35,6 +35,7 @@ from megatron.energon.errors import deprecated
 from megatron.energon.flavors.base_dataset import (
     FlexState,
     SavableDataset,
+    SourceInfo,
     State,
     add_sample_restore_key,
 )
@@ -122,22 +123,28 @@ class SimpleSavableDatasetWrapper(BaseWrapperDataset[T, Tuple[int, int, T]], Gen
                 if worker_active:
                     self.worker_config.worker_deactivate()
 
-    def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T:
-        id, global_worker_id, sample_idx = index[:3]
+    def restore_sample(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> T:
+        id, global_worker_id, sample_idx = restore_key[:3]
         assert id == type(self).__name__
-        index = index[3:]
+        restore_key = restore_key[3:]
         self.worker_config.worker_activate(
             sample_idx, override_global_rank=global_worker_id, cache_pool=self.cache_pool
         )
         try:
             return add_sample_restore_key(
-                self.dataset.restore_sample(index),
+                self.dataset.restore_sample(restore_key),
                 global_worker_id,
                 sample_idx,
                 src=self,
             )
         finally:
             self.worker_config.worker_deactivate()
+    
+    def get_sample_sources(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> list[SourceInfo]:
+        id, global_worker_id, sample_idx = restore_key[:3]
+        assert id == type(self).__name__
+        restore_key = restore_key[3:]
+        return self.dataset.get_sample_sources(restore_key)
 
     def config(self) -> Dict[str, Any]:
         return self.dataset.config()
@@ -523,20 +530,26 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
     def can_restore_sample(self) -> bool:
         return self.dataset.can_restore_sample()
 
-    def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T:
-        id, global_worker_id, sample_idx = index[:3]
+    def restore_sample(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> T:
+        id, global_worker_id, sample_idx = restore_key[:3]
         assert id == type(self).__name__
-        index = index[3:]
+        restore_key = restore_key[3:]
         self.worker_config.worker_activate(sample_idx, override_global_rank=global_worker_id)
         try:
             return add_sample_restore_key(
-                self.dataset.restore_sample(index),
+                self.dataset.restore_sample(restore_key),
                 global_worker_id,
                 sample_idx,
                 src=self,
             )
         finally:
             self.worker_config.worker_deactivate()
+        
+    def get_sample_sources(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> list[SourceInfo]:
+        id, global_worker_id, sample_idx = restore_key[:3]
+        assert id == type(self).__name__
+        restore_key = restore_key[3:]
+        return self.dataset.get_sample_sources(restore_key)
 
     def config(self) -> Dict[str, Any]:
         return self.dataset.config()
@@ -1119,9 +1132,18 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
     def can_restore_sample(self) -> bool:
         return self.dataset.can_restore_sample()
 
-    def restore_sample(self, sample_key: Tuple[Union[str, int, tuple], ...]) -> T:
+    def restore_sample(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> T:
         """Restores a sample from a key. This is useful to debug the dataset."""
-        return self.dataset.restore_sample(sample_key)
+        return self.dataset.restore_sample(restore_key)
+
+    def get_sample_sources(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> list[SourceInfo]:
+        """
+        Get the sources of the sample references by the restore key.
+
+        Returns a list of tuples (for each source sample needed to restore the sample, e.g. for a batch of samples),
+        where each tuple contains (path to the dataset, index of the sample, shard name, name in the shard).
+        """
+        return self.dataset.get_sample_sources(restore_key)
 
     def config(self):
         """Get the configuration, which defines the dataset. Useful in conjunction with `save_state`
@@ -1309,9 +1331,18 @@ class BasicDataLoader(DataLoader[T], Generic[T]):
     def can_restore_sample(self) -> bool:
         return self.dataset.can_restore_sample()
 
-    def restore_sample(self, sample_key: Tuple[Union[str, int, tuple], ...]) -> T:
+    def restore_sample(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> T:
         """Restores a sample from a key. This is useful to debug the dataset."""
-        return self.dataset.restore_sample(sample_key)
+        return self.dataset.restore_sample(restore_key)
+
+    def get_sample_sources(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> list[SourceInfo]:
+        """
+        Get the sources of the sample references by the restore key.
+
+        Returns a list of tuples (for each source sample needed to restore the sample, e.g. for a batch of samples),
+        where each tuple contains (path to the dataset, index of the sample, shard name, name in the shard).
+        """
+        return self.dataset.get_sample_sources(restore_key)
 
 
 def _sample_str(self, sample):

@@ -22,6 +22,7 @@ from megatron.energon.flavors.base_dataset import (
     BaseCoreDatasetFactory,
     Sample,
     SavableDataset,
+    SourceInfo,
     set_sample_restore_key,
 )
 from megatron.energon.flavors.webdataset.base_webdataset import BaseWebdatasetFactory
@@ -53,7 +54,7 @@ class JoinedWebdatasetFactory(
     parallel_shard_iters: Optional[int]
     max_samples_per_sequence: Optional[int]
     join_index: EPath
-    handler: Callable[[Exception, Optional[str]], None]
+    handler: Callable[[Exception, Optional[str], Optional[list[SourceInfo]]], None]
 
     shards: List[Sequence[ShardInfo]]
     part_datasets: SavableDataset[T_sample]
@@ -73,7 +74,7 @@ class JoinedWebdatasetFactory(
         max_samples_per_sequence: Optional[int] = None,
         join_index: EPath,
         joiner: Union[Type[T_sample], Callable[..., T_sample]],
-        handler: Callable[[Exception, Optional[str]], None] = reraise_exception,
+        handler: Callable[[Exception, Optional[str], Optional[list[SourceInfo]]], None] = reraise_exception,
     ):
         """
         Constructs the loader for a joined webdataset. The samples from the inner datasets are joined into a single
@@ -191,7 +192,6 @@ class JoinedWebdatasetFactory(
             worker_config=self.worker_config,
             shuffle_over_epochs=self.shuffle_over_epochs if self.training else None,
             parallel_slice_iters=parallel_shard_iters,
-            handler=self.sample_error_handler,
         )
         return self._process_samples(dataset)
 

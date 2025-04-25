@@ -4,20 +4,20 @@
 from typing import Callable, Generic, Optional, Tuple, TypeVar, Union
 
 from megatron.energon.errors import SYSTEM_EXCEPTIONS, FatalSampleError
-from megatron.energon.flavors.base_dataset import Sample
+from megatron.energon.flavors.base_dataset import Sample, SourceInfo
 from megatron.energon.flavors.webdataset.structs import FilteredSample, reraise_exception
 
 T_sample = TypeVar("T_sample", covariant=True)
 
 
 class ErrorHandler(Generic[T_sample]):
-    handler: Callable[[Exception, Optional[str]], None] = reraise_exception
+    handler: Callable[[Exception, Optional[str], Optional[list[SourceInfo]]], None] = reraise_exception
 
-    def sample_error_handler(self, e: Exception, sample_key: Optional[str]):
+    def sample_error_handler(self, e: Exception, sample_key: Optional[str], sources: Optional[list[SourceInfo]] = None):
         if isinstance(e, SYSTEM_EXCEPTIONS):
             raise FatalSampleError(f"Error in sample {sample_key!r}: {e}") from e
 
-        self.handler(e, sample_key)
+        self.handler(e, sample_key, sources)
 
     def error_handler(
         self,
@@ -29,6 +29,7 @@ class ErrorHandler(Generic[T_sample]):
             None,
             Tuple[Union[T_sample, dict, FilteredSample, None], ...],
         ],
+        sources: Optional[list[SourceInfo]] = None,
     ):
         if isinstance(sample, dict):
             key = sample.get("__key__")
@@ -43,4 +44,4 @@ class ErrorHandler(Generic[T_sample]):
             key = sample.__key__
         else:
             key = None
-        self.sample_error_handler(e, key)
+        self.sample_error_handler(e, key, sources)

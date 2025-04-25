@@ -18,6 +18,7 @@ from typing import (
 from megatron.energon.errors import SYSTEM_EXCEPTIONS, FatalSampleError
 from megatron.energon.flavors.base_dataset import (
     SavableDataset,
+    SourceInfo,
     add_sample_restore_key,
     set_sample_restore_key,
 )
@@ -46,7 +47,7 @@ class PackingDataset(
     final_packer: Callable[[List[T_encoded_sample]], T_batch_sample]
     final_packer_stateless: bool
     packer_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]]
-    error_handler: Callable[[Exception, List[T_sample]], None]
+    error_handler: Callable[[Exception, List[T_sample], list[SourceInfo]], None]
 
     #: The buffer for collecting the samples that shall be packed.
     _reading_buffer: SavableSampleBuffer
@@ -90,7 +91,7 @@ class PackingDataset(
         sample_encoder: Optional[Callable[[List[T_sample]], T_encoded_sample]] = None,
         sample_encoder_stateless: bool = False,
         packer_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]] = None,
-        error_handler: Callable[[Exception, List[T_sample]], None] = log_exception,
+        error_handler: Callable[[Exception, List[T_sample], list[SourceInfo]], None] = log_exception,
         worker_config: WorkerConfig,
     ):
         """Construct a PackingDataset which is used for sequence packing.
@@ -188,7 +189,7 @@ class PackingDataset(
             except SYSTEM_EXCEPTIONS:
                 raise FatalSampleError.from_sample(pack)
             except Exception as e:
-                self.error_handler(e, pack)
+                self.error_handler(e, [sample], self.dataset.get_sample_sources(get_sample_restore_key(sample)))
         return encoded_pack
 
     def __iter__(self) -> Iterator[T_batch_sample]:
@@ -207,6 +208,7 @@ class PackingDataset(
             if len(self._reading_buffer) > 0:
                 # Take all samples from the reading buffer and pre_pack them
                 samples = list(self._reading_buffer)
+                restore_keys = self._reading_buffer.restore_key()
                 # Clear buffer and pre_packing_lengths
                 self._reading_buffer.clear()
                 pre_packing_lengths.clear()
@@ -219,7 +221,7 @@ class PackingDataset(
                 except SYSTEM_EXCEPTIONS:
                     raise FatalSampleError.from_sample(samples)
                 except Exception as e:
-                    self.error_handler(e, samples)
+                    self.error_handler(e, samples, [source for restore_key in restore_keys for source in self.dataset.get_sample_sources(restore_key)])
                     pre_packs = []
 
                 # Put the pre-packed samples into the pre_packing_buffer
@@ -268,7 +270,7 @@ class PackingDataset(
             except SYSTEM_EXCEPTIONS:
                 raise FatalSampleError.from_sample(pack)
             except Exception as e:
-                self.error_handler(e, pack)
+                self.error_handler(e, pack, [source for restore_key in pack_restore_keys for source in self.dataset.get_sample_sources(restore_key)])
 
         # Main loop:
         pre_pack_round = 0
@@ -328,14 +330,18 @@ class PackingDataset(
         self.assert_can_restore()
         if inspect.isgeneratorfunction(self.final_packer):
             id, pack_idx, pack_sub_idx, *pack_restore_keys = restore_key
+            id, pack_idx, pack_sub_idx, *pack_restore_keys = restore_key
             assert id == type(self).__name__
         else:
+            id, pack_idx, *pack_restore_keys = restore_key
             id, pack_idx, *pack_restore_keys = restore_key
             assert id == type(self).__name__
 
         pack = []
         for inner_idx in pack_restore_keys:
             if self.sample_encoder is not None:
+                id, sample_idx, *inner_idx = inner_idx
+                assert id == type(self).__name__
                 id, sample_idx, *inner_idx = inner_idx
                 assert id == type(self).__name__
                 assert isinstance(sample_idx, int)
@@ -366,6 +372,23 @@ class PackingDataset(
             assert False, f"Pack sub-index {pack_sub_idx} not found in pack"
         else:
             return set_sample_restore_key(final_pack, pack_idx, *pack_restore_keys, src=self)
+    
+    def get_sample_sources(self, restore_key: Any) -> list[SourceInfo]:
+        if inspect.isgeneratorfunction(self.final_packer):
+            id, pack_idx, pack_sub_idx, *pack_restore_keys = restore_key
+            assert id == type(self).__name__
+        else:
+            id, pack_idx, *pack_restore_keys = restore_key
+            assert id == type(self).__name__
+        
+        result = []
+        for inner_idx in pack_restore_keys:
+            if self.sample_encoder is not None:
+                id, sample_idx, *inner_idx = inner_idx
+                assert id == type(self).__name__
+                assert isinstance(sample_idx, int)
+            result.extend(self.dataset.get_sample_sources(inner_idx))
+        return result
 
     def config(self) -> Dict[str, Any]:
         return {

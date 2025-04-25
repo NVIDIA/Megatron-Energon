@@ -2,11 +2,20 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import traceback
+from typing import Optional
+
+from megatron.energon.flavors import SourceInfo
 
 
-def log_exception(_e: Exception, sample, /):
+def log_exception(_e: Exception, sample, sources: Optional[list[SourceInfo]] = None):
     traceback.print_exc()
     print("-" * 10)
+
+    if sources:
+        print(f"Sources:")
+        for source in sources:
+            print(f" - {source.dataset_path}[{source.index}] {source.shard_name}{source.file_names!r}")
+        print("-" * 10)
 
     sample_str = str(sample)
     if len(sample_str) > 400:

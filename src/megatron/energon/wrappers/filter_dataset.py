@@ -57,9 +57,6 @@ class FilterDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
             if filter_res:
                 yield sample
 
-    def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_sample:
-        return self.dataset.restore_sample(index)
-
     def config(self) -> Dict[str, Any]:
         return {
             "type": type(self).__qualname__,
