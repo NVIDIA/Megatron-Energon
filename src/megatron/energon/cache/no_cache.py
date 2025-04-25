@@ -23,6 +23,16 @@ class DirectLazy(Lazy[T]):
         assert self._data is not None
         return self._data
 
+    def __hash__(self) -> int:
+        """Allows usage in sets and dicts as key."""
+        return hash((id(self.ds), self.fname))
+
+    def __eq__(self, other: Any) -> bool:
+        """Allows usage in sets and dicts as key. Compares the data source and the filename."""
+        if not isinstance(other, Lazy):
+            return False
+        return self.ds is other.ds and self.fname == other.fname
+
 
 class NoCachePool(CachePool):
     """A pass-through cache pool that does not cache anything."""

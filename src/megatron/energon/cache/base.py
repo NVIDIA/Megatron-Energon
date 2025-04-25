@@ -40,6 +40,16 @@ class Lazy(Generic[T]):
         """
         ...
 
+    def __hash__(self) -> int:
+        """Allows usage in sets and dicts as key."""
+        return hash((id(self.ds), self.fname))
+
+    def __eq__(self, other: Any) -> bool:
+        """Allows usage in sets and dicts as key. Compares the data source and the filename."""
+        if not isinstance(other, Lazy):
+            return False
+        return self.ds is other.ds and self.fname == other.fname
+
 
 @dataclass_slots
 class MockLazy(Lazy[T]):
@@ -72,6 +82,17 @@ class MockLazy(Lazy[T]):
         Get the lazy data now.
         """
         return self.get_fn(self.fname)
+
+    def __hash__(self) -> int:
+        return hash((self.fname, self.get_fn))
+
+    def __eq__(self, other: Any) -> bool:
+        if not isinstance(other, MockLazy):
+            return False
+        return self.fname == other.fname and self.get_fn == other.get_fn
+
+    def __repr__(self) -> str:
+        return f"MockLazy(fname={self.fname!r}, get_fn={self.get_fn!r})"
 
 
 class CachePool(ABC):
