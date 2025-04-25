@@ -276,7 +276,7 @@ class TestDataset(unittest.TestCase):
                         "    path: ds1",
                         "    aux:",
                         "      pkl_source: ds2",
-                        "      fs_source: file://.",
+                        "      fs_source: filesystem://.",
                         "    subflavors:",
                         "      crude_type: aux_random_access",
                     ]
