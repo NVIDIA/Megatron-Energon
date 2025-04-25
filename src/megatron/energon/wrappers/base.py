@@ -9,7 +9,6 @@ from megatron.energon.flavors.base_dataset import (
     FlexState,
     Sample,
     SavableDataset,
-    SourceInfo,
     add_sample_restore_key,
 )
 from megatron.energon.savable import Savable
@@ -90,18 +89,6 @@ class BaseWrapperDataset(SavableDataset[T_sample_out], Generic[T_sample_in, T_sa
                 ds_idx,
                 src=self,
             )
-
-    def get_sample_sources(
-        self, restore_key: Tuple[Union[str, int, tuple], ...]
-    ) -> list[SourceInfo]:
-        if len(self.datasets) == 1:
-            return self.datasets[0].get_sample_sources(restore_key)
-        else:
-            id, ds_idx = restore_key[:2]
-            assert id == type(self).__name__
-            restore_key = restore_key[2:]
-            assert isinstance(ds_idx, int)
-            return self.datasets[ds_idx].get_sample_sources(restore_key)
 
     def save_state(self) -> FlexState:
         own_state = super().save_state()

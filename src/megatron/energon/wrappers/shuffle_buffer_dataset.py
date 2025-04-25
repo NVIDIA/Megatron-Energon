@@ -3,7 +3,7 @@
 
 from typing import Any, Dict, Generic, Iterator, Tuple, TypeVar, Union
 
-from megatron.energon.flavors.base_dataset import SavableDataset, SourceInfo
+from megatron.energon.flavors.base_dataset import SavableDataset
 from megatron.energon.rng import WorkerRng
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset
@@ -58,11 +58,6 @@ class ShuffleBufferDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sam
 
     def restore_sample(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> T_sample:
         return self._active_buffer.restore_sample(restore_key)
-
-    def get_sample_sources(
-        self, restore_key: Tuple[Union[str, int, tuple], ...]
-    ) -> list[SourceInfo]:
-        return self._active_buffer.get_sample_sources(restore_key)
 
     def config(self) -> Dict[str, Any]:
         return {

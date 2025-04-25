@@ -39,7 +39,6 @@ from megatron.energon.flavors import (
     SavableDataset,
     SimilarityInterleavedSample,
     SimilarityInterleavedWebdataset,
-    SourceInfo,
     StandardWebdatasetFactory,
     TextSample,
     TextWebdataset,
@@ -59,6 +58,7 @@ from megatron.energon.metadataset import (
     prepare_metadataset,
 )
 from megatron.energon.savable_loader import SavableDataLoader
+from megatron.energon.source_info import SourceInfo
 from megatron.energon.task_encoder import (
     AugmentTaskEncoder,
     Batch,

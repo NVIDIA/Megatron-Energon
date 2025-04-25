@@ -6,7 +6,6 @@ from megatron.energon.flavors.base_dataset import (
     PinMemoryMixin,
     Sample,
     SavableDataset,
-    SourceInfo,
 )
 from megatron.energon.flavors.captioning import CaptioningSample, CaptioningWebdataset
 from megatron.energon.flavors.crude import CrudeSample, CrudeWebdataset
@@ -72,7 +71,6 @@ __all__ = [
     "SavableDataset",
     "SimilarityInterleavedSample",
     "SimilarityInterleavedWebdataset",
-    "SourceInfo",
     "StandardWebdatasetFactory",
     "TextSample",
     "TextWebdataset",

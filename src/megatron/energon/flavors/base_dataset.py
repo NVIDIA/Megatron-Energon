@@ -30,6 +30,7 @@ from megatron.energon.cache import FileStore
 from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.epathlib import EPath
 from megatron.energon.savable import Savable
+from megatron.energon.source_info import SourceInfo
 from megatron.energon.state import FlexState
 from megatron.energon.worker import WorkerConfig
 
@@ -128,8 +129,13 @@ class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
     #: A dataset may define a subflavors to distinguish between samples of the same sample type.
     __subflavors__: Optional[Dict[str, Any]]
 
+    #: Information about the source of the sample, i.e. where the data was loaded from.
+    __sources__: tuple[SourceInfo, ...]
+
     @classmethod
-    def derive_from(cls: Type[T_sample], base_sample: "Sample", **kwargs) -> T_sample:
+    def derive_from(
+        cls: Type[T_sample], base_sample: "Sample", sources: tuple[SourceInfo, ...] = (), **kwargs
+    ) -> T_sample:
         """
         Uses the base fields of `Sample` from base_sample (i.e. __key__, __restore_key__, __subflavor__, __subflavors__)
         and creates a new sample with the kwargs as fields. This is useful for creating new samples, while keeping the
@@ -137,15 +143,19 @@ class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
 
         Args:
             base_sample: The base sample to copy the base fields / metadata from.
+            source: Additional source information to add to the sample.
             kwargs: The fields of the new sample.
 
         Returns:
             The new sample.
         """
+        base_kwargs = {
+            field.name: getattr(base_sample, field.name) for field in dataclasses.fields(Sample)
+        }
+        if sources is not None:
+            base_kwargs["__sources__"] = (*base_kwargs["__sources__"], sources)
         return cls(
-            **{
-                field.name: getattr(base_sample, field.name) for field in dataclasses.fields(Sample)
-            },
+            **base_kwargs,
             **kwargs,
         )
 
@@ -180,6 +190,11 @@ class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
             fields = dataclasses.fields(primary)
             for field in fields:
                 init_args[field.name] = getattr(primary, field.name)
+            # Merge sources from all joined samples
+            init_args["__sources__"] = (
+                *primary.__sources__,
+                *(src for arg in args if arg is not None for src in arg.__sources__),
+            )
             for arg in args:
                 if arg is None:
                     continue
@@ -225,20 +240,6 @@ class State(ABC, ExtendableDataclassMixin):
                 # required to define `MyExtendedState`.
                 return MyExtendedState.extend(state, b=21)
     """
-
-
-@dataclass_slots
-class SourceInfo:
-    """Information about the source of a sample, i.e. where the data was loaded from."""
-
-    #: The path to the dataset
-    dataset_path: EPath
-    #: The index of the sample in the dataset
-    index: int
-    #: The name of the shard tar file
-    shard_name: str
-    #: The names of the files in the shard used to create the sample
-    file_names: list[str]
 
 
 class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC):
@@ -372,18 +373,6 @@ class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC)
         raise NotImplementedError(
             "This dataset does not support indexing, because it is not safely deterministic."
         )
-
-    @abstractmethod
-    def get_sample_sources(
-        self, restore_key: Tuple[Union[str, int, tuple], ...]
-    ) -> list[SourceInfo]:
-        """
-        Get the sources of the sample references by the restore key.
-
-        Returns a list of tuples (for each source sample needed to restore the sample, e.g. for a batch of samples),
-        where each tuple contains (path to the dataset, index of the sample, shard name, filenames in the shard).
-        """
-        ...
 
 
 class BaseCoreDatasetFactory(Generic[T_sample], ABC):

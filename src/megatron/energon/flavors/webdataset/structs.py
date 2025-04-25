@@ -6,7 +6,7 @@ from typing import Dict, List, Optional, Tuple, TypedDict
 
 from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.base_dataset import SourceInfo
+from megatron.energon.source_info import SourceInfo
 
 
 @dataclass_slots
@@ -52,6 +52,8 @@ class FilteredSample(TypedDict):
     #: Globally unique key to restore a sample from disk.
     #: For example `("Webdataset", 123)` would restore the sample at index 123.
     __restore_key__: Tuple[str, int]
+    #: The source information for the sample.
+    __sources__: tuple[SourceInfo, ...]
 
 
 def reraise_exception(

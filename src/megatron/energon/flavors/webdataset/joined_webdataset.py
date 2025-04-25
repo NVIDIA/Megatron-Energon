@@ -22,7 +22,6 @@ from megatron.energon.flavors.base_dataset import (
     BaseCoreDatasetFactory,
     Sample,
     SavableDataset,
-    SourceInfo,
     legacy_handler,
     set_sample_restore_key,
 )
@@ -36,6 +35,7 @@ from megatron.energon.flavors.webdataset.sample_loader import (
 )
 from megatron.energon.flavors.webdataset.sharder import Sharder
 from megatron.energon.flavors.webdataset.structs import ShardInfo, reraise_exception
+from megatron.energon.source_info import SourceInfo
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.map_dataset import MapDataset
 

@@ -5,6 +5,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Callable, Generic, TypeVar
 
 from megatron.energon.dataclass_slots import dataclass_slots
+from megatron.energon.source_info import SourceInfo, add_source_info
 
 T = TypeVar("T")
 
@@ -13,9 +14,15 @@ class FileStore(Generic[T]):
     """Base type for a dataset that can be accessed randomly by sample key."""
 
     @abstractmethod
-    def __getitem__(self, key: str) -> T:
+    def __getitem__(self, key: str) -> tuple[T, SourceInfo]:
         """Returns the data for the given key."""
         ...
+
+    def get(self, key: str, sample: Any = None) -> Any:
+        """Returns the data for the given key and adds the source info to the sample."""
+        data, source_info = self[key]
+        add_source_info(sample, source_info)
+        return data
 
     @abstractmethod
     def get_path(self) -> str:
@@ -34,9 +41,9 @@ class Lazy(Generic[T]):
     pool: "CachePool"
 
     @abstractmethod
-    def get(self) -> T:
+    def get(self, sample: Any = None) -> T:
         """
-        Get the lazy data now.
+        Get the lazy data now and adds the source info to the sample.
         """
         ...
 
@@ -77,9 +84,9 @@ class MockLazy(Lazy[T]):
         self.pool = None
         self.get_fn = get_fn
 
-    def get(self) -> T:
+    def get(self, sample: Any = None) -> T:
         """
-        Get the lazy data now.
+        Get the lazy data now and adds no source info to the sample.
         """
         return self.get_fn(self.fname)
 
@@ -105,9 +112,9 @@ class CachePool(ABC):
     """
 
     @abstractmethod
-    def get(self, ds: FileStore, fname: str) -> Any:
+    def get(self, ds: FileStore, fname: str, sample: Any = None) -> Any:
         """
-        Get the data for a given file.
+        Get the data for a given file and adds the source info to the sample.
         """
         ...
 

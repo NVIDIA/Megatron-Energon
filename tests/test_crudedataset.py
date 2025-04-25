@@ -35,6 +35,7 @@ from megatron.energon.flavors.base_dataset import Sample
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 from megatron.energon.flavors.webdataset.sample_decoder import SampleDecoder
 from megatron.energon.flavors.webdataset.structs import reraise_exception
+from megatron.energon.source_info import SourceInfo
 from megatron.energon.task_encoder.cooking import cooker
 
 
@@ -47,6 +48,7 @@ class LazyTextSample(Sample):
 @dataclass_slots
 class TextBatch(Batch):
     __keys__: List[str]
+    __sources__: List[SourceInfo]
     txts: List[str]
 
 
@@ -70,7 +72,7 @@ def cook_other(sample: dict) -> TextSample:
 @stateless
 def cook_aux(sample: dict, pkl_source: FileStore, fs_source: FileStore) -> TextSample:
     # ds2 is offset by 100
-    d = pkl_source[f"{int(sample['txt']) + 100:06d}.txt"]
+    d = pkl_source.get(f"{int(sample['txt']) + 100:06d}.txt", sample)
     return TextSample(
         **basic_sample_keys(sample),
         text=f"<{sample['txt']}|aux|{d}>",
@@ -89,6 +91,7 @@ class CookingTaskEncoder(DefaultTaskEncoder[TextSample, TextSample, TextBatch, T
     def batch(self, samples: List[TextSample]) -> TextBatch:
         return TextBatch(
             __keys__=[sample.__key__ for sample in samples],
+            __sources__=[source for sample in samples for source in sample.__sources__],
             txts=[sample.text for sample in samples],
         )
 
@@ -104,7 +107,7 @@ class CookingTaskEncoder(DefaultTaskEncoder[TextSample, TextSample, TextBatch, T
 def cook_aux_filesystem_reference(
     sample: dict, pkl_source: FileStore, fs_source: FileStore
 ) -> TextSample:
-    d = fs_source["aux_metadataset.yaml"][:25].decode()
+    d = fs_source.get("aux_metadataset.yaml", sample)[:25].decode()
     return TextSample(
         **basic_sample_keys(sample),
         text=f"<{sample['txt']}|aux|{d}>",
@@ -123,7 +126,7 @@ def cook_aux_primary_cache(
     sample: dict, primary: FileStore, pkl_source: FileStore, fs_source: FileStore, cache: CachePool
 ) -> LazyTextSample:
     # ds2 is offset by 100
-    d = pkl_source[f"{int(sample['txt']) + 100:06d}.txt"]
+    d = pkl_source.get(f"{int(sample['txt']) + 100:06d}.txt", sample)
     my_lazy_next_txt = cache.get_lazy(primary, f"{(int(sample['txt']) + 1) % 55:06d}.txt")
     return LazyTextSample(
         **basic_sample_keys(sample),
@@ -148,14 +151,16 @@ class LazyCookingTaskEncoder(
     @stateless
     def pack_selected_samples(self, samples: List[LazyTextSample]) -> TextSample:
         assert len(samples) == 1, f"Expected 1 sample, got {len(samples)}"
+        next_txt = samples[0].next_txt.get(samples[0])
         return TextSample.derive_from(
             samples[0],
-            text=samples[0].txt + "|" + samples[0].next_txt.get(),
+            text=samples[0].txt + "|" + next_txt,
         )
 
     def batch(self, samples: List[TextSample]) -> TextBatch:
         return TextBatch(
             __keys__=[sample.__key__ for sample in samples],
+            __sources__=[source for sample in samples for source in sample.__sources__],
             txts=[sample.text for sample in samples],
         )
 
@@ -175,7 +180,7 @@ class LazyCookingTaskEncoderWithPostencode(
         assert isinstance(sample, LazyTextSample)
         return TextSample.derive_from(
             sample,
-            text=sample.txt + "|" + sample.next_txt.get(),
+            text=sample.txt + "|" + sample.next_txt.get(sample),
         )
 
     def select_samples_to_pack(self, samples: List[LazyTextSample]) -> List[List[LazyTextSample]]:
@@ -189,6 +194,7 @@ class LazyCookingTaskEncoderWithPostencode(
     def batch(self, samples: List[TextSample]) -> TextBatch:
         return TextBatch(
             __keys__=[sample.__key__ for sample in samples],
+            __sources__=[source for sample in samples for source in sample.__sources__],
             txts=[sample.text for sample in samples],
         )
 
@@ -201,6 +207,7 @@ class GenericCookingTaskEncoder(DefaultTaskEncoder[TextSample, TextSample, TextB
     def batch(self, samples: List[TextSample]) -> TextBatch:
         return TextBatch(
             __keys__=[sample.__key__ for sample in samples],
+            __sources__=[source for sample in samples for source in sample.__sources__],
             txts=[sample.text for sample in samples],
         )
 

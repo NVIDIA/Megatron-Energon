@@ -4,7 +4,7 @@
 import traceback
 from typing import Optional
 
-from megatron.energon.flavors import SourceInfo
+from megatron.energon.source_info import SourceInfo
 
 
 def log_exception(_e: Exception, sample, sources: Optional[list[SourceInfo]] = None):

@@ -12,11 +12,9 @@ from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.base_dataset import (
     BaseCoreDatasetFactory,
     SavableDataset,
-    SourceInfo,
     legacy_handler,
 )
 from megatron.energon.flavors.webdataset.error_handler import ErrorHandler
-from megatron.energon.flavors.webdataset.file_store import WebdatasetFileStore
 from megatron.energon.flavors.webdataset.metadata import WebdatasetMeta
 from megatron.energon.flavors.webdataset.prepare import WebdatasetPreparator
 from megatron.energon.flavors.webdataset.sample_loader import (
@@ -25,6 +23,7 @@ from megatron.energon.flavors.webdataset.sample_loader import (
 )
 from megatron.energon.flavors.webdataset.sharder import Sharder
 from megatron.energon.flavors.webdataset.structs import FilteredSample, ShardInfo, reraise_exception
+from megatron.energon.source_info import SourceInfo
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.map_dataset import MapDataset
 
@@ -158,7 +157,9 @@ class BaseWebdatasetFactory(
             worker_config=self.worker_config,
         )
 
-    def as_file_store(self) -> FileStore:
+    def as_file_store(self) -> "FileStore":
+        from megatron.energon.cache.file_store import WebdatasetFileStore
+
         return WebdatasetFileStore(self.path)
 
     def sample_filter(self, key: str) -> bool:

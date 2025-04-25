@@ -71,13 +71,13 @@ class WorkerConfig:
     _worker_override_global_rank: ClassVar[Optional[List[int]]] = None
 
     #: The current cache pool for the worker.
-    _cache_pool: ClassVar[Optional[CachePool]] = None
+    _cache_pool: "ClassVar[Optional[CachePool]]" = None
 
     def worker_activate(
         self,
         sample_index: int,
         override_global_rank: Optional[int] = None,
-        cache_pool: Optional[CachePool] = None,
+        cache_pool: "Optional[CachePool]" = None,
     ):
         """Activates the worker config for the current worker and sets it as actively iterating.
         Must be called before next() call on the datasets."""

@@ -6,15 +6,15 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Literal, Optional, Sequence, Type, Union
 
 from megatron.energon.cache import FileStore
-from megatron.energon.cache.file_store import SystemFileStore
+from megatron.energon.cache.file_store import (
+    SystemFileStore,
+    WebdatasetFileStore,
+)
 from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.dataset_config import load_config
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import Sample
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
-from megatron.energon.flavors.webdataset.file_store import (
-    WebdatasetFileStore,
-)
 from megatron.energon.metadataset.dataset_loader import DatasetLoader
 from megatron.energon.metadataset.join_dataset_loader import JoinDatasetLoader, JoinedDatasetInfo
 from megatron.energon.metadataset.loader_interface import (

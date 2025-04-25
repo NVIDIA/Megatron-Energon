@@ -11,6 +11,7 @@ from typing import Any, Dict, Optional
 
 from megatron.energon.cache import DecodeFileStore, FileCacheLazy, FileStore, FileStoreCachePool
 from megatron.energon.flavors.webdataset.sample_decoder import SampleDecoder
+from megatron.energon.source_info import SourceInfo
 
 
 class MockFileStore(FileStore):
@@ -20,8 +21,13 @@ class MockFileStore(FileStore):
         self._data = data if data is not None else {}
         self._path = path
 
-    def __getitem__(self, key: str) -> Any:
-        return self._data[key]
+    def __getitem__(self, key: str) -> tuple[Any, SourceInfo]:
+        return self._data[key], SourceInfo(
+            dataset_path=self._path,
+            index=None,
+            shard_name=None,
+            file_names=(key,),
+        )
 
     def get_path(self) -> str:
         return self._path
@@ -65,12 +71,20 @@ class TestFileStoreCachePool(unittest.TestCase):
         pool = FileStoreCachePool(parent_cache_dir=self.temp_path)
         try:
             # get should directly read from the dataset without caching
-            result = pool.get(mock_raw_file_store, "file1")
+            result, source_info = pool.get(mock_raw_file_store, "file1")
             assert result == b"test data 1"
+            assert source_info.dataset_path == mock_raw_file_store.get_path()
+            assert source_info.index is None
+            assert source_info.shard_name is None
+            assert source_info.file_names == ("file1",)
 
             # get should directly read from the dataset without caching
-            result = pool.get(mock_decode_file_store, "file1")
-            assert result == "file1: test data 1", result
+            result, source_info = pool.get(mock_decode_file_store, "file1")
+            assert result == "file1: test data 1"
+            assert source_info.dataset_path == mock_decode_file_store.get_path()
+            assert source_info.index is None
+            assert source_info.shard_name is None
+            assert source_info.file_names == ("file1",)
         finally:
             pool.close()
 
@@ -135,9 +149,9 @@ class TestFileStoreCachePool(unittest.TestCase):
             assert len(cache_files) == 1, cache_files
 
             # Get data from both references
-            result1 = lazy_ref1.get()
+            result1, source_info1 = lazy_ref1.get()
             assert lazy_ref1.entry.refcount == 1
-            result2 = lazy_ref2.get()
+            result2, source_info2 = lazy_ref2.get()
             assert lazy_ref1.entry.refcount == 0
 
             # Check that the file exists in the cache directory
@@ -146,6 +160,10 @@ class TestFileStoreCachePool(unittest.TestCase):
 
             assert result1 == b"test data 1"
             assert result2 == b"test data 1"
+            assert source_info1.dataset_path == source_info2.dataset_path
+            assert source_info1.index is None
+            assert source_info1.shard_name is None
+            assert source_info1.file_names == source_info2.file_names
         finally:
             pool.close()
 
@@ -271,7 +289,7 @@ class TestFileStoreCachePool(unittest.TestCase):
             print("Fetching lazy2_3")
             # Now, fetching the second file should still work directly and ignore the caching
             # But it will requeue fetching the second file to the background thread for the remaining lazies.
-            result2_3 = lazy2_3.get()
+            result2_3, _ = lazy2_3.get()
             assert result2_3 == b"b" * 50_000
 
             # They should not be able to finish, because the cache is full
@@ -290,7 +308,7 @@ class TestFileStoreCachePool(unittest.TestCase):
             ], txt_status()
 
             # Fetch
-            result1 = lazy1.get()
+            result1, _ = lazy1.get()
             assert result1 == b"a" * 50_000
 
             lazy3.entry.send_to_cache_future.result(timeout=1)
@@ -315,7 +333,7 @@ class TestFileStoreCachePool(unittest.TestCase):
             assert pool.current_cache_count == 2
             assert pool.current_cache_size == 75_000
 
-            result3 = lazy3.get()
+            result3, _ = lazy3.get()
             assert result3 == b"c" * 50_000
 
             time.sleep(0.5)
@@ -337,7 +355,7 @@ class TestFileStoreCachePool(unittest.TestCase):
             assert pool.current_cache_count == 2
             assert pool.current_cache_size == 75_000
 
-            result3_2 = lazy3_2.get()
+            result3_2, _ = lazy3_2.get()
             assert result3_2 == b"c" * 50_000
 
             time.sleep(0.5)
@@ -359,7 +377,7 @@ class TestFileStoreCachePool(unittest.TestCase):
             assert pool.current_cache_count == 2
             assert pool.current_cache_size == 50_000
 
-            result4 = lazy4.get()
+            result4, _ = lazy4.get()
             assert result4 == b"d" * 25_000
 
             time.sleep(0.5)
@@ -381,7 +399,7 @@ class TestFileStoreCachePool(unittest.TestCase):
             assert pool.current_cache_count == 2
             assert pool.current_cache_size == 50_000
 
-            result5 = lazy5.get()
+            result5, _ = lazy5.get()
             assert result5 == b"e" * 25_000
 
             time.sleep(0.5)
@@ -403,7 +421,7 @@ class TestFileStoreCachePool(unittest.TestCase):
             assert pool.current_cache_count == 2
             assert pool.current_cache_size == 75_000
 
-            result6 = lazy6.get()
+            result6, _ = lazy6.get()
             assert result6 == b"f" * 25_000
 
             # Queue state: [], cached out: [6<25>, 2<50>], removed: [1<50>, 3<50>, 4<25>, 5<25>]
@@ -422,7 +440,7 @@ class TestFileStoreCachePool(unittest.TestCase):
             assert pool.current_cache_count == 2
             assert pool.current_cache_size == 75_000
 
-            result2 = lazy2.get()
+            result2, _ = lazy2.get()
             assert result2 == b"b" * 50_000
 
             # Queue state: [], cached out: [6<25>, 2<50>], removed: [1<50>, 3<50>, 4<25>, 5<25>]
@@ -441,7 +459,7 @@ class TestFileStoreCachePool(unittest.TestCase):
             assert pool.current_cache_count == 2
             assert pool.current_cache_size == 75_000
 
-            result2_2 = lazy2_2.get()
+            result2_2, _ = lazy2_2.get()
             assert result2_2 == b"b" * 50_000
 
             # Cache should only contain large_file6 now
@@ -505,8 +523,12 @@ class TestFileStoreCachePool(unittest.TestCase):
             time.sleep(0.5)
 
             # Get the data - should be decoded
-            result = lazy_ref.get()
+            result, source_info = lazy_ref.get()
             assert result == "file1: test data 1"
+            assert source_info.dataset_path == mock_decode_file_store.get_path()
+            assert source_info.index is None
+            assert source_info.shard_name is None
+            assert source_info.file_names == ("file1",)
         finally:
             pool.close()
 
@@ -530,8 +552,12 @@ class TestFileStoreCachePool(unittest.TestCase):
             lazy_ref.entry.send_to_cache_future.result()
 
             # Get the data - should be unpickled correctly
-            result = lazy_ref.get()
+            result, source_info = lazy_ref.get()
             assert result == "file1: test data 1"
+            assert source_info.dataset_path == mock_decode_file_store.get_path()
+            assert source_info.index is None
+            assert source_info.shard_name is None
+            assert source_info.file_names == ("file1",)
 
             # Request lazy loading
             lazy_ref = pool.get_lazy(mock_raw_file_store, "file1")
@@ -540,8 +566,12 @@ class TestFileStoreCachePool(unittest.TestCase):
             lazy_ref.entry.send_to_cache_future.result()
 
             # Get the data - should be unpickled correctly
-            result = lazy_ref.get()
+            result, source_info = lazy_ref.get()
             assert result == b"test data 1"
+            assert source_info.dataset_path == mock_raw_file_store.get_path()
+            assert source_info.index is None
+            assert source_info.shard_name is None
+            assert source_info.file_names == ("file1",)
         finally:
             pool.close()
 
@@ -557,8 +587,12 @@ class TestFileStoreCachePool(unittest.TestCase):
 
         def worker(filename):
             lazy_ref = pool.get_lazy(mock_raw_file_store, filename)
-            result = lazy_ref.get()
+            result, source_info = lazy_ref.get()
             results.append(result)
+            assert source_info.dataset_path == mock_raw_file_store.get_path()
+            assert source_info.index is None
+            assert source_info.shard_name is None
+            assert source_info.file_names == (filename,)
 
         try:
             # Start multiple threads accessing the same file
