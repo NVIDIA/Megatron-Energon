@@ -1,7 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from typing import Any, Callable, Dict, Generic, Iterator, Optional, Tuple, TypeVar, Union
+from typing import Any, Callable, Dict, Generic, Iterator, Optional, TypeVar, Union
 
 from megatron.energon.flavors.base_dataset import SavableDataset
 from megatron.energon.worker import WorkerConfig

@@ -1,14 +1,14 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from typing import Any, Callable, Dict, Generator, Iterator, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, Generator, Iterator, List, Optional, Sequence, Tuple, Union
 
 import torch
 
 from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.flavors.base_dataset import FlexState, SavableDataset, SourceInfo
 from megatron.energon.flavors.webdataset.itar_reader import ITarReader
-from megatron.energon.flavors.webdataset.structs import FilteredSample, reraise_exception
+from megatron.energon.flavors.webdataset.structs import FilteredSample
 from megatron.energon.rng import WorkerRng
 from megatron.energon.worker import WorkerConfig
 
@@ -449,15 +449,12 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
         assert id == "Webdataset"
         assert isinstance(index, int)
         return self._get_sample(index)
-    
+
     def get_sample_sources(self, restore_key: Any) -> list[SourceInfo]:
         id, index = restore_key
         assert id == "Webdataset"
         assert isinstance(index, int)
-        return [
-            reader.get_sample_source(index)
-            for reader in self.join_readers
-        ]
+        return [reader.get_sample_source(index) for reader in self.join_readers]
 
     def config(self) -> Dict[str, Any]:
         return {

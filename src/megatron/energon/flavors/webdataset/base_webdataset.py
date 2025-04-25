@@ -62,7 +62,9 @@ class BaseWebdatasetFactory(
         info_config: str = ".info.yaml",
         split_config: str = "split.yaml",
         part_filter: Optional[Callable[[str], bool]] = None,
-        handler: Callable[[Exception, Optional[str], Optional[list[SourceInfo]]], None] = reraise_exception,
+        handler: Callable[
+            [Exception, Optional[str], Optional[list[SourceInfo]]], None
+        ] = reraise_exception,
     ):
         """
         Base factory for the webdataset sample loader.

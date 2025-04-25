@@ -74,7 +74,9 @@ class JoinedWebdatasetFactory(
         max_samples_per_sequence: Optional[int] = None,
         join_index: EPath,
         joiner: Union[Type[T_sample], Callable[..., T_sample]],
-        handler: Callable[[Exception, Optional[str], Optional[list[SourceInfo]]], None] = reraise_exception,
+        handler: Callable[
+            [Exception, Optional[str], Optional[list[SourceInfo]]], None
+        ] = reraise_exception,
     ):
         """
         Constructs the loader for a joined webdataset. The samples from the inner datasets are joined into a single

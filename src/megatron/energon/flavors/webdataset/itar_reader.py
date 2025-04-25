@@ -193,7 +193,7 @@ class ITarReader(ABC, Generic[T_index]):
         sample_pointer = self._get_itar_sample_pointer(idx)
 
         return self._get_item_by_sample_pointer(sample_pointer, idx)
-    
+
     def get_sample_source(self, idx: int) -> SourceInfo:
         """
         Get the source of the sample at the given index.
@@ -238,7 +238,7 @@ class ITarReader(ABC, Generic[T_index]):
 
             if take_entry:
                 file_names.append(fname)
-        
+
         if len(file_names) == 0:
             raise ValueError(f"No valid files found in sample {sample_pointer}")
 

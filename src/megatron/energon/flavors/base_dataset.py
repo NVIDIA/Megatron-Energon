@@ -374,7 +374,9 @@ class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC)
         )
 
     @abstractmethod
-    def get_sample_sources(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> list[SourceInfo]:
+    def get_sample_sources(
+        self, restore_key: Tuple[Union[str, int, tuple], ...]
+    ) -> list[SourceInfo]:
         """
         Get the sources of the sample references by the restore key.
 

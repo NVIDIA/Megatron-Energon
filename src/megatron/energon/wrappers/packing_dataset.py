@@ -91,7 +91,9 @@ class PackingDataset(
         sample_encoder: Optional[Callable[[List[T_sample]], T_encoded_sample]] = None,
         sample_encoder_stateless: bool = False,
         packer_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]] = None,
-        error_handler: Callable[[Exception, List[T_sample], list[SourceInfo]], None] = log_exception,
+        error_handler: Callable[
+            [Exception, List[T_sample], list[SourceInfo]], None
+        ] = log_exception,
         worker_config: WorkerConfig,
     ):
         """Construct a PackingDataset which is used for sequence packing.
@@ -189,7 +191,9 @@ class PackingDataset(
             except SYSTEM_EXCEPTIONS:
                 raise FatalSampleError.from_sample(pack)
             except Exception as e:
-                self.error_handler(e, [sample], self.dataset.get_sample_sources(get_sample_restore_key(sample)))
+                self.error_handler(
+                    e, [sample], self.dataset.get_sample_sources(get_sample_restore_key(sample))
+                )
         return encoded_pack
 
     def __iter__(self) -> Iterator[T_batch_sample]:
@@ -221,7 +225,15 @@ class PackingDataset(
                 except SYSTEM_EXCEPTIONS:
                     raise FatalSampleError.from_sample(samples)
                 except Exception as e:
-                    self.error_handler(e, samples, [source for restore_key in restore_keys for source in self.dataset.get_sample_sources(restore_key)])
+                    self.error_handler(
+                        e,
+                        samples,
+                        [
+                            source
+                            for restore_key in restore_keys
+                            for source in self.dataset.get_sample_sources(restore_key)
+                        ],
+                    )
                     pre_packs = []
 
                 # Put the pre-packed samples into the pre_packing_buffer
@@ -270,7 +282,15 @@ class PackingDataset(
             except SYSTEM_EXCEPTIONS:
                 raise FatalSampleError.from_sample(pack)
             except Exception as e:
-                self.error_handler(e, pack, [source for restore_key in pack_restore_keys for source in self.dataset.get_sample_sources(restore_key)])
+                self.error_handler(
+                    e,
+                    pack,
+                    [
+                        source
+                        for restore_key in pack_restore_keys
+                        for source in self.dataset.get_sample_sources(restore_key)
+                    ],
+                )
 
         # Main loop:
         pre_pack_round = 0
@@ -372,7 +392,7 @@ class PackingDataset(
             assert False, f"Pack sub-index {pack_sub_idx} not found in pack"
         else:
             return set_sample_restore_key(final_pack, pack_idx, *pack_restore_keys, src=self)
-    
+
     def get_sample_sources(self, restore_key: Any) -> list[SourceInfo]:
         if inspect.isgeneratorfunction(self.final_packer):
             id, pack_idx, pack_sub_idx, *pack_restore_keys = restore_key
@@ -380,7 +400,7 @@ class PackingDataset(
         else:
             id, pack_idx, *pack_restore_keys = restore_key
             assert id == type(self).__name__
-        
+
         result = []
         for inner_idx in pack_restore_keys:
             if self.sample_encoder is not None:

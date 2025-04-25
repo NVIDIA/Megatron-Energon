@@ -139,8 +139,10 @@ class SimpleSavableDatasetWrapper(BaseWrapperDataset[T, Tuple[int, int, T]], Gen
             )
         finally:
             self.worker_config.worker_deactivate()
-    
-    def get_sample_sources(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> list[SourceInfo]:
+
+    def get_sample_sources(
+        self, restore_key: Tuple[Union[str, int, tuple], ...]
+    ) -> list[SourceInfo]:
         id, global_worker_id, sample_idx = restore_key[:3]
         assert id == type(self).__name__
         restore_key = restore_key[3:]
@@ -544,8 +546,10 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
             )
         finally:
             self.worker_config.worker_deactivate()
-        
-    def get_sample_sources(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> list[SourceInfo]:
+
+    def get_sample_sources(
+        self, restore_key: Tuple[Union[str, int, tuple], ...]
+    ) -> list[SourceInfo]:
         id, global_worker_id, sample_idx = restore_key[:3]
         assert id == type(self).__name__
         restore_key = restore_key[3:]
@@ -1136,7 +1140,9 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
         """Restores a sample from a key. This is useful to debug the dataset."""
         return self.dataset.restore_sample(restore_key)
 
-    def get_sample_sources(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> list[SourceInfo]:
+    def get_sample_sources(
+        self, restore_key: Tuple[Union[str, int, tuple], ...]
+    ) -> list[SourceInfo]:
         """
         Get the sources of the sample references by the restore key.
 
@@ -1335,7 +1341,9 @@ class BasicDataLoader(DataLoader[T], Generic[T]):
         """Restores a sample from a key. This is useful to debug the dataset."""
         return self.dataset.restore_sample(restore_key)
 
-    def get_sample_sources(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> list[SourceInfo]:
+    def get_sample_sources(
+        self, restore_key: Tuple[Union[str, int, tuple], ...]
+    ) -> list[SourceInfo]:
         """
         Get the sources of the sample references by the restore key.
 

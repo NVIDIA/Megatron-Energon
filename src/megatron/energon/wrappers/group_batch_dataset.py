@@ -19,7 +19,12 @@ from typing import (
 
 from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.errors import SYSTEM_EXCEPTIONS, FatalSampleError
-from megatron.energon.flavors.base_dataset import FlexState, SavableDataset, SourceInfo, set_sample_restore_key
+from megatron.energon.flavors.base_dataset import (
+    FlexState,
+    SavableDataset,
+    SourceInfo,
+    set_sample_restore_key,
+)
 from megatron.energon.savable import Savable
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers._log_exception import log_exception
@@ -77,7 +82,9 @@ class GroupBatchDataset(
         batcher_stateless: bool = False,
         batcher_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]] = None,
         drop_last: bool = False,
-        error_handler: Callable[[Exception, List[T_batch_sample], list[SourceInfo]], None] = log_exception,
+        error_handler: Callable[
+            [Exception, List[T_batch_sample], list[SourceInfo]], None
+        ] = log_exception,
         worker_config: WorkerConfig,
     ):
         """Construct a GroupBatchDataset.
@@ -153,7 +160,13 @@ class GroupBatchDataset(
             except SYSTEM_EXCEPTIONS:
                 raise FatalSampleError.from_sample(batch_items)
             except Exception as e:
-                self.error_handler(e, batch_items, self.get_sample_sources((type(self).__name__, sample_idx, *sample_restore_keys)))
+                self.error_handler(
+                    e,
+                    batch_items,
+                    self.get_sample_sources(
+                        (type(self).__name__, sample_idx, *sample_restore_keys)
+                    ),
+                )
 
         # Add samples to the buckets
         for sample in self.dataset:
@@ -172,7 +185,13 @@ class GroupBatchDataset(
                 raise FatalSampleError.from_sample(sample)
             except Exception as e:
                 restore_key = get_sample_restore_key(sample)
-                self.error_handler(e, [sample], self.dataset.get_sample_sources(restore_key) if restore_key is not None else None)
+                self.error_handler(
+                    e,
+                    [sample],
+                    self.dataset.get_sample_sources(restore_key)
+                    if restore_key is not None
+                    else None,
+                )
                 continue
             bucket = buckets.get(bucket_key)
             if bucket is None:
@@ -234,15 +253,16 @@ class GroupBatchDataset(
             batch_sample = self.batcher(batch)
         set_sample_restore_key(batch_sample, sample_idx, *sample_restore_keys, src=self)
         return batch_sample
-    
-    def get_sample_sources(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> list[SourceInfo]:
+
+    def get_sample_sources(
+        self, restore_key: Tuple[Union[str, int, tuple], ...]
+    ) -> list[SourceInfo]:
         id, sample_idx, *sample_restore_keys = restore_key
         assert id == type(self).__name__
         return sum(
-            (
-                self.dataset.get_sample_sources(inner_idx)  
-                for inner_idx in sample_restore_keys
-            ), start=[])
+            (self.dataset.get_sample_sources(inner_idx) for inner_idx in sample_restore_keys),
+            start=[],
+        )
 
     def config(self) -> Dict[str, Any]:
         return {

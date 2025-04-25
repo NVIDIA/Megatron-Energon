@@ -11,9 +11,13 @@ T_sample = TypeVar("T_sample", covariant=True)
 
 
 class ErrorHandler(Generic[T_sample]):
-    handler: Callable[[Exception, Optional[str], Optional[list[SourceInfo]]], None] = reraise_exception
+    handler: Callable[[Exception, Optional[str], Optional[list[SourceInfo]]], None] = (
+        reraise_exception
+    )
 
-    def sample_error_handler(self, e: Exception, sample_key: Optional[str], sources: Optional[list[SourceInfo]] = None):
+    def sample_error_handler(
+        self, e: Exception, sample_key: Optional[str], sources: Optional[list[SourceInfo]] = None
+    ):
         if isinstance(e, SYSTEM_EXCEPTIONS):
             raise FatalSampleError(f"Error in sample {sample_key!r}: {e}") from e
 

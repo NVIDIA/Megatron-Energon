@@ -90,8 +90,10 @@ class BaseWrapperDataset(SavableDataset[T_sample_out], Generic[T_sample_in, T_sa
                 ds_idx,
                 src=self,
             )
-    
-    def get_sample_sources(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> list[SourceInfo]:
+
+    def get_sample_sources(
+        self, restore_key: Tuple[Union[str, int, tuple], ...]
+    ) -> list[SourceInfo]:
         if len(self.datasets) == 1:
             return self.datasets[0].get_sample_sources(restore_key)
         else:

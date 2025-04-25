@@ -12,9 +12,11 @@ def log_exception(_e: Exception, sample, sources: Optional[list[SourceInfo]] = N
     print("-" * 10)
 
     if sources:
-        print(f"Sources:")
+        print("Sources:")
         for source in sources:
-            print(f" - {source.dataset_path}[{source.index}] {source.shard_name}{source.file_names!r}")
+            print(
+                f" - {source.dataset_path}[{source.index}] {source.shard_name}{source.file_names!r}"
+            )
         print("-" * 10)
 
     sample_str = str(sample)

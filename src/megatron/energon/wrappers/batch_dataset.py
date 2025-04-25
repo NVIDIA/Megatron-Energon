@@ -49,7 +49,9 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
         batcher_stateless: bool = False,
         batcher_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]] = None,
         drop_last: bool = False,
-        error_handler: Callable[[Exception, List[T_batch_sample], List[SourceInfo]], None] = log_exception,
+        error_handler: Callable[
+            [Exception, List[T_batch_sample], List[SourceInfo]], None
+        ] = log_exception,
         worker_config: WorkerConfig,
     ):
         """Construct a BatchDataset.
@@ -167,7 +169,11 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
             except SYSTEM_EXCEPTIONS:
                 raise FatalSampleError.from_sample(batch)
             except Exception as e:
-                self.error_handler(e, batch, self.get_sample_sources((type(self).__name__, 0, *sample_restore_keys)))
+                self.error_handler(
+                    e,
+                    batch,
+                    self.get_sample_sources((type(self).__name__, 0, *sample_restore_keys)),
+                )
 
         for sample in self.dataset:
             batch.append(sample)
@@ -224,8 +230,10 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
                 *samples_restore_keys,
                 src=self,
             )
-    
-    def get_sample_sources(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> list[SourceInfo]:
+
+    def get_sample_sources(
+        self, restore_key: Tuple[Union[str, int, tuple], ...]
+    ) -> list[SourceInfo]:
         if inspect.isgeneratorfunction(self.batcher):
             id, sample_idx, batch_sub_idx, *samples_restore_keys = restore_key
             assert id == type(self).__name__
@@ -233,11 +241,8 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
             id, sample_idx, *samples_restore_keys = restore_key
             assert id == type(self).__name__
         return sum(
-            (
-                self.dataset.get_sample_sources(inner_idx)  
-                for inner_idx in samples_restore_keys
-            ),
-            start=[]
+            (self.dataset.get_sample_sources(inner_idx) for inner_idx in samples_restore_keys),
+            start=[],
         )
 
     def config(self) -> Dict[str, Any]:

@@ -150,7 +150,13 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
             except SYSTEM_EXCEPTIONS:
                 raise FatalSampleError.from_sample(sample)
             except Exception as e:
-                self.error_handler(e, sample, self.dataset.get_sample_sources(restore_key) if restore_key is not None else None)
+                self.error_handler(
+                    e,
+                    sample,
+                    self.dataset.get_sample_sources(restore_key)
+                    if restore_key is not None
+                    else None,
+                )
 
     def can_restore_sample(self) -> bool:
         return super().can_restore_sample() and self.stateless_map_fn
@@ -190,7 +196,9 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
         else:
             return add_sample_restore_key(mapped_sample, sample_idx, src=self)
 
-    def get_sample_sources(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> list[SourceInfo]:
+    def get_sample_sources(
+        self, restore_key: Tuple[Union[str, int, tuple], ...]
+    ) -> list[SourceInfo]:
         if inspect.isgeneratorfunction(self.map_fn):
             id, sample_idx, local_idx = restore_key[:3]
             assert id == type(self).__name__

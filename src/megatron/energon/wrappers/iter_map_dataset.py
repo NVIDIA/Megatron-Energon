@@ -48,7 +48,9 @@ class IterMapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sampl
         iter_map_fn: Callable[[Iterator[T_sample]], Iterator[T_sample_out]],
         *,
         len_map_fn: Callable[[int], int] = lambda x: x,
-        error_handler: Callable[[Exception, Optional[T_sample], list[SourceInfo]], None] = log_exception,
+        error_handler: Callable[
+            [Exception, Optional[T_sample], list[SourceInfo]], None
+        ] = log_exception,
         stateless_iter_fn: bool = False,
         iter_map_fn_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]] = None,
         worker_config: WorkerConfig,
@@ -126,7 +128,13 @@ class IterMapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sampl
                 raise FatalSampleError.from_sample(last_sample_wrapper.last_sample)
             except Exception as e:
                 restore_key = get_sample_restore_key(last_sample_wrapper.last_sample)
-                self.error_handler(e, last_sample_wrapper.last_sample, self.dataset.get_sample_sources(restore_key) if restore_key is not None else None)
+                self.error_handler(
+                    e,
+                    last_sample_wrapper.last_sample,
+                    self.dataset.get_sample_sources(restore_key)
+                    if restore_key is not None
+                    else None,
+                )
             else:
                 break
 
@@ -173,14 +181,15 @@ class IterMapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sampl
             if hasattr(inner_iter, "close"):
                 inner_iter.close()
 
-    def get_sample_sources(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> list[SourceInfo]:
+    def get_sample_sources(
+        self, restore_key: Tuple[Union[str, int, tuple], ...]
+    ) -> list[SourceInfo]:
         id, sample_idx, iter_idx, *sample_restore_keys = restore_key
         assert id == type(self).__name__
         return sum(
-            (
-                self.dataset.get_sample_sources(inner_idx)  
-                for inner_idx in sample_restore_keys
-            ), start=[])
+            (self.dataset.get_sample_sources(inner_idx) for inner_idx in sample_restore_keys),
+            start=[],
+        )
 
     def config(self) -> Dict[str, Any]:
         return {
