@@ -450,3 +450,28 @@ def set_sample_restore_key(
             "Did not yield a sample with a restore key, but is marked stateless/deterministic."
         )
     return sample
+
+
+def legacy_handler(
+    handler: Union[
+        Callable[[Exception, Optional[str], Optional[list[SourceInfo]]], None],
+        Callable[[Exception, Optional[str]], None],
+    ],
+) -> Callable[[Exception, Optional[str], Optional[list[SourceInfo]]], None]:
+    """Safely returns the new style three argument handler. If the handler takes 2 arguments, it wraps it."""
+    import functools
+    import inspect
+
+    handler_sig = inspect.signature(handler)
+    if len(handler_sig.parameters) != 3:
+        original_handler = handler
+
+        @functools.wraps(original_handler)
+        def wrapped_handler(
+            exc: Exception, key: Optional[str], source_infos: Optional[list[SourceInfo]]
+        ) -> None:
+            return original_handler(exc, key)
+
+        return wrapped_handler
+    else:
+        return handler

@@ -9,7 +9,12 @@ import numpy as np
 
 from megatron.energon.cache import FileStore
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory, SavableDataset, SourceInfo
+from megatron.energon.flavors.base_dataset import (
+    BaseCoreDatasetFactory,
+    SavableDataset,
+    SourceInfo,
+    legacy_handler,
+)
 from megatron.energon.flavors.webdataset.error_handler import ErrorHandler
 from megatron.energon.flavors.webdataset.file_store import WebdatasetFileStore
 from megatron.energon.flavors.webdataset.metadata import WebdatasetMeta
@@ -104,7 +109,7 @@ class BaseWebdatasetFactory(
         self.parallel_shard_iters = parallel_shard_iters
         self.max_samples_per_sequence = max_samples_per_sequence
         self.part_filter = part_filter
-        self.handler = handler
+        self.handler = legacy_handler(handler)
 
     def __len__(self) -> int:
         return sum(shard.count for shard in self.shards)

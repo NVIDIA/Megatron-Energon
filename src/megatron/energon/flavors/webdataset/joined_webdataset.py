@@ -23,6 +23,7 @@ from megatron.energon.flavors.base_dataset import (
     Sample,
     SavableDataset,
     SourceInfo,
+    legacy_handler,
     set_sample_restore_key,
 )
 from megatron.energon.flavors.webdataset.base_webdataset import BaseWebdatasetFactory
@@ -129,7 +130,7 @@ class JoinedWebdatasetFactory(
         self.shuffle_over_epochs = shuffle_over_epochs
         self.parallel_shard_iters = parallel_shard_iters
         self.max_samples_per_sequence = max_samples_per_sequence
-        self.handler = handler
+        self.handler = legacy_handler(handler)
 
     def __len__(self) -> int:
         return sum(shard.count for shard in self.inner_datasets[0].shards)
