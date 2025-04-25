@@ -31,6 +31,7 @@ from megatron.energon import (
 from megatron.energon.cache import FileStore, FileStoreCachePool, Lazy
 from megatron.energon.cache.base import CachePool
 from megatron.energon.dataclass_slots import dataclass_slots
+from megatron.energon.epathlib.epath import EPath
 from megatron.energon.flavors.base_dataset import Sample
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 from megatron.energon.flavors.webdataset.sample_decoder import SampleDecoder
@@ -630,6 +631,51 @@ class TestDataset(unittest.TestCase):
         print(samples_restored)
 
         assert all([a == b for a, b in zip(samples_after, samples_restored)])
+
+        # Verify that the sources are correct
+        sample_src_check = [s.__sources__ for idx, s in zip(range(1), loader)][0]
+        print(sample_src_check)
+        assert sample_src_check == [
+            # Primary source for the sample, reading all source files
+            SourceInfo(
+                dataset_path=EPath(self.dataset_path / "ds1"),
+                index=10,
+                shard_name="parts/data-1.tar",
+                file_names=("000010.pkl", "000010.txt"),
+            ),
+            # Auxiliary source for the sample, reading from ds2
+            SourceInfo(
+                dataset_path=EPath(self.dataset_path / "ds2"),
+                index=10,
+                shard_name="parts/data-1.tar",
+                file_names=("000110.txt",),
+            ),
+            # Auxiliary source for the sample, reading from ds1, but next sample
+            SourceInfo(
+                dataset_path=EPath(self.dataset_path / "ds1"),
+                index=11,
+                shard_name="parts/data-1.tar",
+                file_names=("000011.txt",),
+            ),
+            SourceInfo(
+                dataset_path=EPath(self.dataset_path / "ds1"),
+                index=11,
+                shard_name="parts/data-1.tar",
+                file_names=("000011.pkl", "000011.txt"),
+            ),
+            SourceInfo(
+                dataset_path=EPath(self.dataset_path / "ds2"),
+                index=11,
+                shard_name="parts/data-1.tar",
+                file_names=("000111.txt",),
+            ),
+            SourceInfo(
+                dataset_path=EPath(self.dataset_path / "ds1"),
+                index=12,
+                shard_name="parts/data-1.tar",
+                file_names=("000012.txt",),
+            ),
+        ]
 
     def test_aux_filesystem_reference(self):
         torch.manual_seed(42)

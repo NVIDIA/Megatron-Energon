@@ -3,7 +3,7 @@
 
 from abc import ABC, abstractmethod
 from bisect import bisect_right
-from typing import Any, Callable, Dict, Generic, List, Optional, Tuple, TypeVar, Union, overload
+from typing import Callable, Dict, Generic, List, Optional, Tuple, TypeVar, Union, overload
 
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.webdataset.config import skip_meta_re, split_name_re
@@ -104,7 +104,7 @@ class ITarReader(ABC, Generic[T_index]):
     def _get_item_by_sample_pointer(
         self,
         sample_pointer: ITarSamplePointer,
-        sample_index: Any,
+        sample_index: int,
         entry_match_fn: Optional[Callable[[str], bool]] = None,
     ) -> Union["ITarReader", FilteredSample, None]:
         """
@@ -112,7 +112,7 @@ class ITarReader(ABC, Generic[T_index]):
 
         Args:
             sample_pointer: The sample pointer to get the sample from.
-            sample_index: The index of the sample in the dataset.
+            sample_index: The global index of the sample in the dataset.
             entry_match_fn: An optional function to filter the entries in the sample.
 
         Returns:
@@ -250,14 +250,14 @@ class JoinIndexFileITarReader(ITarReader[int]):
             sample_filter=sample_filter,
         )
 
-    def _get_join_index_reader_cached(self, samp_idx: int) -> JoinIndexReader:
+    def _get_join_index_reader_cached(self, sample_idx: int) -> JoinIndexReader:
         """
         Get the JoinIndexReader object for the given sample index, or create it if it doesn't exist.
         """
 
-        if samp_idx not in self.index_reader_cache:
+        if sample_idx not in self.index_reader_cache:
             index_reader = JoinIndexReader(self.index_file, column=self.column)
-            self.index_reader_cache[samp_idx] = index_reader
+            self.index_reader_cache[sample_idx] = index_reader
 
         # If we hit the limit of open files, close the least recently used file
         while len(self.index_reader_cache) > self.index_reader_cache_size:
@@ -267,18 +267,18 @@ class JoinIndexFileITarReader(ITarReader[int]):
             self.index_reader_cache[lru_key].close()
             del self.index_reader_cache[lru_key]
 
-        return self.index_reader_cache[samp_idx]
+        return self.index_reader_cache[sample_idx]
 
-    def _get_itar_sample_pointer(self, samp_idx: int) -> ITarSamplePointer:
+    def _get_itar_sample_pointer(self, sample_idx: int) -> ITarSamplePointer:
         """
         Get the ITarSample object for the given index.
         """
-        index_reader = self._get_join_index_reader_cached(samp_idx)
-        row = index_reader[samp_idx]
+        index_reader = self._get_join_index_reader_cached(sample_idx)
+        row = index_reader[sample_idx]
 
         # Update cache entry
         new_offset = index_reader.tell_row()
-        del self.index_reader_cache[samp_idx]
+        del self.index_reader_cache[sample_idx]
         self.index_reader_cache[new_offset] = index_reader
 
         assert len(row) == 1
@@ -288,6 +288,7 @@ class JoinIndexFileITarReader(ITarReader[int]):
             tar_file_id=shard_idx,
             byte_offset=byte_offset,
             byte_size=byte_size,
+            sample_index=sample_idx,
         )
 
     def __len__(self) -> int:
@@ -391,6 +392,7 @@ class ShardInfosITarReader(ITarReader[int]):
             tar_file_id=self.shard_tar_file_idxs[shard_idx],
             byte_offset=byte_offset,
             byte_size=byte_size,
+            sample_index=idx,
         )
 
     def __len__(self) -> int:
@@ -468,10 +470,7 @@ class SqliteITarEntryReader(ITarReader[str]):
         if isinstance(key, slice):
             # Return a new reader with a sliced samples tensor
             raise NotImplementedError("Slicing is not yet implemented")
-        elif isinstance(key, str):
-            idx = key
-        else:
-            raise TypeError("Invalid argument type for __getitem__")
+        assert isinstance(key, str), "Invalid argument type for __getitem__"
 
         if self.key_is_full_entryname:
             m = split_name_re.match(key)
@@ -488,13 +487,15 @@ class SqliteITarEntryReader(ITarReader[str]):
         sample_pointer = self._get_itar_sample_pointer(sample_key)
 
         sample = self._get_item_by_sample_pointer(
-            sample_pointer, idx, entry_match_fn=entry_match_fn
+            sample_pointer, sample_pointer.sample_index, entry_match_fn=entry_match_fn
         )
         assert sample is not None, f"Sample not found: {sample_key}"
 
         if self.key_is_full_entryname:
             assert isinstance(sample_ext, str)
-            return sample[sample_ext], sample["__sources__"]  # Return the bytes directly
+            assert len(sample["__sources__"]) == 1
+            # Return the bytes directly
+            return sample[sample_ext], sample["__sources__"][0]
         else:
             return sample  # Return the FilteredSample
 

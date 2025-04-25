@@ -4,7 +4,7 @@
 import sqlite3
 import struct
 from pathlib import Path
-from typing import Any, BinaryIO, List, Optional, Tuple, Union
+from typing import BinaryIO, List, Optional, Tuple, Union
 
 from numpy import int8
 
@@ -28,6 +28,8 @@ class SqliteIndexWriter:
                     byte_offset INTEGER,
                     byte_size INTEGER)
         Also creates an index on samples(sample_key).
+        id is the global index of the sample in the dataset.
+        The sample_index is the local index of the sample in the tar file.
         """
 
         # Final path and temporary path
@@ -71,7 +73,16 @@ class SqliteIndexWriter:
         byte_offset: Optional[int],
         byte_size: Optional[int],
     ):
-        """Adds a new sample row to the samples table."""
+        """
+        Adds a new sample row to the samples table.
+
+        Args:
+            tar_file_id: The index of the tar file in the reader.
+            sample_key: The key of the sample.
+            sample_index: The index of the sample in the tar file.
+            byte_offset: The byte offset of the sample in the tar file.
+            byte_size: The size of the sample in the tar file.
+        """
 
         assert self.db is not None, "Database is closed"
 
@@ -170,6 +181,9 @@ class SqliteIndexReader:
               sample_index INTEGER,
               byte_offset INTEGER,
               byte_size INTEGER)
+
+    id is the global index of the sample in the dataset.
+    The sample_index is the local index of the sample in the tar file.
     """
 
     sqlite_path: EPath
@@ -199,21 +213,20 @@ class SqliteIndexReader:
         count = self.db.select_one("SELECT COUNT(*) FROM samples")
         return count[0] if count else 0
 
-    def get_sample_by_index(self, idx: int) -> Any:
+    def get_sample_by_index(self, idx: int) -> ITarSamplePointer:
         """Get a sample by its numeric index.
 
         Args:
             idx: 0-based index of the sample
 
         Returns:
-            Tuple of (tar_file_id, sample_key, sample_index, byte_offset, byte_size)
+            The sample pointer
         """
         assert self.db is not None, "Database is closed"
 
         # SQLite uses 1-based indexing for ROWID, so add 1 to idx
         sample = self.db.select_one(
-            "SELECT tar_file_id, sample_key, sample_index, byte_offset, byte_size "
-            "FROM samples WHERE id = ?",
+            "SELECT tar_file_id, byte_offset, byte_size, id FROM samples WHERE id = ?",
             (idx + 1,),
         )
 
@@ -222,24 +235,24 @@ class SqliteIndexReader:
 
         return ITarSamplePointer(
             tar_file_id=sample[0],
-            byte_offset=sample[3],
-            byte_size=sample[4],
+            byte_offset=sample[1],
+            byte_size=sample[2],
+            sample_index=sample[3] - 1,
         )
 
-    def get_sample_pointer_by_key(self, key: str) -> Any:
+    def get_sample_pointer_by_key(self, key: str) -> ITarSamplePointer:
         """Get a sample by its key name.
 
         Args:
             key: The sample key to look up
 
         Returns:
-            Tuple of (tar_file_id, sample_key, sample_index, byte_offset, byte_size)
+            The sample pointer
         """
         assert self.db is not None, "Database is closed"
 
         sample = self.db.select_one(
-            "SELECT tar_file_id, sample_key, sample_index, byte_offset, byte_size "
-            "FROM samples WHERE sample_key = ?",
+            "SELECT tar_file_id, byte_offset, byte_size, id FROM samples WHERE sample_key = ?",
             (key,),
         )
 
@@ -248,8 +261,9 @@ class SqliteIndexReader:
 
         return ITarSamplePointer(
             tar_file_id=sample[0],
-            byte_offset=sample[3],
-            byte_size=sample[4],
+            byte_offset=sample[1],
+            byte_size=sample[2],
+            sample_index=sample[3] - 1,
         )
 
     def get_index_by_key(self, key: str) -> int:

@@ -21,9 +21,14 @@ class ITarSamplePointer:
     The tar_file_id refers to the tar_filenames in the reader.
     """
 
+    # The index of the tar file, to be matched with the tar_filenames in the reader.
     tar_file_id: int
+    # The byte offset of the sample in the tar file.
     byte_offset: int
+    # The size of the sample in the tar file.
     byte_size: int
+    # The global index of the sample in the dataset.
+    sample_index: int
 
 
 class TarIndexReader:

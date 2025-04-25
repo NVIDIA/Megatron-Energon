@@ -152,8 +152,8 @@ class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
         base_kwargs = {
             field.name: getattr(base_sample, field.name) for field in dataclasses.fields(Sample)
         }
-        if sources is not None:
-            base_kwargs["__sources__"] = (*base_kwargs["__sources__"], sources)
+        if sources:
+            base_kwargs["__sources__"] = (*base_kwargs["__sources__"], *sources)
         return cls(
             **base_kwargs,
             **kwargs,
