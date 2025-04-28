@@ -66,6 +66,11 @@ class Fastseek:
                     f"Unsupported container: {ftype.mime} (hint: try passing probe=True to the Fastseek constructor)"
                 )
 
+            if len(self.keyframes) == 0:
+                raise ValueError(
+                    f"The parser for {ftype.mime} was unable to find keyframes (hint: try passing probe=True to the Fastseek constructor)"
+                )
+
     def should_seek(self, current: int, target: int, stream: int = 0) -> Optional[KeyframeInfo]:
         """Determine if seeking to a keyframe is necessary to reach the target frame.
 
