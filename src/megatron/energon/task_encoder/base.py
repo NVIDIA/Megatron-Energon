@@ -53,7 +53,6 @@ from megatron.energon.wrappers import (
     ShuffleBufferDataset,
 )
 from megatron.energon.wrappers.repeat_dataset import RepeatDataset
-from megatron.energon.wrappers.watchdog_dataset import WatchdogDataset
 
 T = TypeVar("T")
 V = TypeVar("V")
@@ -657,8 +656,6 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         shuffle_buffer_size: Optional[int] = None,
         blend_mode: DatasetBlendMode = DatasetBlendMode.NONE,
         repeat: bool = True,
-        watchdog_timeout_seconds: Optional[float] = 60,
-        fail_on_timeout: bool = False,
     ) -> SavableDataset[T_batch]:
         """Combines train datasets to a single dataset."""
 
@@ -748,12 +745,6 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         if worker_config.should_log(level=1):
             dataset = LogSampleDataset(dataset, mode="train", worker_config=worker_config)
 
-        dataset = WatchdogDataset(
-            dataset,
-            worker_config=worker_config,
-            timeout_seconds=watchdog_timeout_seconds,
-            fail_on_timeout=fail_on_timeout,
-        )
         return dataset
 
     def build_val_datasets(
@@ -765,8 +756,6 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         batch_drop_last: bool = False,
         packing_buffer_size: Optional[int] = None,
         limit: Optional[int] = None,
-        watchdog_timeout_seconds: Optional[float] = 60,
-        fail_on_timeout: bool = False,
     ) -> SavableDataset[T_batch]:
         """Combines val datasets to a single dataset."""
 
@@ -810,14 +799,10 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 worker_config=worker_config,
                 reset_after_epoch=True,
             )
+
         if worker_config.should_log(level=2):
             dataset = LogSampleDataset(dataset, mode="val", worker_config=worker_config)
-        dataset = WatchdogDataset(
-            dataset,
-            worker_config=worker_config,
-            timeout_seconds=watchdog_timeout_seconds,
-            fail_on_timeout=fail_on_timeout,
-        )
+
         return dataset
 
     @property

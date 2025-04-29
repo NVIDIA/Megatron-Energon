@@ -33,6 +33,7 @@ class Watchdog:
     def __init__(
         self,
         timeout: float,
+        initial_timeout: Optional[float] = None,
         callback: Optional[Callable[[], None]] = None,
         dump_stacks: bool = True,
         enabled: bool = True,
@@ -40,17 +41,23 @@ class Watchdog:
         """
         Args:
             timeout: Number of seconds before the watchdog fires if not reset/disabled.
+            initial_timeout: Number of seconds before the watchdog fires in the first iteration.
             callback: Optional function to call upon timeout.
             dump_stacks: If True, print full stack traces for all threads on timeout (except watchdog's own thread).
             enabled: If False, watchdog starts disabled until enable() is called.
         """
         self._timeout = timeout
+        self._initial_timeout = initial_timeout
         self._callback = callback
         self._dump_stacks = dump_stacks
+        self._is_first_iteration = True
 
         # If _deadline is None, the watchdog is disabled.
         # Otherwise, _deadline = time.time() + _timeout if enabled.
-        self._deadline: Optional[float] = perf_counter() + timeout if enabled else None
+        if enabled:
+            self._deadline: Optional[float] = perf_counter() + self._get_next_timeout()
+        else:
+            self._deadline = None
 
         self._stop = False  # signals permanent shutdown (finish)
 
@@ -59,6 +66,13 @@ class Watchdog:
         # Background thread (daemon) that monitors timeouts
         self._worker_thread = threading.Thread(target=self._worker, daemon=True)
         self._worker_thread.start()
+
+    def _get_next_timeout(self) -> float:
+        if self._is_first_iteration:
+            self._is_first_iteration = False
+            return self._initial_timeout if self._initial_timeout is not None else self._timeout
+        else:
+            return self._timeout
 
     def _worker(self) -> None:
         """
@@ -212,7 +226,7 @@ class Watchdog:
         `time.time() + timeout`.
         """
         with self._cv:
-            self._deadline = perf_counter() + self._timeout
+            self._deadline = perf_counter() + self._get_next_timeout()
             self._cv.notify()
 
     def disable(self) -> None:
@@ -297,7 +311,7 @@ def repr_short(obj: Any) -> str:
     """
     s = repr(obj)
     if len(s) > PRINT_LOCAL_MAX_LENGTH:
-        s = s[:PRINT_LOCAL_MAX_LENGTH//2] + "..." + s[-PRINT_LOCAL_MAX_LENGTH//2:]
+        s = s[: PRINT_LOCAL_MAX_LENGTH // 2] + "..." + s[-PRINT_LOCAL_MAX_LENGTH // 2 :]
     return s
 
 

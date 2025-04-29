@@ -44,6 +44,7 @@ from megatron.energon.wrappers.base import BaseWrapperDataset
 from megatron.energon.wrappers.batch_dataset import BatchDataset
 from megatron.energon.wrappers.gc_dataset import GC_DEFAULT_EVERY_N_ITER, GcDataset, gc_init_worker
 from megatron.energon.wrappers.log_sample_dataset import default_get_keys
+from megatron.energon.wrappers.watchdog_dataset import WatchdogDataset
 
 T = TypeVar("T")
 
@@ -645,6 +646,9 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
         gc_freeze_at_start: bool = True,
         prefetch_factor: int = 2,
         cache_pool: Optional[CachePool] = None,
+        watchdog_timeout_seconds: Optional[float] = 60,
+        watchdog_initial_timeout_seconds: Optional[float] = None,
+        fail_on_timeout: bool = False,
     ):
         """
         Create the dataloader supporting saving and restoring the state.
@@ -670,9 +674,20 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
                 In rare cases, this may cause issues and can be disabled. Keep enabled if you
                 experience no issues.
             cache_pool: If set, the cache pool to use for the dataset.
+            watchdog_timeout_seconds: The timeout in seconds. If None, the watchdog is disabled.
+            watchdog_initial_timeout_seconds: The initial timeout in seconds. If None, the timeout is the same as watchdog_timeout_seconds.
+            fail_on_timeout: If True, stops the whole process upon timeout, after printing a stack trace.
         """
         self.worker_config = dataset.worker_config
         self.id = self.next_id()
+
+        dataset = WatchdogDataset(
+            dataset,
+            worker_config=self.worker_config,
+            timeout_seconds=watchdog_timeout_seconds,
+            initial_timeout_seconds=watchdog_initial_timeout_seconds,
+            fail_on_timeout=fail_on_timeout,
+        )
 
         if gc_collect_every_n_steps > 0:
             dataset = GcDataset(
@@ -1154,6 +1169,9 @@ class BasicDataLoader(DataLoader[T], Generic[T]):
         gc_freeze_at_start: bool = True,
         prefetch_factor: int = 2,
         cache_pool: Optional[CachePool] = None,
+        watchdog_timeout_seconds: Optional[float] = 60,
+        watchdog_initial_timeout_seconds: Optional[float] = None,
+        fail_on_timeout: bool = False,
     ):
         """
         Create the dataloader supporting saving and restoring the state.
@@ -1170,10 +1188,21 @@ class BasicDataLoader(DataLoader[T], Generic[T]):
                 In rare cases, this may cause issues and can be disabled. Keep enabled if you
                 experience no issues.
             cache_pool: If set, the cache pool to use for the dataset.
+            watchdog_timeout_seconds: The timeout in seconds. If None, the watchdog is disabled.
+            watchdog_initial_timeout_seconds: The initial timeout in seconds. If None, the timeout is the same as watchdog_timeout_seconds.
+            fail_on_timeout: If True, stops the whole process upon timeout, after printing a stack trace.
         """
         self.worker_config = dataset.worker_config
 
         self.id = SavableDataLoader.next_id()
+
+        dataset = WatchdogDataset(
+            dataset,
+            worker_config=self.worker_config,
+            timeout_seconds=watchdog_timeout_seconds,
+            initial_timeout_seconds=watchdog_initial_timeout_seconds,
+            fail_on_timeout=fail_on_timeout,
+        )
 
         if gc_collect_every_n_steps > 0:
             dataset = GcDataset(

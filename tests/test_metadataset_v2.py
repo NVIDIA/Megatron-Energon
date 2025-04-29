@@ -1134,11 +1134,13 @@ class TestDataset(unittest.TestCase):
             shuffle_buffer_size=None,
             max_samples_per_sequence=None,
             task_encoder=TestTaskEncoder(),
+        )
+
+        train_loader = get_loader(
+            train_dataset,
             watchdog_timeout_seconds=3,
             fail_on_timeout=False,
         )
-
-        train_loader = get_loader(train_dataset)
 
         for idx, data in enumerate(train_loader):
             print(idx, data.text[0])

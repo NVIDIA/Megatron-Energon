@@ -145,8 +145,6 @@ def get_train_dataset(
         shuffle_buffer_size=shuffle_buffer_size,
         blend_mode=datasets.blend_mode,
         repeat=repeat,
-        watchdog_timeout_seconds=watchdog_timeout_seconds,
-        fail_on_timeout=fail_on_timeout,
     )
 
 
@@ -208,8 +206,6 @@ def get_val_dataset(
         batch_drop_last=batch_drop_last,
         packing_buffer_size=packing_buffer_size,
         limit=limit,
-        watchdog_timeout_seconds=watchdog_timeout_seconds,
-        fail_on_timeout=fail_on_timeout,
     )
 
 
