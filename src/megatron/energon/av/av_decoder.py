@@ -13,7 +13,6 @@ import torch
 try:
     import av
     import av.container
-    import bitstring
     import filetype
 
     from megatron.energon.av.fastseek import Fastseek
