@@ -14,6 +14,7 @@ try:
     import av
     import av.container
     import filetype
+
     from megatron.energon.av.fastseek import Fastseek
 
     AV_DECODE_AVAILABLE = True
