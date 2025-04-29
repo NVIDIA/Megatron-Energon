@@ -14,7 +14,6 @@ try:
     import av
     import av.container
     import filetype
-
     from megatron.energon.av.fastseek import Fastseek
 
     AV_DECODE_AVAILABLE = True
@@ -47,6 +46,7 @@ class AVDecoder:
         try:
             self.seeker = Fastseek(self.stream)
         except Exception:
+            self.stream.seek(0)
             self.seeker = Fastseek(self.stream, probe=True)
 
         self.stream.seek(0)
