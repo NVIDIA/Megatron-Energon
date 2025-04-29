@@ -81,8 +81,6 @@ def get_train_dataset(
     shuffle_over_epochs_multiplier: Optional[int] = 1,
     task_encoder: TaskEncoder[Any, Any, Any, T] = DefaultTaskEncoder(),
     repeat: bool = True,
-    watchdog_timeout_seconds: Optional[float] = 60,
-    fail_on_timeout: bool = False,
     **kwargs,
 ) -> SavableDataset[T]:
     """
@@ -112,10 +110,6 @@ def get_train_dataset(
         repeat: By default, the inner datasets will loop. If set to False, stop iteration after
             one epoch. Must only be set to False in conjunction with blend_epochized in the
             metadataset if one is used.
-        watchdog_timeout_seconds: If set, the dataset will be wrapped in a watchdog. If the dataset
-            inner takes longer than this many seconds for a sample to load, a stack trace will be
-            printed. If None, the watchdog is disabled.
-        fail_on_timeout: If True, stops the whole process upon timeout. Otherwise, issue a warning.
         cache_pool: If set, the cache pool to use for the dataset.
         **kwargs: Additional arguments to the dataset constructor.
 
@@ -157,8 +151,6 @@ def get_val_dataset(
     batch_drop_last: bool = False,
     packing_buffer_size: Optional[int] = None,
     limit: Optional[int] = None,
-    watchdog_timeout_seconds: Optional[float] = 60,
-    fail_on_timeout: bool = False,
     task_encoder: TaskEncoder[Any, Any, Any, T] = DefaultTaskEncoder(),
     **kwargs,
 ) -> SavableDataset[T]:
@@ -180,10 +172,6 @@ def get_val_dataset(
         batch_size: Size of a batch
         batch_drop_last: If true, drop the last batch if it is smaller than `batch_size`.
         limit: If set, limit the number of batches loaded from the dataset to this.
-        watchdog_timeout_seconds: If set, the dataset will be wrapped in a watchdog. If the dataset
-            inner takes longer than this many seconds for a sample to load, a stack trace will be
-            printed. If None, the watchdog is disabled.
-        fail_on_timeout: If True, stops the whole process upon timeout. Otherwise, issue a warning.
         task_encoder: Task encoder to use.
         **kwargs: Additional arguments to the dataset constructor.
 
@@ -218,8 +206,6 @@ def get_val_datasets(
     batch_drop_last: bool = False,
     packing_buffer_size: Optional[int] = None,
     limit: Optional[int] = None,
-    watchdog_timeout_seconds: Optional[float] = 60,
-    fail_on_timeout: bool = False,
     task_encoder: TaskEncoder[Any, Any, Any, T] = DefaultTaskEncoder(),
     **kwargs,
 ) -> List[Tuple[SavableDataset[T], BaseCoreDatasetFactory]]:
@@ -241,10 +227,6 @@ def get_val_datasets(
         batch_size: Size of a batch
         batch_drop_last: If true, drop the last batch if it is smaller than `batch_size`.
         limit: If set, limit the number of batches loaded from the dataset to this.
-        watchdog_timeout_seconds: If set, the dataset will be wrapped in a watchdog. If the dataset
-            inner takes longer than this many seconds for a sample to load, a stack trace will be
-            printed. If None, the watchdog is disabled.
-        fail_on_timeout: If True, stops the whole process upon timeout. Otherwise, issue a warning.
         task_encoder: Task encoder to use.
         **kwargs: Additional arguments to the dataset constructor.
 
@@ -269,8 +251,6 @@ def get_val_datasets(
                 batch_drop_last=batch_drop_last,
                 packing_buffer_size=packing_buffer_size,
                 limit=limit,
-                watchdog_timeout_seconds=watchdog_timeout_seconds,
-                fail_on_timeout=fail_on_timeout,
             ),
             dataset.dataset,
         )

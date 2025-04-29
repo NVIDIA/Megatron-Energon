@@ -1,6 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+import contextlib
 import inspect
 from typing import (
     Any,
@@ -147,23 +148,35 @@ class PackingDataset(
 
         return len(self.dataset)
 
-    def _fill_reading_buffer(self, source_iter: Iterator) -> bool:
+    def _fill_reading_buffer(self, source_iter: Iterator, log_progress: bool = False) -> bool:
         """
         Fill the reading buffer with samples from the dataset source iterator.
 
         Args:
             source_iter: Iterator of samples from the dataset.
+            log_progress: If True, log the progress of the filling.
 
         Returns:
             True if samples are successfully read into the buffer, False if no more data.
         """
 
-        while len(self._reading_buffer) + len(self._pre_packing_buffer) < self.buffer_size:
-            try:
-                sample = next(source_iter)
-                self._reading_buffer.append(sample)
-            except StopIteration:
-                return False
+        if log_progress:
+            import tqdm
+
+            pbar_ctx = pbar = tqdm.tqdm(total=self.buffer_size, desc="Filling reading buffer")
+        else:
+            pbar_ctx = contextlib.nullcontext()
+            pbar = None
+
+        with pbar_ctx:
+            while len(self._reading_buffer) + len(self._pre_packing_buffer) < self.buffer_size:
+                try:
+                    sample = next(source_iter)
+                    self._reading_buffer.append(sample)
+                    if pbar is not None:
+                        pbar.update(1)
+                except StopIteration:
+                    return False
         return True
 
     def _encode_pack_samples(self, pack: List[T_sample]) -> List[T_encoded_sample]:
@@ -198,6 +211,8 @@ class PackingDataset(
 
         self._pre_packing_buffer.worker_start()
         self._reading_buffer.worker_start()
+
+        is_initial_pack = True
 
         def next_pre_pack():
             """Take the samples from the reading buffer and select groups of samples to be packed
@@ -276,9 +291,10 @@ class PackingDataset(
             if pre_pack_round > 10:
                 raise RuntimeError("Pre packer did not yield any packs after 10 rounds.")
             # Fill a portion of the buffer
-            if not self._fill_reading_buffer(src_iter):
+            if not self._fill_reading_buffer(src_iter, log_progress=is_initial_pack):
                 # Break out of the main loop when the source is exhausted.
                 break
+            is_initial_pack = False
 
             # Create new pre packs if necessary
             if len(pre_packing_lengths) == 0:

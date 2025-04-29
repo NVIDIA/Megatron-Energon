@@ -1,7 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-import hashlib
+import os
 import pickle
 import random
 import string
@@ -14,6 +14,7 @@ from typing import Any, Dict, Literal, Optional, Tuple, TypeVar
 from megatron.energon.cache.base import CachePool, FileStore, Lazy
 from megatron.energon.cache.file_store import DecodeFileStore
 from megatron.energon.dataclass_slots import dataclass_slots
+from megatron.energon.fork_hook import fork_hook_class
 
 T = TypeVar("T")
 
@@ -72,15 +73,16 @@ class _PendingTask:
     # The future for the background task that sends the data to the cache.
     send_to_cache_future: Future
     # The number of references to the cache entry.
-    refcount: int
-    # The path to the cache file.
-    cache_path: Path
+    refcount: int = 1
     # The size of the data to be cached.
-    data_size: int
+    data_size: int = 0
     # Whether the data is required now, i.e. a reading thread is waiting for it.
-    require_data_now: bool
+    require_data_now: bool = False
+    # The path to the cache file.
+    cache_path: Optional[Path] = None
 
 
+@fork_hook_class
 class FileStoreCachePool(CachePool):
     """
     Manages a thread pool to pre-fetch data onto an SSD cache.
@@ -99,7 +101,7 @@ class FileStoreCachePool(CachePool):
     method: Literal["raw", "pickle"]
 
     # Thread pool for out-caching tasks
-    _worker_pool: ThreadPoolExecutor
+    _worker_pool: Optional[ThreadPoolExecutor] = None
     # (ds, fname) -> PendingTask
     _pending_tasks: Dict[Tuple[FileStore, str], _PendingTask]
 
@@ -135,17 +137,13 @@ class FileStoreCachePool(CachePool):
         # If no parent directory is given, create a temp directory
         if parent_cache_dir is None:
             parent_cache_dir = Path(tempfile.gettempdir())
+        self.parent_cache_dir = parent_cache_dir
+        self.num_workers = num_workers
 
-        # Create a random subdirectory name to avoid collisions with other processes
-        random_suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=8))
-        self.cache_dir = (parent_cache_dir / f"cache_{random_suffix}").resolve()
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        # Initialize the cache pool (process volatile fields)
+        self.__after_fork__()
 
         self.method = method
-
-        self._worker_pool = ThreadPoolExecutor(
-            max_workers=num_workers, thread_name_prefix="CacheWorker"
-        )
 
         # We'll store _pending_tasks in the form:
         #   (ds, fname) -> PendingTask
@@ -203,7 +201,7 @@ class FileStoreCachePool(CachePool):
                     was_cached = True
 
                     try:
-                        # Can raise exception if job fails
+                        # Can raise exception if job failed
                         was_cached = entry.send_to_cache_future.result()
 
                         if was_cached:
@@ -269,8 +267,12 @@ class FileStoreCachePool(CachePool):
                 return False
 
         try:
+            assert entry.cache_path is None, (
+                f"cache_path should be None, but is {entry.cache_path!r}"
+            )
             # Write to cache
-            self._write_to_cache(entry.cache_path, data)
+            cache_path = self._make_cache_path(ds, fname)
+            self._write_to_cache(cache_path, data)
         except:
             with self._lock:
                 # Revert the space reservation
@@ -278,6 +280,10 @@ class FileStoreCachePool(CachePool):
                 self.current_cache_count -= 1
                 self._cache_space_available.notify_all()
             raise
+        else:
+            with self._lock:
+                entry.cache_path = cache_path
+                # print(f"pid={os.getpid()} Wrote to cache {cache_path} (rc={entry.refcount})\n", end="")
 
         # Data is cached now, return True
         return True
@@ -295,19 +301,12 @@ class FileStoreCachePool(CachePool):
             if entry:
                 # Already have a background task for this (ds, fname)
                 entry.refcount += 1
-                cache_path = entry.cache_path
             else:
                 # Create a new background task
-                cache_path = self._make_cache_path(ds, fname)
-
                 entry = _PendingTask(
                     ds=ds,
                     fname=fname,
                     send_to_cache_future=None,
-                    refcount=1,
-                    cache_path=cache_path,
-                    data_size=0,
-                    require_data_now=False,
                 )
                 self._pending_tasks[key] = entry
 
@@ -352,11 +351,15 @@ class FileStoreCachePool(CachePool):
 
             self._remove_cached_file(entry)
 
+            assert entry.refcount == 0, f"refcount should be 0: {entry.refcount}"
+
     def _make_cache_path(self, ds: FileStore, fname: str) -> Path:
         # This is safe, because the parent cache dir is unique per instance.
-        ds_hash = hashlib.md5(ds.get_path().encode("utf-8")).hexdigest()
-        fn_hash = hashlib.md5(fname.encode("utf-8")).hexdigest()
-        return self.cache_dir / f"{ds_hash}_{fn_hash}.bin"
+        # ds_hash = hashlib.md5(ds.get_path().encode("utf-8")).hexdigest()
+        # fn_hash = hashlib.md5(fname.encode("utf-8")).hexdigest()
+        ds_hash = str(ds.get_path()).replace("/", "_")
+        fn_hash = fname.replace("/", "_")
+        return self.cache_dir / f"{ds_hash}_{fn_hash}"
 
     def _write_to_cache(self, path: Path, data: bytes) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -379,19 +382,59 @@ class FileStoreCachePool(CachePool):
         Removes a file from disk and updates size counters.
         Assumes the caller holds `self._lock`.
         """
+        if entry.cache_path is None:
+            return
         if not entry.cache_path.exists():
             return
 
         try:
+            # print(
+            #     f"pid={os.getpid()} Removing cached file {entry.cache_path} (rc={entry.refcount})\n",
+            #     end="",
+            # )
             entry.cache_path.unlink()
         except OSError:
             pass
+        entry.cache_path = None
 
         if entry.data_size > 0:
             self.current_cache_size -= entry.data_size
             self.current_cache_count -= 1
             # Notify waiting threads that space is now available
             self._cache_space_available.notify_all()
+
+    def __before_fork__(self):
+        # Ensure the worker pool is shutdown before the fork
+        assert len(self._pending_tasks) == 0, "Pending tasks should be empty before fork"
+        print(
+            f"FSCP: Before fork for pid={os.getpid()} oid={id(self)} random_suffix={self.cache_dir.name!r}"
+        )
+        self._worker_pool.shutdown(wait=True)
+        self._worker_pool = None
+
+    def __after_in_child_fork__(self):
+        self.__after_fork__()
+
+    def __after_in_parent_fork__(self):
+        self.__after_fork__()
+
+    def __after_fork__(self):
+        random_suffix = "".join(
+            random.Random(os.getpid() ^ random.randint(0, 2**32)).choices(
+                string.ascii_lowercase + string.digits, k=16
+            )
+        )
+        assert self._worker_pool is None
+        self._worker_pool = ThreadPoolExecutor(
+            max_workers=self.num_workers, thread_name_prefix="CacheWorker"
+        )
+        # Create a random subdirectory name to avoid collisions with other processes
+        # As the global random generator is cloned across processes, we need to use a process-specific seed
+        self.cache_dir = (self.parent_cache_dir / f"cache_{random_suffix}").resolve()
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        print(
+            f"FSCP: After fork for pid={os.getpid()} oid={id(self)} random_suffix={random_suffix!r}"
+        )
 
     def __str__(self):
         return f"FileStoreCachePool(cache_dir={self.cache_dir}, max_cache_size={self.max_cache_size}, max_cache_count={self.max_cache_count}, method={self.method}, current_cache_size={self.current_cache_size}, current_cache_count={self.current_cache_count})"
