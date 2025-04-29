@@ -47,7 +47,7 @@ class AVDecoder:
 
         try:
             self.seeker = Fastseek(self.stream)
-        except (ValueError, IndexError, bitstring.Error, KeyError, IOError, TypeError):
+        except ValueError:
             self.stream.seek(0)
             self.seeker = Fastseek(self.stream, probe=True)
 
