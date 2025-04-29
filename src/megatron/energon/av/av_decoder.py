@@ -14,7 +14,6 @@ try:
     import av
     import av.container
     import filetype
-
     from megatron.energon.av.fastseek import Fastseek
 
     AV_DECODE_AVAILABLE = True
@@ -661,5 +660,7 @@ def initialize_av_container(input_container: av.container.InputContainer) -> Non
 
     for stream in input_container.streams:
         cc = stream.codec_context
-        cc.thread_type = "NONE"
-        cc.thread_count = 0
+
+        if cc is not None:
+            cc.thread_type = "NONE"
+            cc.thread_count = 0
