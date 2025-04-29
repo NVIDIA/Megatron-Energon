@@ -14,6 +14,9 @@ from typing import Any, Callable, Iterable, Iterator, Optional, TypeVar
 # For the watch_iter type
 T = TypeVar("T")
 
+# Maximum length of a single object string to print.
+PRINT_LOCAL_MAX_LENGTH = 250
+
 
 class Watchdog:
     """
@@ -179,13 +182,13 @@ class Watchdog:
                 if arg_dict:
                     print("        Arguments:")
                     for k, v in arg_dict.items():
-                        print(f"            {k}: {repr(v)}")
+                        print(f"            {k}: {repr_short(v)}")
 
                 other_locals = {k: v for k, v in local_vars.items() if k not in arg_dict}
                 if other_locals:
                     print("        Locals:")
                     for k, v in other_locals.items():
-                        print(f"            {k}: {repr(v)}")
+                        print(f"            {k}: {repr_short(v)}")
 
             print()
 
@@ -286,6 +289,16 @@ class Watchdog:
             else:
                 self.disable()
                 yield item
+
+
+def repr_short(obj: Any) -> str:
+    """
+    Return a short repr of an object.
+    """
+    s = repr(obj)
+    if len(s) > PRINT_LOCAL_MAX_LENGTH:
+        s = s[:PRINT_LOCAL_MAX_LENGTH//2] + "..." + s[-PRINT_LOCAL_MAX_LENGTH//2:]
+    return s
 
 
 if __name__ == "__main__":
