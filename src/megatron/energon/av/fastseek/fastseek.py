@@ -51,7 +51,9 @@ class Fastseek:
             ftype = filetype.guess(file)
 
             if ftype is None:
-                raise ValueError("Unable to determine file type")
+                raise ValueError(
+                    "Unable to determine file type (hint: try passing probe=True to the Fastseek constructor)"
+                )
 
             self.mime = ftype.mime
 
@@ -68,7 +70,12 @@ class Fastseek:
 
             if len(self.keyframes) == 0:
                 raise ValueError(
-                    f"The parser for {ftype.mime} was unable to find keyframes (hint: try passing probe=True to the Fastseek constructor)"
+                    f"The parser for {ftype.mime} was unable to find any streams (hint: try passing probe=True to the Fastseek constructor)"
+                )
+
+            if all(len(kf) == 0 for kf in self.keyframes.values()):
+                raise ValueError(
+                    f"The parser for {ftype.mime} was unable to find any keyframes (hint: try passing probe=True to the Fastseek constructor)"
                 )
 
     def should_seek(self, current: int, target: int, stream: int = 0) -> Optional[KeyframeInfo]:
@@ -123,7 +130,14 @@ class Fastseek:
             as some video containers don't report track IDs correctly. This is a temporary
             workaround and may be updated in the future.
         """
-        # HACK some videos don't report track ID correctly, so just use a list for now
+
+        if stream >= len(self.keyframes):
+            raise ValueError(f"No stream with index {stream}")
+
         stream_id = list(self.keyframes.keys())[stream]
+
+        if len(self.keyframes[stream_id]) == 0:
+            raise ValueError(f"No keyframes found for stream {stream}")
+
         nearest_iframe_to_target_index: int = self.keyframes[stream_id].bisect_left(target) - 1
         return self.keyframes[stream_id][max(0, nearest_iframe_to_target_index)]
