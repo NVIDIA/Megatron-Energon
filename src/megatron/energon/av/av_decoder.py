@@ -13,6 +13,7 @@ import torch
 try:
     import av
     import av.container
+    import bitstring
     import filetype
 
     from megatron.energon.av.fastseek import Fastseek
@@ -46,7 +47,7 @@ class AVDecoder:
 
         try:
             self.seeker = Fastseek(self.stream)
-        except Exception:
+        except (ValueError, IndexError, bitstring.Error, KeyError, IOError, TypeError):
             self.stream.seek(0)
             self.seeker = Fastseek(self.stream, probe=True)
 
