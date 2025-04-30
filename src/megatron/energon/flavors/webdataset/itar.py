@@ -276,7 +276,16 @@ class CachedItarOffsetReader:
         self.tar_index_reader_cache.pop(key)
         if entry.lookahead_offset is not None:
             new_key = (str(tar_file), entry.lookahead_offset)
-            self.tar_index_reader_cache[new_key] = entry
+            if new_key not in self.tar_index_reader_cache:
+                self.tar_index_reader_cache[new_key] = entry
+            else:
+                # Already have this entry in the cache, so we can close the reader and use the existing one
+                # TODO: We may actually may want to keep multiple readers open, because they may be multiple
+                # sequences to the same sequence.
+                entry.tar_index_reader.close()
+        else:
+            # No lookahead, so we can close the reader
+            entry.tar_index_reader.close()
 
         return result_byte_offset, length
 
