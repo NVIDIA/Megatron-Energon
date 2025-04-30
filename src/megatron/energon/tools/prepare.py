@@ -10,6 +10,7 @@ from types import FunctionType
 from typing import Any, List, Optional, Tuple, Type
 
 import click
+import yaml
 
 from megatron.energon.epathlib import EPath
 from megatron.energon.eyaml import load_yaml
