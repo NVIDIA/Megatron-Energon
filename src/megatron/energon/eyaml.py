@@ -50,7 +50,6 @@ def load_yaml(stream: Union[BinaryIO, bytes]) -> Any:
     if isinstance(stream, bytes):
         bytes_data = stream
     else:
-        assert isinstance(stream, BinaryIO)
         bytes_data = stream.read()
     tree = ryml.parse_in_arena(bytes_data)
     native_obj = ryml_tree_to_native(tree)
