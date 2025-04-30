@@ -671,7 +671,7 @@ class AVWebdatasetDecoder:
             raise ValueError(f"Invalid av_decode value: {self.av_decode}")
 
 
-def initialize_av_container(input_container: av.container.InputContainer) -> None:
+def initialize_av_container(input_container: "av.container.InputContainer") -> None:
     """Every PyAV container should be initialized with this function.
 
     This function ensures that no additional threads are created.
