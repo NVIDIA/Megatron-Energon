@@ -11,6 +11,9 @@ import traceback
 from time import perf_counter
 from typing import Any, Callable, Iterable, Iterator, Optional, TypeVar
 
+import torch
+from torch.distributed._shard.sharded_tensor import ShardedTensorBase
+
 # For the watch_iter type
 T = TypeVar("T")
 
@@ -309,6 +312,10 @@ def repr_short(obj: Any) -> str:
     """
     Return a short repr of an object.
     """
+    if isinstance(obj, torch.Tensor):
+        if isinstance(obj, ShardedTensorBase) or obj.is_cuda:
+            return "<CUDA tensor>"
+
     s = repr(obj)
     if len(s) > PRINT_LOCAL_MAX_LENGTH:
         s = s[: PRINT_LOCAL_MAX_LENGTH // 2] + "..." + s[-PRINT_LOCAL_MAX_LENGTH // 2 :]
