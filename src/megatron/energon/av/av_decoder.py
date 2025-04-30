@@ -120,7 +120,7 @@ class AVDecoder:
 
                     if not self.suppress_warnings:
                         warnings.warn(
-                            "Video container unit is frames, but seeking in time units. This resulting frames may be slightly off.",
+                            "Video container unit is frames, but seeking in time units. The resulting frames may be slightly off.",
                             RuntimeWarning,
                         )
                 elif video_unit == "seconds" and self.seeker.unit == "frames":
@@ -134,7 +134,7 @@ class AVDecoder:
                     ]
                     if not self.suppress_warnings:
                         warnings.warn(
-                            "Video container unit is time units, but seeking using frame number. This resulting frames may be slightly off.",
+                            "Video container unit is time units, but seeking using frame number. The resulting frames may be slightly off.",
                             RuntimeWarning,
                         )
                 elif video_unit == "seconds" and self.seeker.unit == "pts":
