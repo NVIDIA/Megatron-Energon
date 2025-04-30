@@ -1,6 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+import hashlib
 import os
 import pickle
 import random
@@ -14,7 +15,11 @@ from typing import Any, Dict, Literal, Optional, Tuple, TypeVar
 from megatron.energon.cache.base import CachePool, FileStore, Lazy
 from megatron.energon.cache.file_store import DecodeFileStore
 from megatron.energon.dataclass_slots import dataclass_slots
-from megatron.energon.fork_hook import fork_hook_class
+from megatron.energon.fork_hook import (
+    after_in_child_fork_hook,
+    after_in_parent_fork_hook,
+    before_fork_hook,
+)
 
 T = TypeVar("T")
 
@@ -82,7 +87,6 @@ class _PendingTask:
     cache_path: Optional[Path] = None
 
 
-@fork_hook_class
 class FileStoreCachePool(CachePool):
     """
     Manages a thread pool to pre-fetch data onto an SSD cache.
@@ -141,7 +145,7 @@ class FileStoreCachePool(CachePool):
         self.num_workers = num_workers
 
         # Initialize the cache pool (process volatile fields)
-        self.__after_fork__()
+        self.__after_fork__(initial=True)
 
         self.method = method
 
@@ -160,6 +164,10 @@ class FileStoreCachePool(CachePool):
 
         # Condition variable to signal when cache space is available
         self._cache_space_available = threading.Condition(self._lock)
+
+        before_fork_hook(self, self.__before_fork__)
+        after_in_child_fork_hook(self, self.__after_fork__)
+        after_in_parent_fork_hook(self, self.__after_fork__)
 
     def get(self, ds: FileStore, fname: str) -> Any:
         """
@@ -283,7 +291,10 @@ class FileStoreCachePool(CachePool):
         else:
             with self._lock:
                 entry.cache_path = cache_path
-                # print(f"pid={os.getpid()} Wrote to cache {cache_path} (rc={entry.refcount})\n", end="")
+            # print(
+            #     f"FSCP r={torch.distributed.get_rank()}, pid={os.getpid()}: Wrote to cache {cache_path} (rc={entry.refcount})\n",
+            #     end="",
+            # )
 
         # Data is cached now, return True
         return True
@@ -355,10 +366,10 @@ class FileStoreCachePool(CachePool):
 
     def _make_cache_path(self, ds: FileStore, fname: str) -> Path:
         # This is safe, because the parent cache dir is unique per instance.
-        # ds_hash = hashlib.md5(ds.get_path().encode("utf-8")).hexdigest()
-        # fn_hash = hashlib.md5(fname.encode("utf-8")).hexdigest()
-        ds_hash = str(ds.get_path()).replace("/", "_")
-        fn_hash = fname.replace("/", "_")
+        ds_hash = hashlib.md5(ds.get_path().encode("utf-8")).hexdigest()
+        fn_hash = hashlib.md5(fname.encode("utf-8")).hexdigest()
+        # ds_hash = str(ds.get_path()).replace("/", "_")
+        # fn_hash = fname.replace("/", "_")
         return self.cache_dir / f"{ds_hash}_{fn_hash}"
 
     def _write_to_cache(self, path: Path, data: bytes) -> None:
@@ -389,7 +400,7 @@ class FileStoreCachePool(CachePool):
 
         try:
             # print(
-            #     f"pid={os.getpid()} Removing cached file {entry.cache_path} (rc={entry.refcount})\n",
+            #     f"FSCP r={torch.distributed.get_rank()}, pid={os.getpid()}: Removing cached file {entry.cache_path} (rc={entry.refcount})\n",
             #     end="",
             # )
             entry.cache_path.unlink()
@@ -406,19 +417,14 @@ class FileStoreCachePool(CachePool):
     def __before_fork__(self):
         # Ensure the worker pool is shutdown before the fork
         assert len(self._pending_tasks) == 0, "Pending tasks should be empty before fork"
-        print(
-            f"FSCP: Before fork for pid={os.getpid()} oid={id(self)} random_suffix={self.cache_dir.name!r}"
-        )
+        # print(
+        #     f"FSCP r={torch.distributed.get_rank()}, pid={os.getpid()}: Before fork for oid={id(self)} random_suffix={self.cache_dir.name!r}\n",
+        #     end="",
+        # )
         self._worker_pool.shutdown(wait=True)
         self._worker_pool = None
 
-    def __after_in_child_fork__(self):
-        self.__after_fork__()
-
-    def __after_in_parent_fork__(self):
-        self.__after_fork__()
-
-    def __after_fork__(self):
+    def __after_fork__(self, initial: bool = False):
         random_suffix = "".join(
             random.Random(os.getpid() ^ random.randint(0, 2**32)).choices(
                 string.ascii_lowercase + string.digits, k=16
@@ -432,9 +438,16 @@ class FileStoreCachePool(CachePool):
         # As the global random generator is cloned across processes, we need to use a process-specific seed
         self.cache_dir = (self.parent_cache_dir / f"cache_{random_suffix}").resolve()
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        print(
-            f"FSCP: After fork for pid={os.getpid()} oid={id(self)} random_suffix={random_suffix!r}"
-        )
+        # if initial:
+        #     print(
+        #         f"FSCP r={torch.distributed.get_rank()}, pid={os.getpid()}: Init oid={id(self)} random_suffix={random_suffix!r}\n",
+        #         end="",
+        #     )
+        # else:
+        #     print(
+        #         f"FSCP r={torch.distributed.get_rank()}, pid={os.getpid()}: After fork for pid={os.getpid()} oid={id(self)} random_suffix={random_suffix!r}\n",
+        #         end="",
+        #     )
 
     def __str__(self):
         return f"FileStoreCachePool(cache_dir={self.cache_dir}, max_cache_size={self.max_cache_size}, max_cache_count={self.max_cache_count}, method={self.method}, current_cache_size={self.current_cache_size}, current_cache_count={self.current_cache_count})"
