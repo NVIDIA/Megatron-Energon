@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import io
+import warnings
 from collections.abc import Iterator
 from fractions import Fraction
 from typing import BinaryIO, Literal, Optional, Sequence, Union, overload
@@ -34,8 +35,10 @@ class AVDecoder:
     """
 
     seeker: "Fastseek"
+    stream: BinaryIO
+    suppress_warnings: bool
 
-    def __init__(self, stream: BinaryIO) -> None:
+    def __init__(self, stream: BinaryIO, suppress_warnings: bool = False) -> None:
         if not AV_DECODE_AVAILABLE:
             raise ImportError(
                 f"AV decoding is not available. Please install the required dependencies with:\n"
@@ -43,6 +46,7 @@ class AVDecoder:
                 f"Missing dependency: {MISSING_DEPENDENCY}. Install megatron-energon[av_decode] to use AVDecoder."
             )
         self.stream = stream
+        self.suppress_warnings = suppress_warnings
 
         try:
             self.seeker = Fastseek(self.stream)
@@ -113,6 +117,12 @@ class AVDecoder:
                         )
                         for clip in video_clip_ranges
                     ]
+
+                    if not self.suppress_warnings:
+                        warnings.warn(
+                            "Video container unit is frames, but seeking in time units. This resulting frames may be slightly off.",
+                            RuntimeWarning,
+                        )
                 elif video_unit == "seconds" and self.seeker.unit == "frames":
                     # Convert from seconds to frames
                     video_clip_ranges = [
@@ -122,6 +132,11 @@ class AVDecoder:
                         )
                         for clip in video_clip_ranges
                     ]
+                    if not self.suppress_warnings:
+                        warnings.warn(
+                            "Video container unit is time units, but seeking using frame number. This resulting frames may be slightly off.",
+                            RuntimeWarning,
+                        )
                 elif video_unit == "seconds" and self.seeker.unit == "pts":
                     # Convert from seconds to pts units
                     video_clip_ranges = [
