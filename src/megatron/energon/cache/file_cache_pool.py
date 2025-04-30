@@ -15,11 +15,7 @@ from typing import Any, Dict, Literal, Optional, Tuple, TypeVar
 from megatron.energon.cache.base import CachePool, FileStore, Lazy
 from megatron.energon.cache.file_store import DecodeFileStore
 from megatron.energon.dataclass_slots import dataclass_slots
-from megatron.energon.fork_hook import (
-    after_in_child_fork_hook,
-    after_in_parent_fork_hook,
-    before_fork_hook,
-)
+from megatron.energon.fork_hook import ForkMixin
 
 T = TypeVar("T")
 
@@ -64,7 +60,7 @@ class FileCacheLazy(Lazy[T]):
         if self._data is None:
             with self.pool._lock:
                 # Data was never fetched, still decrement refcount to delete the cache entry
-                self.pool._decrement_refcount_and_cleanup((self.ds, self.fname))
+                self.pool._decrement_refcount_and_cleanup((self.ds.get_path(), self.fname))
 
 
 @dataclass_slots
@@ -87,7 +83,7 @@ class _PendingTask:
     cache_path: Optional[Path] = None
 
 
-class FileStoreCachePool(CachePool):
+class FileStoreCachePool(CachePool, ForkMixin):
     """
     Manages a thread pool to pre-fetch data onto an SSD cache.
     Each (ds, fname) has one Future (one read). Multiple requests
@@ -106,8 +102,8 @@ class FileStoreCachePool(CachePool):
 
     # Thread pool for out-caching tasks
     _worker_pool: Optional[ThreadPoolExecutor] = None
-    # (ds, fname) -> PendingTask
-    _pending_tasks: Dict[Tuple[FileStore, str], _PendingTask]
+    # (ds.path, fname) -> PendingTask
+    _pending_tasks: Dict[Tuple[str, str], _PendingTask]
 
     # Lock for all shared structures
     _lock: threading.Lock
@@ -138,6 +134,7 @@ class FileStoreCachePool(CachePool):
             method: The method to use for caching. "raw" store the non-decoded raw data. "pickle": first decode the data
                 and then store the pickled data.
         """
+        super().__init__()
         # If no parent directory is given, create a temp directory
         if parent_cache_dir is None:
             parent_cache_dir = Path(tempfile.gettempdir())
@@ -150,7 +147,7 @@ class FileStoreCachePool(CachePool):
         self.method = method
 
         # We'll store _pending_tasks in the form:
-        #   (ds, fname) -> PendingTask
+        #   (ds.path, fname) -> PendingTask
         self._pending_tasks = {}
 
         # Cache size management
@@ -164,10 +161,6 @@ class FileStoreCachePool(CachePool):
 
         # Condition variable to signal when cache space is available
         self._cache_space_available = threading.Condition(self._lock)
-
-        before_fork_hook(self, self.__before_fork__)
-        after_in_child_fork_hook(self, self.__after_fork__)
-        after_in_parent_fork_hook(self, self.__after_fork__)
 
     def get(self, ds: FileStore, fname: str) -> Any:
         """
@@ -196,7 +189,7 @@ class FileStoreCachePool(CachePool):
                         result = self.get(ds, fname)
                     finally:
                         # Decrement refcount
-                        self._decrement_refcount_and_cleanup(key=(ds, fname))
+                        self._decrement_refcount_and_cleanup(key=(ds.get_path(), fname))
                 else:
                     # Future is already running or done.
                     # Release the lock so the background job can proceed,
@@ -223,7 +216,7 @@ class FileStoreCachePool(CachePool):
                         entry.require_data_now = False
 
                         # Decrement refcount
-                        self._decrement_refcount_and_cleanup(key=(ds, fname))
+                        self._decrement_refcount_and_cleanup(key=(ds.get_path(), fname))
             finally:
                 if entry.refcount > 0 and not was_cached:
                     # TODO: Could write to cache here, data is already fetched.
@@ -292,7 +285,7 @@ class FileStoreCachePool(CachePool):
             with self._lock:
                 entry.cache_path = cache_path
             # print(
-            #     f"FSCP r={torch.distributed.get_rank()}, pid={os.getpid()}: Wrote to cache {cache_path} (rc={entry.refcount})\n",
+            #     f"FSCP r={torch.distributed.get_rank()}, pid={os.getpid()}: Wrote to cache {cache_path} (rc={entry.refcount}, size={file_size}, name={fname})\n",
             #     end="",
             # )
 
@@ -304,7 +297,7 @@ class FileStoreCachePool(CachePool):
         Schedule a background pre-fetch. If multiple calls come in for the same (ds, fname),
         they'll share the same Future and increment reference counts.
         """
-        key = (ds, fname)
+        key = (ds.get_path(), fname)
         with self._lock:
             if self._shutting_down:
                 raise RuntimeError("Cache pool is already shutting down")
@@ -423,6 +416,12 @@ class FileStoreCachePool(CachePool):
         # )
         self._worker_pool.shutdown(wait=True)
         self._worker_pool = None
+
+    def __after_in_child_fork__(self):
+        self.__after_fork__()
+
+    def __after_in_parent_fork__(self):
+        self.__after_fork__()
 
     def __after_fork__(self, initial: bool = False):
         random_suffix = "".join(
