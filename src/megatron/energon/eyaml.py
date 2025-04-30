@@ -6,6 +6,28 @@ from typing import Any, BinaryIO, Union
 import ryml
 
 
+def load_yaml(stream: Union[BinaryIO, bytes]) -> Any:
+    """Load a YAML file from a stream or bytes object using rapidyaml/ryml.
+    This is much faster than the standard yaml library, but we don't
+    support all YAML features.
+
+    Args:
+        stream: A stream or bytes object containing the YAML data.
+
+    Returns:
+        The parsed YAML data as a native Python object.
+    """
+
+    if isinstance(stream, bytes):
+        bytes_data = stream
+    else:
+        bytes_data = stream.read()
+    tree = ryml.parse_in_arena(bytes_data)
+    native_obj = _ryml_tree_to_native(tree)
+
+    return native_obj
+
+
 def _cast_scalar(tree: ryml.Tree, nid: int) -> object:
     """Convert YAML scalar to bool | int | float | None | str."""
     memview = tree.val(nid)
@@ -42,16 +64,5 @@ def _to_native(t: ryml.Tree, nid: int):
     return _cast_scalar(t, nid)
 
 
-def ryml_tree_to_native(tree: ryml.Tree):
+def _ryml_tree_to_native(tree: ryml.Tree):
     return _to_native(tree, tree.root_id())
-
-
-def load_yaml(stream: Union[BinaryIO, bytes]) -> Any:
-    if isinstance(stream, bytes):
-        bytes_data = stream
-    else:
-        bytes_data = stream.read()
-    tree = ryml.parse_in_arena(bytes_data)
-    native_obj = ryml_tree_to_native(tree)
-
-    return native_obj
