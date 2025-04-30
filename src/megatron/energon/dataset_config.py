@@ -4,9 +4,8 @@
 from pathlib import Path
 from typing import Any, Dict, Optional, Type, TypeVar, Union
 
-import yaml
-
 from megatron.energon.epathlib import EPath
+from megatron.energon.eyaml import load_yaml
 from megatron.energon.flavors import BaseCoreDatasetFactory, StandardWebdatasetFactory
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 from megatron.energon.typed_converter import JsonParser
@@ -37,8 +36,8 @@ def load_config(
         data = path
     else:
         # Read the config from a file
-        with path.open() as f:
-            data: dict = yaml.safe_load(f)
+        with path.open("rb") as f:
+            data: dict = load_yaml(f)
 
     if default_kwargs is not None:
         new_data = default_kwargs.copy()

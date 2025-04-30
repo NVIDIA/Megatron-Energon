@@ -10,9 +10,9 @@ from types import FunctionType
 from typing import Any, List, Optional, Tuple, Type
 
 import click
-import yaml
 
 from megatron.energon.epathlib import EPath
+from megatron.energon.eyaml import load_yaml
 from megatron.energon.flavors import BaseWebdatasetFactory, CrudeWebdataset
 from megatron.energon.flavors.base_dataset import Sample
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
@@ -139,8 +139,8 @@ def command(
 
     if tar_index_only:
         assert (path / MAIN_FOLDER_NAME / ".info.yaml").is_file(), "No .info.yaml found"
-        with (path / MAIN_FOLDER_NAME / ".info.yaml").open("r") as f:
-            info = yaml.safe_load(f)
+        with (path / MAIN_FOLDER_NAME / ".info.yaml").open("rb") as f:
+            info = load_yaml(f)
         all_tars = list(info["shard_counts"].keys())
     else:
         if (path / MAIN_FOLDER_NAME / "dataset.yaml").is_file() or (

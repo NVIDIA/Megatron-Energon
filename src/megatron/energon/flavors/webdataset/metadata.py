@@ -5,9 +5,9 @@ from dataclasses import dataclass
 from typing import Generator, List, Set
 
 import braceexpand
-import yaml
 
 from megatron.energon.epathlib import EPath
+from megatron.energon.eyaml import load_yaml
 from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
 from megatron.energon.flavors.webdataset.empty_dataset_error import EmptyDatasetError
 from megatron.energon.flavors.webdataset.structs import ShardInfo, WebdatasetInfo, WebdatasetSplits
@@ -41,11 +41,11 @@ class WebdatasetMeta:
         """
         parser = JsonParser(strict=True)
         info = parser.raw_to_typed(
-            yaml.safe_load((path / MAIN_FOLDER_NAME / info_config).read_text()),
+            load_yaml((path / MAIN_FOLDER_NAME / info_config).read_bytes()),
             WebdatasetInfo,
         )
         splits = parser.raw_to_typed(
-            yaml.safe_load((path / MAIN_FOLDER_NAME / split_config).read_text()),
+            load_yaml((path / MAIN_FOLDER_NAME / split_config).read_bytes()),
             WebdatasetSplits,
         )
         assert split_part in splits.split_parts, f"Invalid split part: {split_part!r}"
@@ -94,11 +94,11 @@ class WebdatasetMeta:
         """
         parser = JsonParser(strict=True)
         info = parser.raw_to_typed(
-            yaml.safe_load((path / MAIN_FOLDER_NAME / info_config).read_text()),
+            load_yaml((path / MAIN_FOLDER_NAME / info_config).read_bytes()),
             WebdatasetInfo,
         )
         splits = parser.raw_to_typed(
-            yaml.safe_load((path / MAIN_FOLDER_NAME / split_config).read_text()),
+            load_yaml((path / MAIN_FOLDER_NAME / split_config).read_bytes()),
             WebdatasetSplits,
         )
         split_excludes = {

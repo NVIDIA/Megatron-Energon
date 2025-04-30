@@ -2,14 +2,13 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from importlib import import_module
-from io import StringIO
 from typing import Type
 
 import click
-import yaml
 
 import megatron.energon
 from megatron.energon.epathlib import EPath
+from megatron.energon.eyaml import load_yaml
 from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 
@@ -53,9 +52,9 @@ def command(
     Get summarizing information about a dataset.
     """
 
-    ds_config = yaml.safe_load(StringIO((path / MAIN_FOLDER_NAME / dataset_config).read_text()))
-    info_config = yaml.safe_load(StringIO((path / MAIN_FOLDER_NAME / ".info.yaml").read_text()))
-    split_config = yaml.safe_load(StringIO((path / MAIN_FOLDER_NAME / split_config).read_text()))
+    ds_config = load_yaml((path / MAIN_FOLDER_NAME / dataset_config).read_bytes())
+    info_config = load_yaml((path / MAIN_FOLDER_NAME / ".info.yaml").read_bytes())
+    split_config = load_yaml((path / MAIN_FOLDER_NAME / split_config).read_bytes())
     samples_count = sum(info_config["shard_counts"].values())
     dict_sample_type = ds_config["sample_type"]
     sample_module = import_module(dict_sample_type["__module__"])
