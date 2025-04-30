@@ -47,6 +47,7 @@ class AVDecoder:
         try:
             self.seeker = Fastseek(self.stream)
         except ValueError:
+            self.stream.seek(0)
             self.seeker = Fastseek(self.stream, probe=True)
 
         self.stream.seek(0)
@@ -666,5 +667,7 @@ def initialize_av_container(input_container: av.container.InputContainer) -> Non
 
     for stream in input_container.streams:
         cc = stream.codec_context
-        cc.thread_type = "NONE"
-        cc.thread_count = 0
+
+        if cc is not None:
+            cc.thread_type = "NONE"
+            cc.thread_count = 0
