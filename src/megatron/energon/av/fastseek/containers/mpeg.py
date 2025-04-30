@@ -4,7 +4,7 @@ from collections import defaultdict
 from itertools import accumulate
 from typing import Any, Generator
 
-from bitstring import ConstBitStream
+from bitstring import ConstBitStream, Error
 from bitstring.bits import BitsType
 from sortedcontainers import SortedList
 
@@ -170,12 +170,15 @@ class MDAT(Atom):
 
 
 def parse_atoms(file: BitsType) -> Generator[Atom, None, None]:
-    cbs = ConstBitStream(file)
-    while cbs.pos < len(cbs):
-        try:
-            yield Atom.make_atom(cbs)
-        except StopIteration:
-            return
+    try:
+        cbs = ConstBitStream(file)
+        while cbs.pos < len(cbs):
+            try:
+                yield Atom.make_atom(cbs)
+            except StopIteration:
+                return
+    except Error as e:
+        raise ValueError(f"MPEG parsing failed with error {e}")
 
 
 def parse_mpeg(file: BitsType) -> dict[int, SortedList]:
@@ -221,13 +224,16 @@ def parse_mpeg(file: BitsType) -> dict[int, SortedList]:
             a: ELST
             start_offsets[current_track] = -a.edit_list_table[0]["media_time"]
     keyframes = defaultdict(lambda: SortedList())
-    for track_id in sync_samples.keys():
-        for keyframe_number in sync_samples[track_id]:
-            pts = (
-                decode_timestamps[track_id][keyframe_number]
-                + start_offsets[track_id]
-                + presentation_time_offsets[track_id][keyframe_number]
-            )
-            keyframes[track_id].add(KeyframeInfo(keyframe_number, pts))
+    try:
+        for track_id in sync_samples.keys():
+            for keyframe_number in sync_samples[track_id]:
+                pts = (
+                    decode_timestamps[track_id][keyframe_number]
+                    + start_offsets[track_id]
+                    + presentation_time_offsets[track_id][keyframe_number]
+                )
+                keyframes[track_id].add(KeyframeInfo(keyframe_number, pts))
+    except (KeyError, IndexError) as e:
+        raise ValueError(f"MPEG parsing failed with error {e}")
 
     return keyframes

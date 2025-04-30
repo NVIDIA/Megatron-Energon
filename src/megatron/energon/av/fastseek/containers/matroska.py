@@ -31,8 +31,11 @@ class CuePoint:
 
 
 def parse_matroska(file: BitsType) -> SortedList:
-    schema = loadSchema("matroska.xml")
-    doc = schema.load(file, headers=True)
+    try:
+        schema = loadSchema("matroska.xml")
+        doc = schema.load(file, headers=True)
+    except (KeyError, IOError, TypeError) as e:
+        raise ValueError(f"Matroska parsing failed with error {e}")
 
     # Get cue times
     stack = [c for c in doc if c.name == "Segment"]
