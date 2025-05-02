@@ -63,10 +63,26 @@ class WorkerRng(Savable):
         assert len(l) == len(probs)
         return l[self.choice_idx(probs)]
 
+    def randperm(self, n: int, repetitions: int = 1) -> List[int]:
+        """Returns list with shuffled indices. Optionally from a repeated index list."""
+        # Random number will be in range 0..((n*repetitions)-1)
+        p = torch.randperm(n * repetitions, generator=self.rng)
+        # Map to 0..(n-1)
+        # Examples for repetitions=3, n=2:
+        # 0 1 2 3 4 5 -> 0 0 0 1 1 1
+        # 0 5 3 1 2 4 -> 0 1 1 0 0 1
+        p = torch.div(p, repetitions, rounding_mode="trunc")
+        return p.tolist()
+
     def shuffle(self, l: List[T]) -> List[T]:
         """Returns a new list with shuffled entries"""
         p = torch.randperm(len(l), generator=self.rng)
         return [l[p[i]] for i in range(len(l))]
+
+    def shuffle_np(self, l: numpy.ndarray) -> numpy.ndarray:
+        """Returns a new numpy array with shuffled entries"""
+        p = torch.randperm(len(l), generator=self.rng)
+        return l[p.cpu().numpy()]
 
     def rand_pop(self, l: List[T]) -> T:
         return l.pop(self.randbelow(len(l)))

@@ -184,7 +184,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
                 res_list = [rng.randbelow(num_slices) for _ in range(self.parallel_slice_iters)]
             elif self.shuffle_over_epochs >= 1:
                 # Shuffle without replacement (potentially over multiple epochs)
-                res_list = rng.shuffle(list(range(num_slices)) * self.shuffle_over_epochs)
+                res_list = rng.randperm(num_slices, repetitions=self.shuffle_over_epochs)
             else:
                 raise ValueError(f"Invalid shuffle_over_epochs: {self.shuffle_over_epochs}")
         # Reverse, such that pop returns the first element (in O(1) time)

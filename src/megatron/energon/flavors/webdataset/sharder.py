@@ -59,7 +59,7 @@ class Sharder:
         start_index = np.searchsorted(shard_cumsums, offsets[0], side="right") - 1
 
         for start_offset, end_offset in zip(offsets, offsets[1:]):
-            # Find shard idx for end
+            # Find shard idx for end (TODO: Needs to be optimized)
             end_index = start_index
             while True:
                 if end_offset <= shard_cumsums[end_index + 1]:
