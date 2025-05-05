@@ -13,10 +13,10 @@ import click
 import yaml
 
 from megatron.energon.epathlib import EPath
-from megatron.energon.eyaml import load_yaml
 from megatron.energon.flavors import BaseWebdatasetFactory, CrudeWebdataset
 from megatron.energon.flavors.base_dataset import Sample
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset.metadata import get_dataset_info
 from megatron.energon.metadataset.loader import prepare_metadataset
 
 
@@ -139,14 +139,10 @@ def command(
         return
 
     if tar_index_only:
-        assert (path / MAIN_FOLDER_NAME / ".info.yaml").is_file(), "No .info.yaml found"
-        with (path / MAIN_FOLDER_NAME / ".info.yaml").open("rb") as f:
-            info = load_yaml(f)
+        info = get_dataset_info(path)
         all_tars = list(info["shard_counts"].keys())
     else:
-        if (path / MAIN_FOLDER_NAME / "dataset.yaml").is_file() or (
-            path / MAIN_FOLDER_NAME / ".info.yaml"
-        ).is_file():
+        if check_dataset_info_present(path):
             if not click.confirm(
                 "It seems the dataset had already been prepared. Do you want to continue?"
             ):

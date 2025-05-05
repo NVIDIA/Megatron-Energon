@@ -10,7 +10,7 @@ from megatron.energon.epathlib import EPath
 
 @dataclass_slots
 class WebdatasetInfo:
-    """Info about a webdataset. Format for `.nv-meta/.info.yaml`."""
+    """Info about a webdataset. Format for `.nv-meta/.info.yaml` or `.nv-meta/.info.json`."""
 
     # Maps shard name to number of samples in that shard
     shard_counts: Dict[str, int]

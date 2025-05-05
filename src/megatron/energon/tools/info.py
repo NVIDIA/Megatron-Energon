@@ -11,6 +11,7 @@ from megatron.energon.epathlib import EPath
 from megatron.energon.eyaml import load_yaml
 from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset.metadata import get_dataset_info
 
 fmt = """
 * {dataset_name}: `{path}` ({samples_count:,} samples, {samples_size} in {shards_count} shards)
@@ -53,7 +54,8 @@ def command(
     """
 
     ds_config = load_yaml((path / MAIN_FOLDER_NAME / dataset_config).read_bytes())
-    info_config = load_yaml((path / MAIN_FOLDER_NAME / ".info.yaml").read_bytes())
+    info_config = get_dataset_info(path)
+
     split_config = load_yaml((path / MAIN_FOLDER_NAME / split_config).read_bytes())
     samples_count = sum(info_config["shard_counts"].values())
     dict_sample_type = ds_config["sample_type"]

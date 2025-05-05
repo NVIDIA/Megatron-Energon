@@ -1,6 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+import json
 from dataclasses import dataclass
 from typing import Generator, List, Set
 
@@ -10,7 +11,11 @@ from megatron.energon.epathlib import EPath
 from megatron.energon.eyaml import load_yaml
 from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
 from megatron.energon.flavors.webdataset.empty_dataset_error import EmptyDatasetError
-from megatron.energon.flavors.webdataset.structs import ShardInfo, WebdatasetInfo, WebdatasetSplits
+from megatron.energon.flavors.webdataset.structs import (
+    ShardInfo,
+    WebdatasetInfo,
+    WebdatasetSplits,
+)
 from megatron.energon.typed_converter import JsonParser
 
 
@@ -28,7 +33,6 @@ class WebdatasetMeta:
         path: EPath,
         *,
         split_part: str,
-        info_config: str = ".info.yaml",
         split_config: str = "split.yaml",
     ) -> "WebdatasetMeta":
         """
@@ -40,8 +44,10 @@ class WebdatasetMeta:
             split_config: Config file to use for shard split definitions.
         """
         parser = JsonParser(strict=True)
+        info_object = get_dataset_info(path)
+
         info = parser.raw_to_typed(
-            load_yaml((path / MAIN_FOLDER_NAME / info_config).read_bytes()),
+            info_object,
             WebdatasetInfo,
         )
         splits = parser.raw_to_typed(
@@ -82,7 +88,6 @@ class WebdatasetMeta:
     def all_from_config(
         path: EPath,
         *,
-        info_config: str = ".info.yaml",
         split_config: str = "split.yaml",
     ) -> Generator["WebdatasetMeta", None, None]:
         """
@@ -93,8 +98,10 @@ class WebdatasetMeta:
             split_config: Config file to use for shard split definitions.
         """
         parser = JsonParser(strict=True)
+        info_object = get_dataset_info(path)
+
         info = parser.raw_to_typed(
-            load_yaml((path / MAIN_FOLDER_NAME / info_config).read_bytes()),
+            info_object,
             WebdatasetInfo,
         )
         splits = parser.raw_to_typed(
@@ -127,3 +134,27 @@ class WebdatasetMeta:
                 ],
                 split_part_files=split_part_files,
             )
+
+
+def get_dataset_info(path: EPath) -> dict:
+    """Given the path to an energon webdataset that contains a .nv-meta folder,
+    return the dataset info as a dict.
+    """
+
+    info_config = path / MAIN_FOLDER_NAME / ".info.json"
+    yaml_info_config = path / MAIN_FOLDER_NAME / ".info.yaml"  # Backwards compatibility
+    if info_config.is_file():
+        return json.load(info_config.open("r"))
+    elif yaml_info_config.is_file():
+        return load_yaml(yaml_info_config.read_bytes())
+    else:
+        raise ValueError(f"No info config file found at {info_config} or {yaml_info_config}")
+
+
+def check_dataset_info_present(path: EPath) -> bool:
+    """Given the path to an energon webdataset that contains a .nv-meta folder,
+    return True if the dataset info is present, False otherwise.
+    """
+    return (path / MAIN_FOLDER_NAME / ".info.json").is_file() or (
+        path / MAIN_FOLDER_NAME / ".info.yaml"
+    ).is_file()

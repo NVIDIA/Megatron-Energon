@@ -57,7 +57,6 @@ class BaseWebdatasetFactory(
         shuffle_over_epochs: Optional[int] = 1,
         parallel_shard_iters: Optional[int] = None,
         max_samples_per_sequence: Optional[int] = None,
-        info_config: str = ".info.yaml",
         split_config: str = "split.yaml",
         part_filter: Optional[Callable[[str], bool]] = None,
         handler: Callable[[Exception, Optional[str]], None] = reraise_exception,
@@ -80,14 +79,13 @@ class BaseWebdatasetFactory(
             parallel_shard_iters: Number of parallel opened shards per worker, shuffling between.
             max_samples_per_sequence: Maximum number of samples per sequence (=how many samples
                     will be sequentially iterated).
-            info_config: Config file to use for sample metadata.
             split_config: Config file to use for shard split definitions.
             part_filter: (internal) Function for filtering tar files by dict keys
             handler: Exception handler. Args: (exception, key).
         """
         assert self.__sample_type__ is not None, f"Class {type(self)} must define __sample_type__"
         wds_meta = WebdatasetMeta.from_config(
-            path=path, split_part=split_part, info_config=info_config, split_config=split_config
+            path=path, split_part=split_part, split_config=split_config
         )
         self.path = path
         self.paths = [path]

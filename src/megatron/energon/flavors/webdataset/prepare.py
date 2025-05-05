@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import functools
+import json
 import logging
 import random
 import re
@@ -27,6 +28,7 @@ import braceexpand
 import yaml
 
 from megatron.energon.epathlib import EPath
+from megatron.energon.eyaml import load_yaml
 from megatron.energon.flavors.webdataset.aggregator_pool import AggregatorPool, BaseAggregator
 from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME, skip_meta_re, split_name_re
 from megatron.energon.flavors.webdataset.indexing import SqliteIndexWriter
@@ -240,7 +242,6 @@ class WebdatasetPreparator:
         *,
         split_parts_ratio: Optional[List[Tuple[str, float]]] = None,
         split_parts_patterns: Optional[List[Tuple[str, str]]] = None,
-        info_config: str = ".info.yaml",
         split_config: str = "split.yaml",
         shuffle_seed: Optional[int] = 42,
         progress_fn: Callable[[Iterator[Any], int], Iterator[T]] = (lambda x, y: x),
@@ -305,7 +306,14 @@ class WebdatasetPreparator:
             with (parent_path / MAIN_FOLDER_NAME / "index.uuid").open("w") as f:
                 f.write(str(uuid.uuid4()))
 
+        yaml_info_config = parent_path / MAIN_FOLDER_NAME / ".info.yaml"
+        json_info_config = parent_path / MAIN_FOLDER_NAME / ".info.json"
+
         if tar_index_only:
+            if yaml_info_config.is_file() and not json_info_config.is_file():
+                with json_info_config.open("w") as f:
+                    json.dump(load_yaml(yaml_info_config.read_bytes()), f)
+
             return found_parts, duplicates
 
         assert len(shards) == len(shard_to_idx), (
@@ -323,9 +331,10 @@ class WebdatasetPreparator:
         info = WebdatasetInfo(
             shard_counts={shard.name: shard.count for shard in shards},
         )
-        print(f"Saving info to {parent_path / MAIN_FOLDER_NAME / info_config}")
-        with (parent_path / MAIN_FOLDER_NAME / info_config).open("w") as wf:
-            yaml.dump(to_json_object(info), wf)
+        print(f"Saving info to {json_info_config}")
+
+        with json_info_config.open("w") as wf:
+            json.dump(to_json_object(info), wf)
 
         if split_parts_ratio is not None:
             # Normalize ratio

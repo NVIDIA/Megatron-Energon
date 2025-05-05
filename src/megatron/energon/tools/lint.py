@@ -10,9 +10,9 @@ import tqdm
 
 from megatron.energon import WorkerConfig, get_loader, get_val_dataset
 from megatron.energon.epathlib import EPath
-from megatron.energon.eyaml import load_yaml
 from megatron.energon.flavors import BaseWebdatasetFactory
 from megatron.energon.flavors.webdataset.itar import TarIndexReader
+from megatron.energon.flavors.webdataset.metadata import get_dataset_info
 
 
 def check_index(dataset_path: EPath):
@@ -23,8 +23,7 @@ def check_index(dataset_path: EPath):
     ok = True
 
     # Get info file
-    info_file = dataset_path / ".nv-meta/.info.yaml"
-    info = load_yaml(info_file.read_bytes())
+    info = get_dataset_info(dataset_path)
 
     click.echo("Checking the index files...")
     shards = info["shard_counts"]

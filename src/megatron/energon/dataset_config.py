@@ -8,6 +8,7 @@ from megatron.energon.epathlib import EPath
 from megatron.energon.eyaml import load_yaml
 from megatron.energon.flavors import BaseCoreDatasetFactory, StandardWebdatasetFactory
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset.metadata import check_dataset_info_present
 from megatron.energon.typed_converter import JsonParser
 from megatron.energon.worker import WorkerConfig
 
@@ -82,9 +83,9 @@ def get_dataset_from_config(
         The instantiated dataset
     """
     path = EPath(path)
-    if not (path / MAIN_FOLDER_NAME / ".info.yaml").is_file():
+    if not check_dataset_info_present(path):
         raise ValueError(
-            f"Path {path} does not contain a {MAIN_FOLDER_NAME}/.info.yaml file. Did you forget to "
+            f"Path {path} does not contain a {MAIN_FOLDER_NAME}/.info.yaml or .info.json file. Did you forget to "
             f"prepare the dataset? Please check the documentation for an introduction to dataset "
             f"preparation."
         )
