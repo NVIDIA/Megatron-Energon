@@ -1,9 +1,31 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+import json
 from typing import Any, BinaryIO, Union
 
 import ryml
+
+from megatron.energon.epathlib.epath import EPath
+
+
+def load_yaml_json(path: EPath) -> Any:
+    """Load a YAML or JSON file from a path. Loading json is much faster than yaml.
+
+    Args:
+        path: The path to the file to load.
+
+    Returns:
+        The parsed YAML or JSON data as a native Python object.
+    """
+    if path.name.endswith(".yaml"):
+        with path.open("rb") as f:
+            return load_yaml(f)
+    elif path.name.endswith(".json"):
+        with path.open("rb") as f:
+            return json.load(f)
+    else:
+        raise ValueError(f"Invalid file extension: {path.name}")
 
 
 def load_yaml(stream: Union[BinaryIO, bytes]) -> Any:

@@ -18,8 +18,8 @@ class WebdatasetInfo:
 
 @dataclass_slots
 class WebdatasetSplits:
-    """Info about the splits of a webdataset. Format for `.nv-meta/split.yaml` (or custom user yaml
-    of course)."""
+    """Info about the splits of a webdataset. Format for `.nv-meta/split.yaml` or `.nv-meta/split.json`
+    (or custom user yaml/json)."""
 
     # Maps split part to list of shard names
     split_parts: Dict[str, List[str]]

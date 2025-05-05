@@ -20,6 +20,7 @@ from megatron.energon.flavors.webdataset.metadata import (
     check_dataset_info_present,
     get_dataset_info,
 )
+from megatron.energon.metadataset.loader import prepare_metadataset
 
 
 def type_str(tp: Type) -> str:

@@ -257,8 +257,7 @@ class WebdatasetPreparator:
             paths: Paths to the shards
             split_parts_ratio: Names of splits and their ratio (will be normalized)
             split_parts_patterns: Names of splits and their path patterns
-            info_config: Filename for the info config (`parent_path / '.nv-meta' / info_config`)
-            split_config: Filename for the info config (`parent_path / '.nv-meta' / split_config`)
+            split_config: Filename for the split config (`parent_path / '.nv-meta' / split_config`), may be yaml or json
             shuffle_seed: Seed for shuffling shards before splitting into split_parts. None to
                 disable.
             progress_fn: Callback for progress bar
@@ -306,13 +305,15 @@ class WebdatasetPreparator:
             with (parent_path / MAIN_FOLDER_NAME / "index.uuid").open("w") as f:
                 f.write(str(uuid.uuid4()))
 
-        yaml_info_config = parent_path / MAIN_FOLDER_NAME / ".info.yaml"
         json_info_config = parent_path / MAIN_FOLDER_NAME / ".info.json"
 
         if tar_index_only:
+            yaml_info_config = parent_path / MAIN_FOLDER_NAME / ".info.yaml"
             if yaml_info_config.is_file() and not json_info_config.is_file():
+                # Convert legacy .info.yaml to .info.json
                 with json_info_config.open("w") as f:
-                    json.dump(load_yaml(yaml_info_config.read_bytes()), f)
+                    json.dump(load_yaml(yaml_info_config.read_bytes()), f, indent=2)
+                yaml_info_config.unlink()
 
             return found_parts, duplicates
 
@@ -372,6 +373,11 @@ class WebdatasetPreparator:
         # Save split config
         splits_config = WebdatasetSplits(split_parts=split_shards)
         with (parent_path / MAIN_FOLDER_NAME / split_config).open("w") as wf:
-            yaml.dump(to_json_object(splits_config), wf)
+            if split_config.endswith(".yaml"):
+                yaml.dump(to_json_object(splits_config), wf)
+            elif split_config.endswith(".json"):
+                json.dump(to_json_object(splits_config), wf, indent=2)
+            else:
+                raise ValueError(f"Invalid split config extension: {split_config}")
 
         return found_parts, duplicates

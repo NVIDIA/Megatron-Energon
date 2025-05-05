@@ -8,7 +8,7 @@ from typing import Generator, List, Set
 import braceexpand
 
 from megatron.energon.epathlib import EPath
-from megatron.energon.eyaml import load_yaml
+from megatron.energon.eyaml import load_yaml, load_yaml_json
 from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
 from megatron.energon.flavors.webdataset.empty_dataset_error import EmptyDatasetError
 from megatron.energon.flavors.webdataset.structs import (
@@ -40,7 +40,6 @@ class WebdatasetMeta:
 
         Args:
             split_part: Which part to load (e.g. 'train', 'val', 'test').
-            info_config: Config file to use for sample metadata.
             split_config: Config file to use for shard split definitions.
         """
         parser = JsonParser(strict=True)
@@ -50,10 +49,20 @@ class WebdatasetMeta:
             info_object,
             WebdatasetInfo,
         )
-        splits = parser.raw_to_typed(
-            load_yaml((path / MAIN_FOLDER_NAME / split_config).read_bytes()),
-            WebdatasetSplits,
-        )
+        try:
+            splits = parser.raw_to_typed(
+                load_yaml_json(path / MAIN_FOLDER_NAME / split_config),
+                WebdatasetSplits,
+            )
+        except FileNotFoundError:
+            if split_config == "split.yaml":
+                # Try split.json instead
+                splits = parser.raw_to_typed(
+                    load_yaml_json(path / MAIN_FOLDER_NAME / "split.json"),
+                    WebdatasetSplits,
+                )
+            else:
+                raise
         assert split_part in splits.split_parts, f"Invalid split part: {split_part!r}"
         split_excludes = {
             excluded
@@ -94,7 +103,6 @@ class WebdatasetMeta:
         Loads the metadata for a webdataset, i.e. the shards and sample excludes.
 
         Args:
-            info_config: Config file to use for sample metadata.
             split_config: Config file to use for shard split definitions.
         """
         parser = JsonParser(strict=True)
@@ -105,7 +113,7 @@ class WebdatasetMeta:
             WebdatasetInfo,
         )
         splits = parser.raw_to_typed(
-            load_yaml((path / MAIN_FOLDER_NAME / split_config).read_bytes()),
+            load_yaml_json(path / MAIN_FOLDER_NAME / split_config),
             WebdatasetSplits,
         )
         split_excludes = {
