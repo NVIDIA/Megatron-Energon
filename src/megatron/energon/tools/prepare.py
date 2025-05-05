@@ -16,8 +16,10 @@ from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import BaseWebdatasetFactory, CrudeWebdataset
 from megatron.energon.flavors.base_dataset import Sample
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
-from megatron.energon.flavors.webdataset.metadata import get_dataset_info
-from megatron.energon.metadataset.loader import prepare_metadataset
+from megatron.energon.flavors.webdataset.metadata import (
+    check_dataset_info_present,
+    get_dataset_info,
+)
 
 
 def type_str(tp: Type) -> str:
