@@ -77,9 +77,7 @@ def _cast_scalar(tree: ryml.Tree, nid: int) -> object:
 def _to_native(t: ryml.Tree, nid: int):
     if t.is_map(nid):
         # iterate children of a mapping node
-        return {
-            t.key(ch).tobytes().decode(): _to_native(t, ch) for ch in ryml.children(t, nid)
-        }  # children() helper&#8203;:contentReference[oaicite:3]{index=3}
+        return {t.key(ch).tobytes().decode(): _to_native(t, ch) for ch in ryml.children(t, nid)}
     if t.is_seq(nid):
         return [_to_native(t, ch) for ch in ryml.children(t, nid)]
     # scalar leaf
