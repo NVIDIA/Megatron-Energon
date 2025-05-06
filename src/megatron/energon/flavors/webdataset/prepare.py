@@ -306,14 +306,13 @@ class WebdatasetPreparator:
                 f.write(str(uuid.uuid4()))
 
         json_info_config = parent_path / MAIN_FOLDER_NAME / ".info.json"
+        yaml_info_config = parent_path / MAIN_FOLDER_NAME / ".info.yaml"
 
         if tar_index_only:
-            yaml_info_config = parent_path / MAIN_FOLDER_NAME / ".info.yaml"
             if yaml_info_config.is_file() and not json_info_config.is_file():
                 # Convert legacy .info.yaml to .info.json
                 with json_info_config.open("w") as f:
                     json.dump(load_yaml(yaml_info_config.read_bytes()), f, indent=2)
-                yaml_info_config.unlink()
 
             return found_parts, duplicates
 
@@ -336,6 +335,12 @@ class WebdatasetPreparator:
 
         with json_info_config.open("w") as wf:
             json.dump(to_json_object(info), wf)
+
+        if yaml_info_config.is_file():
+            # If a .info.yaml existed previously, let's also update it
+            # to keep them in sync
+            with yaml_info_config.open("w") as wf:
+                yaml.dump(to_json_object(info), wf)
 
         if split_parts_ratio is not None:
             # Normalize ratio
