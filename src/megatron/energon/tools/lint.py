@@ -1,6 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+
 import logging
 import traceback
 from typing import Optional
@@ -11,7 +12,7 @@ import yaml
 
 from megatron.energon import WorkerConfig, get_loader, get_val_dataset
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors import BaseWebdatasetFactory
+from megatron.energon.flavors.webdataset.empty_dataset_error import EmptyDatasetError
 from megatron.energon.flavors.webdataset.itar import TarIndexReader
 
 
@@ -97,7 +98,7 @@ def command(path: EPath, split_parts: str, dataset_config: str, split_config: st
                 handler=handler,
                 **kwargs,
             )
-        except BaseWebdatasetFactory.EmptyDatasetError:
+        except EmptyDatasetError:
             click.echo(f"Skipping empty split part {split_part}")
             continue
 
