@@ -8,7 +8,7 @@ from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.dataset_config import load_config
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import BaseCoreDatasetFactory, Sample
-from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset.metadata import check_dataset_info_present
 from megatron.energon.metadataset.dataset_loader import DatasetLoader
 from megatron.energon.metadataset.join_dataset_loader import JoinDatasetLoader, JoinedDatasetInfo
 from megatron.energon.metadataset.loader_interface import DatasetBlendMode, DatasetLoaderInterface
@@ -43,7 +43,7 @@ class DatasetReference(DatasetLoaderInterface):
                 default_kwargs=dict(path=self.path),
             )
             self._dataset.post_initialize()
-        elif (self.path / MAIN_FOLDER_NAME / ".info.yaml").is_file():
+        elif check_dataset_info_present(self.path):
             self._dataset = DatasetLoader(
                 path=self.path,
                 split_part=self.split_part,
@@ -109,7 +109,7 @@ class JoinDatasetReference(DatasetReference):
         # Do not store the loader, the parent MetadatasetJoin will do that.
         if not isinstance(self.path, EPath):
             self.path = mds_path.parent / self.path
-        if (self.path / MAIN_FOLDER_NAME / ".info.yaml").is_file():
+        if check_dataset_info_present(self.path):
             return DatasetLoader(
                 path=self.path,
                 split_part=self.split_part,

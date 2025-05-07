@@ -10,7 +10,7 @@ from megatron.energon.epathlib import EPath
 
 @dataclass_slots
 class WebdatasetInfo:
-    """Info about a webdataset. Format for `.nv-meta/.info.yaml`."""
+    """Info about a webdataset. Format for `.nv-meta/.info.yaml` or `.nv-meta/.info.json`."""
 
     # Maps shard name to number of samples in that shard
     shard_counts: Dict[str, int]
@@ -18,8 +18,8 @@ class WebdatasetInfo:
 
 @dataclass_slots
 class WebdatasetSplits:
-    """Info about the splits of a webdataset. Format for `.nv-meta/split.yaml` (or custom user yaml
-    of course)."""
+    """Info about the splits of a webdataset. Format for `.nv-meta/split.yaml` or `.nv-meta/split.json`
+    (or custom user yaml/json)."""
 
     # Maps split part to list of shard names
     split_parts: Dict[str, List[str]]
