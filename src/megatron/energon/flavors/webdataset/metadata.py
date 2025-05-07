@@ -3,7 +3,7 @@
 
 import json
 from dataclasses import dataclass
-from typing import Generator, List, Set
+from typing import List, Set
 
 import braceexpand
 
@@ -93,56 +93,6 @@ class WebdatasetMeta:
             info_shard_files=list(info.shard_counts.keys()),
         )
 
-    @staticmethod
-    def all_from_config(
-        path: EPath,
-        *,
-        split_config: str = "split.yaml",
-    ) -> Generator["WebdatasetMeta", None, None]:
-        """
-        Loads the metadata for a webdataset, i.e. the shards and sample excludes.
-
-        Args:
-            split_config: Config file to use for shard split definitions.
-        """
-        parser = JsonParser(strict=True)
-        info_object = get_dataset_info(path)
-
-        info = parser.raw_to_typed(
-            info_object,
-            WebdatasetInfo,
-        )
-        splits = parser.raw_to_typed(
-            load_yaml_json(path / MAIN_FOLDER_NAME / split_config),
-            WebdatasetSplits,
-        )
-        split_excludes = {
-            excluded
-            for excluded in splits.exclude
-            for excluded in braceexpand.braceexpand(excluded)
-        }
-        for split_part in splits.split_parts.keys():
-            split_part_files = [
-                name
-                for name in splits.split_parts[split_part]
-                for name in braceexpand.braceexpand(name)
-                if name not in split_excludes
-            ]
-            if len(split_part_files) == 0:
-                raise EmptyDatasetError(f"No shards found in split part {split_part!r}")
-            yield WebdatasetMeta(
-                sample_excludes={excluded for excluded in split_excludes if "/" in excluded},
-                shards=[
-                    ShardInfo(
-                        name=name,
-                        path=path / name,
-                        count=info.shard_counts[name],
-                    )
-                    for name in split_part_files
-                ],
-                split_part_files=split_part_files,
-            )
-
 
 def get_dataset_info(path: EPath) -> dict:
     """Given the path to an energon webdataset that contains a .nv-meta folder,
@@ -150,7 +100,9 @@ def get_dataset_info(path: EPath) -> dict:
     """
 
     info_config = path / MAIN_FOLDER_NAME / ".info.json"
-    yaml_info_config = path / MAIN_FOLDER_NAME / ".info.yaml"  # Backwards compatibility
+    # YAML for backwards compatibility
+    yaml_info_config = path / MAIN_FOLDER_NAME / ".info.yaml"
+
     if info_config.is_file():
         return json.load(info_config.open("r"))
     elif yaml_info_config.is_file():
