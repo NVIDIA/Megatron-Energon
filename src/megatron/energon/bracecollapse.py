@@ -15,6 +15,7 @@ _num_re = re.compile(r"\d+")
 def _tokenize(s: str) -> Tuple[List[str], List[Tuple[str, int, int]]]:
     """
     Split the string into literal and numeric parts.
+    Always starts with a literal (sometimes empty)
 
     Example:
         "partition_00/shard_000000.tar" ->
@@ -85,48 +86,59 @@ def _streaming_mode(strings: List[str]) -> List[str]:
     Returns:
         List of compressed expressions.
     """
+    # Result list with brace expressions
     out: List[str] = []
-    n, i = len(strings), 0
+
+    # Total number of strings
+    n = len(strings)
+
+    # Current index
+    i = 0
 
     while i < n:
         lits0, nums0 = _tokenize(strings[i])
 
-        # strings without numbers can never form a range
+        # Strings without numbers can never form a range
         if not nums0:
             out.append(strings[i])
             i += 1
             continue
 
-        var_idx: int = -1  # which numeric slot is changing?
+        # Which numeric slot is changing?
+        var_idx: int = -1
+
         start_raw: str = ""
         prev_nums = nums0
-        run_end = i  # last index in the current candidate range
 
+        # Last index in the current candidate range
+        run_end = i
+
+        # Starting with string `i` as the template, check subsequent strings `j` as long as they match
         j = i + 1
         while j < n:
             lits1, nums1 = _tokenize(strings[j])
 
-            # template must be identical
+            # Template must be identical (same number of literals and numeric slots)
             if lits1 != lits0 or len(nums1) != len(nums0):
                 break
 
-            # exactly one numeric slot may differ ─ find it
+            # Exactly one numeric slot may differ ─ find it
             diff_slots = [k for k, (a, b) in enumerate(zip(prev_nums, nums1)) if a[1] != b[1]]
             if len(diff_slots) != 1:
                 break
             k = diff_slots[0]
 
-            # width must stay the same
+            # Width must stay the same
             if nums1[k][2] != prev_nums[k][2]:
                 break
 
-            # same changing slot for the whole run
+            # Same changing slot for the whole run
             if var_idx == -1:
                 var_idx, start_raw = k, nums0[k][0]
             elif var_idx != k:
                 break
 
-            # contiguous ascending (+1) only
+            # Contiguous ascending (+1) only
             if nums1[k][1] != prev_nums[k][1] + 1:
                 break
 
@@ -136,11 +148,14 @@ def _streaming_mode(strings: List[str]) -> List[str]:
             j += 1
 
         run_len = run_end - i + 1
-        if run_len >= 2 and var_idx != -1:  # emit range
+
+        if run_len >= 2 and var_idx != -1:
+            # Emit range
             end_raw = prev_nums[var_idx][0]
             out.append(_build_expr(lits0, nums0, var_idx, start_raw, end_raw))
             i = run_end + 1
-        else:  # single string
+        else:
+            # Single string
             out.append(strings[i])
             i += 1
     return out
@@ -156,13 +171,13 @@ def _bucket_greedy_mode(strings: List[str]) -> List[str]:
     Returns:
         List of compressed expressions (order may change).
     """
-    # ---- tokenise once -----------------------------------------------------
+    # Tokenize all stringsonce
     tokenized = []
     for s in strings:
         lits, nums = _tokenize(s)
         tokenized.append({"lits": lits, "nums": nums, "orig": s})
 
-    # ---- build buckets -----------------------------------------------------
+    # Build buckets
     buckets: defaultdict = defaultdict(list)
     for idx, t in enumerate(tokenized):
         lits, nums = t["lits"], t["nums"]
@@ -175,10 +190,14 @@ def _bucket_greedy_mode(strings: List[str]) -> List[str]:
             key = (var_idx, tuple(key_tokens))
             buckets[key].append((idx, value, raw, width))
 
-    # ---- find contiguous runs inside every bucket --------------------------
-    candidates = []  # (covered_size, indices, expression)
+    # Find contiguous runs inside every bucket
+    # candidate contain tuples (covered_size, indices, expression)
+    candidates = []
     for (var_idx, _), entries in buckets.items():
-        entries.sort(key=lambda e: e[1])  # by numeric *value*
+        # Sort by numeric *value*
+        entries.sort(key=lambda e: e[1])
+
+        # Start with the first entry
         run = [entries[0]]
 
         def _flush():
@@ -189,6 +208,7 @@ def _bucket_greedy_mode(strings: List[str]) -> List[str]:
                 expr = _build_expr(t0["lits"], t0["nums"], var_idx, start_raw, end_raw)
                 candidates.append((len(run), idxs, expr))
 
+        # Check subsequent entries
         for e in entries[1:]:
             prev = run[-1]
             if e[1] == prev[1] + 1 and e[3] == prev[3]:  # contiguous, same width
@@ -198,7 +218,7 @@ def _bucket_greedy_mode(strings: List[str]) -> List[str]:
                 run = [e]
         _flush()
 
-    # ---- greedy cover: longest first, no overlaps --------------------------
+    # Greedy cover: longest first, no overlaps
     candidates.sort(key=lambda c: (-c[0], c[2]))  # stable order
     covered = [False] * len(strings)
     out: List[str] = []
@@ -209,7 +229,7 @@ def _bucket_greedy_mode(strings: List[str]) -> List[str]:
             for i in idxs:
                 covered[i] = True
 
-    # ---- leftover single strings ------------------------------------------
+    # Leftover single strings
     out.extend(t["orig"] for i, t in enumerate(tokenized) if not covered[i])
     return out
 
