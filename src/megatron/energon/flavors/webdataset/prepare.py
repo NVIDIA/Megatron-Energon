@@ -27,6 +27,7 @@ from typing import (
 import braceexpand
 import yaml
 
+from megatron.energon.bracecollapse import collapse
 from megatron.energon.epathlib import EPath
 from megatron.energon.eyaml import load_yaml
 from megatron.energon.flavors.webdataset.aggregator_pool import AggregatorPool, BaseAggregator
@@ -375,11 +376,18 @@ class WebdatasetPreparator:
                     for shard in shards
                     if any(pattern.match(shard.name) for pattern in patterns)
                 ]
+
+        # Optimize the split parts by trying to bracecollapse the shard names
+        print("Collapsing split parts... ", flush=True, end="")
+        for split_part in split_shards:
+            split_shards[split_part] = collapse(split_shards[split_part], keep_order=True)
+        print("Done", flush=True)
+
         # Save split config
         splits_config = WebdatasetSplits(split_parts=split_shards)
         with (parent_path / MAIN_FOLDER_NAME / split_config).open("w") as wf:
             if split_config.endswith(".yaml"):
-                yaml.dump(to_json_object(splits_config), wf)
+                yaml.dump(to_json_object(splits_config), wf, sort_keys=False)
             elif split_config.endswith(".json"):
                 json.dump(to_json_object(splits_config), wf, indent=2)
             else:
