@@ -548,6 +548,23 @@ class TestDataset(unittest.TestCase):
             n_samples += sample.image.shape[0]
         assert n_samples == 50
 
+    def test_no_batching(self):
+        train_loader = get_loader(
+            get_train_dataset(
+                self.dataset_path,
+                batch_size=None,
+                worker_config=no_worker_config,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+            )
+        )
+
+        one_sample = next(iter(train_loader))
+
+        # Single sample without batching
+        assert isinstance(one_sample.image, torch.Tensor)
+        assert isinstance(one_sample.caption, str)
+
     def test_dataset_len(self):
         torch.manual_seed(42)
 

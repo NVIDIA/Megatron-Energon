@@ -6,6 +6,7 @@ import functools
 import inspect
 from abc import ABC
 from dataclasses import is_dataclass
+from types import FunctionType, MethodType
 from typing import (
     Any,
     Callable,
@@ -237,6 +238,8 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
       5. resulting encoded batch is passed to the network
     """
 
+    __energon_impl__: bool = True
+
     cookers: Sequence[Cooker] = ()
 
     @stateless
@@ -252,6 +255,36 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         else:
             assert isinstance(sample, Sample), "Sample must be a complete Sample or a CrudeSample"
             return sample
+
+    def _user_overridden(self, bound_method: Callable[..., Any]) -> bool:
+        """Check if a method is overridden by a user subclass.
+        User subclasses don't have __energon_impl__ = True.
+
+        Return True iff the first implementation of *attr_name*
+        along this object's MRO belongs to a class that is
+        **not** marked with __energon_impl__ = True.
+        """
+
+        if not isinstance(bound_method, MethodType):
+            raise TypeError("expecting an instance-bound method")
+
+        # Get the underlying function
+        func = bound_method.__func__
+
+        # Loop over the MRO in normal lookup order
+        for cls in type(self).mro():
+            # Fast path: Look up by the canonical attribute name
+            name = func.__name__
+            if name in cls.__dict__ and cls.__dict__[name] is func:
+                return not getattr(cls, "__energon_impl__", False)
+
+            # Fallback: scan entire __dict__ in case the function
+            # was aliased under a different attribute name
+            for attr in cls.__dict__.values():
+                if isinstance(attr, FunctionType) and attr is func:
+                    return not getattr(cls, "__energon_impl__", False)
+
+        raise ValueError(f"Method {bound_method} not found in MRO.")
 
     @stateless
     def encode_sample(
@@ -373,14 +406,8 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         """Applies the batcher to the dataset."""
 
         if packing_buffer_size is not None:
-            select_samples_to_pack_provided = (
-                getattr(self.select_samples_to_pack, "__func__", None)
-                is not TaskEncoder.select_samples_to_pack
-            )
-            pack_selected_samples_provided = (
-                getattr(self.pack_selected_samples, "__func__", None)
-                is not TaskEncoder.pack_selected_samples
-            )
+            select_samples_to_pack_provided = self._user_overridden(self.select_samples_to_pack)
+            pack_selected_samples_provided = self._user_overridden(self.pack_selected_samples)
 
             assert select_samples_to_pack_provided and pack_selected_samples_provided, (
                 "Both select_samples_to_pack and pack_selected_samples methods must be provided in the TaskEncoder when using packing_buffer_size"
@@ -395,10 +422,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 worker_config=worker_config,
             )
 
-        if (
-            getattr(self.batch_group_criterion, "__func__", None)
-            is not TaskEncoder.batch_group_criterion
-        ):
+        if self._user_overridden(self.batch_group_criterion):
             dataset = GroupBatchDataset(
                 dataset,
                 fixed_batch_size=batch_size,
@@ -408,7 +432,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 worker_config=worker_config,
             )
 
-            if getattr(self.encode_batch, "__func__", None) is not TaskEncoder.encode_batch:
+            if self._user_overridden(self.encode_batch):
                 dataset = MapDataset(
                     dataset,
                     self.encode_batch,
@@ -428,7 +452,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                     worker_config=worker_config,
                 )
 
-                if getattr(self.encode_batch, "__func__", None) is not TaskEncoder.encode_batch:
+                if self._user_overridden(self.encode_batch):
                     dataset = MapDataset(
                         dataset,
                         self.encode_batch,
@@ -436,10 +460,10 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                         stateless_map_fn=get_stateless(self.encode_batch),
                     )
             else:
-                assert getattr(self.encode_batch, "__func__", None) is TaskEncoder.encode_batch, (
+                assert not self._user_overridden(self.encode_batch), (
                     "batch_size is not set, but encode_batch is not the default."
                 )
-                assert getattr(self.batch, "__func__", None) is TaskEncoder.batch, (
+                assert not self._user_overridden(self.batch), (
                     "batch_size is not set, but batch is not the default."
                 )
 
@@ -452,11 +476,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         worker_config: WorkerConfig,
     ) -> SavableDataset[T_sample]:
         """Applies the sample cooker to the dataset if we have cookers registered."""
-        if (
-            self.cookers
-            or getattr(self.build_cook_crude_sample, "__func__", None)
-            is not TaskEncoder.build_cook_crude_sample
-        ):
+        if self.cookers or self._user_overridden(self.build_cook_crude_sample):
             dataset = MapDataset(
                 dataset,
                 self.cook_crude_sample,
@@ -483,7 +503,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         worker_config: WorkerConfig,
     ) -> SavableDataset[T_encoded_sample]:
         """Applies the sample encoder to the dataset."""
-        if getattr(self.encode_sample, "__func__", None) is not TaskEncoder.encode_sample:
+        if self._user_overridden(self.encode_sample):
             dataset = MapDataset(
                 dataset,
                 self.encode_sample,
@@ -695,6 +715,8 @@ class DefaultTaskEncoder(
     (by name) to your new type.
     """
 
+    __energon_impl__: bool = True
+
     _encoded_sample_type: Optional[Type[T_encoded_sample]]
     _raw_batch_type: Optional[Type[T_raw_batch]]
     _batch_type: Optional[Type[T_batch]]
@@ -789,6 +811,81 @@ class DefaultTaskEncoder(
             return self._batch_type(**fields)
         else:
             raise ValueError("Unrecognized encoded sample type.")
+
+    def build_batch(
+        self,
+        dataset: SavableDataset[T_encoded_sample],
+        *,
+        batch_size: Optional[int],
+        batch_drop_last: bool = False,
+        packing_buffer_size: Optional[int] = None,
+        worker_config: WorkerConfig,
+    ) -> SavableDataset[T_raw_batch]:
+        """Applies the batcher to the dataset."""
+
+        if packing_buffer_size is not None:
+            select_samples_to_pack_provided = self._user_overridden(self.select_samples_to_pack)
+            pack_selected_samples_provided = self._user_overridden(self.pack_selected_samples)
+
+            assert select_samples_to_pack_provided and pack_selected_samples_provided, (
+                "Both select_samples_to_pack and pack_selected_samples methods must be provided in the TaskEncoder when using packing_buffer_size"
+            )
+
+            dataset = PackingDataset(
+                dataset,
+                buffer_size=packing_buffer_size,
+                pre_packer=self.select_samples_to_pack,
+                final_packer=self.pack_selected_samples,
+                final_packer_stateless=get_stateless(self.pack_selected_samples),
+                worker_config=worker_config,
+            )
+
+        if self._user_overridden(self.batch_group_criterion):
+            dataset = GroupBatchDataset(
+                dataset,
+                fixed_batch_size=batch_size,
+                sample_group_key=self.batch_group_criterion,
+                batcher=self.batch,
+                drop_last=batch_drop_last,
+                worker_config=worker_config,
+            )
+
+            if self._user_overridden(self.encode_batch):
+                dataset = MapDataset(
+                    dataset,
+                    self.encode_batch,
+                    worker_config=worker_config,
+                    stateless_map_fn=get_stateless(self.encode_batch),
+                )
+        else:
+            # No grouping is active
+
+            if batch_size is not None:
+                dataset = BatchDataset(
+                    dataset,
+                    batch_size=batch_size,
+                    batcher=self.batch,
+                    batcher_stateless=get_stateless(self.batch),
+                    drop_last=batch_drop_last,
+                    worker_config=worker_config,
+                )
+
+                if self._user_overridden(self.encode_batch):
+                    dataset = MapDataset(
+                        dataset,
+                        self.encode_batch,
+                        worker_config=worker_config,
+                        stateless_map_fn=get_stateless(self.encode_batch),
+                    )
+            else:
+                assert not self._user_overridden(self.encode_batch), (
+                    "batch_size is not set, but encode_batch is not the default."
+                )
+                assert not self._user_overridden(self.batch), (
+                    "batch_size is not set, but batch is not the default."
+                )
+
+        return dataset
 
 
 class AugmentTaskEncoder(
