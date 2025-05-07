@@ -8,7 +8,7 @@ import click
 
 import megatron.energon
 from megatron.energon.epathlib import EPath
-from megatron.energon.eyaml import load_yaml
+from megatron.energon.eyaml import load_yaml, load_yaml_json
 from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 from megatron.energon.flavors.webdataset.metadata import get_dataset_info
@@ -55,8 +55,8 @@ def command(
 
     ds_config = load_yaml((path / MAIN_FOLDER_NAME / dataset_config).read_bytes())
     info_config = get_dataset_info(path)
+    split_config_obj = load_yaml_json(path / MAIN_FOLDER_NAME / split_config)
 
-    split_config = load_yaml((path / MAIN_FOLDER_NAME / split_config).read_bytes())
     samples_count = sum(info_config["shard_counts"].values())
     dict_sample_type = ds_config["sample_type"]
     sample_module = import_module(dict_sample_type["__module__"])
@@ -89,7 +89,7 @@ def command(
             split_samples_count=sum(info_config["shard_counts"][shard] for shard in split_parts),
             split_shards_count=len(split_parts),
         )
-        for split_name, split_parts in sorted(split_config["split_parts"].items(), key=srt_key)
+        for split_name, split_parts in sorted(split_config_obj["split_parts"].items(), key=srt_key)
     )
     print(
         fmt.format(
