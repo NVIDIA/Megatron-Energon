@@ -4,6 +4,7 @@
 from importlib import import_module
 from typing import Type
 
+import braceexpand
 import click
 
 import megatron.energon
@@ -77,6 +78,14 @@ def command(
         except ValueError:
             return 3
 
+    # Brace expand all the split part files
+    expanded_split_parts = {}
+    for split_name, split_parts in split_config_obj["split_parts"].items():
+        expanded_split_parts[split_name] = []
+        for split_part in split_parts:
+            for name in braceexpand.braceexpand(split_part):
+                expanded_split_parts[split_name].append(name)
+
     splits_str = "".join(
         split_fmt.format(
             split_name=split_name,
@@ -89,7 +98,7 @@ def command(
             split_samples_count=sum(info_config["shard_counts"][shard] for shard in split_parts),
             split_shards_count=len(split_parts),
         )
-        for split_name, split_parts in sorted(split_config_obj["split_parts"].items(), key=srt_key)
+        for split_name, split_parts in sorted(expanded_split_parts.items(), key=srt_key)
     )
     print(
         fmt.format(
