@@ -23,7 +23,7 @@ def get_info_shard_files(path: EPath) -> List[str]:
     """Use this if you don't need the full metadata for split parts, but just the shard files."""
     parser = JsonParser(strict=True)
     info = parser.raw_to_typed(
-        yaml.safe_load((path / MAIN_FOLDER_NAME / ".info.yaml").read_text()),
+        load_yaml((path / MAIN_FOLDER_NAME / ".info.yaml").read_bytes()),
         WebdatasetInfo,
     )
     return list(info.shard_counts.keys())

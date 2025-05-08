@@ -11,6 +11,7 @@ from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.dataset_config import load_config
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import Sample
+from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 from megatron.energon.flavors.webdataset.file_store import (
     WebdatasetFileStore,
 )
