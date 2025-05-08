@@ -6,7 +6,7 @@ import functools
 import inspect
 from abc import ABC
 from dataclasses import is_dataclass
-from types import FunctionType, MethodType
+from types import MethodType
 from typing import (
     Any,
     Callable,
@@ -267,13 +267,14 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         """
 
         if not isinstance(bound_method, MethodType):
-            raise TypeError("expecting an instance-bound method")
+            # If the method is not bound, it is always overridden
+            return True
 
         # Get the underlying function
         func = bound_method.__func__
-        name = func.__name__
 
-        return getattr(TaskEncoder, name) is not func
+        # Check if the base class method is different from the subclass method
+        return getattr(TaskEncoder, func.__name__) is not func
 
     @stateless
     def encode_sample(
