@@ -276,13 +276,13 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             # Fast path: Look up by the canonical attribute name
             name = func.__name__
             if name in cls.__dict__ and cls.__dict__[name] is func:
-                return not getattr(cls, "__energon_impl__", False)
+                return not cls.__dict__.get("__energon_impl__", False)
 
             # Fallback: scan entire __dict__ in case the function
             # was aliased under a different attribute name
             for attr in cls.__dict__.values():
                 if isinstance(attr, FunctionType) and attr is func:
-                    return not getattr(cls, "__energon_impl__", False)
+                    return not cls.__dict__.get("__energon_impl__", False)
 
         raise ValueError(f"Method {bound_method} not found in MRO.")
 
