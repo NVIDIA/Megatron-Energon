@@ -19,16 +19,6 @@ from megatron.energon.flavors.webdataset.structs import (
 from megatron.energon.typed_converter import JsonParser
 
 
-def get_info_shard_files(path: EPath) -> List[str]:
-    """Use this if you don't need the full metadata for split parts, but just the shard files."""
-    parser = JsonParser(strict=True)
-    info = parser.raw_to_typed(
-        load_yaml((path / MAIN_FOLDER_NAME / ".info.yaml").read_bytes()),
-        WebdatasetInfo,
-    )
-    return list(info.shard_counts.keys())
-
-
 @dataclass
 class WebdatasetMeta:
     """Class for getting metadata from a webdataset."""
@@ -102,6 +92,16 @@ class WebdatasetMeta:
             split_part_files=all_split_part_files,
             info_shard_files=list(info.shard_counts.keys()),
         )
+
+
+def get_info_shard_files(path: EPath) -> List[str]:
+    """Use this if you don't need the full metadata for split parts, but just the shard files."""
+    parser = JsonParser(strict=True)
+    info = parser.raw_to_typed(
+        get_dataset_info(path),
+        WebdatasetInfo,
+    )
+    return list(info.shard_counts.keys())
 
 
 def get_dataset_info(path: EPath) -> dict:
