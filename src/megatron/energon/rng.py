@@ -97,7 +97,7 @@ class SystemRngState:
     numpy: Any  # Currently `dict[str, Any] | tuple[str, NDArray[uint32], int, int, float]`
     random: Any  # Currently a nested tuple
 
-    def _hashable_value(self, value: Any) -> tuple | int | float | bool | str:
+    def _hashable_value(self, value: Any) -> Any:
         if isinstance(value, (int, float, bool, str)) or value is None:
             return value
         elif isinstance(value, torch.Tensor):
