@@ -304,14 +304,17 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             assert isinstance(sample, Sample), "Sample must be a complete Sample or a CrudeSample"
             return sample
 
-    def _is_overridden(self, bound_method: Callable[..., Any]) -> bool:
-        """Check if a method is overridden by a subclass of TaskEncoder.
-        This is mainly used for optimization purposes. If the default implementation
+    def _is_overridden(
+        self, bound_method: Callable[..., Any], bases: Optional[Sequence[Type[Any]]] = None
+    ) -> bool:
+        """Check if a method is overridden by a subclass of the base class(es).
+        By default, only TaskEncoder is used as a base class.
+        This is mainly used for optimization purposes. If the default method
         is a no-op, we can skip it entirely unless the user has overridden it.
 
         Args:
             bound_method: The method to check.
-
+            bases: The base classes to check against.
         Returns:
             True if the method is overridden outside of TaskEncoder, False otherwise.
         """
@@ -323,8 +326,10 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         # Get the underlying function
         func = bound_method.__func__
 
-        # Check if the base class method is different from the subclass method
-        return getattr(TaskEncoder, func.__name__) is not func
+        # Check if the subclass method matches any of the base class methods
+        if bases is None:
+            bases = (TaskEncoder,)
+        return not any(getattr(base, func.__name__) is func for base in bases)
 
     @stateless
     def encode_sample(
@@ -631,9 +636,8 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         """Applies the sample encoder to the dataset."""
         if self._is_overridden(self.preencode_sample):
             pre_encode_fn = self.preencode_sample
-            assert getattr(self.encode_sample, "__func__", None) in (
-                TaskEncoder.encode_sample,
-                DefaultTaskEncoder.encode_sample,
+            assert not self._is_overridden(
+                self.encode_sample, bases=(TaskEncoder, DefaultTaskEncoder)
             ), "Cannot have both pre- and post-encode functions defined."
         elif self._is_overridden(self.encode_sample):
             pre_encode_fn = self.encode_sample
