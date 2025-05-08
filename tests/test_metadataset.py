@@ -30,6 +30,13 @@ from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 from megatron.energon.metadataset.loader_interface import DatasetBlendMode
 from megatron.energon.wrappers.blend_dataset import BlendDataset
 
+# Speed up tests significantly by reducing the torch status check interval for broken worker shutdown
+try:
+    torch.utils.data._utils.worker.MP_STATUS_CHECK_INTERVAL = 0.1
+    torch.utils.data._utils.MP_STATUS_CHECK_INTERVAL = 0.1
+except AttributeError:
+    pass
+
 
 def _norng_state(state):
     if isinstance(state, bytes):
@@ -1256,6 +1263,9 @@ class TestDataset(unittest.TestCase):
                 for idx, sample in enumerate(initial_samples, start=skip_initial)
             )
         )
+
+        del initial_loader
+        gc.collect()
 
         second_loader = get_savable_loader(
             get_train_dataset(

@@ -500,7 +500,7 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
             self._workers_restore_from = [state.state for state in worker_states]
             self._workers_skip_samples = [state.offset for state in worker_states]
 
-    def get_initial_checkpoint(self) -> tuple[Optional[List[SavableDatasetCheckpoint]], int]:
+    def get_initial_checkpoint(self) -> Optional[List[SavableDatasetCheckpoint]]:
         """
         Get the initial checkpoint for all worker processes if they have not started yet.
 
@@ -514,7 +514,7 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
             assert self._worker_offset == 0, (
                 "Worker offset must be 0 if no checkpoints are available"
             )
-            return None, 0
+            return None
 
         return [
             SavableDatasetCheckpoint(
@@ -522,7 +522,7 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
                 offset=offset,
             )
             for state, offset in zip(self._workers_restore_from, self._workers_skip_samples)
-        ], self._worker_offset
+        ]
 
     def can_restore_sample(self) -> bool:
         return self.dataset.can_restore_sample()
@@ -894,23 +894,19 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
             assert isinstance(self.dataset, SimpleSavableDatasetWrapper)
             worker_states = [self.dataset.save_state()]
             assert self._next_worker_id == 0
-            next_worker_id = 0
         elif self._persistent_iterator is None:
             # Workers configured, but not started yet.
             # If a state has already been restored, it will be returned.
             assert isinstance(self.dataset, SavableDatasetWrapper)
-            worker_states, next_worker_id = self.dataset.get_initial_checkpoint()
+            worker_states = self.dataset.get_initial_checkpoint()
         else:
             # Fetch from worker processes
             worker_states = self._worker_command("get_checkpoint", self._worker_sample_counters)
-            # Add the initial offset to the next worker id
-            # next_worker_id = self._next_worker_id + self.worker_config.worker_id_offset
-            next_worker_id = self._next_worker_id
 
         # Merge the states
         merged_state = SavableDataLoaderState(
             worker_states=worker_states,
-            next_worker_id=next_worker_id,
+            next_worker_id=self._next_worker_id,
             micro_batch_size=self._get_batch_size(),
         )
 
@@ -989,10 +985,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
                 for ws in state.worker_states
             ]
 
-            # Since the workers are already offset by the next_worker_id, we have to set it to 0
-            # here, because the first is always worker number 0 (offset by the next_worker_id of the
-            # state which corresponds to the worker id).
-            self._next_worker_id = 0
+            self._next_worker_id = state.next_worker_id
 
     @deprecated(
         "`save_state` is deprecated and was renamed to `save_state_global` and will be removed "
