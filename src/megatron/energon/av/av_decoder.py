@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import io
+import warnings
 from collections.abc import Iterator
 from fractions import Fraction
 from typing import BinaryIO, Literal, Optional, Sequence, Union, overload
@@ -34,8 +35,10 @@ class AVDecoder:
     """
 
     seeker: "Fastseek"
+    stream: BinaryIO
+    suppress_warnings: bool
 
-    def __init__(self, stream: BinaryIO) -> None:
+    def __init__(self, stream: BinaryIO, suppress_warnings: bool = False) -> None:
         if not AV_DECODE_AVAILABLE:
             raise ImportError(
                 f"AV decoding is not available. Please install the required dependencies with:\n"
@@ -43,6 +46,7 @@ class AVDecoder:
                 f"Missing dependency: {MISSING_DEPENDENCY}. Install megatron-energon[av_decode] to use AVDecoder."
             )
         self.stream = stream
+        self.suppress_warnings = suppress_warnings
 
         try:
             self.seeker = Fastseek(self.stream)
@@ -102,18 +106,24 @@ class AVDecoder:
             time_base: Fraction = video_stream.time_base  # Seconds per PTS unit
             average_frame_duration: int = int(1 / average_rate / time_base)  # PTS units per frame
 
-            if video_clip_ranges is not None and video_unit != self.seeker.unit:
-                # Convert video_clip_ranges to video_unit
-                if video_unit == "frames":
-                    # Convert from frames to seconds
+            if video_clip_ranges is not None:
+                # Convert video_clip_ranges to seeker unit
+                if video_unit == "frames" and self.seeker.unit == "pts":
+                    # Convert from frames to pts units
                     video_clip_ranges = [
                         (
-                            clip[0] / average_rate,
-                            clip[1] / average_rate,
+                            clip[0] / average_rate / time_base,
+                            clip[1] / average_rate / time_base,
                         )
                         for clip in video_clip_ranges
                     ]
-                else:
+
+                    if not self.suppress_warnings:
+                        warnings.warn(
+                            "Video container unit is frames, but seeking in time units. The resulting frames may be slightly off.",
+                            RuntimeWarning,
+                        )
+                elif video_unit == "seconds" and self.seeker.unit == "frames":
                     # Convert from seconds to frames
                     video_clip_ranges = [
                         (
@@ -121,6 +131,16 @@ class AVDecoder:
                             clip[1] * average_rate,
                         )
                         for clip in video_clip_ranges
+                    ]
+                    if not self.suppress_warnings:
+                        warnings.warn(
+                            "Video container unit is time units, but seeking using frame number. The resulting frames may be slightly off.",
+                            RuntimeWarning,
+                        )
+                elif video_unit == "seconds" and self.seeker.unit == "pts":
+                    # Convert from seconds to pts units
+                    video_clip_ranges = [
+                        (clip[0] / time_base, clip[1] / time_base) for clip in video_clip_ranges
                     ]
 
             frame_iterator: Iterator[av.VideoFrame] = input_container.decode(video=0)
@@ -163,7 +183,7 @@ class AVDecoder:
 
                     # Container uses time, the target frame might not correspond exactly to any metadata but the desired timestamp should
                     # fall within a frames display period
-                    if self.seeker.unit == "seconds":
+                    if self.seeker.unit == "pts":
                         if start_frame_index <= frame.pts + average_frame_duration:
                             take_frame = True
                         if (
@@ -651,7 +671,7 @@ class AVWebdatasetDecoder:
             raise ValueError(f"Invalid av_decode value: {self.av_decode}")
 
 
-def initialize_av_container(input_container: av.container.InputContainer) -> None:
+def initialize_av_container(input_container: "av.container.InputContainer") -> None:
     """Every PyAV container should be initialized with this function.
 
     This function ensures that no additional threads are created.
