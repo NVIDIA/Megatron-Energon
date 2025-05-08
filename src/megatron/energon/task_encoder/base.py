@@ -481,10 +481,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 "Both select_samples_to_pack and pack_selected_samples methods must be provided in the TaskEncoder when using packing_buffer_size"
             )
 
-            if (
-                getattr(self.postencode_sample, "__func__", None)
-                is not TaskEncoder.postencode_sample
-            ):
+            if self._is_overridden(self.postencode_sample):
                 post_encode_fn = self.postencode_sample
             else:
                 post_encode_fn = None
@@ -501,7 +498,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 else get_stateless(post_encode_fn),
                 worker_config=worker_config,
             )
-        elif getattr(self.postencode_sample, "__func__", None) is not TaskEncoder.postencode_sample:
+        elif self._is_overridden(self.postencode_sample):
             dataset = MapDataset(
                 dataset,
                 self.postencode_sample,
@@ -638,7 +635,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 TaskEncoder.encode_sample,
                 DefaultTaskEncoder.encode_sample,
             ), "Cannot have both pre- and post-encode functions defined."
-        elif getattr(self.encode_sample, "__func__", None) is not TaskEncoder.encode_sample:
+        elif self._is_overridden(self.encode_sample):
             pre_encode_fn = self.encode_sample
         else:
             pre_encode_fn = None
