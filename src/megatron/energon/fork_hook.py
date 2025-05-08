@@ -55,9 +55,18 @@ class ForkMixin:
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        _before_fork_hooks[self] = "__before_fork__"
-        _after_in_child_fork_hooks[self] = "__after_in_child_fork__"
-        _after_in_parent_fork_hooks[self] = "__after_in_parent_fork__"
+        if getattr(self.__before_fork__, "__func__", None) is not ForkMixin.__before_fork__:
+            _before_fork_hooks[self] = "__before_fork__"
+        if (
+            getattr(self.__after_in_child_fork__, "__func__", None)
+            is not ForkMixin.__after_in_child_fork__
+        ):
+            _after_in_child_fork_hooks[self] = "__after_in_child_fork__"
+        if (
+            getattr(self.__after_in_parent_fork__, "__func__", None)
+            is not ForkMixin.__after_in_parent_fork__
+        ):
+            _after_in_parent_fork_hooks[self] = "__after_in_parent_fork__"
 
     def __after_in_child_fork__(self):
         """
