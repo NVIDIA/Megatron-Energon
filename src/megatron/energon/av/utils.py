@@ -58,12 +58,15 @@ def get_clips_uniform(
         # Special case of single frames: End point should be start of last frame
         video_fps = av_decoder.get_video_fps()
         video_spf = 1 / video_fps
-        last_start_time = total_duration - video_spf * 0.9
+        first_start_time = video_spf * 0.5
+        last_start_time = total_duration - video_spf * 0.5
     else:
+        first_start_time = 0
         last_start_time = total_duration - clip_duration_seconds
+
     clips = [
         (float(start_time), float(start_time + clip_duration_seconds))
-        for start_time in np.linspace(0, last_start_time, num_clips)
+        for start_time in np.linspace(first_start_time, last_start_time, num_clips)
     ]
 
     return av_decoder.get_clips(
