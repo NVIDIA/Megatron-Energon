@@ -339,7 +339,7 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
                             dataset_has_samples = True
                             if self._workers_skip_samples[self._worker_id] > 0:
                                 # Skip ahead to reach the start of the restored checkpoint
-                                # print(f"Skip [{self._worker_id}:{self._sample_index}] {src_data}")
+                                # print(f"Skip [{self._sample_index}:{self._worker_id}] {src_data}")
                                 self._workers_skip_samples[self._worker_id] -= 1
                                 self._sample_index += 1
                                 last_was_skip = True
@@ -358,7 +358,7 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
                                 # print(f"{id(self)}:{multiprocessing.current_process().ident} Lock released")
                                 # Commands may be executed only when data was yielded, not during
                                 # iteration fetching.
-                                # print(f"Yield next data [{self._worker_id}:{sample_index}] {src_data}")
+                                # print(f"Yield next data [{sample_index}:{self._worker_id}] {src_data}")
                                 yield self._worker_id, sample_index, src_data
                             finally:
                                 # print(f"{id(self)}:{multiprocessing.current_process().ident} Lock acquiring")
@@ -458,6 +458,13 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
                     state=checkpoint.state,
                     offset=sample_index - checkpoint.sample_index,
                 )
+
+        # Immediate save after restore
+        if len(self._last_checkpoints) == 0 and len(self._workers_restore_from) > 0:
+            return SavableDatasetCheckpoint(
+                state=self._workers_restore_from[self._worker_id],
+                offset=self._workers_skip_samples[self._worker_id],
+            )
         raise ValueError("No checkpoint found")
 
     def restore_checkpoint(
@@ -483,6 +490,7 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
             self._workers_skip_samples = [0] * num_workers
         else:
             assert isinstance(worker_states, list)
+            assert len(worker_states) == num_workers
             assert isinstance(worker_states[0], SavableDatasetCheckpoint)
 
             self._worker_offset = worker_offset
@@ -491,6 +499,30 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
             # and store the states in the internal arrays
             self._workers_restore_from = [state.state for state in worker_states]
             self._workers_skip_samples = [state.offset for state in worker_states]
+
+    def get_initial_checkpoint(self) -> tuple[Optional[List[SavableDatasetCheckpoint]], int]:
+        """
+        Get the initial checkpoint for all worker processes if they have not started yet.
+
+        Returns:
+            The initial checkpoint for all worker processes and the worker offset.
+        """
+        assert torch.utils.data.get_worker_info() is None, (
+            "Cannot get initial checkpoint in worker process"
+        )
+        if len(self._last_checkpoints) == 0:
+            assert self._worker_offset == 0, (
+                "Worker offset must be 0 if no checkpoints are available"
+            )
+            return None, 0
+
+        return [
+            SavableDatasetCheckpoint(
+                state=state,
+                offset=offset,
+            )
+            for state, offset in zip(self._workers_restore_from, self._workers_skip_samples)
+        ], self._worker_offset
 
     def can_restore_sample(self) -> bool:
         return self.dataset.can_restore_sample()
@@ -862,17 +894,23 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
             assert isinstance(self.dataset, SimpleSavableDatasetWrapper)
             worker_states = [self.dataset.save_state()]
             assert self._next_worker_id == 0
+            next_worker_id = 0
         elif self._persistent_iterator is None:
-            # Workers configured, but not started yet -> Initial state
-            return None
+            # Workers configured, but not started yet.
+            # If a state has already been restored, it will be returned.
+            assert isinstance(self.dataset, SavableDatasetWrapper)
+            worker_states, next_worker_id = self.dataset.get_initial_checkpoint()
         else:
             # Fetch from worker processes
             worker_states = self._worker_command("get_checkpoint", self._worker_sample_counters)
+            # Add the initial offset to the next worker id
+            # next_worker_id = self._next_worker_id + self.worker_config.worker_id_offset
+            next_worker_id = self._next_worker_id
 
         # Merge the states
         merged_state = SavableDataLoaderState(
             worker_states=worker_states,
-            next_worker_id=self._next_worker_id,
+            next_worker_id=next_worker_id,
             micro_batch_size=self._get_batch_size(),
         )
 
@@ -935,6 +973,26 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
                     worker_state.offset *= batch_size_ratio
 
             self.dataset.restore_checkpoint(state.worker_states, worker_offset=state.next_worker_id)
+
+            # Initialize the worker-sample counters so that every worker owns a valid
+            # "last emitted sample" index.  Workers that have not emitted anything yet keep
+            # the default value ``-1``.
+
+            assert isinstance(state.worker_states, list)
+
+            self._worker_sample_counters = [
+                (
+                    ws.state.sample_index - 1
+                    if (isinstance(ws, SavableDatasetCheckpoint) and ws.state is not None)
+                    else -1
+                )
+                for ws in state.worker_states
+            ]
+
+            # Since the workers are already offset by the next_worker_id, we have to set it to 0
+            # here, because the first is always worker number 0 (offset by the next_worker_id of the
+            # state which corresponds to the worker id).
+            self._next_worker_id = 0
 
     @deprecated(
         "`save_state` is deprecated and was renamed to `save_state_global` and will be removed "
