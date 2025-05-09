@@ -43,6 +43,7 @@ class LazyTextSample(Sample):
     txt: str
     next_txt: Lazy[str]
 
+
 # Speed up tests significantly by reducing the torch status check interval for broken worker shutdown
 try:
     torch.utils.data._utils.worker.MP_STATUS_CHECK_INTERVAL = 0.1

@@ -681,6 +681,17 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         ]
 
         if repeat:
+            assert blend_mode in (
+                DatasetBlendMode.NONE,
+                DatasetBlendMode.DATASET_WEIGHT,
+                DatasetBlendMode.SAMPLE_REPETITIONS,
+            )
+        else:
+            assert blend_mode in (
+                DatasetBlendMode.NONE,
+                DatasetBlendMode.SAMPLE_REPETITIONS,
+            ), "If repeat is False, the datasets can only be repeated or have no mode."
+        if blend_mode == DatasetBlendMode.DATASET_WEIGHT:
             inner_datasets = [
                 (
                     RepeatDataset(
@@ -693,11 +704,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 )
                 for dataset, worker_rotation_offset in zip(datasets, worker_rotation_offsets)
             ]
-        else:
-            assert blend_mode in (
-                DatasetBlendMode.NONE,
-                DatasetBlendMode.SAMPLE_REPETITIONS,
-            ), "If repeat is False, the datasets can only be repeated or have no mode."
+        elif blend_mode == DatasetBlendMode.SAMPLE_REPETITIONS:
             inner_datasets = [
                 (
                     (
@@ -715,6 +722,16 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                     ),
                     len(dataset.dataset)
                     * (1 if dataset.repetitions is None else dataset.repetitions),
+                )
+                for dataset, worker_rotation_offset in zip(datasets, worker_rotation_offsets)
+            ]
+        else:
+            inner_datasets = [
+                (
+                    self._load_dataset(
+                        dataset, worker_rotation_offset, worker_config=worker_config
+                    ),
+                    1.0,
                 )
                 for dataset, worker_rotation_offset in zip(datasets, worker_rotation_offsets)
             ]
