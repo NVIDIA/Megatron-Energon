@@ -117,14 +117,20 @@ class WebdatasetPreparator:
     ) -> Generator[Tuple[ShardInfo, Set[str]], None, None]:
         """Process a single tar file, i.e. read the tarinfos, generate the tar index and return
         stats.
+        This method is passed to the `user_produce_data` argument of AggregatorPool.
 
         Args:
             path: Path to the tar file.
+            shard_to_idx: Mapping from shard path to its index
             parent_path: Root path of the dataset.
             max_parts: Maximum number of different parts to return
 
         Returns:
-            Tuple of shard info and found keys of the loaded dicts.
+            A generator of items that will be processed by SqliteIndexWriterAggregator.
+            See method `on_item` of SqliteIndexWriterAggregator.
+            The items are either:
+            - A sample dictionary with information about the offset, key etc.
+            - Or a tuple of shard info and a set of found parts for statistics.
         """
         shard_info = ShardInfo(name=path, path=parent_path / path, count=0)
 
