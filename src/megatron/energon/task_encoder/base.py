@@ -680,18 +680,10 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             rotation_length % global_workers for rotation_length in [0] + rotation_lengths[:-1]
         ]
 
-        if repeat:
-            assert blend_mode in (
-                DatasetBlendMode.NONE,
-                DatasetBlendMode.DATASET_WEIGHT,
-                DatasetBlendMode.SAMPLE_REPETITIONS,
-            )
-        else:
-            assert blend_mode in (
-                DatasetBlendMode.NONE,
-                DatasetBlendMode.SAMPLE_REPETITIONS,
-            ), "If repeat is False, the datasets can only be repeated or have no mode."
         if blend_mode == DatasetBlendMode.DATASET_WEIGHT:
+            assert repeat, (
+                "If repeat is False, the datasets can only be repeated or have no mode. Cannot blend with dataset weights."
+            )
             inner_datasets = [
                 (
                     RepeatDataset(
@@ -704,7 +696,11 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 )
                 for dataset, worker_rotation_offset in zip(datasets, worker_rotation_offsets)
             ]
-        elif blend_mode == DatasetBlendMode.SAMPLE_REPETITIONS:
+            # Already repeating the inner datasets, so no need to repeat again
+            repeat = False
+        elif blend_mode == DatasetBlendMode.SAMPLE_REPETITIONS or (
+            not repeat and blend_mode == DatasetBlendMode.NONE
+        ):
             inner_datasets = [
                 (
                     (
@@ -728,13 +724,17 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         else:
             inner_datasets = [
                 (
-                    self._load_dataset(
-                        dataset, worker_rotation_offset, worker_config=worker_config
+                    RepeatDataset(
+                        self._load_dataset(
+                            dataset, worker_rotation_offset, worker_config=worker_config
+                        ),
+                        worker_config=worker_config,
                     ),
                     1.0,
                 )
                 for dataset, worker_rotation_offset in zip(datasets, worker_rotation_offsets)
             ]
+            repeat = False
 
         if len(inner_datasets) > 1:
             # The worker offset for each dataset is the cumsum of the dataset lengths, but modulo the
@@ -753,6 +753,9 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 size=shuffle_buffer_size,
                 worker_config=worker_config,
             )
+        if repeat:
+            # Still need to repeat the dataset
+            dataset = RepeatDataset(dataset, worker_config=worker_config)
         dataset = self.build_encode_sample(dataset, worker_config=worker_config)
         dataset = self.build_batch(
             dataset,
