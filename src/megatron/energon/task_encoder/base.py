@@ -734,6 +734,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 )
                 for dataset, worker_rotation_offset in zip(datasets, worker_rotation_offsets)
             ]
+            # Already repeating the inner datasets, so no need to repeat again
             repeat = False
 
         if len(inner_datasets) > 1:
@@ -747,15 +748,15 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             dataset = inner_datasets[0][0]
         else:
             raise ValueError("No datasets given.")
+        if repeat:
+            # Still need to repeat the dataset
+            dataset = RepeatDataset(dataset, worker_config=worker_config)
         if shuffle_buffer_size is not None and shuffle_buffer_size > 1:
             dataset = ShuffleBufferDataset(
                 dataset,
                 size=shuffle_buffer_size,
                 worker_config=worker_config,
             )
-        if repeat:
-            # Still need to repeat the dataset
-            dataset = RepeatDataset(dataset, worker_config=worker_config)
         dataset = self.build_encode_sample(dataset, worker_config=worker_config)
         dataset = self.build_batch(
             dataset,

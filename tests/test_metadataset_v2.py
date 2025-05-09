@@ -976,6 +976,8 @@ class TestDataset(unittest.TestCase):
             checkpoint_every_min_n_samples=1,
         )
 
+        assert len(train_loader) == 38 + 55 + 27, len(train_loader)
+
         data = list(enumerate(train_loader))
 
         # Check the overall number of samples
@@ -1107,6 +1109,29 @@ class TestDataset(unittest.TestCase):
         assert sample_counts_save_restore == sample_counts, (
             "Sample counts do not match when using save/restore"
         )
+
+        # Try in repeat mode
+        # Train mode dataset
+        train_loader = get_savable_loader(
+            get_train_dataset(
+                fixed_epochs_mds_path,
+                worker_config=worker_config,
+                batch_size=1,
+                shuffle_buffer_size=None,
+                shuffle_over_epochs_multiplier=None,
+                parallel_shard_iters=1,
+                max_samples_per_sequence=None,
+            ),
+            checkpoint_every_sec=0,
+            checkpoint_every_min_n_samples=1,
+        )
+
+        data = list(zip(range(200), train_loader))
+        assert len(train_loader) == 38 + 55 + 27, len(train_loader)
+
+        # Check the overall number of samples
+        # Should be 0.7*len(ds1) + 1.5*len(ds2) = 38 + 55 + 27 (floor rounding)
+        assert len(data) == 200, len(data)
 
     @patch.object(WatchdogDataset, "_watchdog_trigger")
     def test_watchdog_dataset(self, mock_watchdog_trigger):
