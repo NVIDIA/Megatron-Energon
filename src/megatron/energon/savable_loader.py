@@ -261,6 +261,7 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
         self._last_checkpoints = [
             SavableCheckpoint(state=None, checkpoint_time=time.perf_counter(), sample_index=-1)
         ]
+        self._workers_restore_from = [None] * num_workers
         self._workers_skip_samples = [0] * num_workers
         self._cmd_queues = cmd_queues
         self._result_queues = result_queues
@@ -335,7 +336,7 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
         try:
             assert self._command_lock is not None
             with self._command_lock:
-                if self._workers_restore_from:
+                if self._workers_restore_from[self._worker_id] is not None:
                     my_state = self._workers_restore_from[self._worker_id]
                     my_ds_state = my_state.dataset_state
                     assert my_state is not None
@@ -344,7 +345,7 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
                     else:
                         self.dataset.restore_state(my_ds_state)
                     self._restore_state(my_state)
-                    self._workers_restore_from = []
+                    self._workers_restore_from[self._worker_id] = None
                 else:
                     # Store the initial state of the worker if we stop before the first sample
                     self._store_checkpoint()
@@ -489,7 +490,7 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
                 )
 
         # Immediate save after restore
-        if len(self._last_checkpoints) == 0 and len(self._workers_restore_from) > 0:
+        if len(self._last_checkpoints) == 0:
             return SavableDatasetCheckpoint(
                 state=self._workers_restore_from[self._worker_id],
                 offset=self._workers_skip_samples[self._worker_id],
@@ -513,7 +514,7 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
         num_workers = max(self.worker_config.num_workers, 1)
 
         if worker_states is None:
-            self._workers_restore_from = []
+            self._workers_restore_from = [None] * num_workers
             assert worker_offset == 0
             self._worker_offset = 0
             self._workers_skip_samples = [0] * num_workers
@@ -539,10 +540,9 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
         assert torch.utils.data.get_worker_info() is None, (
             "Cannot get initial checkpoint in worker process"
         )
-        if len(self._last_checkpoints) == 0:
-            assert self._worker_offset == 0, (
-                "Worker offset must be 0 if no checkpoints are available"
-            )
+        if all(s is None for s in self._workers_restore_from):
+            assert all(s == 0 for s in self._workers_skip_samples)
+            # Initial state, no checkpoint
             return None
 
         return [
@@ -950,6 +950,9 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
         else:
             # Fetch from worker processes
             worker_states = self._worker_command("get_checkpoint", self._worker_sample_counters)
+
+        if worker_states is None:
+            return None
 
         # Merge the states
         merged_state = SavableDataLoaderState(

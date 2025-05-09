@@ -1305,12 +1305,31 @@ class TestDataset(unittest.TestCase):
         )
         skip_initial = 9
 
+        previous_cp = initial_loader.save_state_rank()
+        print("initial_samples:")
+        for i, sample in zip(range(skip_initial), initial_loader):
+            print(f"sample[@{i}]: {sample.text}")
+            print("previous_cp:", previous_cp)
+            rst_loader = get_savable_loader(
+                get_train_dataset(
+                    self.nested_mds_path,
+                    worker_config=wc,
+                    batch_size=1,
+                    shuffle_buffer_size=None,
+                    max_samples_per_sequence=None,
+                ),
+                checkpoint_every_sec=0,
+                checkpoint_every_min_n_samples=0,
+            )
+            rst_loader.restore_state_rank(previous_cp)
+            for i, rst_sample in zip(range(1), rst_loader):
+                print(f"rst_sample[@{i}]: {rst_sample.text}")
+            assert sample.text == rst_sample.text, f"{sample} != {rst_sample}"
+            assert sample.__key__ == rst_sample.__key__, f"{sample} != {rst_sample}"
+            assert sample.__restore_key__ == rst_sample.__restore_key__, f"{sample} != {rst_sample}"
+            previous_cp = initial_loader.save_state_rank()
+
         # Iterate 10 samples, the save state and store the next 10 samples for reference.
-        skip_samples = [sample for _, sample in zip(range(skip_initial), initial_loader)]
-        print(
-            "skip_samples:"
-            + "".join(f"\n [@{idx}] {sample.text}" for idx, sample in enumerate(skip_samples))
-        )
         state_initial = initial_loader.save_state_rank()
         print("state_initial:", str(state_initial))
         initial_samples = [sample for _, sample in zip(range(20), initial_loader)]
