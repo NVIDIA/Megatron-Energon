@@ -511,10 +511,9 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
         assert torch.utils.data.get_worker_info() is None, (
             "Cannot get initial checkpoint in worker process"
         )
-        if len(self._last_checkpoints) == 0:
-            assert self._worker_offset == 0, (
-                "Worker offset must be 0 if no checkpoints are available"
-            )
+        if all(s is None for s in self._workers_restore_from):
+            assert all(s == 0 for s in self._workers_skip_samples)
+            # Initial state, no checkpoint
             return None
 
         return [
@@ -903,6 +902,9 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
         else:
             # Fetch from worker processes
             worker_states = self._worker_command("get_checkpoint", self._worker_sample_counters)
+
+        if worker_states is None:
+            return None
 
         # Merge the states
         merged_state = SavableDataLoaderState(
