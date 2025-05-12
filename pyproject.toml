@@ -75,6 +75,10 @@ av_decode = [
   "ebmlite>=3.3.1",
   "av>=13.0.0",
 ]
+# If using guess_content=True for decoding
+guess_content = [
+  "filetype>=1.0.0",
+]
 
 [project.urls]
 Homepage = "https://github.com/NVIDIA/Megatron-Energon"
