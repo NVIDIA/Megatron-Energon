@@ -35,7 +35,7 @@ The types `T_sample`, `T_encoded_sample`, `T_raw_batch` and `T_batch` are generi
 
 ```python
 from dataclasses import dataclass
-from typing import Callable, List, Optional
+from typing import Callable, Tuple, Union, List, Dict, Any, Optional
 
 import torch
 
@@ -47,6 +47,9 @@ from megatron.energon import CaptioningSample, DefaultTaskEncoder, batch_list, b
 class CaptioningRawBatch:
     # (n,)
     __key__: List[str]
+    __restore_key__: Tuple[Union[str, int], ...]
+    __subflavor__: List[str]
+    __subflavors__: List[Dict[str, Any]]
     # (n, c, h, w)
     image: torch.Tensor
     # (n,)
