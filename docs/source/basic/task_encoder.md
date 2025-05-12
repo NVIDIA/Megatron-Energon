@@ -115,6 +115,7 @@ Usage in your training script:
 from torchvision import transforms
 from transformers import AutoTokenizer
 from megatron.energon import get_loader, get_train_dataset
+from megatron.energon import WorkerConfig
 
     
 train_img_transform = transforms.Compose(
@@ -129,6 +130,7 @@ train_loader = get_loader(get_train_dataset(
     batch_size=32,
     shuffle_buffer_size=100,
     max_samples_per_sequence=100,
+    worker_config = WorkerConfig.default_worker_config(),
     task_encoder=CaptioningTaskEncoder(
         tokenizer=AutoTokenizer.from_pretrained('gpt2'),
         image_transform=train_img_transform,
