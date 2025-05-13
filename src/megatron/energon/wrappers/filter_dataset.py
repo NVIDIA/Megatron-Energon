@@ -51,14 +51,37 @@ class FilterDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
         return len(self.dataset)
 
     def __iter__(self) -> Iterator[T_sample]:
-        for sample in self.dataset:
-            with self._sample_index.ctx():
-                filter_res = self.filter_fn(sample)
-            if filter_res:
-                yield sample
+        with self.worker_config.worker_trace_span().span(
+            "FilterDataset.__iter__", args={"config": self._own_config()}, level=1
+        ):
+            for sample in self.dataset:
+                with self._sample_index.ctx():
+                    filter_res = self.filter_fn(sample)
+                if filter_res:
+                    yield sample
+                else:
+                    self.worker_config.worker_trace_span().instant(
+                        "FilterDataset.__iter__.reject", level=3
+                    )
 
     def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_sample:
         return self.dataset.restore_sample(index)
+
+    def _own_config(self) -> Dict[str, Any]:
+        return {
+            "filter_fn": self._function_config(self.filter_fn),
+            **(
+                {
+                    "filter_fn_config": (
+                        self.filter_fn_config()
+                        if callable(self.filter_fn_config)
+                        else self.filter_fn_config
+                    )
+                }
+                if self.filter_fn_config
+                else {}
+            ),
+        }
 
     def config(self) -> Dict[str, Any]:
         return {

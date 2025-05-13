@@ -45,6 +45,7 @@ class WatchdogDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample])
         return len(self.dataset)
 
     def _watchdog_trigger(self) -> None:
+        self.worker_config.worker_trace_span().instant("WatchdogDataset._watchdog_trigger", level=2)
         if self.fail_on_timeout:
             # Raising an exception here will kill the whole process
             raise TimeoutError(
@@ -57,16 +58,26 @@ class WatchdogDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample])
             )
 
     def __iter__(self) -> Iterator[T_sample]:
-        if self.timeout_seconds is None:
-            yield from self.dataset
-        else:
-            watchdog = Watchdog(
-                timeout=self.timeout_seconds,
-                initial_timeout=self.initial_timeout_seconds,
-                callback=self._watchdog_trigger,
-                enabled=False,
-            )
-            yield from watchdog.watch_iter(self.dataset)
+        with self.worker_config.worker_trace_span().span(
+            "WatchdogDataset.__iter__", args={"config": self._own_config()}, level=1
+        ):
+            if self.timeout_seconds is None:
+                yield from self.dataset
+            else:
+                watchdog = Watchdog(
+                    timeout=self.timeout_seconds,
+                    initial_timeout=self.initial_timeout_seconds,
+                    callback=self._watchdog_trigger,
+                    enabled=False,
+                )
+                yield from watchdog.watch_iter(self.dataset)
+
+    def _own_config(self) -> Dict[str, Any]:
+        return {
+            "timeout_seconds": self.timeout_seconds,
+            "initial_timeout_seconds": self.initial_timeout_seconds,
+            "fail_on_timeout": self.fail_on_timeout,
+        }
 
     def config(self) -> Dict[str, Any]:
         # Watchdog is transparent, it won't change the samples

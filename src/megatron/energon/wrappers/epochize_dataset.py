@@ -49,8 +49,8 @@ class EpochizeDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample])
         self._offset = 0
 
     def __iter__(self) -> Iterator[T_sample]:
+        trace_span = self.worker_config.worker_trace_span()
         # Compute the local length for this worker, i.e. all worker's lengths sum up to the total
-
         if self.worker_config.num_workers <= 1:
             local_length = self.length
         else:
@@ -58,54 +58,44 @@ class EpochizeDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample])
             if self.worker_config.rank_worker_id() < self.length % self.worker_config.num_workers:
                 local_length += 1
 
-        if self.worker_config.should_log(level=2):
-            self.worker_config.worker_log(
-                {
-                    "t": "EpochizeDataset.epoch_start",
-                    "r": self.worker_config.rank,
-                    "w": self.worker_config.rank_worker_id(),
-                    "offset": self._offset,
-                    "local_length": local_length,
-                    "length": self.length,
-                }
-            )
+        with trace_span.span(
+            "EpochizeDataset.__iter__",
+            args={
+                "offset": self._offset,
+                "local_length": local_length,
+                "config": self._own_config(),
+            },
+            level=1,
+        ):
+            offset_range = list(range(self._offset, local_length))
 
-        offset_range = list(range(self._offset, local_length))
+            # Only iterate if there are samples to iterate
+            if len(offset_range) > 0:
+                if self._active_iter is None:
+                    self._active_iter = iter(self.dataset)
 
-        # Only iterate if there are samples to iterate
-        if len(offset_range) > 0:
-            if self._active_iter is None:
-                self._active_iter = iter(self.dataset)
-
-            for idx in offset_range:
-                self._offset = (idx + 1) % local_length
-                try:
-                    sample = next(self._active_iter)
-                except StopIteration:
-                    break
-                yield sample
-
-        if self.worker_config.should_log(level=2):
-            self.worker_config.worker_log(
-                {
-                    "t": "EpochizeDataset.epoch_end",
-                    "r": self.worker_config.rank,
-                    "w": self.worker_config.rank_worker_id(),
-                    "offset": self._offset,
-                    "local_length": local_length,
-                    "length": self.length,
-                }
-            )
+                for idx in offset_range:
+                    self._offset = (idx + 1) % local_length
+                    try:
+                        sample = next(self._active_iter)
+                    except StopIteration:
+                        break
+                    yield sample
+            trace_span.instant("EpochizeDataset.__iter__.done", level=1)
 
     def __len__(self) -> int:
         return self.length
+
+    def _own_config(self) -> Dict[str, Any]:
+        return {
+            "length": self.length,
+        }
 
     def config(self) -> Dict[str, Any]:
         return {
             "type": type(self).__qualname__,
             "dataset": self.dataset.config(),
             "length": self.length,
-            "worker_config": self.worker_config.config(),
         }
 
     def __str__(self):

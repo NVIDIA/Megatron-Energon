@@ -179,40 +179,46 @@ class PackingDataset(
                     return False
         return True
 
-    def _encode_pack_samples(self, pack: List[T_sample]) -> List[T_encoded_sample]:
-        # Apply the sample encoder to the pack
-        if self.sample_encoder is None:
-            return pack
-        encoded_pack = []
-        for sample in pack:
-            try:
-                with self._sample_encoder_sample_index.ctx() as encode_idx:
-                    encoded_sample = self.sample_encoder(sample)
-                assert not isinstance(encoded_sample, Generator), "Generator not supported"
-                encoded_pack.append(
-                    add_sample_restore_key(
-                        encoded_sample,
-                        encode_idx,
-                        src=self,
-                    )
-                )
-            except SkipSample:
-                pass
-            except SYSTEM_EXCEPTIONS:
-                raise FatalSampleError.from_sample(pack)
-            except Exception as e:
-                self.error_handler(e, pack)
-        return encoded_pack
-
     def __iter__(self) -> Iterator[T_batch_sample]:
-        pre_packing_lengths = self._pre_packing_lengths
-        # The source dataset
-        src_iter = iter(self.dataset)
+        trace_span = self.worker_config.worker_trace_span()
 
-        self._pre_packing_buffer.worker_start()
-        self._reading_buffer.worker_start()
-
-        is_initial_pack = True
+        def encode_pack_samples(pack: List[T_sample]) -> List[T_encoded_sample]:
+            # Apply the sample encoder to the pack
+            if self.sample_encoder is None:
+                return pack
+            encoded_pack = []
+            with trace_span.span(
+                "PackingDataset._encode_pack_samples", args={"len": len(pack)}, level=2
+            ):
+                for sample in pack:
+                    try:
+                        with trace_span.span(
+                            "PackingDataset._encode_pack_samples.encode_sample", level=2
+                        ):
+                            with self._sample_encoder_sample_index.ctx() as encode_idx:
+                                encoded_sample = self.sample_encoder(sample)
+                            assert not isinstance(encoded_sample, Generator), (
+                                "Generator not supported"
+                            )
+                            encoded_pack.append(
+                                add_sample_restore_key(
+                                    encoded_sample,
+                                    encode_idx,
+                                    src=self,
+                                )
+                            )
+                    except SkipSample:
+                        trace_span.instant("PackingDataset._encode_pack_samples.skip", level=2)
+                    except SYSTEM_EXCEPTIONS:
+                        raise FatalSampleError.from_sample(pack)
+                    except Exception as e:
+                        self.error_handler(e, pack)
+                        trace_span.instant(
+                            "PackingDataset._encode_pack_samples.error/skip",
+                            args={"exception": f"{type(e).__name__}: {str(e)}"},
+                            level=2,
+                        )
+            return encoded_pack
 
         def next_pre_pack():
             """Take the samples from the reading buffer and select groups of samples to be packed
@@ -231,10 +237,16 @@ class PackingDataset(
                         pre_packs = self.pre_packer(samples)
                 except SkipSample:
                     pre_packs = []
+                    trace_span.instant("PackingDataset.next_pre_pack.skip", level=2)
                 except SYSTEM_EXCEPTIONS:
                     raise FatalSampleError.from_sample(samples)
                 except Exception as e:
                     self.error_handler(e, samples)
+                    trace_span.instant(
+                        "PackingDataset.next_pre_pack.error/skip",
+                        args={"exception": f"{type(e).__name__}: {str(e)}"},
+                        level=2,
+                    )
                     pre_packs = []
 
                 # Put the pre-packed samples into the pre_packing_buffer
@@ -249,7 +261,10 @@ class PackingDataset(
             """Yield the next packs from the buffer. The final packer is called on the fly."""
 
             pack = list(self._pre_packing_buffer[: pre_packing_lengths[0]])
-            pack = self._encode_pack_samples(pack)
+            pack = encode_pack_samples(pack)
+            if len(pack) == 0:
+                # All samples in the pack were skipped
+                return
 
             del self._pre_packing_buffer[: pre_packing_lengths[0]]
             del pre_packing_lengths[0]
@@ -279,50 +294,84 @@ class PackingDataset(
                         src=self,
                     )
             except SkipSample:
-                pass
+                trace_span.instant("PackingDataset.next_final_pack.skip", level=2)
             except SYSTEM_EXCEPTIONS:
                 raise FatalSampleError.from_sample(pack)
             except Exception as e:
                 self.error_handler(e, pack)
+                trace_span.instant(
+                    "PackingDataset.next_final_pack.error/skip",
+                    args={"exception": f"{type(e).__name__}: {str(e)}"},
+                    level=2,
+                )
 
-        # Main loop:
-        pre_pack_round = 0
-        while True:
-            if pre_pack_round > 10:
-                raise RuntimeError("Pre packer did not yield any packs after 10 rounds.")
-            # Fill a portion of the buffer
-            if not self._fill_reading_buffer(src_iter, log_progress=is_initial_pack):
-                # Break out of the main loop when the source is exhausted.
-                break
-            is_initial_pack = False
+        with trace_span.span(
+            "PackingDataset.__iter__", args={"config": self._own_config()}, level=1
+        ):
+            pre_packing_lengths = self._pre_packing_lengths
+            # The source dataset
+            src_iter = iter(self.dataset)
 
-            # Create new pre packs if necessary
-            if len(pre_packing_lengths) == 0:
-                assert len(self._pre_packing_buffer) == 0
-                assert len(self._reading_buffer) == self.buffer_size
-                next_pre_pack()
+            self._pre_packing_buffer.worker_start()
+            self._reading_buffer.worker_start()
+
+            is_initial_pack = True
+
+            pre_pack_round = 0
+            # Main loop:
+            while True:
+                if pre_pack_round > 10:
+                    raise RuntimeError("Pre packer did not yield any packs after 10 rounds.")
+                with trace_span.span(
+                    "PackingDataset.__iter__.fill_reading_buffer",
+                    args={
+                        "to_fill": self.buffer_size
+                        - len(self._reading_buffer)
+                        - len(self._pre_packing_buffer),
+                        "reading_buffer": len(self._reading_buffer),
+                        "pre_packing_buffer": len(self._pre_packing_buffer),
+                        "buffer_size": self.buffer_size,
+                    },
+                    level=2,
+                ):
+                    # Fill a portion of the buffer
+                    if not self._fill_reading_buffer(src_iter, log_progress=is_initial_pack):
+                        # Break out of the main loop when the source is exhausted.
+                        break
+                is_initial_pack = False
+
+                # Create new pre packs if necessary
                 if len(pre_packing_lengths) == 0:
-                    # Retry packing, nothing was returned.
-                    pre_pack_round += 1
-                    continue
-
-            if len(pre_packing_lengths) > 0:
+                    with trace_span.span("PackingDataset.__iter__.next_pre_pack", level=1):
+                        assert len(self._pre_packing_buffer) == 0
+                        assert len(self._reading_buffer) == self.buffer_size
+                        next_pre_pack()
+                        if len(pre_packing_lengths) == 0:
+                            # Retry packing, nothing was returned.
+                            pre_pack_round += 1
+                            continue
+                # Reset the pre pack round counter for failing
                 pre_pack_round = 0
 
-            yield from next_final_pack()
+                with trace_span.span("PackingDataset.__iter__.final_pack", level=2):
+                    yield from next_final_pack()
 
-        # Yield the remaining packs, flushing the collecting buffer
-        while len(pre_packing_lengths) > 0:
-            yield from next_final_pack()
+            with trace_span.span("PackingDataset.__iter__.last", level=1):
+                # Yield the remaining packs, flushing the collecting buffer
+                while len(pre_packing_lengths) > 0:
+                    with trace_span.span("PackingDataset.__iter__.last.final_pack", level=2):
+                        yield from next_final_pack()
 
-        # If there are still samples in the partial reading buffer, pre-pack them and yield the
-        # resulting (partial) packs
-        if len(self._reading_buffer) > 0:
-            next_pre_pack()
+                # If there are still samples in the partial reading buffer, pre-pack them and yield the
+                # resulting (partial) packs
+                if len(self._reading_buffer) > 0:
+                    with trace_span.span("PackingDataset.__iter__.last.next_pre_pack", level=1):
+                        next_pre_pack()
 
-        # Yield the remaining packs, flushing the collecting buffer
-        while len(pre_packing_lengths) > 0:
-            yield from next_final_pack()
+                # Yield the remaining packs, flushing the collecting buffer
+                while len(pre_packing_lengths) > 0:
+                    with trace_span.span("PackingDataset.__iter__.last.final_pack", level=2):
+                        yield from next_final_pack()
 
     def can_restore_sample(self) -> bool:
         # Cannot really verify if the returned elements contain a __restore_key__.
@@ -382,6 +431,24 @@ class PackingDataset(
             assert False, f"Pack sub-index {pack_sub_idx} not found in pack"
         else:
             return set_sample_restore_key(final_pack, pack_idx, *pack_restore_keys, src=self)
+
+    def _own_config(self) -> Dict[str, Any]:
+        return {
+            "buffer_size": self.buffer_size,
+            "pre_packer": self._function_config(self.pre_packer),
+            "final_packer": self._function_config(self.final_packer),
+            "final_packer_stateless": self.final_packer_stateless,
+            **(
+                {
+                    "packer_config": (
+                        self.packer_config() if callable(self.packer_config) else self.packer_config
+                    )
+                }
+                if self.packer_config
+                else {}
+            ),
+            "error_handler": self._function_config(self.error_handler),
+        }
 
     def config(self) -> Dict[str, Any]:
         return {

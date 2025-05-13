@@ -101,6 +101,7 @@ class GcDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
         return len(self.dataset)
 
     def __iter__(self) -> Iterator[T_sample]:
+        trace_span = self.worker_config.worker_trace_span()
         in_worker = torch.utils.data.get_worker_info() is not None
         if in_worker and not _frozen_cuda_tensors_initialized:
             raise GcFreezeError(
@@ -108,19 +109,28 @@ class GcDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
             )
 
         if self.freeze:
-            gc.collect()
-            gc.freeze()
-        try:
-            iter = 0
-            for sample in self.dataset:
-                yield sample
-                iter += 1
-                if iter >= self.every_n_iter:
-                    gc.collect()
-                    iter = 0
-        finally:
-            if self.freeze:
-                gc.unfreeze()
+            with trace_span.span("GcDataset.__iter__.gc.freeze", level=1):
+                gc.collect()
+                gc.freeze()
+        with trace_span.span("GcDataset.__iter__", args={"config": self._own_config()}, level=1):
+            try:
+                iter = 0
+                for sample in self.dataset:
+                    yield sample
+                    iter += 1
+                    if iter >= self.every_n_iter:
+                        with trace_span.span("GcDataset.__iter__.gc.collect", level=1):
+                            gc.collect()
+                        iter = 0
+            finally:
+                if self.freeze:
+                    gc.unfreeze()
+
+    def _own_config(self) -> Dict[str, Any]:
+        return {
+            "every_n_iter": self.every_n_iter,
+            "freeze": self.freeze,
+        }
 
     def config(self) -> Dict[str, Any]:
         # This is transparent, no config to be saved (it does not affect the dataset)

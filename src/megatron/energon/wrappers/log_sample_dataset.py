@@ -80,26 +80,33 @@ class LogSampleDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]
     def __len__(self):
         return len(self.dataset)
 
-    def _log(self, sample: T_sample) -> None:
-        if self.worker_config.should_log(level=1):
-            log_entry = {
-                "t": "yield_batch",
-                "r": self.worker_config.rank,
-                "w": self.worker_config.global_worker_id(),
-                "m": self.mode,
-                "idx": self._step,
-            }
-            keys = self.get_keys_fn(sample)
-            if keys is not None:
-                log_entry["keys"] = keys
+    def _log(self, sample: T_sample) -> dict:
+        log_entry = {
+            "idx": self._step,
+        }
+        keys = self.get_keys_fn(sample)
+        if keys is not None:
+            log_entry["keys"] = keys
 
-            self.worker_config.worker_log(log_entry)
+        return log_entry
 
     def __iter__(self) -> Iterator[T_sample]:
-        for sample in self.dataset:
-            self._log(sample)
-            self._step += 1
-            yield sample
+        trace_span = self.worker_config.worker_trace_span()
+        with trace_span.span(
+            "LogSampleDataset.__iter__",
+            args={
+                "mode": self.mode,
+            },
+            level=1,
+        ):
+            for sample in trace_span.iterable(
+                self.dataset, name="LogSampleDataset.__iter__.next", level=1
+            ):
+                with trace_span.span(
+                    "LogSampleDataset.__iter__.yield", args=self._log(sample), level=1
+                ):
+                    self._step += 1
+                    yield sample
 
     def config(self) -> Dict[str, Any]:
         # Transparent logger, it won't change the samples

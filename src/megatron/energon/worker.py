@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import hashlib
-import json
 import multiprocessing
 from pathlib import Path
 from typing import Any, ClassVar, Dict, List, Optional, TextIO, TypeVar
@@ -12,6 +11,8 @@ import torch.utils.data
 
 from megatron.energon.cache import CachePool
 from megatron.energon.dataclass_slots import dataclass_slots
+from megatron.energon.fork_hook import DataclassForkMixin
+from megatron.energon.tracing import NOOP_TRACE_WRITER, AsyncFlow, TraceWriter
 
 __all__ = ("WorkerConfig",)
 
@@ -19,7 +20,7 @@ T = TypeVar("T")
 
 
 @dataclass_slots(eq=False)
-class WorkerConfig:
+class WorkerConfig(DataclassForkMixin):
     """
     Provides information about the current worker and the global configuration. This gives each
     data parallel rank its proper config. Every `rank` (up to `world_size-1`) must be used.
@@ -57,10 +58,10 @@ class WorkerConfig:
     worker_debug_path: Optional[str] = None
     #: Log level for worker logging.
     worker_log_level: int = 0
+    #: The current trace writer for the worker.
+    _worker_trace_writer: Optional[TraceWriter] = None
     #: The opened file for the current worker. Should not be set from outside.
     _worker_debug_file: Optional[TextIO] = None
-    #: worker_id of the opened worker debug file
-    _worker_debug_file_worker_id: Optional[int] = None
 
     #: The current sample index within the current iterating worker
     _sample_index_stack: ClassVar[Optional[List[int]]] = None
@@ -68,7 +69,7 @@ class WorkerConfig:
     active_worker_config: ClassVar[Optional["WorkerConfig"]] = None
 
     #: The global rank override for the worker. Required for restoring samples.
-    _worker_override_global_rank: ClassVar[Optional[List[int]]] = None
+    _worker_override_global_rank: ClassVar[Optional[int]] = None
 
     #: The current cache pool for the worker.
     _cache_pool: ClassVar[Optional[CachePool]] = None
@@ -252,27 +253,43 @@ class WorkerConfig:
     def should_log(self, level: int) -> bool:
         return level <= self.worker_log_level
 
-    def worker_log(self, data: dict) -> None:
-        """Logs the given data to the worker debug file."""
+    def __after_in_child_fork__(self):
+        if self._worker_trace_writer is not None:
+            self._worker_trace_writer.close()
+            self._worker_trace_writer = None
+
+    def __before_fork__(self):
+        if self._worker_trace_writer is not None:
+            self._worker_trace_writer.flush()
+
+    def worker_trace_writer(self) -> TraceWriter:
         if self.worker_debug_path is None:
-            print(json.dumps(data) + "\n", end="", flush=True)
-        else:
+            return NOOP_TRACE_WRITER
+        if self._worker_trace_writer is None:
             in_worker = torch.utils.data.get_worker_info() is not None
             # Additional "worker" with rank_worker_id=0 is the main process. All workers have +1
             # as their worker_id.
             worker_id = (
                 self.rank * (self.num_workers + 1) + self.rank_worker_id() + (1 if in_worker else 0)
             )
-            if self._worker_debug_file is None or self._worker_debug_file_worker_id != worker_id:
-                if self._worker_debug_file is not None:
-                    self._worker_debug_file.close()
-                path = Path(
-                    self.worker_debug_path.format(
-                        worker_id=worker_id, pid=multiprocessing.current_process().ident
-                    )
+            if self._worker_trace_writer is not None:
+                self._worker_trace_writer.close()
+            path = Path(
+                self.worker_debug_path.format(
+                    worker_id=worker_id, pid=multiprocessing.current_process().ident
                 )
-                path.parent.mkdir(exist_ok=True, parents=True)
-                self._worker_debug_file = path.open("w")
-                self._worker_debug_file_worker_id = worker_id
-            self._worker_debug_file.write(json.dumps(data) + "\n")
-            self._worker_debug_file.flush()
+            )
+            path.parent.mkdir(exist_ok=True, parents=True)
+            proc_name = f"dprank{self.global_rank()}"
+            if in_worker:
+                proc_name += f"_worker{self.rank_worker_id()}"
+            self._worker_trace_writer = TraceWriter(path, log_level=self.worker_log_level)
+            self._worker_trace_writer.metadata_process_name(multiprocessing.current_process().name)
+            self._worker_trace_writer.metadata_process_labels(proc_name)
+            self._worker_trace_writer.metadata_process_sort_index(worker_id)
+            self._worker_trace_writer.metadata_thread_name("worker_main")
+            self._worker_trace_writer.metadata_thread_sort_index(0)
+        return self._worker_trace_writer
+
+    def worker_trace_span(self) -> AsyncFlow:
+        return self.worker_trace_writer().async_flow()

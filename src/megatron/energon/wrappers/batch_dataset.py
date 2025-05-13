@@ -102,52 +102,30 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
         )
 
     def __iter__(self) -> Iterator[T_batch]:
-        batch: List[T_batch_sample] = []
-        sample_restore_keys = []
-
-        if self._generator_sample_keys is not None:
-            sample_restore_keys = self._generator_sample_keys
-            assert self._generator_offset is not None
-            batch = [self.dataset.restore_sample(inner_idx) for inner_idx in sample_restore_keys]
-            with self._sample_index.ctx(self._sample_index.current_idx) as sample_idx:
-                batch_sample = self.batcher(batch)
-            assert isinstance(batch_sample, Generator)
-            assert inspect.isgeneratorfunction(self.batcher), (
-                f"Generator in {self.batcher} but not marked as such."
-            )
-            target_offset = self._generator_offset
-            self._generator_offset = 0
-            for batch_sub_idx, (sample_idx, inner_batch_sample) in enumerate(
-                self._sample_index.iter_ctx(batch_sample, sample_idx)
-            ):
-                # Skip other samples
-                if batch_sub_idx >= target_offset:
-                    self._generator_offset = batch_sub_idx + 1
-                    yield set_sample_restore_key(
-                        inner_batch_sample,
-                        sample_idx,
-                        batch_sub_idx,
-                        *sample_restore_keys,
-                        src=self,
-                    )
-            self._generator_sample_keys = None
-            self._generator_offset = None
-            batch.clear()
+        trace_span = self.worker_config.worker_trace_span()
+        with trace_span.span("BatchDataset.__iter__", args={"config": self._own_config()}, level=1):
+            batch: List[T_batch_sample] = []
             sample_restore_keys = []
 
-        def flush():
-            try:
-                with self._sample_index.ctx() as sample_idx:
+            if self._generator_sample_keys is not None:
+                sample_restore_keys = self._generator_sample_keys
+                assert self._generator_offset is not None
+                batch = [
+                    self.dataset.restore_sample(inner_idx) for inner_idx in sample_restore_keys
+                ]
+                with self._sample_index.ctx(self._sample_index.current_idx) as sample_idx:
                     batch_sample = self.batcher(batch)
-                if isinstance(batch_sample, Generator):
-                    assert inspect.isgeneratorfunction(self.batcher), (
-                        f"Generator in {self.batcher} but not marked as such."
-                    )
-                    self._generator_sample_keys = sample_restore_keys
-                    self._generator_offset = 0
-                    for batch_sub_idx, (sample_idx, inner_batch_sample) in enumerate(
-                        self._sample_index.iter_ctx(batch_sample, sample_idx)
-                    ):
+                assert isinstance(batch_sample, Generator)
+                assert inspect.isgeneratorfunction(self.batcher), (
+                    f"Generator in {self.batcher} but not marked as such."
+                )
+                target_offset = self._generator_offset
+                self._generator_offset = 0
+                for batch_sub_idx, (sample_idx, inner_batch_sample) in enumerate(
+                    self._sample_index.iter_ctx(batch_sample, sample_idx)
+                ):
+                    # Skip other samples
+                    if batch_sub_idx >= target_offset:
                         self._generator_offset = batch_sub_idx + 1
                         yield set_sample_restore_key(
                             inner_batch_sample,
@@ -156,27 +134,70 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
                             *sample_restore_keys,
                             src=self,
                         )
-                    self._generator_sample_keys = None
-                    self._generator_offset = None
-                else:
-                    set_sample_restore_key(batch_sample, sample_idx, *sample_restore_keys, src=self)
-                    yield batch_sample
-                sample_restore_keys.clear()
-            except SkipSample:
-                pass
-            except SYSTEM_EXCEPTIONS:
-                raise FatalSampleError.from_sample(batch)
-            except Exception as e:
-                self.error_handler(e, batch)
+                self._generator_sample_keys = None
+                self._generator_offset = None
+                batch.clear()
+                sample_restore_keys = []
 
-        for sample in self.dataset:
-            batch.append(sample)
-            sample_restore_keys.append(get_sample_restore_key(sample))
-            if len(batch) == self.batch_size:
+            def flush() -> Generator[T_batch, None, None]:
+                try:
+                    with self._sample_index.ctx() as sample_idx:
+                        batch_sample = self.batcher(batch)
+                    if isinstance(batch_sample, Generator):
+                        assert inspect.isgeneratorfunction(self.batcher), (
+                            f"Generator in {self.batcher} but not marked as such."
+                        )
+                        self._generator_sample_keys = sample_restore_keys
+                        self._generator_offset = 0
+                        for batch_sub_idx, (sample_idx, inner_batch_sample) in enumerate(
+                            self._sample_index.iter_ctx(batch_sample, sample_idx)
+                        ):
+                            self._generator_offset = batch_sub_idx + 1
+                            yield set_sample_restore_key(
+                                inner_batch_sample,
+                                sample_idx,
+                                batch_sub_idx,
+                                *sample_restore_keys,
+                                src=self,
+                            )
+                        self._generator_sample_keys = None
+                        self._generator_offset = None
+                    else:
+                        set_sample_restore_key(
+                            batch_sample, sample_idx, *sample_restore_keys, src=self
+                        )
+                        yield batch_sample
+                    sample_restore_keys.clear()
+                except SkipSample:
+                    trace_span.instant("BatchDataset.__iter__.skip", level=2)
+                except SYSTEM_EXCEPTIONS:
+                    raise FatalSampleError.from_sample(batch)
+                except Exception as e:
+                    self.error_handler(e, batch)
+                    trace_span.instant(
+                        "BatchDataset.__iter__.error/skip",
+                        args={"exception": f"{type(e).__name__}: {str(e)}"},
+                        level=2,
+                    )
+
+            batch_span = trace_span.span("BatchDataset.__iter__.collect", level=2)
+
+            try:
+                for sample in self.dataset:
+                    batch.append(sample)
+                    sample_restore_keys.append(get_sample_restore_key(sample))
+                    if len(batch) == self.batch_size:
+                        batch_span.end()
+                        yield from flush()
+                        batch = []
+                        batch_span = trace_span.span("BatchDataset.__iter__.collect", level=2)
+            finally:
+                batch_span.end()
+            if len(batch) > 0 and not self.drop_last:
+                batch_span = trace_span.span(
+                    "BatchDataset.__iter__.last", args={"batch_size": len(batch)}, level=1
+                )
                 yield from flush()
-                batch = []
-        if len(batch) > 0 and not self.drop_last:
-            yield from flush()
 
     def can_restore_sample(self) -> bool:
         # Cannot really verify if the returned elements contain a __restore_key__.
@@ -224,6 +245,26 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
                 *samples_restore_keys,
                 src=self,
             )
+
+    def _own_config(self) -> Dict[str, Any]:
+        return {
+            "batch_size": self.batch_size,
+            "batcher": self._function_config(self.batcher),
+            **(
+                {
+                    "batcher_config": (
+                        self.batcher_config()
+                        if callable(self.batcher_config)
+                        else self.batcher_config
+                    )
+                }
+                if self.batcher_config
+                else {}
+            ),
+            "batcher_stateless": self.batcher_stateless,
+            "drop_last": self.drop_last,
+            "error_handler": self._function_config(self.error_handler),
+        }
 
     def config(self) -> Dict[str, Any]:
         return {

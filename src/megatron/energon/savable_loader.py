@@ -788,16 +788,15 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
             **kwargs,
         )
 
-        if self.worker_config.should_log(level=1):
-            self.worker_config.worker_log(
-                {
-                    "t": "SavableLoader.__init__",
-                    "r": self.worker_config.rank,
-                    "w": None,
-                    "id": self.id,
-                    "config": dataset.config(),
-                }
-            )
+        self.worker_config.worker_trace_writer().trace_object(
+            self,
+            "SavableDataLoader",
+            args={
+                "id": self.id,
+                "config": dataset.config(),
+            },
+            level=1,
+        )
 
     @staticmethod
     def next_id() -> int:
@@ -821,16 +820,15 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
             def __init__(self, iterator):
                 self._iterator = iterator
                 self.id = outerself.next_id()
-                if outerself.worker_config.should_log(level=1):
-                    outerself.worker_config.worker_log(
-                        {
-                            "t": "SavableDataLoader.iter",
-                            "r": outerself.worker_config.rank,
-                            "w": None,
-                            "id": outerself.id,
-                            "iter_id": self.id,
-                        }
-                    )
+                outerself.worker_config.worker_trace_writer().trace_object(
+                    self,
+                    "SavableDataLoader.iter",
+                    args={
+                        "id": outerself.id,
+                        "iter_id": self.id,
+                    },
+                    level=1,
+                )
 
                 # self._debugf = open(
                 #     f"worker_samples_rank{outerself.worker_config.rank:02}_t{int(time.time())}.log", "w"
@@ -851,22 +849,18 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
                     # self._debugf.flush()
                     if outerself.worker_config.should_log(level=1):
                         keys = default_get_keys(sample)
-                        outerself.worker_config.worker_log(
-                            {
-                                **{
-                                    "t": "SavableDataLoader.yield",
-                                    "r": outerself.worker_config.rank,
-                                    "w": None,
-                                    "id": outerself.id,
-                                    "iter_id": self.id,
-                                    "worker_id": worker_id,
-                                    "worker_idx": sample_idx,
-                                    "idx": outerself._sample_idx,
-                                    "iter_idx": self.iter_idx,
-                                    "global_idx": outerself._global_sample_idx,
-                                },
+                        outerself.worker_config.worker_trace_writer().instant(
+                            "SavableDataLoader.yield",
+                            args={
+                                "id": outerself.id,
+                                "iter_id": self.id,
+                                "worker_id": worker_id,
+                                "worker_idx": sample_idx,
+                                "idx": outerself._sample_idx,
+                                "iter_idx": self.iter_idx,
+                                "global_idx": outerself._global_sample_idx,
                                 **({} if keys is None else {"keys": keys}),
-                            }
+                            },
                         )
                     outerself._sample_idx += 1
                     outerself._global_sample_idx += 1
@@ -875,16 +869,14 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
                 except StopIteration:
                     self.finished = True
                     outerself._next_worker_id = 0
-                    if outerself.worker_config.should_log(level=1):
-                        outerself.worker_config.worker_log(
-                            {
-                                "t": "SavableDataLoader.StopIteration",
-                                "r": outerself.worker_config.rank,
-                                "w": None,
-                                "id": outerself.id,
-                                "iter_id": self.id,
-                            }
-                        )
+                    outerself.worker_config.worker_trace_writer().instant(
+                        "SavableDataLoader.StopIteration",
+                        args={
+                            "id": outerself.id,
+                            "iter_id": self.id,
+                        },
+                        level=1,
+                    )
                     raise
 
         if self.num_workers > 0:
@@ -1293,16 +1285,15 @@ class BasicDataLoader(DataLoader[T], Generic[T]):
             worker_init_fn=partial(_init_worker, seed_per_worker),
             **kwargs,
         )
-        if self.worker_config.should_log(level=1):
-            self.worker_config.worker_log(
-                {
-                    "t": "BasicDataLoader.__init__",
-                    "r": self.worker_config.rank,
-                    "w": None,
-                    "id": self.id,
-                    "config": self.config(),
-                }
-            )
+        self.worker_config.worker_trace_writer().trace_object(
+            self,
+            "BasicDataLoader",
+            args={
+                "id": self.id,
+                "config": self.config(),
+            },
+            level=1,
+        )
 
     def __iter__(self):
         outerself = self
@@ -1320,16 +1311,15 @@ class BasicDataLoader(DataLoader[T], Generic[T]):
                 self._iterator = iterator
                 self.id = SavableDataLoader.next_id()
 
-                if outerself.worker_config.should_log(level=1):
-                    outerself.worker_config.worker_log(
-                        {
-                            "t": "BasicDataLoader.iter",
-                            "r": outerself.worker_config.rank,
-                            "w": None,
-                            "id": outerself.id,
-                            "iter_id": self.id,
-                        }
-                    )
+                outerself.worker_config.worker_trace_writer().trace_object(
+                    self,
+                    "BasicDataLoader.iter",
+                    args={
+                        "id": outerself.id,
+                        "iter_id": self.id,
+                    },
+                    level=1,
+                )
 
             def __iter__(self):
                 return self
@@ -1341,38 +1331,33 @@ class BasicDataLoader(DataLoader[T], Generic[T]):
                     self.next_worker_id = (worker_id + 1) % max(outerself.num_workers, 1)
                     if outerself.worker_config.should_log(level=1):
                         keys = default_get_keys(sample)
-                        outerself.worker_config.worker_log(
-                            {
-                                **{
-                                    "t": "BasicDataLoader.yield",
-                                    "r": outerself.worker_config.rank,
-                                    "w": None,
-                                    "id": outerself.id,
-                                    "iter_id": self.id,
-                                    "worker_id": worker_id,
-                                    "worker_idx": sample_idx,
-                                    "idx": self.iter_idx,
-                                    "iter_idx": self.iter_idx,
-                                    "global_idx": outerself._sample_idx,
-                                },
+                        outerself.worker_config.worker_trace_writer().instant(
+                            "BasicDataLoader.yield",
+                            args={
+                                "id": outerself.id,
+                                "iter_id": self.id,
+                                "worker_id": worker_id,
+                                "worker_idx": sample_idx,
+                                "idx": self.iter_idx,
+                                "iter_idx": self.iter_idx,
+                                "global_idx": outerself._sample_idx,
                                 **({} if keys is None else {"keys": keys}),
-                            }
+                            },
+                            level=1,
                         )
                     outerself._sample_idx += 1
                     self.iter_idx += 1
                     return sample
                 except StopIteration:
                     self.next_worker_id = 0
-                    if outerself.worker_config.should_log(level=1):
-                        outerself.worker_config.worker_log(
-                            {
-                                "t": "BasicDataLoader.StopIteration",
-                                "r": outerself.worker_config.rank,
-                                "w": None,
-                                "id": outerself.id,
-                                "iter_id": self.id,
-                            }
-                        )
+                    outerself.worker_config.worker_trace_writer().instant(
+                        "BasicDataLoader.StopIteration",
+                        args={
+                            "id": outerself.id,
+                            "iter_id": self.id,
+                        },
+                        level=1,
+                    )
                     raise
 
         return InnerIterator(super().__iter__())

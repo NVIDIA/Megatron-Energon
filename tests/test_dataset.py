@@ -1683,7 +1683,7 @@ class TestDataset(unittest.TestCase):
             world_size=1,
             num_workers=2,
             worker_log_level=3,
-            worker_debug_path=str(self.dataset_path) + "/worker_debug/{worker_id}.jsonl",
+            worker_debug_path=str(self.dataset_path) + "/worker_debug/{worker_id}.json",
         )
 
         # Reset this to 0 to make sure the test is deterministic
@@ -1702,24 +1702,19 @@ class TestDataset(unittest.TestCase):
 
         samples = [[batch.__key__ for batch in loader] for _ in range(2)]
         print(samples)
+        del loader
+        gc.collect()
 
         debug_log_path = self.dataset_path / "worker_debug"
-        assert (debug_log_path / "0.jsonl").is_file()
-        assert (debug_log_path / "1.jsonl").is_file()
-        assert (debug_log_path / "2.jsonl").is_file()
+        assert (debug_log_path / "0.json").is_file(), f"{list(debug_log_path.iterdir())}"
+        assert (debug_log_path / "1.json").is_file(), f"{list(debug_log_path.iterdir())}"
+        assert (debug_log_path / "2.json").is_file(), f"{list(debug_log_path.iterdir())}"
 
         collected_keys_order = [[None] * 10 for _ in range(2)]
-        with (debug_log_path / "0.jsonl").open() as rf:
-            for line in rf:
-                line_data = json.loads(line)
-                if line_data["t"] == "SavableDataLoader.yield":
-                    print(line_data)
-                    for i in range(len(collected_keys_order)):
-                        if collected_keys_order[i][line_data["idx"]] is None:
-                            collected_keys_order[i][line_data["idx"]] = line_data["keys"]
-                            break
-                    else:
-                        assert False, "Too many entries for key"
+        with (debug_log_path / "0.json").open() as rf:
+            raw = json.load(rf)
+            assert len(raw) > 0
+            print(raw)
 
         print(collected_keys_order)
         assert collected_keys_order == samples

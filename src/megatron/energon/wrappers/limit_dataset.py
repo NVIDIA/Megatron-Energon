@@ -57,48 +57,40 @@ class LimitDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
             if worker_id < self.length % self.worker_config.num_workers:
                 local_limit += 1
 
-        if self.worker_config.should_log(level=2):
-            self.worker_config.worker_log(
-                {
-                    "t": "LimitDataset.start",
-                    "r": self.worker_config.rank,
-                    "w": worker_id,
-                    "offset": self.current_offset,
-                    "local_limit": local_limit,
-                    "limit": self.length,
-                }
-            )
-
-        offset_range = list(range(self.current_offset, local_limit))
-        # Only iterate self.dataset if there are samples to iterate
-        if len(offset_range) > 0:
-            for sample, offset in zip(
-                self.dataset,
-                offset_range,
-            ):
-                self.current_offset = offset + 1
-                yield sample
-
-        if self.worker_config.should_log(level=2):
-            self.worker_config.worker_log(
-                {
-                    "t": "LimitDataset.done",
-                    "r": self.worker_config.rank,
-                    "w": worker_id,
-                    "offset": self.current_offset,
-                    "local_limit": local_limit,
-                    "limit": self.length,
-                }
-            )
+        trace_span = self.worker_config.worker_trace_span()
+        with trace_span.span(
+            "LimitDataset.__iter__",
+            args={
+                "offset": self.current_offset,
+                "local_limit": local_limit,
+                "config": self._own_config(),
+            },
+            level=2,
+        ):
+            offset_range = list(range(self.current_offset, local_limit))
+            # Only iterate self.dataset if there are samples to iterate
+            if len(offset_range) > 0:
+                for sample, offset in zip(
+                    self.dataset,
+                    offset_range,
+                ):
+                    self.current_offset = offset + 1
+                    yield sample
 
         # Reset the inner dataset
-        self.dataset.reset_state_deep()
         self.current_offset = 0
         if self.reset_after_epoch:
-            self.dataset.reset_state_deep()
+            with trace_span.span("LimitDataset.__iter__.reset_state_deep"):
+                self.dataset.reset_state_deep()
 
     def worker_has_samples(self) -> bool:
         return super().worker_has_samples() and self.length > 0
+
+    def _own_config(self) -> Dict[str, Any]:
+        return {
+            "length": self.length,
+            "reset_after_epoch": self.reset_after_epoch,
+        }
 
     def config(self) -> Dict[str, Any]:
         return {
