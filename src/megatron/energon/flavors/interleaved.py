@@ -1,18 +1,18 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+from dataclasses import dataclass
 from typing import List, Union
 
 import torch
 
-from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.epathlib.epath import EPath
 from megatron.energon.errors import warn_deprecated
 from megatron.energon.flavors.base_dataset import Sample
 from megatron.energon.flavors.webdataset import DefaultDecoderWebdatasetFactory
 
 
-@dataclass_slots
+@dataclass(slots=True)
 class InterleavedSample(Sample):
     """Sample type for interleaved media such as text with images."""
 

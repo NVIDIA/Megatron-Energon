@@ -2,14 +2,15 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 
-from megatron.energon.dataclass_slots import dataclass_slots
+from dataclasses import dataclass
+
 from megatron.energon.epathlib.epath import EPath
 from megatron.energon.errors import warn_deprecated
 from megatron.energon.flavors.base_dataset import Sample
 from megatron.energon.flavors.webdataset import DefaultDecoderWebdatasetFactory
 
 
-@dataclass_slots
+@dataclass(slots=True)
 class TextSample(Sample):
     """Sample type for simple text."""
 

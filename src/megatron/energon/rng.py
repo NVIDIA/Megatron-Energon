@@ -3,6 +3,7 @@
 
 import hashlib
 import random
+from dataclasses import dataclass
 from typing import Any, List, Mapping, Optional, Sequence, TypeVar
 
 import numpy
@@ -10,7 +11,6 @@ import torch
 import torch.distributed
 import torch.utils.data
 
-from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.savable import FlexState, Savable
 from megatron.energon.worker import WorkerConfig
 
@@ -81,7 +81,7 @@ class WorkerRng(Savable):
             self._restore_state = state["rng"]
 
 
-@dataclass_slots
+@dataclass(slots=True)
 class SystemRngState:
     """The state of the global random generators.
 

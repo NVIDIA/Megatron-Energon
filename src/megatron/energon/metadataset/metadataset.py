@@ -1,9 +1,9 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+from dataclasses import dataclass
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.dataset_config import load_config
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.webdataset.metadata import check_dataset_info_present
@@ -16,7 +16,7 @@ from megatron.energon.metadataset.loader_interface import (
 from megatron.energon.worker import WorkerConfig
 
 
-@dataclass_slots
+@dataclass(slots=True)
 class DatasetReference:
     path: Union[str, EPath]
     split_part: Optional[str] = None
@@ -95,7 +95,7 @@ class DatasetReference:
         )
 
 
-@dataclass_slots
+@dataclass(slots=True)
 class MetadatasetBlender:
     """Internal blending of the dataset."""
 

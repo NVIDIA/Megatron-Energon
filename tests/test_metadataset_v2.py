@@ -11,6 +11,7 @@ import tempfile
 import unittest
 import warnings
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 from unittest.mock import patch
@@ -27,7 +28,6 @@ from megatron.energon import (
     get_train_dataset,
     load_dataset,
 )
-from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.epathlib.epath import EPath
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 from megatron.energon.metadataset.loader import prepare_metadataset
@@ -62,7 +62,7 @@ def _norng_state(state):
         return state
 
 
-@dataclass_slots
+@dataclass(slots=True)
 class TestJoinedSample(Sample):
     text1: torch.Tensor
     text2: torch.Tensor

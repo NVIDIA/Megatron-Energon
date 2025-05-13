@@ -1,10 +1,10 @@
+from dataclasses import dataclass
 from typing import Any
 
-from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.epathlib import EPath
 
 
-@dataclass_slots(frozen=True)
+@dataclass(slots=True, frozen=True)
 class SourceInfo:
     """Information about the source of a sample, i.e. where the data was loaded from."""
 

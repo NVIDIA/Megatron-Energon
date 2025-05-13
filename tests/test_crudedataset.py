@@ -11,6 +11,7 @@ import sys
 import tempfile
 import unittest
 import warnings
+from dataclasses import dataclass
 from pathlib import Path
 from typing import List
 
@@ -30,7 +31,6 @@ from megatron.energon import (
 )
 from megatron.energon.cache import FileStore, FileStoreCachePool, Lazy
 from megatron.energon.cache.base import CachePool
-from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.epathlib.epath import EPath
 from megatron.energon.flavors.base_dataset import Sample
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
@@ -40,7 +40,7 @@ from megatron.energon.source_info import SourceInfo
 from megatron.energon.task_encoder.cooking import cooker
 
 
-@dataclass_slots
+@dataclass(slots=True)
 class LazyTextSample(Sample):
     txt: str
     next_txt: Lazy[str]
@@ -54,7 +54,7 @@ except AttributeError:
     pass
 
 
-@dataclass_slots
+@dataclass(slots=True)
 class TextBatch(Batch):
     __keys__: List[str]
     __sources__: List[SourceInfo]

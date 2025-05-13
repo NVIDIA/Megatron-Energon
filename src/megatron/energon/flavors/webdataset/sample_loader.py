@@ -1,11 +1,11 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+from dataclasses import dataclass
 from typing import Any, Dict, Generator, Iterator, List, Optional, Sequence, Tuple, Union
 
 import torch
 
-from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.flavors.base_dataset import FlexState, SavableDataset
 from megatron.energon.flavors.webdataset.itar_reader import ITarReader
 from megatron.energon.flavors.webdataset.structs import FilteredSample
@@ -13,7 +13,7 @@ from megatron.energon.rng import WorkerRng
 from megatron.energon.worker import WorkerConfig
 
 
-@dataclass_slots
+@dataclass(slots=True)
 class RawSampleData:
     """Represents the iteration state of a single slice slice to the index."""
 
@@ -23,7 +23,7 @@ class RawSampleData:
     data: Tuple[Optional[FilteredSample], ...]
 
 
-@dataclass_slots
+@dataclass(slots=True)
 class SliceState:
     """Represents the iteration state of a single slice slice to the index."""
 

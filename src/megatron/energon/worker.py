@@ -4,6 +4,7 @@
 import hashlib
 import json
 import multiprocessing
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar, Dict, List, Optional, TextIO, TypeVar
 
@@ -11,14 +12,13 @@ import torch.distributed
 import torch.utils.data
 
 from megatron.energon.cache import CachePool
-from megatron.energon.dataclass_slots import dataclass_slots
 
 __all__ = ("WorkerConfig",)
 
 T = TypeVar("T")
 
 
-@dataclass_slots(eq=False)
+@dataclass(slots=True, eq=False)
 class WorkerConfig:
     """
     Provides information about the current worker and the global configuration. This gives each

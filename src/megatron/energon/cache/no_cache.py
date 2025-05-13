@@ -1,16 +1,16 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+from dataclasses import dataclass
 from typing import Any, Optional, TypeVar
 
 from megatron.energon.cache.base import CachePool, FileStore, Lazy
-from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.source_info import SourceInfo, add_source_info
 
 T = TypeVar("T")
 
 
-@dataclass_slots
+@dataclass(slots=True)
 class DirectLazy(Lazy[T]):
     """
     This is not really lazy, it will just defer the dataset access to the first get().

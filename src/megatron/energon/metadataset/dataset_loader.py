@@ -1,9 +1,9 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+from dataclasses import dataclass
 from typing import Any, Dict, Literal, Optional, Union
 
-from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.dataset_config import get_dataset_from_config
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import BaseCoreDatasetFactory
@@ -16,7 +16,7 @@ from megatron.energon.metadataset.loader_interface import (
 from megatron.energon.worker import WorkerConfig
 
 
-@dataclass_slots
+@dataclass(slots=True)
 class DatasetLoader(DatasetLoaderInterface):
     """Loads a dataset from a path."""
 

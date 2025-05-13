@@ -4,17 +4,17 @@
 import contextlib
 import struct
 import tarfile
+from dataclasses import dataclass
 from types import TracebackType
 from typing import BinaryIO, Dict, Generator, Optional, Tuple, Type, Union
 
-from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.epathlib import EPath
 from megatron.energon.retry_stream import RetryReadStream
 
 ITAR_SUFFIX = ".tar.idx"
 
 
-@dataclass_slots
+@dataclass(slots=True)
 class ITarSamplePointer:
     """
     Points to a sample inside some tar file on disk.
@@ -162,7 +162,7 @@ def get_itar_byte_offset(
         return itar[sample_offset]
 
 
-@dataclass_slots
+@dataclass(slots=True)
 class CacheEntry:
     tar_index_reader: TarIndexReader
     lookahead_offset: Optional[int] = None

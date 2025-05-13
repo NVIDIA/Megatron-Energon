@@ -1,14 +1,13 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+from dataclasses import dataclass
 from typing import Optional
 
 import torch
 
-from megatron.energon.dataclass_slots import dataclass_slots
 
-
-@dataclass_slots
+@dataclass(slots=True)
 class AVData:
     #: A list of video clips in the shape (frames, channels, h, w)
     video_clips: Optional[list[torch.Tensor]]

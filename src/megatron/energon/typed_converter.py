@@ -8,9 +8,9 @@ import inspect
 import json
 import re
 import typing
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, Literal, Optional, Tuple, Type, TypeVar, Union
 
-from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.epathlib import EPath
 
 
@@ -60,7 +60,7 @@ def _check_instance_type(cls, inst_type: Type) -> bool:
         return not issubclass(inst_type, type) or issubclass(cls, inst_type)
 
 
-@dataclass_slots
+@dataclass(slots=True)
 class JsonParser:
     strict: bool = True
 

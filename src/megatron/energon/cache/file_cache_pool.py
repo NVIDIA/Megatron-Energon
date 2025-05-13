@@ -9,19 +9,19 @@ import string
 import tempfile
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Literal, Optional, Tuple, TypeVar
 
 from megatron.energon.cache.base import CachePool, FileStore, Lazy
 from megatron.energon.cache.file_store import DecodeFileStore
-from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.fork_hook import ForkMixin
 from megatron.energon.source_info import SourceInfo, add_source_info
 
 T = TypeVar("T")
 
 
-@dataclass_slots
+@dataclass(slots=True)
 class FileCacheLazy(Lazy[T]):
     """
     Represents a reference to a background prefetch.
@@ -66,7 +66,7 @@ class FileCacheLazy(Lazy[T]):
                 self.pool._decrement_refcount_and_cleanup((self.ds.get_path(), self.fname))
 
 
-@dataclass_slots
+@dataclass(slots=True)
 class _PendingTask:
     """Dataclass for storing a pending background task"""
 
