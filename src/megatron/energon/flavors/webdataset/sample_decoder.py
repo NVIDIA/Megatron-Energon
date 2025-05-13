@@ -110,7 +110,6 @@ class SampleDecoder(FileStoreDecoder):
                     AVWebdatasetDecoder(
                         video_decode_audio=video_decode_audio,
                         av_decode=av_decode,
-                        guess_content=guess_content,
                     ),
                 ],
             ),
