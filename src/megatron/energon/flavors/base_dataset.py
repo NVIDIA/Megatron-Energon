@@ -109,7 +109,7 @@ class ExtendableDataclassMixin:
         return cls(**kwargs)
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, kw_only=True)
 class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
     """An abstract base class for one element of a batch.
     Each task should derive a specific subclass as a `@dataclass`, like
@@ -124,12 +124,12 @@ class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
     __restore_key__: Tuple[Union[str, int, tuple], ...]
 
     #: A dataset may define a subflavor to distinguish between samples of the same sample type.
-    __subflavor__: Optional[str]
+    __subflavor__: Optional[str] = None
     #: A dataset may define a subflavors to distinguish between samples of the same sample type.
-    __subflavors__: Optional[Dict[str, Any]]
+    __subflavors__: Optional[Dict[str, Any]] = None
 
     #: Information about the source of the sample, i.e. where the data was loaded from.
-    __sources__: tuple[SourceInfo, ...]
+    __sources__: Optional[tuple[SourceInfo, ...]] = None
 
     @classmethod
     def derive_from(
