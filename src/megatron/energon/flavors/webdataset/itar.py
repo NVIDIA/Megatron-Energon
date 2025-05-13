@@ -14,6 +14,18 @@ from megatron.energon.retry_stream import RetryReadStream
 ITAR_SUFFIX = ".tar.idx"
 
 
+@dataclass_slots
+class ITarSamplePointer:
+    """
+    Points to a sample inside some tar file on disk.
+    The tar_file_id refers to the tar_filenames in the reader.
+    """
+
+    tar_file_id: int
+    byte_offset: int
+    byte_size: int
+
+
 class TarIndexReader:
     def __init__(self, tar_path: Union[EPath, str]):
         tar_path = EPath(tar_path)
@@ -264,7 +276,16 @@ class CachedItarOffsetReader:
         self.tar_index_reader_cache.pop(key)
         if entry.lookahead_offset is not None:
             new_key = (str(tar_file), entry.lookahead_offset)
-            self.tar_index_reader_cache[new_key] = entry
+            if new_key not in self.tar_index_reader_cache:
+                self.tar_index_reader_cache[new_key] = entry
+            else:
+                # Already have this entry in the cache, so we can close the reader and use the existing one
+                # TODO: We may actually may want to keep multiple readers open, because they may be multiple
+                # sequences to the same sequence.
+                entry.tar_index_reader.close()
+        else:
+            # No lookahead, so we can close the reader
+            entry.tar_index_reader.close()
 
         return result_byte_offset, length
 

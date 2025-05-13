@@ -5,9 +5,10 @@ from pathlib import Path
 from typing import Any, List, Literal, Optional, Tuple, TypeVar, Union
 
 from megatron.energon.epathlib import EPath
+from megatron.energon.errors import warn_deprecated
 from megatron.energon.flavors import BaseCoreDatasetFactory, SavableDataset
+from megatron.energon.flavors.webdataset.sample_decoder import SampleDecoder
 from megatron.energon.metadataset import load_dataset
-from megatron.energon.metadataset.loader_interface import DatasetBlendMode
 from megatron.energon.task_encoder.base import DefaultTaskEncoder, TaskEncoder, WorkerConfig
 
 T = TypeVar("T", covariant=True)
@@ -34,6 +35,38 @@ def _split_kwargs(kwargs: dict) -> dict:
     return loader_kwargs
 
 
+def _split_deprecated_decoder_kwargs(kwargs: dict, task_encoder: TaskEncoder) -> None:
+    """
+    auto_decode: bool = True,
+    image_decode: ImageDecoder = "torchrgb",
+    ignore_decoder_errors: bool = False,
+    av_decode: AVDecoder = "AVDecoder",
+    video_decode_audio: bool = False,
+    """
+    decoder_kwargs = {}
+    if "auto_decode" in kwargs:
+        decoder_kwargs["auto_decode"] = kwargs.pop("auto_decode")
+    if "image_decode" in kwargs:
+        decoder_kwargs["image_decode"] = kwargs.pop("image_decode")
+    if "ignore_decoder_errors" in kwargs:
+        decoder_kwargs["ignore_decoder_errors"] = kwargs.pop("ignore_decoder_errors")
+    if "av_decode" in kwargs:
+        decoder_kwargs["av_decode"] = kwargs.pop("av_decode")
+    if "video_decode_audio" in kwargs:
+        decoder_kwargs["video_decode_audio"] = kwargs.pop("video_decode_audio")
+    if len(decoder_kwargs) > 0:
+        warn_deprecated(
+            "The following decoder kwargs are deprecated and will be removed in a future version: "
+            + ", ".join(decoder_kwargs.keys())
+            + ". Instead, set the decoder directly in your task encoder."
+        )
+        assert (
+            not hasattr(task_encoder, "decoder")
+            or task_encoder.decoder is DefaultTaskEncoder.decoder
+        ), "Task encoder already has a decoder, and setting using deprecated kwargs is not allowed."
+        task_encoder.decoder = SampleDecoder(**decoder_kwargs)
+
+
 def get_train_dataset(
     path: Union[str, EPath, Path],
     *,
@@ -48,8 +81,6 @@ def get_train_dataset(
     shuffle_over_epochs_multiplier: Optional[int] = 1,
     task_encoder: TaskEncoder[Any, Any, Any, T] = DefaultTaskEncoder(),
     repeat: bool = True,
-    watchdog_timeout_seconds: Optional[float] = 60,
-    fail_on_timeout: bool = False,
     **kwargs,
 ) -> SavableDataset[T]:
     """
@@ -79,10 +110,7 @@ def get_train_dataset(
         repeat: By default, the inner datasets will loop. If set to False, stop iteration after
             one epoch. Must only be set to False in conjunction with blend_epochized in the
             metadataset if one is used.
-        watchdog_timeout_seconds: If set, the dataset will be wrapped in a watchdog. If the dataset
-            inner takes longer than this many seconds for a sample to load, a stack trace will be
-            printed. If None, the watchdog is disabled.
-        fail_on_timeout: If True, stops the whole process upon timeout. Otherwise, issue a warning.
+        cache_pool: If set, the cache pool to use for the dataset.
         **kwargs: Additional arguments to the dataset constructor.
 
     Returns:
@@ -90,33 +118,27 @@ def get_train_dataset(
     """
 
     loader = load_dataset(path, **_split_kwargs(kwargs))
-    blend_mode, datasets = loader.get_datasets(
+    _split_deprecated_decoder_kwargs(kwargs, task_encoder)
+
+    datasets = loader.get_datasets(
         training=True,
         split_part=split_part,
         worker_config=worker_config,
         max_samples_per_sequence=max_samples_per_sequence,
         shuffle_over_epochs_multiplier=shuffle_over_epochs_multiplier,
+        decoder=task_encoder.decoder,
         **kwargs,
     )
-    assert isinstance(blend_mode, DatasetBlendMode)
-    assert isinstance(datasets, list)
-    assert all(isinstance(d, tuple) and len(d) == 2 for d in datasets)
-    assert all(
-        isinstance(dataset, BaseCoreDatasetFactory) and isinstance(value, (type(None), int, float))
-        for dataset, value in datasets
-    )
     return task_encoder.build_train_datasets(
-        datasets=datasets,
+        datasets=datasets.datasets,
         worker_config=worker_config,
         batch_size=batch_size,
         batch_drop_last=batch_drop_last,
         packing_buffer_size=packing_buffer_size,
         virtual_epoch_length=virtual_epoch_length,
         shuffle_buffer_size=shuffle_buffer_size,
-        blend_mode=blend_mode,
+        blend_mode=datasets.blend_mode,
         repeat=repeat,
-        watchdog_timeout_seconds=watchdog_timeout_seconds,
-        fail_on_timeout=fail_on_timeout,
     )
 
 
@@ -129,8 +151,6 @@ def get_val_dataset(
     batch_drop_last: bool = False,
     packing_buffer_size: Optional[int] = None,
     limit: Optional[int] = None,
-    watchdog_timeout_seconds: Optional[float] = 60,
-    fail_on_timeout: bool = False,
     task_encoder: TaskEncoder[Any, Any, Any, T] = DefaultTaskEncoder(),
     **kwargs,
 ) -> SavableDataset[T]:
@@ -152,36 +172,28 @@ def get_val_dataset(
         batch_size: Size of a batch
         batch_drop_last: If true, drop the last batch if it is smaller than `batch_size`.
         limit: If set, limit the number of batches loaded from the dataset to this.
-        watchdog_timeout_seconds: If set, the dataset will be wrapped in a watchdog. If the dataset
-            inner takes longer than this many seconds for a sample to load, a stack trace will be
-            printed. If None, the watchdog is disabled.
-        fail_on_timeout: If True, stops the whole process upon timeout. Otherwise, issue a warning.
         task_encoder: Task encoder to use.
         **kwargs: Additional arguments to the dataset constructor.
 
     Returns:
         The loaded dataset.
     """
+    _split_deprecated_decoder_kwargs(kwargs, task_encoder)
     loader = load_dataset(path, **_split_kwargs(kwargs))
-    _blend_mode, datasets = loader.get_datasets(
-        training=False, split_part=split_part, worker_config=worker_config, **kwargs
-    )
-    assert isinstance(_blend_mode, DatasetBlendMode)
-    assert isinstance(datasets, list)
-    assert all(isinstance(d, tuple) and len(d) == 2 for d in datasets)
-    assert all(
-        isinstance(dataset, BaseCoreDatasetFactory) and isinstance(value, (type(None), int, float))
-        for dataset, value in datasets
+    datasets = loader.get_datasets(
+        training=False,
+        split_part=split_part,
+        worker_config=worker_config,
+        decoder=task_encoder.decoder,
+        **kwargs,
     )
     return task_encoder.build_val_datasets(
-        datasets=[dataset for dataset, _weight in datasets],
+        datasets=datasets.datasets,
         worker_config=worker_config,
         batch_size=batch_size,
         batch_drop_last=batch_drop_last,
         packing_buffer_size=packing_buffer_size,
         limit=limit,
-        watchdog_timeout_seconds=watchdog_timeout_seconds,
-        fail_on_timeout=fail_on_timeout,
     )
 
 
@@ -194,8 +206,6 @@ def get_val_datasets(
     batch_drop_last: bool = False,
     packing_buffer_size: Optional[int] = None,
     limit: Optional[int] = None,
-    watchdog_timeout_seconds: Optional[float] = 60,
-    fail_on_timeout: bool = False,
     task_encoder: TaskEncoder[Any, Any, Any, T] = DefaultTaskEncoder(),
     **kwargs,
 ) -> List[Tuple[SavableDataset[T], BaseCoreDatasetFactory]]:
@@ -217,26 +227,20 @@ def get_val_datasets(
         batch_size: Size of a batch
         batch_drop_last: If true, drop the last batch if it is smaller than `batch_size`.
         limit: If set, limit the number of batches loaded from the dataset to this.
-        watchdog_timeout_seconds: If set, the dataset will be wrapped in a watchdog. If the dataset
-            inner takes longer than this many seconds for a sample to load, a stack trace will be
-            printed. If None, the watchdog is disabled.
-        fail_on_timeout: If True, stops the whole process upon timeout. Otherwise, issue a warning.
         task_encoder: Task encoder to use.
         **kwargs: Additional arguments to the dataset constructor.
 
     Returns:
         The loaded val datasets, with the source datasets.
     """
+    _split_deprecated_decoder_kwargs(kwargs, task_encoder)
     loader = load_dataset(path, **_split_kwargs(kwargs))
-    _blend_mode, datasets = loader.get_datasets(
-        training=False, split_part=split_part, worker_config=worker_config, **kwargs
-    )
-    assert isinstance(_blend_mode, DatasetBlendMode)
-    assert isinstance(datasets, list)
-    assert all(isinstance(d, tuple) and len(d) == 2 for d in datasets)
-    assert all(
-        isinstance(dataset, BaseCoreDatasetFactory) and isinstance(value, (type(None), int, float))
-        for dataset, value in datasets
+    datasets = loader.get_datasets(
+        training=False,
+        split_part=split_part,
+        worker_config=worker_config,
+        decoder=task_encoder.decoder,
+        **kwargs,
     )
     return [
         (
@@ -247,10 +251,8 @@ def get_val_datasets(
                 batch_drop_last=batch_drop_last,
                 packing_buffer_size=packing_buffer_size,
                 limit=limit,
-                watchdog_timeout_seconds=watchdog_timeout_seconds,
-                fail_on_timeout=fail_on_timeout,
             ),
-            dataset,
+            dataset.dataset,
         )
-        for dataset, _weight in datasets
+        for dataset in datasets.datasets
     ]

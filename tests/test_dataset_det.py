@@ -15,6 +15,7 @@ from pathlib import Path
 
 import torch
 import webdataset as wds
+import yaml
 from click.testing import CliRunner
 
 from megatron.energon import (
@@ -130,6 +131,61 @@ class TestDataset(unittest.TestCase):
                     ]
                 )
             )
+
+        # Split with alternating train/val shards
+        with open(path / MAIN_FOLDER_NAME / "split2.yaml", "w") as f:
+            yaml.dump(
+                {
+                    "split_parts": {
+                        "train": [
+                            "parts/data-4.tar",
+                            "parts/data-0.tar",
+                            "parts/data-2.tar",
+                        ],
+                        "val": [
+                            "parts/data-1.tar",
+                            "parts/data-3.tar",
+                            "parts/data-5.tar",
+                        ],
+                    }
+                },
+                f,
+            )
+
+    def test_split_parts(self):
+        with open(self.dataset_path / MAIN_FOLDER_NAME / "split.yaml", "r") as f:
+            print(f.read())
+        with open(self.dataset_path / MAIN_FOLDER_NAME / "split2.yaml", "r") as f:
+            print(f.read())
+
+        ds = get_dataset_from_config(
+            self.dataset_path,
+            split_config="split2.yaml",
+            split_part="train",
+            worker_config=WorkerConfig(rank=0, world_size=1, num_workers=0),
+            training=False,
+            sample_type=TextSample,
+        )
+        dl = get_loader(ds.build())
+
+        all_keys = [sample.__key__ for sample in dl]
+        assert all_keys == [
+            "parts/data-4.tar/000011",  # Shard 4 first
+            "parts/data-4.tar/000012",
+            "parts/data-4.tar/000013",
+            "parts/data-4.tar/000014",
+            "parts/data-4.tar/000015",
+            "parts/data-4.tar/000016",
+            "parts/data-4.tar/000017",
+            "parts/data-4.tar/000018",
+            "parts/data-4.tar/000019",
+            "parts/data-4.tar/000020",
+            "parts/data-0.tar/000000",  # Shard 0
+            "parts/data-0.tar/000001",
+            "parts/data-2.tar/000004",  # Shard 2
+            "parts/data-2.tar/000005",
+            "parts/data-2.tar/000006",
+        ]
 
     def test_text_dataset(self):
         worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0)

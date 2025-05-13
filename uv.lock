@@ -1,5 +1,4 @@
 version = 1
-revision = 1
 requires-python = ">=3.9"
 resolution-markers = [
     "python_full_version >= '3.13'",
@@ -1196,6 +1195,9 @@ dev = [
 google-cloud-storage = [
     { name = "multi-storage-client", extra = ["google-cloud-storage"] },
 ]
+guess-content = [
+    { name = "filetype" },
+]
 oci = [
     { name = "multi-storage-client", extra = ["oci"] },
 ]
@@ -1215,6 +1217,7 @@ requires-dist = [
     { name = "dataslots", marker = "python_full_version < '3.10'" },
     { name = "ebmlite", marker = "extra == 'av-decode'", specifier = ">=3.3.1" },
     { name = "filetype", marker = "extra == 'av-decode'", specifier = ">=1.2.0" },
+    { name = "filetype", marker = "extra == 'guess-content'", specifier = ">=1.0.0" },
     { name = "multi-storage-client", specifier = ">=0.18.0" },
     { name = "multi-storage-client", extras = ["aistore"], marker = "extra == 'aistore'" },
     { name = "multi-storage-client", extras = ["azure-storage-blob"], marker = "extra == 'azure-storage-blob'" },
@@ -1239,7 +1242,6 @@ requires-dist = [
     { name = "tqdm" },
     { name = "webdataset" },
 ]
-provides-extras = ["aistore", "av-decode", "azure-storage-blob", "dev", "google-cloud-storage", "oci", "s3", "transforms"]
 
 [[package]]
 name = "mpmath"

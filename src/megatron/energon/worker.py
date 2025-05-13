@@ -10,6 +10,7 @@ from typing import Any, ClassVar, Dict, List, Optional, TextIO, TypeVar
 import torch.distributed
 import torch.utils.data
 
+from megatron.energon.cache import CachePool
 from megatron.energon.dataclass_slots import dataclass_slots
 
 __all__ = ("WorkerConfig",)
@@ -69,13 +70,22 @@ class WorkerConfig:
     #: The global rank override for the worker. Required for restoring samples.
     _worker_override_global_rank: ClassVar[Optional[List[int]]] = None
 
-    def worker_activate(self, sample_index: int, override_global_rank: Optional[int] = None):
+    #: The current cache pool for the worker.
+    _cache_pool: ClassVar[Optional[CachePool]] = None
+
+    def worker_activate(
+        self,
+        sample_index: int,
+        override_global_rank: Optional[int] = None,
+        cache_pool: Optional[CachePool] = None,
+    ):
         """Activates the worker config for the current worker and sets it as actively iterating.
         Must be called before next() call on the datasets."""
         assert WorkerConfig.active_worker_config is None
         WorkerConfig._sample_index_stack = [sample_index]
         WorkerConfig.active_worker_config = self
         WorkerConfig._worker_override_global_rank = override_global_rank
+        WorkerConfig._cache_pool = cache_pool
 
     def worker_push_sample_index(self, sample_index: int):
         """Pushes a new sample index to the sample index stack. Should be set by wrapping datasets

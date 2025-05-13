@@ -94,6 +94,16 @@ class WebdatasetMeta:
         )
 
 
+def get_info_shard_files(path: EPath) -> List[str]:
+    """Use this if you don't need the full metadata for split parts, but just the shard files."""
+    parser = JsonParser(strict=True)
+    info = parser.raw_to_typed(
+        get_dataset_info(path),
+        WebdatasetInfo,
+    )
+    return list(info.shard_counts.keys())
+
+
 def get_dataset_info(path: EPath) -> dict:
     """Given the path to an energon webdataset that contains a .nv-meta folder,
     return the dataset info as a dict.

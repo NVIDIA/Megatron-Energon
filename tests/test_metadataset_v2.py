@@ -269,27 +269,30 @@ class TestDataset(unittest.TestCase):
 
         dataset = load_dataset(self.nested_mds_path)
 
-        blend_mode, raw_datasets = dataset.get_datasets(
+        raw_datasets = dataset.get_datasets(
             training=False, split_part="train", worker_config=worker_config
         )
-        assert blend_mode == DatasetBlendMode.DATASET_WEIGHT
-        assert [weight for _raw_dataset, weight in raw_datasets] == [0.4, 0.4, 0.1, 0.1], [
-            weight for _raw_dataset, weight in raw_datasets
-        ]
-        assert [raw_dataset.paths[0].name for raw_dataset, _weight in raw_datasets] == [
+        assert raw_datasets.blend_mode == DatasetBlendMode.DATASET_WEIGHT
+        assert [raw_dataset.weight for raw_dataset in raw_datasets.datasets] == [
+            0.4,
+            0.4,
+            0.1,
+            0.1,
+        ], [raw_dataset.weight for raw_dataset in raw_datasets.datasets]
+        assert [raw_dataset.dataset.paths[0].name for raw_dataset in raw_datasets.datasets] == [
             "ds1",
             "ds2",
             "ds1",
             "ds2",
         ]
-        assert [raw_dataset.subflavor for raw_dataset, _weight in raw_datasets] == [
+        assert [raw_dataset.dataset.subflavor for raw_dataset in raw_datasets.datasets] == [
             "train",
             "train",
             None,
             None,
         ]
-        print([raw_dataset.subflavors for raw_dataset, _weight in raw_datasets])
-        assert [raw_dataset.subflavors for raw_dataset, _weight in raw_datasets] == [
+        print([raw_dataset.dataset.subflavors for raw_dataset in raw_datasets.datasets])
+        assert [raw_dataset.dataset.subflavors for raw_dataset in raw_datasets.datasets] == [
             {
                 "source": "nested_metadataset.yaml",
                 "dataset.yaml": True,
@@ -973,6 +976,8 @@ class TestDataset(unittest.TestCase):
             checkpoint_every_min_n_samples=1,
         )
 
+        assert len(train_loader) == 38 + 55 + 27, len(train_loader)
+
         data = list(enumerate(train_loader))
 
         # Check the overall number of samples
@@ -1105,6 +1110,29 @@ class TestDataset(unittest.TestCase):
             "Sample counts do not match when using save/restore"
         )
 
+        # Try in repeat mode
+        # Train mode dataset
+        train_loader = get_savable_loader(
+            get_train_dataset(
+                fixed_epochs_mds_path,
+                worker_config=worker_config,
+                batch_size=1,
+                shuffle_buffer_size=None,
+                shuffle_over_epochs_multiplier=None,
+                parallel_shard_iters=1,
+                max_samples_per_sequence=None,
+            ),
+            checkpoint_every_sec=0,
+            checkpoint_every_min_n_samples=1,
+        )
+
+        data = list(zip(range(200), train_loader))
+        assert len(train_loader) == 38 + 55 + 27, len(train_loader)
+
+        # Check the overall number of samples
+        # Should be 0.7*len(ds1) + 1.5*len(ds2) = 38 + 55 + 27 (floor rounding)
+        assert len(data) == 200, len(data)
+
     @patch.object(WatchdogDataset, "_watchdog_trigger")
     def test_watchdog_dataset(self, mock_watchdog_trigger):
         class TestTaskEncoder(DefaultTaskEncoder):
@@ -1138,11 +1166,13 @@ class TestDataset(unittest.TestCase):
             shuffle_buffer_size=None,
             max_samples_per_sequence=None,
             task_encoder=TestTaskEncoder(),
+        )
+
+        train_loader = get_loader(
+            train_dataset,
             watchdog_timeout_seconds=3,
             fail_on_timeout=False,
         )
-
-        train_loader = get_loader(train_dataset)
 
         for idx, data in enumerate(train_loader):
             print(idx, data.text[0])

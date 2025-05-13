@@ -11,8 +11,14 @@ import traceback
 from time import perf_counter
 from typing import Any, Callable, Iterable, Iterator, Optional, TypeVar
 
+import torch
+from torch.distributed._shard.sharded_tensor import ShardedTensorBase
+
 # For the watch_iter type
 T = TypeVar("T")
+
+# Maximum length of a single object string to print.
+PRINT_LOCAL_MAX_LENGTH = 250
 
 
 class Watchdog:
@@ -30,6 +36,7 @@ class Watchdog:
     def __init__(
         self,
         timeout: float,
+        initial_timeout: Optional[float] = None,
         callback: Optional[Callable[[], None]] = None,
         dump_stacks: bool = True,
         enabled: bool = True,
@@ -37,17 +44,23 @@ class Watchdog:
         """
         Args:
             timeout: Number of seconds before the watchdog fires if not reset/disabled.
+            initial_timeout: Number of seconds before the watchdog fires in the first iteration.
             callback: Optional function to call upon timeout.
             dump_stacks: If True, print full stack traces for all threads on timeout (except watchdog's own thread).
             enabled: If False, watchdog starts disabled until enable() is called.
         """
         self._timeout = timeout
+        self._initial_timeout = initial_timeout
         self._callback = callback
         self._dump_stacks = dump_stacks
+        self._is_first_iteration = True
 
         # If _deadline is None, the watchdog is disabled.
         # Otherwise, _deadline = time.time() + _timeout if enabled.
-        self._deadline: Optional[float] = perf_counter() + timeout if enabled else None
+        if enabled:
+            self._deadline: Optional[float] = perf_counter() + self._get_next_timeout()
+        else:
+            self._deadline = None
 
         self._stop = False  # signals permanent shutdown (finish)
 
@@ -56,6 +69,13 @@ class Watchdog:
         # Background thread (daemon) that monitors timeouts
         self._worker_thread = threading.Thread(target=self._worker, daemon=True)
         self._worker_thread.start()
+
+    def _get_next_timeout(self) -> float:
+        if self._is_first_iteration:
+            self._is_first_iteration = False
+            return self._initial_timeout if self._initial_timeout is not None else self._timeout
+        else:
+            return self._timeout
 
     def _worker(self) -> None:
         """
@@ -179,13 +199,13 @@ class Watchdog:
                 if arg_dict:
                     print("        Arguments:")
                     for k, v in arg_dict.items():
-                        print(f"            {k}: {repr(v)}")
+                        print(f"            {k}: {repr_short(v)}")
 
                 other_locals = {k: v for k, v in local_vars.items() if k not in arg_dict}
                 if other_locals:
                     print("        Locals:")
                     for k, v in other_locals.items():
-                        print(f"            {k}: {repr(v)}")
+                        print(f"            {k}: {repr_short(v)}")
 
             print()
 
@@ -209,7 +229,7 @@ class Watchdog:
         `time.time() + timeout`.
         """
         with self._cv:
-            self._deadline = perf_counter() + self._timeout
+            self._deadline = perf_counter() + self._get_next_timeout()
             self._cv.notify()
 
     def disable(self) -> None:
@@ -286,6 +306,20 @@ class Watchdog:
             else:
                 self.disable()
                 yield item
+
+
+def repr_short(obj: Any) -> str:
+    """
+    Return a short repr of an object.
+    """
+    if isinstance(obj, torch.Tensor):
+        if isinstance(obj, ShardedTensorBase) or obj.is_cuda:
+            return "<CUDA tensor>"
+
+    s = repr(obj)
+    if len(s) > PRINT_LOCAL_MAX_LENGTH:
+        s = s[: PRINT_LOCAL_MAX_LENGTH // 2] + "..." + s[-PRINT_LOCAL_MAX_LENGTH // 2 :]
+    return s
 
 
 if __name__ == "__main__":

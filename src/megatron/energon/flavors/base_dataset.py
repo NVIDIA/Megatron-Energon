@@ -26,6 +26,7 @@ import torch
 from torch.utils.data import IterableDataset
 from typing_extensions import Self
 
+from megatron.energon.cache import FileStore
 from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.epathlib import EPath
 from megatron.energon.savable import Savable
@@ -370,7 +371,14 @@ class BaseCoreDatasetFactory(Generic[T_sample], ABC):
     subflavors: Dict[str, Any]
 
     @abstractmethod
-    def build(self, worker_rotation_offset: int = 0) -> SavableDataset[T_sample]: ...
+    def build(self, worker_rotation_offset: int = 0) -> SavableDataset[T_sample]:
+        """Builds the dataset."""
+        ...
+
+    @abstractmethod
+    def as_file_store(self) -> "FileStore":
+        """Returns the dataset as a random access dataset."""
+        ...
 
     @abstractmethod
     def __len__(self) -> int:

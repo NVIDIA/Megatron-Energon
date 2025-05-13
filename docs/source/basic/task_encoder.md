@@ -15,8 +15,11 @@ and override one or more of the following methods. The data flow of {py:func}`ge
   - Optional. Define when using [crude data](crude-data).
 - {py:func}`def encode_sample(self, sample: T_sample) -> T_encoded_sample <megatron.energon.DefaultTaskEncoder.encode_sample>`
   - Transform the raw data from the dataset (e.g. augment/transform images, tokenize a single sample).
+  - Alternatively, you can use {py:meth}`preencode_sample <megatron.energon.TaskEncoder.preencode_sample>` and {py:meth}`postencode_sample <megatron.energon.TaskEncoder.postencode_sample>`. This is especially useful when you use packing and you want to defer loading to when the packed samples are known.
 - {py:meth}`def select_samples_to_pack(self, samples: List[T_encoded_sample]) -> List[List[T_encoded_sample]] <megatron.energon.TaskEncoder.select_samples_to_pack>`
   - Optional. Allows for efficient sample packing. See [](../advanced/packing).
+- {py:meth}`def postencode_sample(self, sample: T_sample) -> T_encoded_sample <megatron.energon.TaskEncoder.postencode_sample>`
+  - Only used together with {py:meth}`preencode_sample <megatron.energon.TaskEncoder.preencode_sample>`. Use it if you need to instantiate lazy data before packing the selected samples. But it will also work when not using packing.
 - {py:meth}`def pack_selected_samples(self, samples: List[T_encoded_sample]) -> T_batch_sample] <megatron.energon.TaskEncoder.pack_selected_samples>`
   - Required if select_samples_to_pack is used. Compresses a group of samples to a single sample.
 - (samples are collected for a batch)

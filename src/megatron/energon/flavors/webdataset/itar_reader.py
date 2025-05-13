@@ -3,29 +3,23 @@
 
 from abc import ABC, abstractmethod
 from bisect import bisect_right
-from typing import Callable, Dict, List, Optional, Tuple, Union, overload
+from typing import Any, Callable, Dict, Generic, List, Optional, Tuple, TypeVar, Union, overload
 
-from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.webdataset.config import skip_meta_re, split_name_re
-from megatron.energon.flavors.webdataset.indexing import JoinIndexReader
-from megatron.energon.flavors.webdataset.itar import CachedItarOffsetReader, ITarFile
+from megatron.energon.flavors.webdataset.indexing import JoinIndexReader, SqliteIndexReader
+from megatron.energon.flavors.webdataset.itar import (
+    CachedItarOffsetReader,
+    ITarFile,
+    ITarSamplePointer,
+)
+from megatron.energon.flavors.webdataset.metadata import get_info_shard_files
 from megatron.energon.flavors.webdataset.structs import FilteredSample, ShardInfo
 
-
-@dataclass_slots
-class ITarSamplePointer:
-    """
-    Points to a sample inside some tar file on disk.
-    The tar_file_id refers to the tar_filenames in the reader.
-    """
-
-    tar_file_id: int
-    byte_offset: int
-    byte_size: int
+T_index = TypeVar("T_index", covariant=False)
 
 
-class ITarReader(ABC):
+class ITarReader(ABC, Generic[T_index]):
     """
     An abstract base class for reading a sequence of tar files containing samples.
 
@@ -73,15 +67,15 @@ class ITarReader(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def _get_itar_sample_pointer(self, idx: int) -> ITarSamplePointer:
-        """Get the ITarSample object for the given index."""
-        raise NotImplementedError
-
-    @abstractmethod
     def __str__(self) -> str:
         """
         Must return a descriptive string of the concrete reader.
         """
+        raise NotImplementedError
+
+    @abstractmethod
+    def _get_itar_sample_pointer(self, idx: T_index) -> ITarSamplePointer:
+        """Get the ITarSample object for the given index."""
         raise NotImplementedError
 
     def _get_itarfile_cached(self, tar_file_id: int) -> ITarFile:
@@ -106,42 +100,31 @@ class ITarReader(ABC):
 
         return self.itar_files_cache[tar_file_id]
 
-    @overload
-    def __getitem__(self, key: int) -> Optional[FilteredSample]: ...
-
-    @overload
-    def __getitem__(self, key: slice) -> "ITarReader": ...
-
-    def __getitem__(self, key: Union[slice, int]) -> Union["ITarReader", FilteredSample, None]:
+    def _get_item_by_sample_pointer(
+        self,
+        sample_pointer: ITarSamplePointer,
+        restore_index: Any,
+        entry_match_fn: Optional[Callable[[str], bool]] = None,
+    ) -> Union["ITarReader", FilteredSample, None]:
         """
         Get a sample from the dataset or slice it.
         """
 
-        if isinstance(key, slice):
-            # Return a new reader with a sliced samples tensor
-            raise NotImplementedError("Slicing is not yet implemented")
-        elif isinstance(key, int):
-            idx = key
-        else:
-            raise TypeError("Invalid argument type for __getitem__")
-
-        sample = self._get_itar_sample_pointer(idx)
-
         # Open the tar file (cached)
-        tar_file = self._get_itarfile_cached(sample.tar_file_id)
-        shard_name = self.tar_filenames[sample.tar_file_id]
+        tar_file = self._get_itarfile_cached(sample_pointer.tar_file_id)
+        shard_name = self.tar_filenames[sample_pointer.tar_file_id]
         sample_base_name = None
         sample_name = None
         group_parts: Dict[str, bytes] = {}
 
         # Position the tar file at the correct offset
-        tar_file.offset = sample.byte_offset
+        tar_file.offset = sample_pointer.byte_offset
 
-        while tar_file.offset < sample.byte_offset + sample.byte_size:
+        while tar_file.offset < sample_pointer.byte_offset + sample_pointer.byte_size:
             tarinfo = tar_file.next()
             if tarinfo is None:
                 raise ValueError(
-                    f"Unexpected end of tar file: {self.tar_filenames[sample.tar_file_id]}"
+                    f"Unexpected end of tar file: {self.tar_filenames[sample_pointer.tar_file_id]}"
                 )
             fname = tarinfo.name
             if not tarinfo.isfile() or fname is None:
@@ -166,22 +149,52 @@ class ITarReader(ABC):
                         f"Inconsistent sample base name: {sample_base_name} vs {cur_base_name}"
                     )
 
-            if self.part_filter is None or self.part_filter(cur_ext):
+            if entry_match_fn is not None:
+                # If entry_match_fn is provided, use it to determine if we should take this entry
+                take_entry = entry_match_fn(fname)
+            else:
+                # If no entry_match_fn is provided, use the part_filter to determine if we should take this entry
+                take_entry = self.part_filter is None or self.part_filter(cur_ext)
+
+            if take_entry:
                 member_bytes = tar_file.extractfile(tarinfo).read()
                 group_parts[cur_ext] = member_bytes
 
         if sample_base_name is None:
-            raise ValueError(f"No valid files found in sample {idx}")
+            raise ValueError(f"No valid files found in sample {sample_pointer}")
 
         return FilteredSample(
             __key__=f"{shard_name}/{sample_base_name}",
-            __shard__=self.tar_filenames[sample.tar_file_id],
-            __restore_key__=("Webdataset", idx),
+            __shard__=self.tar_filenames[sample_pointer.tar_file_id],
+            __restore_key__=("Webdataset", restore_index),
             **group_parts,
         )
 
+    @overload
+    def __getitem__(self, key: T_index) -> Optional[FilteredSample]: ...
 
-class JoinIndexFileITarReader(ITarReader):
+    @overload
+    def __getitem__(self, key: slice) -> "ITarReader": ...
+
+    def __getitem__(self, key: Union[slice, T_index]) -> Union["ITarReader", FilteredSample, None]:
+        """
+        Get a sample from the dataset or slice it.
+        """
+
+        if isinstance(key, slice):
+            # Return a new reader with a sliced samples tensor
+            raise NotImplementedError("Slicing is not yet implemented")
+        elif isinstance(key, int):
+            idx = key
+        else:
+            raise TypeError("Invalid argument type for __getitem__")
+
+        sample_pointer = self._get_itar_sample_pointer(idx)
+
+        return self._get_item_by_sample_pointer(sample_pointer, idx)
+
+
+class JoinIndexFileITarReader(ITarReader[int]):
     """
     A concrete ITarReader that reads samples from a join index file (via JoinIndexReader).
     """
@@ -278,7 +291,7 @@ class JoinIndexFileITarReader(ITarReader):
         )
 
 
-class ShardInfosITarReader(ITarReader):
+class ShardInfosITarReader(ITarReader[int]):
     """
     A concrete ITarReader that constructs its internal sample list from a list of ShardInfos.
     """
@@ -372,3 +385,125 @@ class ShardInfosITarReader(ITarReader):
             f"len(shards)={len(self.tar_filenames)}, "
             f"shards=[{self.tar_filenames[0] if self.tar_filenames else 'N/A'}, ...])"
         )
+
+
+class SqliteITarEntryReader(ITarReader[str]):
+    """
+    A concrete ITarReader that constructs its internal sample list from a SQLite database.
+    """
+
+    sqlite_reader: SqliteIndexReader
+
+    def __init__(
+        self,
+        base_path: EPath,
+        part_filter: Optional[Callable[[str], bool]] = None,
+        itar_cache_size: int = 5,
+        sample_filter: Optional[Callable[[str], bool]] = None,
+        key_is_full_entryname: bool = False,
+    ):
+        from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
+        from megatron.energon.flavors.webdataset.indexing import SqliteIndexReader
+
+        # shard_name_to_info_idx = {name: i for i, name in enumerate(wds_meta.info_shard_files)}
+        tar_filenames = get_info_shard_files(base_path)
+        tar_filepaths = [base_path / fn for fn in tar_filenames]
+
+        # Initialize the SQLite reader
+        sqlite_path = base_path / MAIN_FOLDER_NAME / "index.sqlite"
+        self.sqlite_reader = SqliteIndexReader(sqlite_path)
+
+        self.key_is_full_entryname = key_is_full_entryname
+
+        super().__init__(
+            base_path=base_path,
+            tar_filenames=tar_filenames,
+            tar_filepaths=tar_filepaths,
+            part_filter=part_filter,
+            itar_cache_size=itar_cache_size,
+            sample_filter=sample_filter,
+        )
+
+    def _get_itar_sample_pointer(self, sample_key: str) -> ITarSamplePointer:
+        """
+        Get the ITarSample object for the given index.
+        """
+
+        return self.sqlite_reader.get_sample_pointer_by_key(sample_key)
+
+    @overload
+    def __getitem__(self, key: str) -> Optional[Union[FilteredSample, bytes]]: ...
+
+    @overload
+    def __getitem__(self, key: slice) -> "ITarReader": ...
+
+    def __getitem__(self, key: Union[slice, str]) -> Union[FilteredSample, bytes, ITarReader, None]:
+        """
+        Either get a sample from the dataset by the sample key including all its entries,
+        or get the bytes of a specific entry by the full filename of the entry inside the tar.
+        """
+
+        if isinstance(key, slice):
+            # Return a new reader with a sliced samples tensor
+            raise NotImplementedError("Slicing is not yet implemented")
+        elif isinstance(key, str):
+            idx = key
+        else:
+            raise TypeError("Invalid argument type for __getitem__")
+
+        if self.key_is_full_entryname:
+            m = split_name_re.match(key)
+            if not m:
+                raise ValueError(f"Invalid file name: {key}")
+
+            sample_key, sample_ext = m.groups()
+            entry_match_fn = lambda fname: key == fname
+        else:
+            sample_key = key
+            sample_ext = None
+            entry_match_fn = None
+
+        sample_pointer = self._get_itar_sample_pointer(sample_key)
+
+        sample = self._get_item_by_sample_pointer(
+            sample_pointer, idx, entry_match_fn=entry_match_fn
+        )
+        assert sample is not None, f"Sample not found: {sample_key}"
+
+        if self.key_is_full_entryname:
+            assert isinstance(sample_ext, str)
+            return sample[sample_ext]  # Return the bytes directly
+        else:
+            return sample  # Return the FilteredSample
+
+    def __len__(self) -> int:
+        """Return the total number of samples in the database."""
+        return self.sqlite_reader.get_sample_count()
+
+    def __str__(self) -> str:
+        """Return a descriptive string of this reader."""
+        return (
+            f"SqliteITarEntryReader("
+            f"len={len(self)}, base_path={self.base_path}, "
+            f"len(shards)={len(self.tar_filenames)}, "
+            f"shards=[{self.tar_filenames[0] if self.tar_filenames else 'N/A'}, ...])"
+        )
+
+    def close(self):
+        """Close the SQLite reader and any open ITarFiles."""
+        # Close the SQLite reader
+        if hasattr(self, "sqlite_reader") and self.sqlite_reader is not None:
+            self.sqlite_reader.close()
+
+        # Close any open ITarFiles (using parent class implementation)
+        for tar_file_id in list(self.itar_files_cache.keys()):
+            tar_file = self.itar_files_cache[tar_file_id]
+            if (
+                tar_file is not None
+                and hasattr(tar_file, "fileobj")
+                and tar_file.fileobj is not None
+            ):
+                tar_file.fileobj.close()
+            if tar_file is not None and hasattr(tar_file, "close"):
+                tar_file.close()
+            del self.itar_files_cache[tar_file_id]

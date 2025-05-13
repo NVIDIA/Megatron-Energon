@@ -1,13 +1,18 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Dict, Literal, Optional, Union
 
 from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.dataset_config import get_dataset_from_config
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import BaseCoreDatasetFactory
-from megatron.energon.metadataset.loader_interface import DatasetBlendMode, DatasetLoaderInterface
+from megatron.energon.metadataset.loader_interface import (
+    DatasetBlendMode,
+    DatasetLoaderInterface,
+    LoadedDataset,
+    LoadedDatasetList,
+)
 from megatron.energon.worker import WorkerConfig
 
 
@@ -88,18 +93,21 @@ class DatasetLoader(DatasetLoaderInterface):
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: Optional[int] = 1,
         **kwargs,
-    ) -> Tuple[DatasetBlendMode, List[Tuple[BaseCoreDatasetFactory, Union[float, int, None]]]]:
-        return DatasetBlendMode.NONE, [
-            (
-                self.get_dataset(
-                    training=training,
-                    split_part=split_part,
-                    worker_config=worker_config,
-                    subflavor=subflavor,
-                    subflavors=subflavors,
-                    shuffle_over_epochs=shuffle_over_epochs_multiplier,
-                    **kwargs,
-                ),
-                None,
-            )
-        ]
+    ) -> LoadedDatasetList:
+        return LoadedDatasetList(
+            blend_mode=DatasetBlendMode.NONE,
+            datasets=[
+                LoadedDataset(
+                    dataset=self.get_dataset(
+                        training=training,
+                        split_part=split_part,
+                        worker_config=worker_config,
+                        subflavor=subflavor,
+                        subflavors=subflavors,
+                        shuffle_over_epochs=shuffle_over_epochs_multiplier,
+                        **kwargs,
+                    ),
+                    weight=None,
+                )
+            ],
+        )

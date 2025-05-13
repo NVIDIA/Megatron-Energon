@@ -4,11 +4,13 @@
 import sqlite3
 import struct
 from pathlib import Path
-from typing import BinaryIO, List, Optional, Tuple, Union
+from typing import Any, BinaryIO, List, Optional, Tuple, Union
 
 from numpy import int8
 
 from megatron.energon.epathlib import EPath
+from megatron.energon.flavors.webdataset.itar import ITarSamplePointer
+from megatron.energon.flavors.webdataset.thread_local_sqlite import ThreadLocalSqlite
 
 
 class SqliteIndexWriter:
@@ -19,8 +21,7 @@ class SqliteIndexWriter:
     def __init__(self, sqlite_path: EPath):
         """
         Initializes an SQLite database and sets up the samples table:
-          - samples(id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    tar_file_id INTEGER,
+          - samples(tar_file_id INTEGER,
                     sample_key TEXT,
                     sample_index INTEGER,
                     byte_offset INTEGER,
@@ -49,7 +50,6 @@ class SqliteIndexWriter:
         self.db.execute(
             """
             CREATE TABLE samples (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
                 tar_file_id INTEGER,
                 sample_key TEXT,
                 sample_index INTEGER,
@@ -150,6 +150,83 @@ class JoinIndexWriter:
 
     def close(self):
         self.join_index_file.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+
+class SqliteIndexReader:
+    """Reads samples from an SQLite database created by SqliteIndexWriter.
+
+    The database contains a table with the following schema:
+    - samples(tar_file_id INTEGER,
+              sample_key TEXT,
+              sample_index INTEGER,
+              byte_offset INTEGER,
+              byte_size INTEGER)
+    """
+
+    sqlite_path: EPath
+    db: ThreadLocalSqlite
+
+    def __init__(self, sqlite_path: EPath):
+        """Initialize the SQLite database reader.
+
+        Args:
+            sqlite_path: Path to the SQLite database file
+        """
+        self.sqlite_path = sqlite_path
+
+        # Initialize SQLite connection
+        path = str(self.sqlite_path)
+        # Only supporting local file system, because sqlite does not support remote file systems
+        assert path.startswith("/"), (
+            f"SQLite path must be absolute local file system path: {self.sqlite_path}"
+        )
+
+        self.db = ThreadLocalSqlite(path)
+
+    def get_sample_count(self) -> int:
+        """Get the total number of samples in the database."""
+        assert self.db is not None, "Database is closed"
+
+        count = self.db.select_one("SELECT COUNT(*) FROM samples")
+        return count[0] if count else 0
+
+    def get_sample_pointer_by_key(self, key: str) -> Any:
+        """Get a sample by its key name.
+
+        Args:
+            key: The sample key to look up
+
+        Returns:
+            Tuple of (tar_file_id, sample_key, sample_index, byte_offset, byte_size)
+        """
+        assert self.db is not None, "Database is closed"
+
+        sample = self.db.select_one(
+            "SELECT tar_file_id, sample_key, sample_index, byte_offset, byte_size "
+            "FROM samples WHERE sample_key = ?",
+            (key,),
+        )
+
+        if sample is None:
+            raise KeyError(f"Sample key not found: {key}")
+
+        return ITarSamplePointer(
+            tar_file_id=sample[0],
+            byte_offset=sample[3],
+            byte_size=sample[4],
+        )
+
+    def close(self):
+        """Close the database connection."""
+        if self.db is not None:
+            self.db.close()
+            del self.db
 
     def __enter__(self):
         return self

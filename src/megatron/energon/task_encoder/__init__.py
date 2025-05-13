@@ -12,6 +12,7 @@ from megatron.energon.task_encoder.base import (
     generic_batch,
     stateless,
 )
+from megatron.energon.task_encoder.cooking import Cooker, basic_sample_keys, cooker
 from megatron.energon.task_encoder.loader import (
     get_train_dataset,
     get_val_dataset,
@@ -20,15 +21,18 @@ from megatron.energon.task_encoder.loader import (
 
 __all__ = [
     "AugmentTaskEncoder",
-    "Batch",
-    "DefaultTaskEncoder",
-    "TaskEncoder",
+    "basic_sample_keys",
     "batch_list",
     "batch_pad_stack",
     "batch_stack",
+    "Batch",
+    "cooker",
+    "Cooker",
+    "DefaultTaskEncoder",
     "generic_batch",
     "get_train_dataset",
     "get_val_dataset",
     "get_val_datasets",
     "stateless",
+    "TaskEncoder",
 ]

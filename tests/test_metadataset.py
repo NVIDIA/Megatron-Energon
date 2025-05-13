@@ -12,7 +12,7 @@ import unittest
 import warnings
 from collections import Counter
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 import torch
 import webdataset as wds
@@ -65,6 +65,60 @@ def get_blend_dataset(ds: SavableDataset):
             return get_blend_dataset(ds.dataset)
         else:
             raise ValueError("No blend dataset found")
+
+
+def assert_nested_equal(a: Any, b: Any, path: str = "") -> None:
+    """
+    Recursively checks that two nested data structures (consisting of dicts, lists, tuples,
+    and other basic types) are equal. If they are not equal, prints the path of the first mismatch
+    and raises an AssertionError.
+
+    :param a: First nested structure to compare.
+    :param b: Second nested structure to compare.
+    :param path: Internal parameter used to pass the current traversal path (do not set this manually).
+    :raises AssertionError: If a mismatch is found.
+    """
+    # Check if types differ
+    if type(a) is not type(b):
+        mismatch_details = f"Type mismatch at {path or '<root>'}: {type(a)} != {type(b)}"
+        print(mismatch_details)
+        raise AssertionError(mismatch_details)
+
+    # If they are both dictionaries, compare each key and value
+    if isinstance(a, dict):
+        # Check if they have the same keys
+        a_keys = set(a.keys())
+        b_keys = set(b.keys())
+        if a_keys != b_keys:
+            missing_in_a = b_keys - a_keys
+            missing_in_b = a_keys - b_keys
+            mismatch_details = (
+                f"Key mismatch at {path or '<root>'}:\n"
+                f"Missing in first object: {missing_in_a}\n"
+                f"Missing in second object: {missing_in_b}"
+            )
+            print(mismatch_details)
+            raise AssertionError(mismatch_details)
+        for key in a:
+            sub_path = f"{path}['{key}']" if path else f"['{key}']"
+            assert_nested_equal(a[key], b[key], sub_path)
+
+    # If they are lists (or tuples), compare elements in order
+    elif isinstance(a, (list, tuple)):
+        if len(a) != len(b):
+            mismatch_details = f"Length mismatch at {path or '<root>'}: {len(a)} != {len(b)}"
+            print(mismatch_details)
+            raise AssertionError(mismatch_details)
+        for index, (item_a, item_b) in enumerate(zip(a, b)):
+            sub_path = f"{path}[{index}]" if path else f"[{index}]"
+            assert_nested_equal(item_a, item_b, sub_path)
+
+    # Otherwise, compare values directly
+    else:
+        if a != b:
+            mismatch_details = f"Value mismatch at {path or '<root>'}: {repr(a)} != {repr(b)}"
+            print(mismatch_details)
+            raise AssertionError(mismatch_details)
 
 
 class TestDataset(unittest.TestCase):
@@ -282,25 +336,25 @@ class TestDataset(unittest.TestCase):
 
         dataset = load_dataset(self.nested_mds_path)
 
-        blend_mode, raw_datasets = dataset.get_datasets(
+        raw_datasets = dataset.get_datasets(
             training=False, split_part="train", worker_config=worker_config
         )
-        assert blend_mode == DatasetBlendMode.DATASET_WEIGHT
-        assert [weight for _raw_dataset, weight in raw_datasets] == [0.4, 0.4, 0.1, 0.1]
-        assert [raw_dataset.paths[0].name for raw_dataset, _weight in raw_datasets] == [
+        assert raw_datasets.blend_mode == DatasetBlendMode.DATASET_WEIGHT
+        assert [raw_dataset.weight for raw_dataset in raw_datasets.datasets] == [0.4, 0.4, 0.1, 0.1]
+        assert [raw_dataset.dataset.paths[0].name for raw_dataset in raw_datasets.datasets] == [
             "ds1",
             "ds2",
             "ds1",
             "ds2",
         ]
-        assert [raw_dataset.subflavor for raw_dataset, _weight in raw_datasets] == [
+        assert [raw_dataset.dataset.subflavor for raw_dataset in raw_datasets.datasets] == [
             "train",
             "train",
             None,
             None,
         ]
-        print([raw_dataset.subflavors for raw_dataset, _weight in raw_datasets])
-        assert [raw_dataset.subflavors for raw_dataset, _weight in raw_datasets] == [
+        print([raw_dataset.dataset.subflavors for raw_dataset in raw_datasets.datasets])
+        assert [raw_dataset.dataset.subflavors for raw_dataset in raw_datasets.datasets] == [
             {
                 "source": "nested_metadataset.yaml",
                 "dataset.yaml": True,
@@ -681,8 +735,10 @@ class TestDataset(unittest.TestCase):
             "num_workers": 0,
             "data_parallel_group": None,
         }
+        print("loader.config():")
         print(loader.config())
-        assert loader.config() == {
+        print()
+        reference_config = {
             "type": "SavableDataLoader",
             "num_workers": 0,
             "persistent_workers": False,
@@ -785,8 +841,9 @@ class TestDataset(unittest.TestCase):
                                                 },
                                                 "sample_loader": "megatron.energon.flavors.webdataset.default_generic_webdataset.DefaultGenericWebdatasetFactory.__init__.<locals>.<lambda>",
                                                 "image_decode": "torchrgb",
-                                                "ignore_decoder_errors": False,
                                                 "av_decode": "AVDecoder",
+                                                "video_decode_audio": False,
+                                                "guess_content": False,
                                             },
                                             "map_fn_stateless": True,
                                         },
@@ -877,8 +934,9 @@ class TestDataset(unittest.TestCase):
                                                 },
                                                 "sample_loader": "megatron.energon.flavors.webdataset.default_generic_webdataset.DefaultGenericWebdatasetFactory.__init__.<locals>.<lambda>",
                                                 "image_decode": "torchrgb",
-                                                "ignore_decoder_errors": False,
                                                 "av_decode": "AVDecoder",
+                                                "video_decode_audio": False,
+                                                "guess_content": False,
                                             },
                                             "map_fn_stateless": True,
                                         },
@@ -898,6 +956,8 @@ class TestDataset(unittest.TestCase):
                 "map_fn_stateless": True,
             },
         }
+        print("Comparing dataset configs in test_save_restore_state_train.")
+        assert_nested_equal(loader.config(), reference_config)
 
     def test_save_restore_state_train_workers(self):
         torch.manual_seed(42)
