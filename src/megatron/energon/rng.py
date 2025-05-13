@@ -3,7 +3,7 @@
 
 import hashlib
 import random
-from typing import Any, List, Optional, TypeVar
+from typing import Any, List, Mapping, Optional, Sequence, TypeVar
 
 import numpy
 import torch
@@ -97,8 +97,25 @@ class SystemRngState:
     numpy: Any  # Currently `dict[str, Any] | tuple[str, NDArray[uint32], int, int, float]`
     random: Any  # Currently a nested tuple
 
+    def _hashable_value(self, value: Any) -> Any:
+        if isinstance(value, (int, float, bool, str)) or value is None:
+            return value
+        elif isinstance(value, torch.Tensor):
+            return self._hashable_value(value.tolist())
+        elif isinstance(value, numpy.ndarray):
+            return self._hashable_value(value.tolist())
+        elif isinstance(value, Mapping):
+            return tuple(
+                (self._hashable_value(k), self._hashable_value(v)) for k, v in value.items()
+            )
+        elif isinstance(value, Sequence):
+            return tuple(self._hashable_value(v) for v in value)
+        else:
+            raise ValueError(f"Cannot hash value of type {type(value)}: {value!r}")
+
     def __repr__(self):
-        return f"SystemRngState(torch={self.torch[:3]}..., numpy={self.numpy!r}, random={self.random!r})"
+        # If the hash is the same, the state is the same. Should suffice to identify the state.
+        return f"SystemRngState(hash={hash(self._hashable_value((self.torch, self.numpy, self.random)))})"
 
 
 class SystemRng:

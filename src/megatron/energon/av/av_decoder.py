@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import io
+import warnings
 from collections.abc import Iterator
 from fractions import Fraction
 from typing import BinaryIO, Literal, Optional, Sequence, Union, overload
@@ -34,8 +35,10 @@ class AVDecoder:
     """
 
     seeker: "Fastseek"
+    stream: BinaryIO
+    suppress_warnings: bool
 
-    def __init__(self, stream: BinaryIO) -> None:
+    def __init__(self, stream: BinaryIO, suppress_warnings: bool = False) -> None:
         if not AV_DECODE_AVAILABLE:
             raise ImportError(
                 f"AV decoding is not available. Please install the required dependencies with:\n"
@@ -43,10 +46,12 @@ class AVDecoder:
                 f"Missing dependency: {MISSING_DEPENDENCY}. Install megatron-energon[av_decode] to use AVDecoder."
             )
         self.stream = stream
+        self.suppress_warnings = suppress_warnings
 
         try:
             self.seeker = Fastseek(self.stream)
         except ValueError:
+            self.stream.seek(0)
             self.seeker = Fastseek(self.stream, probe=True)
 
         self.stream.seek(0)
@@ -86,17 +91,13 @@ class AVDecoder:
         self.stream.seek(0)  # Reset the video stream so that pyav can read the entire container
 
         with av.open(self.stream) as input_container:
+            initialize_av_container(input_container)
+
             assert len(input_container.streams.video) > 0, (
                 "No video stream found, but video_clips are requested"
             )
 
             video_stream = input_container.streams.video[0]
-
-            # Enable multi-threaded decode for video
-            # TODO: This causes a bug which leads to a deadlock in ffmpeg when deallocating the object.
-            # Thus, disable for now.
-            # video_stream.thread_type = 3
-            video_stream.thread_type = 0
 
             # Pre-calculate timing info for video
             average_rate: Fraction = video_stream.average_rate  # Frames per second
@@ -105,18 +106,24 @@ class AVDecoder:
             time_base: Fraction = video_stream.time_base  # Seconds per PTS unit
             average_frame_duration: int = int(1 / average_rate / time_base)  # PTS units per frame
 
-            if video_clip_ranges is not None and video_unit != self.seeker.unit:
-                # Convert video_clip_ranges to video_unit
-                if video_unit == "frames":
-                    # Convert from frames to seconds
+            if video_clip_ranges is not None:
+                # Convert video_clip_ranges to seeker unit
+                if video_unit == "frames" and self.seeker.unit == "pts":
+                    # Convert from frames to pts units
                     video_clip_ranges = [
                         (
-                            clip[0] / average_rate,
-                            clip[1] / average_rate,
+                            clip[0] / average_rate / time_base,
+                            clip[1] / average_rate / time_base,
                         )
                         for clip in video_clip_ranges
                     ]
-                else:
+
+                    if not self.suppress_warnings:
+                        warnings.warn(
+                            "Video container unit is frames, but seeking in time units. The resulting frames may be slightly off.",
+                            RuntimeWarning,
+                        )
+                elif video_unit == "seconds" and self.seeker.unit == "frames":
                     # Convert from seconds to frames
                     video_clip_ranges = [
                         (
@@ -124,6 +131,16 @@ class AVDecoder:
                             clip[1] * average_rate,
                         )
                         for clip in video_clip_ranges
+                    ]
+                    if not self.suppress_warnings:
+                        warnings.warn(
+                            "Video container unit is time units, but seeking using frame number. The resulting frames may be slightly off.",
+                            RuntimeWarning,
+                        )
+                elif video_unit == "seconds" and self.seeker.unit == "pts":
+                    # Convert from seconds to pts units
+                    video_clip_ranges = [
+                        (clip[0] / time_base, clip[1] / time_base) for clip in video_clip_ranges
                     ]
 
             frame_iterator: Iterator[av.VideoFrame] = input_container.decode(video=0)
@@ -166,7 +183,7 @@ class AVDecoder:
 
                     # Container uses time, the target frame might not correspond exactly to any metadata but the desired timestamp should
                     # fall within a frames display period
-                    if self.seeker.unit == "seconds":
+                    if self.seeker.unit == "pts":
                         if start_frame_index <= frame.pts + average_frame_duration:
                             take_frame = True
                         if (
@@ -242,11 +259,13 @@ class AVDecoder:
         self.stream.seek(0)  # Reset the video stream so that pyav can read the entire container
 
         with av.open(self.stream) as input_container:
+            initialize_av_container(input_container)
             assert len(input_container.streams.audio) > 0, (
                 "No audio stream found, but audio_clips are requested"
             )
 
             audio_stream = input_container.streams.audio[0]
+
             audio_sample_rate = audio_stream.sample_rate
 
             assert audio_sample_rate, "Audio streams without sample rate are not supported"
@@ -281,10 +300,18 @@ class AVDecoder:
                 # Seek near start time, but rounded down to the nearest frame
                 input_container.seek(int(start_time * av.time_base))
 
+                if end_time != float("inf"):
+                    desired_duration = end_time - start_time
+                    desired_sample_count = int(desired_duration * audio_sample_rate + 0.5)
+                else:
+                    desired_sample_count = None
+
                 clip_start_time = None
                 clip_end_time = None
 
                 decoded_samples = []
+                decoded_sample_count = 0
+
                 previous_frame = None
                 for frame in input_container.decode(audio=0):
                     assert frame.pts is not None, "Audio frame has no PTS timestamp"
@@ -306,6 +333,7 @@ class AVDecoder:
                                 :, int((start_time - prev_start_time) * audio_sample_rate + 0.5) :
                             ]
                             decoded_samples.append(prev_frame_array)
+                            decoded_sample_count += prev_frame_array.shape[1]
                             clip_start_time = start_time
                             clip_end_time = prev_start_time + cur_frame_duration
                         else:
@@ -315,15 +343,29 @@ class AVDecoder:
                     if cur_frame_time + cur_frame_duration >= end_time:
                         # Crop the last frame to the end time
                         last_frame_array = audio_frame_array(frame)
-                        last_frame_array = last_frame_array[
-                            :, : int((end_time - cur_frame_time) * audio_sample_rate + 0.5)
-                        ]
+                        additional_samples = int(
+                            (end_time - cur_frame_time) * audio_sample_rate + 0.5
+                        )
+                        projected_total_samples = decoded_sample_count + additional_samples
+                        projected_total_samples = decoded_sample_count + additional_samples
+
+                        if (
+                            desired_sample_count is not None
+                            and 0 < abs(projected_total_samples - desired_sample_count) < 2
+                        ):
+                            # We are within 2 samples of the desired duration, let's adjust
+                            # the last frame so that we get the desired duration
+                            additional_samples = desired_sample_count - decoded_sample_count
+
+                        last_frame_array = last_frame_array[:, :additional_samples]
                         decoded_samples.append(last_frame_array)
+                        decoded_sample_count += last_frame_array.shape[1]
                         clip_end_time = end_time
                         break
 
                     frame_nd = audio_frame_array(frame)  # (channels, samples)
                     decoded_samples.append(frame_nd)
+                    decoded_sample_count += frame_nd.shape[1]
                     clip_end_time = cur_frame_time + cur_frame_duration
 
                 if decoded_samples:
@@ -432,6 +474,7 @@ class AVDecoder:
         """Get the FPS of the video stream."""
         self.stream.seek(0)
         with av.open(self.stream) as input_container:
+            initialize_av_container(input_container)
             video_stream = input_container.streams.video[0]
             assert video_stream.average_rate is not None
             return float(video_stream.average_rate)
@@ -440,18 +483,61 @@ class AVDecoder:
         """Get the number of samples per second of the audio stream."""
         self.stream.seek(0)
         with av.open(self.stream) as input_container:
+            initialize_av_container(input_container)
             audio_stream = input_container.streams.audio[0]
             assert audio_stream.sample_rate is not None
             return int(audio_stream.sample_rate)
 
-    @overload
-    def get_duration(self, get_frame_count: Literal[True]) -> tuple[float, int]: ...
+    def has_audio_stream(self) -> bool:
+        """Check if the stream has an audio stream."""
+        self.stream.seek(0)
+        with av.open(self.stream) as input_container:
+            initialize_av_container(input_container)
+            return len(input_container.streams.audio) > 0
+
+    def has_video_stream(self) -> bool:
+        """Check if the stream has a video stream."""
+        self.stream.seek(0)
+        with av.open(self.stream) as input_container:
+            initialize_av_container(input_container)
+            return len(input_container.streams.video) > 0
+
+    def get_audio_duration(self) -> Optional[float]:
+        """Get the duration of the audio stream.
+
+        Returns:
+            The duration of the audio stream in seconds
+        """
+
+        self.stream.seek(0)
+
+        with av.open(self.stream) as input_container:
+            initialize_av_container(input_container)
+            if input_container.streams.audio:
+                audio_time_base = input_container.streams.audio[0].time_base
+                audio_start_pts = input_container.streams.audio[0].start_time
+                if audio_start_pts is None:
+                    audio_start_pts = 0.0
+
+                audio_duration = input_container.streams.audio[0].duration
+                if audio_time_base is not None and audio_duration is not None:
+                    duration = int(audio_duration - audio_start_pts) * audio_time_base
+                    return float(duration)
+
+        return None
 
     @overload
-    def get_duration(self, get_frame_count: bool = False) -> tuple[float, Optional[int]]: ...
+    def get_video_duration(self, get_frame_count: Literal[True]) -> tuple[Optional[float], int]: ...
 
-    def get_duration(self, get_frame_count: bool = False) -> tuple[float, Optional[int]]:
-        """Get the duration of the video and/or audio stream. If both lengths are found, the maximum is returned.
+    @overload
+    def get_video_duration(
+        self, get_frame_count: bool = False
+    ) -> tuple[Optional[float], Optional[int]]: ...
+
+    def get_video_duration(
+        self, get_frame_count: bool = False
+    ) -> tuple[Optional[float], Optional[int]]:
+        """Get the duration of the video stream.
 
         Args:
             get_frame_count: Whether to return the number of frames in the video. This is a more costly operation.
@@ -461,12 +547,13 @@ class AVDecoder:
         """
 
         video_duration = None
-        audio_duration = None
         num_frames = None
+        duration = None
 
         self.stream.seek(0)  # Reset the video stream so that pyav can read the entire container
 
         with av.open(self.stream) as input_container:
+            initialize_av_container(input_container)
             if input_container.streams.video:
                 video_stream = input_container.streams.video[0]
                 assert video_stream.time_base is not None
@@ -477,37 +564,30 @@ class AVDecoder:
 
                 video_duration = video_stream.duration
 
-            if input_container.streams.audio:
-                audio_time_base = input_container.streams.audio[0].time_base
-                audio_start_pts = input_container.streams.audio[0].start_time
-                if audio_start_pts is None:
-                    audio_start_pts = 0.0
-
-                audio_duration = input_container.streams.audio[0].duration
-
-            if audio_duration is None and video_duration is None:
+            if video_duration is None:
                 # If duration isn't found in header the whole video is decoded to
                 # determine the duration.
-                packets = [p for p in input_container.demux(video=0) if p.pts is not None]
-                num_frames = len(packets)
-                video_duration = packets[-1].pts + packets[-1].duration
+                num_frames = 0
+                last_packet = None
+                for packet in input_container.demux(video=0):
+                    if packet.pts is not None:
+                        num_frames += 1
+                        last_packet = packet
 
-            # Take the largest duration of either video or audio duration
-            if audio_duration is not None and video_duration is not None:
-                duration = max(
-                    int(video_duration - video_start_pts) * video_stream.time_base,
-                    int(audio_duration - audio_start_pts) * audio_time_base,
-                )
-            elif video_duration is not None:
+                if last_packet is not None and last_packet.duration is not None:
+                    assert last_packet.pts is not None
+                    video_duration = last_packet.pts + last_packet.duration
+
+            if video_duration is not None and video_stream.time_base is not None:
                 duration = int(video_duration - video_start_pts) * video_stream.time_base
-            elif audio_duration is not None:
-                duration = int(audio_duration - audio_start_pts) * audio_time_base
 
             if get_frame_count and num_frames is None:
-                packets = [p for p in input_container.demux(video=0) if p.pts is not None]
-                num_frames = len(packets)
+                num_frames = sum(1 for p in input_container.demux(video=0) if p.pts is not None)
 
-        return float(duration), num_frames
+        return float(duration) if duration is not None else None, num_frames
+
+    def __repr__(self):
+        return f"AVDecoder(stream={self.stream!r})"
 
 
 class AVWebdatasetDecoder:
@@ -571,7 +651,7 @@ class AVWebdatasetDecoder:
         """
         if not any(
             key == ext or key.endswith("." + ext)
-            for ext in ("mp4", "mov", "webm", "mkv", "flac", "mp3", "wav")
+            for ext in ("mp4", "avi", "mov", "webm", "mkv", "flac", "mp3", "wav")
         ):
             return None
 
@@ -580,10 +660,29 @@ class AVWebdatasetDecoder:
         if self.av_decode == "AVDecoder":
             return av_decoder
         elif self.av_decode == "pyav":
-            return av.open(av_decoder.stream)
+            input_container = av.open(av_decoder.stream)
+            initialize_av_container(input_container)
+            return input_container
         elif self.av_decode == "torch":
             return av_decoder.get_frames(
                 video_decode_audio=self.video_decode_audio,
             )
         else:
             raise ValueError(f"Invalid av_decode value: {self.av_decode}")
+
+
+def initialize_av_container(input_container: "av.container.InputContainer") -> None:
+    """Every PyAV container should be initialized with this function.
+
+    This function ensures that no additional threads are created.
+    This is to avoid deadlocks in ffmpeg when when deallocating the container.
+    Furthermore, we cannot have multiple threads before forking the process when
+    using torch data loaders with multiple workers.
+    """
+
+    for stream in input_container.streams:
+        cc = stream.codec_context
+
+        if cc is not None:
+            cc.thread_type = "NONE"
+            cc.thread_count = 0

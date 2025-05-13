@@ -29,6 +29,7 @@ dependencies = [
   "numpy",
   "pillow>=10.0.1",  # WEBP vulnerability fixed starting from 10.0.1
   "pyyaml",
+  "rapidyaml==0.9.0",
   "s3fs",
   "torch",
   "tqdm",
@@ -73,6 +74,10 @@ av_decode = [
   "filetype>=1.2.0",
   "ebmlite>=3.3.1",
   "av>=13.0.0",
+]
+# If using guess_content=True for decoding
+guess_content = [
+  "filetype>=1.0.0",
 ]
 
 [project.urls]

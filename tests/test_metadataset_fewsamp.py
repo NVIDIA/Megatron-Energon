@@ -24,6 +24,13 @@ from megatron.energon import (
 )
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 
+# Speed up tests significantly by reducing the torch status check interval for broken worker shutdown
+try:
+    torch.utils.data._utils.worker.MP_STATUS_CHECK_INTERVAL = 0.1
+    torch.utils.data._utils.MP_STATUS_CHECK_INTERVAL = 0.1
+except AttributeError:
+    pass
+
 
 def _norng_state(state):
     if isinstance(state, bytes):

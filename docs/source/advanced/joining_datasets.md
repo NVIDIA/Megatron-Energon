@@ -21,7 +21,7 @@ Here is an example structure of the datasets within the tar files:
 ```
 ds1
 ├── .nv-meta
-│   ├── .info.yaml
+│   ├── .info.json
 │   ├── split.yaml
 │   └── dataset.yaml
 ├── shard1.tar
@@ -32,7 +32,7 @@ ds1
 
 ds2
 ├── .nv-meta
-│   ├── .info.yaml
+│   ├── .info.json
 │   ├── split.yaml
 │   └── dataset.yaml
 ├── shard1.tar

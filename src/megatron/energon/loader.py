@@ -23,6 +23,9 @@ def get_savable_loader(
     gc_collect_every_n_steps: int = GC_DEFAULT_EVERY_N_ITER,
     prefetch_factor: int = 2,
     cache_pool: Optional[CachePool] = None,
+    watchdog_timeout_seconds: Optional[float] = 60,
+    watchdog_initial_timeout_seconds: Optional[float] = None,
+    fail_on_timeout: bool = False,
 ) -> SavableDataLoader[T]:
     """
 
@@ -40,7 +43,9 @@ def get_savable_loader(
         n_checkpoints: The number of internal checkpoints to keep. Only applies if using workers.
             If None, computes a suitable value.
         cache_pool: If set, the cache pool to use for the dataset.
-
+        watchdog_timeout_seconds: The timeout in seconds. If None, the watchdog is disabled.
+        watchdog_initial_timeout_seconds: The initial timeout in seconds. If None, the timeout is the same as watchdog_timeout_seconds.
+        fail_on_timeout: If True, stops the whole process upon timeout, after printing a stack trace.
     Returns:
         The instantiated :class:`megatron.energon.SavableDataLoader`, yielding batches from the dataset,
         allowing to save the state of the dataset.
@@ -64,6 +69,9 @@ def get_savable_loader(
         gc_collect_every_n_steps=gc_collect_every_n_steps,
         prefetch_factor=prefetch_factor,
         cache_pool=cache_pool,
+        watchdog_timeout_seconds=watchdog_timeout_seconds,
+        watchdog_initial_timeout_seconds=watchdog_initial_timeout_seconds,
+        fail_on_timeout=fail_on_timeout,
     )
 
 
@@ -73,6 +81,9 @@ def get_loader(
     worker_config: Optional[WorkerConfig] = None,
     prefetch_factor: int = 2,
     cache_pool: Optional[CachePool] = None,
+    watchdog_timeout_seconds: Optional[float] = 60,
+    watchdog_initial_timeout_seconds: Optional[float] = None,
+    fail_on_timeout: bool = False,
 ) -> BasicDataLoader[T]:
     """
     Get a dataloader for the given dataset.
@@ -81,6 +92,9 @@ def get_loader(
         dataset: The dataset to create a loader for.
         worker_config: Deprecated. Please pass this to the dataset instead.
         cache_pool: If set, the cache pool to use for the dataset.
+        watchdog_timeout_seconds: The timeout in seconds. If None, the watchdog is disabled.
+        watchdog_initial_timeout_seconds: The initial timeout in seconds. If None, the timeout is the same as watchdog_timeout_seconds.
+        fail_on_timeout: If True, stops the whole process upon timeout, after printing a stack trace.
     Returns:
         The instantiated :class:`torch.data.DataLoader`, yielding batches from the dataset.
     """
@@ -95,4 +109,11 @@ def get_loader(
                 "Passing a worker_config to get_loader() is deprecated and will have no effect."
             )
 
-    return BasicDataLoader(dataset, prefetch_factor=prefetch_factor, cache_pool=cache_pool)
+    return BasicDataLoader(
+        dataset,
+        prefetch_factor=prefetch_factor,
+        cache_pool=cache_pool,
+        watchdog_timeout_seconds=watchdog_timeout_seconds,
+        watchdog_initial_timeout_seconds=watchdog_initial_timeout_seconds,
+        fail_on_timeout=fail_on_timeout,
+    )

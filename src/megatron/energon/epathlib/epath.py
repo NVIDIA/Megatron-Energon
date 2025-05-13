@@ -59,14 +59,14 @@ class EPath:
             # Resolve the client. Only depends on the protocol and the first part of the path
             self.fs, _ = msc.resolve_storage_client(f"msc://{self.profile}")
 
-    def __getstate__(self):
+    def __getstate__(self) -> dict:
         return {
             "internal_path": self.internal_path,
             "profile": self.profile,
             # Do not save the fs when serializing, to avoid leaking credentials
         }
 
-    def __setstate__(self, state) -> None:
+    def __setstate__(self, state: dict) -> None:
         self.internal_path = state["internal_path"]
         self.profile = state["profile"]
         self.fs, _ = msc.resolve_storage_client(f"msc://{self.profile}")
@@ -117,32 +117,36 @@ class EPath:
     ) -> Union[TextIO, BinaryIO]:
         return self.fs.open(self._internal_str_path, mode)
 
-    def read_text(self):
+    def read_text(self) -> str:
         with self.open() as f:
             return f.read()
 
+    def read_bytes(self) -> bytes:
+        with self.open("rb") as f:
+            return f.read()
+
     @property
-    def name(self):
+    def name(self) -> str:
         return self.internal_path.name
 
     @property
-    def parent(self):
+    def parent(self) -> "EPath":
         new_path = EPath(self)
         new_path.internal_path = self.internal_path.parent
         return new_path
 
     @property
-    def url(self):
+    def url(self) -> str:
         if self.profile == "default":
             # A local path
             return self._internal_str_path
         int_path_str = str(self.internal_path)
         return f"msc://{self.profile}{int_path_str}"
 
-    def is_dir(self):
+    def is_dir(self) -> bool:
         return self.fs.info(self._internal_str_path).type == "directory"
 
-    def is_file(self):
+    def is_file(self) -> bool:
         return self.fs.is_file(self._internal_str_path)
 
     def mkdir(self, exist_ok: bool = True, parents: bool = False):
@@ -159,21 +163,21 @@ class EPath:
 
             yield new_path
 
-    def size(self):
+    def size(self) -> int:
         return self.fs.info(self._internal_str_path).content_length
 
-    def with_suffix(self, suffix):
+    def with_suffix(self, suffix: str) -> "EPath":
         new_path = EPath(self)
         new_path.internal_path = self.internal_path.with_suffix(suffix)
         return new_path
 
-    def move(self, target: "EPath"):
+    def move(self, target: "EPath") -> None:
         assert self.profile == target.profile, "Can only move within same profile"
 
         self.fs.copy(self._internal_str_path, target._internal_str_path)
         self.fs.delete(self._internal_str_path)
 
-    def unlink(self):
+    def unlink(self) -> None:
         return self.fs.delete(self._internal_str_path)
 
     def relative_to(self, other: "EPath") -> str:
@@ -181,7 +185,7 @@ class EPath:
 
         return str(self.internal_path.relative_to(other.internal_path))
 
-    def __truediv__(self, other: Union[str, "EPath"]):
+    def __truediv__(self, other: Union[str, "EPath"]) -> "EPath":
         if isinstance(other, EPath):
             # Always absolute
             return other
@@ -192,21 +196,21 @@ class EPath:
         new_path.internal_path = self._resolve(self.internal_path / other)
         return new_path
 
-    def __lt__(self, other: "EPath"):
+    def __lt__(self, other: "EPath") -> bool:
         assert self.profile == other.profile, "Cannot compare paths from different profiles"
 
         return self.internal_path < other.internal_path
 
-    def __str__(self):
+    def __str__(self) -> str:
         return self.url
 
     def __repr__(self) -> str:
         return f"EPath({str(self)!r})"
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash((self.internal_path, self.profile))
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         return (
             isinstance(other, EPath)
             and self.internal_path == other.internal_path

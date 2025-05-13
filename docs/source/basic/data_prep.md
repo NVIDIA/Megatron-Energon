@@ -360,7 +360,7 @@ my_dataset
 ├── .nv-meta
 │   ├── dataset.yaml
 │   ├── split.yaml
-│   └── .info.yaml
+│   └── .info.json
 ├── shards
 │   ├── shard_000.tar
 │   ├── shard_001.tar
@@ -427,14 +427,17 @@ split_parts:
 ```
 The above code excludes the entire shard `004` and two samples from the shard `001`.
 
-#### .info.yaml
+#### .info.json
 The hidden info file is auto-generated and contains statistics about each shard.
 
 Example:
-```yaml
-shard_counts:
-  shards/000.tar: 1223
-  shards/001.tar: 1420
-  shards/002.tar: 1418
-  shards/003.tar: 1358
+```json
+{
+  "shard_counts": {
+    "shards/000.tar": 1223,
+    "shards/001.tar": 1420,
+    "shards/002.tar": 1418,
+    "shards/003.tar": 1358
+  }
+}
 ```

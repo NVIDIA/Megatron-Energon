@@ -20,6 +20,7 @@ class WatchdogDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample])
         dataset: SavableDataset[T_sample],
         worker_config: WorkerConfig,
         timeout_seconds: Optional[float] = 60,
+        initial_timeout_seconds: Optional[float] = None,
         fail_on_timeout: bool = False,
     ):
         """Construct the watchdog dataset, which wraps another dataset and watches
@@ -29,10 +30,12 @@ class WatchdogDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample])
             dataset: The input dataset to wrap
             worker_config: The worker configuration
             timeout_seconds: The timeout in seconds. If None, the watchdog is disabled.
+            initial_timeout_seconds: The initial timeout in seconds. If None, the timeout is the same as timeout_seconds.
             fail_on_timeout: If True, stops the whole process upon timeout, after printing a stack trace.
         """
         super().__init__(dataset, worker_config=worker_config)
         self.timeout_seconds = timeout_seconds
+        self.initial_timeout_seconds = initial_timeout_seconds
         self.fail_on_timeout = fail_on_timeout
 
     def reset_state_own(self) -> None:
@@ -58,7 +61,10 @@ class WatchdogDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample])
             yield from self.dataset
         else:
             watchdog = Watchdog(
-                timeout=self.timeout_seconds, callback=self._watchdog_trigger, enabled=False
+                timeout=self.timeout_seconds,
+                initial_timeout=self.initial_timeout_seconds,
+                callback=self._watchdog_trigger,
+                enabled=False,
             )
             yield from watchdog.watch_iter(self.dataset)
 

@@ -6,6 +6,7 @@ import functools
 import inspect
 from abc import ABC
 from dataclasses import is_dataclass
+from types import MethodType
 from typing import (
     Any,
     Callable,
@@ -53,7 +54,6 @@ from megatron.energon.wrappers import (
     ShuffleBufferDataset,
 )
 from megatron.energon.wrappers.repeat_dataset import RepeatDataset
-from megatron.energon.wrappers.watchdog_dataset import WatchdogDataset
 
 T = TypeVar("T")
 V = TypeVar("V")
@@ -304,6 +304,33 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             assert isinstance(sample, Sample), "Sample must be a complete Sample or a CrudeSample"
             return sample
 
+    def _is_overridden(
+        self, bound_method: Callable[..., Any], bases: Optional[Sequence[Type[Any]]] = None
+    ) -> bool:
+        """Check if a method is overridden by a subclass of the base class(es).
+        By default, only TaskEncoder is used as a base class.
+        This is mainly used for optimization purposes. If the default method
+        is a no-op, we can skip it entirely unless the user has overridden it.
+
+        Args:
+            bound_method: The method to check.
+            bases: The base classes to check against.
+        Returns:
+            True if the method is overridden outside of TaskEncoder, False otherwise.
+        """
+
+        if not isinstance(bound_method, MethodType):
+            # If the method is not bound, it is always overridden
+            return True
+
+        # Get the underlying function
+        func = bound_method.__func__
+
+        # Check if the subclass method matches any of the base class methods
+        if bases is None:
+            bases = (TaskEncoder,)
+        return not any(getattr(base, func.__name__) is func for base in bases)
+
     @stateless
     def encode_sample(
         self, sample: T_sample
@@ -452,23 +479,14 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         dataset: SavableDataset[Any]
 
         if packing_buffer_size is not None:
-            select_samples_to_pack_provided = (
-                getattr(self.select_samples_to_pack, "__func__", None)
-                is not TaskEncoder.select_samples_to_pack
-            )
-            pack_selected_samples_provided = (
-                getattr(self.pack_selected_samples, "__func__", None)
-                is not TaskEncoder.pack_selected_samples
-            )
+            select_samples_to_pack_provided = self._is_overridden(self.select_samples_to_pack)
+            pack_selected_samples_provided = self._is_overridden(self.pack_selected_samples)
 
             assert select_samples_to_pack_provided and pack_selected_samples_provided, (
                 "Both select_samples_to_pack and pack_selected_samples methods must be provided in the TaskEncoder when using packing_buffer_size"
             )
 
-            if (
-                getattr(self.postencode_sample, "__func__", None)
-                is not TaskEncoder.postencode_sample
-            ):
+            if self._is_overridden(self.postencode_sample):
                 post_encode_fn = self.postencode_sample
             else:
                 post_encode_fn = None
@@ -485,7 +503,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 else get_stateless(post_encode_fn),
                 worker_config=worker_config,
             )
-        elif getattr(self.postencode_sample, "__func__", None) is not TaskEncoder.postencode_sample:
+        elif self._is_overridden(self.postencode_sample):
             dataset = MapDataset(
                 dataset,
                 self.postencode_sample,
@@ -493,10 +511,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 stateless_map_fn=get_stateless(self.postencode_sample),
             )
 
-        if (
-            getattr(self.batch_group_criterion, "__func__", None)
-            is not TaskEncoder.batch_group_criterion
-        ):
+        if self._is_overridden(self.batch_group_criterion):
             dataset = GroupBatchDataset(
                 dataset,
                 fixed_batch_size=batch_size,
@@ -506,7 +521,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 worker_config=worker_config,
             )
 
-            if getattr(self.encode_batch, "__func__", None) is not TaskEncoder.encode_batch:
+            if self._is_overridden(self.encode_batch):
                 dataset = MapDataset(
                     dataset,
                     self.encode_batch,
@@ -526,20 +541,13 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                     worker_config=worker_config,
                 )
 
-                if getattr(self.encode_batch, "__func__", None) is not TaskEncoder.encode_batch:
+                if self._is_overridden(self.encode_batch):
                     dataset = MapDataset(
                         dataset,
                         self.encode_batch,
                         worker_config=worker_config,
                         stateless_map_fn=get_stateless(self.encode_batch),
                     )
-            else:
-                assert getattr(self.encode_batch, "__func__", None) is TaskEncoder.encode_batch, (
-                    "batch_size is not set, but encode_batch is not the default."
-                )
-                assert getattr(self.batch, "__func__", None) is TaskEncoder.batch, (
-                    "batch_size is not set, but batch is not the default."
-                )
 
         return dataset
 
@@ -626,13 +634,12 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         worker_config: WorkerConfig,
     ) -> SavableDataset[T_encoded_sample]:
         """Applies the sample encoder to the dataset."""
-        if getattr(self.preencode_sample, "__func__", None) is not TaskEncoder.preencode_sample:
+        if self._is_overridden(self.preencode_sample):
             pre_encode_fn = self.preencode_sample
-            assert getattr(self.encode_sample, "__func__", None) in (
-                TaskEncoder.encode_sample,
-                DefaultTaskEncoder.encode_sample,
+            assert not self._is_overridden(
+                self.encode_sample, bases=(TaskEncoder, DefaultTaskEncoder)
             ), "Cannot have both pre- and post-encode functions defined."
-        elif getattr(self.encode_sample, "__func__", None) is not TaskEncoder.encode_sample:
+        elif self._is_overridden(self.encode_sample):
             pre_encode_fn = self.encode_sample
         else:
             pre_encode_fn = None
@@ -657,8 +664,6 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         shuffle_buffer_size: Optional[int] = None,
         blend_mode: DatasetBlendMode = DatasetBlendMode.NONE,
         repeat: bool = True,
-        watchdog_timeout_seconds: Optional[float] = 60,
-        fail_on_timeout: bool = False,
     ) -> SavableDataset[T_batch]:
         """Combines train datasets to a single dataset."""
 
@@ -675,7 +680,10 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             rotation_length % global_workers for rotation_length in [0] + rotation_lengths[:-1]
         ]
 
-        if repeat:
+        if blend_mode == DatasetBlendMode.DATASET_WEIGHT:
+            assert repeat, (
+                "If repeat is False, the datasets can only be repeated or have no mode. Cannot blend with dataset weights."
+            )
             inner_datasets = [
                 (
                     RepeatDataset(
@@ -688,11 +696,11 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 )
                 for dataset, worker_rotation_offset in zip(datasets, worker_rotation_offsets)
             ]
-        else:
-            assert blend_mode in (
-                DatasetBlendMode.NONE,
-                DatasetBlendMode.SAMPLE_REPETITIONS,
-            ), "If repeat is False, the datasets can only be repeated or have no mode."
+            # Already repeating the inner datasets, so no need to repeat again
+            repeat = False
+        elif blend_mode == DatasetBlendMode.SAMPLE_REPETITIONS or (
+            not repeat and blend_mode == DatasetBlendMode.NONE
+        ):
             inner_datasets = [
                 (
                     (
@@ -713,6 +721,21 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 )
                 for dataset, worker_rotation_offset in zip(datasets, worker_rotation_offsets)
             ]
+        else:
+            inner_datasets = [
+                (
+                    RepeatDataset(
+                        self._load_dataset(
+                            dataset, worker_rotation_offset, worker_config=worker_config
+                        ),
+                        worker_config=worker_config,
+                    ),
+                    1.0,
+                )
+                for dataset, worker_rotation_offset in zip(datasets, worker_rotation_offsets)
+            ]
+            # Already repeating the inner datasets, so no need to repeat again
+            repeat = False
 
         if len(inner_datasets) > 1:
             # The worker offset for each dataset is the cumsum of the dataset lengths, but modulo the
@@ -725,6 +748,9 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             dataset = inner_datasets[0][0]
         else:
             raise ValueError("No datasets given.")
+        if repeat:
+            # Still need to repeat the dataset
+            dataset = RepeatDataset(dataset, worker_config=worker_config)
         if shuffle_buffer_size is not None and shuffle_buffer_size > 1:
             dataset = ShuffleBufferDataset(
                 dataset,
@@ -748,12 +774,6 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         if worker_config.should_log(level=1):
             dataset = LogSampleDataset(dataset, mode="train", worker_config=worker_config)
 
-        dataset = WatchdogDataset(
-            dataset,
-            worker_config=worker_config,
-            timeout_seconds=watchdog_timeout_seconds,
-            fail_on_timeout=fail_on_timeout,
-        )
         return dataset
 
     def build_val_datasets(
@@ -765,8 +785,6 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         batch_drop_last: bool = False,
         packing_buffer_size: Optional[int] = None,
         limit: Optional[int] = None,
-        watchdog_timeout_seconds: Optional[float] = 60,
-        fail_on_timeout: bool = False,
     ) -> SavableDataset[T_batch]:
         """Combines val datasets to a single dataset."""
 
@@ -810,14 +828,10 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 worker_config=worker_config,
                 reset_after_epoch=True,
             )
+
         if worker_config.should_log(level=2):
             dataset = LogSampleDataset(dataset, mode="val", worker_config=worker_config)
-        dataset = WatchdogDataset(
-            dataset,
-            worker_config=worker_config,
-            timeout_seconds=watchdog_timeout_seconds,
-            fail_on_timeout=fail_on_timeout,
-        )
+
         return dataset
 
     @property

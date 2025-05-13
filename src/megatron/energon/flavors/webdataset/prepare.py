@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import functools
+import json
 import logging
 import random
 import re
@@ -26,7 +27,9 @@ from typing import (
 import braceexpand
 import yaml
 
+from megatron.energon.bracecollapse import collapse
 from megatron.energon.epathlib import EPath
+from megatron.energon.eyaml import load_yaml
 from megatron.energon.flavors.webdataset.aggregator_pool import AggregatorPool, BaseAggregator
 from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME, skip_meta_re, split_name_re
 from megatron.energon.flavors.webdataset.indexing import SqliteIndexWriter
@@ -114,14 +117,20 @@ class WebdatasetPreparator:
     ) -> Generator[Tuple[ShardInfo, Set[str]], None, None]:
         """Process a single tar file, i.e. read the tarinfos, generate the tar index and return
         stats.
+        This method is passed to the `user_produce_data` argument of AggregatorPool.
 
         Args:
             path: Path to the tar file.
+            shard_to_idx: Mapping from shard path to its index
             parent_path: Root path of the dataset.
             max_parts: Maximum number of different parts to return
 
         Returns:
-            Tuple of shard info and found keys of the loaded dicts.
+            A generator of items that will be processed by SqliteIndexWriterAggregator.
+            See method `on_item` of SqliteIndexWriterAggregator.
+            The items are either:
+            - A sample dictionary with information about the offset, key etc.
+            - Or a tuple of shard info and a set of found parts for statistics.
         """
         shard_info = ShardInfo(name=path, path=parent_path / path, count=0)
 
@@ -240,7 +249,6 @@ class WebdatasetPreparator:
         *,
         split_parts_ratio: Optional[List[Tuple[str, float]]] = None,
         split_parts_patterns: Optional[List[Tuple[str, str]]] = None,
-        info_config: str = ".info.yaml",
         split_config: str = "split.yaml",
         shuffle_seed: Optional[int] = 42,
         progress_fn: Callable[[Iterator[Any], int], Iterator[T]] = (lambda x, y: x),
@@ -256,8 +264,7 @@ class WebdatasetPreparator:
             paths: Paths to the shards
             split_parts_ratio: Names of splits and their ratio (will be normalized)
             split_parts_patterns: Names of splits and their path patterns
-            info_config: Filename for the info config (`parent_path / '.nv-meta' / info_config`)
-            split_config: Filename for the info config (`parent_path / '.nv-meta' / split_config`)
+            split_config: Filename for the split config (`parent_path / '.nv-meta' / split_config`), may be yaml or json
             shuffle_seed: Seed for shuffling shards before splitting into split_parts. None to
                 disable.
             progress_fn: Callback for progress bar
@@ -305,7 +312,15 @@ class WebdatasetPreparator:
             with (parent_path / MAIN_FOLDER_NAME / "index.uuid").open("w") as f:
                 f.write(str(uuid.uuid4()))
 
+        json_info_config = parent_path / MAIN_FOLDER_NAME / ".info.json"
+        yaml_info_config = parent_path / MAIN_FOLDER_NAME / ".info.yaml"
+
         if tar_index_only:
+            if yaml_info_config.is_file() and not json_info_config.is_file():
+                # Convert legacy .info.yaml to .info.json
+                with json_info_config.open("w") as f:
+                    json.dump(load_yaml(yaml_info_config.read_bytes()), f, indent=2)
+
             return found_parts, duplicates
 
         assert len(shards) == len(shard_to_idx), (
@@ -323,9 +338,16 @@ class WebdatasetPreparator:
         info = WebdatasetInfo(
             shard_counts={shard.name: shard.count for shard in shards},
         )
-        print(f"Saving info to {parent_path / MAIN_FOLDER_NAME / info_config}")
-        with (parent_path / MAIN_FOLDER_NAME / info_config).open("w") as wf:
-            yaml.dump(to_json_object(info), wf)
+        print(f"Saving info to {json_info_config}")
+
+        with json_info_config.open("w") as wf:
+            json.dump(to_json_object(info), wf)
+
+        if yaml_info_config.is_file():
+            # If a .info.yaml existed previously, let's also update it
+            # to keep them in sync
+            with yaml_info_config.open("w") as wf:
+                yaml.dump(to_json_object(info), wf)
 
         if split_parts_ratio is not None:
             # Normalize ratio
@@ -360,9 +382,21 @@ class WebdatasetPreparator:
                     for shard in shards
                     if any(pattern.match(shard.name) for pattern in patterns)
                 ]
+
+        # Optimize the split parts by trying to bracecollapse the shard names
+        print("Collapsing split parts... ", flush=True, end="")
+        for split_part in split_shards:
+            split_shards[split_part] = collapse(split_shards[split_part], keep_order=True)
+        print("Done", flush=True)
+
         # Save split config
         splits_config = WebdatasetSplits(split_parts=split_shards)
         with (parent_path / MAIN_FOLDER_NAME / split_config).open("w") as wf:
-            yaml.dump(to_json_object(splits_config), wf)
+            if split_config.endswith(".yaml"):
+                yaml.dump(to_json_object(splits_config), wf, sort_keys=False)
+            elif split_config.endswith(".json"):
+                json.dump(to_json_object(splits_config), wf, indent=2)
+            else:
+                raise ValueError(f"Invalid split config extension: {split_config}")
 
         return found_parts, duplicates

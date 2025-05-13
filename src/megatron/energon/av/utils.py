@@ -1,7 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from typing import Optional
+from typing import List, Literal, Optional, Tuple, Union, overload
 
 import numpy as np
 import torch
@@ -35,18 +35,38 @@ def get_clips_uniform(
     if not request_video and not request_audio:
         raise ValueError("You must request at least one of video or audio")
 
-    total_duration, _ = av_decoder.get_duration()
+    video_duration = float("inf")
+    audio_duration = float("inf")
+
+    if request_video:
+        video_duration, _ = av_decoder.get_video_duration()
+        if video_duration is None:
+            raise ValueError("No video duration found")
+
+    if request_audio:
+        audio_duration = av_decoder.get_audio_duration()
+        if audio_duration is None:
+            raise ValueError("No audio duration found")
+
+    # Typically, audio and video don't have the exact same duration, so we take the minimum
+    # so that we can safely extract clips of equal duration.
+    total_duration = min(video_duration, audio_duration)
+
+    assert total_duration != float("inf")
 
     if clip_duration_seconds == 0:
         # Special case of single frames: End point should be start of last frame
         video_fps = av_decoder.get_video_fps()
         video_spf = 1 / video_fps
-        last_start_time = total_duration - video_spf * 1.5
+        first_start_time = video_spf * 0.5
+        last_start_time = total_duration - video_spf * 0.5
     else:
+        first_start_time = 0
         last_start_time = total_duration - clip_duration_seconds
+
     clips = [
         (float(start_time), float(start_time + clip_duration_seconds))
-        for start_time in np.linspace(0, last_start_time, num_clips)
+        for start_time in np.linspace(first_start_time, last_start_time, num_clips)
     ]
 
     return av_decoder.get_clips(
@@ -58,11 +78,33 @@ def get_clips_uniform(
     )
 
 
+@overload
+def get_single_frames_uniform(
+    av_decoder: "AVDecoder",
+    num_frames: int,
+    *,
+    video_out_frame_size: Optional[Tuple[int, int]] = None,
+    return_timestamps: Literal[False] = False,
+) -> torch.Tensor: ...
+
+
+@overload
+def get_single_frames_uniform(
+    av_decoder: "AVDecoder",
+    num_frames: int,
+    *,
+    video_out_frame_size: Optional[Tuple[int, int]] = None,
+    return_timestamps: Literal[True],
+) -> Tuple[torch.Tensor, List[float]]: ...
+
+
 def get_single_frames_uniform(
     av_decoder: AVDecoder,
     num_frames: int,
+    *,
     video_out_frame_size: Optional[tuple[int, int]] = None,
-) -> torch.Tensor:
+    return_timestamps: bool = False,
+) -> Union[torch.Tensor, tuple[torch.Tensor, list[float]]]:
     """Extracts a sequence of clips, such that each clip contains
     only a single frame and the frames are equidistant from each other.
 
@@ -86,4 +128,7 @@ def get_single_frames_uniform(
 
     # Concatenate all video single-frame clips to form a single tensor
     video_tensor = torch.cat(av_data.video_clips, dim=0)
-    return video_tensor
+    if return_timestamps:
+        return video_tensor, [t for t, _ in av_data.video_timestamps]
+    else:
+        return video_tensor

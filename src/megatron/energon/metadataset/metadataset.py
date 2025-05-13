@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.dataset_config import load_config
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset.metadata import check_dataset_info_present
 from megatron.energon.metadataset.dataset_loader import DatasetLoader
 from megatron.energon.metadataset.loader_interface import (
     DatasetBlendMode,
@@ -43,7 +43,7 @@ class DatasetReference:
                 default_kwargs=dict(path=self.path),
             )
             self._dataset.post_initialize()
-        elif (self.path / MAIN_FOLDER_NAME / ".info.yaml").is_file():
+        elif check_dataset_info_present(self.path):
             self._dataset = DatasetLoader(
                 path=self.path,
                 split_part=self.split_part,

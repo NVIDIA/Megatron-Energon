@@ -178,9 +178,12 @@ class WorkerConfig:
         if worker_info is None:
             return self.worker_id_offset
         assert worker_info.num_workers == self.num_workers
-        return (
-            worker_info.id + worker_info.num_workers - self.worker_id_offset
-        ) % worker_info.num_workers
+        # Apply the worker_id_offset as a left rotation of the logical worker ids.
+        # This ensures that after restoring a checkpoint the first physical
+        # worker (id=0) corresponds to the logical worker that should emit the
+        # next sample. For example, if `worker_id_offset` is 1, logical worker
+        # 1 becomes the first to emit a sample, shifting the ordering forward.
+        return (worker_info.id + self.worker_id_offset) % worker_info.num_workers
 
     def assert_worker(self):
         """Checks if the current process is a worker (if configured so), and that the workers are

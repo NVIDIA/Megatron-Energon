@@ -34,6 +34,11 @@ def load_video_to_tensor(video_path: str) -> torch.Tensor:
         Tensor of shape [num_frames, channels, height, width]
     """
     container = av.open(video_path)
+    for stream in container.streams:
+        cc = stream.codec_context
+        cc.thread_type = "NONE"
+        cc.thread_count = 0
+
     frames = []
 
     for frame in container.decode(video=0):
@@ -107,27 +112,33 @@ class TestVideoDecode(unittest.TestCase):
 
     def test_decode_strided_resized(self):
         """Test decoding a subset of frames with resizing."""
-        with open("tests/data/sync_test.mp4", "rb") as f:
-            raw_bytes = f.read()
-            stream = io.BytesIO(raw_bytes)
+        for video_file in ["tests/data/sync_test.mkv", "tests/data/sync_test.mp4"]:
+            print(f"================= Testing {video_file} ==================")
+            with open(video_file, "rb") as f:
+                raw_bytes = f.read()
+                stream = io.BytesIO(raw_bytes)
 
-        av_decoder = AVDecoder(stream)
-        video_tensor = get_single_frames_uniform(
-            av_decoder=av_decoder, num_frames=64, video_out_frame_size=(224, 224)
-        )
+            av_decoder = AVDecoder(stream)
+            video_duration, frame_count = av_decoder.get_video_duration(get_frame_count=True)
 
-        # Get strided frames from baseline complete video tensor
-        strided_baseline_tensor = self.complete_video_tensor[
-            np.linspace(0, self.complete_video_tensor.shape[0] - 1, 64, dtype=int).tolist()
-        ]
-        # Now resize the baseline frames
-        resize = transforms.Resize((224, 224))
-        strided_resized_baseline_tensor = resize(strided_baseline_tensor)
+            video_tensor = get_single_frames_uniform(
+                av_decoder=av_decoder,
+                num_frames=64,
+                video_out_frame_size=(224, 224),
+            )
 
-        # We allow small numerical differences due to different resize implementations
-        assert tensors_close(video_tensor, strided_resized_baseline_tensor, tolerance=0.01), (
-            "Energon decoded video does not match baseline"
-        )
+            # Get strided frames from baseline complete video tensor
+            strided_baseline_tensor = self.complete_video_tensor[
+                np.linspace(0, self.complete_video_tensor.shape[0] - 1, 64, dtype=int).tolist()
+            ]
+            # Now resize the baseline frames
+            resize = transforms.Resize((224, 224))
+            strided_resized_baseline_tensor = resize(strided_baseline_tensor)
+
+            # We allow small numerical differences due to different resize implementations
+            assert tensors_close(video_tensor, strided_resized_baseline_tensor, tolerance=0.01), (
+                "Energon decoded video does not match baseline"
+            )
 
     def test_video_audio_sync(self):
         """Test decoding video frames and audio clips together."""
@@ -275,6 +286,35 @@ class TestAudioDecode(unittest.TestCase):
             audio_tensor.shape == torch.Size([2, expected_samples])
             for audio_tensor in av_data.audio_clips
         ), "Energon decoded WAV file has wrong shape."
+
+    def test_decode_wav_same_shape(self):
+        """Test decoding a WAV file."""
+        # Skip WAV test if file doesn't exist
+        if not os.path.exists("tests/data/test_audio.wav"):
+            self.skipTest("WAV test file not found")
+            return
+
+        with open("tests/data/test_audio.wav", "rb") as f:
+            raw_bytes = f.read()
+            stream = io.BytesIO(raw_bytes)
+
+        av_decoder = AVDecoder(stream)
+        av_data = get_clips_uniform(
+            av_decoder=av_decoder,
+            num_clips=10,
+            clip_duration_seconds=0.9954783485892385,
+            request_audio=True,
+        )
+        audio_sps = av_decoder.get_audio_samples_per_second()
+
+        print(f"SPS: {audio_sps}")
+        for audio_tensor in av_data.audio_clips:
+            print(audio_tensor.shape)
+
+        assert all(
+            audio_tensor.shape == av_data.audio_clips[0].shape
+            for audio_tensor in av_data.audio_clips
+        ), "Audio clips have different shapes"
 
     def test_wav_decode_against_soundfile(self):
         """Test decoding a WAV file against the soundfile library."""

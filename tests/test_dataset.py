@@ -54,6 +54,14 @@ from megatron.energon.tools.lint import command as lint_command
 from megatron.energon.tools.prepare import command as prepare_command
 from megatron.energon.tools.preview import command as preview_command
 
+# Speed up tests significantly by reducing the torch status check interval for broken worker shutdown
+try:
+    torch.utils.data._utils.worker.MP_STATUS_CHECK_INTERVAL = 0.1
+    torch.utils.data._utils.MP_STATUS_CHECK_INTERVAL = 0.1
+except AttributeError:
+    pass
+
+
 DATASET_SIZE = 50
 
 no_worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0)
@@ -547,6 +555,23 @@ class TestDataset(unittest.TestCase):
             assert sample.image.shape == (10, 3, 100, 100)
             n_samples += sample.image.shape[0]
         assert n_samples == 50
+
+    def test_no_batching(self):
+        train_loader = get_loader(
+            get_train_dataset(
+                self.dataset_path,
+                batch_size=None,
+                worker_config=no_worker_config,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+            )
+        )
+
+        one_sample = next(iter(train_loader))
+
+        # Single sample without batching
+        assert isinstance(one_sample.image, torch.Tensor)
+        assert isinstance(one_sample.caption, str)
 
     def test_dataset_len(self):
         torch.manual_seed(42)
