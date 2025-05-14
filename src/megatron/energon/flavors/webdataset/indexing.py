@@ -4,7 +4,7 @@
 import sqlite3
 import struct
 from pathlib import Path
-from typing import Any, BinaryIO, List, Optional, Tuple, Union
+from typing import Any, BinaryIO, Generator, List, Literal, Optional, Tuple, Union, overload
 
 from numpy import int8
 
@@ -188,6 +188,13 @@ class SqliteIndexReader:
         )
 
         self.db = ThreadLocalSqlite(path)
+
+    def list_all_samples(self) -> Generator[Tuple[str, int], None, None]:
+        """List all sample keys in the database."""
+        assert self.db is not None, "Database is closed"
+
+        for row in self.db.select_all("SELECT sample_key, byte_size FROM samples"):
+            yield row[0], row[1]
 
     def get_sample_count(self) -> int:
         """Get the total number of samples in the database."""

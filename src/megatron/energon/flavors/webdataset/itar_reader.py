@@ -3,7 +3,19 @@
 
 from abc import ABC, abstractmethod
 from bisect import bisect_right
-from typing import Any, Callable, Dict, Generic, List, Optional, Tuple, TypeVar, Union, overload
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Generator,
+    Generic,
+    List,
+    Optional,
+    Tuple,
+    TypeVar,
+    Union,
+    overload,
+)
 
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.webdataset.config import skip_meta_re, split_name_re
@@ -430,6 +442,9 @@ class SqliteITarEntryReader(ITarReader[str]):
         """
 
         return self.sqlite_reader.get_sample_pointer_by_key(sample_key)
+
+    def list_all_samples(self) -> Generator[Tuple[str, int], None, None]:
+        return self.sqlite_reader.list_all_samples()
 
     @overload
     def __getitem__(self, key: str) -> Optional[Union[FilteredSample, bytes]]: ...
