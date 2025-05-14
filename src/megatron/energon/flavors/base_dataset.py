@@ -6,7 +6,7 @@ import inspect
 import typing
 from abc import ABC, abstractmethod
 from copy import deepcopy
-from dataclasses import dataclass, is_dataclass
+from dataclasses import is_dataclass
 from typing import (
     Any,
     Callable,

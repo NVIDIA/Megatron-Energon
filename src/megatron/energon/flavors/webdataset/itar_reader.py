@@ -3,7 +3,7 @@
 
 from abc import ABC, abstractmethod
 from bisect import bisect_right
-from typing import Any, Callable, Dict, Generic, List, Optional, Tuple, TypeVar, Union, overload
+from typing import Callable, Dict, Generic, List, Optional, Tuple, TypeVar, Union, overload
 
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.webdataset.config import skip_meta_re, split_name_re
