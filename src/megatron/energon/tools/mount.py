@@ -3,7 +3,6 @@
 
 import io
 import stat
-from pathlib import Path
 from typing import IO, Dict, Iterable, Optional, Union
 
 import click

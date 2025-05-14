@@ -4,7 +4,7 @@
 import sqlite3
 import struct
 from pathlib import Path
-from typing import Any, BinaryIO, Generator, List, Literal, Optional, Tuple, Union, overload
+from typing import Any, BinaryIO, Generator, List, Optional, Tuple, Union
 
 from numpy import int8
 
