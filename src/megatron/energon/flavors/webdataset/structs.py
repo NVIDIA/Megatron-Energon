@@ -1,14 +1,15 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from dataclasses import dataclass, field
+from dataclasses import field
 from typing import Dict, List, Optional, Tuple, TypedDict
 
+from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
 from megatron.energon.source_info import SourceInfo
 
 
-@dataclass(slots=True)
+@edataclass
 class WebdatasetInfo:
     """Info about a webdataset. Format for `.nv-meta/.info.yaml` or `.nv-meta/.info.json`."""
 
@@ -16,7 +17,7 @@ class WebdatasetInfo:
     shard_counts: Dict[str, int]
 
 
-@dataclass(slots=True)
+@edataclass
 class WebdatasetSplits:
     """Info about the splits of a webdataset. Format for `.nv-meta/split.yaml` or `.nv-meta/split.json`
     (or custom user yaml/json)."""
@@ -27,7 +28,7 @@ class WebdatasetSplits:
     exclude: List[str] = field(default_factory=list)
 
 
-@dataclass(slots=True)
+@edataclass
 class ShardInfo:
     """Info about a single shard as passed through internally. Not exposed to the user."""
 

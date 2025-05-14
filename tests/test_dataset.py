@@ -15,7 +15,6 @@ import tempfile
 import unittest
 import warnings
 from collections import defaultdict
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Hashable, List, Tuple, Type, Union
 
@@ -45,6 +44,7 @@ from megatron.energon import (
     homogeneous_concat_mix,
 )
 from megatron.energon.dataset_config import get_dataset_from_config
+from megatron.energon.edataclass import edataclass
 from megatron.energon.flavors import BaseWebdatasetFactory
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 from megatron.energon.task_encoder.base import stateless
@@ -67,14 +67,14 @@ DATASET_SIZE = 50
 no_worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0)
 
 
-@dataclass(slots=True)
+@edataclass
 class ExtendedCaptioningSample(CaptioningSample):
     batch_index: int
     sample_index: int
     rand_num: int
 
 
-@dataclass(slots=True)
+@edataclass
 class EncodedCaptioningSample:
     __key__: str
     __restore_key__: Tuple[Union[str, int, tuple], ...]
@@ -82,12 +82,12 @@ class EncodedCaptioningSample:
     caption: torch.Tensor
 
 
-@dataclass(slots=True)
+@edataclass
 class CaptioningEncodedBatch(CaptioningSample):
     pass
 
 
-@dataclass(slots=True)
+@edataclass
 class CaptioningBatch(Batch):
     __key__: List[str]
     __restore_key__: Tuple[Union[str, int, tuple], ...]
@@ -696,7 +696,7 @@ class TestDataset(unittest.TestCase):
 
         torch.manual_seed(42)
 
-        @dataclass(slots=True)
+        @edataclass
         class WeightedCaptioningBatch(Batch):
             __key__: List[str]
             __restore_key__: Tuple[Union[str, int], ...]
@@ -760,7 +760,7 @@ class TestDataset(unittest.TestCase):
         assert 750 <= bs_hist[20] <= 850
 
     def test_mixing_homogeneous(self):
-        @dataclass(slots=True)
+        @edataclass
         class TestBatch(Batch):
             __key__: List[str]
             __restore_key__: Tuple[Union[str, int], ...]
@@ -816,7 +816,7 @@ class TestDataset(unittest.TestCase):
         assert 7500 <= source_hist[1] <= 8500
 
     def test_mixing_heterogeneous(self):
-        @dataclass(slots=True)
+        @edataclass
         class TestBatch1(Batch):
             __key__: List[str]
             __restore_key__: Tuple[Union[str, int], ...]
@@ -826,7 +826,7 @@ class TestDataset(unittest.TestCase):
             caption: List[str]
             source: int
 
-        @dataclass(slots=True)
+        @edataclass
         class TestBatch2(TestBatch1):
             pass
 

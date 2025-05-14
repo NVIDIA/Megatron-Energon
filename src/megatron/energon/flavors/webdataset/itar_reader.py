@@ -3,7 +3,7 @@
 
 from abc import ABC, abstractmethod
 from bisect import bisect_right
-from typing import Callable, Dict, Generic, List, Optional, Tuple, TypeVar, Union, overload
+from typing import Any, Callable, Dict, Generic, List, Optional, Tuple, TypeVar, Union, overload
 
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.webdataset.config import skip_meta_re, split_name_re
@@ -104,7 +104,7 @@ class ITarReader(ABC, Generic[T_index]):
     def _get_item_by_sample_pointer(
         self,
         sample_pointer: ITarSamplePointer,
-        sample_index: int,
+        restore_index: Union[str, int],
         entry_match_fn: Optional[Callable[[str], bool]] = None,
     ) -> Union["ITarReader", FilteredSample, None]:
         """
@@ -176,11 +176,11 @@ class ITarReader(ABC, Generic[T_index]):
         return FilteredSample(
             __key__=f"{shard_name}/{sample_base_name}",
             __shard__=self.tar_filenames[sample_pointer.tar_file_id],
-            __restore_key__=("Webdataset", sample_index),
+            __restore_key__=("Webdataset", restore_index),
             __sources__=(
                 SourceInfo(
                     dataset_path=self.base_path,
-                    index=sample_index,
+                    index=restore_index,
                     shard_name=shard_name,
                     file_names=tuple(file_names),
                 ),
@@ -392,7 +392,6 @@ class ShardInfosITarReader(ITarReader[int]):
             tar_file_id=self.shard_tar_file_idxs[shard_idx],
             byte_offset=byte_offset,
             byte_size=byte_size,
-            sample_index=idx,
         )
 
     def __len__(self) -> int:
@@ -487,7 +486,7 @@ class SqliteITarEntryReader(ITarReader[str]):
         sample_pointer = self._get_itar_sample_pointer(sample_key)
 
         sample = self._get_item_by_sample_pointer(
-            sample_pointer, sample_pointer.sample_index, entry_match_fn=entry_match_fn
+            sample_pointer, key, entry_match_fn=entry_match_fn
         )
         assert sample is not None, f"Sample not found: {sample_key}"
 

@@ -11,6 +11,7 @@ import torch
 import torch.distributed
 import torch.utils.data
 
+from megatron.energon.edataclass import edataclass
 from megatron.energon.savable import FlexState, Savable
 from megatron.energon.worker import WorkerConfig
 
@@ -81,7 +82,7 @@ class WorkerRng(Savable):
             self._restore_state = state["rng"]
 
 
-@dataclass(slots=True)
+@edataclass
 class SystemRngState:
     """The state of the global random generators.
 

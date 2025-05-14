@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 from typing import Any, Callable, Generic, TypeVar
 
+from megatron.energon.edataclass import edataclass
 from megatron.energon.source_info import SourceInfo, add_source_info
 
 T = TypeVar("T")
@@ -30,7 +30,7 @@ class FileStore(Generic[T]):
         ...
 
 
-@dataclass(slots=True)
+@edataclass
 class Lazy(Generic[T]):
     """
     Abstract base class for lazy references to data.
@@ -58,7 +58,7 @@ class Lazy(Generic[T]):
         return self.ds is other.ds and self.fname == other.fname
 
 
-@dataclass(slots=True)
+@edataclass
 class MockLazy(Lazy[T]):
     """
     Mock object, which can be used as a Lazy. Allows the user to set the function to retrieve the

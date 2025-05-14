@@ -31,6 +31,7 @@ import torch.multiprocessing
 from torch.utils.data import DataLoader, IterableDataset
 
 from megatron.energon.cache import CachePool
+from megatron.energon.edataclass import edataclass
 from megatron.energon.errors import deprecated
 from megatron.energon.flavors.base_dataset import (
     FlexState,
@@ -147,7 +148,7 @@ class SimpleSavableDatasetWrapper(BaseWrapperDataset[T, Tuple[int, int, T]], Gen
         return f"SimpleSavableDatasetWrapper(dataset={self.dataset})"
 
 
-@dataclass(slots=True)
+@edataclass
 class SavableDatasetState(State):
     """State of the dataset wrapper. It stores the global random states and the index of the next
     sample to be returned from the dataset. This class is not intended to be used directly, but by
@@ -164,7 +165,7 @@ class SavableDatasetState(State):
         return f"SavableDatasetState(rng={self.rng!r}, sample_index={self.sample_index})"
 
 
-@dataclass(slots=True)
+@edataclass
 class SavableCheckpoint:
     """Checkpoint data for :class:`megatron.energon.SavableDatasetWrapper`. An instance is created
     regularly to be able to save the state of the dataset wrapper before the currently emitted
@@ -179,7 +180,7 @@ class SavableCheckpoint:
     sample_index: int
 
 
-@dataclass(slots=True)
+@edataclass
 class SavableDatasetCheckpoint(State):
     """Checkpoint data for :class:`megatron.energon.SavableDatasetWrapper`. The checkpoint state
     represents a state before that checkpoint, with an offset (i.e. samples to be skipped)."""
@@ -578,7 +579,7 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
         return f"SavableDatasetWrapper(dataset={self.dataset})"
 
 
-@dataclass(slots=True)
+@edataclass
 class SavableDataLoaderState(State):
     """Saved state of the :class:`megatron.energon.SavableDataLoader`. Contains the state for all worker
     processed of a single rank."""

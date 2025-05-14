@@ -498,7 +498,7 @@ LOADER_LOG_LINE_TYPES_T = (
 )
 
 
-@dataclass(slots=True)
+@dataclass
 class LoaderInfo:
     id: int
     modality: str

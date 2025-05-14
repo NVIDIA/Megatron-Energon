@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import inspect
-from dataclasses import dataclass
 from typing import (
     Any,
     Callable,
@@ -18,6 +17,7 @@ from typing import (
     Union,
 )
 
+from megatron.energon.edataclass import edataclass
 from megatron.energon.errors import SYSTEM_EXCEPTIONS, FatalSampleError
 from megatron.energon.flavors.base_dataset import (
     FlexState,
@@ -36,7 +36,7 @@ T_batch = TypeVar("T_batch", covariant=True)
 T_batch_sample = TypeVar("T_batch_sample", covariant=True)
 
 
-@dataclass(slots=True)
+@edataclass
 class Bucket(Savable, Generic[T_batch_sample]):
     batch_size: int
 

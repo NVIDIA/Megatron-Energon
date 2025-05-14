@@ -27,6 +27,7 @@ from torch.utils.data import IterableDataset
 from typing_extensions import Self
 
 from megatron.energon.cache import FileStore
+from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
 from megatron.energon.savable import Savable
 from megatron.energon.source_info import SourceInfo
@@ -109,7 +110,7 @@ class ExtendableDataclassMixin:
         return cls(**kwargs)
 
 
-@dataclass(slots=True, kw_only=True)
+@edataclass
 class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
     """An abstract base class for one element of a batch.
     Each task should derive a specific subclass as a `@dataclass`, like
@@ -204,7 +205,7 @@ class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
         return cls(**init_args)
 
 
-@dataclass(slots=True)
+@edataclass
 class State(ABC, ExtendableDataclassMixin):
     """An abstract base class for the state of a dataset. See :class:`megatron.energon.SavableDataset`.
     The state of a dataset is used to save and restore the dataset state (i.e. random generators,

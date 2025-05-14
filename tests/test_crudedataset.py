@@ -11,7 +11,6 @@ import sys
 import tempfile
 import unittest
 import warnings
-from dataclasses import dataclass
 from pathlib import Path
 from typing import List
 
@@ -31,6 +30,7 @@ from megatron.energon import (
 )
 from megatron.energon.cache import FileStore, FileStoreCachePool, Lazy
 from megatron.energon.cache.base import CachePool
+from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib.epath import EPath
 from megatron.energon.flavors.base_dataset import Sample
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
@@ -40,7 +40,7 @@ from megatron.energon.source_info import SourceInfo
 from megatron.energon.task_encoder.cooking import cooker
 
 
-@dataclass(slots=True)
+@edataclass
 class LazyTextSample(Sample):
     txt: str
     next_txt: Lazy[str]
@@ -54,7 +54,7 @@ except AttributeError:
     pass
 
 
-@dataclass(slots=True)
+@edataclass
 class TextBatch(Batch):
     __keys__: List[str]
     __sources__: List[SourceInfo]
@@ -643,6 +643,7 @@ class TestDataset(unittest.TestCase):
         # Verify that the sources are correct
         sample_src_check = [s.__sources__ for idx, s in zip(range(1), loader)][0]
         print(sample_src_check)
+        # NOTE: Auxiliary sources have string as index, not int
         assert sample_src_check == [
             # Primary source for the sample, reading all source files
             SourceInfo(
@@ -654,14 +655,14 @@ class TestDataset(unittest.TestCase):
             # Auxiliary source for the sample, reading from ds2
             SourceInfo(
                 dataset_path=EPath(self.dataset_path / "ds2"),
-                index=10,
+                index="000110.txt",
                 shard_name="parts/data-1.tar",
                 file_names=("000110.txt",),
             ),
             # Auxiliary source for the sample, reading from ds1, but next sample
             SourceInfo(
                 dataset_path=EPath(self.dataset_path / "ds1"),
-                index=11,
+                index="000011.txt",
                 shard_name="parts/data-1.tar",
                 file_names=("000011.txt",),
             ),
@@ -673,13 +674,13 @@ class TestDataset(unittest.TestCase):
             ),
             SourceInfo(
                 dataset_path=EPath(self.dataset_path / "ds2"),
-                index=11,
+                index="000111.txt",
                 shard_name="parts/data-1.tar",
                 file_names=("000111.txt",),
             ),
             SourceInfo(
                 dataset_path=EPath(self.dataset_path / "ds1"),
-                index=12,
+                index="000012.txt",
                 shard_name="parts/data-1.tar",
                 file_names=("000012.txt",),
             ),

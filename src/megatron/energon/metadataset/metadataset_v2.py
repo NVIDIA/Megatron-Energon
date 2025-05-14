@@ -11,6 +11,7 @@ from megatron.energon.cache.file_store import (
     WebdatasetFileStore,
 )
 from megatron.energon.dataset_config import load_config
+from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import Sample
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
@@ -29,7 +30,7 @@ from megatron.energon.worker import WorkerConfig
 url_regex = re.compile(r"^(?P<protocol>[a-z][a-z0-9+.-]*)://(?P<path>.*)", re.IGNORECASE)
 
 
-@dataclass(slots=True)
+@edataclass
 class AuxDatasetReference:
     path: Union[str, EPath]
 
@@ -49,7 +50,7 @@ class AuxDatasetReference:
         return WebdatasetFileStore(self.path)
 
 
-@dataclass(slots=True)
+@edataclass
 class AuxFilesystemReference:
     fs_path: Union[str, EPath]
 
@@ -63,7 +64,7 @@ class AuxFilesystemReference:
         return SystemFileStore(self.fs_path)
 
 
-@dataclass(slots=True)
+@edataclass
 class DatasetReference(DatasetLoaderInterface):
     path: Union[str, EPath]
 
@@ -172,7 +173,7 @@ class DatasetReference(DatasetLoaderInterface):
         return result
 
 
-@dataclass(slots=True)
+@edataclass
 class JoinDatasetReference(DatasetReference):
     nonmatch: Literal["skip", "none", "error"] = "error"
 
@@ -209,7 +210,7 @@ class JoinDatasetReference(DatasetReference):
         )
 
 
-@dataclass(slots=True)
+@edataclass
 class MetadatasetJoin(DatasetLoaderInterface):
     join: Union[List[JoinDatasetReference], Dict[str, JoinDatasetReference]]
     joiner: Union[Type[Sample], Callable[..., Sample]]
@@ -292,17 +293,17 @@ class BlendWeightMixin:
     weight: float = 1.0
 
 
-@dataclass(slots=True)
+@edataclass
 class BlendDatasetReference(BlendWeightMixin, DatasetReference):
     pass
 
 
-@dataclass(slots=True)
+@edataclass
 class BlendJoinDatasetReference(BlendWeightMixin, MetadatasetJoin):
     pass
 
 
-@dataclass(slots=True)
+@edataclass
 class MetadatasetBlend(DatasetLoaderInterface):
     """Blending of datasets by specifying the sampling weight for the inner datasets."""
 
@@ -370,17 +371,17 @@ class BlendRepetitionsMixin:
     repetitions: Union[int, float] = 1
 
 
-@dataclass(slots=True)
+@edataclass
 class BlendEpochizedDatasetReference(BlendRepetitionsMixin, DatasetReference):
     pass
 
 
-@dataclass(slots=True)
+@edataclass
 class BlendEpochizedJoinDatasetReference(BlendRepetitionsMixin, MetadatasetJoin):
     pass
 
 
-@dataclass(slots=True)
+@edataclass
 class MetadatasetBlendEpochized(DatasetLoaderInterface):
     """Blending of datasets, by specifying the number of repetitions for samples from the inner
     datasets. Ensures that the constraint, that samples are seen exactly this many times before
@@ -444,7 +445,7 @@ class MetadatasetBlendEpochized(DatasetLoaderInterface):
         )
 
 
-@dataclass(slots=True)
+@edataclass
 class MetadatasetV2(DatasetLoaderInterface):
     path: EPath
     splits: Dict[

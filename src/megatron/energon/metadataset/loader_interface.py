@@ -2,11 +2,11 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Sequence, Union
 
 from megatron.energon.cache import FileStore
+from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory
 from megatron.energon.worker import WorkerConfig
@@ -23,7 +23,7 @@ class DatasetBlendMode(Enum):
     SAMPLE_REPETITIONS = "sample_repetitions"
 
 
-@dataclass(slots=True)
+@edataclass
 class LoadedDataset:
     dataset: BaseCoreDatasetFactory
     weight: Union[float, int, None] = None
@@ -31,7 +31,7 @@ class LoadedDataset:
     aux: Optional[Dict[str, FileStore]] = None
 
 
-@dataclass(slots=True)
+@edataclass
 class LoadedDatasetList:
     datasets: List[LoadedDataset]
     blend_mode: DatasetBlendMode = DatasetBlendMode.NONE

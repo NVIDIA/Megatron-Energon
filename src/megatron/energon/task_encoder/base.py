@@ -5,7 +5,7 @@ import dataclasses
 import functools
 import inspect
 from abc import ABC
-from dataclasses import dataclass, is_dataclass
+from dataclasses import is_dataclass
 from types import MethodType
 from typing import (
     Any,
@@ -28,6 +28,7 @@ import torch
 from typing_extensions import ParamSpec
 
 from megatron.energon.cache import CachePool, DecodeFileStore, FileStore
+from megatron.energon.edataclass import edataclass
 from megatron.energon.flavors import (
     CrudeSample,
     CrudeWebdataset,
@@ -233,7 +234,7 @@ def get_stateless(fn: Callable[..., T_sample]) -> bool:
     return getattr(fn, "__stateless__", False)
 
 
-@dataclass(slots=True)
+@edataclass
 class Batch(PinMemoryMixin):
     """Base class for a batch dataclass. Provides a default implementation for pinning memory."""
 
