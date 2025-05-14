@@ -288,7 +288,6 @@ class JoinIndexFileITarReader(ITarReader[int]):
             tar_file_id=shard_idx,
             byte_offset=byte_offset,
             byte_size=byte_size,
-            sample_index=sample_idx,
         )
 
     def __len__(self) -> int:

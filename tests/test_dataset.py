@@ -15,6 +15,7 @@ import tempfile
 import unittest
 import warnings
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Hashable, List, Tuple, Type, Union
 
@@ -34,6 +35,7 @@ from megatron.energon import (
     MapDataset,
     MixBatchDataset,
     SavableDataLoader,
+    SourceInfo,
     TaskEncoder,
     WorkerConfig,
     generic_batch,
@@ -702,6 +704,7 @@ class TestDataset(unittest.TestCase):
             __restore_key__: Tuple[Union[str, int], ...]
             __subflavor__: List[str]
             __subflavors__: List[Dict[str, Any]]
+            __sources__: List[SourceInfo]
             image: torch.Tensor
             caption: List[str]
             weight: float
@@ -760,12 +763,13 @@ class TestDataset(unittest.TestCase):
         assert 750 <= bs_hist[20] <= 850
 
     def test_mixing_homogeneous(self):
-        @edataclass
+        @dataclass
         class TestBatch(Batch):
             __key__: List[str]
             __restore_key__: Tuple[Union[str, int], ...]
             __subflavor__: List[str]
             __subflavors__: List[Dict[str, Any]]
+            __sources__: List[SourceInfo]
             image: torch.Tensor
             caption: List[str]
             source: int
@@ -816,17 +820,18 @@ class TestDataset(unittest.TestCase):
         assert 7500 <= source_hist[1] <= 8500
 
     def test_mixing_heterogeneous(self):
-        @edataclass
+        @dataclass
         class TestBatch1(Batch):
             __key__: List[str]
             __restore_key__: Tuple[Union[str, int], ...]
             __subflavor__: List[str]
             __subflavors__: List[Dict[str, Any]]
+            __sources__: List[SourceInfo]
             image: torch.Tensor
             caption: List[str]
             source: int
 
-        @edataclass
+        @dataclass
         class TestBatch2(TestBatch1):
             pass
 
