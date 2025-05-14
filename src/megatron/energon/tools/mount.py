@@ -65,6 +65,7 @@ class EnergonMount(MountSource):
         return result
 
     def getFileInfo(self, path: str, fileVersion: int = 0) -> Optional[FileInfo]:
+        print(f"getFileInfo: {path}")
         if path == "/":
             return FileInfo(
                 size=0,
@@ -76,6 +77,9 @@ class EnergonMount(MountSource):
                 userdata=[None],
             )
         else:
+            if path[0] != "/":
+                return None
+            path = path[1:]
             try:
                 size = self._all_files[path]
             except KeyError:
@@ -95,6 +99,7 @@ class EnergonMount(MountSource):
         return 1 if self.getFileInfo(path) else 0
 
     def open(self, fileInfo: FileInfo, buffering: int = -1) -> IO[bytes]:
+        print(f"open: {fileInfo.userdata}")
         if fileInfo.userdata is None:
             return None
         b = self._wds_filestore[fileInfo.userdata[0]]
@@ -123,13 +128,13 @@ class EnergonMount(MountSource):
     type=click.Path(path_type=EPath),
 )
 @click.option(
-    "--foreground",
-    "-f",
+    "--background",
+    "-b",
     is_flag=True,
     default=False,
-    help="Run in foreground",
+    help="Run in background",
 )
-def command(path: EPath, mountpoint: EPath, foreground: bool):
+def command(path: EPath, mountpoint: EPath, background: bool):
     """
     Mount an energon WebdatasetFileStore at the given mountpoint.
 
@@ -145,13 +150,13 @@ def command(path: EPath, mountpoint: EPath, foreground: bool):
     ops = FuseMount(
         pathToMount="/",
         mountPoint=str(mountpoint),
-        foreground=foreground,
+        foreground=not background,
     )
     ops.mountSource = root
 
     fuse.FUSE(
         operations=ops,
         mountpoint=str(mountpoint),
-        foreground=foreground,
+        foreground=not background,
         nothreads=True,
     )
