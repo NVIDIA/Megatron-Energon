@@ -33,7 +33,7 @@ class EnergonMount(MountSource):
 
         self._wds_filestore = WebdatasetFileStore(db_path)
 
-        self._all_files = {key: size for key, size in self._wds_filestore.list_all_samples()}
+        self._all_samples = {key: size for key, size in self._wds_filestore.list_all_samples()}
 
         self._print = print_debug
 
@@ -44,7 +44,7 @@ class EnergonMount(MountSource):
         if path != "/":
             return None
         result = {}
-        for key, size in self._all_files.items():
+        for key, size in self._all_samples.items():
             result[key] = FileInfo(
                 size=size,
                 mtime=0,
@@ -60,13 +60,17 @@ class EnergonMount(MountSource):
         if path != "/":
             return None
         result = {}
-        for key in self._all_files.keys():
+        for key in self._all_samples.keys():
             result[key] = 0o444 | stat.S_IFREG
         return result
 
     def getFileInfo(self, path: str, fileVersion: int = 0) -> Optional[FileInfo]:
         print(f"getFileInfo: {path}")
+        if path[0] != "/":
+            return None
+
         if path == "/":
+            # Root directory
             return FileInfo(
                 size=0,
                 mtime=0,
@@ -77,11 +81,9 @@ class EnergonMount(MountSource):
                 userdata=[None],
             )
         else:
-            if path[0] != "/":
-                return None
             path = path[1:]
             try:
-                size = self._all_files[path]
+                size = self._all_samples[path]
             except KeyError:
                 return None
 
@@ -104,11 +106,6 @@ class EnergonMount(MountSource):
             return None
         b = self._wds_filestore[fileInfo.userdata[0]]
         return io.BytesIO(b)
-
-    def read(self, fileInfo: FileInfo, size: int, offset: int) -> bytes:
-        with self.open(fileInfo, buffering=0) as f:
-            f.seek(offset)
-            return f.read(size)
 
     def statfs(self):
         block = 512
