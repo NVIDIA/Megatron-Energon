@@ -229,11 +229,12 @@ class WebdatasetPreparator:
                         # Yield this part of the sample to the aggregator
                         yield IndexSamplePart(
                             tar_file_id=shard_to_idx[path],
-                            sample_index=count,
+                            sample_index=count - 1,
                             part_name=name_match.group(2),
                             content_byte_offset=member.offset_data,
                             content_byte_size=member.size,
                         )
+
                     shard_info.count = count
                     iw.append(tar.offset)
                     if next_index_sample is not None:
