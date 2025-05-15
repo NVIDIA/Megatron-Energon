@@ -71,20 +71,30 @@ class TestFileStoreCachePool(unittest.TestCase):
         pool = FileStoreCachePool(parent_cache_dir=self.temp_path)
         try:
             # get should directly read from the dataset without caching
-            result, source_info = pool.get(mock_raw_file_store, "file1")
+            sample_for_source_info = {"__sources__": ()}
+            result = pool.get(mock_raw_file_store, "file1", sample_for_source_info)
             assert result == b"test data 1"
-            assert source_info.dataset_path == mock_raw_file_store.get_path()
-            assert source_info.index is None
-            assert source_info.shard_name is None
-            assert source_info.file_names == ("file1",)
+            assert len(sample_for_source_info["__sources__"]) == 1
+            assert (
+                sample_for_source_info["__sources__"][0].dataset_path
+                == mock_raw_file_store.get_path()
+            )
+            assert sample_for_source_info["__sources__"][0].index is None
+            assert sample_for_source_info["__sources__"][0].shard_name is None
+            assert sample_for_source_info["__sources__"][0].file_names == ("file1",)
 
             # get should directly read from the dataset without caching
-            result, source_info = pool.get(mock_decode_file_store, "file1")
+            sample_for_source_info = {"__sources__": ()}
+            result = pool.get(mock_decode_file_store, "file1", sample_for_source_info)
             assert result == "file1: test data 1"
-            assert source_info.dataset_path == mock_decode_file_store.get_path()
-            assert source_info.index is None
-            assert source_info.shard_name is None
-            assert source_info.file_names == ("file1",)
+            assert len(sample_for_source_info["__sources__"]) == 1
+            assert (
+                sample_for_source_info["__sources__"][0].dataset_path
+                == mock_decode_file_store.get_path()
+            )
+            assert sample_for_source_info["__sources__"][0].index is None
+            assert sample_for_source_info["__sources__"][0].shard_name is None
+            assert sample_for_source_info["__sources__"][0].file_names == ("file1",)
         finally:
             pool.close()
 
