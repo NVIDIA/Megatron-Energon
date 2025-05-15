@@ -44,8 +44,9 @@ class SqliteIndexWriter:
         self.db.execute("PRAGMA busy_timeout = 5000;")  # wait up to 5000ms when locked
         self.db.execute("PRAGMA journal_mode = WAL;")
 
-        # Create the table
+        # Create the sample table
         self.db.execute("DROP INDEX IF EXISTS idx_samples_sample_key")
+        self.db.execute("DROP INDEX IF EXISTS idx_samples_by_tar_and_idx")
         self.db.execute("DROP TABLE IF EXISTS samples")
         self.db.execute(
             """
@@ -53,6 +54,22 @@ class SqliteIndexWriter:
                 tar_file_id INTEGER,
                 sample_key TEXT,
                 sample_index INTEGER,
+                byte_offset INTEGER,
+                byte_size INTEGER
+            )
+        """
+        )
+
+        # Create the sample parts table
+        self.db.execute("DROP INDEX IF EXISTS idx_sample_parts_seq")
+        self.db.execute("DROP INDEX IF EXISTS idx_sample_parts_full")
+        self.db.execute("DROP TABLE IF EXISTS sample_parts")
+        self.db.execute(
+            """
+            CREATE TABLE sample_parts (
+                tar_file_id INTEGER,
+                sample_index INTEGER,
+                part_name TEXT,
                 byte_offset INTEGER,
                 byte_size INTEGER
             )
@@ -82,6 +99,27 @@ class SqliteIndexWriter:
             (tar_file_id, sample_key, sample_index, byte_offset, byte_size),
         )
 
+    def append_part(
+        self,
+        tar_file_id: int8,
+        sample_index: int,
+        part_name: str,
+        byte_offset: int,
+        byte_size: int,
+    ):
+        """Adds a new part row to the samples table."""
+
+        assert self.db is not None, "Database is closed"
+
+        # Insert a row in the sample parts table
+        self.db.execute(
+            """
+            INSERT INTO sample_parts (tar_file_id, sample_index, part_name, byte_offset, byte_size)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (tar_file_id, sample_index, part_name, byte_offset, byte_size),
+        )
+
     def close(self):
         """
         Closes the DB connection. If finalize=True, the temporary database is
@@ -92,6 +130,21 @@ class SqliteIndexWriter:
         # Create the index after adding all the samples for better speed
         # Index on sample_key for fast lookups
         self.db.execute("CREATE INDEX IF NOT EXISTS idx_samples_sample_key ON samples(sample_key)")
+
+        # Create index on the samples table.  Help the planner if it chooses `samples` as the probe side of the join
+        self.db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_samples_by_tar_and_idx ON samples(tar_file_id, sample_index)"
+        )
+
+        # Create index on the sample_parts table for fast sequential access
+        self.db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sample_parts_seq ON sample_parts(tar_file_id, sample_index, byte_offset)"
+        )
+
+        # Create a full index on the sample_parts table for equality lookups and getting offsets directly from key
+        self.db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sample_parts_full ON sample_parts(tar_file_id, sample_index, part_name, byte_offset, byte_size)"
+        )
 
         # Check if sample_key are all unique
         # self.db.execute("CREATE TEMP TABLE temp AS SELECT sample_key, COUNT(*) AS c FROM samples GROUP BY sample_key HAVING c > 1")
