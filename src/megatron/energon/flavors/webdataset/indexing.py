@@ -70,8 +70,8 @@ class SqliteIndexWriter:
                 tar_file_id INTEGER,
                 sample_index INTEGER,
                 part_name TEXT,
-                byte_offset INTEGER,
-                byte_size INTEGER
+                content_byte_offset INTEGER,
+                content_byte_size INTEGER
             )
         """
         )
@@ -104,8 +104,8 @@ class SqliteIndexWriter:
         tar_file_id: int8,
         sample_index: int,
         part_name: str,
-        byte_offset: int,
-        byte_size: int,
+        content_byte_offset: int,
+        content_byte_size: int,
     ):
         """Adds a new part row to the samples table."""
 
@@ -114,10 +114,10 @@ class SqliteIndexWriter:
         # Insert a row in the sample parts table
         self.db.execute(
             """
-            INSERT INTO sample_parts (tar_file_id, sample_index, part_name, byte_offset, byte_size)
+            INSERT INTO sample_parts (tar_file_id, sample_index, part_name, content_byte_offset, content_byte_size)
             VALUES (?, ?, ?, ?, ?)
             """,
-            (tar_file_id, sample_index, part_name, byte_offset, byte_size),
+            (tar_file_id, sample_index, part_name, content_byte_offset, content_byte_size),
         )
 
     def close(self):
@@ -138,12 +138,12 @@ class SqliteIndexWriter:
 
         # Create index on the sample_parts table for fast sequential access
         self.db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_sample_parts_seq ON sample_parts(tar_file_id, sample_index, byte_offset)"
+            "CREATE INDEX IF NOT EXISTS idx_sample_parts_seq ON sample_parts(tar_file_id, sample_index, content_byte_offset)"
         )
 
         # Create a full index on the sample_parts table for equality lookups and getting offsets directly from key
         self.db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_sample_parts_full ON sample_parts(tar_file_id, sample_index, part_name, byte_offset, byte_size)"
+            "CREATE INDEX IF NOT EXISTS idx_sample_parts_full ON sample_parts(tar_file_id, sample_index, part_name, content_byte_offset, content_byte_size)"
         )
 
         # Check if sample_key are all unique

@@ -68,8 +68,8 @@ class IndexSamplePart(IndexAggregatable):
     tar_file_id: int
     sample_index: int
     part_name: str
-    byte_offset: int
-    byte_size: int
+    content_byte_offset: int
+    content_byte_size: int
 
 
 @edataclass
@@ -231,8 +231,8 @@ class WebdatasetPreparator:
                             tar_file_id=shard_to_idx[path],
                             sample_index=count,
                             part_name=name_match.group(2),
-                            byte_offset=member.offset,
-                            byte_size=member.size,
+                            content_byte_offset=member.offset_data,
+                            content_byte_size=member.size,
                         )
                     shard_info.count = count
                     iw.append(tar.offset)
