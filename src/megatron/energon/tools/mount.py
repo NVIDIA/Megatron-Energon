@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import io
+import os
 import stat
 from typing import IO, Dict, Iterable, Optional, Union
 
@@ -33,7 +34,20 @@ class EnergonMount(MountSource):
 
         self._wds_filestore = WebdatasetFileStore(db_path)
 
-        self._all_samples = {key: size for key, size in self._wds_filestore.list_all_samples()}
+        self._all_sample_parts = {
+            key: size for key, size in self._wds_filestore.list_all_sample_parts()
+        }
+
+        # Get current uid and gid
+        self._uid = os.getuid()
+        self._gid = os.getgid()
+
+        # Get modification time of the db file
+        try:
+            self._mtime = os.path.getmtime(str(db_path))
+        except FileNotFoundError:
+            # Remote file systems have no modification time
+            self._mtime = 0
 
         self._print = print_debug
 
@@ -44,14 +58,14 @@ class EnergonMount(MountSource):
         if path != "/":
             return None
         result = {}
-        for key, size in self._all_samples.items():
+        for key, size in self._all_sample_parts.items():
             result[key] = FileInfo(
                 size=size,
-                mtime=0,
+                mtime=self._mtime,
                 mode=0o444 | stat.S_IFREG,
                 linkname="",
-                uid=0,
-                gid=0,
+                uid=self._uid,
+                gid=self._gid,
                 userdata=[key],
             )
         return result
@@ -60,12 +74,11 @@ class EnergonMount(MountSource):
         if path != "/":
             return None
         result = {}
-        for key in self._all_samples.keys():
+        for key in self._all_sample_parts.keys():
             result[key] = 0o444 | stat.S_IFREG
         return result
 
     def getFileInfo(self, path: str, fileVersion: int = 0) -> Optional[FileInfo]:
-        print(f"getFileInfo: {path}")
         if path[0] != "/":
             return None
 
@@ -73,27 +86,27 @@ class EnergonMount(MountSource):
             # Root directory
             return FileInfo(
                 size=0,
-                mtime=0,
+                mtime=self._mtime,
                 mode=0o555 | stat.S_IFDIR,
                 linkname="",
-                uid=0,
-                gid=0,
+                uid=self._uid,
+                gid=self._gid,
                 userdata=[None],
             )
         else:
             path = path[1:]
             try:
-                size = self._all_samples[path]
+                size = self._all_sample_parts[path]
             except KeyError:
                 return None
 
             return FileInfo(
                 size=size,
-                mtime=0,
+                mtime=self._mtime,
                 mode=0o444 | stat.S_IFREG,
                 linkname="",
-                uid=0,
-                gid=0,
+                uid=self._uid,
+                gid=self._gid,
                 userdata=[path],
             )
 

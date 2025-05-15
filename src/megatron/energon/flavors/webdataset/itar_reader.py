@@ -446,6 +446,9 @@ class SqliteITarEntryReader(ITarReader[str]):
     def list_all_samples(self) -> Generator[Tuple[str, int], None, None]:
         return self.sqlite_reader.list_all_samples()
 
+    def list_all_sample_parts(self) -> Generator[Tuple[str, int], None, None]:
+        return self.sqlite_reader.list_all_sample_parts()
+
     @overload
     def __getitem__(self, key: str) -> Optional[Union[FilteredSample, bytes]]: ...
 

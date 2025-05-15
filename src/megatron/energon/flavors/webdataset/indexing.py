@@ -243,10 +243,32 @@ class SqliteIndexReader:
         self.db = ThreadLocalSqlite(path)
 
     def list_all_samples(self) -> Generator[Tuple[str, int], None, None]:
-        """List all sample keys in the database."""
+        """List all sample keys in the database.
+
+        Returns:
+            Tuple of (sample_key, byte_size)
+        """
+
         assert self.db is not None, "Database is closed"
 
         for row in self.db.select_all("SELECT sample_key, byte_size FROM samples"):
+            yield row[0], row[1]
+
+    def list_all_sample_parts(self) -> Generator[Tuple[str, int], None, None]:
+        """List all sample parts (i.e. individual files) in the database."""
+
+        assert self.db is not None, "Database is closed"
+
+        # Select all parts (sorted by tar_file_id, sample_index) but joined with the sample_key names
+        for row in self.db.select_all(
+            "SELECT "
+            "s.sample_key || '.' || sp.part_name AS full_key, "
+            "sp.content_byte_size AS size "
+            "FROM sample_parts AS sp "
+            "JOIN samples AS s "
+            "ON sp.tar_file_id  = s.tar_file_id AND sp.sample_index = s.sample_index "
+            "ORDER BY sp.tar_file_id, sp.sample_index, sp.content_byte_offset"
+        ):
             yield row[0], row[1]
 
     def get_sample_count(self) -> int:
