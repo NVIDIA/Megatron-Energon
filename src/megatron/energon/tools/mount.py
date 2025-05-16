@@ -52,7 +52,6 @@ class EnergonFS(Operations):
         if path[0] != "/":
             raise FuseOSError(ENOENT)
 
-        print(f"getattr: {path}")
         if path == "/":
             return dict(
                 st_mode=0o555 | stat.S_IFDIR,
@@ -85,8 +84,6 @@ class EnergonFS(Operations):
         )
 
     def readdir(self, path: str, fh: int = 0):
-        print(f"readdir: {path}")
-
         if path != "/":
             raise FuseOSError(ENOENT)
 
@@ -97,7 +94,6 @@ class EnergonFS(Operations):
             yield entry
 
     def open(self, path: str, flags: int = 0):
-        print(f"open: {path}")
         if path[0] != "/":
             raise FuseOSError(ENOENT)
 
@@ -136,9 +132,9 @@ class EnergonFS(Operations):
             raise FuseOSError(ENOENT)
         del self._open_files[path]
 
-    def __exit__(self, exc_t, exc_v, exc_tb):
-        print("closing filestore")
-        print(f"Number of open files: {len(self._open_files)}")
+    def destroy(self, path: str):
+        print("Closing energon mount.")
+        print(f"Number of still open files: {len(self._open_files)}")
         self._wds_filestore.close()
 
 
@@ -179,9 +175,13 @@ def command(path: EPath, mountpoint: Path, detach: bool, sample_folders: bool):
 
     energon_fs = EnergonFS(path)
 
-    FUSE(
-        operations=energon_fs,
-        mountpoint=str(mountpoint),
-        foreground=not detach,
-        nothreads=True,
-    )
+    try:
+        FUSE(
+            operations=energon_fs,
+            mountpoint=str(mountpoint),
+            foreground=not detach,
+            nothreads=True,
+        )
+    except RuntimeError as e:
+        if str(e) != "7":
+            raise
