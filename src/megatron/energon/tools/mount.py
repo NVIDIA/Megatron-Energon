@@ -1,25 +1,19 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-import io
 import os
 import stat
-from typing import IO, Dict, Iterable, Optional, Union
+from errno import ENOENT
+from pathlib import Path
 
 import click
-from ratarmount import FuseMount
-from ratarmountcore import (
-    FileInfo,
-    FileVersionLayer,
-    MountSource,
-)
-from ratarmountcore.fusepy import fuse
+from mfusepy import FUSE, FuseOSError, Operations
 
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.webdataset.file_store import WebdatasetFileStore
 
 
-class EnergonMount(MountSource):
+class EnergonFS(Operations):
     """
     Read-only filesystem that exposes an energon WebdatasetFileStore.
     """
@@ -38,6 +32,9 @@ class EnergonMount(MountSource):
             key: size for key, size in self._wds_filestore.list_all_sample_parts()
         }
 
+        # When a file is opened, we keep the bytes in memory for now (until it is closed)
+        self._open_files = {}
+
         # Get current uid and gid
         self._uid = os.getuid()
         self._gid = os.getgid()
@@ -51,80 +48,97 @@ class EnergonMount(MountSource):
 
         self._print = print_debug
 
-    def isImmutable(self) -> bool:  # our DB never changes
-        return True
-
-    def listDir(self, path: str) -> Optional[Union[Iterable[str], Dict[str, FileInfo]]]:
-        if path != "/":
-            return None
-        result = {}
-        for key, size in self._all_sample_parts.items():
-            result[key] = FileInfo(
-                size=size,
-                mtime=self._mtime,
-                mode=0o444 | stat.S_IFREG,
-                linkname="",
-                uid=self._uid,
-                gid=self._gid,
-                userdata=[key],
-            )
-        return result
-
-    def listDirModeOnly(self, path: str) -> Optional[Union[Iterable[str], Dict[str, int]]]:
-        if path != "/":
-            return None
-        result = {}
-        for key in self._all_sample_parts.keys():
-            result[key] = 0o444 | stat.S_IFREG
-        return result
-
-    def getFileInfo(self, path: str, fileVersion: int = 0) -> Optional[FileInfo]:
+    def getattr(self, path: str, fh: int = 0):
         if path[0] != "/":
-            return None
+            raise FuseOSError(ENOENT)
 
+        print(f"getattr: {path}")
         if path == "/":
-            # Root directory
-            return FileInfo(
-                size=0,
-                mtime=self._mtime,
-                mode=0o555 | stat.S_IFDIR,
-                linkname="",
-                uid=self._uid,
-                gid=self._gid,
-                userdata=[None],
-            )
-        else:
-            path = path[1:]
-            try:
-                size = self._all_sample_parts[path]
-            except KeyError:
-                return None
-
-            return FileInfo(
-                size=size,
-                mtime=self._mtime,
-                mode=0o444 | stat.S_IFREG,
-                linkname="",
-                uid=self._uid,
-                gid=self._gid,
-                userdata=[path],
+            return dict(
+                st_mode=0o555 | stat.S_IFDIR,
+                st_nlink=2,
+                st_size=0,
+                st_ctime=self._mtime,
+                st_mtime=self._mtime,
+                st_atime=self._mtime,
+                st_uid=self._uid,
+                st_gid=self._gid,
             )
 
-    def fileVersions(self, path: str) -> int:
-        return 1 if self.getFileInfo(path) else 0
+        # Strip leading '/'
+        path = path[1:]
 
-    def open(self, fileInfo: FileInfo, buffering: int = -1) -> IO[bytes]:
-        print(f"open: {fileInfo.userdata}")
-        if fileInfo.userdata is None:
-            return None
-        b = self._wds_filestore[fileInfo.userdata[0]]
-        return io.BytesIO(b)
+        if path not in self._all_sample_parts:
+            raise FuseOSError(ENOENT)
 
-    def statfs(self):
-        block = 512
-        return {"f_bsize": block, "f_frsize": block, "f_namemax": 255}
+        file_size = self._all_sample_parts[path]
+
+        return dict(
+            st_mode=0o444 | stat.S_IFREG,
+            st_nlink=1,
+            st_size=file_size,
+            st_ctime=self._mtime,
+            st_mtime=self._mtime,
+            st_atime=self._mtime,
+            st_uid=self._uid,
+            st_gid=self._gid,
+        )
+
+    def readdir(self, path: str, fh: int = 0):
+        print(f"readdir: {path}")
+
+        if path != "/":
+            raise FuseOSError(ENOENT)
+
+        # '.' and '..' plus our files
+        yield "."
+        yield ".."
+        for entry in self._all_sample_parts.keys():
+            yield entry
+
+    def open(self, path: str, flags: int = 0):
+        print(f"open: {path}")
+        if path[0] != "/":
+            raise FuseOSError(ENOENT)
+
+        path = path[1:]
+
+        # read-only: deny write flags
+        if flags & (os.O_WRONLY | os.O_RDWR | os.O_APPEND):
+            raise FuseOSError(ENOENT)
+        if path not in self._all_sample_parts:
+            raise FuseOSError(ENOENT)
+        file_bytes = self._wds_filestore[path]
+        assert isinstance(file_bytes, bytes)
+        self._open_files[path] = file_bytes
+
+        # dummy file handle
+        return 0
+
+    def read(self, path: str, size: int, offset: int, fh: int = 0):
+        if path[0] != "/":
+            raise FuseOSError(ENOENT)
+
+        path = path[1:]
+
+        if path not in self._all_sample_parts:
+            raise FuseOSError(ENOENT)
+        data = self._open_files[path]
+        return data[offset : offset + size]
+
+    def close(self, path: str, fh: int = 0):
+        if path[0] != "/":
+            raise FuseOSError(ENOENT)
+
+        path = path[1:]
+
+        if path not in self._open_files:
+            raise FuseOSError(ENOENT)
+        del self._open_files[path]
 
     def __exit__(self, exc_t, exc_v, exc_tb):
+        print("closing filestore")
+        print(f"Number of open files: {len(self._open_files)}")
         self._wds_filestore.close()
 
 
@@ -135,16 +149,23 @@ class EnergonMount(MountSource):
 )
 @click.argument(
     "mountpoint",
-    type=click.Path(path_type=EPath),
+    type=click.Path(path_type=Path),
 )
 @click.option(
-    "--background",
-    "-b",
+    "--detach",
+    "-d",
     is_flag=True,
     default=False,
     help="Run in background",
 )
-def command(path: EPath, mountpoint: EPath, background: bool):
+@click.option(
+    "--sample-folders",
+    "-s",
+    is_flag=True,
+    default=False,
+    help="Present a virtual folder per sample. Otherwise a single folder with all sample parts.",
+)
+def command(path: EPath, mountpoint: Path, detach: bool, sample_folders: bool):
     """
     Mount an energon WebdatasetFileStore at the given mountpoint.
 
@@ -152,21 +173,15 @@ def command(path: EPath, mountpoint: EPath, background: bool):
     """
 
     path = EPath(path)
-    mountpoint = EPath(mountpoint)
+    mountpoint = Path(mountpoint)
+    print(f"Mounting {path} at {mountpoint}")
+    mountpoint.mkdir(parents=True, exist_ok=True)
 
-    mount_source = EnergonMount(path)
-    root = FileVersionLayer(mount_source)
+    energon_fs = EnergonFS(path)
 
-    ops = FuseMount(
-        pathToMount="/",
-        mountPoint=str(mountpoint),
-        foreground=not background,
-    )
-    ops.mountSource = root
-
-    fuse.FUSE(
-        operations=ops,
+    FUSE(
+        operations=energon_fs,
         mountpoint=str(mountpoint),
-        foreground=not background,
+        foreground=not detach,
         nothreads=True,
     )
