@@ -443,11 +443,17 @@ class SqliteITarEntryReader(ITarReader[str]):
 
         return self.sqlite_reader.get_sample_pointer_by_key(sample_key)
 
-    def list_all_samples(self) -> Generator[Tuple[str, int], None, None]:
+    def list_all_samples(self) -> Generator[Tuple[str, int, int], None, None]:
         return self.sqlite_reader.list_all_samples()
 
-    def list_all_sample_parts(self) -> Generator[Tuple[str, int], None, None]:
+    def list_all_sample_parts(self) -> Generator[Tuple[str, int, int], None, None]:
         return self.sqlite_reader.list_all_sample_parts()
+
+    def list_sample_parts(self, sample_key: str) -> Generator[Tuple[str, int, int], None, None]:
+        return self.sqlite_reader.list_sample_parts(sample_key)
+
+    def get_total_size(self) -> int:
+        return self.sqlite_reader.get_total_size()
 
     @overload
     def __getitem__(self, key: str) -> Optional[Union[FilteredSample, bytes]]: ...

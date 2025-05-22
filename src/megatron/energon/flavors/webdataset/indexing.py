@@ -242,7 +242,7 @@ class SqliteIndexReader:
 
         self.db = ThreadLocalSqlite(path)
 
-    def list_all_samples(self) -> Generator[Tuple[str, int], None, None]:
+    def list_all_samples(self) -> Generator[Tuple[str, int, int], None, None]:
         """List all sample keys in the database.
 
         Returns:
@@ -251,11 +251,15 @@ class SqliteIndexReader:
 
         assert self.db is not None, "Database is closed"
 
-        for row in self.db.select_all("SELECT sample_key, byte_size FROM samples"):
-            yield row[0], row[1]
+        for row in self.db.select_all("SELECT sample_key, byte_size, tar_file_id FROM samples"):
+            yield row[0], row[1], row[2]
 
-    def list_all_sample_parts(self) -> Generator[Tuple[str, int], None, None]:
-        """List all sample parts (i.e. individual files) in the database."""
+    def list_all_sample_parts(self) -> Generator[Tuple[str, int, int], None, None]:
+        """List all sample parts (i.e. individual files) in the database.
+
+        Returns:
+            Tuple of (full_key, size, tar_file_id)
+        """
 
         assert self.db is not None, "Database is closed"
 
@@ -263,13 +267,48 @@ class SqliteIndexReader:
         for row in self.db.select_all(
             "SELECT "
             "s.sample_key || '.' || sp.part_name AS full_key, "
-            "sp.content_byte_size AS size "
+            "sp.content_byte_size AS size, "
+            "sp.tar_file_id AS tar_file_id "
             "FROM sample_parts AS sp "
             "JOIN samples AS s "
             "ON sp.tar_file_id  = s.tar_file_id AND sp.sample_index = s.sample_index "
             "ORDER BY sp.tar_file_id, sp.sample_index, sp.content_byte_offset"
         ):
-            yield row[0], row[1]
+            yield row[0], row[1], row[2]
+
+    def list_sample_parts(self, sample_key: str) -> Generator[Tuple[str, int, int], None, None]:
+        """List all sample parts (i.e. individual files) in the database.
+
+        Args:
+            sample_key: The sample key to look up
+
+        Returns:
+            Tuple of (part_name, size, tar_file_id)
+        """
+
+        assert self.db is not None, "Database is closed"
+
+        # Select all parts (sorted by tar_file_id, sample_index) but joined with the sample_key names
+        for row in self.db.select_all(
+            "SELECT "
+            "sp.part_name AS part_name, "
+            "sp.content_byte_size AS size, "
+            "sp.tar_file_id AS tar_file_id "
+            "FROM sample_parts AS sp "
+            "JOIN samples AS s "
+            "ON sp.tar_file_id  = s.tar_file_id AND sp.sample_index = s.sample_index "
+            "WHERE s.sample_key = ? "
+            "ORDER BY sp.tar_file_id, sp.sample_index, sp.content_byte_offset",
+            (sample_key,),
+        ):
+            yield row[0], row[1], row[2]
+
+    def get_total_size(self) -> int:
+        """Get the total size of all samples in the database."""
+        assert self.db is not None, "Database is closed"
+
+        count = self.db.select_one("SELECT SUM(byte_size) FROM samples")
+        return count[0] if count else 0
 
     def get_sample_count(self) -> int:
         """Get the total number of samples in the database."""

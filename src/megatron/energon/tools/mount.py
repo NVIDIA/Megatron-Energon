@@ -3,7 +3,7 @@
 
 import os
 import stat
-from errno import ENOENT
+from errno import EBADF, ENOENT
 from pathlib import Path
 
 import click
@@ -12,25 +12,43 @@ from mfusepy import FUSE, FuseOSError, Operations
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.webdataset.file_store import WebdatasetFileStore
 
+MULTI_WARN = "WARNING_SAME_KEY_IN_MULTIPLE_TAR_FILES"
+
 
 class EnergonFS(Operations):
     """
     Read-only filesystem that exposes an energon WebdatasetFileStore.
     """
 
-    def __init__(self, db_path: EPath, *, print_debug: int = 0) -> None:
+    def __init__(
+        self, db_path: EPath, *, sample_folders: bool = False, print_debug: int = 0
+    ) -> None:
         # First create a temporary directory and copy the db there
 
-        # temp_dir = tempfile.mkdtemp()
-        # temp_db_path = Path(temp_dir) / "index.db"
-        # shutil.copy(db_path, temp_db_path)
-        # self._wds_filestore = WebdatasetFileStore(EPath(temp_db_path))
+        # TODO: We need to figue out if the EPath is remote or local.
+        # If it's remote, we need to download the sqlite DB to a temporary directory.
+        # However, in this case we still need to modify `SqliteITarEntryReader`
+        # to support a mixture of local (DB) and remote files (shards).
+
+        self._sample_folders = sample_folders
 
         self._wds_filestore = WebdatasetFileStore(db_path)
 
-        self._all_sample_parts = {
-            key: size for key, size in self._wds_filestore.list_all_sample_parts()
-        }
+        self._all_sample_parts = {}
+        for key, size, tar_file_id in self._wds_filestore.list_all_sample_parts():
+            if key not in self._all_sample_parts:
+                # Only take the first tar file id
+                self._all_sample_parts[key] = size
+
+        self._samples_with_multiple_tar_files = set()
+        self._all_samples = {}
+        for key, size, tar_file_id in self._wds_filestore.list_all_samples():
+            if key not in self._all_samples:
+                self._all_samples[key] = size
+            else:
+                self._samples_with_multiple_tar_files.add(key)
+
+        self._total_size = None
 
         # When a file is opened, we keep the bytes in memory for now (until it is closed)
         self._open_files = {}
@@ -48,7 +66,43 @@ class EnergonFS(Operations):
 
         self._print = print_debug
 
+    def statfs(self, path):
+        """Return information about the file system.
+
+        This is called when the user runs `df` on the mount point.
+        """
+
+        if self._total_size is None:
+            print("Computing total size...", end="", flush=True)
+            self._total_size = self._wds_filestore.get_total_size()
+            print(f"done: {self._total_size} bytes")
+
+        return dict(
+            f_bsize=512,
+            f_blocks=self._total_size // 512,
+            f_bavail=0,
+            f_bfree=0,
+            f_files=len(self._all_sample_parts),
+            f_ffree=0,
+            f_namemax=1024,
+        )
+
     def getattr(self, path: str, fh: int = 0):
+        """Return information about one file or folder.
+
+        This is called when using `ls -l` etc.
+
+        Returns a dict with the following keys:
+        - st_mode: File mode (S_IFDIR, S_IFREG, etc.)
+        - st_nlink: Number of links
+        - st_size: Size of the file
+        - st_ctime: Creation time
+        - st_mtime: Modification time
+        - st_atime: Access time
+        - st_uid: User ID of the file
+        - st_gid: Group ID of the file
+        """
+
         if path[0] != "/":
             raise FuseOSError(ENOENT)
 
@@ -67,13 +121,40 @@ class EnergonFS(Operations):
         # Strip leading '/'
         path = path[1:]
 
-        if path not in self._all_sample_parts:
-            raise FuseOSError(ENOENT)
+        if path.endswith(MULTI_WARN):
+            return dict(
+                st_mode=0o000 | stat.S_IFBLK,
+                st_nlink=1,
+                st_size=0,
+                st_ctime=self._mtime,
+                st_mtime=self._mtime,
+            )
 
-        file_size = self._all_sample_parts[path]
+        if self._sample_folders:
+            folder, part_name = self._path_parts(path)
+            if part_name != "":
+                # This is a sample part (file)
+                if folder not in self._all_samples:
+                    raise FuseOSError(ENOENT)
+                full_name = f"{folder}.{part_name}"
+                if full_name not in self._all_sample_parts:
+                    raise FuseOSError(ENOENT)
+                file_size = self._all_sample_parts[full_name]
+                mode = 0o444 | stat.S_IFREG
+            else:
+                # This is a sample (directory)
+                if path not in self._all_samples:
+                    raise FuseOSError(ENOENT)
+                file_size = self._all_samples[path]
+                mode = 0o555 | stat.S_IFDIR
+        else:
+            if path not in self._all_sample_parts:
+                raise FuseOSError(ENOENT)
+            file_size = self._all_sample_parts[path]
+            mode = 0o444 | stat.S_IFREG
 
         return dict(
-            st_mode=0o444 | stat.S_IFREG,
+            st_mode=mode,
             st_nlink=1,
             st_size=file_size,
             st_ctime=self._mtime,
@@ -83,17 +164,85 @@ class EnergonFS(Operations):
             st_gid=self._gid,
         )
 
-    def readdir(self, path: str, fh: int = 0):
-        if path != "/":
+    def _path_parts(self, path: str) -> tuple[str, str]:
+        """Split a path into a folder and a part name and check for errors.
+        We only allow paths of the form "sample_key/part_name".
+        The leading "/" must be stripped before.
+        """
+
+        path_parts = path.split("/")
+        # path_parts [0] == "sample_key"
+        # path_parts [1] == "part_name"
+
+        if len(path_parts) > 2:
             raise FuseOSError(ENOENT)
 
-        # '.' and '..' plus our files
-        yield "."
-        yield ".."
-        for entry in self._all_sample_parts.keys():
-            yield entry
+        if len(path_parts) == 1:
+            part_name = ""
+        else:
+            part_name = path_parts[1]
+
+        return path_parts[0], part_name
+
+    def readdir(self, path: str, fh: int = 0):
+        """List the contents of a directory.
+
+        This is called when using `ls` etc.
+
+        Returns a generator of the entries in the directory as strings.
+        """
+
+        if path[0] != "/":
+            raise FuseOSError(ENOENT)
+
+        path = path[1:]
+
+        if self._sample_folders:
+            if path == "":
+                yield "."
+                yield ".."
+                for entry in self._all_samples.keys():
+                    yield entry
+            else:
+                folder, part_name = self._path_parts(path)
+
+                if folder not in self._all_samples or part_name != "":
+                    raise FuseOSError(ENOENT)
+
+                yield "."
+                yield ".."
+
+                single_tar_id = None
+                for entry, size, tar_file_id in self._wds_filestore.list_sample_parts(folder):
+                    if single_tar_id is None:
+                        single_tar_id = tar_file_id
+                    elif single_tar_id != tar_file_id:
+                        break
+                    yield entry
+
+                if folder in self._samples_with_multiple_tar_files:
+                    print(f"  Warning: {folder} sample has multiple tar files")
+                    yield MULTI_WARN
+        else:
+            if path != "":
+                # Only "/" is allowed for listing all sample parts
+                raise FuseOSError(ENOENT)
+            yield "."
+            yield ".."
+            for entry in self._all_sample_parts.keys():
+                yield entry
+            for key in self._samples_with_multiple_tar_files:
+                yield f"{key}.{MULTI_WARN}"
 
     def open(self, path: str, flags: int = 0):
+        """Open a file for reading.
+
+        Actually, we already read the file into memory when it is opened.
+        The read operation just returns a slice of the memory buffer.
+
+        Returns a dummy file descriptor.
+        """
+
         if path[0] != "/":
             raise FuseOSError(ENOENT)
 
@@ -102,9 +251,18 @@ class EnergonFS(Operations):
         # read-only: deny write flags
         if flags & (os.O_WRONLY | os.O_RDWR | os.O_APPEND):
             raise FuseOSError(ENOENT)
-        if path not in self._all_sample_parts:
-            raise FuseOSError(ENOENT)
-        file_bytes = self._wds_filestore[path]
+
+        if self._sample_folders:
+            folder, part_name = self._path_parts(path)
+            if folder not in self._all_samples:
+                raise FuseOSError(ENOENT)
+            full_name = f"{folder}.{part_name}"
+            file_bytes = self._wds_filestore[full_name]
+        else:
+            if path not in self._all_sample_parts:
+                raise FuseOSError(ENOENT)
+            file_bytes = self._wds_filestore[path]
+
         assert isinstance(file_bytes, bytes)
         self._open_files[path] = file_bytes
 
@@ -112,17 +270,30 @@ class EnergonFS(Operations):
         return 0
 
     def read(self, path: str, size: int, offset: int, fh: int = 0):
+        """Read from an open file.
+
+        This is called when using `read` etc.
+
+        Returns the bytes object of a previously opened file.
+        """
+
         if path[0] != "/":
-            raise FuseOSError(ENOENT)
+            raise FuseOSError(EBADF)
 
         path = path[1:]
 
-        if path not in self._all_sample_parts:
+        if path not in self._open_files:
             raise FuseOSError(ENOENT)
+
         data = self._open_files[path]
         return data[offset : offset + size]
 
-    def close(self, path: str, fh: int = 0):
+    def release(self, path: str, fh: int = 0):
+        """Release an open file.
+
+        This is called when the file is closed. We can now discard the memory buffer.
+        """
+
         if path[0] != "/":
             raise FuseOSError(ENOENT)
 
@@ -134,7 +305,8 @@ class EnergonFS(Operations):
 
     def destroy(self, path: str):
         print("Closing energon mount.")
-        print(f"Number of still open files: {len(self._open_files)}")
+        if len(self._open_files) > 0:
+            print(f"Number of still open files: {len(self._open_files)}")
         self._wds_filestore.close()
 
 
@@ -170,10 +342,12 @@ def command(path: EPath, mountpoint: Path, detach: bool, sample_folders: bool):
 
     path = EPath(path)
     mountpoint = Path(mountpoint)
-    print(f"Mounting {path} at {mountpoint}")
+    print(f"Mounting {path} at {mountpoint}...")
     mountpoint.mkdir(parents=True, exist_ok=True)
 
-    energon_fs = EnergonFS(path)
+    energon_fs = EnergonFS(path, sample_folders=sample_folders)
+
+    print("Mount is ready to go.")
 
     try:
         FUSE(
@@ -181,6 +355,7 @@ def command(path: EPath, mountpoint: Path, detach: bool, sample_folders: bool):
             mountpoint=str(mountpoint),
             foreground=not detach,
             nothreads=True,
+            ro=True,
         )
     except RuntimeError as e:
         if str(e) != "7":
