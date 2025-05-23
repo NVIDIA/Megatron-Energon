@@ -11,6 +11,7 @@ from numpy import int8
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.webdataset.itar import ITarSamplePointer
 from megatron.energon.flavors.webdataset.thread_local_sqlite import ThreadLocalSqlite
+from megatron.energon.local_copy import ensure_local_copy
 
 
 class SqliteIndexWriter:
@@ -231,7 +232,7 @@ class SqliteIndexReader:
         Args:
             sqlite_path: Path to the SQLite database file
         """
-        self.sqlite_path = sqlite_path
+        self.sqlite_path = ensure_local_copy(sqlite_path)
 
         # Initialize SQLite connection
         path = str(self.sqlite_path)

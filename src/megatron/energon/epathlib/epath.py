@@ -125,6 +125,17 @@ class EPath:
         with self.open("rb") as f:
             return f.read()
 
+    def download(self, target: "EPath") -> None:
+        """Download the file to a local path.
+
+        Args:
+            target: The path to the local file to download to.
+        """
+
+        assert target.is_local(), "Can only download to local paths"
+        with self.open("rb") as f, target.open("wb") as f_target:
+            f_target.write(f.read())
+
     @property
     def name(self) -> str:
         return self.internal_path.name
@@ -137,11 +148,13 @@ class EPath:
 
     @property
     def url(self) -> str:
-        if self.profile == "default":
-            # A local path
+        if self.is_local():
             return self._internal_str_path
         int_path_str = str(self.internal_path)
         return f"msc://{self.profile}{int_path_str}"
+
+    def is_local(self) -> bool:
+        return self.profile == "default"
 
     def is_dir(self) -> bool:
         return self.fs.info(self._internal_str_path).type == "directory"
