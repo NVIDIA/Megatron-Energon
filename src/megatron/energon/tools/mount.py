@@ -221,7 +221,6 @@ class EnergonFS(Operations):
                     yield entry
 
                 if folder in self._samples_with_multiple_tar_files:
-                    print(f"  Warning: {folder} sample has multiple tar files")
                     yield MULTI_WARN
         else:
             if path != "":
