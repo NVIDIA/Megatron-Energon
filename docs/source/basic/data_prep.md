@@ -144,6 +144,11 @@ Commandline:
 > energon prepare --split-parts 'train:shards/train/.*' --split-parts 'val:shards/val/.*' ./
 ```
 
+```{admonition} Good to know
+:class: tip
+You can inspect your prepared dataset like a normal file system by using the [`energon mount`](energon-mount) feature.
+```
+
 ### Sample Types
 
 After the split is set up, the assistant will ask you which sample type you want to use.
