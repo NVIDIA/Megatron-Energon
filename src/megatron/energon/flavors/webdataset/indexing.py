@@ -21,8 +21,7 @@ class SqliteIndexWriter:
     def __init__(self, sqlite_path: EPath):
         """
         Initializes an SQLite database and sets up the samples table:
-          - samples(id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    tar_file_id INTEGER,
+          - samples(tar_file_id INTEGER,
                     sample_key TEXT,
                     sample_index INTEGER,
                     byte_offset INTEGER,
@@ -51,7 +50,6 @@ class SqliteIndexWriter:
         self.db.execute(
             """
             CREATE TABLE samples (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
                 tar_file_id INTEGER,
                 sample_key TEXT,
                 sample_index INTEGER,
@@ -164,8 +162,7 @@ class SqliteIndexReader:
     """Reads samples from an SQLite database created by SqliteIndexWriter.
 
     The database contains a table with the following schema:
-    - samples(id INTEGER PRIMARY KEY AUTOINCREMENT,
-              tar_file_id INTEGER,
+    - samples(tar_file_id INTEGER,
               sample_key TEXT,
               sample_index INTEGER,
               byte_offset INTEGER,
@@ -199,33 +196,6 @@ class SqliteIndexReader:
         count = self.db.select_one("SELECT COUNT(*) FROM samples")
         return count[0] if count else 0
 
-    def get_sample_by_index(self, idx: int) -> Any:
-        """Get a sample by its numeric index.
-
-        Args:
-            idx: 0-based index of the sample
-
-        Returns:
-            Tuple of (tar_file_id, sample_key, sample_index, byte_offset, byte_size)
-        """
-        assert self.db is not None, "Database is closed"
-
-        # SQLite uses 1-based indexing for ROWID, so add 1 to idx
-        sample = self.db.select_one(
-            "SELECT tar_file_id, sample_key, sample_index, byte_offset, byte_size "
-            "FROM samples WHERE id = ?",
-            (idx + 1,),
-        )
-
-        if sample is None:
-            raise IndexError(f"Sample index out of bounds: {idx}")
-
-        return ITarSamplePointer(
-            tar_file_id=sample[0],
-            byte_offset=sample[3],
-            byte_size=sample[4],
-        )
-
     def get_sample_pointer_by_key(self, key: str) -> Any:
         """Get a sample by its key name.
 
@@ -251,25 +221,6 @@ class SqliteIndexReader:
             byte_offset=sample[3],
             byte_size=sample[4],
         )
-
-    def get_index_by_key(self, key: str) -> int:
-        """Get the index of a sample by its key name.
-
-        Args:
-            key: The sample key to look up
-
-        Returns:
-            0-based index of the sample
-        """
-        assert self.db is not None, "Database is closed"
-
-        result = self.db.select_one("SELECT id FROM samples WHERE sample_key = ?", (key,))
-
-        if result is None:
-            raise KeyError(f"Sample key not found: {key}")
-
-        # Convert from 1-based SQLite ROWID to 0-based index
-        return result[0] - 1
 
     def close(self):
         """Close the database connection."""
