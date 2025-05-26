@@ -16,6 +16,9 @@ and override one or more of the following methods. The data flow of {py:func}`ge
 - {py:func}`def encode_sample(self, sample: T_sample) -> T_encoded_sample <megatron.energon.DefaultTaskEncoder.encode_sample>`
   - Transform the raw data from the dataset (e.g. augment/transform images, tokenize a single sample).
   - Alternatively, you can use {py:meth}`preencode_sample <megatron.energon.TaskEncoder.preencode_sample>` and {py:meth}`postencode_sample <megatron.energon.TaskEncoder.postencode_sample>`. This is especially useful when you use packing and you want to defer loading to when the packed samples are known.
+- {py:meth}`def preencode_sample(self, sample: T_sample) -> T_sample <megatron.energon.TaskEncoder.preencode_sample>`
+  - Can be used as a replacement to {py:func}`encode_sample <megatron.energon.DefaultTaskEncoder.encode_sample>`
+  - Only used together with {py:meth}`postencode_sample <megatron.energon.TaskEncoder.postencode_sample>` (below). Use it if you need to instantiate lazy data before packing the selected samples. But it will also work when not using packing.
 - {py:meth}`def select_samples_to_pack(self, samples: List[T_encoded_sample]) -> List[List[T_encoded_sample]] <megatron.energon.TaskEncoder.select_samples_to_pack>`
   - Optional. Allows for efficient sample packing. See [](../advanced/packing).
 - {py:meth}`def postencode_sample(self, sample: T_sample) -> T_encoded_sample <megatron.energon.TaskEncoder.postencode_sample>`
@@ -74,6 +77,8 @@ class CaptioningTaskEncoder(
 ):
     """A simple task encoder for captioning."""
 
+    decoder = SampleDecoder(image_decode="torchrgb")
+
     def __init__(
         self,
         tokenizer: Tokenizer,
@@ -112,6 +117,8 @@ class CaptioningTaskEncoder(
 
 ```
 
+If you're wondering about the `decoder` assignment, check out [](../basic/data_decoding).
+
 Usage in your training script:
 ```python
     
@@ -136,10 +143,6 @@ train_loader = get_loader(get_train_dataset(
         tokenizer=AutoTokenizer.from_pretrained('gpt2'),
         image_transform=train_img_transform,
     ),
-    # Change this to set how images are decoded.
-    # E.g. "pil" is another commonly used valid option.
-    # See `webdataset.imagehandler` for more options.
-    image_decode="torchrgb",
 ))
 
 for data in train_loader:
