@@ -103,8 +103,8 @@ class TestDataset(unittest.TestCase):
 
         # Create a temporary directory
         self.temp_dir = tempfile.TemporaryDirectory()
-        # self.dataset_path = Path(self.temp_dir.name)
-        self.dataset_path = Path("./test_dataset")
+        self.dataset_path = Path(self.temp_dir.name)
+        # self.dataset_path = Path("./test_dataset")
 
         self.dataset_path.mkdir(exist_ok=True, parents=True)
 
