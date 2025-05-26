@@ -3,7 +3,7 @@ SPDX-License-Identifier: BSD-3-Clause -->
 
 # Remote Dataset
 
-Since version 2.0.0, Megatron Energon supports the use of remote datasets. Since version >5.2.0, Energon file access is based on [Multi Storage Client (MSC)](https://github.com/NVIDIA/multi-storage-client).
+Megatron Energon supports the use of remote datasets. Since version >5.2.0, Energon file access is based on [Multi Storage Client (MSC)](https://github.com/NVIDIA/multi-storage-client).
 This means you can train or validate with your data right from any storage by simply swapping the dataset path for a so-called _MSC URL_.
 
 ## Prerequisites
