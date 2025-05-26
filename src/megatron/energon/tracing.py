@@ -5,8 +5,9 @@ import json
 import os
 import threading
 import time
+import traceback
 import weakref
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import (
@@ -16,9 +17,8 @@ from typing import (
     ClassVar,
     ContextManager,
     Dict,
-    Generic,
     Iterable,
-    Iterator,
+    Literal,
     Mapping,
     Optional,
     TypeVar,
@@ -33,7 +33,8 @@ __all__ = [
     "TraceWriter",
     "Span",
     "AsyncSpan",
-    "AsyncFlow",
+    "AsyncContext",
+    "Flow",
     "ObjectTrace",
     "NoopTraceWriter",
 ]
@@ -51,6 +52,14 @@ def _timestamp_us() -> int:
     return time.time_ns() // 1_000  # convert ns -> µs
 
 
+def _cur_thread_id() -> int:
+    """Return current thread id as int."""
+    tid = threading.get_ident()
+    while tid > 0xFFFFFFFF:
+        tid = (tid & 0xFFFFFFFF) ^ (tid >> 32)
+    return tid
+
+
 class JsonEncoder(json.JSONEncoder):
     """Custom JSON encoder that handles numpy arrays, torch tensors, and dataclasses."""
 
@@ -62,8 +71,8 @@ class JsonEncoder(json.JSONEncoder):
             except Exception:
                 return str(o)[:250]
 
-        # Handle dataclasses
-        if is_dataclass(o):
+        # Handle dataclass *instances* (exclude dataclass *types*).
+        if is_dataclass(o) and not isinstance(o, type):
             return {"__type__": type(o).__name__, **asdict(o)}
 
         return super().default(o)
@@ -228,14 +237,14 @@ class TraceWriter(AbstractContextManager):
             args: Extra arguments object to attach to both *B* and *E* events.
             level: Logging level.
         """
-        if level < self._log_level:
+        if level > self._log_level:
             return
         event = {
             "name": name,
             "ph": "B",
             "ts": _timestamp_us(),
             "pid": self._pid,
-            "tid": threading.get_ident(),
+            "tid": _cur_thread_id(),
         }
         if cat is not None:
             event["cat"] = cat
@@ -259,14 +268,14 @@ class TraceWriter(AbstractContextManager):
             args: Extra arguments object to attach to both *B* and *E* events.
             level: Logging level.
         """
-        if level < self._log_level:
+        if level > self._log_level:
             return
         event = {
             "name": name,
             "ph": "E",
             "ts": _timestamp_us(),
             "pid": self._pid,
-            "tid": threading.get_ident(),
+            "tid": _cur_thread_id(),
         }
         if cat is not None:
             event["cat"] = cat
@@ -293,16 +302,34 @@ class TraceWriter(AbstractContextManager):
         Returns:
             Span – a context manager emitting matching ``B``/``E`` events.
         """
-        if level < self._log_level:
+        if level > self._log_level:
             return _NOOP_SPAN
         return Span(self, name=name, cat=cat, args=args)
+
+    def iterable(
+        self,
+        iterable: Iterable[T],
+        *,
+        name: Optional[str] = None,
+        next: Optional[Callable[[], ContextManager]] = None,
+        level: int = 0,
+    ) -> Iterable[T]:
+        """Wrap an iterable to emit trace events for each `next` call."""
+        if level > self._log_level:
+            return iterable
+        assert (name is not None) != (next is not None), "Either name xor next must be provided"
+        if name is not None:
+            return iterable_wrapper(iterable, span=lambda: self.span(name))
+        else:
+            assert next is not None
+            return iterable_wrapper(iterable, span=next)
 
     def instant(
         self,
         name: str,
         *,
         cat: str | None = None,
-        scope: str = "t",
+        scope: Optional[Literal["t", "p", "g"]] = None,
         args: Optional[Dict[str, Any]] = None,
         level: int = 0,
     ) -> None:
@@ -312,25 +339,38 @@ class TraceWriter(AbstractContextManager):
             name: Display name.
             cat: Optional categories.
             scope: Trace-viewer scope selector – ``t`` (thread), ``p`` (process)
-                or ``g`` (global).
+                or ``g`` (global). Defaults to ``t``.
             args: Optional arguments payload.
             level: Logging level.
         """
-        if level < self._log_level:
+        if level > self._log_level:
             return
         event = {
             "name": name,
             "ph": "i",
             "ts": _timestamp_us(),
             "pid": self._pid,
-            "tid": threading.get_ident(),
-            "s": scope,
+            "tid": _cur_thread_id(),
         }
+        if scope is not None:
+            event["s"] = scope
         if cat is not None:
             event["cat"] = cat
         if args:
             event["args"] = dict(args)
         self._emit(event)
+
+    def generator(
+        self,
+        name: str,
+        *,
+        cat: str | None = None,
+        next_args: Optional[Dict[str, Any]] = None,
+        level: int = 0,
+    ) -> "GeneratorContext":
+        if level > self._log_level:
+            return _NOOP_GENERATOR_CONTEXT
+        return GeneratorContext(self, name=name, cat=cat, next_args=next_args)
 
     # Async events --------------------------------------------------------
 
@@ -340,7 +380,6 @@ class TraceWriter(AbstractContextManager):
         *,
         id: Union[int, str, None] = None,
         cat: str | None = None,
-        scope: str | None = None,
         args: Optional[Dict[str, Any]] = None,
         level: int = 0,
     ) -> Union[int, str]:
@@ -350,14 +389,13 @@ class TraceWriter(AbstractContextManager):
             name: Event display name.
             id: Correlation identifier (int or str).
             cat: Optional categories.
-            scope: Extra scope string to avoid id collisions.
             args: Optional argument object.
             level: Logging level.
         """
-        if level < self._log_level:
-            return
         if id is None:
             id = self._next_id()
+        if level > self._log_level:
+            return id
 
         event = {
             "name": name,
@@ -365,12 +403,10 @@ class TraceWriter(AbstractContextManager):
             "id": id,
             "ts": _timestamp_us(),
             "pid": self._pid,
-            "tid": threading.get_ident(),
+            "tid": _cur_thread_id(),
         }
         if cat is not None:
             event["cat"] = cat
-        if scope is not None:
-            event["scope"] = scope  # avoid clash with "s" used by instant events
         if args:
             event["args"] = dict(args)
         self._emit(event)
@@ -382,7 +418,6 @@ class TraceWriter(AbstractContextManager):
         *,
         id: Union[int, str, None] = None,
         cat: str | None = None,
-        scope: str | None = None,
         args: Optional[Dict[str, Any]] = None,
         level: int = 0,
     ) -> None:
@@ -392,11 +427,10 @@ class TraceWriter(AbstractContextManager):
             name: Event name.
             id: Correlation identifier.
             cat: Categories.
-            scope: Optional scope string.
             args: Additional arguments.
             level: Logging level.
         """
-        if level < self._log_level:
+        if level > self._log_level:
             return
         if id is None:
             id = self._next_id()
@@ -407,12 +441,10 @@ class TraceWriter(AbstractContextManager):
             "id": id,
             "ts": _timestamp_us(),
             "pid": self._pid,
-            "tid": threading.get_ident(),
+            "tid": _cur_thread_id(),
         }
         if cat is not None:
             event["cat"] = cat
-        if scope is not None:
-            event["scope"] = scope
         if args:
             event["args"] = dict(args)
         self._emit(event)
@@ -423,7 +455,6 @@ class TraceWriter(AbstractContextManager):
         *,
         id: Union[int, str],
         cat: str | None = None,
-        scope: str | None = None,
         args: Optional[Dict[str, Any]] = None,
         level: int = 0,
     ) -> None:
@@ -432,23 +463,20 @@ class TraceWriter(AbstractContextManager):
         Args:
             id: Correlation identifier.
             cat: Categories.
-            scope: Optional scope string.
             args: Additional arguments.
             level: Logging level.
         """
-        if level < self._log_level:
+        if level > self._log_level:
             return
         event = {
             "ph": "e",
             "id": id,
             "ts": _timestamp_us(),
             "pid": self._pid,
-            "tid": threading.get_ident(),
+            "tid": _cur_thread_id(),
         }
         if cat is not None:
             event["cat"] = cat
-        if scope is not None:
-            event["scope"] = scope
         if args:
             event["args"] = dict(args)
         self._emit(event)
@@ -459,7 +487,6 @@ class TraceWriter(AbstractContextManager):
         *,
         id: Union[int, str, None] = None,
         cat: str | None = None,
-        scope: str | None = None,
         args: Optional[Dict[str, Any]] = None,
         level: int = 0,
     ) -> "AsyncSpan":
@@ -469,14 +496,13 @@ class TraceWriter(AbstractContextManager):
             name: Display name.
             id: Correlation identifier to keep events together.
             cat: Categories.
-            scope: Optional scope string.
             args: Arguments attached to the begin event.
             level: Logging level.
 
         Returns:
             AsyncSpan context manager.
         """
-        if level < self._log_level:
+        if level > self._log_level:
             return _NOOP_ASYNC_SPAN
         if id is None:
             id = self._next_id()
@@ -486,7 +512,6 @@ class TraceWriter(AbstractContextManager):
             name=name,
             id=id,
             cat=cat,
-            scope=scope,
             args=args,
         )
 
@@ -495,27 +520,46 @@ class TraceWriter(AbstractContextManager):
         *,
         id: Union[int, str, None] = None,
         cat: str | None = None,
-        scope: str | None = None,
         level: int = 0,
-    ) -> "AsyncFlow":
+    ) -> "AsyncContext":
         """Return an *AsyncFlow* context-manager for a nestable async chain.
 
         Args:
             id: Correlation identifier.
             cat: Categories.
-            scope: Optional scope string.
             level: Logging level.
         """
-        if level < self._log_level:
-            return _NOOP_ASYNC_FLOW
+        if level > self._log_level:
+            return _NOOP_ASYNC_CONTEXT
         if id is None:
             id = self._next_id()
 
-        return AsyncFlow(
+        return AsyncContext(
             self,
             id=id,
             cat=cat,
-            scope=scope,
+        )
+
+    def async_generator(
+        self,
+        name: str,
+        *,
+        id: Union[int, str, None] = None,
+        cat: str | None = None,
+        next_args: Optional[Dict[str, Any]] = None,
+        level: int = 0,
+    ) -> "AsyncGeneratorContext":
+        """Emit an async *generator* (``ph='g'``) event within this async flow."""
+        if level > self._log_level:
+            return _NOOP_ASYNC_GENERATOR_CONTEXT
+        if id is None:
+            id = self._next_id()
+        return AsyncGeneratorContext(
+            self,
+            name=name,
+            id=id,
+            cat=cat,
+            next_args=next_args,
         )
 
     # Counter events ------------------------------------------------------
@@ -539,7 +583,7 @@ class TraceWriter(AbstractContextManager):
             cat: Categories.
             level: Logging level.
         """
-        if level < self._log_level:
+        if level > self._log_level:
             return
         if isinstance(value, Mapping):
             args_field = value
@@ -553,7 +597,7 @@ class TraceWriter(AbstractContextManager):
             "ph": "C",
             "ts": _timestamp_us(),
             "pid": self._pid,
-            "tid": threading.get_ident(),
+            "tid": _cur_thread_id(),
             "args": args_field,
         }
         if id is not None:
@@ -562,132 +606,12 @@ class TraceWriter(AbstractContextManager):
             event["cat"] = cat
         self._emit(event)
 
-    # Object events -------------------------------------------------------
-
-    def object_new(
+    def async_object_trace(
         self,
         name: str,
         *,
         id: Union[int, str, None] = None,
         cat: str | None = None,
-        scope: str | None = None,
-        level: int = 0,
-    ) -> None:
-        """Emit an object creation event (``ph='N'``).
-
-        Args:
-            name: Object type/name displayed in UI.
-            id: Unique identifier (e.g. pointer address or GUID).
-            cat: Categories.
-            scope: Optional scope string to avoid id clashes.
-            level: Logging level.
-        """
-        if level < self._log_level:
-            return
-        if id is None:
-            id = self._next_id()
-
-        event = {
-            "name": name,
-            "ph": "N",
-            "id": id,
-            "ts": _timestamp_us(),
-            "pid": self._pid,
-            "tid": threading.get_ident(),
-        }
-        if cat is not None:
-            event["cat"] = cat
-        if scope is not None:
-            event["scope"] = scope
-        self._emit(event)
-        return id
-
-    def object_snapshot(
-        self,
-        name: str,
-        *,
-        id: Union[int, str, None] = None,
-        snapshot: Dict[str, Any],
-        cat: str | None = None,
-        scope: str | None = None,
-        level: int = 0,
-    ) -> None:
-        """Emit an object *snapshot* (``ph='O'``).
-
-        Args:
-            name: Object name.
-            id: Identifier matching a previously created object.
-            snapshot: Arbitrary JSON-serialisable state payload.
-            cat: Categories.
-            scope: Optional scope string.
-            level: Logging level.
-        """
-        if level < self._log_level:
-            return
-        if id is None:
-            id = self._next_id()
-
-        event = {
-            "name": name,
-            "ph": "O",
-            "id": id,
-            "ts": _timestamp_us(),
-            "pid": self._pid,
-            "tid": threading.get_ident(),
-            "args": {"snapshot": dict(snapshot)},
-        }
-        if cat is not None:
-            event["cat"] = cat
-        if scope is not None:
-            event["scope"] = scope
-        self._emit(event)
-
-    def object_delete(
-        self,
-        name: str,
-        *,
-        id: Union[int, str, None] = None,
-        cat: str | None = None,
-        scope: str | None = None,
-        level: int = 0,
-    ) -> None:
-        """Emit an object deletion event (``ph='D'``).
-
-        Args:
-            name: Object name.
-            id: Identifier.
-            cat: Categories.
-            scope: Optional scope string.
-            level: Logging level.
-        """
-        if level < self._log_level:
-            return
-        if id is None:
-            id = self._next_id()
-
-        event = {
-            "name": name,
-            "ph": "D",
-            "id": id,
-            "ts": _timestamp_us(),
-            "pid": self._pid,
-            "tid": threading.get_ident(),
-        }
-        if cat is not None:
-            event["cat"] = cat
-        if scope is not None:
-            event["scope"] = scope
-        self._emit(event)
-
-    # Helper --------------------------------------------------------------
-
-    def object_trace(
-        self,
-        name: str,
-        *,
-        id: Union[int, str, None] = None,
-        cat: str | None = None,
-        scope: str | None = None,
         snapshot: Optional[Dict[str, Any]] = None,
         level: int = 0,
     ) -> "ObjectTrace":
@@ -697,14 +621,13 @@ class TraceWriter(AbstractContextManager):
             name: Object type/name.
             id: Identifier to correlate with future snapshots/deletion.
             cat: Categories.
-            scope: Optional scope string.
             snapshot: Optional initial snapshot emitted right after ``N``.
             level: Logging level.
 
         Returns:
-            ObjectTrace instance.
+            AsyncObjectTrace instance.
         """
-        if level < self._log_level:
+        if level > self._log_level:
             return _NOOP_OBJECT_TRACE
         if id is None:
             id = self._next_id()
@@ -714,17 +637,15 @@ class TraceWriter(AbstractContextManager):
             name=name,
             id=id,
             cat=cat,
-            scope=scope,
             initial_snapshot=snapshot,
         )
 
-    def trace_object(
+    def trace_object_async(
         self,
         obj: Any,
         name: str,
         *,
         cat: str | None = None,
-        scope: str | None = None,
         args: Optional[Dict[str, Any]] = None,
         level: int = 0,
     ) -> "ObjectTrace":
@@ -734,20 +655,17 @@ class TraceWriter(AbstractContextManager):
             obj: Target instance to monitor.
             name: Trace-viewer object name.
             cat: Categories.
-            scope: Optional scope string.
             level: Logging level.
 
         Returns:
-            ObjectTrace handle.
+            AsyncObjectTrace handle.
         """
         if not gc.is_tracked(obj):
             raise ValueError("Object is not tracked by the garbage collector")
-        if level < self._log_level:
+        if level > self._log_level:
             return _NOOP_OBJECT_TRACE
-        trace = self.object_trace(name, id=id(obj), cat=cat, scope=scope)
+        trace = self.async_object_trace(name, id=id(obj), cat=cat, snapshot=args)
         weakref.finalize(obj, trace.delete)
-        if args:
-            trace.snapshot(args)
         return trace
 
     # Metadata ------------------------------------------------------------
@@ -757,7 +675,6 @@ class TraceWriter(AbstractContextManager):
         name: str,
         *,
         args: Dict[str, Any],
-        pid: int | None = None,
         tid: int | None = None,
     ) -> None:
         """Emit a generic *metadata* event (``ph='M'``).
@@ -765,13 +682,12 @@ class TraceWriter(AbstractContextManager):
         Args:
             name: Metadata event name (e.g. ``process_name``).
             args: Arguments dict as required by the spec.
-            pid: Override process id; defaults to writer.pid.
             tid: Thread id; required for thread metadata.
         """
         event = {
             "name": name,
             "ph": "M",
-            "pid": pid if pid is not None else self._pid,
+            "pid": self._pid,
         }
         if tid is not None:
             event["tid"] = tid
@@ -779,31 +695,165 @@ class TraceWriter(AbstractContextManager):
             event["args"] = dict(args)
         self._emit(event)
 
-    def metadata_process_name(self, name: str, *, pid: int | None = None) -> None:
-        self.metadata("process_name", args=dict(name=name), pid=pid)
+    def metadata_process_name(self, name: str) -> None:
+        """Set the current process name."""
+        self.metadata("process_name", args=dict(name=name))
 
-    def metadata_process_labels(self, labels: str, *, pid: int | None = None) -> None:
-        self.metadata("process_labels", args=dict(labels=labels), pid=pid)
+    def metadata_thread_name(self, name: str) -> None:
+        """Set the current thread name."""
+        self.metadata("thread_name", args=dict(name=name), tid=_cur_thread_id())
 
-    def metadata_process_sort_index(self, sort_index: int, *, pid: int | None = None) -> None:
-        self.metadata("process_sort_index", args=dict(sort_index=sort_index), pid=pid)
+    # Flow events --------------------------------------------------------
 
-    def metadata_thread_name(
-        self, name: str, *, tid: int | None = None, pid: int | None = None
+    def flow_start(
+        self,
+        name: str,
+        *,
+        id: Optional[int] = None,
+        cat: str | None = None,
+        level: int = 0,
+    ) -> Union[int, str]:
+        """Emit a *flow start* (``ph='s'``) event. The flow is bound to the enclosing slice.
+
+        Args:
+            name: Display name.
+            id: Correlation identifier.
+            cat: Categories.
+            args: Additional arguments.
+            level: Logging level.
+        """
+        if id is None:
+            id = self._next_id()
+        if level > self._log_level:
+            return id
+
+        event: Dict[str, Any] = {
+            "name": name,
+            "ph": "s",
+            "id": id,
+            "ts": _timestamp_us(),
+            "pid": self._pid,
+            "tid": _cur_thread_id(),
+        }
+        if cat is not None:
+            event["cat"] = cat
+        self._emit(event)
+        return id
+
+    def flow_step(
+        self,
+        name: str,
+        *,
+        id: int,
+        cat: str | None = None,
+        level: int = 0,
     ) -> None:
-        self.metadata(
-            "thread_name", args=dict(name=name), tid=tid or threading.get_ident(), pid=pid
-        )
+        """
+        Emit a *flow step* (``ph='t'``) event. The flow is bound to the enclosing slice.
 
-    def metadata_thread_sort_index(
-        self, sort_index: int, *, tid: int | None = None, pid: int | None = None
+        Args:
+            name: The name of the flow.
+            id: The id of the flow.
+            cat: The category of the flow.
+            level: The level of the flow.
+        """
+        if level > self._log_level:
+            return
+
+        event: Dict[str, Any] = {
+            "name": name,
+            "ph": "t",
+            "id": id,
+            "ts": _timestamp_us(),
+            "pid": self._pid,
+            "tid": _cur_thread_id(),
+        }
+        if cat is not None:
+            event["cat"] = cat
+        self._emit(event)
+
+    def flow_end(
+        self,
+        name: str,
+        *,
+        id: int,
+        cat: str | None = None,
+        bind_enclosing_slice: bool = False,
+        level: int = 0,
     ) -> None:
-        self.metadata(
-            "thread_sort_index",
-            args=dict(sort_index=sort_index),
-            tid=tid or threading.get_ident(),
-            pid=pid,
-        )
+        """Emit a *flow end* (``ph='f'``) event. The flow is finished either in the enclosing slice or at the next slice.
+
+        Args:
+            name: The name of the flow.
+            id: The id of the flow.
+            cat: The category of the flow.
+            bind_enclosing_slice: If *True*, adds ``bp='e'`` to bind to the
+                enclosing slice (see Trace Event Format), otherwise binds to the next slice.
+            level: The level of the flow.
+        """
+        if level > self._log_level:
+            return
+
+        event: Dict[str, Any] = {
+            "name": name,
+            "ph": "f",
+            "id": id,
+            "ts": _timestamp_us(),
+            "pid": self._pid,
+            "tid": _cur_thread_id(),
+        }
+        if cat is not None:
+            event["cat"] = cat
+        if bind_enclosing_slice:
+            event["bp"] = "e"
+        self._emit(event)
+
+    def flow(
+        self,
+        name: str,
+        *,
+        id: Optional[int] = None,
+        cat: str | None = None,
+        level: int = 0,
+    ) -> "Flow":
+        """Emit a *flow* event."""
+        if level > self._log_level:
+            return _NOOP_FLOW
+        if id is None:
+            id = self._next_id()
+        return Flow(self, name=name, id=id, cat=cat)
+
+    def resume_flow(self, saved_flow: dict) -> "Flow":
+        """Resume a flow from a dictionary."""
+        if len(saved_flow) == 0:
+            return _NOOP_FLOW
+        return Flow(self, **saved_flow, resuming=True)
+
+    # Exception ---------------------------------------------------------
+
+    def async_exc(
+        self,
+        *,
+        name: str,
+        id: Union[int, str, None] = None,
+        cat: str | None = None,
+        level: int = 0,
+    ) -> None:
+        """Emit an *exception* event as an async instant (``ph='n'``).
+
+        This is primarily used by :class:`AsyncFlow` to surface
+        exceptions that happened inside a flow.
+        """
+
+        if id is None:
+            id = self._next_id()
+        if level > self._log_level:
+            return
+
+        # Represent exception as string to keep JSON serialisable.
+        exc_repr = traceback.format_exc().splitlines()
+
+        self.async_instant(name, id=id, cat=cat, args={"exception": exc_repr}, level=level)
 
     # Context management ---------------------------------------------------
 
@@ -830,7 +880,7 @@ class Span(AbstractContextManager):
     """
 
     __slots__ = ("_writer", "_name", "_cat", "_args", "_begin_ts")
-    _writer: TraceWriter
+    _writer: Optional[TraceWriter]
     _name: str
     _cat: Optional[str]
     _args: Dict[str, Any] | None
@@ -846,79 +896,8 @@ class Span(AbstractContextManager):
         self._writer = writer
         self._name = name
         self._cat = cat
-        self._args = args
-
-    def begin(self) -> None:
-        self._writer.duration_begin(self._name, cat=self._cat, args=self._args)
+        self._writer.duration_begin(self._name, cat=self._cat, args=args or None)
         self._args = None
-
-    def update_args(self, args: Dict[str, Any]) -> None:
-        if self._args is None:
-            self._args = args
-        else:
-            self._args.update(args)
-
-    def end(self) -> None:
-        self._writer.duration_end(self._name, cat=self._cat, args=self._args or None)
-        self._args = None
-
-    # ------------------------------------------------------------------
-    # Context management
-    # ------------------------------------------------------------------
-
-    def __enter__(self):  # noqa: D401
-        self.begin()
-        return self
-
-    def __exit__(self, exc_type, exc, tb):  # noqa: D401, N802
-        self.end()
-
-
-class AsyncSpan(AbstractContextManager):
-    """Context manager for *nestable async* events.
-
-    Use :py:meth:`instant` for ``n`` events inside the span.
-    """
-
-    __slots__ = (
-        "_writer",
-        "_name",
-        "_id",
-        "_cat",
-        "_scope",
-        "_args",
-    )
-
-    def __init__(
-        self,
-        writer: TraceWriter,
-        *,
-        name: str,
-        id: Union[int, str],
-        cat: str | None = None,
-        scope: str | None = None,
-        args: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        self._writer = writer
-        self._name = name
-        self._id = id
-        self._cat = cat
-        self._scope = scope
-        self._args = args
-
-    # ------------------------------------------------------------------
-    # Context management
-    # ------------------------------------------------------------------
-
-    def begin(self) -> None:
-        self._writer.async_begin(
-            self._name, id=self._id, cat=self._cat, scope=self._scope, args=self._args or None
-        )
-        self._args = None
-
-    def __enter__(self):  # noqa: D401
-        self.begin()
-        return self
 
     def update_args(self, args: Dict[str, Any]) -> None:
         if self._args is None:
@@ -927,202 +906,23 @@ class AsyncSpan(AbstractContextManager):
             self._args.update(args)
 
     def end(self, args: Optional[Dict[str, Any]] = None) -> None:
+        if self._writer is None:
+            return
         if self._args and args:
             self._args.update(args)
-        self._writer.async_end(
-            self._name, id=self._id, cat=self._cat, scope=self._scope, args=self._args or None
-        )
+        self._writer.duration_end(self._name, cat=self._cat, args=self._args or args or None)
         self._args = None
+        self._writer = None
+
+    # ------------------------------------------------------------------
+    # Context management
+    # ------------------------------------------------------------------
+
+    def __enter__(self):  # noqa: D401
+        return self
 
     def __exit__(self, exc_type, exc, tb):  # noqa: D401, N802
         self.end()
-
-
-class AsyncFlow(AbstractContextManager):
-    """Context manager for *nestable async* events."""
-
-    __slots__ = (
-        "_writer",
-        "_id",
-        "_cat",
-        "_scope",
-    )
-
-    def __init__(
-        self,
-        writer: TraceWriter,
-        *,
-        id: Union[int, str],
-        cat: str | None = None,
-        scope: str | None = None,
-    ) -> None:
-        self._writer = writer
-        self._id = id
-        self._cat = cat
-        self._scope = scope
-
-    # ------------------------------------------------------------------
-    # Context management
-    # ------------------------------------------------------------------
-
-    def __enter__(self):  # noqa: D401
-        return self
-
-    def instant(self, name: str, *, args: Optional[Dict[str, Any]] = None, level: int = 0) -> None:
-        """Emit an async *instant* (``ph='n'``) event within this async flow."""
-        self._writer.async_instant(
-            name, id=self._id, cat=self._cat, scope=self._scope, args=args, level=level
-        )
-
-    def start(self, name: str, *, args: Optional[Dict[str, Any]] = None, level: int = 0) -> None:
-        """Emit an async *start* (``ph='b'``) event within this async flow."""
-        self._writer.async_begin(
-            name, id=self._id, cat=self._cat, scope=self._scope, args=args, level=level
-        )
-
-    def end(self, name: str, *, args: Optional[Dict[str, Any]] = None, level: int = 0) -> None:
-        """Emit an async *end* (``ph='e'``) event within this async flow."""
-        self._writer.async_end(
-            name, id=self._id, cat=self._cat, scope=self._scope, args=args, level=level
-        )
-
-    def span(
-        self, name: str, *, args: Optional[Dict[str, Any]] = None, level: int = 0
-    ) -> AsyncSpan:
-        """Emit an async *span* (``ph='s'``) event within this async flow."""
-        return self._writer.async_span(
-            name, id=self._id, cat=self._cat, scope=self._scope, args=args, level=level
-        )
-
-    def iterable(self, iterable: Iterable[T], *, name: str, level: int = 0) -> Iterable[T]:
-        """Wrap an iterable to emit trace events for each `next` call."""
-        if level < self._writer._log_level:
-            return iterable
-        return IterableNextWrapper(iterable, span=lambda: self.span(name))
-
-    def exception(self, exc: Exception, *, name: str, level: int = 0) -> None:
-        """Emit an exception event."""
-        self._writer.exception(
-            exc, name=name, id=self._id, cat=self._cat, scope=self._scope, level=level
-        )
-
-    def __exit__(self, exc_type, exc, tb):  # noqa: D401, N802
-        pass
-
-
-class IterableNextWrapper(Iterator[T], Generic[T]):
-    """A wrapper for an iterable that emits trace events for each `next` call."""
-
-    __slots__ = (
-        "_iterable",
-        "_name",
-    )
-
-    _iterator: Iterator[T]
-    _span: Callable[[], ContextManager]
-
-    def __init__(self, iterable: Iterable[T], *, span: Callable[[], ContextManager]):
-        self._iterator = iter(iterable)
-        self._span = span
-
-    def __iter__(self):
-        return self
-
-    def __next__(self):
-        with self._span():
-            return next(self._iterator)
-
-
-class ObjectTrace(AbstractContextManager):
-    """Lifecycle helper for Trace-Event objects.
-
-    Emits ``N`` on construction, :py:meth:`snapshot` for ``O`` and ``D`` upon
-    deletion, context exit, or garbage collection.
-    """
-
-    __slots__ = (
-        "_writer",
-        "_name",
-        "_id",
-        "_cat",
-        "_scope",
-        "_deleted",
-    )
-
-    def __init__(
-        self,
-        writer: TraceWriter,
-        *,
-        name: str,
-        id: Union[int, str],
-        cat: str | None = None,
-        scope: str | None = None,
-        initial_snapshot: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        self._writer = writer
-        self._name = name
-        self._id = id
-        self._cat = cat
-        self._scope = scope
-        self._deleted = False
-
-        # Emit object creation event
-        self._writer.object_new(name, id=id, cat=cat, scope=scope)
-
-        if initial_snapshot is not None:
-            self.snapshot(initial_snapshot)
-
-    # ------------------------------------------------------------------
-    # API
-    # ------------------------------------------------------------------
-
-    def snapshot(self, data: Dict[str, Any], *, level: int = 0) -> None:
-        """Emit snapshot for current state of the object."""
-        if self._deleted:
-            raise RuntimeError("Cannot snapshot deleted traced object")
-        self._writer.object_snapshot(
-            self._name,
-            id=self._id,
-            snapshot=data,
-            cat=self._cat,
-            scope=self._scope,
-            level=level,
-        )
-
-    def delete(self) -> None:
-        """Emit delete event if not already emitted."""
-        if not self._deleted:
-            self._writer.object_delete(
-                self._name,
-                id=self._id,
-                cat=self._cat,
-                scope=self._scope,
-            )
-            self._deleted = True
-
-    # ------------------------------------------------------------------
-    # Context management
-    # ------------------------------------------------------------------
-
-    def __enter__(self):  # noqa: D401
-        return self
-
-    def __exit__(self, exc_type, exc, tb):  # noqa: D401, N802
-        self.delete()
-        # Do not suppress exceptions
-        return False
-
-    def __del__(self):  # noqa: D401
-        # Ensure deletion event when object garbage-collected
-        try:
-            self.delete()
-        except Exception:
-            pass
-
-
-# ------------------------------------------------------------------
-# Noop implementations
-# ------------------------------------------------------------------
 
 
 class _NoopSpan(AbstractContextManager):
@@ -1145,10 +945,66 @@ class _NoopSpan(AbstractContextManager):
 _NOOP_SPAN = cast(Span, _NoopSpan())
 
 
-class NoopAsyncSpan(AbstractContextManager):
-    def begin(self, *args, **kwargs) -> None:
-        pass
+class AsyncSpan(AbstractContextManager):
+    """Context manager for *nestable async* events.
 
+    Use :py:meth:`instant` for ``n`` events inside the span.
+    """
+
+    __slots__ = (
+        "_writer",
+        "_name",
+        "_id",
+        "_cat",
+        "_args",
+    )
+
+    _writer: Optional[TraceWriter]
+    _name: str
+    _id: Union[int, str]
+    _cat: Optional[str]
+    _args: Optional[Dict[str, Any]]
+
+    def __init__(
+        self,
+        writer: TraceWriter,
+        *,
+        name: str,
+        id: Union[int, str],
+        cat: str | None = None,
+        args: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        self._writer = writer
+        self._name = name
+        self._id = id
+        self._cat = cat
+        self._args = None
+
+        self._writer.async_begin(self._name, id=self._id, cat=self._cat, args=args or None)
+
+    def update_args(self, args: Dict[str, Any]) -> None:
+        if self._args is None:
+            self._args = args
+        else:
+            self._args.update(args)
+
+    def end(self, args: Optional[Dict[str, Any]] = None) -> None:
+        if self._writer is None:
+            return
+        if self._args and args:
+            self._args.update(args)
+        self._writer.async_end(self._name, id=self._id, cat=self._cat, args=self._args or None)
+        self._args = None
+        self._writer = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.end()
+
+
+class NoopAsyncSpan(AbstractContextManager):
     def update_args(self, *args, **kwargs) -> None:
         pass
 
@@ -1165,7 +1021,79 @@ class NoopAsyncSpan(AbstractContextManager):
 _NOOP_ASYNC_SPAN = cast(AsyncSpan, NoopAsyncSpan())
 
 
-class NoopAsyncFlow(AbstractContextManager):
+class AsyncContext:
+    """Context manager for *nestable async* events with the same id."""
+
+    __slots__ = (
+        "_writer",
+        "_id",
+        "_cat",
+    )
+
+    _writer: TraceWriter
+    _id: Union[int, str]
+    _cat: Optional[str]
+
+    def __init__(
+        self,
+        writer: TraceWriter,
+        *,
+        id: Union[int, str],
+        cat: str | None = None,
+    ) -> None:
+        self._writer = writer
+        self._id = id
+        self._cat = cat
+
+    def instant(self, name: str, *, args: Optional[Dict[str, Any]] = None, level: int = 0) -> None:
+        """Emit an async *instant* (``ph='n'``) event within this async flow."""
+        self._writer.async_instant(name, id=self._id, cat=self._cat, args=args, level=level)
+
+    def start(self, name: str, *, args: Optional[Dict[str, Any]] = None, level: int = 0) -> None:
+        """Emit an async *start* (``ph='b'``) event within this async flow."""
+        self._writer.async_begin(name, id=self._id, cat=self._cat, args=args, level=level)
+
+    def end(self, name: str, *, args: Optional[Dict[str, Any]] = None, level: int = 0) -> None:
+        """Emit an async *end* (``ph='e'``) event within this async flow."""
+        self._writer.async_end(name, id=self._id, cat=self._cat, args=args, level=level)
+
+    def span(
+        self, name: str, *, args: Optional[Dict[str, Any]] = None, level: int = 0
+    ) -> AsyncSpan:
+        """Emit an async *span* (``ph='s'``) event within this async flow."""
+        return self._writer.async_span(name, id=self._id, cat=self._cat, args=args, level=level)
+
+    def generator(
+        self, name: str, *, next_args: Optional[Dict[str, Any]] = None, level: int = 0
+    ) -> "AsyncGeneratorContext":
+        """Get a generator context for the given name.
+
+        This is used to trace all code being executed between yields of a generator.
+
+        Usage::
+
+            with async_ctx.generator(name="my_generator", next_args={"item_idx": 0}) as ctx:
+                for item_idx, item in enumerate(iterable):
+                    ctx.instant("item", args={"item": item})
+                    with ctx.yield_(next_args={"item_idx": item_idx + 1}):
+                        yield item
+        """
+        return self._writer.async_generator(
+            name, id=self._id, cat=self._cat, next_args=next_args, level=level
+        )
+
+    def iterable(self, iterable: Iterable[T], *, name: str, level: int = 0) -> Iterable[T]:
+        """Wrap an iterable to emit trace events for each `next` call."""
+        if level > self._writer._log_level:
+            return iterable
+        return iterable_wrapper(iterable, span=lambda: self.span(name))
+
+    def exc(self, *, name: str, level: int = 0) -> None:
+        """Emit an exception event."""
+        self._writer.async_exc(name=name, id=self._id, cat=self._cat, level=level)
+
+
+class NoopAsyncContext:
     def instant(self, *args, **kwargs) -> None:
         pass
 
@@ -1177,31 +1105,301 @@ class NoopAsyncFlow(AbstractContextManager):
 
     def span(self, *args, **kwargs) -> AsyncSpan:
         return _NOOP_ASYNC_SPAN
-    
+
     def iterable(self, iterable, *args, **kwargs) -> Iterable:
+        return iterable
+
+    def exc(self, *args, **kwargs) -> None:
+        pass
+
+
+_NOOP_ASYNC_CONTEXT = cast(AsyncContext, NoopAsyncContext())
+
+
+class AsyncGeneratorContext(AbstractContextManager):
+    """Context manager for a generator context, that interrupts when yielding.
+
+    Use like this::
+
+        with writer.async_generator_context(name="my_generator", next_args={"item_idx": 0}) as ctx:
+            for item_idx, item in enumerate(iterable):
+                ctx.instant("item", args={"item": item})
+                with ctx.yield_(next_args={"item_idx": item_idx + 1}):
+                    yield item
+    """
+
+    __slots__ = (
+        "_writer",
+        "_name",
+        "_id",
+        "_cat",
+        "_active_scope",
+    )
+
+    _writer: Optional[TraceWriter]
+    _name: str
+    _id: Union[int, str]
+    _cat: Optional[str]
+
+    _active_scope: Optional[AsyncSpan]
+
+    def __init__(
+        self,
+        writer: TraceWriter,
+        *,
+        name: str,
+        id: Union[int, str],
+        cat: Optional[str] = None,
+        next_args: Optional[Dict[str, Any]] = None,
+    ):
+        self._writer = writer
+        self._name = name
+        self._id = id
+        self._cat = cat
+
+        self._active_scope = self._writer.async_span(name, id=id, cat=cat, args=next_args)
+
+    @contextmanager
+    def yield_(
+        self,
+        *,
+        last_args: Optional[Dict[str, Any]] = None,
+        next_args: Optional[Dict[str, Any]] = None,
+    ):
+        if self._writer is None:
+            return
+        assert self._active_scope is not None
+        self._active_scope.end(args=last_args)
+        self._active_scope = None
+        try:
+            yield self
+        finally:
+            assert self._active_scope is None
+            self._active_scope = self._writer.async_span(
+                self._name, id=self._id, cat=self._cat, args=next_args
+            )
+
+    def yield_from(
+        self,
+        iterable: Iterable[T],
+        *,
+        last_args: Optional[Dict[str, Any]] = None,
+        args: Optional[Dict[str, Any]] = None,
+    ) -> Iterable[T]:
+        """Wrap an iterable to emit trace events for each `next` call."""
+        for item in iterable:
+            with self.yield_(last_args=last_args, next_args=args):
+                last_args = None
+                yield item
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        assert self._active_scope is not None
+        self._active_scope.end()
+        self._active_scope = None
+        self._writer = None
+
+
+class DummyAsyncGeneratorContext(AbstractContextManager):
+    @contextmanager
+    def yield_(self, *args, **kwargs):
+        yield self
+
+    def yield_from(self, iterable: Iterable[T], **kwargs) -> Iterable[T]:
         return iterable
 
     def __enter__(self):
         return self
 
-    def __exit__(self, exc_type, exc, tb):
+    def __exit__(self, *args, **kwargs):
         pass
 
 
-_NOOP_ASYNC_FLOW = cast(AsyncFlow, NoopAsyncFlow())
+_NOOP_ASYNC_GENERATOR_CONTEXT = cast(AsyncGeneratorContext, DummyAsyncGeneratorContext())
 
 
-class NoopObjectTrace(AbstractContextManager):
-    def snapshot(self, *args, **kwargs) -> None:
-        pass
+class GeneratorContext(AbstractContextManager):
+    """Context manager for a generator context, that interrupts when yielding.
 
-    def delete(self, *args, **kwargs) -> None:
-        pass
+    Use like this::
+
+        with writer.generator_context(name="my_generator", next_args={"item_idx": 0}) as ctx:
+            for item_idx, item in enumerate(iterable):
+                with ctx.yield_(next_args={"item_idx": item_idx + 1}):
+                    yield item
+    """
+
+    __slots__ = (
+        "_writer",
+        "_name",
+        "_cat",
+        "_active_scope",
+    )
+
+    _writer: Optional[TraceWriter]
+    _name: str
+    _cat: Optional[str]
+
+    _active_scope: Optional[Span]
+
+    def __init__(
+        self,
+        writer: TraceWriter,
+        *,
+        name: str,
+        cat: Optional[str] = None,
+        next_args: Optional[Dict[str, Any]] = None,
+    ):
+        self._writer = writer
+        self._name = name
+        self._cat = cat
+
+        self._active_scope = self._writer.span(name, cat=cat, args=next_args)
+
+    @contextmanager
+    def yield_(
+        self,
+        *,
+        last_args: Optional[Dict[str, Any]] = None,
+        next_args: Optional[Dict[str, Any]] = None,
+    ):
+        if self._writer is None:
+            return
+        assert self._active_scope is not None
+        self._active_scope.end(args=last_args)
+        self._active_scope = None
+        try:
+            yield self
+        finally:
+            assert self._active_scope is None
+            self._active_scope = self._writer.span(self._name, cat=self._cat, args=next_args)
+
+    def yield_from(
+        self,
+        iterable: Iterable[T],
+        *,
+        last_args: Optional[Dict[str, Any]] = None,
+        args: Optional[Dict[str, Any]] = None,
+    ) -> Iterable[T]:
+        """Wrap an iterable to emit trace events for each `next` call."""
+        for item in iterable:
+            with self.yield_(last_args=last_args, next_args=args):
+                last_args = None
+                yield item
 
     def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc, tb):
+        assert self._active_scope is not None
+        self._active_scope.end()
+        self._active_scope = None
+        self._writer = None
+
+
+class DummyGeneratorContext(AbstractContextManager):
+    @contextmanager
+    def yield_(self, *args, **kwargs):
+        yield self
+
+    def yield_from(self, iterable: Iterable[T], **kwargs) -> Iterable[T]:
+        return iterable
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args, **kwargs):
+        pass
+
+
+_NOOP_GENERATOR_CONTEXT = cast(GeneratorContext, DummyGeneratorContext())
+
+
+def iterable_wrapper(iterable: Iterable[T], *, span: Callable[[], ContextManager]) -> Iterable[T]:
+    """A wrapper for an iterable that emits trace events for each `next` call."""
+    ctx = span()
+    ctx.__enter__()
+    try:
+        for item in iterable:
+            ctx.__exit__(None, None, None)
+            yield item
+            ctx = span()
+            ctx.__enter__()
+    finally:
+        ctx.__exit__(None, None, None)
+
+
+class ObjectTrace:
+    """Lifecycle helper for Trace-Event objects, using async events to trace the object.
+
+    Emits ``N`` on construction, :py:meth:`snapshot` for ``O`` and ``D`` upon
+    deletion, context exit, or garbage collection.
+    """
+
+    __slots__ = (
+        "_writer",
+        "_name",
+        "_id",
+        "_cat",
+    )
+
+    _writer: Optional[TraceWriter]
+    _name: str
+    _id: Union[int, str]
+    _cat: Optional[str]
+
+    def __init__(
+        self,
+        writer: TraceWriter,
+        *,
+        name: str,
+        id: Union[int, str],
+        cat: str | None = None,
+        initial_snapshot: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        self._writer = writer
+        self._name = name
+        self._id = id
+        self._cat = cat
+
+        # Emit object creation event
+        self._writer.async_begin(name, id=id, cat=cat, args=initial_snapshot)
+
+    # ------------------------------------------------------------------
+    # API
+    # ------------------------------------------------------------------
+
+    def snapshot(self, data: Dict[str, Any], *, level: int = 0) -> None:
+        """Emit snapshot for current state of the object."""
+        if self._writer is None:
+            raise RuntimeError("Cannot snapshot deleted traced object")
+        self._writer.async_instant(
+            self._name,
+            id=self._id,
+            args=data,
+            cat=self._cat,
+            level=level,
+        )
+
+    def delete(self) -> None:
+        """Emit delete event if not already emitted."""
+        if self._writer is None:
+            return
+        self._writer.async_end(
+            self._name,
+            id=self._id,
+            cat=self._cat,
+        )
+        self._writer = None
+
+
+class NoopObjectTrace:
+    def snapshot(self, *args, **kwargs) -> None:
+        pass
+
+    def delete(self, *args, **kwargs) -> None:
         pass
 
 
@@ -1235,8 +1433,8 @@ class NoopTraceWriter:
     def async_span(self, *args, **kwargs) -> "AsyncSpan":
         return _NOOP_ASYNC_SPAN
 
-    def async_flow(self, *args, **kwargs) -> "AsyncFlow":
-        return _NOOP_ASYNC_FLOW
+    def async_context(self, *args, **kwargs) -> "AsyncContext":
+        return _NOOP_ASYNC_CONTEXT
 
     def flow_start(self, *args, **kwargs) -> None:
         pass
@@ -1247,16 +1445,10 @@ class NoopTraceWriter:
     def flow_end(self, *args, **kwargs) -> None:
         pass
 
+    def flow(self, *args, **kwargs) -> "Flow":
+        return _NOOP_FLOW
+
     def counter(self, *args, **kwargs) -> None:
-        pass
-
-    def object_new(self, *args, **kwargs) -> None:
-        pass
-
-    def object_snapshot(self, *args, **kwargs) -> None:
-        pass
-
-    def object_delete(self, *args, **kwargs) -> None:
         pass
 
     def object_trace(self, *args, **kwargs) -> "ObjectTrace":
@@ -1280,5 +1472,116 @@ class NoopTraceWriter:
     def __repr__(self) -> str:
         return "<NoopTraceWriter>"
 
+    def exception(self, *args, **kwargs) -> None:
+        pass
+
 
 NOOP_TRACE_WRITER: TraceWriter = cast(TraceWriter, NoopTraceWriter())
+
+
+# ------------------------------------------------------------------
+# Flow context manager
+# ------------------------------------------------------------------
+
+
+class Flow:
+    """Context manager for *flow* events (``ph='s'``/``'t'``/``'f'``).
+
+    Use :py:meth:`step` for intermediate *t* events inside the flow.
+    """
+
+    __slots__ = (
+        "_writer",
+        "_name",
+        "_id",
+        "_cat",
+    )
+
+    _writer: Optional[TraceWriter]
+    _name: str
+    _id: Union[int, str]
+    _cat: Optional[str]
+
+    def __init__(
+        self,
+        writer: TraceWriter,
+        *,
+        name: str,
+        id: int,
+        cat: str | None = None,
+        resuming: bool = False,
+    ) -> None:
+        self._writer = writer
+        self._name = name
+        self._id = id
+        self._cat = cat
+
+        # Emit flow *start* event.
+        if not resuming:
+            self._writer.flow_start(
+                self._name,
+                id=self._id,
+                cat=self._cat,
+            )
+
+    def step(self, *, level: int = 0) -> None:
+        """Emit a *flow step* (``ph='t'``) event. The flow is bound to the enclosing slice."""
+        writer = self._writer
+        if writer is None:
+            return
+        writer.flow_step(
+            self._name,
+            id=self._id,
+            cat=self._cat,
+            level=level,
+        )
+
+    def end(
+        self,
+        *,
+        level: int = 0,
+        bind_enclosing_slice: bool = False,
+    ) -> None:
+        """
+        Emit the *flow end* (``ph='f'``) event. The flow is finished either in the enclosing slice or in the next slice.
+
+        Args:
+            name: The name of the flow.
+            level: The level of the flow.
+            bind_enclosing_slice: Whether to bind the flow to the enclosing slice (otherwise bind to the next slice).
+        """
+        writer = self._writer
+        if writer is None:
+            return
+
+        writer.flow_end(
+            self._name,
+            id=self._id,
+            cat=self._cat,
+            bind_enclosing_slice=bind_enclosing_slice,
+            level=level,
+        )
+        # Mark as closed to avoid further emissions.
+        self._writer = None
+
+    def save(self) -> dict:
+        """Return a dictionary representation of the flow, allowing resuming the flow in another process."""
+        return {
+            "name": self._name,
+            "id": self._id,
+            "cat": self._cat,
+        }
+
+
+class NoopFlow:
+    def step(self, *args, **kwargs) -> None:
+        pass
+
+    def end(self, *args, **kwargs) -> None:
+        pass
+
+    def save(self) -> dict:
+        return {}
+
+
+_NOOP_FLOW = cast(Flow, NoopFlow())

@@ -58,30 +58,42 @@ class EpochizeDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample])
             if self.worker_config.rank_worker_id() < self.length % self.worker_config.num_workers:
                 local_length += 1
 
-        with trace_span.span(
-            "EpochizeDataset.__iter__",
-            args={
-                "offset": self._offset,
-                "local_length": local_length,
-                "config": self._own_config(),
-            },
-            level=1,
+        with (
+            trace_span.span(
+                "EpochizeDataset.__iter__",
+                args={
+                    "offset": self._offset,
+                    "local_length": local_length,
+                    "config": self._own_config(),
+                },
+                level=1,
+            ),
+            self.worker_config.worker_trace_writer().generator(
+                "EpochizeDataset.__iter__.next", level=2
+            ) as trace_gen,
         ):
-            offset_range = list(range(self._offset, local_length))
+            try:
+                offset_range = list(range(self._offset, local_length))
 
-            # Only iterate if there are samples to iterate
-            if len(offset_range) > 0:
-                if self._active_iter is None:
-                    self._active_iter = iter(self.dataset)
+                # Only iterate if there are samples to iterate
+                if len(offset_range) > 0:
+                    if self._active_iter is None:
+                        self._active_iter = iter(self.dataset)
 
-                for idx in offset_range:
-                    self._offset = (idx + 1) % local_length
-                    try:
-                        sample = next(self._active_iter)
-                    except StopIteration:
-                        break
-                    yield sample
-            trace_span.instant("EpochizeDataset.__iter__.done", level=1)
+                    for idx in offset_range:
+                        self._offset = (idx + 1) % local_length
+                        try:
+                            sample = next(self._active_iter)
+                        except StopIteration:
+                            break
+                        with trace_gen.yield_():
+                            yield sample
+                trace_span.instant("EpochizeDataset.__iter__.done", level=1)
+            except GeneratorExit:
+                if self._active_iter is not None and hasattr(self._active_iter, "close"):
+                    self._active_iter.close()
+                    self._active_iter = None
+                raise
 
     def __len__(self) -> int:
         return self.length

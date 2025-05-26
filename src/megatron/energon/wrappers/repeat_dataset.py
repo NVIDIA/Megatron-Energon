@@ -60,14 +60,19 @@ class RepeatDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
         ds_len = len(self.dataset)
 
         trace_span = self.worker_config.worker_trace_span()
-        with trace_span.span(
-            "RepeatDataset.__iter__",
-            args={
-                "repetition": self._repetition,
-                "repeats": self.repeats,
-                "inner_len": ds_len,
-            },
-            level=2,
+        with (
+            trace_span.span(
+                "RepeatDataset.__iter__",
+                args={
+                    "repetition": self._repetition,
+                    "inner_len": ds_len,
+                    "config": self._own_config(),
+                },
+                level=2,
+            ),
+            self.worker_config.worker_trace_writer().generator(
+                "RepeatDataset.__iter__.next", next_args={"idx": self._index}, level=2
+            ) as trace_gen,
         ):
             while self.repeats is None or self._repetition < self.repeats:
                 with trace_span.span(
@@ -90,14 +95,15 @@ class RepeatDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
                         stop_after = None
 
                     for sample in self.dataset:
-                        with trace_span.span(
+                        trace_span.instant(
                             "RepeatDataset.__iter__.__iter__.yield",
                             args={
                                 "idx": self._index,
                             },
                             level=2,
-                        ):
-                            self._index += 1
+                        )
+                        self._index += 1
+                        with trace_gen.yield_(next_args={"idx": self._index}):
                             yield sample
 
                         if stop_after is not None and self._index >= stop_after:
@@ -113,6 +119,11 @@ class RepeatDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
             else:
                 # No more repeats
                 self._repetition = math.ceil(self.repeats)
+
+    def _own_config(self) -> Dict[str, Any]:
+        return {
+            "repeats": self.repeats,
+        }
 
     def config(self) -> Dict[str, Any]:
         return {

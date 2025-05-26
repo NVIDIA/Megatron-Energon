@@ -1,7 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from typing import Any, Callable, Dict, Generic, Iterator, Optional, Tuple, TypeVar, Union
+from typing import Any, Callable, Dict, Generic, Iterator, Optional, TypeVar, Union
 
 from megatron.energon.flavors.base_dataset import SavableDataset
 from megatron.energon.worker import WorkerConfig
@@ -51,21 +51,25 @@ class FilterDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
         return len(self.dataset)
 
     def __iter__(self) -> Iterator[T_sample]:
-        with self.worker_config.worker_trace_span().span(
-            "FilterDataset.__iter__", args={"config": self._own_config()}, level=1
+        trace_span = self.worker_config.worker_trace_span()
+        filter_name = self._function_config(self.filter_fn)
+        with (
+            trace_span.span("FilterDataset.__iter__", args={"config": self._own_config()}, level=1),
+            trace_span.generator("FilterDataset.__iter__.next", level=2) as trace_gen,
         ):
             for sample in self.dataset:
-                with self._sample_index.ctx():
+                with (
+                    self._sample_index.ctx(),
+                    trace_span.span(filter_name, args={"sample": sample}, level=2),
+                ):
                     filter_res = self.filter_fn(sample)
                 if filter_res:
-                    yield sample
+                    with trace_gen.yield_():
+                        yield sample
                 else:
                     self.worker_config.worker_trace_span().instant(
                         "FilterDataset.__iter__.reject", level=3
                     )
-
-    def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_sample:
-        return self.dataset.restore_sample(index)
 
     def _own_config(self) -> Dict[str, Any]:
         return {

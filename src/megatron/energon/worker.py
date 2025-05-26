@@ -12,7 +12,7 @@ import torch.utils.data
 from megatron.energon.cache import CachePool
 from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.fork_hook import DataclassForkMixin
-from megatron.energon.tracing import NOOP_TRACE_WRITER, AsyncFlow, TraceWriter
+from megatron.energon.tracing import NOOP_TRACE_WRITER, AsyncContext, Flow, TraceWriter
 
 __all__ = ("WorkerConfig",)
 
@@ -60,6 +60,8 @@ class WorkerConfig(DataclassForkMixin):
     worker_log_level: int = 0
     #: The current trace writer for the worker.
     _worker_trace_writer: Optional[TraceWriter] = None
+    #: The current trace writer for the worker.
+    _worker_trace_sample_flow: Optional[Flow] = None
     #: The opened file for the current worker. Should not be set from outside.
     _worker_debug_file: Optional[TextIO] = None
 
@@ -257,6 +259,7 @@ class WorkerConfig(DataclassForkMixin):
         if self._worker_trace_writer is not None:
             self._worker_trace_writer.close()
             self._worker_trace_writer = None
+        self._worker_trace_sample_flow = None
 
     def __before_fork__(self):
         if self._worker_trace_writer is not None:
@@ -284,12 +287,18 @@ class WorkerConfig(DataclassForkMixin):
             if in_worker:
                 proc_name += f"_worker{self.rank_worker_id()}"
             self._worker_trace_writer = TraceWriter(path, log_level=self.worker_log_level)
-            self._worker_trace_writer.metadata_process_name(multiprocessing.current_process().name)
-            self._worker_trace_writer.metadata_process_labels(proc_name)
-            self._worker_trace_writer.metadata_process_sort_index(worker_id)
-            self._worker_trace_writer.metadata_thread_name("worker_main")
-            self._worker_trace_writer.metadata_thread_sort_index(0)
+            self._worker_trace_writer.metadata_process_name(proc_name)
+            if in_worker:
+                self._worker_trace_writer.metadata_thread_name("worker_main")
+            else:
+                self._worker_trace_writer.metadata_thread_name("main")
+            self._worker_trace_writer.flush()
         return self._worker_trace_writer
 
-    def worker_trace_span(self) -> AsyncFlow:
+    def worker_trace_span(self) -> AsyncContext:
         return self.worker_trace_writer().async_flow()
+
+    def worker_trace_sample_flow(self, level: int):
+        if self._worker_trace_sample_flow is None:
+            return
+        self._worker_trace_sample_flow.step(level=level)

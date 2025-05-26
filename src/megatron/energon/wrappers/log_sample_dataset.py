@@ -10,40 +10,46 @@ from megatron.energon.wrappers.base import BaseWrapperDataset
 T_sample = TypeVar("T_sample")
 
 
+def _flatten_str_list(keys: Any) -> Iterator[Optional[str]]:
+    """Flatten a list of keys into a list of strings."""
+    if isinstance(keys, str):
+        yield keys
+    elif isinstance(keys, (list, tuple)):
+        for key in keys:
+            yield from _flatten_str_list(key)
+    else:
+        yield None
+
+
+def _flatten_str_list_or_none(keys: Any) -> Optional[List[str]]:
+    """Flatten a list of keys into a list of strings. If this cannot be fetched, return None."""
+    keys = list(_flatten_str_list(keys))
+    if any(k is None for k in keys):
+        return None
+    return keys
+
+
 def default_get_keys(batch: Any) -> Optional[List[str]]:
     """Default get_keys, which has some heuristics to find the sample keys."""
     if isinstance(batch, list):
-        batch = batch[0]
-    if (
-        hasattr(batch, "__key__")
-        and isinstance(batch.__key__, list)
-        and all(isinstance(k, str) for k in batch.__key__)
-    ):
-        return batch.__key__
-    elif (
-        hasattr(batch, "__keys__")
-        and isinstance(batch.__keys__, list)
-        and all(isinstance(k, str) for k in batch.__keys__)
-    ):
-        return batch.__keys__
-    elif (
-        isinstance(batch, dict)
-        and "__key__" in batch
-        and all(isinstance(k, str) for k in batch["__key__"])
-    ):
-        return batch["__key__"]
-    elif (
-        isinstance(batch, dict)
-        and "__keys__" in batch
-        and all(isinstance(k, str) for k in batch["__keys__"])
-    ):
-        return batch["__keys__"]
-    elif (
-        isinstance(batch, dict)
-        and "keys" in batch
-        and all(isinstance(k, str) for k in batch["keys"])
-    ):
-        return batch["keys"]
+        all_keys = []
+        for b in batch:
+            k = default_get_keys(b)
+            if k is None:
+                return None
+            all_keys.extend(k)
+        return all_keys
+    if hasattr(batch, "__key__"):
+        return _flatten_str_list_or_none(batch.__key__)
+    elif hasattr(batch, "__keys__"):
+        return _flatten_str_list_or_none(batch.__keys__)
+    elif isinstance(batch, dict):
+        if "__key__" in batch:
+            return _flatten_str_list_or_none(batch["__key__"])
+        elif "__keys__" in batch:
+            return _flatten_str_list_or_none(batch["__keys__"])
+        elif "keys" in batch:
+            return _flatten_str_list_or_none(batch["keys"])
     return None
 
 

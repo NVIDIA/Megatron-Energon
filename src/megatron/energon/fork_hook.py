@@ -1,11 +1,10 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from dataclasses import dataclass
-import functools
 import os
 import weakref
-from typing import Callable, Protocol, Type, TypeVar
+from dataclasses import dataclass
+from typing import Callable, TypeVar
 
 _after_in_child_fork_hooks = dict()
 _after_in_parent_fork_hooks = dict()
@@ -95,6 +94,7 @@ class ForkMixin:
         A method that runs before the fork of a worker process.
         """
         pass
+
 
 @dataclass
 class DataclassForkMixin:

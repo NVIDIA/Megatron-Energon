@@ -119,9 +119,15 @@ class GroupBatchDataset(
     def __iter__(self) -> Iterator[T_batch]:
         buckets = self._buckets
 
+        batcher_name = self._function_config(self.batcher)
         trace_span = self.worker_config.worker_trace_span()
-        with trace_span.span(
-            "GroupBatchDataset.__iter__", args={"config": self._own_config()}, level=1
+        with (
+            trace_span.span(
+                "GroupBatchDataset.__iter__", args={"config": self._own_config()}, level=1
+            ),
+            self.worker_config.worker_trace_writer().generator(
+                "GroupBatchDataset.__iter__.next", level=2
+            ) as trace_gen,
         ):
             if buckets is None:
                 buckets = self._buckets = dict()
@@ -145,24 +151,26 @@ class GroupBatchDataset(
                 batch_items, sample_restore_keys = bucket.samples.flush()
                 # print(f"[wrk={worker_idx}, s={self._batch_sample_index.current_idx}] flushed: len(batch)={len(batch_items)} len(samples)={len(bucket.samples)}\n", end="")
                 try:
-                    with trace_span.span(
-                        "GroupBatchDataset.flush",
-                        args={
-                            "bucket": str(key),
-                            "bucket_size": bucket.batch_size,
-                            "bucket_len": len(batch_items),
-                        },
-                        level=2,
+                    with (
+                        self._batch_sample_index.ctx() as sample_idx,
+                        trace_span.span(
+                            batcher_name,
+                            args={
+                                "bucket": str(key),
+                                "bucket_size": bucket.batch_size,
+                                "sample_idx": sample_idx,
+                                "len": len(batch_items),
+                            },
+                            level=2,
+                        ),
                     ):
-                        with self._batch_sample_index.ctx() as sample_idx:
-                            batch_sample = self.batcher(batch_items)
-                            assert not isinstance(batch_sample, Generator), (
-                                f"Batcher {self.batcher} returned a generator, which is not supported for grouped batching yet."
-                            )
-                        set_sample_restore_key(
-                            batch_sample, sample_idx, *sample_restore_keys, src=self
+                        batch_sample = self.batcher(batch_items)
+                        assert not isinstance(batch_sample, Generator), (
+                            f"Batcher {self.batcher} returned a generator, which is not supported for grouped batching yet."
                         )
-                    yield batch_sample
+                    set_sample_restore_key(batch_sample, sample_idx, *sample_restore_keys, src=self)
+                    with trace_gen.yield_():
+                        yield batch_sample
                 except SkipSample:
                     trace_span.instant("GroupBatchDataset.flush.skip", level=2)
                 except SYSTEM_EXCEPTIONS:
@@ -252,14 +260,34 @@ class GroupBatchDataset(
         super().assert_can_restore()
 
     def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_batch:
-        self.assert_can_restore()
-        id, sample_idx, *sample_restore_keys = index
-        assert id == type(self).__name__
-        batch = [self.dataset.restore_sample(inner_idx) for inner_idx in sample_restore_keys]
-        with self._batch_sample_index.ctx(sample_idx):
-            batch_sample = self.batcher(batch)
-        set_sample_restore_key(batch_sample, sample_idx, *sample_restore_keys, src=self)
-        return batch_sample
+        trace_span = self.worker_config.worker_trace_span()
+        with trace_span.span(
+            "GroupBatchDataset.restore_sample",
+            args={"index": index},
+            level=1,
+        ):
+            self.assert_can_restore()
+            id, sample_idx, *sample_restore_keys = index
+            assert id == type(self).__name__
+            with trace_span.span(
+                "GroupBatchDataset.restore_sample.dataset",
+                args={"sample_idx": sample_idx, "len": len(sample_restore_keys)},
+                level=2,
+            ):
+                batch = [
+                    self.dataset.restore_sample(inner_idx) for inner_idx in sample_restore_keys
+                ]
+            with (
+                self._batch_sample_index.ctx(sample_idx),
+                trace_span.span(
+                    f"GroupBatchDataset.restore_sample.batcher:{self._function_config(self.batcher)}",
+                    args={"sample_idx": sample_idx, "len": len(batch)},
+                    level=2,
+                ),
+            ):
+                batch_sample = self.batcher(batch)
+            set_sample_restore_key(batch_sample, sample_idx, *sample_restore_keys, src=self)
+            return batch_sample
 
     def _own_config(self) -> Dict[str, Any]:
         return {

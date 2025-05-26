@@ -2,19 +2,13 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import json
-import time
-import traceback
-from concurrent.futures.process import ProcessPoolExecutor
+import re
+from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import (
-    Container,
-    Dict,
     Generator,
-    Iterable,
-    List,
     Literal,
-    Optional,
-    Tuple,
     TypedDict,
     Union,
 )
@@ -22,9 +16,8 @@ from typing import (
 import click
 import numpy as np
 from PIL import Image
-from tqdm import tqdm
 
-from megatron.energon.dataclass_slots import dataclass_slots
+from megatron.energon.tools.analyze_debug_merge import merge_log_reader
 
 cpal = np.array(
     [
@@ -98,54 +91,6 @@ cpal = np.array(
 )
 
 
-class YieldBatchLogLine(TypedDict):
-    # Json example:
-    # {
-    #   "t": "yield_batch",
-    #   "r": 1,
-    #   "w": 1,
-    #   "m": "train",
-    #   "idx": 1,
-    #   "keys": ["parts/data-train-000051.tar/528866", ...],
-    # }
-    t: Literal["yield_batch"]
-    r: int
-    w: int
-    m: Literal["train", "val"]
-    idx: int
-    keys: List[str]
-
-
-class SampleLoaderYieldLogLine(TypedDict):
-    # Json example:
-    # {
-    #   "t": "WebdatasetSampleLoaderDataset._slices_iter.yield",
-    #   "r": 1,
-    #   "w": 1,
-    #   "index": 528800,
-    #   "key": "parts/data-train-000051.tar/528866",
-    #   "shard": "parts/data-train-000051.tar",
-    #   "count": 633,
-    #   "epoch": 0,
-    #   "epoch_count": 633
-    # }
-    t: Literal["WebdatasetSampleLoaderDataset._slices_iter.yield"]
-    r: int
-    w: int
-    #: The global index in the underlying dataset (concats of all shards)
-    index: int
-    #: The sample key from the shard, concatenated as f"{shard}/{key}"
-    key: str
-    #: Name of the shard
-    shard: str
-    #: Number of samples yielded from the sample loader over all epochs
-    count: int
-    #: Number of repetitions of the dataset (=epochs). First epoch is 0.
-    epoch: int
-    #: Number of samples yielded from the sample loader in the current epoch
-    epoch_count: int
-
-
 class AutosizingHeatmapWriter:
     """Writes a heatmap, automatically resizing it if necessary."""
 
@@ -166,6 +111,7 @@ class AutosizingHeatmapWriter:
         Args:
             sample_id: The sample id (y-axis)
             step: The step (x-axis)
+            src: The source rank (colorizing)
         """
         # Resize heatmap?
         while self.heatmap.shape[0] * self.heatmap_sample_factor <= sample_id:
@@ -212,8 +158,7 @@ class AutosizingHeatmapWriter:
 
 @click.command(name="analyze-debug")
 @click.argument(
-    "log_paths",
-    nargs=-1,
+    "log_path",
     type=click.Path(exists=True, file_okay=True, dir_okay=True, path_type=Path),
 )
 @click.option(
@@ -240,384 +185,292 @@ class AutosizingHeatmapWriter:
     help="Gain (=multiplication factor) for the heatmap",
 )
 @click.option(
-    "--force-loading-order",
-    is_flag=True,
-    default=False,
-    help="If true, force using the dataloader loading order instead of batch data",
-)
-@click.option(
-    "--include-modality",
-    type=str,
-    default="train",
-    help="Choose which modality/modalities (train,val) to include. Comma separate for multiple.",
-)
-@click.option(
-    "--skip",
-    type=int,
-    default=0,
-    help="If >0, skip this many steps at the beginning of log file parsing.",
-)
-@click.option(
     "--no-colors",
     is_flag=True,
     default=False,
     help="If set, disable colorizing ranks.",
 )
 def command(
-    log_paths: List[Path],
+    log_path: Path,
     heatmap_path: Path,
     heatmap_steps: int,
     heatmap_samples: int,
     heatmap_gain: float,
-    force_loading_order: bool,
-    include_modality: str,
-    skip: int,
     no_colors: bool,
 ):
     """Internal tool to analyze randomness.
 
     The LOG_PATH should point to the folder with the debug log, or to a single log file."""
 
-    if len(log_paths) == 0:
-        raise click.ClickException("No log paths specified")
-    log_files = []
-    for log_path in log_paths:
-        if log_path.is_dir():
-            log_files.extend(sorted(log_path.glob("*.jsonl")))
-        elif log_path.is_file():
-            log_files.append(log_path)
-        else:
-            raise click.ClickException(f"Invalid log path: {log_path}")
-
-    if len(log_files) == 0:
-        raise click.ClickException("No log files found")
-
     heatmap = AutosizingHeatmapWriter(heatmap_samples, heatmap_steps, colorize=not no_colors)
 
-    print(f"Analyzing {len(log_files)} logs...")
+    print(f"Analyzing log {log_path}...")
 
-    modalities = [m.strip() for m in include_modality.split(",")]
+    if log_path.is_dir():
+        log_paths = list(log_path.glob("*.json"))
+    else:
+        log_paths = [log_path]
 
-    key_index = {}
-    count = 0
-    if not force_loading_order:
-        loaders = [LoaderLogIter(log_file, start_idx=skip) for log_file in log_files]
-        loaders_by_id: Dict[int, Tuple[LoaderInfo, List[LoaderLogIter]]] = {}
-        with ProcessPoolExecutor(max_workers=16) as executor:
-            for loader, loader_info in tqdm(
-                executor.map(_proc_map_loader, loaders), total=len(loaders)
-            ):
-                for loader_id, loader_info in loader_info.items():
-                    if loader_id in loaders_by_id:
-                        existing_loader_info, existing_loaders = loaders_by_id[loader_id]
-                        assert (
-                            existing_loader_info.modality == loader_info.modality
-                            and existing_loader_info.path == loader_info.path
-                        ), (
-                            f"Found multiple loaders for {loader_id}: {existing_loader_info.modality, existing_loader_info.path} and {loader_info.modality, loader_info.path}"
-                        )
-                        existing_loader_info.global_count = max(
-                            existing_loader_info.global_count, loader_info.global_count
-                        )
-                        existing_loaders.append(loader)
-                    else:
-                        loaders_by_id[loader_id] = (loader_info, [loader])
-        print("Available loaders:")
-        selected_loader_id = None
-        must_select = False
-        for loader_id, (loader_info, _iters) in loaders_by_id.items():
+    print(f"Analyzing {len(log_paths)} logs...")
+
+    loader_log_loader = LogLoader(log_paths)
+
+    key_index: dict[str, int] = defaultdict(lambda: len(key_index))
+
+    for entry in loader_log_loader.read_entries():
+        if isinstance(entry, LogLoader.LoaderIterator):
             print(
-                f"  {loader_id}: {loader_info.modality} {loader_info.path} {loader_info.global_count} steps"
+                f"Loader rank={entry.rank} loader_id={entry.loader_id} iter_id={entry.iter_id} nw={entry.num_workers} ws={entry.world_size}"
             )
-            if loader_info.modality in modalities:
-                if selected_loader_id is None:
-                    selected_loader_id = loader_id
-                else:
-                    # Have multiple loaders
-                    must_select = True
-        if must_select:
-            while True:
-                loader_id_str = input("Choose loader id: ")
-                try:
-                    selected_loader_id = int(loader_id_str)
-                except ValueError:
-                    print(f"Invalid loader id {loader_id_str} 1")
-                    continue
-                if selected_loader_id in loaders_by_id:
-                    break
-                print(f"Invalid loader id {selected_loader_id}")
-        assert selected_loader_id is not None
-        selected_loader_info, selected_loader_readers = loaders_by_id[selected_loader_id]
-        print(
-            f"Reading for loader {selected_loader_id}: {selected_loader_info.modality} {selected_loader_info.path}"
-        )
-        log_iters = [
-            (idx, loader.log_entries(loader_ids={selected_loader_id}))
-            for idx, loader in enumerate(selected_loader_readers)
-        ]
-        with tqdm(total=selected_loader_info.global_count) as pbar:
-            while len(log_iters) > 0:
-                cur_count = 0
-                # Iterate over all iterators for this count and put into heatmap
-                for src_idx, log_iter in tuple(log_iters):
-                    # Iterate until None (=next count) is encountered
-                    while True:
-                        try:
-                            log_keys = next(log_iter)
-                        except StopIteration:
-                            log_iters.remove((src_idx, log_iter))
-                            break
-                        except OSError:
-                            traceback.print_exc()
-                            log_iters.remove((src_idx, log_iter))
-                            break
-                        else:
-                            if log_keys is None:
-                                break
-                            for log_key in log_keys:
-                                key_id = key_index.setdefault(log_key, len(key_index))
-                                heatmap.add(key_id, count, src_idx)
-                                cur_count += 1
-                if cur_count == 0:
-                    print(f"No data for step {count}")
-                count += 1
-                pbar.update(1)
+        elif isinstance(entry, LogLoader.Worker):
+            print(
+                f"Worker rank={entry.loader.rank} loader_id={entry.loader.loader_id} iter_id={entry.loader.iter_id} worker_id={entry.worker_id}"
+            )
+        # elif isinstance(entry, LogLoader.LoadSample):
+        #     print(f"LoadSample {entry.worker.worker_id} {entry.worker.loader.loader_id} {entry.worker.loader.rank} {entry.worker.loader.num_workers} {entry.base_path} {entry.key} {entry.index} {entry.epoch} {entry.epoch_count}")
+        elif isinstance(entry, LogLoader.YieldSample):
+            # print(f"YieldSample rank={entry.worker.loader.rank} loader_id={entry.worker.loader.loader_id} iter_id={entry.worker.loader.iter_id} wrk_id={entry.worker.worker_id} sample_idx={entry.sample_idx} iter_idx={entry.iter_idx} global_sample_idx={entry.global_sample_idx} keys={entry.keys}")
+            if entry.keys is not None:
+                for key in entry.keys:
+                    heatmap.add(
+                        key_index[key], entry.global_sample_idx, src=entry.worker.loader.rank
+                    )
+        elif isinstance(entry, LogLoader.LoadNextEpoch):
+            # print(f"LoadNextEpoch rank={entry.worker.loader.rank} loader_id={entry.worker.loader.loader_id} iter_id={entry.worker.loader.iter_id} wrk_id={entry.worker.worker_id} epoch_idx={entry.epoch_idx} epoch_sample_count={entry.epoch_sample_count}")
+            pass
+        elif isinstance(entry, LogLoader.StopIteration):
+            # print(f"StopIteration rank={entry.loader.rank} loader_id={entry.loader.loader_id} iter_id={entry.loader.iter_id}")
+            pass
 
     if len(key_index) == 0:
-        if force_loading_order:
-            print("Forcing to use sample loader logs")
-        else:
-            print("No batch information in logs, trying sample loader logs...")
-        if modalities != {"train", "val"}:
-            print("  Data includes all modalities (train and val)")
-        print(
-            "  Shuffle buffer and batching will not be considered, only the loading order from disk"
-        )
-        log_iters = [
-            _iter_sl_log_line_keys(_iter_sl_log_samples(log_file), start_idx=skip)
-            for log_file in log_files
-        ]
-        key_index = {}
-        count = 0
-        start = time.time()
-        while len(log_iters) > 0:
-            cur_count = 0
-            # Iterate over all iterators for this count and put into heatmap
-            for log_iter in tuple(log_iters):
-                # Iterate until None (=next count) is encountered
-                while True:
-                    try:
-                        log_key = next(log_iter)
-                    except StopIteration:
-                        log_iters.remove(log_iter)
-                        break
-                    except OSError:
-                        traceback.print_exc()
-                        log_iters.remove(log_iter)
-                        break
-                    else:
-                        if log_key is None:
-                            break
-                        key_id = key_index.setdefault(log_key, len(key_index))
-                        heatmap.add(key_id, count)
-                        cur_count += 1
-            if cur_count == 0:
-                print(f"No data for step {count}")
-            if time.time() - start > 10:
-                print(f"  Step {count}")
-                start = time.time()
-            count += 1
-
-    if count == 0:
         raise click.ClickException("No data found in logs")
 
-    print(f"Found {len(key_index)} unique sample keys, {count} steps")
+    print(f"Found {len(key_index)} unique sample keys, {heatmap.heatmap_step_max + 1} steps")
 
     # print(f"Heatmap factors: {heatmap_sample_factor} samples, {heatmap_step_factor} steps")
     # print(f"Heatmap max: {heatmap_sample_max} samples, {heatmap_step_max} steps")
-    n_samples, n_steps = heatmap.save(heatmap_path, heatmap_gain)
+    max_sample, max_step = heatmap.save(heatmap_path, heatmap_gain)
     print(f"Wrote heatmap to {heatmap_path}")
     print("Heatmap axes:")
-    print(f"  x-axis: {n_steps} worker steps")
-    print(f"  y-axis: {n_samples} samples")
+    print(f"  x-axis: {max_step + 1} worker steps")
+    print(f"  y-axis: {max_sample + 1} samples")
 
 
-class LoaderInitLogLine(TypedDict):
-    t: Literal["SavableLoader.__init__", "BasicDataLoader.__init__"]
-    r: int
-    w: None
+class LogEntry(TypedDict):
+    """
+    Chrome tracing log entry.
+    *ph*ase values:
+    - B: Begin
+    - E: End
+    - i: Instant
+    - b: Begin (async)
+    - e: End (async)
+    - n: Instant (async)
+    - C: Counter
+    - M: Metadata
+    - s: Flow start
+    - t: Flow step
+    - f: Flow end
+    """
+
+    ph: Literal["B", "E", "i", "b", "e", "n", "C", "M", "s", "t", "f"]
+    name: str
     id: int
-    config: dict
+    ts: int
+    pid: int
+    tid: int
+    args: dict
+    s: Literal["t", "p", "g"]
 
 
-class LoaderIterLogLine(TypedDict):
-    t: Literal["SavableDataLoader.iter", "BasicDataLoader.iter"]
-    r: int
-    w: None
-    id: int
-    iter_id: int
+class LogLoader:
+    """Loads a chrome tracing log file. Extract specific information from it."""
 
+    _re_pname = re.compile(r"^dprank(\d+)(?:_worker(\d+))?$")
 
-class LoaderYieldLogLine(TypedDict):
-    t: Literal["SavableDataLoader.yield", "BasicDataLoader.yield"]
-    r: int
-    w: None
-    id: int
-    iter_id: int
-    worker_id: int
-    worker_idx: int
-    idx: int
-    iter_idx: int
-    global_idx: int
-    keys: Optional[List[str]]
+    def __init__(self, paths: list[Path]):
+        self._paths = paths
 
+    def _log_reader(self, path: Path) -> Generator[LogEntry, None, None]:
+        """Reads a log file and yields a tuple of the line and the ts."""
+        had_end = False
+        with open(path, "rb") as f:
+            assert f.read(2) == b"[\n", "Log file must start with a JSON array"
+            for line in f:
+                if not line:
+                    assert had_end, "Log file must end with a JSON array"
+                if line.endswith(b"]\n"):
+                    had_end = True
+                else:
+                    assert line.endswith(b",\n"), f"Log file must be newline-terminated: {line}"
+                yield json.loads(line[:-2])
+            assert had_end, "Log file must end with a JSON array"
 
-class LoaderStopLogLine(TypedDict):
-    t: Literal["SavableDataLoader.StopIteration", "BasicDataLoader.StopIteration"]
-    r: int
-    w: None
-    id: int
-    iter_id: int
+    def _log_reader_all(self) -> Generator[LogEntry, None, None]:
+        """Reads all log files and yields a tuple of the line and the ts."""
+        if len(self._paths) == 1:
+            yield from self._log_reader(self._paths[0])
+        else:
+            for entry in merge_log_reader(self._paths):
+                yield json.loads(entry)
 
+    @dataclass
+    class LoaderIterator:
+        world_size: int
+        rank: int
+        num_workers: int
+        loader_id: int
+        iter_id: int
 
-LoaderLines = Union[
-    LoaderInitLogLine,
-    LoaderIterLogLine,
-    LoaderYieldLogLine,
-    LoaderStopLogLine,
-]
+    @dataclass
+    class Worker:
+        worker_id: int
+        loader: "LogLoader.LoaderIterator"
 
-LOADER_LOG_LINE_TYPES_T = (
-    "SavableLoader.__init__",
-    "BasicDataLoader.__init__",
-    "SavableDataLoader.iter",
-    "BasicDataLoader.iter",
-    "SavableDataLoader.yield",
-    "BasicDataLoader.yield",
-    "SavableDataLoader.StopIteration",
-    "BasicDataLoader.StopIteration",
-)
+    @dataclass
+    class LoadSample:
+        worker: "LogLoader.Worker"
+        base_path: str
+        key: str
+        global_sample_index: int
+        sample_count: int
+        epoch_idx: int
+        epoch_sample_count: int
 
+    @dataclass
+    class LoadNextEpoch:
+        worker: "LogLoader.Worker"
+        epoch_idx: int
+        epoch_sample_count: int
 
-@dataclass_slots
-class LoaderInfo:
-    id: int
-    modality: str
-    path: str
-    global_count: int
+    @dataclass
+    class YieldSample:
+        worker: "LogLoader.Worker"
+        worker_sample_idx: int
+        sample_idx: int
+        iter_idx: int
+        global_sample_idx: int
+        keys: list[str] | None
 
+    @dataclass
+    class StopIteration:
+        loader: "LogLoader.LoaderIterator"
 
-class LoaderLogIter:
-    def __init__(self, path: Path, start_idx: int = 0):
-        self._path = path
-        self._start_idx = start_idx
+    def read_entries(self):
+        # Maps pid to (rank, worker_id|None)
+        procs: dict[int, tuple[int, int | None]] = dict()
+        # Maps (pid, tid) to worker_id|None, only for main threads
+        proc_workers: dict[tuple[int, int], int | None] = dict()
+        # Maps (pid, tid) to worker
+        workers_by_pid_tid: dict[tuple[int, int], LogLoader.Worker] = dict()
+        # Maps (rank, loader_id, worker_id) to worker
+        workers_by_rank_loader_id_iter_id_worker_id: dict[
+            tuple[int, int, int], LogLoader.Worker
+        ] = dict()
+        # Maps (rank, loader_id) to loader
+        loaders_by_rank_loader_id: dict[tuple[int, int], LogLoader.LoaderIterator] = dict()
+        # Maps (rank, loader_id, iter_id) to loader
+        loaders_by_rank_loader_id_iter_id: dict[tuple[int, int, int], LogLoader.LoaderIterator] = (
+            dict()
+        )
+        for log_entry in self._log_reader_all():
+            ph = log_entry["ph"]
+            name = log_entry.get("name")
+            if ph == "M":
+                if name == "process_name":
+                    pid = log_entry["pid"]
+                    pname = log_entry["args"]["name"]
+                    m = self._re_pname.match(pname)
+                    if m:
+                        rank = int(m.group(1))
+                        if m.group(2) is not None:
+                            worker_id = int(m.group(2))
+                        else:
+                            worker_id = None
+                        procs[log_entry["pid"]] = (rank, worker_id)
+                if name == "thread_name":
+                    thread_name = log_entry["args"]["name"]
+                    pid = log_entry["pid"]
+                    tid = log_entry["tid"]
+                    if thread_name in ("main", "worker_main"):
+                        proc_workers[(pid, tid)] = procs[pid][1]
+            if ph == "n":
+                if name == "WebdatasetSampleLoaderDataset._slices_iter.yield":
+                    yield LogLoader.LoadSample(
+                        worker=workers_by_pid_tid[(log_entry["pid"], log_entry["tid"])],
+                        base_path=log_entry["args"]["base_path"],
+                        key=log_entry["args"]["key"],
+                        global_sample_index=log_entry["args"]["global_sample_index"],
+                        sample_count=log_entry["args"]["sample_count"],
+                        epoch_idx=log_entry["args"]["epoch_idx"],
+                        epoch_sample_count=log_entry["args"]["epoch_sample_count"],
+                    )
+                elif name == "WebdatasetSampleLoaderDataset._slices_iter.next_epoch":
+                    yield LogLoader.LoadNextEpoch(
+                        worker=workers_by_pid_tid[(log_entry["pid"], log_entry["tid"])],
+                        epoch_idx=log_entry["args"]["epoch_idx"],
+                        epoch_sample_count=log_entry["args"]["epoch_sample_count"],
+                    )
+                elif name in ("SavableDataLoader.yield", "BasicDataLoader.yield"):
+                    rank = procs[log_entry["pid"]][0]
+                    yield LogLoader.YieldSample(
+                        worker=workers_by_rank_loader_id_iter_id_worker_id[
+                            (rank, log_entry["args"]["loader_id"], log_entry["args"]["worker_id"])
+                        ],
+                        worker_sample_idx=log_entry["args"]["worker_sample_idx"],
+                        sample_idx=log_entry["args"]["sample_idx"],
+                        iter_idx=log_entry["args"]["iter_idx"],
+                        global_sample_idx=log_entry["args"]["global_sample_idx"],
+                        keys=log_entry["args"].get("keys", None),
+                    )
+                elif name in ("SavableDataLoader.StopIteration", "BasicDataLoader.StopIteration"):
+                    rank = procs[log_entry["pid"]][0]
+                    yield LogLoader.StopIteration(
+                        loader=loaders_by_rank_loader_id_iter_id[
+                            (rank, log_entry["args"]["loader_id"], log_entry["args"]["iter_id"])
+                        ],
+                    )
+            elif ph == "B":
+                if name in (
+                    "SavableDatasetWrapper.__iter__",
+                    "SimpleSavableDatasetWrapper.__iter__",
+                ):
+                    rank = procs[log_entry["pid"]][0]
+                    # This is not 100% correct, but it's the best mapping we can get right now.
+                    loader = loaders_by_rank_loader_id[(rank, log_entry["args"]["loader_id"])]
+                    worker = LogLoader.Worker(
+                        worker_id=log_entry["args"]["worker_id"],
+                        loader=loader,
+                    )
+                    workers_by_pid_tid[(log_entry["pid"], log_entry["tid"])] = worker
+                    workers_by_rank_loader_id_iter_id_worker_id[
+                        (rank, loader.loader_id, worker.worker_id)
+                    ] = worker
+                    yield worker
+            elif ph == "b":
+                if name in ("SavableDataLoader.__iter__", "BasicDataLoader.__iter__"):
+                    rank = procs[log_entry["pid"]][0]
+                    loader = loaders_by_rank_loader_id[(rank, log_entry["args"]["loader_id"])]
+                    loader.iter_id = log_entry["args"]["iter_id"]
+                    loaders_by_rank_loader_id_iter_id[(rank, loader.loader_id, loader.iter_id)] = (
+                        loader
+                    )
+                    yield loader
+                elif name in ("SavableDataLoader", "BasicDataLoader"):
+                    cfg_rank = log_entry["args"]["worker_config"]["rank"]
+                    rank = procs[log_entry["pid"]][0]
+                    assert rank == cfg_rank, f"Rank mismatch: {rank} != {cfg_rank}"
 
-    def _iter_log_lines(self, which: Iterable[str]) -> Generator[LoaderLines, None, None]:
-        try:
-            with self._path.open("r") as rf:
-                for line in rf:
-                    if any(f'"t": "{t}"' in line for t in which):
-                        try:
-                            yield json.loads(line.strip())
-                        except json.JSONDecodeError:
-                            print("Cannot decode line", repr(line))
-        except IOError as e:
-            print(f"Ignoring IOError: {e} for {self._path}")
-
-    @staticmethod
-    def _find_config_modality(config: dict) -> Literal["train", "val"]:
-        assert isinstance(config, dict)
-        if "map_fn_config" in config and "training" in config["map_fn_config"]:
-            return "train" if config["map_fn_config"]["training"] else "val"
-        elif "dataset" in config:
-            return LoaderLogIter._find_config_modality(config["dataset"])
-        elif "dataset_weights" in config:
-            return LoaderLogIter._find_config_modality(config["dataset_weights"][0][0])
-        elif "datasets" in config:
-            return LoaderLogIter._find_config_modality(config["datasets"][0])
-        assert False, f"Unrecognized config {config}"
-
-    @staticmethod
-    def _find_config_path(config: dict) -> str:
-        assert isinstance(config, dict)
-        if "map_fn_config" in config and "_path" in config["map_fn_config"]:
-            return config["map_fn_config"]["_path"]
-        elif "dataset" in config:
-            return LoaderLogIter._find_config_path(config["dataset"])
-        elif "dataset_weights" in config:
-            return LoaderLogIter._find_config_path(config["dataset_weights"][0][0])
-        elif "datasets" in config:
-            return LoaderLogIter._find_config_path(config["datasets"][0])
-        assert False, f"Unrecognized config {config}"
-
-    def loaders(self) -> Dict[int, LoaderInfo]:
-        loaders = {}
-        for log_line in self._iter_log_lines(
-            (
-                "SavableLoader.__init__",
-                "BasicDataLoader.__init__",
-                "SavableDataLoader.yield",
-                "BasicDataLoader.yield",
-            )
-        ):
-            if log_line["t"] in ("SavableLoader.__init__", "BasicDataLoader.__init__"):
-                loaders[log_line["id"]] = LoaderInfo(
-                    id=log_line["id"],
-                    modality=self._find_config_modality(log_line["config"]),
-                    path=self._find_config_path(log_line["config"]),
-                    global_count=0,
-                )
-            elif log_line["t"] in ("SavableDataLoader.yield", "BasicDataLoader.yield"):
-                loaders[log_line["id"]].global_count = log_line["global_idx"]
-        return loaders
-
-    def log_entries(self, loader_ids: Container[int]) -> Generator[Optional[List[str]], None, None]:
-        idx = self._start_idx
-        for log_line in self._iter_log_lines(("SavableDataLoader.yield", "BasicDataLoader.yield")):
-            if (
-                log_line["t"] in ("SavableDataLoader.yield", "BasicDataLoader.yield")
-                and log_line["id"] in loader_ids
-            ):
-                assert log_line["global_idx"] >= idx, (
-                    f"Found entry {log_line} with wrong idx <{idx}"
-                )
-                while log_line["global_idx"] != idx:
-                    yield None
-                    idx += 1
-                if "keys" in log_line:
-                    yield log_line["keys"]
-
-    def __repr__(self) -> str:
-        return f"log({str(self._path)})"
-
-
-def _proc_map_loader(loader: LoaderLogIter) -> Tuple[LoaderLogIter, Dict[int, LoaderInfo]]:
-    return (loader, loader.loaders())
-
-
-def _iter_sl_log_line_keys(
-    log_lines: Iterable[SampleLoaderYieldLogLine],
-    start_idx: int = 0,
-) -> Generator[Optional[str], None, None]:
-    count = start_idx
-    for log_line in log_lines:
-        if log_line["count"] < start_idx:
-            continue
-        assert log_line["count"] >= count
-        while log_line["count"] != count:
-            yield None
-            count += 1
-        yield log_line["key"]
-
-
-def _iter_sl_log_samples(path: Path) -> Generator[SampleLoaderYieldLogLine, None, None]:
-    with path.open("r") as rf:
-        for line in rf:
-            if '"t": "WebdatasetSampleLoaderDataset._slices_iter.yield"' in line:
-                try:
-                    yield json.loads(line.strip())
-                except json.JSONDecodeError:
-                    print("Cannot decode line", repr(line))
+                    loader = LogLoader.LoaderIterator(
+                        world_size=log_entry["args"]["worker_config"]["world_size"],
+                        rank=rank,
+                        num_workers=log_entry["args"]["worker_config"]["num_workers"],
+                        loader_id=log_entry["args"]["loader_id"],
+                        iter_id=-1,
+                    )
+                    # This is not 100% correct, but it's the best mapping we can get right now.
+                    loaders_by_rank_loader_id[(rank, log_entry["args"]["loader_id"])] = loader
+                    yield loader
 
 
 if __name__ == "__main__":

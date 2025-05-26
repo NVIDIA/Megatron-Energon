@@ -205,7 +205,18 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
 
         trace = self.worker_config.worker_trace_span()
 
-        with trace.span("WebdatasetSampleLoaderDataset._slices_iter", level=1) as fn_span:
+        with trace.span(
+            "WebdatasetSampleLoaderDataset._slices_iter",
+            args={
+                "base_paths": [str(reader.base_path) for reader in self.join_readers],
+                "shuffle_over_epochs": self.shuffle_over_epochs,
+                "parallel_slice_iters": self.parallel_slice_iters,
+                "sample_count": self._sample_count,
+                "epoch_idx": self._epoch_count,
+                "epoch_sample_count": self._epoch_sample_count,
+            },
+            level=1,
+        ) as fn_span:
             assert self.slice_offsets is not None
 
             active_slice_probs = torch.zeros(self.parallel_slice_iters, dtype=torch.float32)
@@ -251,9 +262,6 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
                             )
                             for state in active_slices
                         ],
-                        "count": self._sample_count,
-                        "epoch": self._epoch_count,
-                        "epoch_count": self._epoch_sample_count,
                         "probs": active_slice_probs.tolist(),
                     }
                 )
@@ -272,10 +280,12 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
                             )
                             for state in active_slices
                         ],
-                        "count": self._sample_count,
-                        "epoch": self._epoch_count,
-                        "epoch_count": self._epoch_sample_count,
+                        "sample_count": self._sample_count,
+                        "epoch_idx": self._epoch_count,
+                        "epoch_sample_count": self._epoch_sample_count,
                         "probs": active_slice_probs.tolist(),
+                        "shuffle_over_epochs": self.shuffle_over_epochs,
+                        "parallel_slice_iters": self.parallel_slice_iters,
                     },
                     level=1,
                 )
@@ -289,22 +299,19 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
                     {
                         "mode": "next_epoch",
                         "pending_slice_indexes": pending_slice_indexes,
-                        "count": self._sample_count,
-                        "epoch": self._epoch_count,
-                        "epoch_count": self._epoch_sample_count,
                         "probs": active_slice_probs.tolist(),
-                        "shuffle_over_epochs": self.shuffle_over_epochs,
                     }
                 )
                 trace.instant(
                     "WebdatasetSampleLoaderDataset._slices_iter.next_epoch",
                     args={
                         "pending_slice_indexes": pending_slice_indexes,
-                        "count": self._sample_count,
-                        "epoch": self._epoch_count,
-                        "epoch_count": self._epoch_sample_count,
+                        "sample_count": self._sample_count,
+                        "epoch_idx": self._epoch_count,
+                        "epoch_sample_count": self._epoch_sample_count,
                         "probs": active_slice_probs.tolist(),
                         "shuffle_over_epochs": self.shuffle_over_epochs,
+                        "parallel_slice_iters": self.parallel_slice_iters,
                     },
                     level=1,
                 )
@@ -393,37 +400,38 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
                             "WebdatasetSampleLoaderDataset._slices_iter.exhausted",
                             args={
                                 "remaining": len(pending_slice_indexes),
-                                "count": self._sample_count,
-                                "epoch": self._epoch_count,
-                                "epoch_count": self._epoch_sample_count,
+                                "sample_count": self._sample_count,
+                                "epoch_idx": self._epoch_count,
+                                "epoch_sample_count": self._epoch_sample_count,
                                 "probs": active_slice_probs.tolist(),
                             },
                             level=2,
                         )
                     if sample.data[0] is not None:
                         # Otherwise the sample was skipped.
-                        with trace.span(
+                        trace.instant(
                             "WebdatasetSampleLoaderDataset._slices_iter.yield",
                             args={
-                                "index": sample.__restore_key__[1],
+                                "base_path": str(self.join_readers[0].base_path),
+                                "global_sample_index": sample.__restore_key__[1],
                                 "key": sample.data[0]["__key__"],
                                 "shard": sample.data[0]["__shard__"],
-                                "count": self._sample_count,
-                                "epoch": self._epoch_count,
-                                "epoch_count": self._epoch_sample_count,
+                                "sample_count": self._sample_count,
+                                "epoch_idx": self._epoch_count,
+                                "epoch_sample_count": self._epoch_sample_count,
                             },
                             level=2,
-                        ):
-                            # Now, yield the sample
-                            yield sample
-                            del sample
+                        )
+                        # Now, yield the sample
+                        yield sample
+                        del sample
             if self.worker_config.should_log(level=2):
                 trace.instant(
                     "WebdatasetSampleLoaderDataset._slices_iter.all_exhausted",
                     args={
-                        "count": self._sample_count,
-                        "epoch": self._epoch_count,
-                        "epoch_count": self._epoch_sample_count,
+                        "sample_count": self._sample_count,
+                        "epoch_idx": self._epoch_count,
+                        "epoch_sample_count": self._epoch_sample_count,
                     },
                     level=2,
                 )
@@ -453,12 +461,6 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
 
         self.ensure_slice_offsets()
         assert self.slice_offsets is not None
-
-        self.worker_config.worker_trace_writer().instant(
-            "WebdatasetSampleLoaderDataset.__iter__",
-            args=self.config(),
-            level=1,
-        )
 
         if len(self.slice_offsets) <= 1:
             return

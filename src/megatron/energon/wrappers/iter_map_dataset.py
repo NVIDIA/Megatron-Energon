@@ -90,8 +90,14 @@ class IterMapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sampl
 
     def __iter__(self) -> Iterator[T_sample_out]:
         trace_span = self.worker_config.worker_trace_span()
-        with trace_span.span(
-            "IterMapDataset.__iter__", args={"config": self._own_config()}, level=1
+        iter_name = f"IterMapDataset.__iter__.iter_map_fn:{self._function_config(self.iter_map_fn)}"
+        with (
+            trace_span.span(
+                "IterMapDataset.__iter__", args={"config": self._own_config()}, level=1
+            ),
+            self.worker_config.worker_trace_writer().generator(
+                "IterMapDataset.__iter__.next", level=2
+            ) as trace_gen,
         ):
             last_sample_wrapper = _LastSampleWrapper(self.dataset)
             # The iter_map_fn is stateless. Thus we need to know which inner sample created the
@@ -112,33 +118,39 @@ class IterMapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sampl
 
             ds_iter = iter(reset_idx_iter())
 
-            # While True will break when the inner dataset is exhausted, but may continue on exception
-            while True:
-                iter_idx = 0
-                try:
-                    for sample_idx, sample in self._sample_index.iter_ctx(
-                        self.iter_map_fn(ds_iter)
-                    ):
-                        yield set_sample_restore_key(
-                            sample,
-                            sample_idx,
-                            iter_idx,
-                            *sample_restore_keys,
-                            src=self,
+            try:
+                # While True will break when the inner dataset is exhausted, but may continue on exception
+                while True:
+                    iter_idx = 0
+                    try:
+                        for sample_idx, sample in trace_span.iterable(
+                            self._sample_index.iter_ctx(self.iter_map_fn(ds_iter)),
+                            name=iter_name,
+                            level=1,
+                        ):
+                            with trace_gen.yield_():
+                                yield set_sample_restore_key(
+                                    sample,
+                                    sample_idx,
+                                    iter_idx,
+                                    *sample_restore_keys,
+                                    src=self,
+                                )
+                            sample_restore_keys.clear()
+                            iter_idx += 1
+                    except SYSTEM_EXCEPTIONS:
+                        raise FatalSampleError.from_sample(last_sample_wrapper.last_sample)
+                    except Exception as e:
+                        self.error_handler(e, last_sample_wrapper.last_sample)
+                        trace_span.instant(
+                            "IterMapDataset.__iter__.error/retry",
+                            args={"exception": f"{type(e).__name__}: {str(e)}"},
+                            level=1,
                         )
-                        sample_restore_keys.clear()
-                        iter_idx += 1
-                except SYSTEM_EXCEPTIONS:
-                    raise FatalSampleError.from_sample(last_sample_wrapper.last_sample)
-                except Exception as e:
-                    self.error_handler(e, last_sample_wrapper.last_sample)
-                    trace_span.instant(
-                        "IterMapDataset.__iter__.error/retry",
-                        args={"exception": f"{type(e).__name__}: {str(e)}"},
-                        level=1,
-                    )
-                else:
-                    break
+                    else:
+                        break
+            finally:
+                ds_iter.close()
 
     def can_restore_sample(self) -> bool:
         return super().can_restore_sample() and self.stateless_iter_fn
@@ -150,38 +162,52 @@ class IterMapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sampl
         super().assert_can_restore()
 
     def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_sample:
+        trace_span = self.worker_config.worker_trace_span()
+        iter_name = self._function_config(self.iter_map_fn)
         self.assert_can_restore()
-        id, sample_idx, iter_idx, *sample_restore_keys = index
-        assert id == type(self).__name__
-        assert isinstance(iter_idx, int)
-        inner_iter = iter(
-            self.iter_map_fn(
-                (self.dataset.restore_sample(inner_index) for inner_index in sample_restore_keys)
+        with trace_span.span(
+            "IterMapDataset.restore_sample",
+            args={"index": index},
+            level=1,
+        ):
+            id, sample_idx, iter_idx, *sample_restore_keys = index
+            assert id == type(self).__name__
+            assert isinstance(iter_idx, int)
+            inner_iter = iter(
+                trace_span.iterable(
+                    self.iter_map_fn(
+                        (
+                            self.dataset.restore_sample(inner_index)
+                            for inner_index in sample_restore_keys
+                        )
+                    ),
+                    name=f"{iter_name}.next",
+                    level=2,
+                )
             )
-        )
-        try:
-            # Skip inner yielded samples to get the correct sample
-            for skip_idx in range(iter_idx):
-                with self._sample_index.ctx(sample_idx - iter_idx + skip_idx):
-                    next(inner_iter)
-            # This is the sample to restore
-            with self._sample_index.ctx(sample_idx):
-                sample = next(inner_iter)
-            return set_sample_restore_key(
-                sample,
-                sample_idx,
-                iter_idx,
-                *sample_restore_keys,
-                src=self,
-            )
-        except StopIteration:
-            raise RuntimeError(
-                "Generator did not yield enough samples, but is marked stateless/deterministic."
-            )
-        finally:
-            # Properly close if it's a generator
-            if hasattr(inner_iter, "close"):
-                inner_iter.close()
+            try:
+                # Skip inner yielded samples to get the correct sample
+                for skip_idx in range(iter_idx):
+                    with self._sample_index.ctx(sample_idx - iter_idx + skip_idx):
+                        next(inner_iter)
+                # This is the sample to restore
+                with self._sample_index.ctx(sample_idx):
+                    sample = next(inner_iter)
+                return set_sample_restore_key(
+                    sample,
+                    sample_idx,
+                    iter_idx,
+                    *sample_restore_keys,
+                    src=self,
+                )
+            except StopIteration:
+                raise RuntimeError(
+                    "Generator did not yield enough samples, but is marked stateless/deterministic."
+                )
+            finally:
+                # Properly close if it's a generator
+                if hasattr(inner_iter, "close"):
+                    inner_iter.close()
 
     def _own_config(self) -> Dict[str, Any]:
         return {

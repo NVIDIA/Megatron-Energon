@@ -102,21 +102,28 @@ class GcDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
 
     def __iter__(self) -> Iterator[T_sample]:
         trace_span = self.worker_config.worker_trace_span()
-        in_worker = torch.utils.data.get_worker_info() is not None
-        if in_worker and not _frozen_cuda_tensors_initialized:
-            raise GcFreezeError(
-                "You are using GcDataset with multiple workers, but forgot to call gc_init_worker() in at least one forked worker process."
-            )
+        with (
+            trace_span.span("GcDataset.__iter__", args={"config": self._own_config()}, level=1),
+            self.worker_config.worker_trace_writer().generator(
+                "GcDataset.__iter__.next", level=2
+            ) as trace_gen,
+        ):
+            in_worker = torch.utils.data.get_worker_info() is not None
+            if in_worker and not _frozen_cuda_tensors_initialized:
+                raise GcFreezeError(
+                    "You are using GcDataset with multiple workers, but forgot to call gc_init_worker() in at least one forked worker process."
+                )
 
-        if self.freeze:
-            with trace_span.span("GcDataset.__iter__.gc.freeze", level=1):
-                gc.collect()
-                gc.freeze()
-        with trace_span.span("GcDataset.__iter__", args={"config": self._own_config()}, level=1):
+            if self.freeze:
+                with trace_span.span("GcDataset.__iter__.gc.collect", level=1):
+                    gc.collect()
+                with trace_span.span("GcDataset.__iter__.gc.freeze", level=1):
+                    gc.freeze()
             try:
                 iter = 0
                 for sample in self.dataset:
-                    yield sample
+                    with trace_gen.yield_():
+                        yield sample
                     iter += 1
                     if iter >= self.every_n_iter:
                         with trace_span.span("GcDataset.__iter__.gc.collect", level=1):
@@ -124,7 +131,8 @@ class GcDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
                         iter = 0
             finally:
                 if self.freeze:
-                    gc.unfreeze()
+                    with trace_span.span("GcDataset.__iter__.gc.unfreeze", level=1):
+                        gc.unfreeze()
 
     def _own_config(self) -> Dict[str, Any]:
         return {

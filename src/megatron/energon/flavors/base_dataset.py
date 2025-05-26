@@ -330,6 +330,10 @@ class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC)
             mod_name = getattr(fn, "__module__", "<unknown>")
         return f"{mod_name}.{getattr(fn, '__qualname__', getattr(fn, '__name__', '<unknown>'))}"
 
+    @staticmethod
+    def _function_config_short(fn: Callable) -> str:
+        return getattr(fn, "__qualname__", getattr(fn, "__name__", "<unknown>"))
+
     @abstractmethod
     def config(self) -> Dict[str, Any]:
         """Return a config dict that can be used to check if datasets have the same settings.

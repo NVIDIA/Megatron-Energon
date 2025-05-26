@@ -78,17 +78,26 @@ class BaseWrapperDataset(SavableDataset[T_sample_out], Generic[T_sample_in, T_sa
 
     def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_sample_out:
         if len(self.datasets) == 1:
-            return self.datasets[0].restore_sample(index)
+            with self.worker_config.worker_trace_writer().span(
+                f"{type(self).__name__}.restore_sample",
+                level=1,
+            ):
+                return self.datasets[0].restore_sample(index)
         else:
             id, ds_idx = index[:2]
             assert id == type(self).__name__
             index = index[2:]
             assert isinstance(ds_idx, int)
-            return add_sample_restore_key(
-                self.datasets[ds_idx].restore_sample(index),
-                ds_idx,
-                src=self,
-            )
+            with self.worker_config.worker_trace_writer().span(
+                f"{type(self).__name__}.restore_sample",
+                args={"ds_idx": ds_idx},
+                level=1,
+            ):
+                return add_sample_restore_key(
+                    self.datasets[ds_idx].restore_sample(index),
+                    ds_idx,
+                    src=self,
+                )
 
     def save_state(self) -> FlexState:
         own_state = super().save_state()
