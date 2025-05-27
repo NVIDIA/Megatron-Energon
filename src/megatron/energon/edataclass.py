@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from dataclasses import dataclass
-from typing import dataclass_transform
+
+from typing_extensions import dataclass_transform
 
 
 # We define an alias for `@dataclass(slots=True, kw_only=True)`,
