@@ -42,14 +42,12 @@ from typing import Callable, List, Optional
 
 import torch
 
-from megatron.energon import CaptioningSample, DefaultTaskEncoder, batch_list, batch_stack
+from megatron.energon import Batch, CaptioningSample, DefaultTaskEncoder, batch_list, batch_stack
 
 
 # Type for intermediate batch, after batching operation
 @dataclass
-class CaptioningRawBatch:
-    # (n,)
-    __key__: List[str]
+class CaptioningRawBatch(Batch):
     # (n, c, h, w)
     image: torch.Tensor
     # (n,)
@@ -58,8 +56,7 @@ class CaptioningRawBatch:
 
 # Typing for the resulting batch data
 @dataclass
-class CaptioningBatch:
-    __keys__: List[str]
+class CaptioningBatch(Batch):
     # (n, c, h, w)
     images: torch.Tensor
     # (n, c)
@@ -93,18 +90,16 @@ class CaptioningTaskEncoder(
     
     def batch(self, samples: List[CaptioningSample]) -> CaptioningRawBatch:
         # Batch the samples
-        # The actions dict specifies how to batch each field of the sample. In addition to these, you may use 
-        # `batch_pad_stack` as well.
         # By default, `batch_pad_stack` is used for all tensor fields, and `batch_list` is used for all non-tensor 
         # fields. This example matches the default implementation (not overwriting the `batch` method).
-        return self._batch(samples, result_type=CaptioningRawBatch, actions={"image": batch_stack, "caption": batch_list})
+        return CaptioningRawBatch.from_samples(samples)
 
     def encode_batch(self, batch_data: CaptioningRawBatch) -> CaptioningBatch:
         # Run the encoder on the batch of captions.
         tokenized = self.tokenizer(batch_data.caption)
         # Return the final batch, going into the network
-        return CaptioningBatch(
-            __keys__=batch_data.__key__,
+        return CaptioningBatch.derive_from(
+            batch_data,
             images=batch_data.image,
             text_tokens=tokenized["input_ids"],
             text_attn_mask=tokenized["attention_mask"],
