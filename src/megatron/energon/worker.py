@@ -11,14 +11,14 @@ import torch.distributed
 import torch.utils.data
 
 from megatron.energon.cache import CachePool
-from megatron.energon.dataclass_slots import dataclass_slots
+from megatron.energon.edataclass import edataclass
 
 __all__ = ("WorkerConfig",)
 
 T = TypeVar("T")
 
 
-@dataclass_slots(eq=False)
+@edataclass(eq=False)
 class WorkerConfig:
     """
     Provides information about the current worker and the global configuration. This gives each
@@ -71,13 +71,13 @@ class WorkerConfig:
     _worker_override_global_rank: ClassVar[Optional[List[int]]] = None
 
     #: The current cache pool for the worker.
-    _cache_pool: ClassVar[Optional[CachePool]] = None
+    _cache_pool: "ClassVar[Optional[CachePool]]" = None
 
     def worker_activate(
         self,
         sample_index: int,
         override_global_rank: Optional[int] = None,
-        cache_pool: Optional[CachePool] = None,
+        cache_pool: "Optional[CachePool]" = None,
     ):
         """Activates the worker config for the current worker and sets it as actively iterating.
         Must be called before next() call on the datasets."""

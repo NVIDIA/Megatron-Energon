@@ -22,6 +22,7 @@ from megatron.energon.flavors.base_dataset import (
     add_sample_restore_key,
     set_sample_restore_key,
 )
+from megatron.energon.source_info import SourceInfo
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers._log_exception import log_exception
 from megatron.energon.wrappers.base import BaseWrapperDataset, SampleIndex, get_sample_restore_key
@@ -47,7 +48,7 @@ class PackingDataset(
     final_packer: Callable[[List[T_encoded_sample]], T_batch_sample]
     final_packer_stateless: bool
     packer_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]]
-    error_handler: Callable[[Exception, List[T_sample]], None]
+    error_handler: Callable[[Exception, List[T_sample], list[SourceInfo]], None]
 
     #: The buffer for collecting the samples that shall be packed.
     _reading_buffer: SavableSampleBuffer
@@ -91,7 +92,9 @@ class PackingDataset(
         sample_encoder: Optional[Callable[[List[T_sample]], T_encoded_sample]] = None,
         sample_encoder_stateless: bool = False,
         packer_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]] = None,
-        error_handler: Callable[[Exception, List[T_sample]], None] = log_exception,
+        error_handler: Callable[
+            [Exception, List[T_sample], list[SourceInfo]], None
+        ] = log_exception,
         worker_config: WorkerConfig,
     ):
         """Construct a PackingDataset which is used for sequence packing.
@@ -201,7 +204,7 @@ class PackingDataset(
             except SYSTEM_EXCEPTIONS:
                 raise FatalSampleError.from_sample(pack)
             except Exception as e:
-                self.error_handler(e, pack)
+                self.error_handler(e, [sample])
         return encoded_pack
 
     def __iter__(self) -> Iterator[T_batch_sample]:
@@ -344,14 +347,18 @@ class PackingDataset(
         self.assert_can_restore()
         if inspect.isgeneratorfunction(self.final_packer):
             id, pack_idx, pack_sub_idx, *pack_restore_keys = restore_key
+            id, pack_idx, pack_sub_idx, *pack_restore_keys = restore_key
             assert id == type(self).__name__
         else:
+            id, pack_idx, *pack_restore_keys = restore_key
             id, pack_idx, *pack_restore_keys = restore_key
             assert id == type(self).__name__
 
         pack = []
         for inner_idx in pack_restore_keys:
             if self.sample_encoder is not None:
+                id, sample_idx, *inner_idx = inner_idx
+                assert id == type(self).__name__
                 id, sample_idx, *inner_idx = inner_idx
                 assert id == type(self).__name__
                 assert isinstance(sample_idx, int)

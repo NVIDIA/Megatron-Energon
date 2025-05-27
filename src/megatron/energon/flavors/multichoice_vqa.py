@@ -5,14 +5,14 @@ from typing import List, Optional
 
 import torch
 
-from megatron.energon.dataclass_slots import dataclass_slots
+from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib.epath import EPath
 from megatron.energon.errors import warn_deprecated
 from megatron.energon.flavors.base_dataset import Sample
 from megatron.energon.flavors.webdataset import DefaultDecoderWebdatasetFactory
 
 
-@dataclass_slots
+@edataclass
 class MultiChoiceVQASample(Sample):
     """Sample type for visual question answering."""
 

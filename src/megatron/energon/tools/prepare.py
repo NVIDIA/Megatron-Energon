@@ -331,6 +331,7 @@ def command(
                         "__restore_key__",
                         "__subflavor__",
                         "__subflavors__",
+                        "__sources__",
                     ):
                         continue
                     while True:

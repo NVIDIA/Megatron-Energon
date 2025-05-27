@@ -9,9 +9,12 @@ import numpy as np
 
 from megatron.energon.cache import FileStore
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory, SavableDataset
+from megatron.energon.flavors.base_dataset import (
+    BaseCoreDatasetFactory,
+    SavableDataset,
+    legacy_handler,
+)
 from megatron.energon.flavors.webdataset.error_handler import ErrorHandler
-from megatron.energon.flavors.webdataset.file_store import WebdatasetFileStore
 from megatron.energon.flavors.webdataset.metadata import WebdatasetMeta
 from megatron.energon.flavors.webdataset.prepare import WebdatasetPreparator
 from megatron.energon.flavors.webdataset.sample_loader import (
@@ -20,6 +23,7 @@ from megatron.energon.flavors.webdataset.sample_loader import (
 )
 from megatron.energon.flavors.webdataset.sharder import Sharder
 from megatron.energon.flavors.webdataset.structs import FilteredSample, ShardInfo, reraise_exception
+from megatron.energon.source_info import SourceInfo
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.map_dataset import MapDataset
 
@@ -61,7 +65,9 @@ class BaseWebdatasetFactory(
         max_samples_per_sequence: Optional[int] = None,
         split_config: str = "split.yaml",
         part_filter: Optional[Callable[[str], bool]] = None,
-        handler: Callable[[Exception, Optional[str]], None] = reraise_exception,
+        handler: Callable[
+            [Exception, Optional[str], Optional[list[SourceInfo]]], None
+        ] = reraise_exception,
     ):
         """
         Base factory for the webdataset sample loader.
@@ -100,7 +106,7 @@ class BaseWebdatasetFactory(
         self.parallel_shard_iters = parallel_shard_iters
         self.max_samples_per_sequence = max_samples_per_sequence
         self.part_filter = part_filter
-        self.handler = handler
+        self.handler = legacy_handler(handler)
 
     def __len__(self) -> int:
         return sum(shard.count for shard in self.shards)
@@ -139,7 +145,6 @@ class BaseWebdatasetFactory(
             worker_config=self.worker_config,
             shuffle_over_epochs=self.shuffle_over_epochs if self.training else None,
             parallel_slice_iters=parallel_shard_iters,
-            handler=self.sample_error_handler,
         )
         return MapDataset(
             dataset,
@@ -150,7 +155,9 @@ class BaseWebdatasetFactory(
             worker_config=self.worker_config,
         )
 
-    def as_file_store(self) -> FileStore:
+    def as_file_store(self) -> "FileStore":
+        from megatron.energon.cache.file_store import WebdatasetFileStore
+
         return WebdatasetFileStore(self.path)
 
     def sample_filter(self, key: str) -> bool:

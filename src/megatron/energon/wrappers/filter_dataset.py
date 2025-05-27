@@ -1,7 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from typing import Any, Callable, Dict, Generic, Iterator, Optional, Tuple, TypeVar, Union
+from typing import Any, Callable, Dict, Generic, Iterator, Optional, TypeVar, Union
 
 from megatron.energon.flavors.base_dataset import SavableDataset
 from megatron.energon.worker import WorkerConfig
@@ -56,9 +56,6 @@ class FilterDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
                 filter_res = self.filter_fn(sample)
             if filter_res:
                 yield sample
-
-    def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_sample:
-        return self.dataset.restore_sample(index)
 
     def config(self) -> Dict[str, Any]:
         return {

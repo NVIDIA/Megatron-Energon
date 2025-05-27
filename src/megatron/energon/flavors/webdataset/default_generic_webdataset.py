@@ -98,6 +98,7 @@ class DefaultGenericWebdatasetFactory(BaseWebdatasetFactory[T_sample], Generic[T
             "__restore_key__": sample["__restore_key__"],
             "__subflavor__": self.subflavor,
             "__subflavors__": self.subflavors,
+            "__sources__": sample["__sources__"],
         }
         super().__init__(path, **kwargs, part_filter=part_filter)
         self.subflavor = subflavor

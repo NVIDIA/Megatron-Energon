@@ -1,19 +1,19 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from typing import Any, Callable, Dict, Generator, Iterator, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, Generator, Iterator, List, Optional, Sequence, Tuple, Union
 
 import torch
 
-from megatron.energon.dataclass_slots import dataclass_slots
+from megatron.energon.edataclass import edataclass
 from megatron.energon.flavors.base_dataset import FlexState, SavableDataset
 from megatron.energon.flavors.webdataset.itar_reader import ITarReader
-from megatron.energon.flavors.webdataset.structs import FilteredSample, reraise_exception
+from megatron.energon.flavors.webdataset.structs import FilteredSample
 from megatron.energon.rng import WorkerRng
 from megatron.energon.worker import WorkerConfig
 
 
-@dataclass_slots
+@edataclass
 class RawSampleData:
     """Represents the iteration state of a single slice slice to the index."""
 
@@ -23,7 +23,7 @@ class RawSampleData:
     data: Tuple[Optional[FilteredSample], ...]
 
 
-@dataclass_slots
+@edataclass
 class SliceState:
     """Represents the iteration state of a single slice slice to the index."""
 
@@ -49,9 +49,6 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
     shuffle_over_epochs: Optional[int]
     # Number of parallel iterators to be opened simultaneously (and random sample between them)
     parallel_slice_iters: int
-
-    # Error handler
-    handler: Callable[[Exception, Optional[str]], None]
 
     # Worker's random generator
     _worker_rng: WorkerRng
@@ -92,7 +89,6 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
         worker_config: WorkerConfig,
         shuffle_over_epochs: Optional[int] = None,
         parallel_slice_iters: int = 1,
-        handler: Callable[[Exception, Optional[str]], None] = reraise_exception,
     ):
         """
         The webdataset loader. Iterates over the slice infos and yields the samples.
@@ -110,14 +106,12 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
             parallel_slice_iters: If > 1, samples are randomly drawn from parallel slice iterators.
                 This will not impact performance, but increase randomness. If = 1, the slices are
                 iterated in order.
-            handler: Exception handler. Args: (exception, key).
         """
         super().__init__(worker_config=worker_config)
 
         self.join_readers = join_readers
         self.shuffle_over_epochs = shuffle_over_epochs
         self.parallel_slice_iters = parallel_slice_iters
-        self.handler = handler
 
         # Store the slices for all workers
         # The slices for the current worker, will have to be extracted from this list later
@@ -448,10 +442,10 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
     def assert_can_restore(self) -> None:
         pass
 
-    def restore_sample(self, key: Tuple[Union[str, int, tuple], ...]) -> RawSampleData:
+    def restore_sample(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> RawSampleData:
         # Key is: ("Webdataset", index)
         # The key is joined in the dataset's typed joining (i.e. load_sample of JoinedWebdatasetFactory).
-        id, index = key
+        id, index = restore_key
         assert id == "Webdataset"
         assert isinstance(index, int)
         return self._get_sample(index)
