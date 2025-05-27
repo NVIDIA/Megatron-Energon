@@ -167,7 +167,10 @@ class AVDecoder:
                     input_container.seek(iframe_info.pts, stream=input_container.streams.video[0])
                     previous_frame_index = iframe_info.index
 
+                iterated_any_frames = False
+
                 for i, frame in enumerate(frame_iterator):
+                    iterated_any_frames = True
                     take_frame = False
                     last_frame = False
 
@@ -215,7 +218,8 @@ class AVDecoder:
                         break
 
                 # Add the number of frames we iterated over to the previous frame index
-                previous_frame_index += i + 1
+                if iterated_any_frames:
+                    previous_frame_index += i + 1
 
                 if clip_timestamp_start is not None and clip_timestamp_end is not None:
                     video_clips_frames.append(clip_frames)
