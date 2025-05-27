@@ -115,7 +115,7 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
                 target_offset = self._generator_offset
                 self._generator_offset = 0
                 for idx, (sample_idx, inner_sample) in trace_span.iterable(
-                    self._sample_index.iter_ctx(mapped_sample, sample_idx),
+                    enumerate(self._sample_index.iter_ctx(mapped_sample, sample_idx)),
                     name=f"{fn_span}.next",
                     level=2,
                 ):
@@ -149,7 +149,7 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
                         # In case of a generator, additionally store the index of the yielded samples
                         # per input sample
                         for idx, (sample_idx, inner_sample) in trace_span.iterable(
-                            self._sample_index.iter_ctx(mapped_sample, sample_idx),
+                            enumerate(self._sample_index.iter_ctx(mapped_sample, sample_idx)),
                             name=f"{fn_span}.next",
                             level=2,
                         ):
@@ -228,7 +228,7 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
                     f"Generator in {self.map_fn} but not marked as such."
                 )
                 for idx, (sample_idx, res_sample) in trace_span.iterable(
-                    self._sample_index.iter_ctx(mapped_sample, sample_idx),
+                    enumerate(self._sample_index.iter_ctx(mapped_sample, sample_idx)),
                     name=f"MapDataset.restore_sample.map_fn:{self._function_config(self.map_fn)}.next",
                     level=2,
                 ):

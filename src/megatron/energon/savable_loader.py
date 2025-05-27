@@ -39,7 +39,6 @@ from megatron.energon.flavors.base_dataset import (
     add_sample_restore_key,
 )
 from megatron.energon.rng import SystemRng, SystemRngState
-from megatron.energon.tracing import Flow
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset
 from megatron.energon.wrappers.batch_dataset import BatchDataset
@@ -62,7 +61,24 @@ def _init_worker(seed_per_worker: List[int], worker_id: int):
     SystemRng.seed(worker_seed)
 
 
-class SimpleSavableDatasetWrapper(BaseWrapperDataset[T, Tuple[int, int, T]], Generic[T]):
+@edataclass
+class SavableDatasetState(State):
+    """State of the dataset wrapper. It stores the global random states and the index of the next
+    sample to be returned from the dataset. This class is not intended to be used directly, but by
+    :class:`megatron.energon.SavableDatasetWrapper`."""
+
+    #: The state of all the system random number generators
+    rng: SystemRngState
+    #: The state of the savable dataset
+    dataset_state: FlexState
+    #: Index of the next sample to be returned from the dataset
+    sample_index: int
+
+    def __repr__(self):
+        return f"SavableDatasetState(rng={self.rng!r}, sample_index={self.sample_index})"
+
+
+class SimpleSavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
     """Wrapper for non-multiprocessing savable datasets. Restarts the inner dataset. This class is
     not intended to be used directly."""
 
@@ -71,8 +87,6 @@ class SimpleSavableDatasetWrapper(BaseWrapperDataset[T, Tuple[int, int, T]], Gen
 
     _state_restored: bool
     _sample_index: int
-
-    _savable_fields = ("_sample_index",)
 
     def __init__(
         self,
@@ -88,20 +102,18 @@ class SimpleSavableDatasetWrapper(BaseWrapperDataset[T, Tuple[int, int, T]], Gen
             cache_pool: The cache pool to use for the dataset.
             dataloader_id: The id of the data loader for logging purposes.
         """
-        super().__init__(dataset, worker_config=worker_config)
+        self.dataset = dataset
+        self.worker_config = worker_config
         self.cache_pool = cache_pool
         self.dataloader_id = dataloader_id
 
         self.reset_state_own()
-        # This must be removed, such that the outer dataloader does not use this
-        # from the second epoch on for training.
-        del self.__len__
 
     def reset_state_own(self) -> None:
         self._sample_index = 0
         self._state_restored = False
 
-    def __len__(self):
+    def inner_len(self):
         return len(self.dataset)
 
     def __iter__(self):
@@ -123,26 +135,25 @@ class SimpleSavableDatasetWrapper(BaseWrapperDataset[T, Tuple[int, int, T]], Gen
                 self._state_restored = False
                 self.worker_config.worker_activate(self._sample_index, cache_pool=self.cache_pool)
                 worker_active = True
+                trace_sample_flow: dict = {}
                 try:
                     # For tracing, this contains the current sample flow
 
-                    trace_sample_flow: Flow = None
-
-                    def _next_span():
+                    def _trace_next():
                         # Trace the next sample flow
                         nonlocal trace_sample_flow
                         span = trace_writer.span(
                             name="SimpleSavableDatasetWrapper.__iter__.loop.dataset.next",
-                            args={"sample_idx": self._sample_index},
+                            args={"sample_index": self._sample_index},
                             level=1,
                         )
                         trace_sample_flow = trace_writer.flow(
                             f"w{global_worker_id}_s{self._sample_index}",
                             level=1,
-                        )
+                        ).save()
                         return span
 
-                    for src_data in trace_writer.iterable(self.dataset, next=_next_span):
+                    for src_data in trace_writer.iterable(self.dataset, next=_trace_next):
                         self.worker_config.worker_deactivate()
                         worker_active = False
                         sample_index = self._sample_index
@@ -150,13 +161,12 @@ class SimpleSavableDatasetWrapper(BaseWrapperDataset[T, Tuple[int, int, T]], Gen
                             src_data, global_worker_id, sample_index, src=self
                         )
                         self._sample_index += 1
-                        trace_sample_flow.end(level=1)
                         trace_writer.instant(
                             "SimpleSavableDatasetWrapper.__iter__.loop.yield",
                             args={"sample_index": sample_index},
                             level=1,
                         )
-                        yield worker_id, sample_index, src_data
+                        yield worker_id, sample_index, src_data, trace_sample_flow
                         if self._state_restored:
                             # Restart iterator after restore
                             break
@@ -167,6 +177,21 @@ class SimpleSavableDatasetWrapper(BaseWrapperDataset[T, Tuple[int, int, T]], Gen
                 finally:
                     if worker_active:
                         self.worker_config.worker_deactivate()
+        trace_writer.instant("SimpleSavableDatasetWrapper.__iter__.break", level=1)
+
+    def save_state(self):
+        return SavableDatasetState(
+            rng=None,
+            dataset_state=self.dataset.save_state(),
+            sample_index=self._sample_index,
+        )
+
+    def restore_state(self, state: SavableDatasetState):
+        self._sample_index = state.sample_index
+        self.dataset.restore_state(state.dataset_state)
+
+    def can_restore_sample(self) -> bool:
+        return self.dataset.can_restore_sample()
 
     def restore_sample(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> T:
         with self.worker_config.worker_trace_writer().span(
@@ -193,52 +218,6 @@ class SimpleSavableDatasetWrapper(BaseWrapperDataset[T, Tuple[int, int, T]], Gen
 
     def __str__(self):
         return f"SimpleSavableDatasetWrapper(dataset={self.dataset})"
-
-
-class SimpleSavableDatasetWrapperWithoutLen(IterableDataset[Tuple[int, int, T]], Generic[T]):
-    """Wrapper for non-multiprocessing savable datasets. Restarts the inner dataset. This class is
-    not intended to be used directly."""
-
-    def __init__(self, dataset: SavableDataset[T]):
-        self.dataset = dataset
-
-    def inner_len(self):
-        return len(self.dataset)
-
-    def __iter__(self):
-        return self.dataset.__iter__()
-
-    def save_state(self):
-        return self.dataset.save_state()
-
-    def restore_state(self, state: FlexState):
-        return self.dataset.restore_state(state)
-
-    def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T:
-        return self.dataset.restore_sample(index)
-
-    def config(self):
-        return self.dataset.config()
-
-    def __str__(self):
-        return f"SimpleSavableDatasetWrapperWithoutLen(dataset={self.dataset})"
-
-
-@edataclass
-class SavableDatasetState(State):
-    """State of the dataset wrapper. It stores the global random states and the index of the next
-    sample to be returned from the dataset. This class is not intended to be used directly, but by
-    :class:`megatron.energon.SavableDatasetWrapper`."""
-
-    #: The state of all the system random number generators
-    rng: SystemRngState
-    #: The state of the savable dataset
-    dataset_state: FlexState
-    #: Index of the next sample to be returned from the dataset
-    sample_index: int
-
-    def __repr__(self):
-        return f"SavableDatasetState(rng={self.rng!r}, sample_index={self.sample_index})"
 
 
 @edataclass
@@ -412,14 +391,6 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
             self._command_lock = None
             self._cmd_thread = None
             # print(f"{id(self)}:{multiprocessing.current_process().ident} Cmd thread closed")
-
-    def _trace_hierarchy(self, dataset: SavableDataset[T]):
-        trace_writer = self.worker_config.worker_trace_writer()
-        dataset = self.dataset
-        with trace_writer.span(type(dataset).__name__, level=1):
-            if isinstance(dataset, BaseWrapperDataset):
-                for dataset in dataset.datasets:
-                    self._trace_hierarchy(dataset)
 
     def __iter__(self):
         trace_writer = self.worker_config.worker_trace_writer()
@@ -717,7 +688,9 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
             id, global_worker_id, sample_idx = restore_key[:3]
             assert id == type(self).__name__
             restore_key = restore_key[3:]
-            self.worker_config.worker_activate(sample_idx, override_global_rank=global_worker_id)
+            self.worker_config.worker_activate(
+                sample_idx, override_global_rank=global_worker_id, cache_pool=self.cache_pool
+            )
             try:
                 return add_sample_restore_key(
                     self.dataset.restore_sample(restore_key),
@@ -741,7 +714,7 @@ class SavableDataLoaderState(State):
     processed of a single rank."""
 
     #: The internal state of the dataset (for each worker process)
-    worker_states: List[Union[SavableDatasetCheckpoint, FlexState]]
+    worker_states: Union[List[SavableDatasetCheckpoint], List[SavableDatasetState]]
     #: Which worker will be the next to emit a sample. Used to restore the proper order
     next_worker_id: int
 
@@ -800,7 +773,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
     #: The worker config
     worker_config: WorkerConfig
     #: The wrapped dataset. For multiprocessing, this is a :class:`megatron.energon.SavableDatasetWrapper`
-    dataset: Union[SavableDatasetWrapper[T], SimpleSavableDatasetWrapperWithoutLen[T]]
+    dataset: Union[SavableDatasetWrapper[T], SimpleSavableDatasetWrapper[T]]
 
     #: The global ID counter
     _next_id: ClassVar[int] = 0
@@ -815,6 +788,8 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
     #: Instance of the current data iterator. There shall be only one active iterator, such that the
     # dataset is not iterated multiple times in parallel. The state will proceed.
     _persistent_iterator: Optional[Iterator[T]] = None
+    #: Whether the dataloader has running workers.
+    _has_workers: bool = False
     #: The index of the current worker. -1 if not started yet.
     _worker_sample_counters: List[int]
     #: Id of the next worker to retrieve data from
@@ -912,10 +887,8 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
                 dataloader_id=self.id,
             )
         else:
-            dataset = SimpleSavableDatasetWrapperWithoutLen(
-                SimpleSavableDatasetWrapper(
-                    dataset, self.worker_config, cache_pool=cache_pool, dataloader_id=self.id
-                )
+            dataset = SimpleSavableDatasetWrapper(
+                dataset, self.worker_config, cache_pool=cache_pool, dataloader_id=self.id
             )
 
         self._worker_sample_counters = [-1] * num_procs
@@ -938,6 +911,16 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
             self.worker_config.worker_seed(i) for i in range(self.worker_config.num_workers)
         ]
 
+        super().__init__(
+            dataset,
+            batch_size=None,
+            shuffle=False,
+            num_workers=self.worker_config.num_workers,
+            pin_memory=True,
+            worker_init_fn=partial(_init_worker, seed_per_worker),
+            **kwargs,
+        )
+
         self.worker_config.worker_trace_writer().trace_object_async(
             self,
             "SavableDataLoader",
@@ -949,16 +932,6 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
             level=1,
         )
 
-        super().__init__(
-            dataset,
-            batch_size=None,
-            shuffle=False,
-            num_workers=self.worker_config.num_workers,
-            pin_memory=True,
-            worker_init_fn=partial(_init_worker, seed_per_worker),
-            **kwargs,
-        )
-
     @staticmethod
     def next_id() -> int:
         next_id = SavableDataLoader._next_id
@@ -966,6 +939,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
         return next_id
 
     def __len__(self):
+        # We override this, because otherwise we'll see warnings
         return self.dataset.inner_len()
 
     def __iter__(self):
@@ -1022,6 +996,8 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
                                 },
                                 level=1,
                             )
+                        else:
+                            keys = None
                         with trace_generator.yield_(
                             last_args={
                                 "loader_id": self.id,
@@ -1038,9 +1014,10 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
                             self._global_sample_idx += 1
                             iter_idx += 1
                             yield sample
-                finally:
+                    # After the source is exhausted, not for GeneratorExit.
                     self._persistent_iterator = None
                     self._next_worker_id = 0
+                finally:
                     trace_span.instant(
                         "SavableDataLoader.StopIteration",
                         level=1,
@@ -1057,6 +1034,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
             if self._persistent_iterator is None:
                 self._persistent_iterator = _inner_generator(super().__iter__())
                 self._sample_idx = 0
+                self._has_workers = True
                 # print("New Iterator", self._persistent_iterator)
             return self._persistent_iterator
         else:
@@ -1079,9 +1057,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
 
     def _get_batch_size(self) -> Optional[int]:
         """Try to infer micro batch size from the dataset"""
-        if isinstance(self.dataset, SavableDatasetWrapper):
-            dataset = self.dataset.dataset
-        elif isinstance(self.dataset, SimpleSavableDatasetWrapperWithoutLen):
+        if isinstance(self.dataset, (SavableDatasetWrapper, SimpleSavableDatasetWrapper)):
             dataset = self.dataset.dataset
         else:
             dataset = self.dataset
@@ -1106,17 +1082,17 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
         # Fetch current rank's worker's state
         if self.num_workers == 0:
             # No workers configured
-            assert isinstance(self.dataset, SimpleSavableDatasetWrapperWithoutLen)
+            assert isinstance(self.dataset, SimpleSavableDatasetWrapper)
             worker_states = [self.dataset.save_state()]
             assert self._next_worker_id == 0
-        elif self._persistent_iterator is None:
+        elif self._has_workers:
+            # Fetch from worker processes
+            worker_states = self._worker_command("get_checkpoint", self._worker_sample_counters)
+        else:
             # Workers configured, but not started yet.
             # If a state has already been restored, it will be returned.
             assert isinstance(self.dataset, SavableDatasetWrapper)
             worker_states = self.dataset.get_initial_checkpoint()
-        else:
-            # Fetch from worker processes
-            worker_states = self._worker_command("get_checkpoint", self._worker_sample_counters)
 
         if worker_states is None:
             return None
@@ -1149,13 +1125,13 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
 
         if self.num_workers == 0:
             # No workers configured
-            assert isinstance(self.dataset, SimpleSavableDatasetWrapperWithoutLen)
+            assert isinstance(self.dataset, SimpleSavableDatasetWrapper)
             assert micro_batch_size == old_micro_batch_size, (
                 "Changing micro batch size is not allowed without workers"
             )
 
             assert len(state.worker_states) == 1
-            assert isinstance(state.worker_states[0], FlexState)
+            assert isinstance(state.worker_states[0], SavableDatasetState)
             self.dataset.restore_state(state.worker_states[0])
         else:
             # Workers configured
@@ -1437,7 +1413,7 @@ class BasicDataLoader(DataLoader[T], Generic[T]):
             )
 
         dataset = SimpleSavableDatasetWrapper(
-            dataset, worker_config=self.worker_config, cache_pool=cache_pool
+            dataset, worker_config=self.worker_config, dataloader_id=self.id, cache_pool=cache_pool
         )
 
         self._worker_sample_counters = [0] * max(self.worker_config.num_workers, 1)
@@ -1454,6 +1430,16 @@ class BasicDataLoader(DataLoader[T], Generic[T]):
 
         gc.collect()  # This ensures that we don't include any old worker refs in the newly forked worker processes
 
+        super().__init__(
+            dataset,
+            batch_size=None,
+            shuffle=False,
+            num_workers=self.worker_config.num_workers,
+            pin_memory=True,
+            worker_init_fn=partial(_init_worker, seed_per_worker),
+            **kwargs,
+        )
+
         self.worker_config.worker_trace_writer().trace_object_async(
             self,
             "BasicDataLoader",
@@ -1465,15 +1451,9 @@ class BasicDataLoader(DataLoader[T], Generic[T]):
             level=1,
         )
 
-        super().__init__(
-            dataset,
-            batch_size=None,
-            shuffle=False,
-            num_workers=self.worker_config.num_workers,
-            pin_memory=True,
-            worker_init_fn=partial(_init_worker, seed_per_worker),
-            **kwargs,
-        )
+    def __len__(self):
+        # We override this, because otherwise we'll see warnings
+        return self.dataset.inner_len()
 
     def __iter__(self):
         def _inner_generator(iterator):
@@ -1530,12 +1510,18 @@ class BasicDataLoader(DataLoader[T], Generic[T]):
                                 },
                                 level=1,
                             )
+                        else:
+                            keys = None
                         with trace_generator.yield_(
                             last_args={
                                 "loader_id": self.id,
                                 "iter_id": id,
                                 "worker_id": worker_id,
-                                "sample_idx": sample_idx,
+                                "worker_sample_idx": sample_idx,
+                                "sample_idx": iter_idx,
+                                "iter_idx": iter_idx,
+                                "global_sample_idx": self._sample_idx,
+                                **({} if keys is None else {"keys": keys}),
                             }
                         ):
                             self._sample_idx += 1
@@ -1563,7 +1549,7 @@ class BasicDataLoader(DataLoader[T], Generic[T]):
         and `restore_state` to match the configuration as well."""
         return {
             "type": type(self).__qualname__,
-            "num_workers": self.num_workers,
+            "num_workers": self.worker_config.num_workers,
             "persistent_workers": self.persistent_workers,
             "pin_memory": self.pin_memory,
             "prefetch_factor": None if self.num_workers == 0 else self.prefetch_factor,

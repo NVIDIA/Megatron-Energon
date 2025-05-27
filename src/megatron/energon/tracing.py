@@ -1409,6 +1409,12 @@ _NOOP_OBJECT_TRACE = cast(ObjectTrace, NoopObjectTrace())
 class NoopTraceWriter:
     """A trace writer that does nothing. Used when tracing is disabled."""
 
+    def close(self) -> None:
+        pass
+
+    def flush(self) -> None:
+        pass
+
     def duration_begin(self, *args, **kwargs) -> None:
         pass
 
@@ -1420,6 +1426,12 @@ class NoopTraceWriter:
 
     def instant(self, *args, **kwargs) -> None:
         pass
+
+    def iterable(self, iterable: Iterable[T], *args, **kwargs) -> Iterable[T]:
+        return iterable
+
+    def generator(self, *args, **kwargs) -> "GeneratorContext":
+        return _NOOP_GENERATOR_CONTEXT
 
     def async_begin(self, *args, **kwargs) -> None:
         pass
@@ -1433,8 +1445,11 @@ class NoopTraceWriter:
     def async_span(self, *args, **kwargs) -> "AsyncSpan":
         return _NOOP_ASYNC_SPAN
 
-    def async_context(self, *args, **kwargs) -> "AsyncContext":
+    def async_flow(self, *args, **kwargs) -> "AsyncContext":
         return _NOOP_ASYNC_CONTEXT
+
+    def async_generator(self, *args, **kwargs) -> "AsyncGeneratorContext":
+        return _NOOP_ASYNC_GENERATOR_CONTEXT
 
     def flow_start(self, *args, **kwargs) -> None:
         pass
@@ -1448,19 +1463,28 @@ class NoopTraceWriter:
     def flow(self, *args, **kwargs) -> "Flow":
         return _NOOP_FLOW
 
+    def resume_flow(self, saved_flow: dict) -> "Flow":
+        return _NOOP_FLOW
+
     def counter(self, *args, **kwargs) -> None:
         pass
 
-    def object_trace(self, *args, **kwargs) -> "ObjectTrace":
+    def async_object_trace(self, *args, **kwargs) -> "ObjectTrace":
         return _NOOP_OBJECT_TRACE
 
-    def trace_object(self, *args, **kwargs) -> "ObjectTrace":
+    def trace_object_async(self, *args, **kwargs) -> "ObjectTrace":
         return _NOOP_OBJECT_TRACE
 
     def metadata(self, *args, **kwargs) -> None:
         pass
 
-    def close(self) -> None:
+    def metadata_process_name(self, name: str) -> None:
+        pass
+
+    def metadata_thread_name(self, name: str) -> None:
+        pass
+
+    def async_exc(self, *args, **kwargs) -> None:
         pass
 
     def __enter__(self):
@@ -1471,9 +1495,6 @@ class NoopTraceWriter:
 
     def __repr__(self) -> str:
         return "<NoopTraceWriter>"
-
-    def exception(self, *args, **kwargs) -> None:
-        pass
 
 
 NOOP_TRACE_WRITER: TraceWriter = cast(TraceWriter, NoopTraceWriter())
