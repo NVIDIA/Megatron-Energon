@@ -245,13 +245,16 @@ class PackingDataset(
                 # But the lengths of the groups are stored in pre_packing_lengths
                 # so that the groups can be separated later
                 for pre_pack in pre_packs:
-                    self._pre_packing_buffer.extend(pre_pack)
-                    pre_packing_lengths.append(len(pre_pack))
+                    if len(pre_pack) > 0:
+                        self._pre_packing_buffer.extend(pre_pack)
+                        pre_packing_lengths.append(len(pre_pack))
 
         def next_final_pack() -> Generator[T_batch_sample, None, None]:
             """Yield the next packs from the buffer. The final packer is called on the fly."""
 
             pack = list(self._pre_packing_buffer[: pre_packing_lengths[0]])
+            if len(pack) == 0:
+                return
             pack = self._encode_pack_samples(pack)
 
             del self._pre_packing_buffer[: pre_packing_lengths[0]]
