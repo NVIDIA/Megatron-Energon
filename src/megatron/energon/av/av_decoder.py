@@ -175,10 +175,7 @@ class AVDecoder:
                     if self.seeker.unit == "frames":
                         if previous_frame_index >= start_frame_index:
                             take_frame = True
-                        if (
-                            end_frame_index is not None
-                            and previous_frame_index >= end_frame_index
-                        ):
+                        if end_frame_index is not None and previous_frame_index >= end_frame_index:
                             last_frame = True
 
                     # Container uses time, the target frame might not correspond exactly to any metadata but the desired timestamp should
@@ -212,7 +209,7 @@ class AVDecoder:
                         )
 
                     previous_frame_index += 1
-                    
+
                     if last_frame:
                         break
 

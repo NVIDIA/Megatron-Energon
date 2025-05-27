@@ -311,7 +311,6 @@ class TestDataset(unittest.TestCase):
                 return TextSample(
                     __key__=sample.__key__,
                     __restore_key__=sample.__restore_key__,
-                    __subflavor__=sample.__subflavor__,
                     __subflavors__=sample.__subflavors__,
                     text=sample.text + rand_str,
                 )
@@ -369,7 +368,6 @@ class TestDataset(unittest.TestCase):
                 return TextSample(
                     __key__=sample.__key__,
                     __restore_key__=sample.__restore_key__,
-                    __subflavor__=sample.__subflavor__,
                     __subflavors__=sample.__subflavors__,
                     text=sample.text + rand_str,
                 )

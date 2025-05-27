@@ -53,6 +53,7 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
         error_handler: Callable[
             [Exception, List[T_batch_sample], List[SourceInfo]], None
         ] = log_exception,
+        failure_tolerance: Optional[int] = 100,
         worker_config: WorkerConfig,
     ):
         """Construct a BatchDataset.
@@ -69,6 +70,7 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
             drop_last: If True, the last batch is dropped if it is smaller than the batch size.
             error_handler: Function which handles exceptions raised by the batcher. The default
                 implementation logs the exception.
+            failure_tolerance: The number of consecutive failures after which the dataset is considered broken.
             worker_config: Configuration for the workers.
         """
         super().__init__(dataset, worker_config=worker_config)
@@ -78,6 +80,7 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
         self.batcher_config = batcher_config
         self.drop_last = drop_last
         self.error_handler = error_handler
+        self.failure_tolerance = failure_tolerance
 
         self.reset_state_own()
 
@@ -107,6 +110,8 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
     def __iter__(self) -> Iterator[T_batch]:
         batch: List[T_batch_sample] = []
         sample_restore_keys = []
+
+        last_batch_failures = 0
 
         if self._generator_sample_keys is not None:
             sample_restore_keys = self._generator_sample_keys
@@ -139,6 +144,8 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
             sample_restore_keys = []
 
         def flush():
+            nonlocal last_batch_failures
+
             try:
                 with self._sample_index.ctx() as sample_idx:
                     batch_sample = self.batcher(batch)
@@ -151,6 +158,7 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
                     for batch_sub_idx, (sample_idx, inner_batch_sample) in enumerate(
                         self._sample_index.iter_ctx(batch_sample, sample_idx)
                     ):
+                        last_batch_failures = 0
                         self._generator_offset = batch_sub_idx + 1
                         yield set_sample_restore_key(
                             inner_batch_sample,
@@ -162,15 +170,28 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
                     self._generator_sample_keys = None
                     self._generator_offset = None
                 else:
+                    last_batch_failures = 0
                     set_sample_restore_key(batch_sample, sample_idx, *sample_restore_keys, src=self)
                     yield batch_sample
-                sample_restore_keys.clear()
+            except GeneratorExit:
+                raise
             except SkipSample:
                 pass
             except SYSTEM_EXCEPTIONS:
                 raise FatalSampleError.from_sample(batch)
             except Exception as e:
                 self.error_handler(e, batch)
+                last_batch_failures += 1
+                if (
+                    self.failure_tolerance is not None
+                    and last_batch_failures >= self.failure_tolerance
+                ):
+                    raise FatalSampleError.from_sample(
+                        batch,
+                        f"BatchDataset {self.batcher} failed {last_batch_failures} times in a row. Likely your code or dataset are broken.",
+                    )
+            finally:
+                sample_restore_keys.clear()
 
         for sample in self.dataset:
             batch.append(sample)

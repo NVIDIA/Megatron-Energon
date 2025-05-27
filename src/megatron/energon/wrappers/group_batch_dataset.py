@@ -85,6 +85,7 @@ class GroupBatchDataset(
         error_handler: Callable[
             [Exception, List[T_batch_sample], list[SourceInfo]], None
         ] = log_exception,
+        failure_tolerance: Optional[int] = 100,
         worker_config: WorkerConfig,
     ):
         """Construct a GroupBatchDataset.
@@ -97,6 +98,7 @@ class GroupBatchDataset(
                 :exc:`megatron.energon.SkipSample` to skip a sample.
             drop_last: If True, the last batch is dropped if it is smaller than the batch size.
             error_handler: Handler for errors. Defaults to logging and ignoring the exception.
+            failure_tolerance: The number of consecutive failures after which the dataset is considered broken.
             worker_config: Configuration for the workers.
         """
         super().__init__(dataset, worker_config=worker_config)
@@ -107,6 +109,7 @@ class GroupBatchDataset(
         self.batcher_config = batcher_config
         self.drop_last = drop_last
         self.error_handler = error_handler
+        self.failure_tolerance = failure_tolerance
 
         self.reset_state_own()
 
@@ -126,6 +129,8 @@ class GroupBatchDataset(
     def __iter__(self) -> Iterator[T_batch]:
         buckets = self._buckets
 
+        last_batch_failures = 0
+
         if buckets is None:
             buckets = self._buckets = dict()
 
@@ -140,6 +145,7 @@ class GroupBatchDataset(
         # print(f"[wrk={worker_idx}, s={self._batch_sample_index.current_idx}] initial done\n", end="")
 
         def flush(bucket: Bucket[T_batch_sample]) -> Generator[T_batch, None, None]:
+            nonlocal last_batch_failures
             # Debug print the state
             # print(f"[wrk={worker_idx}, s={self._batch_sample_index.current_idx}] flush GroupBatchDataset state:\n", end="")
             # for dbg_bucket_key, dbg_bucket in buckets.items():
@@ -153,6 +159,7 @@ class GroupBatchDataset(
                     assert not isinstance(batch_sample, Generator), (
                         f"Batcher {self.batcher} returned a generator, which is not supported for grouped batching yet."
                     )
+                last_batch_failures = 0
                 set_sample_restore_key(batch_sample, sample_idx, *sample_restore_keys, src=self)
                 yield batch_sample
             except SkipSample:
@@ -161,6 +168,15 @@ class GroupBatchDataset(
                 raise FatalSampleError.from_sample(batch_items)
             except Exception as e:
                 self.error_handler(e, batch_items)
+                last_batch_failures += 1
+                if (
+                    self.failure_tolerance is not None
+                    and last_batch_failures >= self.failure_tolerance
+                ):
+                    raise FatalSampleError.from_sample(
+                        batch_items,
+                        f"GroupBatchDataset {self.batcher} failed {last_batch_failures} times in a row. Likely your code or dataset are broken.",
+                    )
 
         # Add samples to the buckets
         for sample in self.dataset:

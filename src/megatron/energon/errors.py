@@ -86,8 +86,10 @@ class SampleException(ValueError):
         return cls(f"Sample {sample_key} failed")
 
     @classmethod
-    def from_sample(cls: Type[T], sample: Any) -> T:
-        return cls(f"Sample {compact_str(sample)} failed")
+    def from_sample(cls: Type[T], sample: Any, message: str = "") -> T:
+        if message:
+            message = f": {message}"
+        return cls(f"Sample {compact_str(sample)} failed{message}")
 
 
 class FatalSampleError(SampleException):

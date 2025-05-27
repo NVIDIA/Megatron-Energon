@@ -58,7 +58,6 @@ def get_dataset_from_config(
     split_config: str = "split.yaml",
     split_part: str = "train",
     training: bool = True,
-    subflavor: Optional[str] = None,
     subflavors: Optional[Dict[str, Any]] = None,
     worker_config: WorkerConfig,
     sample_type: Optional[Type[T_sample]] = None,
@@ -73,7 +72,6 @@ def get_dataset_from_config(
         split_config: Filename of the split config file (`path / '.nv-meta' / split_config`)
         split_part: Name of the split to load.
         training: If true, apply training randomization and loop the dataset.
-        subflavor: Override the __subflavor__ property of each sample.
         subflavors: Merge-Override the __subflavors__ property of each sample.
         worker_config: If set, use this worker config instead of the default one.
         sample_type: Type of the samples to load, only used to ensure typing.
@@ -96,15 +94,12 @@ def get_dataset_from_config(
             split_config=split_config,
             split_part=split_part,
             training=training,
-            subflavor=subflavor,
             worker_config=worker_config,
             **kwargs,
         ),
         default_type=StandardWebdatasetFactory,
     )
-    if dataset.subflavors is None:
-        dataset.subflavors = subflavors
-    elif subflavors is not None:
+    if subflavors is not None:
         dataset.subflavors.update(subflavors)
     if sample_type is not None:
         assert issubclass(dataset.__sample_type__, sample_type), (
