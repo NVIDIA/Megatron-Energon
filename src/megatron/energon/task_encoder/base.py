@@ -37,8 +37,10 @@ from megatron.energon.flavors import (
     SampleDecoder,
     SavableDataset,
 )
+from megatron.energon.flavors.base_dataset import ExtendableDataclassMixin
 from megatron.energon.metadataset.loader_interface import DatasetBlendMode, LoadedDataset
 from megatron.energon.rng import SystemRng
+from megatron.energon.source_info import SourceInfo
 from megatron.energon.task_encoder.cooking import Cooker
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers import (
@@ -74,6 +76,9 @@ def generic_batch(batch: List[Any]) -> Any:
     elif isinstance(batch[0], dict):
         return {key: generic_batch([sample[key] for sample in batch]) for key in batch[0].keys()}
     elif is_dataclass(batch[0]):
+        if hasattr(batch[0], "from_samples"):
+            # The dataclass defines a method for batching samples
+            return batch[0].from_samples(batch)
         return type(batch[0])(
             **{
                 field.name: generic_batch([getattr(sample, field.name) for sample in batch])
@@ -235,8 +240,95 @@ def get_stateless(fn: Callable[..., T_sample]) -> bool:
 
 
 @edataclass
-class Batch(PinMemoryMixin):
-    """Base class for a batch dataclass. Provides a default implementation for pinning memory."""
+class Batch(PinMemoryMixin, ExtendableDataclassMixin):
+    """Base class for a batch dataclass. Provides a default implementation for pinning memory.
+    Additionally, it provides a future safe implementation for creating an instance from another
+    batch `Batch.derive_from`."""
+
+    #: Uniquely identifies each sample in the dataset.
+    __key__: list[str]
+    #: Key for restoring the sample. This is used to restore the sample from a checkpoint. It
+    # should be a (nested) tuple of strings and integers, which can be used to index the dataset.
+    __restore_key__: Tuple[Union[str, int, tuple], ...]
+
+    #: A dataset may define a subflavor to distinguish between samples of the same sample type.
+    __subflavor__: list[Optional[str]]
+    #: A dataset may define a subflavors to distinguish between samples of the same sample type.
+    __subflavors__: list[Optional[Dict[str, Any]]]
+
+    #: Information about the source of the sample, i.e. where the data was loaded from.
+    __sources__: Optional[tuple[SourceInfo, ...]]
+
+    @classmethod
+    def derive_from(
+        cls: Type[T_batch], base_batch: "Batch", sources: tuple[SourceInfo, ...] = (), **kwargs
+    ) -> T_batch:
+        """
+        Uses the base fields of `Batch` from base_batch (i.e. __key__, __restore_key__, __subflavor__, __subflavors__, __sources__)
+        and creates a new batch with the kwargs as fields. This is useful for creating new batches, while keeping the
+        metadata of the base batch.
+
+        Use like::
+
+        .. code-block:: python
+
+            def encode_batch(batch: RawBatch) -> Batch:
+                return Batch.derive_from(batch, field1=batch.field1 + 1)
+
+        Args:
+            base_batch: The base batch to copy the base fields / metadata from.
+            source: Additional source information to add to the batch.
+            kwargs: The fields of the new batch.
+
+        Returns:
+            The new batch.
+        """
+        base_kwargs = {
+            field.name: getattr(base_batch, field.name) for field in dataclasses.fields(Batch)
+        }
+        if sources:
+            base_kwargs["__sources__"] = (*base_kwargs["__sources__"], *sources)
+        return cls(
+            **base_kwargs,
+            **kwargs,
+        )
+
+    @classmethod
+    def from_samples(cls: Type[T_batch], samples: Sequence[Sample], **kwargs) -> T_batch:
+        """
+        Creates a batch from samples to be batched. Tensors will be padded and stacked, other types will be put into
+        lists. This is the default implementation for `Batch.from_samples`.
+
+        Args:
+            samples: The samples to batch.
+            kwargs: Additional (overriding) fields of the batch.
+
+        Returns:
+            The constructed batch.
+        """
+        assert all(dataclasses.is_dataclass(scls) for scls in samples), (
+            "Samples must be dataclasses"
+        )
+        assert dataclasses.is_dataclass(cls), "Batch must be dataclass"
+        init_args = {}
+        fields = dataclasses.fields(cls)
+        for field in fields:
+            if field.name in kwargs:
+                init_args[field.name] = kwargs[field.name]
+            elif field.name == "__sources__":
+                # Special handling, needs flattening
+                init_args[field.name] = tuple(
+                    source
+                    for sample in samples
+                    if sample.__sources__
+                    for source in sample.__sources__
+                )
+            else:
+                value = [getattr(sample, field.name) for sample in samples]
+                if len(samples) > 0 and isinstance(samples[0], torch.Tensor):
+                    value = batch_pad_stack(value)
+                init_args[field.name] = value
+        return cls(**init_args)
 
 
 class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]):
@@ -404,6 +496,9 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         Returns:
             The batched result
         """
+        if dataclasses.is_dataclass(result_type) and hasattr(result_type, "from_samples"):
+            return result_type.from_samples(samples)
+
         # Get dict of samples
         if isinstance(samples[0], dict):
             list_samples = {key: [sample[key] for sample in samples] for key in samples[0].keys()}
