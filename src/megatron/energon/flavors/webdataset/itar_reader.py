@@ -449,8 +449,39 @@ class SqliteITarEntryReader(ITarReader[str]):
     def list_all_sample_parts(self) -> Generator[Tuple[str, int, int], None, None]:
         return self.sqlite_reader.list_all_sample_parts()
 
-    def list_sample_parts(self, sample_key: str) -> Generator[Tuple[str, int, int], None, None]:
-        return self.sqlite_reader.list_sample_parts(sample_key)
+    def list_sample_parts(self, sample_key: str, slow_mode: bool = False) -> Generator[Tuple[str, int, int], None, None]:
+        """Given a sample key, list all its parts. (E.g. given 001, list 001.jpg, 001.json, etc.)
+
+        If allow_fallback is True, and the database is an older version, which
+        does not contain the sample_parts table, we will try to find the sample_parts
+        in the tar files.
+
+        Args:
+            sample_key: The sample key to list the parts of.
+            allow_fallback: If True, and the database is an older version, which
+                does not contain the sample_parts table, we will try to find the sample_parts
+                in the tar files.
+
+        Returns:
+            A generator of tuples of (part_name, size, tar_file_id)
+        """
+
+        if not slow_mode:
+            res = self.sqlite_reader.list_sample_parts(sample_key)
+            print(f"returning: {res}")
+            return res
+        else:            
+            sample_pointer = self._get_itar_sample_pointer(sample_key)
+            print(f"Slow mode sample_pointer: {sample_pointer}")
+
+            sample = self._get_item_by_sample_pointer(
+                sample_pointer, None, entry_match_fn=None
+            )
+
+            for ext in sample.keys():
+                if not ext.startswith("__"):
+                    yield ext, len(sample[ext]), sample_pointer.tar_file_id
+            
 
     def get_total_size(self) -> int:
         return self.sqlite_reader.get_total_size()

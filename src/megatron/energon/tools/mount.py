@@ -11,6 +11,7 @@ from mfusepy import FUSE, FuseOSError, Operations
 
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.webdataset.file_store import WebdatasetFileStore
+from sqlite3 import OperationalError
 
 MULTI_WARN = "WARNING_SAME_KEY_IN_MULTIPLE_TAR_FILES"
 
@@ -21,24 +22,25 @@ class EnergonFS(Operations):
     """
 
     def __init__(
-        self, db_path: EPath, *, sample_folders: bool = False, print_debug: int = 0
+        self, db_path: EPath, *, sample_folders: bool = False, print_debug: int = 0, allow_slow_mode: bool = False
     ) -> None:
-        # First create a temporary directory and copy the db there
-
-        # TODO: We need to figue out if the EPath is remote or local.
-        # If it's remote, we need to download the sqlite DB to a temporary directory.
-        # However, in this case we still need to modify `SqliteITarEntryReader`
-        # to support a mixture of local (DB) and remote files (shards).
-
         self._sample_folders = sample_folders
 
         self._wds_filestore = WebdatasetFileStore(db_path)
 
         self._all_sample_parts = {}
-        for key, size, tar_file_id in self._wds_filestore.list_all_sample_parts():
-            if key not in self._all_sample_parts:
-                # Only take the first tar file id
-                self._all_sample_parts[key] = size
+        self._slow_mode = False
+        try:
+            for key, size, tar_file_id in self._wds_filestore.list_all_sample_parts():
+                if key not in self._all_sample_parts:
+                    # Only take the first tar file id
+                    self._all_sample_parts[key] = size
+        except OperationalError:
+            if not allow_slow_mode:
+                raise RuntimeError("The dataset was prepared with an older version of energon. Either update the dataset, or allow slow mode.")
+            else:
+                assert sample_folders, "Only sample_folders mode is supported when using slow mode."
+                self._slow_mode = True
 
         self._samples_with_multiple_tar_files = set()
         self._all_samples = {}
@@ -82,7 +84,7 @@ class EnergonFS(Operations):
             f_blocks=self._total_size // 512,
             f_bavail=0,
             f_bfree=0,
-            f_files=len(self._all_sample_parts),
+            f_files=len(self._all_sample_parts) if not self._slow_mode else 0,
             f_ffree=0,
             f_namemax=1024,
         )
@@ -136,7 +138,15 @@ class EnergonFS(Operations):
                 # This is a sample part (file)
                 if folder not in self._all_samples:
                     raise FuseOSError(ENOENT)
+                
                 full_name = f"{folder}.{part_name}"
+
+                if self._slow_mode and full_name not in self._all_sample_parts:
+                    # Slow mode
+                    for entry, size, tar_file_id in self._wds_filestore.list_sample_parts(folder, slow_mode=True):
+                        cur_full_name = f"{folder}.{entry}"
+                        self._all_sample_parts[cur_full_name] = size
+                
                 if full_name not in self._all_sample_parts:
                     raise FuseOSError(ENOENT)
                 file_size = self._all_sample_parts[full_name]
@@ -213,7 +223,9 @@ class EnergonFS(Operations):
                 yield ".."
 
                 single_tar_id = None
-                for entry, size, tar_file_id in self._wds_filestore.list_sample_parts(folder):
+                all_entries = list(self._wds_filestore.list_sample_parts(folder, slow_mode=self._slow_mode))
+                print(f"all_entries: {all_entries}")
+                for entry, size, tar_file_id in all_entries:
                     if single_tar_id is None:
                         single_tar_id = tar_file_id
                     elif single_tar_id != tar_file_id:
@@ -332,7 +344,14 @@ class EnergonFS(Operations):
     default=False,
     help="Present a virtual folder per sample. Otherwise a single folder with all sample parts.",
 )
-def command(path: EPath, mountpoint: Path, detach: bool, sample_folders: bool):
+@click.option(
+    "--allow-slow",
+    "-w",
+    is_flag=True,
+    default=False,
+    help="Allow slow mode. This is useful if the dataset was prepared with an older version of energon.",
+)
+def command(path: EPath, mountpoint: Path, detach: bool, sample_folders: bool, allow_slow: bool):
     """
     Mount an energon WebdatasetFileStore at the given mountpoint.
 
@@ -344,7 +363,7 @@ def command(path: EPath, mountpoint: Path, detach: bool, sample_folders: bool):
     print(f"Mounting {path} at {mountpoint}...")
     mountpoint.mkdir(parents=True, exist_ok=True)
 
-    energon_fs = EnergonFS(path, sample_folders=sample_folders)
+    energon_fs = EnergonFS(path, sample_folders=sample_folders, allow_slow_mode=allow_slow)
 
     print("Mount is ready to go.")
 
