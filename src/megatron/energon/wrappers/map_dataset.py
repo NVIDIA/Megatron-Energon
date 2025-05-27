@@ -52,6 +52,7 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
         error_handler: Callable[[Exception, T_sample, list[SourceInfo]], None] = log_exception,
         stateless_map_fn: bool = False,
         map_fn_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]] = None,
+        failure_tolerance: Optional[int] = 100,
         worker_config: WorkerConfig,
     ):
         """Construct a MapDataset.
@@ -69,6 +70,7 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
                 (thus key for random access can propagate to inner dataset). Defaults to False.
             map_fn_config: Configuration for the map_fn function. If callable, it should return the
                 configuration. Defaults to None.
+            failure_tolerance: The number of consecutive failures after which the dataset is considered broken.
             worker_config: Worker configuration.
         """
         super().__init__(dataset, worker_config=worker_config)
@@ -76,6 +78,7 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
         self.error_handler = error_handler
         self.stateless_map_fn = stateless_map_fn
         self.map_fn_config = map_fn_config
+        self.failure_tolerance = failure_tolerance
 
         self.reset_state_own()
 
@@ -88,6 +91,8 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
         return len(self.dataset)
 
     def __iter__(self) -> Iterator[T_sample_out]:
+        last_map_failures = 0
+
         if self._generator_sample_key is not None:
             assert self._generator_offset is not None
             sample = self.dataset.restore_sample(self._generator_sample_key)
@@ -115,8 +120,6 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
             self._generator_sample_key = None
             self._generator_offset = None
 
-        last_failures = 0
-
         for sample in self.dataset:
             restore_key = get_sample_restore_key(sample)
             try:
@@ -134,6 +137,7 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
                         self._sample_index.iter_ctx(mapped_sample, sample_idx)
                     ):
                         self._generator_offset = idx + 1
+                        last_map_failures = 0
                         yield add_sample_restore_key(
                             inner_sample,
                             sample_idx,
@@ -143,12 +147,12 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
                     self._generator_sample_key = None
                     self._generator_offset = None
                 else:
+                    last_map_failures = 0
                     yield add_sample_restore_key(
                         mapped_sample,
                         sample_idx,
                         src=self,
                     )
-                last_failures = 0
             except GeneratorExit:
                 raise
             except SkipSample:
@@ -157,11 +161,14 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
                 raise FatalSampleError.from_sample(sample)
             except Exception as e:
                 self.error_handler(e, sample)
-                last_failures += 1
-                if last_failures > 100:
+                last_map_failures += 1
+                if (
+                    self.failure_tolerance is not None
+                    and last_map_failures >= self.failure_tolerance
+                ):
                     raise FatalSampleError.from_sample(
                         sample,
-                        f"MapDataset {self.map_fn} failed 100 times in a row. Likely your dataset is broken.",
+                        f"MapDataset {self.map_fn} failed {last_map_failures} times in a row. Likely your code or dataset are broken.",
                     )
 
     def can_restore_sample(self) -> bool:

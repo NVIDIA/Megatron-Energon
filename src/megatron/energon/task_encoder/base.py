@@ -129,7 +129,10 @@ def stateless(fn: Callable[P, T]) -> Callable[P, T]: ...
 
 
 def stateless(
-    fn: Optional[Callable[..., T]] = None, *, restore_seeds: bool = False
+    fn: Optional[Callable[..., T]] = None,
+    *,
+    restore_seeds: bool = False,
+    failure_tolerance: Optional[int] = None,
 ) -> Union[Callable[[Callable[..., T]], Callable[..., T]], Callable[..., T]]:
     """Decorator to mark a function of the task encoder as restorable.
 
@@ -138,6 +141,8 @@ def stateless(
         restore_seeds: Whether to restore the seeds for the function. I.e. the seeds are set
             from the sample index and the worker seed, such that they can be restored when a sample
             is restored from that function.
+        failure_tolerance: The number of consecutive exceptions that are handled, after which a `FatalSampleError` is
+            raised for this function.
 
     Usage:
 
@@ -155,7 +160,9 @@ def stateless(
     """
 
     if fn is None:
-        return lambda f: stateless(f, restore_seeds=restore_seeds)
+        return lambda f: stateless(
+            f, restore_seeds=restore_seeds, failure_tolerance=failure_tolerance
+        )
     if restore_seeds:
         worker_seed = None
 
@@ -231,12 +238,20 @@ def stateless(
             return seed_wrapper
 
     setattr(fn, "__stateless__", True)
+    setattr(fn, "__failure_tolerance__", failure_tolerance)
     return fn
 
 
-def get_stateless(fn: Callable[..., T_sample]) -> bool:
+def get_stateless(fn: Callable) -> bool:
     """Get whether a function is stateless."""
     return getattr(fn, "__stateless__", False)
+
+
+def get_failure_tolerance(
+    fn: Callable, default_failure_tolerance: Optional[int] = None
+) -> Optional[int]:
+    """Get the failure tolerance of a function."""
+    return getattr(fn, "__failure_tolerance__", default_failure_tolerance)
 
 
 @edataclass
@@ -252,17 +267,15 @@ class Batch(PinMemoryMixin, ExtendableDataclassMixin):
     __restore_key__: Tuple[Union[str, int, tuple], ...]
 
     #: A dataset may define a subflavor to distinguish between samples of the same sample type.
-    __subflavor__: list[Optional[str]]
+    __subflavor__: Optional[list[Optional[str]]] = None
     #: A dataset may define a subflavors to distinguish between samples of the same sample type.
-    __subflavors__: list[Optional[Dict[str, Any]]]
+    __subflavors__: Optional[list[Optional[Dict[str, Any]]]] = None
 
     #: Information about the source of the sample, i.e. where the data was loaded from.
-    __sources__: Optional[tuple[SourceInfo, ...]]
+    __sources__: Optional[tuple[SourceInfo, ...]] = None
 
     @classmethod
-    def derive_from(
-        cls: Type[T_batch], base_batch: "Batch", sources: tuple[SourceInfo, ...] = (), **kwargs
-    ) -> T_batch:
+    def derive_from(cls: Type[T_batch], base_batch: "Batch", **kwargs) -> T_batch:
         """
         Uses the base fields of `Batch` from base_batch (i.e. __key__, __restore_key__, __subflavor__, __subflavors__, __sources__)
         and creates a new batch with the kwargs as fields. This is useful for creating new batches, while keeping the
@@ -277,7 +290,6 @@ class Batch(PinMemoryMixin, ExtendableDataclassMixin):
 
         Args:
             base_batch: The base batch to copy the base fields / metadata from.
-            source: Additional source information to add to the batch.
             kwargs: The fields of the new batch.
 
         Returns:
@@ -286,8 +298,6 @@ class Batch(PinMemoryMixin, ExtendableDataclassMixin):
         base_kwargs = {
             field.name: getattr(base_batch, field.name) for field in dataclasses.fields(Batch)
         }
-        if sources:
-            base_kwargs["__sources__"] = (*base_kwargs["__sources__"], *sources)
         return cls(
             **base_kwargs,
             **kwargs,
@@ -309,20 +319,31 @@ class Batch(PinMemoryMixin, ExtendableDataclassMixin):
         assert all(dataclasses.is_dataclass(scls) for scls in samples), (
             "Samples must be dataclasses"
         )
-        assert dataclasses.is_dataclass(cls), "Batch must be dataclass"
+        # assert dataclasses.is_dataclass(cls), "Batch must be dataclass"
         init_args = {}
         fields = dataclasses.fields(cls)
         for field in fields:
             if field.name in kwargs:
                 init_args[field.name] = kwargs[field.name]
             elif field.name == "__sources__":
-                # Special handling, needs flattening
-                init_args[field.name] = tuple(
-                    source
-                    for sample in samples
-                    if sample.__sources__
-                    for source in sample.__sources__
-                )
+                if any(sample.__sources__ is not None for sample in samples):
+                    # Special handling, needs flattening
+                    init_args[field.name] = tuple(
+                        source
+                        for sample in samples
+                        if sample.__sources__
+                        for source in sample.__sources__
+                    )
+            elif field.name == "__subflavor__":
+                if any(sample.__subflavor__ is not None for sample in samples):
+                    init_args[field.name] = [
+                        sample.__subflavor__ for sample in samples if sample.__subflavor__
+                    ]
+            elif field.name == "__subflavors__":
+                if any(sample.__subflavors__ is not None for sample in samples):
+                    init_args[field.name] = [
+                        sample.__subflavors__ for sample in samples if sample.__subflavors__
+                    ]
             else:
                 value = [getattr(sample, field.name) for sample in samples]
                 if len(samples) > 0 and isinstance(samples[0], torch.Tensor):
@@ -347,6 +368,8 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
       8. :meth:`megatron.energon.Batch.to_device` is called on the encoded batch
       9. resulting encoded batch is passed to the network
     """
+
+    __default_failure_tolerance__: Optional[int] = 100
 
     cookers: Sequence[Cooker[T_sample]] = ()
     #: Internal: List of registered cookers. Will be the same as `cookers` after registering cookers.
@@ -597,6 +620,15 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 if post_encode_fn is None
                 else get_stateless(post_encode_fn),
                 worker_config=worker_config,
+                pre_packer_failure_tolerance=get_failure_tolerance(
+                    self.select_samples_to_pack, self.__default_failure_tolerance__
+                ),
+                final_packer_failure_tolerance=get_failure_tolerance(
+                    self.pack_selected_samples, self.__default_failure_tolerance__
+                ),
+                sample_encoder_failure_tolerance=None
+                if post_encode_fn is None
+                else get_failure_tolerance(post_encode_fn, self.__default_failure_tolerance__),
             )
         elif self._is_overridden(self.postencode_sample):
             dataset = MapDataset(
@@ -604,6 +636,9 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 self.postencode_sample,
                 worker_config=worker_config,
                 stateless_map_fn=get_stateless(self.postencode_sample),
+                failure_tolerance=get_failure_tolerance(
+                    self.postencode_sample, self.__default_failure_tolerance__
+                ),
             )
 
         if self._is_overridden(self.batch_group_criterion):
@@ -614,6 +649,9 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 batcher=self.batch,
                 drop_last=batch_drop_last,
                 worker_config=worker_config,
+                failure_tolerance=get_failure_tolerance(
+                    self.batch, self.__default_failure_tolerance__
+                ),
             )
 
             if self._is_overridden(self.encode_batch):
@@ -622,6 +660,9 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                     self.encode_batch,
                     worker_config=worker_config,
                     stateless_map_fn=get_stateless(self.encode_batch),
+                    failure_tolerance=get_failure_tolerance(
+                        self.encode_batch, self.__default_failure_tolerance__
+                    ),
                 )
         else:
             # No grouping is active
@@ -634,6 +675,9 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                     batcher_stateless=get_stateless(self.batch),
                     drop_last=batch_drop_last,
                     worker_config=worker_config,
+                    failure_tolerance=get_failure_tolerance(
+                        self.batch, self.__default_failure_tolerance__
+                    ),
                 )
 
                 if self._is_overridden(self.encode_batch):
@@ -642,6 +686,9 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                         self.encode_batch,
                         worker_config=worker_config,
                         stateless_map_fn=get_stateless(self.encode_batch),
+                        failure_tolerance=get_failure_tolerance(
+                            self.encode_batch, self.__default_failure_tolerance__
+                        ),
                     )
 
         return dataset
@@ -704,6 +751,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 ],
                 subflavors=subflavors,
             ),
+            failure_tolerance=get_failure_tolerance(cook_fn, self.__default_failure_tolerance__),
         )
 
     def _load_dataset(
@@ -744,6 +792,9 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 pre_encode_fn,
                 worker_config=worker_config,
                 stateless_map_fn=get_stateless(pre_encode_fn),
+                failure_tolerance=get_failure_tolerance(
+                    pre_encode_fn, self.__default_failure_tolerance__
+                ),
             )
         return dataset
 
