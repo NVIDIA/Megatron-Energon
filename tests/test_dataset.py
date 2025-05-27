@@ -15,6 +15,7 @@ import tempfile
 import unittest
 import warnings
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Hashable, List, Tuple, Type, Union
 
@@ -34,6 +35,7 @@ from megatron.energon import (
     MapDataset,
     MixBatchDataset,
     SavableDataLoader,
+    SourceInfo,
     TaskEncoder,
     WorkerConfig,
     generic_batch,
@@ -43,8 +45,8 @@ from megatron.energon import (
     get_val_dataset,
     homogeneous_concat_mix,
 )
-from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.dataset_config import get_dataset_from_config
+from megatron.energon.edataclass import edataclass
 from megatron.energon.flavors import BaseWebdatasetFactory
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 from megatron.energon.task_encoder.base import stateless
@@ -67,14 +69,14 @@ DATASET_SIZE = 50
 no_worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0)
 
 
-@dataclass_slots
+@edataclass
 class ExtendedCaptioningSample(CaptioningSample):
     batch_index: int
     sample_index: int
     rand_num: int
 
 
-@dataclass_slots
+@edataclass
 class EncodedCaptioningSample:
     __key__: str
     __restore_key__: Tuple[Union[str, int, tuple], ...]
@@ -82,12 +84,12 @@ class EncodedCaptioningSample:
     caption: torch.Tensor
 
 
-@dataclass_slots
+@edataclass
 class CaptioningEncodedBatch(CaptioningSample):
     pass
 
 
-@dataclass_slots
+@edataclass
 class CaptioningBatch(Batch):
     __key__: List[str]
     __restore_key__: Tuple[Union[str, int, tuple], ...]
@@ -696,12 +698,13 @@ class TestDataset(unittest.TestCase):
 
         torch.manual_seed(42)
 
-        @dataclass_slots
+        @edataclass
         class WeightedCaptioningBatch(Batch):
             __key__: List[str]
             __restore_key__: Tuple[Union[str, int], ...]
             __subflavor__: List[str]
             __subflavors__: List[Dict[str, Any]]
+            __sources__: List[SourceInfo]
             image: torch.Tensor
             caption: List[str]
             weight: float
@@ -760,12 +763,13 @@ class TestDataset(unittest.TestCase):
         assert 750 <= bs_hist[20] <= 850
 
     def test_mixing_homogeneous(self):
-        @dataclass_slots
+        @dataclass
         class TestBatch(Batch):
             __key__: List[str]
             __restore_key__: Tuple[Union[str, int], ...]
             __subflavor__: List[str]
             __subflavors__: List[Dict[str, Any]]
+            __sources__: List[SourceInfo]
             image: torch.Tensor
             caption: List[str]
             source: int
@@ -816,17 +820,18 @@ class TestDataset(unittest.TestCase):
         assert 7500 <= source_hist[1] <= 8500
 
     def test_mixing_heterogeneous(self):
-        @dataclass_slots
+        @dataclass
         class TestBatch1(Batch):
             __key__: List[str]
             __restore_key__: Tuple[Union[str, int], ...]
             __subflavor__: List[str]
             __subflavors__: List[Dict[str, Any]]
+            __sources__: List[SourceInfo]
             image: torch.Tensor
             caption: List[str]
             source: int
 
-        @dataclass_slots
+        @dataclass
         class TestBatch2(TestBatch1):
             pass
 

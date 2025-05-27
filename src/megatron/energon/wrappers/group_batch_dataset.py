@@ -17,10 +17,15 @@ from typing import (
     Union,
 )
 
-from megatron.energon.dataclass_slots import dataclass_slots
+from megatron.energon.edataclass import edataclass
 from megatron.energon.errors import SYSTEM_EXCEPTIONS, FatalSampleError
-from megatron.energon.flavors.base_dataset import FlexState, SavableDataset, set_sample_restore_key
+from megatron.energon.flavors.base_dataset import (
+    FlexState,
+    SavableDataset,
+    set_sample_restore_key,
+)
 from megatron.energon.savable import Savable
+from megatron.energon.source_info import SourceInfo
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers._log_exception import log_exception
 from megatron.energon.wrappers.base import BaseWrapperDataset, SampleIndex
@@ -31,7 +36,7 @@ T_batch = TypeVar("T_batch", covariant=True)
 T_batch_sample = TypeVar("T_batch_sample", covariant=True)
 
 
-@dataclass_slots
+@edataclass
 class Bucket(Savable, Generic[T_batch_sample]):
     batch_size: int
 
@@ -62,7 +67,7 @@ class GroupBatchDataset(
     sample_group_key: Callable[[T_batch_sample], Tuple[Hashable, Optional[int]]]
     batcher: Callable[[List[T_batch_sample]], T_batch]
     drop_last: bool
-    error_handler: Callable[[Exception, List[T_batch_sample]], None]
+    error_handler: Callable[[Exception, List[T_batch_sample], list[SourceInfo]], None]
     _group_key_sample_index: SampleIndex
     _batch_sample_index: SampleIndex
     _buckets: Dict[Hashable, Bucket[T_batch_sample]]
@@ -77,7 +82,9 @@ class GroupBatchDataset(
         batcher_stateless: bool = False,
         batcher_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]] = None,
         drop_last: bool = False,
-        error_handler: Callable[[Exception, List[T_batch_sample]], None] = log_exception,
+        error_handler: Callable[
+            [Exception, List[T_batch_sample], list[SourceInfo]], None
+        ] = log_exception,
         worker_config: WorkerConfig,
     ):
         """Construct a GroupBatchDataset.

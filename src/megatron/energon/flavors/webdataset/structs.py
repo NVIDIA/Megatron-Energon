@@ -4,11 +4,12 @@
 from dataclasses import field
 from typing import Dict, List, Optional, Tuple, TypedDict
 
-from megatron.energon.dataclass_slots import dataclass_slots
+from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
+from megatron.energon.source_info import SourceInfo
 
 
-@dataclass_slots
+@edataclass
 class WebdatasetInfo:
     """Info about a webdataset. Format for `.nv-meta/.info.yaml` or `.nv-meta/.info.json`."""
 
@@ -16,7 +17,7 @@ class WebdatasetInfo:
     shard_counts: Dict[str, int]
 
 
-@dataclass_slots
+@edataclass
 class WebdatasetSplits:
     """Info about the splits of a webdataset. Format for `.nv-meta/split.yaml` or `.nv-meta/split.json`
     (or custom user yaml/json)."""
@@ -27,7 +28,7 @@ class WebdatasetSplits:
     exclude: List[str] = field(default_factory=list)
 
 
-@dataclass_slots
+@edataclass
 class ShardInfo:
     """Info about a single shard as passed through internally. Not exposed to the user."""
 
@@ -51,10 +52,18 @@ class FilteredSample(TypedDict):
     #: Globally unique key to restore a sample from disk.
     #: For example `("Webdataset", 123)` would restore the sample at index 123.
     __restore_key__: Tuple[str, int]
+    #: The source information for the sample.
+    __sources__: tuple[SourceInfo, ...]
 
 
-def reraise_exception(exc: Exception, key: Optional[str]) -> None:
-    if key:
+def reraise_exception(
+    exc: Exception, key: Optional[str], sources: Optional[list[SourceInfo]] = None
+) -> None:
+    if sources:
+        raise Exception(
+            f"For sample {key!r} from {', '.join(f'{source.dataset_path}[{source.index}] {source.shard_name}{source.file_names!r}' for source in sources)}"
+        ) from exc
+    elif key:
         raise Exception(f"For sample {key!r}") from exc
     else:
         raise

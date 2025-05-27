@@ -14,13 +14,14 @@ from typing import Any, Dict, Literal, Optional, Tuple, TypeVar
 
 from megatron.energon.cache.base import CachePool, FileStore, Lazy
 from megatron.energon.cache.file_store import DecodeFileStore
-from megatron.energon.dataclass_slots import dataclass_slots
+from megatron.energon.edataclass import edataclass
 from megatron.energon.fork_hook import ForkMixin
+from megatron.energon.source_info import SourceInfo, add_source_info
 
 T = TypeVar("T")
 
 
-@dataclass_slots
+@edataclass
 class FileCacheLazy(Lazy[T]):
     """
     Represents a reference to a background prefetch.
@@ -32,11 +33,12 @@ class FileCacheLazy(Lazy[T]):
     entry: "_PendingTask"
 
     # If get() was called, this will be the data (uncached).
-    _data: Optional[T] = None
+    _data: Optional[tuple[T, SourceInfo]] = None
 
-    def get(self) -> T:
+    def get(self, sample: Any = None) -> T:
         """
-        Returns the data. If the background job hasn't started, we cancel it,
+        Returns the data and adds the source info to the sample.
+        If the background job hasn't started, we cancel it,
         do a direct read, and remove ourselves from the pool's references.
         Otherwise, we wait for the job to finish, read from cache, and remove ourselves.
         """
@@ -44,7 +46,8 @@ class FileCacheLazy(Lazy[T]):
             return self._data
         self._data = self.pool._get_data(self.ds, self.fname, self.entry)
         assert self._data is not None
-        return self._data
+        add_source_info(sample, self._data[1])
+        return self._data[0]
 
     def __hash__(self) -> int:
         """Allows usage in sets and dicts as key."""
@@ -63,7 +66,7 @@ class FileCacheLazy(Lazy[T]):
                 self.pool._decrement_refcount_and_cleanup((self.ds.get_path(), self.fname))
 
 
-@dataclass_slots
+@edataclass
 class _PendingTask:
     """Dataclass for storing a pending background task"""
 
@@ -81,6 +84,8 @@ class _PendingTask:
     require_data_now: bool = False
     # The path to the cache file.
     cache_path: Optional[Path] = None
+    # The source info for the data.
+    source_info: Optional[SourceInfo] = None
 
 
 class FileStoreCachePool(CachePool, ForkMixin):
@@ -162,13 +167,13 @@ class FileStoreCachePool(CachePool, ForkMixin):
         # Condition variable to signal when cache space is available
         self._cache_space_available = threading.Condition(self._lock)
 
-    def get(self, ds: FileStore, fname: str) -> Any:
+    def get(self, ds: FileStore, fname: str, sample: Any = None) -> Any:
         """
         Synchronous read from the dataset (no cache usage).
         """
-        return ds[fname]
+        return ds.get(fname, sample)
 
-    def _get_data(self, ds: FileStore, fname: str, entry: _PendingTask) -> Any:
+    def _get_data(self, ds: FileStore, fname: str, entry: _PendingTask) -> tuple[Any, SourceInfo]:
         """
         Get the data for a given file from the cache and purge cache if no references are left.
 
@@ -179,6 +184,7 @@ class FileStoreCachePool(CachePool, ForkMixin):
         * If the cache-out job failed, raise through and keep for other references.
         * If the cache-out job is cancelled, requeue if there are other references waiting for it.
         """
+        result: tuple[Any, SourceInfo]
         with self._lock:
             try:
                 # Attempt to cancel if the job hasn't started
@@ -186,7 +192,7 @@ class FileStoreCachePool(CachePool, ForkMixin):
                     was_cached = False
                     try:
                         # Cancelled => job never ran. We'll do a direct read.
-                        result = self.get(ds, fname)
+                        result = ds[fname]
                     finally:
                         # Decrement refcount
                         self._decrement_refcount_and_cleanup(key=(ds.get_path(), fname))
@@ -210,7 +216,7 @@ class FileStoreCachePool(CachePool, ForkMixin):
                             result = self._read_from_cache(entry)
                         else:
                             # The job failed, so we'll do a direct decode
-                            result = self.get(ds, fname)
+                            result = ds[fname]
                     finally:
                         self._lock.acquire()
                         entry.require_data_now = False
@@ -236,11 +242,11 @@ class FileStoreCachePool(CachePool, ForkMixin):
         # Perform the data read
         if self.method == "raw":
             if isinstance(ds, DecodeFileStore):
-                data = ds.inner_reader[fname]
+                data, entry.source_info = ds.inner_reader[fname]
             else:
-                data = ds[fname]
+                data, entry.source_info = ds[fname]
         elif self.method == "pickle":
-            data = ds[fname]
+            data, entry.source_info = ds[fname]
             data = pickle.dumps(data)
         else:
             raise ValueError(f"Invalid method: {self.method}")
@@ -370,16 +376,17 @@ class FileStoreCachePool(CachePool, ForkMixin):
         with open(path, "wb") as f:
             f.write(data)
 
-    def _read_from_cache(self, entry: _PendingTask) -> Any:
+    def _read_from_cache(self, entry: _PendingTask) -> tuple[Any, SourceInfo]:
+        assert entry.source_info is not None, "source_info should have been set"
         with open(entry.cache_path, "rb") as f:
             if self.method == "raw":
                 raw = f.read()
                 if isinstance(entry.ds, DecodeFileStore):
-                    return entry.ds.decoder.decode(entry.fname, raw)
+                    return entry.ds.decoder.decode(entry.fname, raw), entry.source_info
                 else:
-                    return raw
+                    return raw, entry.source_info
             else:
-                return pickle.load(f)
+                return pickle.load(f), entry.source_info
 
     def _remove_cached_file(self, entry: _PendingTask) -> None:
         """

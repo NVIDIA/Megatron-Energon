@@ -30,7 +30,7 @@ import torch.multiprocessing
 from torch.utils.data import DataLoader, IterableDataset
 
 from megatron.energon.cache import CachePool
-from megatron.energon.dataclass_slots import dataclass_slots
+from megatron.energon.edataclass import edataclass
 from megatron.energon.errors import deprecated
 from megatron.energon.flavors.base_dataset import (
     FlexState,
@@ -168,19 +168,19 @@ class SimpleSavableDatasetWrapper(BaseWrapperDataset[T, Tuple[int, int, T]], Gen
                     if worker_active:
                         self.worker_config.worker_deactivate()
 
-    def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T:
+    def restore_sample(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> T:
         with self.worker_config.worker_trace_writer().span(
-            "SimpleSavableDatasetWrapper.restore_sample", args={"index": index}, level=1
+            "SimpleSavableDatasetWrapper.restore_sample", args={"restore_key": restore_key}, level=1
         ):
-            id, global_worker_id, sample_idx = index[:3]
+            id, global_worker_id, sample_idx = restore_key[:3]
             assert id == type(self).__name__
-            index = index[3:]
+            restore_key = restore_key[3:]
             self.worker_config.worker_activate(
                 sample_idx, override_global_rank=global_worker_id, cache_pool=self.cache_pool
             )
             try:
                 return add_sample_restore_key(
-                    self.dataset.restore_sample(index),
+                    self.dataset.restore_sample(restore_key),
                     global_worker_id,
                     sample_idx,
                     src=self,
@@ -224,7 +224,7 @@ class SimpleSavableDatasetWrapperWithoutLen(IterableDataset[Tuple[int, int, T]],
         return f"SimpleSavableDatasetWrapperWithoutLen(dataset={self.dataset})"
 
 
-@dataclass_slots
+@edataclass
 class SavableDatasetState(State):
     """State of the dataset wrapper. It stores the global random states and the index of the next
     sample to be returned from the dataset. This class is not intended to be used directly, but by
@@ -241,7 +241,7 @@ class SavableDatasetState(State):
         return f"SavableDatasetState(rng={self.rng!r}, sample_index={self.sample_index})"
 
 
-@dataclass_slots
+@edataclass
 class SavableCheckpoint:
     """Checkpoint data for :class:`megatron.energon.SavableDatasetWrapper`. An instance is created
     regularly to be able to save the state of the dataset wrapper before the currently emitted
@@ -256,7 +256,7 @@ class SavableCheckpoint:
     sample_index: int
 
 
-@dataclass_slots
+@edataclass
 class SavableDatasetCheckpoint(State):
     """Checkpoint data for :class:`megatron.energon.SavableDatasetWrapper`. The checkpoint state
     represents a state before that checkpoint, with an offset (i.e. samples to be skipped)."""
@@ -710,17 +710,17 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
     def can_restore_sample(self) -> bool:
         return self.dataset.can_restore_sample()
 
-    def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T:
+    def restore_sample(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> T:
         with self.worker_config.worker_trace_writer().span(
-            "SavableDatasetWrapper.restore_sample", args={"index": index}, level=1
+            "SavableDatasetWrapper.restore_sample", args={"restore_key": restore_key}, level=1
         ):
-            id, global_worker_id, sample_idx = index[:3]
+            id, global_worker_id, sample_idx = restore_key[:3]
             assert id == type(self).__name__
-            index = index[3:]
+            restore_key = restore_key[3:]
             self.worker_config.worker_activate(sample_idx, override_global_rank=global_worker_id)
             try:
                 return add_sample_restore_key(
-                    self.dataset.restore_sample(index),
+                    self.dataset.restore_sample(restore_key),
                     global_worker_id,
                     sample_idx,
                     src=self,
@@ -735,7 +735,7 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
         return f"SavableDatasetWrapper(dataset={self.dataset})"
 
 
-@dataclass_slots
+@edataclass
 class SavableDataLoaderState(State):
     """Saved state of the :class:`megatron.energon.SavableDataLoader`. Contains the state for all worker
     processed of a single rank."""
@@ -1358,9 +1358,9 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
     def can_restore_sample(self) -> bool:
         return self.dataset.can_restore_sample()
 
-    def restore_sample(self, sample_key: Tuple[Union[str, int, tuple], ...]) -> T:
+    def restore_sample(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> T:
         """Restores a sample from a key. This is useful to debug the dataset."""
-        return self.dataset.restore_sample(sample_key)
+        return self.dataset.restore_sample(restore_key)
 
     def config(self):
         """Get the configuration, which defines the dataset. Useful in conjunction with `save_state`
@@ -1573,9 +1573,9 @@ class BasicDataLoader(DataLoader[T], Generic[T]):
     def can_restore_sample(self) -> bool:
         return self.dataset.can_restore_sample()
 
-    def restore_sample(self, sample_key: Tuple[Union[str, int, tuple], ...]) -> T:
+    def restore_sample(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> T:
         """Restores a sample from a key. This is useful to debug the dataset."""
-        return self.dataset.restore_sample(sample_key)
+        return self.dataset.restore_sample(restore_key)
 
 
 def _sample_str(self, sample):

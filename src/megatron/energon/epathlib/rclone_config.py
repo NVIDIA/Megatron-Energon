@@ -4,12 +4,13 @@
 import configparser
 import os
 import shutil
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional
 
+from megatron.energon.edataclass import edataclass
 
-@dataclass
+
+@edataclass
 class ConfigEntry:
     name: str
     type: str

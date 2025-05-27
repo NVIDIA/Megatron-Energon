@@ -69,7 +69,16 @@ class SqliteIndexWriter:
         byte_offset: Optional[int],
         byte_size: Optional[int],
     ):
-        """Adds a new sample row to the samples table."""
+        """
+        Adds a new sample row to the samples table.
+
+        Args:
+            tar_file_id: The index of the tar file in the reader.
+            sample_key: The key of the sample.
+            sample_index: The index of the sample in the tar file.
+            byte_offset: The byte offset of the sample in the tar file.
+            byte_size: The size of the sample in the tar file.
+        """
 
         assert self.db is not None, "Database is closed"
 

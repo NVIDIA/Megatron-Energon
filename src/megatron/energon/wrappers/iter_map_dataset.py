@@ -18,6 +18,7 @@ from torch.utils.data import IterableDataset
 
 from megatron.energon.errors import SYSTEM_EXCEPTIONS, FatalSampleError
 from megatron.energon.flavors.base_dataset import SavableDataset, set_sample_restore_key
+from megatron.energon.source_info import SourceInfo
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers._log_exception import log_exception
 from megatron.energon.wrappers.base import BaseWrapperDataset, SampleIndex, get_sample_restore_key
@@ -35,7 +36,7 @@ class IterMapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sampl
 
     iter_map_fn: Callable[[Iterator[T_sample]], Iterator[T_sample_out]]
     len_map_fn: Callable[[int], int]
-    error_handler: Callable[[Exception, Optional[T_sample]], None]
+    error_handler: Callable[[Exception, Optional[T_sample], list[SourceInfo]], None]
     stateless_iter_fn: bool
     iter_map_fn_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]]
     _sample_index: SampleIndex
@@ -48,7 +49,9 @@ class IterMapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sampl
         iter_map_fn: Callable[[Iterator[T_sample]], Iterator[T_sample_out]],
         *,
         len_map_fn: Callable[[int], int] = lambda x: x,
-        error_handler: Callable[[Exception, Optional[T_sample]], None] = log_exception,
+        error_handler: Callable[
+            [Exception, Optional[T_sample], list[SourceInfo]], None
+        ] = log_exception,
         stateless_iter_fn: bool = False,
         iter_map_fn_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]] = None,
         worker_config: WorkerConfig,
@@ -161,16 +164,16 @@ class IterMapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sampl
         )
         super().assert_can_restore()
 
-    def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_sample:
+    def restore_sample(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> T_sample:
         trace_span = self.worker_config.worker_trace_span()
         iter_name = self._function_config(self.iter_map_fn)
         self.assert_can_restore()
         with trace_span.span(
             "IterMapDataset.restore_sample",
-            args={"index": index},
+            args={"restore_key": restore_key},
             level=1,
         ):
-            id, sample_idx, iter_idx, *sample_restore_keys = index
+            id, sample_idx, iter_idx, *sample_restore_keys = restore_key
             assert id == type(self).__name__
             assert isinstance(iter_idx, int)
             inner_iter = iter(
