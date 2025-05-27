@@ -224,7 +224,6 @@ class EnergonFS(Operations):
 
                 single_tar_id = None
                 all_entries = list(self._wds_filestore.list_sample_parts(folder, slow_mode=self._slow_mode))
-                print(f"all_entries: {all_entries}")
                 for entry, size, tar_file_id in all_entries:
                     if single_tar_id is None:
                         single_tar_id = tar_file_id
