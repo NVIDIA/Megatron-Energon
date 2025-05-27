@@ -197,13 +197,7 @@ In a real use-case you will want to do a lot more here and we recommend keeping 
 
 ## Other Filters for Cookers
 
-You can filter using the `subflavors` as above, you can also filter using the deprecated single `subflavor` like this:
-
-```python
-Cooker(cook_text, is_subflavor="helloworld")
-```
-
-or if you need custom filtering, you can provide a method to filter the sample:
+You can filter using a custom filtering, by providing a method to filter the sample:
 
 ```python
 Cooker(cook_text, condition=lambda sample: return sample['myprop'] == 'yes_thats_it')

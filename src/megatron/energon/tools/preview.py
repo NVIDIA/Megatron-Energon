@@ -88,7 +88,7 @@ def to_str(value: Any, indent: str) -> str:
 def pprint(idx: int, sample: Sample):
     click.echo(f"Sample {idx}")
     for field in dataclasses.fields(sample):
-        if field.name in ("__restore_key__", "__subflavor__", "__subflavors__"):
+        if field.name in ("__restore_key__", "__subflavors__", "__sources__"):
             continue
         click.echo(f" - {field.name} ({field.type}): {to_str(getattr(sample, field.name), '')}")
 

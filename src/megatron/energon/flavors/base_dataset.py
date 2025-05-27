@@ -124,8 +124,6 @@ class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
     # should be a (nested) tuple of strings and integers, which can be used to index the dataset.
     __restore_key__: Tuple[Union[str, int, tuple], ...]
 
-    #: A dataset may define a subflavor to distinguish between samples of the same sample type.
-    __subflavor__: Optional[str] = None
     #: A dataset may define a subflavors to distinguish between samples of the same sample type.
     __subflavors__: Optional[Dict[str, Any]] = None
 
@@ -133,17 +131,14 @@ class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
     __sources__: Optional[tuple[SourceInfo, ...]] = None
 
     @classmethod
-    def derive_from(
-        cls: Type[T_sample], base_sample: "Sample", sources: tuple[SourceInfo, ...] = (), **kwargs
-    ) -> T_sample:
+    def derive_from(cls: Type[T_sample], base_sample: "Sample", **kwargs) -> T_sample:
         """
-        Uses the base fields of `Sample` from base_sample (i.e. __key__, __restore_key__, __subflavor__, __subflavors__)
+        Uses the base fields of `Sample` from base_sample (i.e. __key__, __restore_key__, __subflavors__, __sources__)
         and creates a new sample with the kwargs as fields. This is useful for creating new samples, while keeping the
         metadata of the base sample.
 
         Args:
             base_sample: The base sample to copy the base fields / metadata from.
-            source: Additional source information to add to the sample.
             kwargs: The fields of the new sample.
 
         Returns:
@@ -152,8 +147,6 @@ class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
         base_kwargs = {
             field.name: getattr(base_sample, field.name) for field in dataclasses.fields(Sample)
         }
-        if sources:
-            base_kwargs["__sources__"] = (*base_kwargs["__sources__"], *sources)
         return cls(
             **base_kwargs,
             **kwargs,
@@ -192,8 +185,13 @@ class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
                 init_args[field.name] = getattr(primary, field.name)
             # Merge sources from all joined samples
             init_args["__sources__"] = (
-                *primary.__sources__,
-                *(src for arg in args if arg is not None for src in arg.__sources__),
+                *(primary.__sources__ or ()),
+                *(
+                    src
+                    for arg in args
+                    if arg is not None and arg.__sources__ is not None
+                    for src in arg.__sources__
+                ),
             )
             for arg in args:
                 if arg is None:
@@ -382,7 +380,6 @@ class BaseCoreDatasetFactory(Generic[T_sample], ABC):
     __sample_type__: Type[T_sample] = cast(Type[T_sample], None)
     paths: List[EPath]
 
-    subflavor: Optional[str]
     subflavors: Dict[str, Any]
 
     @abstractmethod

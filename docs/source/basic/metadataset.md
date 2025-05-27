@@ -124,7 +124,6 @@ splits:
   val:
     # Only use coco val for val
     path: ./coco
-    subflavor: small_images
     subflavors:
       augmentation_type: small_images
       text_length: short
