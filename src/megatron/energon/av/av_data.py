@@ -5,10 +5,10 @@ from typing import Optional
 
 import torch
 
-from megatron.energon.dataclass_slots import dataclass_slots
+from megatron.energon.edataclass import edataclass
 
 
-@dataclass_slots
+@edataclass
 class AVData:
     #: A list of video clips in the shape (frames, channels, h, w)
     video_clips: Optional[list[torch.Tensor]]

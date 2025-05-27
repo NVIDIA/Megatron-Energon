@@ -8,6 +8,7 @@ from typing import Callable, Generic, Optional, TypeVar, Union, overload
 
 from megatron.energon.flavors.base_dataset import Sample
 from megatron.energon.flavors.crude import CrudeSample
+from megatron.energon.source_info import SourceInfo
 
 T_sample = TypeVar("T_sample", bound=Sample, covariant=True)
 
@@ -124,12 +125,18 @@ class Cooker(Generic[T_sample]):
         return True
 
 
-def basic_sample_keys(crude_sample: dict) -> dict:
+def basic_sample_keys(
+    crude_sample: dict, additional_source_info: tuple[SourceInfo, ...] = ()
+) -> dict:
     """A convenience helper to extract the basic keys from a crude sample,
     which you will always need to forward to the cooked sample."""
 
-    return {
+    res = {
         field.name: crude_sample[field.name]
         for field in dataclasses.fields(Sample)
         if field.name in crude_sample
     }
+
+    if additional_source_info:
+        res["__sources__"] = (*crude_sample["__sources__"], *additional_source_info)
+    return res

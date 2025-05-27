@@ -22,6 +22,7 @@ from megatron.energon.flavors.base_dataset import (
     BaseCoreDatasetFactory,
     Sample,
     SavableDataset,
+    legacy_handler,
     set_sample_restore_key,
 )
 from megatron.energon.flavors.webdataset.base_webdataset import BaseWebdatasetFactory
@@ -34,6 +35,7 @@ from megatron.energon.flavors.webdataset.sample_loader import (
 )
 from megatron.energon.flavors.webdataset.sharder import Sharder
 from megatron.energon.flavors.webdataset.structs import ShardInfo, reraise_exception
+from megatron.energon.source_info import SourceInfo
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.map_dataset import MapDataset
 
@@ -53,7 +55,7 @@ class JoinedWebdatasetFactory(
     parallel_shard_iters: Optional[int]
     max_samples_per_sequence: Optional[int]
     join_index: EPath
-    handler: Callable[[Exception, Optional[str]], None]
+    handler: Callable[[Exception, Optional[str], Optional[list[SourceInfo]]], None]
 
     shards: List[Sequence[ShardInfo]]
     part_datasets: SavableDataset[T_sample]
@@ -73,7 +75,9 @@ class JoinedWebdatasetFactory(
         max_samples_per_sequence: Optional[int] = None,
         join_index: EPath,
         joiner: Union[Type[T_sample], Callable[..., T_sample]],
-        handler: Callable[[Exception, Optional[str]], None] = reraise_exception,
+        handler: Callable[
+            [Exception, Optional[str], Optional[list[SourceInfo]]], None
+        ] = reraise_exception,
     ):
         """
         Constructs the loader for a joined webdataset. The samples from the inner datasets are joined into a single
@@ -126,7 +130,7 @@ class JoinedWebdatasetFactory(
         self.shuffle_over_epochs = shuffle_over_epochs
         self.parallel_shard_iters = parallel_shard_iters
         self.max_samples_per_sequence = max_samples_per_sequence
-        self.handler = handler
+        self.handler = legacy_handler(handler)
 
     def __len__(self) -> int:
         return sum(shard.count for shard in self.inner_datasets[0].shards)
@@ -191,7 +195,6 @@ class JoinedWebdatasetFactory(
             worker_config=self.worker_config,
             shuffle_over_epochs=self.shuffle_over_epochs if self.training else None,
             parallel_slice_iters=parallel_shard_iters,
-            handler=self.sample_error_handler,
         )
         return self._process_samples(dataset)
 

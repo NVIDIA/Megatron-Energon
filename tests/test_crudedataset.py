@@ -30,15 +30,17 @@ from megatron.energon import (
 )
 from megatron.energon.cache import FileStore, FileStoreCachePool, Lazy
 from megatron.energon.cache.base import CachePool
-from megatron.energon.dataclass_slots import dataclass_slots
+from megatron.energon.edataclass import edataclass
+from megatron.energon.epathlib.epath import EPath
 from megatron.energon.flavors.base_dataset import Sample
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 from megatron.energon.flavors.webdataset.sample_decoder import SampleDecoder
 from megatron.energon.flavors.webdataset.structs import reraise_exception
+from megatron.energon.source_info import SourceInfo
 from megatron.energon.task_encoder.cooking import cooker
 
 
-@dataclass_slots
+@edataclass
 class LazyTextSample(Sample):
     txt: str
     next_txt: Lazy[str]
@@ -52,9 +54,10 @@ except AttributeError:
     pass
 
 
-@dataclass_slots
+@edataclass
 class TextBatch(Batch):
     __keys__: List[str]
+    __sources__: List[SourceInfo]
     txts: List[str]
 
 
@@ -78,7 +81,7 @@ def cook_other(sample: dict) -> TextSample:
 @stateless
 def cook_aux(sample: dict, pkl_source: FileStore, fs_source: FileStore) -> TextSample:
     # ds2 is offset by 100
-    d = pkl_source[f"{int(sample['txt']) + 100:06d}.txt"]
+    d = pkl_source.get(f"{int(sample['txt']) + 100:06d}.txt", sample)
     return TextSample(
         **basic_sample_keys(sample),
         text=f"<{sample['txt']}|aux|{d}>",
@@ -97,6 +100,7 @@ class CookingTaskEncoder(DefaultTaskEncoder[TextSample, TextSample, TextBatch, T
     def batch(self, samples: List[TextSample]) -> TextBatch:
         return TextBatch(
             __keys__=[sample.__key__ for sample in samples],
+            __sources__=[source for sample in samples for source in sample.__sources__],
             txts=[sample.text for sample in samples],
         )
 
@@ -112,7 +116,7 @@ class CookingTaskEncoder(DefaultTaskEncoder[TextSample, TextSample, TextBatch, T
 def cook_aux_filesystem_reference(
     sample: dict, pkl_source: FileStore, fs_source: FileStore
 ) -> TextSample:
-    d = fs_source["aux_metadataset.yaml"][:25].decode()
+    d = fs_source.get("aux_metadataset.yaml", sample)[:25].decode()
     return TextSample(
         **basic_sample_keys(sample),
         text=f"<{sample['txt']}|aux|{d}>",
@@ -131,7 +135,7 @@ def cook_aux_primary_cache(
     sample: dict, primary: FileStore, pkl_source: FileStore, fs_source: FileStore, cache: CachePool
 ) -> LazyTextSample:
     # ds2 is offset by 100
-    d = pkl_source[f"{int(sample['txt']) + 100:06d}.txt"]
+    d = pkl_source.get(f"{int(sample['txt']) + 100:06d}.txt", sample)
     my_lazy_next_txt = cache.get_lazy(primary, f"{(int(sample['txt']) + 1) % 55:06d}.txt")
     return LazyTextSample(
         **basic_sample_keys(sample),
@@ -156,14 +160,16 @@ class LazyCookingTaskEncoder(
     @stateless
     def pack_selected_samples(self, samples: List[LazyTextSample]) -> TextSample:
         assert len(samples) == 1, f"Expected 1 sample, got {len(samples)}"
+        next_txt = samples[0].next_txt.get(samples[0])
         return TextSample.derive_from(
             samples[0],
-            text=samples[0].txt + "|" + samples[0].next_txt.get(),
+            text=samples[0].txt + "|" + next_txt,
         )
 
     def batch(self, samples: List[TextSample]) -> TextBatch:
         return TextBatch(
             __keys__=[sample.__key__ for sample in samples],
+            __sources__=[source for sample in samples for source in sample.__sources__],
             txts=[sample.text for sample in samples],
         )
 
@@ -183,7 +189,7 @@ class LazyCookingTaskEncoderWithPostencode(
         assert isinstance(sample, LazyTextSample)
         return TextSample.derive_from(
             sample,
-            text=sample.txt + "|" + sample.next_txt.get(),
+            text=sample.txt + "|" + sample.next_txt.get(sample),
         )
 
     def select_samples_to_pack(self, samples: List[LazyTextSample]) -> List[List[LazyTextSample]]:
@@ -197,6 +203,7 @@ class LazyCookingTaskEncoderWithPostencode(
     def batch(self, samples: List[TextSample]) -> TextBatch:
         return TextBatch(
             __keys__=[sample.__key__ for sample in samples],
+            __sources__=[source for sample in samples for source in sample.__sources__],
             txts=[sample.text for sample in samples],
         )
 
@@ -209,6 +216,7 @@ class GenericCookingTaskEncoder(DefaultTaskEncoder[TextSample, TextSample, TextB
     def batch(self, samples: List[TextSample]) -> TextBatch:
         return TextBatch(
             __keys__=[sample.__key__ for sample in samples],
+            __sources__=[source for sample in samples for source in sample.__sources__],
             txts=[sample.text for sample in samples],
         )
 
@@ -631,6 +639,52 @@ class TestDataset(unittest.TestCase):
         print(samples_restored)
 
         assert all([a == b for a, b in zip(samples_after, samples_restored)])
+
+        # Verify that the sources are correct
+        sample_src_check = [s.__sources__ for idx, s in zip(range(1), loader)][0]
+        print(sample_src_check)
+        # NOTE: Auxiliary sources have string as index, not int
+        assert sample_src_check == [
+            # Primary source for the sample, reading all source files
+            SourceInfo(
+                dataset_path=EPath(self.dataset_path / "ds1"),
+                index=10,
+                shard_name="parts/data-1.tar",
+                file_names=("000010.pkl", "000010.txt"),
+            ),
+            # Auxiliary source for the sample, reading from ds2
+            SourceInfo(
+                dataset_path=EPath(self.dataset_path / "ds2"),
+                index="000110.txt",
+                shard_name="parts/data-1.tar",
+                file_names=("000110.txt",),
+            ),
+            # Auxiliary source for the sample, reading from ds1, but next sample
+            SourceInfo(
+                dataset_path=EPath(self.dataset_path / "ds1"),
+                index="000011.txt",
+                shard_name="parts/data-1.tar",
+                file_names=("000011.txt",),
+            ),
+            SourceInfo(
+                dataset_path=EPath(self.dataset_path / "ds1"),
+                index=11,
+                shard_name="parts/data-1.tar",
+                file_names=("000011.pkl", "000011.txt"),
+            ),
+            SourceInfo(
+                dataset_path=EPath(self.dataset_path / "ds2"),
+                index="000111.txt",
+                shard_name="parts/data-1.tar",
+                file_names=("000111.txt",),
+            ),
+            SourceInfo(
+                dataset_path=EPath(self.dataset_path / "ds1"),
+                index="000012.txt",
+                shard_name="parts/data-1.tar",
+                file_names=("000012.txt",),
+            ),
+        ]
 
     def test_aux_filesystem_reference(self):
         torch.manual_seed(42)

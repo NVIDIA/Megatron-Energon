@@ -27,9 +27,10 @@ from torch.utils.data import IterableDataset
 from typing_extensions import Self
 
 from megatron.energon.cache import FileStore
-from megatron.energon.dataclass_slots import dataclass_slots
+from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
 from megatron.energon.savable import Savable
+from megatron.energon.source_info import SourceInfo
 from megatron.energon.state import FlexState
 from megatron.energon.worker import WorkerConfig
 
@@ -109,7 +110,7 @@ class ExtendableDataclassMixin:
         return cls(**kwargs)
 
 
-@dataclass_slots
+@edataclass
 class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
     """An abstract base class for one element of a batch.
     Each task should derive a specific subclass as a `@dataclass`, like
@@ -124,12 +125,17 @@ class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
     __restore_key__: Tuple[Union[str, int, tuple], ...]
 
     #: A dataset may define a subflavor to distinguish between samples of the same sample type.
-    __subflavor__: Optional[str]
+    __subflavor__: Optional[str] = None
     #: A dataset may define a subflavors to distinguish between samples of the same sample type.
-    __subflavors__: Optional[Dict[str, Any]]
+    __subflavors__: Optional[Dict[str, Any]] = None
+
+    #: Information about the source of the sample, i.e. where the data was loaded from.
+    __sources__: Optional[tuple[SourceInfo, ...]] = None
 
     @classmethod
-    def derive_from(cls: Type[T_sample], base_sample: "Sample", **kwargs) -> T_sample:
+    def derive_from(
+        cls: Type[T_sample], base_sample: "Sample", sources: tuple[SourceInfo, ...] = (), **kwargs
+    ) -> T_sample:
         """
         Uses the base fields of `Sample` from base_sample (i.e. __key__, __restore_key__, __subflavor__, __subflavors__)
         and creates a new sample with the kwargs as fields. This is useful for creating new samples, while keeping the
@@ -137,15 +143,19 @@ class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
 
         Args:
             base_sample: The base sample to copy the base fields / metadata from.
+            source: Additional source information to add to the sample.
             kwargs: The fields of the new sample.
 
         Returns:
             The new sample.
         """
+        base_kwargs = {
+            field.name: getattr(base_sample, field.name) for field in dataclasses.fields(Sample)
+        }
+        if sources:
+            base_kwargs["__sources__"] = (*base_kwargs["__sources__"], *sources)
         return cls(
-            **{
-                field.name: getattr(base_sample, field.name) for field in dataclasses.fields(Sample)
-            },
+            **base_kwargs,
             **kwargs,
         )
 
@@ -180,6 +190,11 @@ class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
             fields = dataclasses.fields(primary)
             for field in fields:
                 init_args[field.name] = getattr(primary, field.name)
+            # Merge sources from all joined samples
+            init_args["__sources__"] = (
+                *primary.__sources__,
+                *(src for arg in args if arg is not None for src in arg.__sources__),
+            )
             for arg in args:
                 if arg is None:
                     continue
@@ -190,7 +205,7 @@ class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
         return cls(**init_args)
 
 
-@dataclass_slots
+@edataclass
 class State(ABC, ExtendableDataclassMixin):
     """An abstract base class for the state of a dataset. See :class:`megatron.energon.SavableDataset`.
     The state of a dataset is used to save and restore the dataset state (i.e. random generators,
@@ -347,7 +362,7 @@ class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC)
         """Asserts that the dataset can restore a sample from a key."""
         assert self.can_restore_sample(), "This dataset cannot restore samples."
 
-    def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_sample:
+    def restore_sample(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> T_sample:
         """
         Generic key type, because it might be either an integer (for a core dataset), or something
         more complex (e.g. for blended datasets).
@@ -424,3 +439,28 @@ def set_sample_restore_key(
             "Did not yield a sample with a restore key, but is marked stateless/deterministic."
         )
     return sample
+
+
+def legacy_handler(
+    handler: Union[
+        Callable[[Exception, Optional[str], Optional[list[SourceInfo]]], None],
+        Callable[[Exception, Optional[str]], None],
+    ],
+) -> Callable[[Exception, Optional[str], Optional[list[SourceInfo]]], None]:
+    """Safely returns the new style three argument handler. If the handler takes 2 arguments, it wraps it."""
+    import functools
+    import inspect
+
+    handler_sig = inspect.signature(handler)
+    if len(handler_sig.parameters) != 3:
+        original_handler = handler
+
+        @functools.wraps(original_handler)
+        def wrapped_handler(
+            exc: Exception, key: Optional[str], source_infos: Optional[list[SourceInfo]]
+        ) -> None:
+            return original_handler(exc, key)
+
+        return wrapped_handler
+    else:
+        return handler
