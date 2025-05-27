@@ -2,11 +2,11 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import json
-from dataclasses import dataclass
 from typing import List, Set
 
 import braceexpand
 
+from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
 from megatron.energon.eyaml import load_yaml, load_yaml_json
 from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
@@ -19,7 +19,7 @@ from megatron.energon.flavors.webdataset.structs import (
 from megatron.energon.typed_converter import JsonParser
 
 
-@dataclass
+@edataclass
 class WebdatasetMeta:
     """Class for getting metadata from a webdataset."""
 

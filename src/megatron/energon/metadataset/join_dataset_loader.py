@@ -15,7 +15,7 @@ from typing import (
     Union,
 )
 
-from megatron.energon.dataclass_slots import dataclass_slots
+from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib.epath import EPath
 from megatron.energon.flavors import (
     BaseCoreDatasetFactory,
@@ -321,7 +321,7 @@ def join_multiple_indices(
     conn.close()
 
 
-@dataclass_slots
+@edataclass
 class JoinedDatasetInfo:
     """Internal for passing the joined datasets."""
 
@@ -330,7 +330,7 @@ class JoinedDatasetInfo:
     nonmatch: Literal["skip", "none", "error"]
 
 
-@dataclass_slots
+@edataclass
 class JoinedDatasetMetaInfo:
     """Internal for passing the joined datasets."""
 
@@ -342,7 +342,7 @@ class JoinedDatasetMetaInfo:
     nonmatch: Literal["skip", "none", "error"]
 
 
-@dataclass_slots
+@edataclass
 class JoinDatasetLoader(DatasetLoaderInterface):
     """Loads a joined dataset from a path."""
 

@@ -6,15 +6,15 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Literal, Optional, Sequence, Type, Union
 
 from megatron.energon.cache import FileStore
-from megatron.energon.cache.file_store import SystemFileStore
-from megatron.energon.dataclass_slots import dataclass_slots
+from megatron.energon.cache.file_store import (
+    SystemFileStore,
+    WebdatasetFileStore,
+)
 from megatron.energon.dataset_config import load_config
+from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import Sample
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
-from megatron.energon.flavors.webdataset.file_store import (
-    WebdatasetFileStore,
-)
 from megatron.energon.flavors.webdataset.metadata import check_dataset_info_present
 from megatron.energon.metadataset.dataset_loader import DatasetLoader
 from megatron.energon.metadataset.join_dataset_loader import JoinDatasetLoader, JoinedDatasetInfo
@@ -30,7 +30,7 @@ from megatron.energon.worker import WorkerConfig
 url_regex = re.compile(r"^(?P<protocol>[a-z][a-z0-9+.-]*)://(?P<path>.*)", re.IGNORECASE)
 
 
-@dataclass_slots
+@edataclass
 class AuxDatasetReference:
     path: Union[str, EPath]
 
@@ -50,7 +50,7 @@ class AuxDatasetReference:
         return WebdatasetFileStore(self.path)
 
 
-@dataclass_slots
+@edataclass
 class AuxFilesystemReference:
     fs_path: Union[str, EPath]
 
@@ -64,7 +64,7 @@ class AuxFilesystemReference:
         return SystemFileStore(self.fs_path)
 
 
-@dataclass_slots
+@edataclass
 class DatasetReference(DatasetLoaderInterface):
     path: Union[str, EPath]
 
@@ -173,7 +173,7 @@ class DatasetReference(DatasetLoaderInterface):
         return result
 
 
-@dataclass_slots
+@edataclass
 class JoinDatasetReference(DatasetReference):
     nonmatch: Literal["skip", "none", "error"] = "error"
 
@@ -210,7 +210,7 @@ class JoinDatasetReference(DatasetReference):
         )
 
 
-@dataclass_slots
+@edataclass
 class MetadatasetJoin(DatasetLoaderInterface):
     join: Union[List[JoinDatasetReference], Dict[str, JoinDatasetReference]]
     joiner: Union[Type[Sample], Callable[..., Sample]]
@@ -293,17 +293,17 @@ class BlendWeightMixin:
     weight: float = 1.0
 
 
-@dataclass_slots
+@edataclass
 class BlendDatasetReference(BlendWeightMixin, DatasetReference):
     pass
 
 
-@dataclass_slots
+@edataclass
 class BlendJoinDatasetReference(BlendWeightMixin, MetadatasetJoin):
     pass
 
 
-@dataclass_slots
+@edataclass
 class MetadatasetBlend(DatasetLoaderInterface):
     """Blending of datasets by specifying the sampling weight for the inner datasets."""
 
@@ -371,17 +371,17 @@ class BlendRepetitionsMixin:
     repetitions: Union[int, float] = 1
 
 
-@dataclass_slots
+@edataclass
 class BlendEpochizedDatasetReference(BlendRepetitionsMixin, DatasetReference):
     pass
 
 
-@dataclass_slots
+@edataclass
 class BlendEpochizedJoinDatasetReference(BlendRepetitionsMixin, MetadatasetJoin):
     pass
 
 
-@dataclass_slots
+@edataclass
 class MetadatasetBlendEpochized(DatasetLoaderInterface):
     """Blending of datasets, by specifying the number of repetitions for samples from the inner
     datasets. Ensures that the constraint, that samples are seen exactly this many times before
@@ -445,7 +445,7 @@ class MetadatasetBlendEpochized(DatasetLoaderInterface):
         )
 
 
-@dataclass_slots
+@edataclass
 class MetadatasetV2(DatasetLoaderInterface):
     path: EPath
     splits: Dict[

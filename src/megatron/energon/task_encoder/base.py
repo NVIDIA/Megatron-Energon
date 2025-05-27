@@ -28,7 +28,7 @@ import torch
 from typing_extensions import ParamSpec
 
 from megatron.energon.cache import CachePool, DecodeFileStore, FileStore
-from megatron.energon.dataclass_slots import dataclass_slots
+from megatron.energon.edataclass import edataclass
 from megatron.energon.flavors import (
     CrudeSample,
     CrudeWebdataset,
@@ -234,7 +234,7 @@ def get_stateless(fn: Callable[..., T_sample]) -> bool:
     return getattr(fn, "__stateless__", False)
 
 
-@dataclass_slots
+@edataclass
 class Batch(PinMemoryMixin):
     """Base class for a batch dataclass. Provides a default implementation for pinning memory."""
 

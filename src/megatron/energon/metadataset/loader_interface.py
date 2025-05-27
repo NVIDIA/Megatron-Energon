@@ -6,7 +6,7 @@ from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Sequence, Union
 
 from megatron.energon.cache import FileStore
-from megatron.energon.dataclass_slots import dataclass_slots
+from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory
 from megatron.energon.worker import WorkerConfig
@@ -23,7 +23,7 @@ class DatasetBlendMode(Enum):
     SAMPLE_REPETITIONS = "sample_repetitions"
 
 
-@dataclass_slots
+@edataclass
 class LoadedDataset:
     dataset: BaseCoreDatasetFactory
     weight: Union[float, int, None] = None
@@ -31,7 +31,7 @@ class LoadedDataset:
     aux: Optional[Dict[str, FileStore]] = None
 
 
-@dataclass_slots
+@edataclass
 class LoadedDatasetList:
     datasets: List[LoadedDataset]
     blend_mode: DatasetBlendMode = DatasetBlendMode.NONE

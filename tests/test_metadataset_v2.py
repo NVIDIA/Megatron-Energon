@@ -27,7 +27,7 @@ from megatron.energon import (
     get_train_dataset,
     load_dataset,
 )
-from megatron.energon.dataclass_slots import dataclass_slots
+from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib.epath import EPath
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 from megatron.energon.metadataset.loader import prepare_metadataset
@@ -62,7 +62,7 @@ def _norng_state(state):
         return state
 
 
-@dataclass_slots
+@edataclass
 class TestJoinedSample(Sample):
     text1: torch.Tensor
     text2: torch.Tensor

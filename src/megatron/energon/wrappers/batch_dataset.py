@@ -18,6 +18,7 @@ from typing import (
 
 from megatron.energon.errors import SYSTEM_EXCEPTIONS, FatalSampleError
 from megatron.energon.flavors.base_dataset import SavableDataset, set_sample_restore_key
+from megatron.energon.source_info import SourceInfo
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers._log_exception import log_exception
 from megatron.energon.wrappers.base import BaseWrapperDataset, SampleIndex, get_sample_restore_key
@@ -33,7 +34,7 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
     batch_size: int
     batcher: Callable[[List[T_batch_sample]], T_batch]
     drop_last: bool
-    error_handler: Callable[[Exception, List[T_batch_sample]], None]
+    error_handler: Callable[[Exception, list[T_batch_sample], list[SourceInfo]], None]
     _sample_index: SampleIndex
     _generator_sample_keys: Optional[Any]
     _generator_offset: Optional[int]
@@ -49,7 +50,9 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
         batcher_stateless: bool = False,
         batcher_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]] = None,
         drop_last: bool = False,
-        error_handler: Callable[[Exception, List[T_batch_sample]], None] = log_exception,
+        error_handler: Callable[
+            [Exception, List[T_batch_sample], List[SourceInfo]], None
+        ] = log_exception,
         worker_config: WorkerConfig,
     ):
         """Construct a BatchDataset.
@@ -189,14 +192,14 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
         )
         super().assert_can_restore()
 
-    def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_batch:
+    def restore_sample(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> T_batch:
         # We need to store multiple indices to restore a batch.
         self.assert_can_restore()
         if inspect.isgeneratorfunction(self.batcher):
-            id, sample_idx, batch_sub_idx, *samples_restore_keys = index
+            id, sample_idx, batch_sub_idx, *samples_restore_keys = restore_key
             assert id == type(self).__name__
         else:
-            id, sample_idx, *samples_restore_keys = index
+            id, sample_idx, *samples_restore_keys = restore_key
             assert id == type(self).__name__
         batch = [self.dataset.restore_sample(inner_idx) for inner_idx in samples_restore_keys]
         with self._sample_index.ctx(sample_idx):
