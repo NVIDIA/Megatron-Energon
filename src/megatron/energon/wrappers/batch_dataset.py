@@ -53,6 +53,7 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
         error_handler: Callable[
             [Exception, List[T_batch_sample], List[SourceInfo]], None
         ] = log_exception,
+        failure_tolerance: Optional[int] = 100,
         worker_config: WorkerConfig,
     ):
         """Construct a BatchDataset.
@@ -69,6 +70,7 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
             drop_last: If True, the last batch is dropped if it is smaller than the batch size.
             error_handler: Function which handles exceptions raised by the batcher. The default
                 implementation logs the exception.
+            failure_tolerance: The number of consecutive failures after which the dataset is considered broken.
             worker_config: Configuration for the workers.
         """
         super().__init__(dataset, worker_config=worker_config)
@@ -78,6 +80,7 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
         self.batcher_config = batcher_config
         self.drop_last = drop_last
         self.error_handler = error_handler
+        self.failure_tolerance = failure_tolerance
 
         self.reset_state_own()
 
@@ -108,13 +111,14 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
         batch: List[T_batch_sample] = []
         sample_restore_keys = []
 
+        last_batch_failures = 0
+
         batcher_name = self._function_config(self.batcher)
         trace_span = self.worker_config.worker_trace_span()
 
-        last_failures = 0
-
         def flush() -> Generator[T_batch, None, None]:
-            nonlocal last_failures
+            nonlocal last_batch_failures
+
             try:
                 with (
                     self._sample_index.ctx() as sample_idx,
@@ -129,28 +133,27 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
                     )
                     self._generator_sample_keys = sample_restore_keys
                     self._generator_offset = 0
-                    try:
-                        for batch_sub_idx, (sample_idx, inner_batch_sample) in trace_span.iterable(
-                            enumerate(self._sample_index.iter_ctx(batch_sample, sample_idx)),
-                            name=f"{batcher_name}.next",
-                            level=2,
-                        ):
-                            self._generator_offset = batch_sub_idx + 1
-                            yield set_sample_restore_key(
-                                inner_batch_sample,
-                                sample_idx,
-                                batch_sub_idx,
-                                *sample_restore_keys,
-                                src=self,
-                            )
-                    finally:
-                        self._generator_sample_keys = None
-                        self._generator_offset = None
+                    for batch_sub_idx, (sample_idx, inner_batch_sample) in trace_span.iterable(
+                        enumerate(self._sample_index.iter_ctx(batch_sample, sample_idx)),
+                        name=f"{batcher_name}.next",
+                        level=2,
+                    ):
+                        last_batch_failures = 0
+                        self._generator_offset = batch_sub_idx + 1
+                        yield set_sample_restore_key(
+                            inner_batch_sample,
+                            sample_idx,
+                            batch_sub_idx,
+                            *sample_restore_keys,
+                            src=self,
+                        )
+                    self._generator_sample_keys = None
+                    self._generator_offset = None
                 else:
+                    last_batch_failures = 0
                     set_sample_restore_key(batch_sample, sample_idx, *sample_restore_keys, src=self)
                     with trace_gen.yield_(next_args={"sample_idx": sample_idx}):
                         yield batch_sample
-                last_failures = 0
                 sample_restore_keys.clear()
             except GeneratorExit:
                 raise
@@ -165,11 +168,14 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
                     args={"exception": f"{type(e).__name__}: {str(e)}"},
                     level=2,
                 )
-                last_failures += 1
-                if last_failures > 100:
+                last_batch_failures += 1
+                if (
+                    self.failure_tolerance is not None
+                    and last_batch_failures >= self.failure_tolerance
+                ):
                     raise FatalSampleError.from_sample(
                         batch,
-                        f"BatchDataset {self.batcher} failed 100 times in a row. Likely your dataset is broken.",
+                        f"BatchDataset {self.batcher} failed {last_batch_failures} times in a row. Likely your code or dataset are broken.",
                     )
 
         with (

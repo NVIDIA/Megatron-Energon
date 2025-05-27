@@ -126,7 +126,6 @@ class TestDataset(unittest.TestCase):
                         "    blend:",
                         "      - weight: 1",
                         "        path: ds1",
-                        "        subflavor: ds1",
                         "        subflavors:",
                         "          source: metadataset_v2.yaml",
                         "          number: 43",
@@ -134,7 +133,6 @@ class TestDataset(unittest.TestCase):
                         "        shuffle_over_epochs_multiplier: 3",
                         "      - weight: 1",
                         "        path: ds2",
-                        "        subflavor: ds2",
                         "        subflavors:",
                         "          source: metadataset_v2.yaml",
                         "          number: 44",
@@ -163,7 +161,6 @@ class TestDataset(unittest.TestCase):
                         "      - weight: 4",
                         "        path: ./metadataset_v2.yaml",
                         "        split_part: train",
-                        "        subflavor: train",
                         "        subflavors:",
                         "          source: nested_metadataset.yaml",
                         "          mds: nested_train",
@@ -284,12 +281,6 @@ class TestDataset(unittest.TestCase):
             "ds2",
             "ds1",
             "ds2",
-        ]
-        assert [raw_dataset.dataset.subflavor for raw_dataset in raw_datasets.datasets] == [
-            "train",
-            "train",
-            None,
-            None,
         ]
         print([raw_dataset.dataset.subflavors for raw_dataset in raw_datasets.datasets])
         assert [raw_dataset.dataset.subflavors for raw_dataset in raw_datasets.datasets] == [

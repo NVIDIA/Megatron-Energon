@@ -352,7 +352,6 @@ class JoinDatasetLoader(DatasetLoaderInterface):
 
     split_part: Optional[str] = None
     split_config: Optional[str] = None
-    subflavor: Optional[str] = None
     subflavors: Optional[Dict[str, Any]] = None
     shuffle_over_epochs_multiplier: Optional[int] = 1
 
@@ -452,7 +451,6 @@ class JoinDatasetLoader(DatasetLoaderInterface):
         training: bool,
         split_part: Optional[str] = None,
         worker_config: WorkerConfig,
-        subflavor: Optional[str] = None,
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs: Optional[int] = 1,
         split_config: Optional[str] = None,
@@ -464,7 +462,6 @@ class JoinDatasetLoader(DatasetLoaderInterface):
             split_part: Default split part to use.
             worker_config: Worker configuration.
             shuffle_buffer_size: Size of the sample shuffle buffer (before task encoding).
-            subflavor: Subflavor to use, might be overridden by inner datasets.
             subflavors: Subflavors to use, might be overridden by inner datasets.
             shuffle_over_epochs: Shuffle the dataset over this many epochs.
             **kwargs: Additional arguments to the dataset constructor.
@@ -478,11 +475,8 @@ class JoinDatasetLoader(DatasetLoaderInterface):
             split_part = self.split_part
         if split_part is None:
             raise ValueError("Missing split part")
-        if subflavor is None:
-            subflavor = self.subflavor
         if self.subflavors is not None:
             subflavors = {**self.subflavors, **(subflavors or {})}
-
         join_index_path, _ = self._get_joined_meta(split_part)
 
         if isinstance(self.datasets, list):
@@ -491,7 +485,6 @@ class JoinDatasetLoader(DatasetLoaderInterface):
                     training=training,
                     split_part=split_part,
                     worker_config=worker_config,
-                    subflavor=subflavor,
                     subflavors=subflavors,
                     shuffle_over_epochs=shuffle_over_epochs,
                     split_config=split_config,
@@ -508,7 +501,6 @@ class JoinDatasetLoader(DatasetLoaderInterface):
                     training=training,
                     split_part=split_part,
                     worker_config=worker_config,
-                    subflavor=subflavor,
                     subflavors=subflavors,
                     shuffle_over_epochs=shuffle_over_epochs,
                     split_config=split_config,
@@ -539,7 +531,6 @@ class JoinDatasetLoader(DatasetLoaderInterface):
         training: bool,
         split_part: Union[Literal["train", "val", "test"], str],
         worker_config: WorkerConfig,
-        subflavor: Optional[str] = None,
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: Optional[int] = 1,
         **kwargs,
@@ -552,7 +543,6 @@ class JoinDatasetLoader(DatasetLoaderInterface):
                         training=training,
                         split_part=split_part,
                         worker_config=worker_config,
-                        subflavor=subflavor,
                         subflavors=subflavors,
                         shuffle_over_epochs=shuffle_over_epochs_multiplier,
                         **kwargs,
