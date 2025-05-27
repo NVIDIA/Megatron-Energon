@@ -5,13 +5,13 @@ import os
 import stat
 from errno import EBADF, ENOENT
 from pathlib import Path
+from sqlite3 import OperationalError
 
 import click
 from mfusepy import FUSE, FuseOSError, Operations
 
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.webdataset.file_store import WebdatasetFileStore
-from sqlite3 import OperationalError
 
 MULTI_WARN = "WARNING_SAME_KEY_IN_MULTIPLE_TAR_FILES"
 

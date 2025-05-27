@@ -185,7 +185,7 @@ class TestDataset(unittest.TestCase):
             checkpoint_every_min_n_samples=1,
         )
 
-        data1a = list(zip(train_loader, range(3)))  # noqa: F841. Load 3 samples
+        list(zip(train_loader, range(3)))  # noqa: F841. Load 3 samples
 
         # Save state mid epoch
         state1 = train_loader.save_state_rank()
