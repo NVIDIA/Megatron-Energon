@@ -468,11 +468,9 @@ class SqliteITarEntryReader(ITarReader[str]):
 
         if not slow_mode:
             res = self.sqlite_reader.list_sample_parts(sample_key)
-            print(f"returning: {res}")
             return res
         else:            
             sample_pointer = self._get_itar_sample_pointer(sample_key)
-            print(f"Slow mode sample_pointer: {sample_pointer}")
 
             sample = self._get_item_by_sample_pointer(
                 sample_pointer, None, entry_match_fn=None
