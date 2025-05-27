@@ -347,12 +347,6 @@ class TestDataset(unittest.TestCase):
             "ds1",
             "ds2",
         ]
-        assert [raw_dataset.dataset.subflavor for raw_dataset in raw_datasets.datasets] == [
-            "train",
-            "train",
-            None,
-            None,
-        ]
         print([raw_dataset.dataset.subflavors for raw_dataset in raw_datasets.datasets])
         assert [raw_dataset.dataset.subflavors for raw_dataset in raw_datasets.datasets] == [
             {
@@ -360,12 +354,14 @@ class TestDataset(unittest.TestCase):
                 "dataset.yaml": True,
                 "number": 43,
                 "mds": "nested_train",
+                "__subflavor__": "train",
             },
             {
                 "source": "nested_metadataset.yaml",
                 "dataset.yaml": True,
                 "number": 44,
                 "mds": "nested_train",
+                "__subflavor__": "train",
             },
             {
                 "source": "nested_metadataset.yaml",
@@ -431,6 +427,7 @@ class TestDataset(unittest.TestCase):
                     ("source", "nested_metadataset.yaml"),
                     ("dataset.yaml", True),
                     ("number", 43),
+                    ("__subflavor__", "train"),
                     ("mds", "nested_train"),
                 )
             ]
@@ -443,6 +440,7 @@ class TestDataset(unittest.TestCase):
                     ("source", "nested_metadataset.yaml"),
                     ("dataset.yaml", True),
                     ("number", 44),
+                    ("__subflavor__", "train"),
                     ("mds", "nested_train"),
                 )
             ]
@@ -832,12 +830,12 @@ class TestDataset(unittest.TestCase):
                                                 "shuffle_over_epochs": 6,
                                                 "parallel_shard_iters": 2,
                                                 "max_samples_per_sequence": None,
-                                                "subflavor": "ds1",
                                                 "subflavors": {
                                                     "source": "metadataset.yaml",
                                                     "dataset.yaml": True,
                                                     "number": 43,
                                                     "mds": "mds",
+                                                    "__subflavor__": "ds1",
                                                 },
                                                 "sample_loader": "megatron.energon.flavors.webdataset.default_generic_webdataset.DefaultGenericWebdatasetFactory.__init__.<locals>.<lambda>",
                                                 "image_decode": "torchrgb",
@@ -925,12 +923,12 @@ class TestDataset(unittest.TestCase):
                                                 "shuffle_over_epochs": 2,
                                                 "parallel_shard_iters": 2,
                                                 "max_samples_per_sequence": None,
-                                                "subflavor": "ds2",
                                                 "subflavors": {
                                                     "source": "metadataset.yaml",
                                                     "dataset.yaml": True,
                                                     "number": 44,
                                                     "mds": "mds",
+                                                    "__subflavor__": "ds2",
                                                 },
                                                 "sample_loader": "megatron.energon.flavors.webdataset.default_generic_webdataset.DefaultGenericWebdatasetFactory.__init__.<locals>.<lambda>",
                                                 "image_decode": "torchrgb",

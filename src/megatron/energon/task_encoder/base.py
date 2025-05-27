@@ -266,18 +266,26 @@ class Batch(PinMemoryMixin, ExtendableDataclassMixin):
     # should be a (nested) tuple of strings and integers, which can be used to index the dataset.
     __restore_key__: Tuple[Union[str, int, tuple], ...]
 
-    #: A dataset may define a subflavor to distinguish between samples of the same sample type.
-    __subflavor__: Optional[list[Optional[str]]] = None
     #: A dataset may define a subflavors to distinguish between samples of the same sample type.
     __subflavors__: Optional[list[Optional[Dict[str, Any]]]] = None
 
     #: Information about the source of the sample, i.e. where the data was loaded from.
     __sources__: Optional[tuple[SourceInfo, ...]] = None
 
+    @property
+    def __subflavor__(self) -> Optional[list[Optional[str]]]:
+        """Deprecated, use __subflavors__ directly instead. This is just a deprecation alias."""
+        if self.__subflavors__ is None:
+            return None
+        return [
+            entry.get("__subflavor__", None) if entry is not None else None
+            for entry in self.__subflavors__
+        ]
+
     @classmethod
     def derive_from(cls: Type[T_batch], base_batch: "Batch", **kwargs) -> T_batch:
         """
-        Uses the base fields of `Batch` from base_batch (i.e. __key__, __restore_key__, __subflavor__, __subflavors__, __sources__)
+        Uses the base fields of `Batch` from base_batch (i.e. __key__, __restore_key__, __subflavors__, __sources__)
         and creates a new batch with the kwargs as fields. This is useful for creating new batches, while keeping the
         metadata of the base batch.
 
@@ -334,11 +342,6 @@ class Batch(PinMemoryMixin, ExtendableDataclassMixin):
                         if sample.__sources__
                         for source in sample.__sources__
                     )
-            elif field.name == "__subflavor__":
-                if any(sample.__subflavor__ is not None for sample in samples):
-                    init_args[field.name] = [
-                        sample.__subflavor__ for sample in samples if sample.__subflavor__
-                    ]
             elif field.name == "__subflavors__":
                 if any(sample.__subflavors__ is not None for sample in samples):
                     init_args[field.name] = [
@@ -1095,7 +1098,6 @@ class DefaultTaskEncoder(
         actions = None
         if isinstance(samples[0], Sample):
             actions = {
-                "__subflavor__": lambda x: x,
                 "__subflavors__": lambda x: x,
             }
         return self._batch(

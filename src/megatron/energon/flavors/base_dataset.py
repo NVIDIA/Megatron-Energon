@@ -124,18 +124,29 @@ class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
     # should be a (nested) tuple of strings and integers, which can be used to index the dataset.
     __restore_key__: Tuple[Union[str, int, tuple], ...]
 
-    #: A dataset may define a subflavor to distinguish between samples of the same sample type.
-    __subflavor__: Optional[str] = None
     #: A dataset may define a subflavors to distinguish between samples of the same sample type.
     __subflavors__: Optional[Dict[str, Any]] = None
 
     #: Information about the source of the sample, i.e. where the data was loaded from.
     __sources__: Optional[tuple[SourceInfo, ...]] = None
 
+    @property
+    def __subflavor__(self) -> Optional[str]:
+        """Deprecated, use __subflavors__ directly instead. This is just a deprecation alias."""
+        if self.__subflavors__ is None:
+            return None
+        if isinstance(self.__subflavors__, list):
+            # Batch fallback
+            return [
+                entry.get("__subflavor__", None) if entry is not None else None
+                for entry in self.__subflavors__
+            ]
+        return self.__subflavors__.get("__subflavor__", None)
+
     @classmethod
     def derive_from(cls: Type[T_sample], base_sample: "Sample", **kwargs) -> T_sample:
         """
-        Uses the base fields of `Sample` from base_sample (i.e. __key__, __restore_key__, __subflavor__, __subflavors__)
+        Uses the base fields of `Sample` from base_sample (i.e. __key__, __restore_key__, __subflavors__, __sources__)
         and creates a new sample with the kwargs as fields. This is useful for creating new samples, while keeping the
         metadata of the base sample.
 
@@ -382,7 +393,6 @@ class BaseCoreDatasetFactory(Generic[T_sample], ABC):
     __sample_type__: Type[T_sample] = cast(Type[T_sample], None)
     paths: List[EPath]
 
-    subflavor: Optional[str]
     subflavors: Dict[str, Any]
 
     @abstractmethod

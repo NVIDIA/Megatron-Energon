@@ -285,12 +285,6 @@ class TestDataset(unittest.TestCase):
             "ds1",
             "ds2",
         ]
-        assert [raw_dataset.dataset.subflavor for raw_dataset in raw_datasets.datasets] == [
-            "train",
-            "train",
-            None,
-            None,
-        ]
         print([raw_dataset.dataset.subflavors for raw_dataset in raw_datasets.datasets])
         assert [raw_dataset.dataset.subflavors for raw_dataset in raw_datasets.datasets] == [
             {
@@ -298,12 +292,14 @@ class TestDataset(unittest.TestCase):
                 "dataset.yaml": True,
                 "number": 43,
                 "mds": "nested_train",
+                "__subflavor__": "train",
             },
             {
                 "source": "nested_metadataset.yaml",
                 "dataset.yaml": True,
                 "number": 44,
                 "mds": "nested_train",
+                "__subflavor__": "train",
             },
             {
                 "source": "nested_metadataset.yaml",

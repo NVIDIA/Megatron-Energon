@@ -82,6 +82,14 @@ class DatasetReference(DatasetLoaderInterface):
 
     _dataset: Optional[DatasetLoaderInterface] = None
 
+    def __post_init__(self):
+        if self.subflavor is not None:
+            if self.subflavors is None:
+                self.subflavors = {"__subflavor__": self.subflavor}
+            elif "__subflavor__" not in self.subflavors:
+                self.subflavors = {"__subflavor__": self.subflavor, **(self.subflavors or {})}
+            self.subflavor = None
+
     def post_initialize(self, mds_path: Optional[EPath] = None) -> None:
         assert mds_path is not None
         if not isinstance(self.path, EPath):
@@ -98,15 +106,7 @@ class DatasetReference(DatasetLoaderInterface):
             )
             self._dataset.post_initialize()
         elif check_dataset_info_present(self.path):
-            self._dataset = DatasetLoader(
-                path=self.path,
-                split_part=self.split_part,
-                subflavor=self.subflavor,
-                subflavors=self.subflavors,
-                shuffle_over_epochs_multiplier=self.shuffle_over_epochs_multiplier,
-                dataset_config=self.dataset_config,
-                split_config=self.split_config,
-            )
+            self._dataset = DatasetLoader(path=self.path)
             self._dataset.post_initialize()
             if self.aux is not None:
                 new_aux = {}
@@ -134,7 +134,6 @@ class DatasetReference(DatasetLoaderInterface):
         training: bool,
         split_part: Union[Literal["train", "val", "test"], str],
         worker_config: WorkerConfig,
-        subflavor: Optional[str] = None,
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: Optional[int] = 1,
         **kwargs,
@@ -158,7 +157,6 @@ class DatasetReference(DatasetLoaderInterface):
             training=training,
             split_part=self.split_part or split_part,
             worker_config=worker_config,
-            subflavor=subflavor or self.subflavor,
             subflavors=subflavors,
             shuffle_over_epochs_multiplier=new_shuffle_over_epochs_multiplier,
             **kwargs,
@@ -187,7 +185,6 @@ class JoinDatasetReference(DatasetReference):
             return DatasetLoader(
                 path=self.path,
                 split_part=self.split_part,
-                subflavor=self.subflavor,
                 subflavors=self.subflavors,
                 shuffle_over_epochs_multiplier=self.shuffle_over_epochs_multiplier,
                 dataset_config=self.dataset_config,
@@ -216,6 +213,7 @@ class MetadatasetJoin(DatasetLoaderInterface):
     joiner: Union[Type[Sample], Callable[..., Sample]]
 
     split_part: Optional[str] = None
+    # Note: subflavor is only for legacy compatibility.
     subflavor: Optional[str] = None
     subflavors: Optional[Dict[str, Any]] = None
     shuffle_over_epochs_multiplier: Optional[int] = 1
@@ -223,6 +221,14 @@ class MetadatasetJoin(DatasetLoaderInterface):
     split_config: str = "split.yaml"
 
     _dataset: Optional[JoinDatasetLoader] = None
+
+    def __post_init__(self):
+        if self.subflavor is not None:
+            if self.subflavors is None:
+                self.subflavors = {"__subflavor__": self.subflavor}
+            elif "__subflavor__" not in self.subflavors:
+                self.subflavors = {"__subflavor__": self.subflavor, **(self.subflavors or {})}
+            self.subflavor = None
 
     def post_initialize(self, mds_path: Optional[EPath] = None):
         assert mds_path is not None
@@ -254,7 +260,6 @@ class MetadatasetJoin(DatasetLoaderInterface):
             datasets=inner_loaders,
             joiner=self.joiner,
             split_part=self.split_part,
-            subflavor=self.subflavor,
             subflavors=self.subflavors,
             shuffle_over_epochs_multiplier=self.shuffle_over_epochs_multiplier,
             split_config=self.split_config,
@@ -271,7 +276,6 @@ class MetadatasetJoin(DatasetLoaderInterface):
         training: bool,
         split_part: Union[Literal["train", "val", "test"], str],
         worker_config: WorkerConfig,
-        subflavor: Optional[str] = None,
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: Optional[int] = 1,
         **kwargs,
@@ -281,7 +285,6 @@ class MetadatasetJoin(DatasetLoaderInterface):
             training=training,
             split_part=split_part,
             worker_config=worker_config,
-            subflavor=subflavor,
             subflavors=subflavors,
             shuffle_over_epochs_multiplier=shuffle_over_epochs_multiplier,
             **kwargs,
@@ -326,7 +329,6 @@ class MetadatasetBlend(DatasetLoaderInterface):
         training: bool,
         split_part: Union[Literal["train", "val", "test"], str],
         worker_config: WorkerConfig,
-        subflavor: Optional[str] = None,
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: Optional[int] = 1,
         **kwargs,
@@ -338,7 +340,6 @@ class MetadatasetBlend(DatasetLoaderInterface):
                 training=training,
                 split_part=split_part,
                 worker_config=worker_config,
-                subflavor=subflavor,
                 subflavors=subflavors,
                 shuffle_over_epochs_multiplier=shuffle_over_epochs_multiplier,
                 **kwargs,
@@ -407,7 +408,6 @@ class MetadatasetBlendEpochized(DatasetLoaderInterface):
         training: bool,
         split_part: Union[Literal["train", "val", "test"], str],
         worker_config: WorkerConfig,
-        subflavor: Optional[str] = None,
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: Optional[int] = 1,
         **kwargs,
@@ -418,7 +418,6 @@ class MetadatasetBlendEpochized(DatasetLoaderInterface):
                 training=training,
                 split_part=split_part,
                 worker_config=worker_config,
-                subflavor=subflavor,
                 subflavors=subflavors,
                 shuffle_over_epochs_multiplier=shuffle_over_epochs_multiplier,
                 **kwargs,
@@ -484,7 +483,6 @@ class MetadatasetV2(DatasetLoaderInterface):
         training: bool,
         split_part: Union[Literal["train", "val", "test"], str],
         worker_config: WorkerConfig,
-        subflavor: Optional[str] = None,
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: Optional[int] = 1,
         **kwargs,
@@ -493,7 +491,6 @@ class MetadatasetV2(DatasetLoaderInterface):
             training=training,
             split_part=split_part,
             worker_config=worker_config,
-            subflavor=subflavor,
             subflavors=subflavors,
             shuffle_over_epochs_multiplier=shuffle_over_epochs_multiplier,
             **kwargs,

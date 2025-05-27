@@ -26,7 +26,6 @@ class DefaultGenericWebdatasetFactory(BaseWebdatasetFactory[T_sample], Generic[T
         self,
         path: EPath,
         *,
-        subflavor: Optional[str] = None,
         subflavors: Optional[Dict[str, Any]] = None,
         field_map: Optional[Dict[str, str]] = None,
         sample_loader: Optional[Union[str, Callable[[dict], dict]]] = None,
@@ -37,7 +36,6 @@ class DefaultGenericWebdatasetFactory(BaseWebdatasetFactory[T_sample], Generic[T
         Factory for the webdataset sample loader and basic configuration options.
 
         Args:
-            subflavor: Deprecated. Subflavor to set for all loaded samples.
             subflavors: Subflavors dictionary to set for all loaded samples.
             field_map: Mapping from the webdataset fields to the sample fields.
             sample_loader: Function to load the sample from the webdataset fields. May be a string
@@ -96,12 +94,10 @@ class DefaultGenericWebdatasetFactory(BaseWebdatasetFactory[T_sample], Generic[T
             "__key__": sample["__key__"],
             **inner_sample_loader(sample),
             "__restore_key__": sample["__restore_key__"],
-            "__subflavor__": self.subflavor,
             "__subflavors__": self.subflavors,
             "__sources__": sample["__sources__"],
         }
         super().__init__(path, **kwargs, part_filter=part_filter)
-        self.subflavor = subflavor
         self.subflavors = subflavors or {}
 
     def load_sample(self, sample: FilteredSample) -> T_sample:
@@ -110,7 +106,6 @@ class DefaultGenericWebdatasetFactory(BaseWebdatasetFactory[T_sample], Generic[T
     def config(self) -> Dict[str, Any]:
         return dict(
             **super().config(),
-            subflavor=self.subflavor,
             subflavors=self.subflavors,
             sample_loader=SavableDataset._function_config(self._sample_loader),
         )

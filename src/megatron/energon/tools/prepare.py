@@ -43,7 +43,7 @@ def sample_loader_template(fields: dict, parts: list):
 
     fields_str = ""
     for field in fields:
-        if field.name in ("__key__", "__restore_key__", "__subflavor__", "__subflavors__"):
+        if field.name in ("__key__", "__restore_key__", "__subflavors__"):
             continue
         line = f"""        {field.name}=raw["TODO"],  # expected type: {type_str(field.type)}"""
         if field.default is not dataclasses.MISSING:
@@ -329,7 +329,6 @@ def command(
                     if field.name in (
                         "__key__",
                         "__restore_key__",
-                        "__subflavor__",
                         "__subflavors__",
                         "__sources__",
                     ):
