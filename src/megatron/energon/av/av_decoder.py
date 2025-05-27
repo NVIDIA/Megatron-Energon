@@ -211,11 +211,10 @@ class AVDecoder:
                             (frame.pts + average_frame_duration) * frame.time_base
                         )
 
+                    previous_frame_index += 1
+                    
                     if last_frame:
                         break
-                
-                    previous_frame_index += 1
-
 
                 if clip_timestamp_start is not None and clip_timestamp_end is not None:
                     video_clips_frames.append(clip_frames)
