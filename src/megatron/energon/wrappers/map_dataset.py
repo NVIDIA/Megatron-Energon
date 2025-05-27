@@ -115,6 +115,8 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
             self._generator_sample_key = None
             self._generator_offset = None
 
+        last_failures = 0
+
         for sample in self.dataset:
             restore_key = get_sample_restore_key(sample)
             try:
@@ -146,12 +148,21 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
                         sample_idx,
                         src=self,
                     )
+                last_failures = 0
+            except GeneratorExit:
+                raise
             except SkipSample:
                 pass
             except SYSTEM_EXCEPTIONS:
                 raise FatalSampleError.from_sample(sample)
             except Exception as e:
                 self.error_handler(e, sample)
+                last_failures += 1
+                if last_failures > 100:
+                    raise FatalSampleError.from_sample(
+                        sample,
+                        f"MapDataset {self.map_fn} failed 100 times in a row. Likely your dataset is broken.",
+                    )
 
     def can_restore_sample(self) -> bool:
         return super().can_restore_sample() and self.stateless_map_fn
