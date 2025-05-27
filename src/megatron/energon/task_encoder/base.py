@@ -272,16 +272,6 @@ class Batch(PinMemoryMixin, ExtendableDataclassMixin):
     #: Information about the source of the sample, i.e. where the data was loaded from.
     __sources__: Optional[tuple[SourceInfo, ...]] = None
 
-    @property
-    def __subflavor__(self) -> Optional[list[Optional[str]]]:
-        """Deprecated, use __subflavors__ directly instead. This is just a deprecation alias."""
-        if self.__subflavors__ is None:
-            return None
-        return [
-            entry.get("__subflavor__", None) if entry is not None else None
-            for entry in self.__subflavors__
-        ]
-
     @classmethod
     def derive_from(cls: Type[T_batch], base_batch: "Batch", **kwargs) -> T_batch:
         """

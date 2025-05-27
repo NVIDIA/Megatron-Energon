@@ -69,7 +69,6 @@ class DatasetReference(DatasetLoaderInterface):
     path: Union[str, EPath]
 
     split_part: Optional[str] = None
-    subflavor: Optional[str] = None
     subflavors: Optional[Dict[str, Any]] = None
     shuffle_over_epochs_multiplier: Optional[int] = 1
     dataset_config: str = "dataset.yaml"
@@ -81,14 +80,6 @@ class DatasetReference(DatasetLoaderInterface):
     aux: Optional[Dict[str, str]] = None
 
     _dataset: Optional[DatasetLoaderInterface] = None
-
-    def __post_init__(self):
-        if self.subflavor is not None:
-            if self.subflavors is None:
-                self.subflavors = {"__subflavor__": self.subflavor}
-            elif "__subflavor__" not in self.subflavors:
-                self.subflavors = {"__subflavor__": self.subflavor, **(self.subflavors or {})}
-            self.subflavor = None
 
     def post_initialize(self, mds_path: Optional[EPath] = None) -> None:
         assert mds_path is not None
@@ -213,22 +204,12 @@ class MetadatasetJoin(DatasetLoaderInterface):
     joiner: Union[Type[Sample], Callable[..., Sample]]
 
     split_part: Optional[str] = None
-    # Note: subflavor is only for legacy compatibility.
-    subflavor: Optional[str] = None
     subflavors: Optional[Dict[str, Any]] = None
     shuffle_over_epochs_multiplier: Optional[int] = 1
     dataset_config: str = "dataset.yaml"
     split_config: str = "split.yaml"
 
     _dataset: Optional[JoinDatasetLoader] = None
-
-    def __post_init__(self):
-        if self.subflavor is not None:
-            if self.subflavors is None:
-                self.subflavors = {"__subflavor__": self.subflavor}
-            elif "__subflavor__" not in self.subflavors:
-                self.subflavors = {"__subflavor__": self.subflavor, **(self.subflavors or {})}
-            self.subflavor = None
 
     def post_initialize(self, mds_path: Optional[EPath] = None):
         assert mds_path is not None

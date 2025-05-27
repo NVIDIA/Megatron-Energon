@@ -284,9 +284,9 @@ class TestDataset(unittest.TestCase):
         assert all(48 <= v <= 52 for v in Counter(train_order1).values())
 
         train_subflavors = [
-            subflavor
+            subflavor["__subflavor__"]
             for idx, data in zip(range(55), train_loader1)
-            for subflavor in data.__subflavor__
+            for subflavor in data.__subflavors__
         ]
         print(train_subflavors[:10])
         print(Counter(train_subflavors))
@@ -399,9 +399,9 @@ class TestDataset(unittest.TestCase):
         assert all(48 <= v <= 53 for v in Counter(train_order1).values())
 
         train_subflavors = [
-            subflavor
+            subflavor.get("__subflavor__")
             for idx, data in zip(range(55), train_loader1)
-            for subflavor in data.__subflavor__
+            for subflavor in data.__subflavors__
         ]
         cnt = Counter(train_subflavors)
         print(train_subflavors[:10])
@@ -1239,7 +1239,10 @@ class TestDataset(unittest.TestCase):
                 )
                 loader = get_loader(ds)
 
-                subflavors = [data.__subflavor__[0] for idx, data in zip(range(25), loader)]
+                subflavors = [
+                    data.__subflavors__[0].get("__subflavor__")
+                    for idx, data in zip(range(25), loader)
+                ]
 
                 all_ranks_subflavors.append(subflavors)
 

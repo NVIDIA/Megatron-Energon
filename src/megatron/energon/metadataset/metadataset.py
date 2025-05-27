@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from megatron.energon.dataset_config import load_config
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
+from megatron.energon.errors import warn_deprecated
 from megatron.energon.flavors.webdataset.metadata import check_dataset_info_present
 from megatron.energon.metadataset.dataset_loader import DatasetLoader
 from megatron.energon.metadataset.loader_interface import (
@@ -33,6 +34,9 @@ class DatasetReference:
 
     def __post_init__(self):
         if self.subflavor is not None:
+            warn_deprecated(
+                "subflavor is deprecated, use subflavors instead. This will be removed in a future release."
+            )
             if self.subflavors is None:
                 self.subflavors = {"__subflavor__": self.subflavor}
             elif "__subflavor__" not in self.subflavors:
