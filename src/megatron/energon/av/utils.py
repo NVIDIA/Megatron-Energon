@@ -126,6 +126,9 @@ def get_single_frames_uniform(
         video_out_frame_size=video_out_frame_size,
     )
 
+    if len(av_data.video_clips) == 0:
+        raise ValueError("No video frames found")
+
     # Concatenate all video single-frame clips to form a single tensor
     video_tensor = torch.cat(av_data.video_clips, dim=0)
     if return_timestamps:

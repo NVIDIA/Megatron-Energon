@@ -167,18 +167,15 @@ class AVDecoder:
                     input_container.seek(iframe_info.pts, stream=input_container.streams.video[0])
                     previous_frame_index = iframe_info.index
 
-                for i, frame in enumerate(frame_iterator):
+                for frame in frame_iterator:
                     take_frame = False
                     last_frame = False
 
                     # Container uses frame counts, we can find the exact target frame by counting from the iframe which is at a known offset
                     if self.seeker.unit == "frames":
-                        if previous_frame_index + i >= start_frame_index:
+                        if previous_frame_index >= start_frame_index:
                             take_frame = True
-                        if (
-                            end_frame_index is not None
-                            and previous_frame_index + i >= end_frame_index
-                        ):
+                        if end_frame_index is not None and previous_frame_index >= end_frame_index:
                             last_frame = True
 
                     # Container uses time, the target frame might not correspond exactly to any metadata but the desired timestamp should
@@ -211,11 +208,10 @@ class AVDecoder:
                             (frame.pts + average_frame_duration) * frame.time_base
                         )
 
+                    previous_frame_index += 1
+
                     if last_frame:
                         break
-
-                # Add the number of frames we iterated over to the previous frame index
-                previous_frame_index += i + 1
 
                 if clip_timestamp_start is not None and clip_timestamp_end is not None:
                     video_clips_frames.append(clip_frames)
