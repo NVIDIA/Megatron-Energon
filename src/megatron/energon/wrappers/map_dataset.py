@@ -132,6 +132,8 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
                 self._generator_sample_key = None
                 self._generator_offset = None
 
+            last_failures = 0
+
             for sample in self.dataset:
                 restore_key = get_sample_restore_key(sample)
                 try:
@@ -154,6 +156,7 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
                             level=2,
                         ):
                             self._generator_offset = idx + 1
+                            last_failures = 0
                             with trace_gen.yield_(last_args={"sample_idx": sample_idx, "idx": idx}):
                                 yield add_sample_restore_key(
                                     inner_sample,
@@ -164,12 +167,15 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
                         self._generator_sample_key = None
                         self._generator_offset = None
                     else:
+                        last_failures = 0
                         with trace_gen.yield_(last_args={"sample_idx": sample_idx}):
                             yield add_sample_restore_key(
                                 mapped_sample,
                                 sample_idx,
                                 src=self,
                             )
+                except GeneratorExit:
+                    raise
                 except SkipSample:
                     trace_span.instant(f"{map_dataset_prefix}.__iter__.skip", level=1)
                 except SYSTEM_EXCEPTIONS:
@@ -181,6 +187,12 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
                         args={"exception": f"{type(e).__name__}: {str(e)}"},
                         level=1,
                     )
+                    last_failures += 1
+                    if last_failures > 100:
+                        raise FatalSampleError.from_sample(
+                            sample,
+                            f"MapDataset {self.map_fn} failed 100 times in a row. Likely your dataset is broken.",
+                        )
 
     def can_restore_sample(self) -> bool:
         return super().can_restore_sample() and self.stateless_map_fn

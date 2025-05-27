@@ -3,6 +3,7 @@
 
 import hashlib
 import multiprocessing
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar, Dict, List, Optional, TextIO, TypeVar
 
@@ -10,7 +11,6 @@ import torch.distributed
 import torch.utils.data
 
 from megatron.energon.cache import CachePool
-from megatron.energon.edataclass import edataclass
 from megatron.energon.fork_hook import DataclassForkMixin
 from megatron.energon.tracing import NOOP_TRACE_WRITER, AsyncContext, Flow, TraceWriter
 
@@ -19,7 +19,7 @@ __all__ = ("WorkerConfig",)
 T = TypeVar("T")
 
 
-@edataclass(eq=False)
+@dataclass(slots=True, kw_only=True, eq=False)
 class WorkerConfig(DataclassForkMixin):
     """
     Provides information about the current worker and the global configuration. This gives each

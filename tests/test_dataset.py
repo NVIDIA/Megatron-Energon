@@ -34,6 +34,7 @@ from megatron.energon import (
     DefaultTaskEncoder,
     MapDataset,
     MixBatchDataset,
+    Sample,
     SavableDataLoader,
     SourceInfo,
     TaskEncoder,
@@ -77,9 +78,7 @@ class ExtendedCaptioningSample(CaptioningSample):
 
 
 @edataclass
-class EncodedCaptioningSample:
-    __key__: str
-    __restore_key__: Tuple[Union[str, int, tuple], ...]
+class EncodedCaptioningSample(Sample):
     image: torch.Tensor
     caption: torch.Tensor
 
@@ -91,8 +90,6 @@ class CaptioningEncodedBatch(CaptioningSample):
 
 @edataclass
 class CaptioningBatch(Batch):
-    __key__: List[str]
-    __restore_key__: Tuple[Union[str, int, tuple], ...]
     image: torch.Tensor
     caption: torch.Tensor
 
@@ -469,9 +466,8 @@ class TestDataset(unittest.TestCase):
                 super().__init__(raw_batch_type=CaptioningBatch)
 
             def encode_sample(self, sample: CaptioningSample) -> EncodedCaptioningSample:
-                return EncodedCaptioningSample(
-                    __key__=sample.__key__,
-                    __restore_key__=sample.__restore_key__,
+                return EncodedCaptioningSample.derive_from(
+                    sample,
                     image=sample.image,
                     caption=torch.frombuffer(bytearray(sample.caption.encode()), dtype=torch.uint8),
                 )
@@ -1379,9 +1375,8 @@ class TestDataset(unittest.TestCase):
 
             @stateless
             def encode_sample(self, sample: CaptioningSample) -> EncodedCaptioningSample:
-                return EncodedCaptioningSample(
-                    __key__=sample.__key__,
-                    __restore_key__=sample.__restore_key__,
+                return EncodedCaptioningSample.derive_from(
+                    sample,
                     image=sample.image,
                     caption=torch.frombuffer(sample.caption.encode(), dtype=torch.uint8),
                 )
@@ -1512,9 +1507,8 @@ class TestDataset(unittest.TestCase):
 
             @stateless
             def encode_sample(self, sample: CaptioningSample) -> EncodedCaptioningSample:
-                return EncodedCaptioningSample(
-                    __key__=sample.__key__,
-                    __restore_key__=sample.__restore_key__,
+                return EncodedCaptioningSample.derive_from(
+                    sample,
                     image=sample.image,
                     caption=torch.frombuffer(sample.caption.encode(), dtype=torch.uint8),
                 )
