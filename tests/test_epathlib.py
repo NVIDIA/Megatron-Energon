@@ -136,7 +136,9 @@ class TestEPath(unittest.TestCase):
         os.environ["HOME"] = "/tmp/XDG_CONFIG_HOME"
         # Hack to clear the cache of the rclone config for msc to get the "s3" profile
         from multistorageclient.rclone import read_rclone_config
+
         read_rclone_config.cache_clear()
+
         try:
             # Test globbing
             p = EPath("msc://s3/tmp/path/subpath.txt")
