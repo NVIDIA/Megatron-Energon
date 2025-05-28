@@ -17,6 +17,7 @@ from unittest.mock import patch
 
 import torch
 import webdataset as wds
+from epath_s3_emulator import setup_s3_emulator
 
 from megatron.energon import (
     Sample,
@@ -1172,6 +1173,45 @@ class TestDataset(unittest.TestCase):
 
         mock_watchdog_trigger.assert_called()
 
+    def test_s3(self):
+        with setup_s3_emulator():
+            # Upload the dataset to the S3 emulator
+            EPath(self.dataset_path).copy(EPath("msc://s3/test/dataset"))
+
+            mds_path = EPath("msc://s3/test/dataset/nested_metadataset_v2.yaml")
+
+            assert mds_path.is_file()
+
+            train_dataset = get_loader(get_train_dataset(
+                mds_path,
+                worker_config=WorkerConfig(
+                    rank=0,
+                    world_size=1,
+                    num_workers=0,
+                    seed_offset=42,
+                ),
+                batch_size=1,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                virtual_epoch_length=10,
+            ))
+
+            data = list(enumerate(train_dataset))
+            assert len(data) == 10, len(data)
+            assert data[0][1].text[0] == "1"
+            assert data[1][1].text[0] == "2"
+            assert data[2][1].text[0] == "3"
+            assert data[3][1].text[0] == "4"
+            assert data[4][1].text[0] == "5"
+
+
+
 
 if __name__ == "__main__":
-    unittest.main()
+    # unittest.main()
+    t = TestDataset()
+    t.setUp()
+    try:
+        t.test_s3()
+    finally:
+        t.tearDown()
