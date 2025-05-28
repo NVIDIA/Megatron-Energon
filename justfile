@@ -16,6 +16,8 @@ prod-sync:
 fix: dev-sync
     uv run ruff check --fix
     uv run ruff format
+    uv run scripts/license_headers.py src --fix
+    uv run scripts/license_headers.py tests --fix
 
 # Execute the ruff code linter and format checker
 check: dev-sync
