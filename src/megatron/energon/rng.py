@@ -55,7 +55,15 @@ class WorkerRng(Savable):
         if len(probs) == 1:
             return 0
         else:
-            return torch.multinomial(probs, 1, replacement=True, generator=self.rng).item()
+            # Custom implementation of multinomial to ensure consistency
+            # Torch changed their implementation of torch.multinomial in 2.7.0 and to be
+            # consistent with any torch version, we use a custom implementation here instead.
+            # This is anyways just a very simple case of multinomial, thus this should be fine.
+            # Actually, benchmarks show that this is faster than torch.multinomial by a factor of
+            # 10 even on CPU.
+            cdf = torch.cumsum(probs, dim=0)
+            val = torch.rand(1, generator=self.rng) * cdf[-1]
+            return torch.searchsorted(cdf, val).item()
 
     def choice(self, l: List[T], probs: Optional[torch.Tensor] = None) -> T:
         if probs is None:

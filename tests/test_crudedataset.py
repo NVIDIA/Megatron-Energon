@@ -640,41 +640,41 @@ class TestDataset(unittest.TestCase):
             # Primary source for the sample, reading all source files
             SourceInfo(
                 dataset_path=EPath(self.dataset_path / "ds1"),
-                index=10,
-                shard_name="parts/data-1.tar",
-                file_names=("000010.pkl", "000010.txt"),
+                index=2,
+                shard_name="parts/data-0.tar",
+                file_names=("000002.pkl", "000002.txt"),
             ),
             # Auxiliary source for the sample, reading from ds2
             SourceInfo(
                 dataset_path=EPath(self.dataset_path / "ds2"),
-                index="000110.txt",
-                shard_name="parts/data-1.tar",
-                file_names=("000110.txt",),
+                index="000102.txt",
+                shard_name="parts/data-0.tar",
+                file_names=("000102.txt",),
             ),
             # Auxiliary source for the sample, reading from ds1, but next sample
             SourceInfo(
                 dataset_path=EPath(self.dataset_path / "ds1"),
-                index="000011.txt",
-                shard_name="parts/data-1.tar",
-                file_names=("000011.txt",),
+                index="000003.txt",
+                shard_name="parts/data-0.tar",
+                file_names=("000003.txt",),
             ),
             SourceInfo(
                 dataset_path=EPath(self.dataset_path / "ds1"),
-                index=11,
-                shard_name="parts/data-1.tar",
-                file_names=("000011.pkl", "000011.txt"),
+                index=21,
+                shard_name="parts/data-2.tar",
+                file_names=("000021.pkl", "000021.txt"),
             ),
             SourceInfo(
                 dataset_path=EPath(self.dataset_path / "ds2"),
-                index="000111.txt",
-                shard_name="parts/data-1.tar",
-                file_names=("000111.txt",),
+                index="000121.txt",
+                shard_name="parts/data-2.tar",
+                file_names=("000121.txt",),
             ),
             SourceInfo(
                 dataset_path=EPath(self.dataset_path / "ds1"),
-                index="000012.txt",
-                shard_name="parts/data-1.tar",
-                file_names=("000012.txt",),
+                index="000022.txt",
+                shard_name="parts/data-2.tar",
+                file_names=("000022.txt",),
             ),
         )
 
