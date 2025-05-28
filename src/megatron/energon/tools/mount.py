@@ -6,7 +6,7 @@ import stat
 from errno import EBADF, ENOENT
 from pathlib import Path
 from sqlite3 import OperationalError
-from typing import Generator, TypedDict
+from typing import Generator
 
 import click
 from mfusepy import FUSE, FuseOSError, Operations
@@ -15,27 +15,6 @@ from megatron.energon.cache.file_store import WebdatasetFileStore
 from megatron.energon.epathlib import EPath
 
 MULTI_WARN = "WARNING_SAME_KEY_IN_MULTIPLE_TAR_FILES"
-
-
-class fsinfo(TypedDict):
-    f_bsize: int
-    f_blocks: int
-    f_bavail: int
-    f_bfree: int
-    f_files: int
-    f_ffree: int
-    f_namemax: int
-
-
-class fileinfo(TypedDict, total=False):
-    st_mode: int
-    st_nlink: int
-    st_size: int
-    st_ctime: float
-    st_mtime: float
-    st_atime: float
-    st_uid: int
-    st_gid: int
 
 
 class EnergonFS(Operations):
@@ -97,7 +76,7 @@ class EnergonFS(Operations):
 
         self._print = print_debug
 
-    def statfs(self, path: str) -> fsinfo:
+    def statfs(self, path: str) -> dict:
         """Return information about the file system.
 
         This is called when the user runs `df` on the mount point.
@@ -108,7 +87,7 @@ class EnergonFS(Operations):
             self._total_size = self._wds_filestore.get_total_size()
             print(f"done: {self._total_size} bytes")
 
-        return fsinfo(
+        return dict(
             f_bsize=512,
             f_blocks=self._total_size // 512,
             f_bavail=0,
@@ -118,7 +97,7 @@ class EnergonFS(Operations):
             f_namemax=1024,
         )
 
-    def getattr(self, path: str, fh: int = 0) -> fileinfo:
+    def getattr(self, path: str, fh: int = 0) -> dict:
         """Return information about one file or folder.
 
         This is called when using `ls -l` etc.
@@ -138,7 +117,7 @@ class EnergonFS(Operations):
             raise FuseOSError(ENOENT)
 
         if path == "/":
-            return fileinfo(
+            return dict(
                 st_mode=0o555 | stat.S_IFDIR,
                 st_nlink=2,
                 st_size=0,
@@ -153,7 +132,7 @@ class EnergonFS(Operations):
         path = path[1:]
 
         if path.endswith(MULTI_WARN):
-            return fileinfo(
+            return dict(
                 st_mode=0o000 | stat.S_IFBLK,
                 st_nlink=1,
                 st_size=0,
@@ -194,7 +173,7 @@ class EnergonFS(Operations):
             file_size = self._all_sample_parts[path]
             mode = 0o444 | stat.S_IFREG
 
-        return fileinfo(
+        return dict(
             st_mode=mode,
             st_nlink=1,
             st_size=file_size,
