@@ -6,14 +6,36 @@ import stat
 from errno import EBADF, ENOENT
 from pathlib import Path
 from sqlite3 import OperationalError
+from typing import Generator, TypedDict
 
 import click
 from mfusepy import FUSE, FuseOSError, Operations
 
+from megatron.energon.cache.file_store import WebdatasetFileStore
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.webdataset.file_store import WebdatasetFileStore
 
 MULTI_WARN = "WARNING_SAME_KEY_IN_MULTIPLE_TAR_FILES"
+
+
+class fsinfo(TypedDict):
+    f_bsize: int
+    f_blocks: int
+    f_bavail: int
+    f_bfree: int
+    f_files: int
+    f_ffree: int
+    f_namemax: int
+
+
+class fileinfo(TypedDict, total=False):
+    st_mode: int
+    st_nlink: int
+    st_size: int
+    st_ctime: float
+    st_mtime: float
+    st_atime: float
+    st_uid: int
+    st_gid: int
 
 
 class EnergonFS(Operations):
@@ -75,7 +97,7 @@ class EnergonFS(Operations):
 
         self._print = print_debug
 
-    def statfs(self, path):
+    def statfs(self, path: str) -> fsinfo:
         """Return information about the file system.
 
         This is called when the user runs `df` on the mount point.
@@ -86,7 +108,7 @@ class EnergonFS(Operations):
             self._total_size = self._wds_filestore.get_total_size()
             print(f"done: {self._total_size} bytes")
 
-        return dict(
+        return fsinfo(
             f_bsize=512,
             f_blocks=self._total_size // 512,
             f_bavail=0,
@@ -96,7 +118,7 @@ class EnergonFS(Operations):
             f_namemax=1024,
         )
 
-    def getattr(self, path: str, fh: int = 0):
+    def getattr(self, path: str, fh: int = 0) -> fileinfo:
         """Return information about one file or folder.
 
         This is called when using `ls -l` etc.
@@ -116,7 +138,7 @@ class EnergonFS(Operations):
             raise FuseOSError(ENOENT)
 
         if path == "/":
-            return dict(
+            return fileinfo(
                 st_mode=0o555 | stat.S_IFDIR,
                 st_nlink=2,
                 st_size=0,
@@ -131,7 +153,7 @@ class EnergonFS(Operations):
         path = path[1:]
 
         if path.endswith(MULTI_WARN):
-            return dict(
+            return fileinfo(
                 st_mode=0o000 | stat.S_IFBLK,
                 st_nlink=1,
                 st_size=0,
@@ -172,7 +194,7 @@ class EnergonFS(Operations):
             file_size = self._all_sample_parts[path]
             mode = 0o444 | stat.S_IFREG
 
-        return dict(
+        return fileinfo(
             st_mode=mode,
             st_nlink=1,
             st_size=file_size,
@@ -203,7 +225,7 @@ class EnergonFS(Operations):
 
         return path_parts[0], part_name
 
-    def readdir(self, path: str, fh: int = 0):
+    def readdir(self, path: str, fh: int = 0) -> Generator[str, None, None]:
         """List the contents of a directory.
 
         This is called when using `ls` etc.
@@ -255,7 +277,7 @@ class EnergonFS(Operations):
             for key in self._samples_with_multiple_tar_files:
                 yield f"{key}.{MULTI_WARN}"
 
-    def open(self, path: str, flags: int = 0):
+    def open(self, path: str, flags: int = 0) -> int:
         """Open a file for reading.
 
         Actually, we already read the file into memory when it is opened.
@@ -290,7 +312,7 @@ class EnergonFS(Operations):
         # dummy file handle
         return 0
 
-    def read(self, path: str, size: int, offset: int, fh: int = 0):
+    def read(self, path: str, size: int, offset: int, fh: int = 0) -> bytes:
         """Read from an open file.
 
         This is called when using `read` etc.
@@ -309,7 +331,7 @@ class EnergonFS(Operations):
         data = self._open_files[path]
         return data[offset : offset + size]
 
-    def release(self, path: str, fh: int = 0):
+    def release(self, path: str, fh: int = 0) -> None:
         """Release an open file.
 
         This is called when the file is closed. We can now discard the memory buffer.
@@ -324,7 +346,7 @@ class EnergonFS(Operations):
             raise FuseOSError(ENOENT)
         del self._open_files[path]
 
-    def destroy(self, path: str):
+    def destroy(self, path: str) -> None:
         print("Closing energon mount.")
         if len(self._open_files) > 0:
             print(f"Number of still open files: {len(self._open_files)}")
