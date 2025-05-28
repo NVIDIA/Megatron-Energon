@@ -43,6 +43,7 @@ You can use this URL instead of paths to datasets in
 * Functions like `get_train_dataset`, `get_val_dataset`
 * Inside [metadataset](../basic/metadataset) specifications
 * As arguments to `energon prepare` or `energon lint`. Note that those may be slow for remote locations.
+* Or as a path to [`energon mount`](energon-mount) to locally inspect your remote dataset 😎
 
 Example usage:
 

@@ -8,6 +8,7 @@ import random
 import re
 import tarfile
 import uuid
+from dataclasses import asdict
 from pathlib import Path
 from typing import (
     Any,
@@ -28,6 +29,7 @@ import braceexpand
 import yaml
 
 from megatron.energon.bracecollapse import collapse
+from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
 from megatron.energon.eyaml import load_yaml
 from megatron.energon.flavors.webdataset.aggregator_pool import AggregatorPool, BaseAggregator
@@ -40,6 +42,40 @@ from megatron.energon.typed_converter import to_json_object
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T", covariant=True)
+
+
+@edataclass
+class IndexAggregatable:
+    """
+    A base class for all objects that can be returned/yielded by `_preprocess_tar` and
+    received by `SqliteIndexWriterAggregator.on_item`.
+    """
+
+    ...
+
+
+@edataclass
+class IndexSample(IndexAggregatable):
+    tar_file_id: int
+    sample_key: str
+    sample_index: int
+    byte_offset: int
+    byte_size: int
+
+
+@edataclass
+class IndexSamplePart(IndexAggregatable):
+    tar_file_id: int
+    sample_index: int
+    part_name: str
+    content_byte_offset: int
+    content_byte_size: int
+
+
+@edataclass
+class IndexShardInfo(IndexAggregatable):
+    shard_info: ShardInfo
+    parts: Set[str]
 
 
 class SqliteIndexWriterAggregator(
@@ -79,18 +115,20 @@ class SqliteIndexWriterAggregator(
 
     def on_item(
         self,
-        item: Union[Dict[str, Any], Tuple[ShardInfo, Set[str]]],
+        item: IndexAggregatable,
         aggregator_pool: AggregatorPool,
     ) -> None:
         assert self.writer is not None, "Writer is not initialized."
-        if isinstance(item, dict):
-            self.writer.append_sample(**item)
+        if isinstance(item, IndexSample):
+            self.writer.append_sample(**asdict(item))
             self.had_update = True
-        elif isinstance(item, tuple):
+        elif isinstance(item, IndexSamplePart):
+            self.writer.append_part(**asdict(item))
+        elif isinstance(item, IndexShardInfo):
             # This is a (shard_info, parts) tuple
             next(self.prog_iter)
 
-            shard_info, cur_parts = item
+            shard_info, cur_parts = item.shard_info, item.parts
             assert shard_info.count != 0, f"Shard {shard_info.name} has no samples."
             self.shards.append(shard_info)
             if len(self.found_parts) < 50:
@@ -114,7 +152,7 @@ class WebdatasetPreparator:
         shard_to_idx: Dict[str, int],
         parent_path: EPath,
         max_parts: int,
-    ) -> Generator[Tuple[ShardInfo, Set[str]], None, None]:
+    ) -> Generator[IndexAggregatable, None, None]:
         """Process a single tar file, i.e. read the tarinfos, generate the tar index and return
         stats.
         This method is passed to the `user_produce_data` argument of AggregatorPool.
@@ -144,7 +182,11 @@ class WebdatasetPreparator:
                     TarIndexWriter(shard_info.path) as iw,
                 ):
                     count = 0
+
+                    # The parts set is used to collect various file endings that are
+                    # available in the dataset. This is used for the interactive prepare wizard.
                     parts = set()
+
                     last_base_name = None
                     member: tarfile.TarInfo
 
@@ -173,7 +215,7 @@ class WebdatasetPreparator:
                                 next_index_sample["byte_size"] = (
                                     member.offset - next_index_sample["byte_offset"]
                                 )
-                                yield next_index_sample
+                                yield IndexSample(**next_index_sample)
 
                             next_index_sample = dict(
                                 tar_file_id=shard_to_idx[path],
@@ -183,18 +225,28 @@ class WebdatasetPreparator:
                             )
                             last_base_name = base_name
                             count += 1
+
+                        # Yield this part of the sample to the aggregator
+                        yield IndexSamplePart(
+                            tar_file_id=shard_to_idx[path],
+                            sample_index=count - 1,
+                            part_name=name_match.group(2),
+                            content_byte_offset=member.offset_data,
+                            content_byte_size=member.size,
+                        )
+
                     shard_info.count = count
                     iw.append(tar.offset)
                     if next_index_sample is not None:
                         next_index_sample["byte_size"] = (
                             tar.offset - next_index_sample["byte_offset"]
                         )
-                        yield next_index_sample
-            yield shard_info, parts
+                        yield IndexSample(**next_index_sample)
+            yield IndexShardInfo(shard_info=shard_info, parts=parts)
             return
         except BaseException:
             logger.exception(f"Shard failed to load: {path!r}. Skipping it.")
-            yield shard_info, set()
+            yield IndexShardInfo(shard_info=shard_info, parts=set())
             return
 
     @staticmethod
