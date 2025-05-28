@@ -41,7 +41,7 @@ def ensure_local_copy(path: EPath) -> EPath:
 
         # We are the downloader
         try:
-            path.download(EPath(tmp_path))
+            path.copy(EPath(tmp_path))
             tmp_path.rename(final_path)
         finally:
             tmp_path.unlink(missing_ok=True)

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import re
+import shutil
 from pathlib import Path as PathlibPath
 from pathlib import PurePosixPath
 from typing import BinaryIO, Generator, Literal, Optional, TextIO, Tuple, Union, overload
@@ -125,16 +126,24 @@ class EPath:
         with self.open("rb") as f:
             return f.read()
 
-    def download(self, target: "EPath") -> None:
-        """Download the file to a local path.
+    def copy(self, target: "EPath") -> None:
+        """Copy a file to a new path, possibly between different file systems.
 
         Args:
             target: The path to the local file to download to.
         """
 
-        assert target.is_local(), "Can only download to local paths"
-        with self.open("rb") as f, target.open("wb") as f_target:
-            f_target.write(f.read())
+        if self.fs == target.fs:
+            self.fs.copy(self._internal_str_path, target._internal_str_path)
+        elif target.is_local():
+            # Note, src and target are swapped for these calls.
+            self.fs.download_file(target._internal_str_path, self._internal_str_path)
+        elif self.is_local():
+            # Note, src and target are swapped for these calls.
+            self.fs.upload_file(target._internal_str_path, self._internal_str_path)
+        else:
+            with self.open("rb") as src_f, target.open("wb") as dst_f:
+                shutil.copyfileobj(src_f, dst_f)
 
     @property
     def name(self) -> str:
@@ -185,10 +194,8 @@ class EPath:
         return new_path
 
     def move(self, target: "EPath") -> None:
-        assert self.profile == target.profile, "Can only move within same profile"
-
-        self.fs.copy(self._internal_str_path, target._internal_str_path)
-        self.fs.delete(self._internal_str_path)
+        self.copy(target)
+        self.unlink()
 
     def unlink(self) -> None:
         return self.fs.delete(self._internal_str_path)

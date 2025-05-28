@@ -22,7 +22,12 @@ class EnergonFS(Operations):
     """
 
     def __init__(
-        self, db_path: EPath, *, sample_folders: bool = False, print_debug: int = 0, allow_slow_mode: bool = False
+        self,
+        db_path: EPath,
+        *,
+        sample_folders: bool = False,
+        print_debug: int = 0,
+        allow_slow_mode: bool = False,
     ) -> None:
         self._sample_folders = sample_folders
 
@@ -37,7 +42,9 @@ class EnergonFS(Operations):
                     self._all_sample_parts[key] = size
         except OperationalError:
             if not allow_slow_mode:
-                raise RuntimeError("The dataset was prepared with an older version of energon. Either update the dataset, or allow slow mode.")
+                raise RuntimeError(
+                    "The dataset was prepared with an older version of energon. Either update the dataset, or allow slow mode."
+                )
             else:
                 assert sample_folders, "Only sample_folders mode is supported when using slow mode."
                 self._slow_mode = True
@@ -138,15 +145,17 @@ class EnergonFS(Operations):
                 # This is a sample part (file)
                 if folder not in self._all_samples:
                     raise FuseOSError(ENOENT)
-                
+
                 full_name = f"{folder}.{part_name}"
 
                 if self._slow_mode and full_name not in self._all_sample_parts:
                     # Slow mode
-                    for entry, size, tar_file_id in self._wds_filestore.list_sample_parts(folder, slow_mode=True):
+                    for entry, size, tar_file_id in self._wds_filestore.list_sample_parts(
+                        folder, slow_mode=True
+                    ):
                         cur_full_name = f"{folder}.{entry}"
                         self._all_sample_parts[cur_full_name] = size
-                
+
                 if full_name not in self._all_sample_parts:
                     raise FuseOSError(ENOENT)
                 file_size = self._all_sample_parts[full_name]
@@ -223,7 +232,9 @@ class EnergonFS(Operations):
                 yield ".."
 
                 single_tar_id = None
-                all_entries = list(self._wds_filestore.list_sample_parts(folder, slow_mode=self._slow_mode))
+                all_entries = list(
+                    self._wds_filestore.list_sample_parts(folder, slow_mode=self._slow_mode)
+                )
                 for entry, size, tar_file_id in all_entries:
                     if single_tar_id is None:
                         single_tar_id = tar_file_id
