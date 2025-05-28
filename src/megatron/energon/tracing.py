@@ -1,4 +1,5 @@
-from __future__ import annotations
+# Copyright (c) 2025, NVIDIA CORPORATION.
+# SPDX-License-Identifier: BSD-3-Clause
 
 import gc
 import json
