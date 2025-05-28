@@ -1,4 +1,3 @@
-import time
 import urllib.parse as _up
 from datetime import datetime, timezone
 from email.utils import formatdate

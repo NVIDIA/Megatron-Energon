@@ -126,6 +126,14 @@ class EPath:
         with self.open("rb") as f:
             return f.read()
 
+    def write_text(self, text: str) -> None:
+        with self.open("w") as f:
+            f.write(text)
+
+    def write_bytes(self, data: bytes) -> None:
+        with self.open("wb") as f:
+            f.write(data)
+
     def copy(self, target: "EPath") -> None:
         """Copy a file to a new path, possibly between different file systems.
 
@@ -213,7 +221,7 @@ class EPath:
         if isinstance(other, EPath):
             # Always absolute
             return other
-        if other.startswith("/"):
+        if other.startswith("/") or "://" in other:
             return EPath(other)
 
         new_path = EPath(self)

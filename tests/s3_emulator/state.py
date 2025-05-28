@@ -172,6 +172,21 @@ class S3State:
         with self._lock:
             self._uploads.pop(upload_id, None)
 
+    # ======================================================================
+    # File helpers
+    # ======================================================================
+
+    def add_file(self, src: Path, dst: str):
+        if src.is_dir():
+            dst = dst.removesuffix("/")
+            for file in src.iterdir():
+                self.add_file(file, dst=f"{dst}/{file.name}")
+        elif src.is_file():
+            bucket, key = dst.removeprefix("/").split("/", 1)
+            self.put_object(bucket, key, src.read_bytes())
+        else:
+            raise ValueError(f"Invalid file: {src}")
+
 
 # ----------------------------------------------------------------------
 # Internal helper data structures
