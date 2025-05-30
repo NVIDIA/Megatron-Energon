@@ -34,43 +34,62 @@ def setup_s3_emulator(
     """
 
     print("BEFORE s3_emulator", flush=True)
-    with s3_emulator(
-        host="127.0.0.1",
-        port=port,
-        credentials={access_key: secret_key},
-        root_dir=root_dir,
-        region=region,
-    ) as emu:
-        # Create config directory
-        config_dir = Path("/tmp/XDG_CONFIG_HOME/.config/rclone")
-        config_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        with s3_emulator(
+            host="127.0.0.1",
+            port=port,
+            credentials={access_key: secret_key},
+            root_dir=root_dir,
+            region=region,
+        ) as emu:
+            # Create config directory
+            config_dir = Path("/tmp/XDG_CONFIG_HOME/.config/rclone")
+            config_dir.mkdir(parents=True, exist_ok=True)
 
-        # Write rclone config
-        config_path = config_dir / "rclone.conf"
-        with config_path.open("w") as f:
-            f.write(
-                "\n".join(
-                    [
-                        "[s3]",
-                        "type = s3",
-                        "env_auth = false",
-                        f"access_key_id = {access_key}",
-                        f"secret_access_key = {secret_key}",
-                        f"region = {region}",
-                        f"endpoint = http://127.0.0.1:{emu.port}",
-                    ]
+            # Write rclone config
+            config_path = config_dir / "rclone.conf"
+            with config_path.open("w") as f:
+                f.write(
+                    "\n".join(
+                        [
+                            "[s3]",
+                            "type = s3",
+                            "env_auth = false",
+                            f"access_key_id = {access_key}",
+                            f"secret_access_key = {secret_key}",
+                            f"region = {region}",
+                            f"endpoint = http://127.0.0.1:{emu.port}",
+                        ]
+                    )
                 )
-            )
 
-        # Set environment variables
-        os.environ["XDG_CONFIG_HOME"] = "/tmp/XDG_CONFIG_HOME/.config"
-        os.environ["HOME"] = "/tmp/XDG_CONFIG_HOME"
+            # Set environment variables
+            os.environ["XDG_CONFIG_HOME"] = "/tmp/XDG_CONFIG_HOME/.config"
+            os.environ["HOME"] = "/tmp/XDG_CONFIG_HOME"
 
-        # Hack to clear the cache of the rclone config for msc to get the "s3" profile
-        read_rclone_config.cache_clear()
+            # Hack to clear the cache of the rclone config for msc to get the "s3" profile
+            read_rclone_config.cache_clear()
 
-        yield emu.state
+            print("s3_emulator: BEFORE yield", flush=True)
+            yield emu.state
+            print("s3_emulator: AFTER yield", flush=True)
 
-        read_rclone_config.cache_clear()
+            read_rclone_config.cache_clear()
+    finally:
+        print("END OF s3_emulator", flush=True)
+        # Show all threads of the current PID that are still running
+        import threading
 
-    print("AFTER s3_emulator", flush=True)
+        import psutil
+
+        print("Python threads:", flush=True)
+        for t in threading.enumerate():
+            print(getattr(t, "native_id", None), t.name, t.ident, flush=True)
+
+        print("All threads:", flush=True)
+
+        p = psutil.Process()
+        for th in p.threads():
+            print(th.id, th, flush=True)
+
+        print("AFTER s3_emulator", flush=True)
