@@ -75,6 +75,13 @@ def setup_s3_emulator(
             print("s3_emulator: AFTER yield", flush=True)
 
             read_rclone_config.cache_clear()
+    except Exception as e:
+        print("ERROR in s3_emulator", flush=True)
+        print("Full traceback:", flush=True)
+        import traceback
+
+        traceback.print_exc()
+        raise e
     finally:
         print("END OF s3_emulator", flush=True)
         # Show all threads of the current PID that are still running
