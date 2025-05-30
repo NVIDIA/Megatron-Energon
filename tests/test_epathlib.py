@@ -262,8 +262,8 @@ class TestEPath(unittest.TestCase):
 
     def test_msc_s3(self):
         # Test S3 with MSC
-        with setup_s3_emulator():
-            p = EPath("msc://s3/test/file.txt")
+        with setup_s3_emulator(profile_name="s3test_msc"):
+            p = EPath("msc://s3test_msc/test/file.txt")
             assert not p.is_file()
             p.write_text("dummy")
             assert p.is_file()

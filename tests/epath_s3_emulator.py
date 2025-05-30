@@ -19,6 +19,7 @@ def setup_s3_emulator(
     secret_key: str = "test",
     root_dir: str | None = None,
     region: str = "us-east-1",
+    profile_name: str = "s3test",
 ) -> Generator[S3State, None, None]:
     """Set up S3 emulator and write necessary config files.
 
@@ -52,7 +53,7 @@ def setup_s3_emulator(
                 f.write(
                     "\n".join(
                         [
-                            "[s3]",
+                            f"[{profile_name}]",
                             "type = s3",
                             "env_auth = false",
                             f"access_key_id = {access_key}",
