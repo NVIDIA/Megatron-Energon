@@ -50,7 +50,7 @@ class S3EmulatorServer:
 
         self._httpd: ThreadingHTTPServer = _Server((host, port), S3RequestHandler)
         self._thread: threading.Thread | None = None
-        print(f"S3 emulator listening on http://{host}:{self.port}")
+        print(f"S3 emulator on http://{host}:{self.port}", flush=True)
 
     @property
     def port(self) -> int:
@@ -93,6 +93,8 @@ class S3EmulatorServer:
         deadline = time.perf_counter() + timeout
         host, port = self._httpd.server_address
 
+        print(f"S3 emulator waiting for {host}:{port} to start", flush=True)
+
         while time.perf_counter() < deadline:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
                 sock.settimeout(poll)
@@ -102,8 +104,10 @@ class S3EmulatorServer:
                     time.sleep(poll)
                 else:
                     # Successfully connected - server is ready
+                    print(f"S3 emulator started up on {host}:{port}", flush=True)
                     return
 
+        print(f"S3 emulator failed to start within {timeout} s on {host}:{port}", flush=True)
         raise RuntimeError(f"S3 emulator failed to start within {timeout} s on {host}:{port}")
 
     def join(self, timeout: float | None = None):  # noqa: D401

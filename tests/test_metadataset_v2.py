@@ -17,7 +17,6 @@ from unittest.mock import patch
 
 import torch
 import webdataset as wds
-from epath_s3_emulator import setup_s3_emulator
 
 from megatron.energon import (
     Sample,
@@ -35,6 +34,7 @@ from megatron.energon.metadataset.loader import prepare_metadataset
 from megatron.energon.metadataset.loader_interface import DatasetBlendMode
 from megatron.energon.task_encoder.base import DefaultTaskEncoder
 from megatron.energon.wrappers.watchdog_dataset import WatchdogDataset
+from tests.epath_s3_emulator import setup_s3_emulator
 
 # Speed up tests significantly by reducing the torch status check interval for broken worker shutdown
 try:
@@ -1184,12 +1184,12 @@ class TestDataset(unittest.TestCase):
                         "__class__: MetadatasetV2",
                         "splits:",
                         "  train:",
-                        "    path: msc://s3/test/dataset/nested_metadataset_v2.yaml",
+                        "    path: msc://s3test_metadataset/test/dataset/nested_metadataset_v2.yaml",
                     ]
                 )
             )
 
-        with setup_s3_emulator() as emu:
+        with setup_s3_emulator(profile_name="s3test_metadataset") as emu:
             # Upload the dataset to the S3 emulator
             # EPath(self.dataset_path).copy(EPath("msc://s3/test/dataset"))
             emu.add_file(self.dataset_path, "test/dataset")

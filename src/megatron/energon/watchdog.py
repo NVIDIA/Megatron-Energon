@@ -207,7 +207,7 @@ class Watchdog:
                     for k, v in other_locals.items():
                         print(f"            {k}: {repr_short(v)}")
 
-            print()
+            print(flush=True)
 
     # --------------------------------------------------------------------------
     # Public API
