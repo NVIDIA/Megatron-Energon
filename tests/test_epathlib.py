@@ -115,7 +115,7 @@ class TestEPath(unittest.TestCase):
 
     def test_s3_path_resolution(self):
         """Test s3 path resolution"""
-        rclone_config_path = EPath("/tmp/XDG_CONFIG_HOME/rclone/rclone.conf")
+        rclone_config_path = EPath("/tmp/XDG_CONFIG_HOME/.config/rclone/rclone.conf")
         with rclone_config_path.open("w") as f:
             f.write(
                 "\n".join(
@@ -132,7 +132,12 @@ class TestEPath(unittest.TestCase):
             )
 
         orig_xdg_config_home = os.environ.get("XDG_CONFIG_HOME")
-        os.environ["XDG_CONFIG_HOME"] = "/tmp/XDG_CONFIG_HOME"
+        os.environ["XDG_CONFIG_HOME"] = "/tmp/XDG_CONFIG_HOME/.config"
+        os.environ["HOME"] = "/tmp/XDG_CONFIG_HOME"
+        # Hack to clear the cache of the rclone config for msc to get the "s3" profile
+        from multistorageclient.rclone import read_rclone_config
+
+        read_rclone_config.cache_clear()
         try:
             # Test globbing
             p = EPath("msc://s3/tmp/path/subpath.txt")
