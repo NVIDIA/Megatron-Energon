@@ -33,6 +33,7 @@ def setup_s3_emulator(
         Tuple of (config path, server instance)
     """
 
+    print("BEFORE s3_emulator", flush=True)
     with s3_emulator(
         host="127.0.0.1",
         port=port,
@@ -71,3 +72,5 @@ def setup_s3_emulator(
         yield emu.state
 
         read_rclone_config.cache_clear()
+
+    print("AFTER s3_emulator", flush=True)

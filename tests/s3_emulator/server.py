@@ -50,7 +50,7 @@ class S3EmulatorServer:
 
         self._httpd: ThreadingHTTPServer = _Server((host, port), S3RequestHandler)
         self._thread: threading.Thread | None = None
-        print(f"S3 emulator listening on http://{host}:{self.port}")
+        print(f"S3 emulator listening on http://{host}:{self.port}", flush=True)
 
     @property
     def port(self) -> int:
