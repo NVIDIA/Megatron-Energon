@@ -71,6 +71,10 @@ def setup_s3_emulator(
             read_rclone_config.cache_clear()
 
             print("s3_emulator: BEFORE yield", flush=True)
+            print("s3_emulator: emu.port", emu.port, flush=True)
+            print(f"s3_emulator: {config_path}:", flush=True)
+            with config_path.open("r") as f:
+                print(f.read(), flush=True)
             yield emu.state
             print("s3_emulator: AFTER yield", flush=True)
 
