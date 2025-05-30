@@ -33,6 +33,6 @@ jobs:
 
     - name: Run unit tests
       run: |
-      uv run python -m unittest -v tests.test_dataset
-      uv run python -m unittest -v tests.test_epathlib
-      uv run python -m unittest -v tests.test_metadataset_v2
+        uv run python -m unittest -v tests.test_dataset
+        uv run python -m unittest -v tests.test_epathlib
+        uv run python -m unittest -v tests.test_metadataset_v2
