@@ -1,3 +1,5 @@
+# Copyright (c) 2025, NVIDIA CORPORATION.
+# SPDX-License-Identifier: BSD-3-Clause
 import json
 from pathlib import Path
 from threading import RLock
