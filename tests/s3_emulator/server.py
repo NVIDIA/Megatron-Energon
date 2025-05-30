@@ -1,6 +1,8 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
+import socket
 import threading
+import time
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Mapping
@@ -84,6 +86,25 @@ class S3EmulatorServer:
 
         self._thread = threading.Thread(target=_run, daemon=True)
         self._thread.start()
+
+    def wait_until_ready(self, timeout: float = 5.0, poll: float = 0.2) -> None:
+        """Block until the HTTP server socket starts accepting connections."""
+
+        deadline = time.perf_counter() + timeout
+        host, port = self._httpd.server_address
+
+        while time.perf_counter() < deadline:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.settimeout(poll)
+                try:
+                    sock.connect((host, port))
+                except OSError:
+                    time.sleep(poll)
+                else:
+                    # Successfully connected - server is ready
+                    return
+
+        raise RuntimeError(f"S3 emulator failed to start within {timeout} s on {host}:{port}")
 
     def join(self, timeout: float | None = None):  # noqa: D401
         """Join the background thread (see :py:meth:`start_background`)."""
