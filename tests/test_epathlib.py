@@ -11,9 +11,8 @@ import struct
 import sys
 import unittest
 
-from epath_s3_emulator import setup_s3_emulator
-
 from megatron.energon.epathlib import EPath
+from tests.epath_s3_emulator import setup_s3_emulator
 
 
 class TestEPath(unittest.TestCase):

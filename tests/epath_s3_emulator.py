@@ -6,8 +6,9 @@ from pathlib import Path
 from typing import Generator
 
 from multistorageclient.rclone import read_rclone_config
-from s3_emulator.state import S3State
-from s3_emulator.test import s3_emulator
+
+from tests.s3_emulator.state import S3State
+from tests.s3_emulator.test import s3_emulator
 
 
 @contextmanager

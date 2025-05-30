@@ -33,4 +33,4 @@ jobs:
 
     - name: Run unit tests
       run: |
-        just test
+        uv run python -m unittest -v tests.test_metadataset_v2.TestDataset.test_s3

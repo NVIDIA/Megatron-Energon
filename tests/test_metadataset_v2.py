@@ -17,7 +17,6 @@ from unittest.mock import patch
 
 import torch
 import webdataset as wds
-from epath_s3_emulator import setup_s3_emulator
 
 from megatron.energon import (
     Sample,
@@ -35,6 +34,7 @@ from megatron.energon.metadataset.loader import prepare_metadataset
 from megatron.energon.metadataset.loader_interface import DatasetBlendMode
 from megatron.energon.task_encoder.base import DefaultTaskEncoder
 from megatron.energon.wrappers.watchdog_dataset import WatchdogDataset
+from tests.epath_s3_emulator import setup_s3_emulator
 
 # Speed up tests significantly by reducing the torch status check interval for broken worker shutdown
 try:
