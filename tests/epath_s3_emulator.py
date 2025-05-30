@@ -1,35 +1,11 @@
-import multiprocessing
 import os
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Generator
 
 from multistorageclient.rclone import read_rclone_config
+from s3_emulator.state import S3State
 from s3_emulator.test import s3_emulator
-
-
-def _multiproc_setup_s3_emulator(
-    port: int = 0,
-    *,
-    access_key: str = "test",
-    secret_key: str = "test",
-    root_dir: str | None = None,
-    region: str = "us-east-1",
-    is_running,
-    shutdown,
-    running_port,
-) -> None:
-    with s3_emulator(
-        host="127.0.0.1",
-        port=port,
-        credentials={access_key: secret_key},
-        root_dir=root_dir,
-        region=region,
-    ) as emu:
-        with running_port:
-            running_port.value = emu.port
-        is_running.set()
-        shutdown.wait()
 
 
 @contextmanager
@@ -40,7 +16,7 @@ def setup_s3_emulator(
     secret_key: str = "test",
     root_dir: str | None = None,
     region: str = "us-east-1",
-) -> Generator[None, None, None]:
+) -> Generator[S3State, None, None]:
     """Set up S3 emulator and write necessary config files.
 
     Args:
@@ -53,32 +29,14 @@ def setup_s3_emulator(
     Returns:
         Tuple of (config path, server instance)
     """
-    is_running = multiprocessing.Event()
-    shutdown = multiprocessing.Event()
-    running_port = multiprocessing.Value("i", 0)
-    running_port.value
 
-    p = multiprocessing.Process(
-        target=_multiproc_setup_s3_emulator,
-        kwargs=dict(
-            port=port,
-            access_key=access_key,
-            secret_key=secret_key,
-            root_dir=root_dir,
-            region=region,
-            is_running=is_running,
-            shutdown=shutdown,
-            running_port=running_port,
-        ),
-        name="s3-emulator",
-        daemon=True,
-    )
-    p.start()
-    is_running.wait()
-    with running_port:
-        port = running_port.value
-
-    try:
+    with s3_emulator(
+        host="127.0.0.1",
+        port=port,
+        credentials={access_key: secret_key},
+        root_dir=root_dir,
+        region=region,
+    ) as emu:
         # Create config directory
         config_dir = Path("/tmp/XDG_CONFIG_HOME/.config/rclone")
         config_dir.mkdir(parents=True, exist_ok=True)
@@ -95,7 +53,7 @@ def setup_s3_emulator(
                         f"access_key_id = {access_key}",
                         f"secret_access_key = {secret_key}",
                         f"region = {region}",
-                        f"endpoint = http://127.0.0.1:{port}",
+                        f"endpoint = http://127.0.0.1:{emu.port}",
                     ]
                 )
             )
@@ -107,9 +65,6 @@ def setup_s3_emulator(
         # Hack to clear the cache of the rclone config for msc to get the "s3" profile
         read_rclone_config.cache_clear()
 
-        yield
+        yield emu.state
 
         read_rclone_config.cache_clear()
-    finally:
-        shutdown.set()
-        p.join()
