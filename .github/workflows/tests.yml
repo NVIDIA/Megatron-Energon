@@ -33,4 +33,5 @@ jobs:
 
     - name: Run unit tests
       run: |
+        uv run python -m unittest -v tests.test_epathlib.TestEPath.test_msc_s3
         uv run python -m unittest -v tests.test_metadataset_v2.TestDataset.test_s3
