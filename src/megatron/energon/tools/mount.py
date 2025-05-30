@@ -279,11 +279,11 @@ class EnergonFS(Operations):
             if folder not in self._all_samples:
                 raise FuseOSError(ENOENT)
             full_name = f"{folder}.{part_name}"
-            file_bytes = self._wds_filestore[full_name]
+            file_bytes, _ = self._wds_filestore[full_name]
         else:
             if path not in self._all_sample_parts:
                 raise FuseOSError(ENOENT)
-            file_bytes = self._wds_filestore[path]
+            file_bytes, _ = self._wds_filestore[path]
 
         assert isinstance(file_bytes, bytes)
         self._open_files[path] = file_bytes
