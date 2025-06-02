@@ -1214,10 +1214,4 @@ class TestDataset(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    # unittest.main()
-    t = TestDataset()
-    t.setUp()
-    try:
-        t.test_s3()
-    finally:
-        t.tearDown()
+    unittest.main()

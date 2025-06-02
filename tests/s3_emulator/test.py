@@ -9,7 +9,7 @@ from .server import S3EmulatorServer
 @contextmanager
 def s3_emulator(
     host: str = "127.0.0.1",
-    port: int = 9000,
+    port: int = 0,
     *,
     credentials: dict[str, str] | None = None,
     root_dir: str | None = None,
@@ -19,7 +19,7 @@ def s3_emulator(
 
     Args:
         host: Host to bind the server to
-        port: Port to bind the server to
+        port: Port to bind the server to. Use 0 to let the OS choose a free port.
         credentials: Optional credentials mapping
         root_dir: Optional directory to persist S3 data
         region: Region for authentication

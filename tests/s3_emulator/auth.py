@@ -20,26 +20,20 @@ class InvalidSignature(Exception):
 class S3Auth:
     """Very small subset implementation of AWS Signature V4 verification.
 
-    Only what is mandatory for the emulator to work for *most* typical SDK
+    Only what is mandatory for the emulator to work for most typical SDK
     operations is implemented. Notably, chunked uploads and presigned URLs are
     not supported.
     """
 
     def __init__(self, credentials: Mapping[str, str], region: str = "us-east-1") -> None:
-        """Parameters
-        ----------
-        credentials:
-            Mapping of *access_key* -> *secret_key* accepted by the server.
-        region:
-            AWS region assumed when verifying the signing key (default
-            ``us-east-1``).
+        """Initialize the S3 authentication handler.
+
+        Args:
+            credentials: Mapping of access_key to secret_key accepted by the server.
+            region: AWS region assumed when verifying the signing key.
         """
         self._creds: Dict[str, str] = dict(credentials)
         self._region = region
-
-    # ------------------------------------------------------------------
-    # Public helpers
-    # ------------------------------------------------------------------
 
     def verify(
         self,
@@ -49,15 +43,14 @@ class S3Auth:
         headers: Mapping[str, str] | MutableMapping[str, str],
         payload: bytes,
     ) -> None:
-        """Validate the *Authorization* header for the given request.
+        """Validate the Authorization header for the given request.
 
-        Raises
-        ------
-        InvalidSignature
-            If the calculated signature does not match the one supplied by the
-            client.
-        ValueError
-            If mandatory signing headers are missing.
+        Args:
+            method: HTTP method of the request.
+            canonical_uri: Canonical URI path.
+            canonical_querystring: Canonical query string.
+            headers: Request headers.
+            payload: Request body.
         """
         auth_header = headers.get("authorization") or headers.get("Authorization")
         if auth_header is None:
@@ -79,9 +72,7 @@ class S3Auth:
         if secret_key is None:
             raise InvalidSignature("Unknown access key")
 
-        # ------------------------------------------------------------------
         # Canonical URI & query string (encode & normalise)
-        # ------------------------------------------------------------------
         canonical_uri = _canonical_uri(canonical_uri)
         canonical_querystring = _canonical_querystring(canonical_querystring)
 
@@ -109,7 +100,6 @@ class S3Auth:
         )
         hashed_canonical_request = sha256(canonical_request.encode()).hexdigest()
 
-        # ------------------------------------------------------------------
         # String to sign
         amz_date = headers.get("x-amz-date") or headers.get("X-Amz-Date")
         if amz_date is None:
@@ -123,7 +113,6 @@ class S3Auth:
             ]
         )
 
-        # ------------------------------------------------------------------
         # Calculate signing key and signature
         date_key = _sign(("AWS4" + secret_key).encode(), date_str)
         region_key = _sign(date_key, region)
@@ -131,59 +120,93 @@ class S3Auth:
         signing_key = _sign(service_key, "aws4_request")
         calc_signature = hmac.new(signing_key, string_to_sign.encode(), sha256).hexdigest()
 
-        # ------------------------------------------------------------------
         if not hmac.compare_digest(calc_signature, signature):
             print(f"Sig mismatch: expected={signature} got={calc_signature}")
             raise InvalidSignature("Signature mismatch")
 
 
-# ----------------------------------------------------------------------
-# Internal helpers
-# ----------------------------------------------------------------------
-
-
 def _first_group(regex: re.Pattern[str], string: str) -> str | None:
+    """Extract the first capture group from a regex match.
+
+    Args:
+        regex: The regex pattern to match.
+        string: The string to search in.
+
+    Returns:
+        The first capture group if found, None otherwise.
+    """
     match = regex.search(string)
     return match.group(1) if match else None
 
 
 def _sign(key: bytes, msg: str) -> bytes:
+    """Sign a message with a key using HMAC-SHA256.
+
+    Args:
+        key: The signing key.
+        msg: The message to sign.
+
+    Returns:
+        The HMAC-SHA256 signature.
+    """
     return hmac.new(key, msg.encode(), sha256).digest()
 
 
 def _normalize_whitespace(value: str) -> str:
-    """Collapse consecutive whitespace (as per AWS SigV4 spec)."""
+    """Collapse consecutive whitespace.
+
+    Args:
+        value: The string to normalize.
+
+    Returns:
+        The normalized string with collapsed whitespace.
+    """
     return " ".join(value.strip().split())
 
 
-# ----------------------------------------------------------------------
-# Additional canonical helpers
-# ----------------------------------------------------------------------
+def _percent_encode(value: str) -> str:
+    """Percent encode a string using AWS safe characters.
 
+    Args:
+        value: The string to encode.
 
-def _percent_encode(value: str) -> str:  # noqa: D401
+    Returns:
+        The percent-encoded string.
+    """
     return _up.quote(value, safe="-_.~")
 
 
-def _canonical_uri(uri: str) -> str:  # noqa: D401
-    """Return URI‐encoded path as required by SigV4.
+def _canonical_uri(uri: str) -> str:
+    """Return URI-encoded path as required by SigV4.
 
-    Each segment between ``/`` must be percent-encoded with the AWS safe list
-    ``-_.~``. Duplicate slashes are preserved (AWS behaviour).
+    Each segment between / must be percent-encoded with the AWS safe list
+    -_.~. Duplicate slashes are preserved (AWS behaviour).
+
+    Args:
+        uri: The URI path to canonicalize.
+
+    Returns:
+        The canonical URI path.
     """
     if uri == "":
         return "/"
     encoded_parts = [_percent_encode(_up.unquote(part)) for part in uri.split("/")]
-    # Leading and trailing slash must be preserved
     prefix = "" if uri.startswith("/") else "/"
     return prefix + "/".join(encoded_parts)
 
 
-def _canonical_querystring(raw_qs: str) -> str:  # noqa: D401
+def _canonical_querystring(raw_qs: str) -> str:
+    """Canonicalize a query string according to AWS SigV4 rules.
+
+    Args:
+        raw_qs: The raw query string to canonicalize.
+
+    Returns:
+        The canonical query string.
+    """
     if raw_qs == "":
         return ""
     pairs = _up.parse_qsl(raw_qs, keep_blank_values=True)
     encoded_pairs = [(_percent_encode(k), _percent_encode(v)) for k, v in pairs]
-    # Sort by key then value to comply with AWS spec
     encoded_pairs.sort()
     return "&".join(f"{k}={v}" for k, v in encoded_pairs)

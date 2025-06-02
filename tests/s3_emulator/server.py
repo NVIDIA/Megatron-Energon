@@ -15,32 +15,37 @@ __all__ = ["S3EmulatorServer"]
 
 
 class S3EmulatorServer:
-    """A lightweight, *blocking* S3 HTTP emulator.
+    """A lightweight, blocking S3 HTTP emulator.
 
-    Typical usage::
+    This server provides a minimal S3-compatible HTTP interface for testing purposes.
+    It supports basic S3 operations like bucket and object management.
 
-        from s3_emulator import S3EmulatorServer
-
-        server = S3EmulatorServer(
-            host="127.0.0.1",
-            port=9000,
-            credentials={"ACCESS": "SECRET"},
-        )
-        server.serve_forever()
-
-    By default the server blocks the calling thread. Wrap :py:meth:`serve_forever`
-    inside :pyclass:`threading.Thread` when integrating in a larger test suite.
+    Example:
+        >>> server = S3EmulatorServer(
+        ...     host="127.0.0.1",
+        ...     port=9000,
+        ...     credentials={"ACCESS": "SECRET"},
+        ... )
+        >>> server.serve_forever()
     """
 
     def __init__(
         self,
         host: str = "0.0.0.0",
-        port: int = 9000,
+        port: int = 0,
         *,
         credentials: Mapping[str, str] | None = None,
         root_dir: str | Path | None = None,
         region: str = "us-east-1",
-    ):  # noqa: D401
+    ):
+        """
+        Args:
+            host: The host address to bind to.
+            port: The port to bind to. Use 0 to let the OS choose a free port.
+            credentials: Optional mapping of access keys to secret keys.
+            root_dir: Optional path to persist the S3 store on disk.
+            region: AWS region to emulate.
+        """
         self._state = S3State(Path(root_dir) if root_dir else None)
         self._auth = S3Auth(credentials or {"test": "test"}, region=region)
 
@@ -54,30 +59,32 @@ class S3EmulatorServer:
 
     @property
     def port(self) -> int:
+        """Returns the port number the server is bound to."""
         return self._httpd.server_port
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
     @property
-    def state(self) -> S3State:  # noqa: D401
+    def state(self) -> S3State:
+        """Returns the internal S3 state object."""
         return self._state
 
-    def serve_forever(self):  # noqa: D401
+    def serve_forever(self):
+        """Start the server and block until shutdown is called.
+
+        This method will block the calling thread. For non-blocking usage,
+        see start_background().
+        """
         try:
             self._httpd.serve_forever()
         finally:
             self._state.flush()
 
-    def shutdown(self):  # noqa: D401
+    def shutdown(self):
+        """Shutdown the server and flush any pending state changes."""
         self._httpd.shutdown()
         self._state.flush()
 
-    # Convenience helpers -------------------------------------------------
-
-    def start_background(self):  # noqa: D401
-        """Start the server in a background :pyclass:`threading.Thread`."""
+    def start_background(self):
+        """Start the server in a background thread."""
         if self._thread and self._thread.is_alive():
             raise RuntimeError("Server already running")
 
@@ -88,8 +95,12 @@ class S3EmulatorServer:
         self._thread.start()
 
     def wait_until_ready(self, timeout: float = 5.0, poll: float = 0.2) -> None:
-        """Block until the HTTP server socket starts accepting connections."""
+        """Block until the HTTP server socket starts accepting connections.
 
+        Args:
+            timeout: Maximum time to wait in seconds.
+            poll: Time between connection attempts in seconds.
+        """
         deadline = time.perf_counter() + timeout
         host, port = self._httpd.server_address
 
@@ -103,15 +114,18 @@ class S3EmulatorServer:
                 except OSError:
                     time.sleep(poll)
                 else:
-                    # Successfully connected - server is ready
                     print(f"S3 emulator started up on {host}:{port}", flush=True)
                     return
 
         print(f"S3 emulator failed to start within {timeout} s on {host}:{port}", flush=True)
         raise RuntimeError(f"S3 emulator failed to start within {timeout} s on {host}:{port}")
 
-    def join(self, timeout: float | None = None):  # noqa: D401
-        """Join the background thread (see :py:meth:`start_background`)."""
+    def join(self, timeout: float | None = None):
+        """Join the background thread.
+
+        Args:
+            timeout: Optional timeout in seconds to wait for thread completion.
+        """
         if self._thread is None:
             return
         self._thread.join(timeout)

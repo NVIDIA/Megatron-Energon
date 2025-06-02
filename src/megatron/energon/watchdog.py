@@ -209,10 +209,6 @@ class Watchdog:
 
             print(flush=True)
 
-    # --------------------------------------------------------------------------
-    # Public API
-    # --------------------------------------------------------------------------
-
     def reset(self) -> None:
         """
         Reset the watchdog timer (push out deadline by `timeout` seconds),
@@ -250,10 +246,6 @@ class Watchdog:
             self._cv.notify()
         self._worker_thread.join()
 
-    # --------------------------------------------------------------------------
-    # Context manager support
-    # --------------------------------------------------------------------------
-
     def __enter__(self) -> "Watchdog":
         # If currently disabled, calling enable() will also reset the timer
         if self._deadline is None:
@@ -263,10 +255,6 @@ class Watchdog:
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         # End the watchdog on context exit
         self.finish()
-
-    # --------------------------------------------------------------------------
-    # Iterator wrapper
-    # --------------------------------------------------------------------------
 
     def watch_iter(self, iterable: Iterable[T]) -> Iterator[T]:
         """

@@ -15,57 +15,85 @@ __all__ = ["S3RequestHandler"]
 
 
 class S3RequestHandler(BaseHTTPRequestHandler):
+    """HTTP request handler implementing a minimal S3-compatible API.
+
+    This handler processes HTTP requests and maps them to S3 operations.
+    It supports basic S3 operations like bucket and object management,
+    including multipart uploads.
+    """
+
     server: "S3ServerProtocol"  # type: ignore[assignment]
 
-    # Disable default logging to stderr of every single request from BaseHTTPRequestHandler
-    def log_message(self, fmt: str, *args):  # noqa: D401, ANN001
+    def log_message(self, fmt: str, *args):
+        """Log a message to stdout.
+
+        Args:
+            fmt: Format string for the message.
+            *args: Arguments to format the message with.
+        """
         print(f"{self.client_address[0]} - - {fmt % args}")
 
-    # ------------------------------------------------------------------
-    # HTTP verbs
-    # ------------------------------------------------------------------
-
-    def do_PUT(self):  # noqa: N802  (method names determined by BaseHTTPRequestHandler)
+    def do_PUT(self):
+        """Handle PUT requests for object creation and bucket creation."""
         self._handle_write()
 
-    def do_GET(self):  # noqa: N802
+    def do_GET(self):
+        """Handle GET requests for object retrieval and bucket listing."""
         self._handle_read(listing=False)
 
-    def do_HEAD(self):  # noqa: N802
+    def do_HEAD(self):
+        """Handle HEAD requests for object metadata."""
         self._handle_read(listing=False, only_headers=True)
 
-    def do_DELETE(self):  # noqa: N802
+    def do_DELETE(self):
+        """Handle DELETE requests for object and bucket deletion."""
         self._handle_delete()
 
-    def do_POST(self):  # noqa: N802
+    def do_POST(self):
+        """Handle POST requests for multipart upload operations."""
         self._handle_post()
 
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-
     def _read_body(self) -> bytes:
+        """Read and return the request body.
+
+        Returns:
+            The request body as bytes.
+        """
         length = int(self.headers.get("Content-Length", 0))
         if length == 0:
             return b""
         data = self.rfile.read(length)
         return data
 
-    def _split_path(self):  # noqa: D401
-        """Return ``bucket``, ``key`` (key may be "")."""
+    def _split_path(self) -> tuple[str, str, _up.ParseResult]:
+        """Split the request path into bucket and key components.
+
+        Returns:
+            A tuple of (bucket, key, parsed_url).
+        """
         parsed = _up.urlparse(self.path)
         parts = [p for p in parsed.path.split("/") if p]
         bucket = parts[0] if parts else ""
         key = "/".join(parts[1:]) if len(parts) > 1 else ""
         return bucket, key, parsed
 
-    def _auth(self, payload: bytes, parsed: _up.ParseResult):
+    def _auth(self, payload: bytes, parsed: _up.ParseResult) -> bool:
+        """Verify the request signature.
+
+        Args:
+            payload: The request body.
+            parsed: The parsed URL.
+
+        Returns:
+            True if authentication succeeds, False otherwise.
+        """
         try:
+            headers_dict = {k: v for k, v in self.headers.items()}
             self.server.auth.verify(
                 method=self.command,
                 canonical_uri=parsed.path or "/",
                 canonical_querystring=parsed.query,
-                headers=self.headers,  # type: ignore[arg-type]
+                headers=headers_dict,
                 payload=payload,
             )
         except InvalidSignature as err:
@@ -76,9 +104,8 @@ class S3RequestHandler(BaseHTTPRequestHandler):
             return False
         return True
 
-    # ------------------------------------------------------------------
-
     def _handle_write(self):
+        """Handle PUT requests for object creation and bucket creation."""
         bucket, key, parsed = self._split_path()
         body = self._read_body()
         if not self._auth(body, parsed):
@@ -86,9 +113,7 @@ class S3RequestHandler(BaseHTTPRequestHandler):
 
         qs = _up.parse_qs(parsed.query, keep_blank_values=True)
 
-        # ------------------------------------------------------------------
         # Multipart: upload part
-        # ------------------------------------------------------------------
         if "uploadId" in qs and "partNumber" in qs:
             upload_id = qs["uploadId"][0]
             try:
@@ -120,9 +145,13 @@ class S3RequestHandler(BaseHTTPRequestHandler):
             extra_headers={"ETag": _etag(body)},
         )
 
-    # ------------------------------------------------------------------
-
     def _handle_read(self, listing: bool, only_headers: bool = False):
+        """Handle GET/HEAD requests for object retrieval and bucket listing.
+
+        Args:
+            listing: Whether this is a bucket listing request.
+            only_headers: Whether to return only headers (HEAD request).
+        """
         bucket, key, parsed = self._split_path()
         body = b""  # GET/HEAD normally payload considered in signature (hash of empty string)
         if not self._auth(body, parsed):
@@ -206,9 +235,8 @@ class S3RequestHandler(BaseHTTPRequestHandler):
                     extra_headers={"Accept-Ranges": "bytes"},
                 )
 
-    # ------------------------------------------------------------------
-
     def _handle_delete(self):
+        """Handle DELETE requests for object and bucket deletion."""
         bucket, key, parsed = self._split_path()
         body = b""  # empty
         if not self._auth(body, parsed):
@@ -234,11 +262,8 @@ class S3RequestHandler(BaseHTTPRequestHandler):
             return
         self._send_status(HTTPStatus.NO_CONTENT)
 
-    # ------------------------------------------------------------------
-    # NEW: POST handler
-    # ------------------------------------------------------------------
-
     def _handle_post(self):
+        """Handle POST requests for multipart upload operations."""
         bucket, key, parsed = self._split_path()
         body = self._read_body()
         if not self._auth(body, parsed):
@@ -281,11 +306,13 @@ class S3RequestHandler(BaseHTTPRequestHandler):
 
         self._send_error(HTTPStatus.NOT_IMPLEMENTED, "Unsupported POST request")
 
-    # ------------------------------------------------------------------
-    # Response helpers
-    # ------------------------------------------------------------------
-
     def _send_status(self, status: HTTPStatus, extra_headers: dict[str, str] | None = None):
+        """Send an HTTP response with the given status code.
+
+        Args:
+            status: The HTTP status code to send.
+            extra_headers: Optional additional headers to include.
+        """
         self.send_response(status.value)
         headers = {"Server": "s3-emulator"}
         if extra_headers:
@@ -295,6 +322,12 @@ class S3RequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def _send_error(self, status: HTTPStatus, message: str):
+        """Send an error response.
+
+        Args:
+            status: The HTTP status code to send.
+            message: The error message to include in the response.
+        """
         print(f"Error {status}: {message}")
         self._send_bytes(message.encode(), status=status, content_type="text/plain")
 
@@ -305,6 +338,14 @@ class S3RequestHandler(BaseHTTPRequestHandler):
         content_type: str = "application/octet-stream",
         extra_headers: dict[str, str] | None = None,
     ) -> None:
+        """Send a response with binary data.
+
+        Args:
+            data: The binary data to send.
+            status: The HTTP status code to send. Defaults to 200 OK.
+            content_type: The Content-Type header value. Defaults to application/octet-stream.
+            extra_headers: Optional additional headers to include.
+        """
         self.send_response(status.value)
         headers = {
             "Server": "s3-emulator",
@@ -319,11 +360,17 @@ class S3RequestHandler(BaseHTTPRequestHandler):
         if self.command != "HEAD":
             self.wfile.write(data)
 
-    # ------------------------------------------------------------------
-
     @staticmethod
-    def _render_bucket_list(bucket: str, objects: list[str]) -> bytes:  # noqa: D401
-        """Return a minimal XML listing of *objects* in *bucket*."""
+    def _render_bucket_list(bucket: str, objects: list[str]) -> bytes:
+        """Generate an XML listing of objects in a bucket.
+
+        Args:
+            bucket: The bucket name.
+            objects: List of object keys in the bucket.
+
+        Returns:
+            The XML document as bytes.
+        """
         entries = []
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
         for key in objects:
@@ -353,22 +400,20 @@ class S3RequestHandler(BaseHTTPRequestHandler):
         return xml.encode()
 
 
-# ----------------------------------------------------------------------
-# Protocol bridging: allow type checker to access server attributes
-# ----------------------------------------------------------------------
-
-
 class S3ServerProtocol(Protocol):  # noqa: D101
     state: S3State
     auth: S3Auth
 
 
-# ----------------------------------------------------------------------
-# Utils
-# ----------------------------------------------------------------------
-
-
 def _escape_xml(text: str) -> str:  # noqa: D401
+    """Escape special characters for XML.
+
+    Args:
+        text: The text to escape.
+
+    Returns:
+        The escaped text.
+    """
     return (
         text.replace("&", "&amp;")
         .replace("<", "&lt;")
@@ -379,4 +424,12 @@ def _escape_xml(text: str) -> str:  # noqa: D401
 
 
 def _etag(data: bytes) -> str:  # noqa: D401
+    """Generate an ETag for binary data.
+
+    Args:
+        data: The binary data to generate an ETag for.
+
+    Returns:
+        The MD5 hash of the data as a hex string.
+    """
     return md5(data).hexdigest()

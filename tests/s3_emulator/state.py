@@ -12,16 +12,20 @@ __all__ = ["S3State"]
 class S3State:
     """A minimal, thread-safe, in-memory representation of an S3 object store.
 
-    Optionally, a *root_dir* can be supplied to persist the store on the local
-    file system. The directory structure mirrors the S3 layout::
+    Optionally, a root_dir can be supplied to persist the store on the local
+    file system. The directory structure mirrors the S3 layout:
 
         <root_dir>/<bucket>/<key>
 
     Buckets are directories, objects are stored as regular files. Metadata is
-    *not* currently persisted beyond the object byte payload.
+    not currently persisted beyond the object byte payload.
     """
 
     def __init__(self, root_dir: Optional[Path] = None) -> None:
+        """
+        Args:
+            root_dir: Path to persist the store on disk.
+        """
         self._fs: Dict[str, Dict[str, bytes]] = {}
         self._uploads: Dict[str, _MultipartUpload] = {}
         self._lock = RLock()
@@ -30,15 +34,21 @@ class S3State:
             self._root_dir.mkdir(parents=True, exist_ok=True)
             self._load_from_disk()
 
-    # ======================================================================
-    # Bucket helpers
-    # ======================================================================
-
     def list_buckets(self) -> list[str]:
+        """List all buckets in the store.
+
+        Returns:
+            Sorted list of bucket names.
+        """
         with self._lock:
             return sorted(self._fs.keys())
 
     def create_bucket(self, bucket: str) -> None:
+        """Create a new bucket.
+
+        Args:
+            bucket: Name of the bucket to create.
+        """
         with self._lock:
             if bucket in self._fs:
                 print(f"Bucket '{bucket}' already exists")
@@ -48,6 +58,11 @@ class S3State:
             (self._root_dir / bucket).mkdir(parents=True, exist_ok=True)
 
     def delete_bucket(self, bucket: str) -> None:
+        """Delete a bucket.
+
+        Args:
+            bucket: Name of the bucket to delete.
+        """
         with self._lock:
             if bucket not in self._fs:
                 raise KeyError(f"Bucket '{bucket}' does not exist")
@@ -61,11 +76,14 @@ class S3State:
                     p.unlink()
                 bucket_path.rmdir()
 
-    # ======================================================================
-    # Object helpers
-    # ======================================================================
-
     def put_object(self, bucket: str, key: str, data: bytes) -> None:
+        """Store an object in a bucket.
+
+        Args:
+            bucket: Name of the bucket.
+            key: Object key.
+            data: Object data.
+        """
         if not bucket:
             raise ValueError("Bucket name must be given")
         with self._lock:
@@ -78,6 +96,15 @@ class S3State:
             obj_path.write_bytes(data)
 
     def get_object(self, bucket: str, key: str) -> bytes:
+        """Retrieve an object from a bucket.
+
+        Args:
+            bucket: Name of the bucket.
+            key: Object key.
+
+        Returns:
+            The object data.
+        """
         with self._lock:
             try:
                 return self._fs[bucket][key]
@@ -85,6 +112,12 @@ class S3State:
                 raise FileNotFoundError(f"{bucket}/{key}") from exc
 
     def delete_object(self, bucket: str, key: str) -> None:
+        """Delete an object from a bucket.
+
+        Args:
+            bucket: Name of the bucket.
+            key: Object key.
+        """
         with self._lock:
             try:
                 del self._fs[bucket][key]
@@ -96,23 +129,27 @@ class S3State:
                 obj_path.unlink(missing_ok=True)
 
     def list_objects(self, bucket: str) -> list[str]:
+        """List all objects in a bucket.
+
+        Args:
+            bucket: Name of the bucket.
+
+        Returns:
+            Sorted list of object keys.
+        """
         with self._lock:
             if bucket not in self._fs:
                 raise KeyError(f"Bucket '{bucket}' does not exist")
             return sorted(self._fs[bucket].keys())
 
-    # ======================================================================
-    # Persistence helpers
-    # ======================================================================
-
     STATE_FILE = "__state.json"
 
     def _load_from_disk(self) -> None:
-        """Load persisted state from *root_dir*.
+        """Load persisted state from root_dir.
 
         The object payload itself is not loaded in memory to keep startup
         affordable. Only the structure (bucket -> keys) is persisted in a
-        *state* file.
+        state file.
         """
         if self._root_dir is None:
             return
@@ -128,34 +165,49 @@ class S3State:
             self._fs = {bucket: {key: b"" for key in keys} for bucket, keys in mapping.items()}
 
     def flush(self) -> None:
-        """Persist *only* the structure of the store to disk."""
+        """Persist only the structure of the store to disk."""
         if self._root_dir is None:
             return
         mapping = {bucket: list(objects.keys()) for bucket, objects in self._fs.items()}
         (self._root_dir / self.STATE_FILE).write_text(json.dumps(mapping))
 
-    # ======================================================================
-    # Multipart upload helpers
-    # ======================================================================
+    def initiate_multipart(self, bucket: str, key: str) -> str:
+        """Create a new multipart upload.
 
-    def initiate_multipart(self, bucket: str, key: str) -> str:  # noqa: D401
-        """Create a new multipart upload and return its *upload_id*."""
+        Args:
+            bucket: Name of the bucket.
+            key: Object key.
+
+        Returns:
+            The upload ID.
+        """
         with self._lock:
             upload_id = uuid4().hex
             self._uploads[upload_id] = _MultipartUpload(bucket, key)
-            # Ensure bucket exists for when we eventually complete
             if bucket not in self._fs:
                 self._fs[bucket] = {}
             return upload_id
 
-    def upload_part(self, upload_id: str, part_number: int, data: bytes) -> None:  # noqa: D401
+    def upload_part(self, upload_id: str, part_number: int, data: bytes) -> None:
+        """Upload a part of a multipart upload.
+
+        Args:
+            upload_id: The upload ID.
+            part_number: The part number.
+            data: The part data.
+        """
         with self._lock:
             mp = self._uploads.get(upload_id)
             if mp is None:
                 raise KeyError("Invalid upload_id")
             mp.parts[part_number] = data
 
-    def complete_multipart(self, upload_id: str) -> None:  # noqa: D401
+    def complete_multipart(self, upload_id: str) -> None:
+        """Complete a multipart upload.
+
+        Args:
+            upload_id: The upload ID.
+        """
         with self._lock:
             mp = self._uploads.pop(upload_id, None)
             if mp is None:
@@ -164,21 +216,27 @@ class S3State:
             if mp.bucket not in self._fs:
                 self._fs[mp.bucket] = {}
             self._fs[mp.bucket][mp.key] = data
-        # Persist data on disk if configured
         if self._root_dir is not None:
             obj_path = (self._root_dir / mp.bucket / mp.key).resolve()
             obj_path.parent.mkdir(parents=True, exist_ok=True)
             obj_path.write_bytes(data)
 
-    def abort_multipart(self, upload_id: str) -> None:  # noqa: D401
+    def abort_multipart(self, upload_id: str) -> None:
+        """Abort a multipart upload.
+
+        Args:
+            upload_id: The upload ID.
+        """
         with self._lock:
             self._uploads.pop(upload_id, None)
 
-    # ======================================================================
-    # File helpers
-    # ======================================================================
-
     def add_file(self, src: Path, dst: str):
+        """Add a file or directory to the store.
+
+        Args:
+            src: Source file or directory path.
+            dst: Destination path in S3 format (bucket/key).
+        """
         if src.is_dir():
             dst = dst.removesuffix("/")
             for file in src.iterdir():
@@ -190,12 +248,9 @@ class S3State:
             raise ValueError(f"Invalid file: {src}")
 
 
-# ----------------------------------------------------------------------
-# Internal helper data structures
-# ----------------------------------------------------------------------
-
-
 class _MultipartUpload:
+    """Internal helper class for managing multipart uploads."""
+
     __slots__ = ("bucket", "key", "parts")
 
     def __init__(self, bucket: str, key: str):
@@ -203,7 +258,12 @@ class _MultipartUpload:
         self.key = key
         self.parts: Dict[int, bytes] = {}
 
-    def assemble(self) -> bytes:  # noqa: D401
+    def assemble(self) -> bytes:
+        """Assemble the uploaded parts into a complete object.
+
+        Returns:
+            The complete object data.
+        """
         if not self.parts:
             return b""
         return b"".join(self.parts[n] for n in sorted(self.parts))

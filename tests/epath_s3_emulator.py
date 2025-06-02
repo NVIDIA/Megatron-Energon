@@ -13,8 +13,8 @@ from tests.s3_emulator.test import s3_emulator
 
 @contextmanager
 def setup_s3_emulator(
-    port: int = 0,
     *,
+    port: int = 0,
     access_key: str = "test",
     secret_key: str = "test",
     root_dir: str | None = None,
@@ -24,11 +24,12 @@ def setup_s3_emulator(
     """Set up S3 emulator and write necessary config files.
 
     Args:
-        host: Host to bind the server to
-        port: Port to bind the server to
-        credentials: Optional credentials mapping
+        port: Port to bind the server to. Use 0 to let the OS choose a free port.
+        access_key: Access key for authentication
+        secret_key: Secret key for authentication
         root_dir: Optional directory to persist S3 data
         region: Region for authentication
+        profile_name: Name of the rclone profile
 
     Returns:
         Tuple of (config path, server instance)
