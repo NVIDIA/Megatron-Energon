@@ -88,12 +88,11 @@ class S3RequestHandler(BaseHTTPRequestHandler):
             True if authentication succeeds, False otherwise.
         """
         try:
-            headers_dict = {k: v for k, v in self.headers.items()}
             self.server.auth.verify(
                 method=self.command,
                 canonical_uri=parsed.path or "/",
                 canonical_querystring=parsed.query,
-                headers=headers_dict,
+                headers=self.headers,
                 payload=payload,
             )
         except InvalidSignature as err:
