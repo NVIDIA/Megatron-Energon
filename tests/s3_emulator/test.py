@@ -36,7 +36,6 @@ def s3_emulator(
     )
     try:
         server.start_background()
-        server.wait_until_ready()
         yield server
     finally:
         server.shutdown()

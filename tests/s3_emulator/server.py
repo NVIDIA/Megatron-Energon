@@ -1,8 +1,6 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
-import socket
 import threading
-import time
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Mapping
@@ -20,13 +18,24 @@ class S3EmulatorServer:
     This server provides a minimal S3-compatible HTTP interface for testing purposes.
     It supports basic S3 operations like bucket and object management.
 
-    Example:
-        >>> server = S3EmulatorServer(
-        ...     host="127.0.0.1",
-        ...     port=9000,
-        ...     credentials={"ACCESS": "SECRET"},
-        ... )
-        >>> server.serve_forever()
+    Example (blocking)::
+        server = S3EmulatorServer(
+            host="127.0.0.1",
+            port=9000,
+            credentials={"ACCESS": "SECRET"},
+        )
+        server.serve_forever()
+
+    Example (threaded)::
+        server = S3EmulatorServer(
+            host="127.0.0.1",
+            port=9000,
+            credentials={"ACCESS": "SECRET"},
+        )
+        server.start_background()
+        # ...
+        server.shutdown()
+        server.join()
     """
 
     def __init__(
@@ -39,6 +48,14 @@ class S3EmulatorServer:
         region: str = "us-east-1",
     ):
         """
+        This server provides a minimal S3-compatible HTTP interface for testing purposes.
+        It supports basic S3 operations like bucket and object management.
+
+        There is no need to check that the port is bound, it is already bound after initialization.
+        Retrieve the real port with `.port` if set to 0.
+        The server is listening to the port immediately, but will only start processing after
+        `start_background()` (threaded) or `.serve_forever()` (blocking) is called.
+
         Args:
             host: The host address to bind to.
             port: The port to bind to. Use 0 to let the OS choose a free port.
@@ -93,32 +110,6 @@ class S3EmulatorServer:
 
         self._thread = threading.Thread(target=_run, daemon=True)
         self._thread.start()
-
-    def wait_until_ready(self, timeout: float = 5.0, poll: float = 0.2) -> None:
-        """Block until the HTTP server socket starts accepting connections.
-
-        Args:
-            timeout: Maximum time to wait in seconds.
-            poll: Time between connection attempts in seconds.
-        """
-        deadline = time.perf_counter() + timeout
-        host, port = self._httpd.server_address
-
-        print(f"S3 emulator waiting for {host}:{port} to start", flush=True)
-
-        while time.perf_counter() < deadline:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                sock.settimeout(poll)
-                try:
-                    sock.connect((host, port))
-                except OSError:
-                    time.sleep(poll)
-                else:
-                    print(f"S3 emulator started up on {host}:{port}", flush=True)
-                    return
-
-        print(f"S3 emulator failed to start within {timeout} s on {host}:{port}", flush=True)
-        raise RuntimeError(f"S3 emulator failed to start within {timeout} s on {host}:{port}")
 
     def join(self, timeout: float | None = None):
         """Join the background thread.

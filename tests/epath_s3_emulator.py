@@ -29,10 +29,11 @@ def setup_s3_emulator(
         secret_key: Secret key for authentication
         root_dir: Optional directory to persist S3 data
         region: Region for authentication
-        profile_name: Name of the rclone profile
+        profile_name: Name of the rclone profile. Must be different in all tests, to ensure that a
+            cached rclone config is used in MSC.
 
     Returns:
-        Tuple of (config path, server instance)
+        The S3 emulator state. Can be used to quickly upload files to the emulator.
     """
 
     try:
