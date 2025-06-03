@@ -1,3 +1,6 @@
+# Copyright (c) 2025, NVIDIA CORPORATION.
+# SPDX-License-Identifier: BSD-3-Clause
+
 import functools
 from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, TypeVar, Union
 
