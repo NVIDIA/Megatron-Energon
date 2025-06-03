@@ -17,6 +17,15 @@ pip install megatron-energon
 in your project's Python environment, which could be a virtualenv, or a conda environment.
 You can even install it inside a `Dockerfile` to include it in your custom docker container.
 
+If you want to use [remote datasets](../advanced/remote_dataset) or [audio/video decoding](av-decoder), you
+need to provide *extras* to the installation command, for example like
+
+```shell
+pip install megatron-energon[s3,av_decode]
+```
+
+For all available extras, check out the above links and the `pyproject.toml` file.
+
 ## Installation for Development
 
 If you want to manage, debug or modify the code of energon itself, we recommend that you clone this repository
