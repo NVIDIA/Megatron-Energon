@@ -5,7 +5,7 @@ import io
 import warnings
 from collections.abc import Iterator
 from fractions import Fraction
-from typing import BinaryIO, Literal, Optional, Sequence, Union, overload
+from typing import BinaryIO, Literal, Optional, Sequence, TypedDict, Union, overload
 
 import numpy as np
 import torch
@@ -582,6 +582,72 @@ class AVDecoder:
 
         return float(duration) if duration is not None else None, num_frames
 
+    def get_metadata(self, get_frame_count: bool = True) -> "AVMetadata":
+        """Get the metadata of the media object."""
+        self.stream.seek(0)
+        with av.open(self.stream) as input_container:
+            initialize_av_container(input_container)
+
+            metadata = AVMetadata()
+
+            if input_container.streams.video:
+                video_stream = input_container.streams.video[0]
+                assert video_stream.time_base is not None
+
+                video_start_pts = video_stream.start_time
+                if video_start_pts is None:
+                    video_start_pts = 0.0
+
+                video_duration = video_stream.duration
+
+                if video_duration is None:
+                    # If duration isn't found in header the whole video is decoded to
+                    # determine the duration.
+                    num_frames = 0
+                    last_packet = None
+                    for packet in input_container.demux(video=0):
+                        if packet.pts is not None:
+                            num_frames += 1
+                            last_packet = packet
+
+                    if last_packet is not None and last_packet.duration is not None:
+                        assert last_packet.pts is not None
+                        video_duration = last_packet.pts + last_packet.duration
+
+                if video_duration is not None and video_stream.time_base is not None:
+                    duration = int(video_duration - video_start_pts) * video_stream.time_base
+
+                if video_duration is not None:
+                    metadata["video_duration"] = video_duration
+                if get_frame_count and num_frames is None:
+                    num_frames = sum(1 for p in input_container.demux(video=0) if p.pts is not None)
+                    metadata["video_num_frames"] = num_frames
+
+                # Get the first frame to reliably get the width and height
+                for first_frame in input_container.decode(video=0):
+                    metadata["video_width"] = first_frame.width
+                    metadata["video_height"] = first_frame.height
+                    break
+
+            if input_container.streams.audio:
+                audio_stream = input_container.streams.audio[0]
+                assert audio_stream.sample_rate is not None
+                metadata["audio_sample_rate"] = int(audio_stream.sample_rate)
+                audio_time_base = audio_stream.time_base
+                audio_start_pts = audio_stream.start_time
+                if audio_start_pts is None:
+                    audio_start_pts = 0.0
+
+                audio_duration = audio_stream.duration
+                if audio_time_base is not None and audio_duration is not None:
+                    duration = int(audio_duration - audio_start_pts) * audio_time_base
+                    metadata["audio_duration"] = float(duration)
+
+                if audio_stream.channels is not None:
+                    metadata["audio_channels"] = audio_stream.channels
+
+            return metadata
+
     def __repr__(self):
         return f"AVDecoder(stream={self.stream!r})"
 
@@ -665,6 +731,19 @@ class AVWebdatasetDecoder:
             )
         else:
             raise ValueError(f"Invalid av_decode value: {self.av_decode}")
+
+
+class AVMetadata(TypedDict, total=False):
+    """Metadata of the media object."""
+
+    video_duration: float
+    video_num_frames: int
+    video_width: int
+    video_height: int
+
+    audio_duration: float
+    audio_channels: int
+    audio_sample_rate: int
 
 
 def initialize_av_container(input_container: "av.container.InputContainer") -> None:
