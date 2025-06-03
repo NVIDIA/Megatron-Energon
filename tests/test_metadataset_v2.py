@@ -34,6 +34,7 @@ from megatron.energon.metadataset.loader import prepare_metadataset
 from megatron.energon.metadataset.loader_interface import DatasetBlendMode
 from megatron.energon.task_encoder.base import DefaultTaskEncoder
 from megatron.energon.wrappers.watchdog_dataset import WatchdogDataset
+from tests.epath_s3_emulator import setup_s3_emulator
 
 # Speed up tests significantly by reducing the torch status check interval for broken worker shutdown
 try:
@@ -1171,6 +1172,45 @@ class TestDataset(unittest.TestCase):
                 break
 
         mock_watchdog_trigger.assert_called()
+
+    def test_s3(self):
+        # Create a joined dataset configuration
+        mixed_mds_path = self.dataset_path / "metadataset_mixed.yaml"
+        with open(mixed_mds_path, "w") as f:
+            f.write(
+                "\n".join(
+                    [
+                        "__module__: megatron.energon",
+                        "__class__: MetadatasetV2",
+                        "splits:",
+                        "  train:",
+                        "    path: msc://s3test_metadataset/test/dataset/nested_metadataset_v2.yaml",
+                    ]
+                )
+            )
+
+        with setup_s3_emulator(profile_name="s3test_metadataset") as emu:
+            # Upload the dataset to the S3 emulator
+            # EPath(self.dataset_path).copy(EPath("msc://s3/test/dataset"))
+            emu.add_file(self.dataset_path, "test/dataset")
+
+            train_dataset = get_loader(
+                get_train_dataset(
+                    mixed_mds_path,
+                    worker_config=WorkerConfig(
+                        rank=0,
+                        world_size=1,
+                        num_workers=2,
+                    ),
+                    batch_size=1,
+                    shuffle_buffer_size=10,
+                    max_samples_per_sequence=None,
+                    virtual_epoch_length=10,
+                )
+            )
+
+            data = list(enumerate(train_dataset))
+            assert len(data) == 10, len(data)
 
 
 if __name__ == "__main__":
