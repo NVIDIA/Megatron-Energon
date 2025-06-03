@@ -1,13 +1,13 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+from dataclasses import dataclass
 from typing import Any, Union
 
-from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
 
 
-@edataclass(frozen=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
 class SourceInfo:
     """Information about the source of a sample, i.e. where the data was loaded from."""
 

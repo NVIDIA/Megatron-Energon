@@ -82,17 +82,13 @@ class Cooker(Generic[T_sample]):
     # `cache` is passed only if want_cache is true.
     cook: Callable[..., T_sample]
 
-    #: (Deprecated) The subflavor to check for a sample to be cooked by this cooker.
-    # Use `has_subflavors` instead.
-    # If combined with `has_subflavors` or `condition`, all must be satisfied.
-    is_subflavor: Optional[str] = None
     #: The subflavors to be present in the sample to be cooked by this cooker. All keys and values
     # must match.
-    # If combined with `is_subflavor` or `condition`, all must be satisfied.
+    # If combined with `condition`, all must be satisfied.
     has_subflavors: Optional[dict] = None
     #: The custom condition on the raw sample to check if the sample should be cooked by this
     # cooker.
-    # If combined with `is_subflavor` or `has_subflavors`, all must be satisfied.
+    # If combined with `has_subflavors`, all must be satisfied.
     condition: Optional[Callable[[CrudeSample], bool]] = None
 
     @property
@@ -104,10 +100,6 @@ class Cooker(Generic[T_sample]):
         return get_cooker_need_cache(self.cook)
 
     def is_match(self, crude_sample: CrudeSample) -> bool:
-        if self.is_subflavor is not None:
-            if crude_sample["__subflavor__"] != self.is_subflavor:
-                return False
-
         if self.has_subflavors is not None:
             # Checks if the dict entries provided as a filter all match
             # the ones in the sample. The sample may have additional entries.

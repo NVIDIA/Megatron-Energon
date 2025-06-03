@@ -339,10 +339,6 @@ class FileStoreCachePool(CachePool, ForkMixin):
         with self._lock:
             self._pending_tasks.clear()
 
-    # ------------------------------------------------------------------------
-    # Internal cache management
-    # ------------------------------------------------------------------------
-
     def _decrement_refcount_and_cleanup(self, key: Tuple[FileStore, str]) -> None:
         """
         Decrement the reference count in `_pending_tasks`.

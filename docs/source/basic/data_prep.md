@@ -144,6 +144,11 @@ Commandline:
 > energon prepare --split-parts 'train:shards/train/.*' --split-parts 'val:shards/val/.*' ./
 ```
 
+```{admonition} Good to know
+:class: tip
+You can inspect your prepared dataset like a normal file system by using the [`energon mount`](energon-mount) feature.
+```
+
 ### Sample Types
 
 After the split is set up, the assistant will ask you which sample type you want to use.
@@ -166,7 +171,6 @@ These are the possible integrated types you can currently choose from:
   * Attributes:
     * {py:attr}`__key__: str <megatron.energon.Sample.__key__>`: Unique identifier of the sample within the dataset. Useful for backtracking the source of a single sample.
     * {py:attr}`__key__: str <megatron.energon.Sample.__restore_key__>`: Structured key of the sample, which can be used to regenerate the sample without storing the whole sample.
-    * {py:attr}`__subflavor__: str <megatron.energon.Sample.__subflavor__>`: Deprecated.
     * {py:attr}`__subflavors__: dict[str, Any] | None <megatron.energon.Sample.__subflavors__>`: Represents the subflavors (i.e. custom dict data) set for the source dataset (typically in the metadataset).
   * {py:class}`CaptioningSample <megatron.energon.CaptioningSample>`: Represents a sample for captioning
     * Attributes:

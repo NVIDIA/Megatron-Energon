@@ -56,8 +56,6 @@ except AttributeError:
 
 @edataclass
 class TextBatch(Batch):
-    __keys__: List[str]
-    __sources__: List[SourceInfo]
     txts: List[str]
 
 
@@ -98,9 +96,8 @@ class CookingTaskEncoder(DefaultTaskEncoder[TextSample, TextSample, TextBatch, T
     ]
 
     def batch(self, samples: List[TextSample]) -> TextBatch:
-        return TextBatch(
-            __keys__=[sample.__key__ for sample in samples],
-            __sources__=[source for sample in samples for source in sample.__sources__],
+        return TextBatch.from_samples(
+            samples,
             txts=[sample.text for sample in samples],
         )
 
@@ -167,9 +164,8 @@ class LazyCookingTaskEncoder(
         )
 
     def batch(self, samples: List[TextSample]) -> TextBatch:
-        return TextBatch(
-            __keys__=[sample.__key__ for sample in samples],
-            __sources__=[source for sample in samples for source in sample.__sources__],
+        return TextBatch.from_samples(
+            samples,
             txts=[sample.text for sample in samples],
         )
 
@@ -201,9 +197,8 @@ class LazyCookingTaskEncoderWithPostencode(
         return samples[0]
 
     def batch(self, samples: List[TextSample]) -> TextBatch:
-        return TextBatch(
-            __keys__=[sample.__key__ for sample in samples],
-            __sources__=[source for sample in samples for source in sample.__sources__],
+        return TextBatch.from_samples(
+            samples,
             txts=[sample.text for sample in samples],
         )
 
@@ -214,9 +209,8 @@ class GenericCookingTaskEncoder(DefaultTaskEncoder[TextSample, TextSample, TextB
     cookers = [Cooker(cook_text)]
 
     def batch(self, samples: List[TextSample]) -> TextBatch:
-        return TextBatch(
-            __keys__=[sample.__key__ for sample in samples],
-            __sources__=[source for sample in samples for source in sample.__sources__],
+        return TextBatch.from_samples(
+            samples,
             txts=[sample.text for sample in samples],
         )
 
@@ -253,7 +247,6 @@ class TestDataset(unittest.TestCase):
                         "    datasets:",
                         "      - weight: 1",
                         "        path: ds1",
-                        "        subflavor: ds1",
                         "        subflavors:",
                         "          source: metadataset.yaml",
                         "          number: 43",
@@ -262,7 +255,6 @@ class TestDataset(unittest.TestCase):
                         "        shuffle_over_epochs_multiplier: 3",
                         "      - weight: 1",
                         "        path: ds2",
-                        "        subflavor: ds2",
                         "        subflavors:",
                         "          source: metadataset.yaml",
                         "          number: 44",
@@ -382,7 +374,7 @@ class TestDataset(unittest.TestCase):
             assert isinstance(data, TextBatch)
 
             print("Batch", idx)
-            for txt, key in zip(data.txts, data.__keys__):
+            for txt, key in zip(data.txts, data.__key__):
                 key_int = int(key.split("/")[-1])
                 if key_int < 100:
                     assert txt == f"<{key_int}>"
@@ -412,13 +404,13 @@ class TestDataset(unittest.TestCase):
             checkpoint_every_sec=0,
             checkpoint_every_min_n_samples=1,
         )
-        samples = [s.__keys__ for idx, s in zip(range(100), loader)]
+        samples = [s.__key__ for idx, s in zip(range(100), loader)]
 
         print(samples)
 
         state = loader.save_state_rank()
 
-        samples_after = [s.__keys__ for idx, s in zip(range(100, 200), loader)]
+        samples_after = [s.__key__ for idx, s in zip(range(100, 200), loader)]
         print(samples_after)
 
         loader = get_savable_loader(
@@ -437,7 +429,7 @@ class TestDataset(unittest.TestCase):
 
         loader.restore_state_rank(state)
 
-        samples_restored = [s.__keys__ for idx, s in zip(range(100, 200), loader)]
+        samples_restored = [s.__key__ for idx, s in zip(range(100, 200), loader)]
         print(samples_restored)
 
         assert all([a == b for a, b in zip(samples_after, samples_restored)])
@@ -478,7 +470,7 @@ class TestDataset(unittest.TestCase):
 
         state = loader.save_state_rank()
 
-        samples_after = [s.__keys__ for idx, s in zip(range(100, 200), loader)]
+        samples_after = [s.__key__ for idx, s in zip(range(100, 200), loader)]
         print(samples_after)
 
         loader = get_savable_loader(
@@ -497,7 +489,7 @@ class TestDataset(unittest.TestCase):
 
         loader.restore_state_rank(state)
 
-        samples_restored = [s.__keys__ for idx, s in zip(range(100, 200), loader)]
+        samples_restored = [s.__key__ for idx, s in zip(range(100, 200), loader)]
         print(samples_restored)
 
         assert all([a == b for a, b in zip(samples_after, samples_restored)])
@@ -543,7 +535,7 @@ class TestDataset(unittest.TestCase):
 
         state = loader.save_state_rank()
 
-        samples_after = [s.__keys__ for idx, s in zip(range(100, 200), loader)]
+        samples_after = [s.__key__ for idx, s in zip(range(100, 200), loader)]
         print(samples_after)
 
         loader = get_savable_loader(
@@ -566,7 +558,7 @@ class TestDataset(unittest.TestCase):
 
         loader.restore_state_rank(state)
 
-        samples_restored = [s.__keys__ for idx, s in zip(range(100, 200), loader)]
+        samples_restored = [s.__key__ for idx, s in zip(range(100, 200), loader)]
         print(samples_restored)
 
         assert all([a == b for a, b in zip(samples_after, samples_restored)])
@@ -612,7 +604,7 @@ class TestDataset(unittest.TestCase):
 
         state = loader.save_state_rank()
 
-        samples_after = [s.__keys__ for idx, s in zip(range(100, 200), loader)]
+        samples_after = [s.__key__ for idx, s in zip(range(100, 200), loader)]
         print(samples_after)
 
         loader = get_savable_loader(
@@ -635,7 +627,7 @@ class TestDataset(unittest.TestCase):
 
         loader.restore_state_rank(state)
 
-        samples_restored = [s.__keys__ for idx, s in zip(range(100, 200), loader)]
+        samples_restored = [s.__key__ for idx, s in zip(range(100, 200), loader)]
         print(samples_restored)
 
         assert all([a == b for a, b in zip(samples_after, samples_restored)])
@@ -644,47 +636,47 @@ class TestDataset(unittest.TestCase):
         sample_src_check = [s.__sources__ for idx, s in zip(range(1), loader)][0]
         print(sample_src_check)
         # NOTE: Auxiliary sources have string as index, not int
-        assert sample_src_check == [
+        assert sample_src_check == (
             # Primary source for the sample, reading all source files
             SourceInfo(
                 dataset_path=EPath(self.dataset_path / "ds1"),
-                index=10,
-                shard_name="parts/data-1.tar",
-                file_names=("000010.pkl", "000010.txt"),
+                index=2,
+                shard_name="parts/data-0.tar",
+                file_names=("000002.pkl", "000002.txt"),
             ),
             # Auxiliary source for the sample, reading from ds2
             SourceInfo(
                 dataset_path=EPath(self.dataset_path / "ds2"),
-                index="000110.txt",
-                shard_name="parts/data-1.tar",
-                file_names=("000110.txt",),
+                index="000102.txt",
+                shard_name="parts/data-0.tar",
+                file_names=("000102.txt",),
             ),
             # Auxiliary source for the sample, reading from ds1, but next sample
             SourceInfo(
                 dataset_path=EPath(self.dataset_path / "ds1"),
-                index="000011.txt",
-                shard_name="parts/data-1.tar",
-                file_names=("000011.txt",),
+                index="000003.txt",
+                shard_name="parts/data-0.tar",
+                file_names=("000003.txt",),
             ),
             SourceInfo(
                 dataset_path=EPath(self.dataset_path / "ds1"),
-                index=11,
-                shard_name="parts/data-1.tar",
-                file_names=("000011.pkl", "000011.txt"),
+                index=21,
+                shard_name="parts/data-2.tar",
+                file_names=("000021.pkl", "000021.txt"),
             ),
             SourceInfo(
                 dataset_path=EPath(self.dataset_path / "ds2"),
-                index="000111.txt",
-                shard_name="parts/data-1.tar",
-                file_names=("000111.txt",),
+                index="000121.txt",
+                shard_name="parts/data-2.tar",
+                file_names=("000121.txt",),
             ),
             SourceInfo(
                 dataset_path=EPath(self.dataset_path / "ds1"),
-                index="000012.txt",
-                shard_name="parts/data-1.tar",
-                file_names=("000012.txt",),
+                index="000022.txt",
+                shard_name="parts/data-2.tar",
+                file_names=("000022.txt",),
             ),
-        ]
+        )
 
     def test_aux_filesystem_reference(self):
         torch.manual_seed(42)
@@ -729,7 +721,7 @@ class TestDataset(unittest.TestCase):
             checkpoint_every_sec=0,
             checkpoint_every_min_n_samples=1,
         )
-        samples = [s.__keys__ for idx, s in zip(range(100), loader)]
+        samples = [s.__key__ for idx, s in zip(range(100), loader)]
 
         print(samples)
         assert len(samples) == 100

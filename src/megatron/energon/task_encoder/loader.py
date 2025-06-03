@@ -21,10 +21,6 @@ def _split_kwargs(kwargs: dict) -> dict:
     except KeyError:
         pass
     try:
-        loader_kwargs["subflavor"] = kwargs.pop("subflavor")
-    except KeyError:
-        pass
-    try:
         loader_kwargs["dataset_config"] = kwargs.pop("dataset_config")
     except KeyError:
         pass
