@@ -3,7 +3,11 @@
 
 from typing import Any, Callable, Dict, Generic, Iterator, Optional, TypeVar, Union
 
-from megatron.energon.flavors.base_dataset import SavableDataset
+from megatron.energon.flavors.base_dataset import (
+    SavableDataset,
+    add_sample_restore_key,
+)
+from megatron.energon.flavors.trace import TraceIter, trace_iter
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset, SampleIndex
 
@@ -50,26 +54,27 @@ class FilterDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
     def __len__(self):
         return len(self.dataset)
 
-    def __iter__(self) -> Iterator[T_sample]:
-        trace_span = self.worker_config.worker_trace_span()
-        filter_name = self._function_config(self.filter_fn)
-        with (
-            trace_span.span("FilterDataset.__iter__", args={"config": self._own_config()}, level=1),
-            trace_span.generator("FilterDataset.__iter__.next", level=2) as trace_gen,
-        ):
-            for sample in self.dataset:
-                with (
-                    self._sample_index.ctx(),
-                    trace_span.span(filter_name, args={"sample": sample}, level=2),
-                ):
-                    filter_res = self.filter_fn(sample)
-                if filter_res:
-                    with trace_gen.yield_():
-                        yield sample
-                else:
-                    self.worker_config.worker_trace_span().instant(
-                        "FilterDataset.__iter__.reject", level=3
-                    )
+    @trace_iter(
+        name=lambda self: f"FilterDataset({self._function_config_short(self.filter_fn)})",
+        call_args={
+            "config": lambda self: self._own_config(),
+        },
+        next_args={
+            "sample_idx": lambda self: self._sample_index.current_idx,
+        },
+    )
+    def __iter__(self, trace_iter: TraceIter) -> Iterator[T_sample]:
+        filter_fn = trace_iter.wrap_fn(self.filter_fn)
+
+        for sample in self.dataset:
+            with self._sample_index.ctx() as sample_idx:
+                filter_res = filter_fn(sample)
+            if filter_res:
+                yield add_sample_restore_key(
+                    sample,
+                    sample_idx,
+                    src=self,
+                )
 
     def _own_config(self) -> Dict[str, Any]:
         return {

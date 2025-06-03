@@ -38,12 +38,12 @@ from megatron.energon.flavors.base_dataset import (
     State,
     add_sample_restore_key,
 )
+from megatron.energon.flavors.trace import default_get_keys
 from megatron.energon.rng import SystemRng, SystemRngState
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset
 from megatron.energon.wrappers.batch_dataset import BatchDataset
 from megatron.energon.wrappers.gc_dataset import GC_DEFAULT_EVERY_N_ITER, GcDataset, gc_init_worker
-from megatron.energon.wrappers.log_sample_dataset import default_get_keys
 from megatron.energon.wrappers.watchdog_dataset import WatchdogDataset
 
 T = TypeVar("T")

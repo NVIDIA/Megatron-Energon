@@ -4,53 +4,11 @@
 from typing import Any, Callable, Dict, Generic, Iterator, List, Literal, Optional, TypeVar
 
 from megatron.energon.flavors.base_dataset import SavableDataset
+from megatron.energon.flavors.trace import TraceIter, default_get_keys, trace_iter
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset
 
 T_sample = TypeVar("T_sample")
-
-
-def _flatten_str_list(keys: Any) -> Iterator[Optional[str]]:
-    """Flatten a list of keys into a list of strings."""
-    if isinstance(keys, str):
-        yield keys
-    elif isinstance(keys, (list, tuple)):
-        for key in keys:
-            yield from _flatten_str_list(key)
-    else:
-        yield None
-
-
-def _flatten_str_list_or_none(keys: Any) -> Optional[List[str]]:
-    """Flatten a list of keys into a list of strings. If this cannot be fetched, return None."""
-    keys = list(_flatten_str_list(keys))
-    if any(k is None for k in keys):
-        return None
-    return keys
-
-
-def default_get_keys(batch: Any) -> Optional[List[str]]:
-    """Default get_keys, which has some heuristics to find the sample keys."""
-    if isinstance(batch, list):
-        all_keys = []
-        for b in batch:
-            k = default_get_keys(b)
-            if k is None:
-                return None
-            all_keys.extend(k)
-        return all_keys
-    if hasattr(batch, "__key__"):
-        return _flatten_str_list_or_none(batch.__key__)
-    elif hasattr(batch, "__keys__"):
-        return _flatten_str_list_or_none(batch.__keys__)
-    elif isinstance(batch, dict):
-        if "__key__" in batch:
-            return _flatten_str_list_or_none(batch["__key__"])
-        elif "__keys__" in batch:
-            return _flatten_str_list_or_none(batch["__keys__"])
-        elif "keys" in batch:
-            return _flatten_str_list_or_none(batch["keys"])
-    return None
 
 
 class LogSampleDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
@@ -86,33 +44,16 @@ class LogSampleDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]
     def __len__(self):
         return len(self.dataset)
 
-    def _log(self, sample: T_sample) -> dict:
-        log_entry = {
-            "idx": self._step,
-        }
-        keys = self.get_keys_fn(sample)
-        if keys is not None:
-            log_entry["keys"] = keys
-
-        return log_entry
-
-    def __iter__(self) -> Iterator[T_sample]:
-        trace_span = self.worker_config.worker_trace_span()
-        with trace_span.span(
-            "LogSampleDataset.__iter__",
-            args={
-                "mode": self.mode,
-            },
-            level=1,
-        ):
-            for sample in trace_span.iterable(
-                self.dataset, name="LogSampleDataset.__iter__.next", level=1
-            ):
-                with trace_span.span(
-                    "LogSampleDataset.__iter__.yield", args=self._log(sample), level=1
-                ):
-                    self._step += 1
-                    yield sample
+    @trace_iter(
+        next_args={
+            "idx": lambda self: self._step,
+        },
+    )
+    def __iter__(self, trace_iter: TraceIter) -> Iterator[T_sample]:
+        for sample in self.dataset:
+            self._step += 1
+            trace_iter.sample(sample)
+            yield sample
 
     def config(self) -> Dict[str, Any]:
         # Transparent logger, it won't change the samples

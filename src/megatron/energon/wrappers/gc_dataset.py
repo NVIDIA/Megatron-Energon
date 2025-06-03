@@ -11,6 +11,7 @@ from torch.distributed._shard.sharded_tensor import ShardedTensorBase
 from torch.distributed.distributed_c10d import reduce_op
 
 from megatron.energon.flavors.base_dataset import SavableDataset
+from megatron.energon.flavors.trace import TraceIter, trace_iter
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset
 
@@ -100,39 +101,44 @@ class GcDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
     def __len__(self):
         return len(self.dataset)
 
-    def __iter__(self) -> Iterator[T_sample]:
-        trace_span = self.worker_config.worker_trace_span()
-        with (
-            trace_span.span("GcDataset.__iter__", args={"config": self._own_config()}, level=1),
-            self.worker_config.worker_trace_writer().generator(
-                "GcDataset.__iter__.next", level=2
-            ) as trace_gen,
-        ):
-            in_worker = torch.utils.data.get_worker_info() is not None
-            if in_worker and not _frozen_cuda_tensors_initialized:
-                raise GcFreezeError(
-                    "You are using GcDataset with multiple workers, but forgot to call gc_init_worker() in at least one forked worker process."
-                )
+    @trace_iter(
+        call_args={
+            "config": lambda self: self._own_config(),
+        },
+    )
+    def __iter__(self, trace_iter: TraceIter) -> Iterator[T_sample]:
+        in_worker = torch.utils.data.get_worker_info() is not None
+        if in_worker and not _frozen_cuda_tensors_initialized:
+            raise GcFreezeError(
+                "You are using GcDataset with multiple workers, but forgot to call gc_init_worker() in at least one forked worker process."
+            )
 
+        @trace_iter.wrap_inner()
+        def gc_freeze():
+            gc.freeze()
+
+        @trace_iter.wrap_inner()
+        def gc_collect():
+            gc.collect()
+
+        @trace_iter.wrap_inner()
+        def gc_unfreeze():
+            gc.unfreeze()
+
+        if self.freeze:
+            gc_collect()
+            gc_freeze()
+        try:
+            iter = 0
+            for sample in self.dataset:
+                yield sample
+                iter += 1
+                if iter >= self.every_n_iter:
+                    gc_collect()
+                    iter = 0
+        finally:
             if self.freeze:
-                with trace_span.span("GcDataset.__iter__.gc.collect", level=1):
-                    gc.collect()
-                with trace_span.span("GcDataset.__iter__.gc.freeze", level=1):
-                    gc.freeze()
-            try:
-                iter = 0
-                for sample in self.dataset:
-                    with trace_gen.yield_():
-                        yield sample
-                    iter += 1
-                    if iter >= self.every_n_iter:
-                        with trace_span.span("GcDataset.__iter__.gc.collect", level=1):
-                            gc.collect()
-                        iter = 0
-            finally:
-                if self.freeze:
-                    with trace_span.span("GcDataset.__iter__.gc.unfreeze", level=1):
-                        gc.unfreeze()
+                gc_unfreeze()
 
     def _own_config(self) -> Dict[str, Any]:
         return {

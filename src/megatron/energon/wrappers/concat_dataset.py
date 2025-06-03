@@ -3,7 +3,11 @@
 
 from typing import Any, Dict, Generic, Iterator, TypeVar
 
-from megatron.energon.flavors.base_dataset import SavableDataset, add_sample_restore_key
+from megatron.energon.flavors.base_dataset import (
+    SavableDataset,
+    add_sample_restore_key,
+)
+from megatron.energon.flavors.trace import TraceIter, trace_iter
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset
 
@@ -32,20 +36,23 @@ class ConcatDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
     def __len__(self):
         return sum(len(dataset) for dataset in self.datasets)
 
-    def __iter__(self) -> Iterator[T_sample]:
-        trace_span = self.worker_config.worker_trace_span()
-        with trace_span.span("ConcatDataset.__iter__", level=1):
-            for ds_idx, dataset in enumerate(self.datasets):
-                with trace_span.span(
-                    "ConcatDataset.next_dataset.yield_from", args={"ds_idx": ds_idx}, level=1
-                ):
-                    for sample in dataset:
-                        yield add_sample_restore_key(
-                            sample,
-                            ds_idx,
-                            src=self,
-                        )
-            trace_span.instant("ConcatDataset.__iter__.done", level=1)
+    @trace_iter(
+        name=lambda self: "ConcatDataset",
+        call_args={
+            "config": lambda self: self._own_config(),
+        },
+    )
+    def __iter__(self, trace_iter: TraceIter) -> Iterator[T_sample]:
+        for ds_idx, dataset in enumerate(self.datasets):
+            for sample in dataset:
+                yield add_sample_restore_key(
+                    sample,
+                    ds_idx,
+                    src=self,
+                )
+
+    def _own_config(self) -> Dict[str, Any]:
+        return {}
 
     def config(self) -> Dict[str, Any]:
         return {

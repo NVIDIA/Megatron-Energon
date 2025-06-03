@@ -4,6 +4,7 @@
 from typing import Any, Dict, Generic, Iterator, List, TypeVar
 
 from megatron.energon.flavors.base_dataset import SavableDataset
+from megatron.energon.flavors.trace import TraceIter, trace_iter
 from megatron.energon.rng import WorkerRng
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset
@@ -44,56 +45,44 @@ class ShuffleBufferDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sam
     def __len__(self) -> int:
         return len(self.dataset)
 
-    def __iter__(self) -> Iterator[T_sample]:
-        trace_span = self.worker_config.worker_trace_span()
-        with (
-            trace_span.span(
-                "ShuffleBufferDataset.__iter__", args={"config": self._own_config()}, level=1
-            ),
-            self.worker_config.worker_trace_writer().generator(
-                "ShuffleBufferDataset.__iter__.next", level=2
-            ) as trace_gen,
-        ):
-            self._active_buffer.worker_start()
-            it = iter(self._active_buffer.append_iter())
-            try:
-                while True:
-                    if len(self._active_buffer) >= self.size:
-                        pop_idx = self._worker_rng.randbelow(len(self._active_buffer))
-                        sample_creation = self._sample_creation.pop(pop_idx)
-                        trace_span.instant(
-                            "ShuffleBufferDataset.__iter__.yield",
-                            args={
-                                "idx": pop_idx,
-                                "sample_creation": sample_creation,
-                                "sample_age": self._iterations - sample_creation,
-                            },
-                            level=2,
-                        )
-                        with trace_gen.yield_(last_args={"idx": pop_idx}):
-                            yield self._active_buffer.pop(pop_idx)
-                    else:
-                        try:
-                            next(it)
-                            self._sample_creation.append(self._iterations)
-                            trace_span.instant(
-                                "ShuffleBufferDataset.__iter__.append",
-                                args={
-                                    "idx": len(self._sample_creation) - 1,
-                                    "sample_creation": self._iterations,
-                                },
-                                level=2,
-                            )
-                            self._iterations += 1
-                        except StopIteration:
-                            break
-            finally:
-                if hasattr(it, "close"):
-                    it.close()
-            with trace_span.span("ShuffleBufferDataset.__iter__.final_buffer", level=2):
-                while len(self._active_buffer) > 0:
+    @trace_iter(
+        call_args={
+            "config": lambda self: self._own_config(),
+        },
+        next_args={
+            "idx": lambda self: self._sample_creation[-1],
+        },
+    )
+    def __iter__(self, trace_iter: TraceIter) -> Iterator[T_sample]:
+        self._active_buffer.worker_start()
+        it = iter(self._active_buffer.append_iter())
+        try:
+            while True:
+                if len(self._active_buffer) >= self.size:
                     pop_idx = self._worker_rng.randbelow(len(self._active_buffer))
+                    sample_creation = self._sample_creation.pop(pop_idx)
+                    trace_iter.sample(
+                        self._active_buffer.pop(pop_idx),
+                        {
+                            "idx": pop_idx,
+                            "sample_creation": sample_creation,
+                            "sample_age": self._iterations - sample_creation,
+                        },
+                    )
                     yield self._active_buffer.pop(pop_idx)
+                else:
+                    try:
+                        next(it)
+                        self._sample_creation.append(self._iterations)
+                        self._iterations += 1
+                    except StopIteration:
+                        break
+        finally:
+            if hasattr(it, "close"):
+                it.close()
+        while len(self._active_buffer) > 0:
+            pop_idx = self._worker_rng.randbelow(len(self._active_buffer))
+            yield self._active_buffer.pop(pop_idx)
 
     def _own_config(self) -> Dict[str, Any]:
         return {

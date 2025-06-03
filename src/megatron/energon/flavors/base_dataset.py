@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import dataclasses
+import functools
 import inspect
 import typing
 from abc import ABC, abstractmethod
@@ -449,9 +450,6 @@ def legacy_handler(
     ],
 ) -> Callable[[Exception, Optional[str], Optional[list[SourceInfo]]], None]:
     """Safely returns the new style three argument handler. If the handler takes 2 arguments, it wraps it."""
-    import functools
-    import inspect
-
     handler_sig = inspect.signature(handler)
     if len(handler_sig.parameters) != 3:
         original_handler = handler

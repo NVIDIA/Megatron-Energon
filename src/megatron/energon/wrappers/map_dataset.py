@@ -10,14 +10,19 @@ from typing import (
     Generic,
     Iterator,
     Optional,
+    Sequence,
     Tuple,
     TypeVar,
     Union,
 )
 
 from megatron.energon.errors import SYSTEM_EXCEPTIONS, FatalSampleError
-from megatron.energon.flavors.base_dataset import SavableDataset, add_sample_restore_key
-from megatron.energon.source_info import SourceInfo
+from megatron.energon.flavors.base_dataset import (
+    SavableDataset,
+    add_sample_restore_key,
+)
+from megatron.energon.flavors.trace import TraceIter, trace_iter
+from megatron.energon.source_info import SourceInfo, get_source_info
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers._log_exception import log_exception
 from megatron.energon.wrappers.base import BaseWrapperDataset, SampleIndex, get_sample_restore_key
@@ -31,7 +36,7 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
     """This dataset wrapper applies a custom function to transform each sample."""
 
     map_fn: Callable[[T_sample], Union[T_sample_out, Generator[T_sample_out, None, None]]]
-    error_handler: Callable[[Exception, T_sample, list[SourceInfo]], None]
+    error_handler: Callable[[Exception, T_sample, Sequence[SourceInfo]], None]
     stateless_map_fn: bool
     map_fn_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]]
     _sample_index: SampleIndex
@@ -49,7 +54,7 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
         dataset: SavableDataset[T_sample],
         map_fn: Callable[[T_sample], Union[T_sample_out, Generator[T_sample_out, None, None]]],
         *,
-        error_handler: Callable[[Exception, T_sample, list[SourceInfo]], None] = log_exception,
+        error_handler: Callable[[Exception, T_sample, Sequence[SourceInfo]], None] = log_exception,
         stateless_map_fn: bool = False,
         map_fn_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]] = None,
         failure_tolerance: Optional[int] = 100,
@@ -90,115 +95,98 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
     def __len__(self):
         return len(self.dataset)
 
-    def __iter__(self) -> Iterator[T_sample_out]:
-        trace_span = self.worker_config.worker_trace_span()
-        map_dataset_prefix = f"MapDataset({self._function_config_short(self.map_fn)})"
-        fn_span = self._function_config(self.map_fn)
+    @trace_iter(
+        name=lambda self: f"MapDataset({self._function_config_short(self.map_fn)})",
+        call_args={
+            "config": lambda self: self._own_config(),
+        },
+        next_args={
+            "sample_idx": lambda self: self._sample_index.current_idx,
+        },
+    )
+    def __iter__(self, trace_iter: TraceIter) -> Iterator[T_sample_out]:
         last_map_failures = 0
 
-        with (
-            trace_span.span(
-                f"{map_dataset_prefix}.__iter__", args={"config": self._own_config()}, level=1
-            ),
-            self.worker_config.worker_trace_writer().generator(
-                "MapDataset.__iter__.next", level=2
-            ) as trace_gen,
-        ):
-            if self._generator_sample_key is not None:
-                assert self._generator_offset is not None
-                sample = self.dataset.restore_sample(self._generator_sample_key)
-                # Do not increment the sample index, use previous index
-                with (
-                    self._sample_index.ctx(self._sample_index.current_idx) as sample_idx,
-                    trace_span.span(fn_span, args={"sample_idx": sample_idx}, level=2),
-                ):
-                    mapped_sample = self.map_fn(sample)
-                assert isinstance(mapped_sample, Generator)
-                assert inspect.isgeneratorfunction(self.map_fn), (
-                    f"Generator in {self.map_fn} but not marked as such."
-                )
-                target_offset = self._generator_offset
-                self._generator_offset = 0
-                for idx, (sample_idx, inner_sample) in trace_span.iterable(
-                    enumerate(self._sample_index.iter_ctx(mapped_sample, sample_idx)),
-                    name=f"{fn_span}.next",
-                    level=2,
-                ):
-                    # Skip other samples
-                    if idx >= target_offset:
-                        self._generator_offset = idx + 1
-                        with trace_gen.yield_(last_args={"sample_idx": sample_idx, "idx": idx}):
-                            yield add_sample_restore_key(
-                                inner_sample,
-                                sample_idx,
-                                idx,
-                                src=self,
-                            )
-                self._generator_sample_key = None
-                self._generator_offset = None
+        map_fn = trace_iter.wrap_fn(self.map_fn)
 
-            for sample in self.dataset:
-                restore_key = get_sample_restore_key(sample)
-                try:
-                    with (
-                        self._sample_index.ctx() as sample_idx,
-                        trace_span.span(fn_span, args={"sample_idx": sample_idx}, level=2),
-                    ):
-                        mapped_sample = self.map_fn(sample)
-                    if isinstance(mapped_sample, Generator):
-                        assert inspect.isgeneratorfunction(self.map_fn), (
-                            f"Generator in {self.map_fn} but not marked as such."
-                        )
-                        self._generator_sample_key = restore_key
-                        self._generator_offset = 0
-                        # In case of a generator, additionally store the index of the yielded samples
-                        # per input sample
-                        for idx, (sample_idx, inner_sample) in trace_span.iterable(
-                            enumerate(self._sample_index.iter_ctx(mapped_sample, sample_idx)),
-                            name=f"{fn_span}.next",
-                            level=2,
-                        ):
-                            self._generator_offset = idx + 1
-                            last_map_failures = 0
-                            with trace_gen.yield_(last_args={"sample_idx": sample_idx, "idx": idx}):
-                                yield add_sample_restore_key(
-                                    inner_sample,
-                                    sample_idx,
-                                    idx,
-                                    src=self,
-                                )
-                        self._generator_sample_key = None
-                        self._generator_offset = None
-                    else:
-                        last_map_failures = 0
-                        with trace_gen.yield_(last_args={"sample_idx": sample_idx}):
-                            yield add_sample_restore_key(
-                                mapped_sample,
-                                sample_idx,
-                                src=self,
-                            )
-                except GeneratorExit:
-                    raise
-                except SkipSample:
-                    trace_span.instant(f"{map_dataset_prefix}.__iter__.skip", level=1)
-                except SYSTEM_EXCEPTIONS:
-                    raise FatalSampleError.from_sample(sample)
-                except Exception as e:
-                    self.error_handler(e, sample)
-                    trace_span.instant(
-                        f"{map_dataset_prefix}.__iter__.error/skip",
-                        args={"exception": f"{type(e).__name__}: {str(e)}"},
-                        level=1,
+        if self._generator_sample_key is not None:
+            assert self._generator_offset is not None
+            sample = self.dataset.restore_sample(self._generator_sample_key)
+            # Do not increment the sample index, use previous index
+            with self._sample_index.ctx(self._sample_index.current_idx) as sample_idx:
+                mapped_sample = map_fn(sample)
+            assert isinstance(mapped_sample, Generator)
+            assert inspect.isgeneratorfunction(self.map_fn), (
+                f"Generator in {self.map_fn} but not marked as such."
+            )
+            target_offset = self._generator_offset
+            self._generator_offset = 0
+            for idx, (sample_idx, inner_sample) in enumerate(
+                self._sample_index.iter_ctx(mapped_sample, sample_idx)
+            ):
+                # Skip other samples
+                if idx >= target_offset:
+                    self._generator_offset = idx + 1
+                    yield add_sample_restore_key(
+                        inner_sample,
+                        sample_idx,
+                        idx,
+                        src=self,
                     )
-                    last_map_failures += 1
-                    if (
-                        self.failure_tolerance is not None
-                        and last_map_failures >= self.failure_tolerance
+            self._generator_sample_key = None
+            self._generator_offset = None
+
+        for sample in self.dataset:
+            restore_key = get_sample_restore_key(sample)
+            try:
+                with self._sample_index.ctx() as sample_idx:
+                    mapped_sample = map_fn(sample)
+                if isinstance(mapped_sample, Generator):
+                    assert inspect.isgeneratorfunction(self.map_fn), (
+                        f"Generator in {self.map_fn} but not marked as such."
+                    )
+                    self._generator_sample_key = restore_key
+                    self._generator_offset = 0
+                    # In case of a generator, additionally store the index of the yielded samples
+                    # per input sample
+                    for idx, (sample_idx, inner_sample) in enumerate(
+                        self._sample_index.iter_ctx(mapped_sample, sample_idx)
                     ):
-                        raise FatalSampleError.from_sample(
-                            sample,
-                            f"MapDataset {self.map_fn} failed {last_map_failures} times in a row. Likely your code or dataset are broken.",
+                        self._generator_offset = idx + 1
+                        last_map_failures = 0
+                        yield add_sample_restore_key(
+                            inner_sample,
+                            sample_idx,
+                            idx,
+                            src=self,
                         )
+                    self._generator_sample_key = None
+                    self._generator_offset = None
+                else:
+                    last_map_failures = 0
+                    yield add_sample_restore_key(
+                        mapped_sample,
+                        sample_idx,
+                        src=self,
+                    )
+            except GeneratorExit:
+                raise
+            except SkipSample:
+                trace_iter.skip_sample(sample)
+            except SYSTEM_EXCEPTIONS:
+                raise FatalSampleError.from_sample(sample)
+            except Exception as e:
+                self.error_handler(e, sample, get_source_info(sample))
+                trace_iter.sample_exception(e, sample)
+                last_map_failures += 1
+                if (
+                    self.failure_tolerance is not None
+                    and last_map_failures >= self.failure_tolerance
+                ):
+                    raise FatalSampleError.from_sample(
+                        sample,
+                        f"MapDataset {self.map_fn} failed {last_map_failures} times in a row. Likely your code or dataset are broken.",
+                    )
 
     def can_restore_sample(self) -> bool:
         return super().can_restore_sample() and self.stateless_map_fn

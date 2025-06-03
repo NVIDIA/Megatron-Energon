@@ -5,6 +5,7 @@ import warnings
 from typing import Any, Dict, Generic, Iterator, Optional, TypeVar
 
 from megatron.energon.flavors.base_dataset import SavableDataset
+from megatron.energon.flavors.trace import TraceIter, trace_iter
 from megatron.energon.watchdog import Watchdog
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset
@@ -57,20 +58,23 @@ class WatchdogDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample])
                 RuntimeWarning,
             )
 
-    def __iter__(self) -> Iterator[T_sample]:
-        with self.worker_config.worker_trace_span().span(
-            "WatchdogDataset.__iter__", args={"config": self._own_config()}, level=1
-        ):
-            if self.timeout_seconds is None:
-                yield from self.dataset
-            else:
-                watchdog = Watchdog(
-                    timeout=self.timeout_seconds,
-                    initial_timeout=self.initial_timeout_seconds,
-                    callback=self._watchdog_trigger,
-                    enabled=False,
-                )
-                yield from watchdog.watch_iter(self.dataset)
+    @trace_iter(
+        name=lambda self: f"WatchdogDataset({self._function_config(self.dataset)})",
+        call_args={
+            "config": lambda self: self._own_config(),
+        },
+    )
+    def __iter__(self, trace_iter: TraceIter) -> Iterator[T_sample]:
+        if self.timeout_seconds is None:
+            yield from self.dataset
+        else:
+            watchdog = Watchdog(
+                timeout=self.timeout_seconds,
+                initial_timeout=self.initial_timeout_seconds,
+                callback=self._watchdog_trigger,
+                enabled=False,
+            )
+            yield from watchdog.watch_iter(self.dataset)
 
     def _own_config(self) -> Dict[str, Any]:
         return {

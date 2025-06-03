@@ -1,11 +1,15 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from typing import Any, Dict, Iterator, List, Tuple, TypeVar
+from typing import Any, Dict, Iterator, List, Sequence, Tuple, TypeVar
 
 import torch
 
-from megatron.energon.flavors.base_dataset import SavableDataset, add_sample_restore_key
+from megatron.energon.flavors.base_dataset import (
+    SavableDataset,
+    add_sample_restore_key,
+)
+from megatron.energon.flavors.trace import TraceIter, trace_iter
 from megatron.energon.rng import WorkerRng
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset
@@ -19,7 +23,9 @@ class BlendDataset(BaseWrapperDataset[T_sample, T_sample]):
     The datasets may be infinite. This dataset is always infinite.
     """
 
+    datasets: List[SavableDataset[T_sample]]
     weights: Tuple[float, ...]
+    dataset_weights: Sequence[Tuple[SavableDataset[T_sample], float]]
     exhausted: List[bool]
     _worker_rng: WorkerRng
 
@@ -52,85 +58,69 @@ class BlendDataset(BaseWrapperDataset[T_sample, T_sample]):
 
     def __len__(self) -> int:
         # Give the number of samples in inner datasets, disregarding the weight
-        return sum(len(dataset) for dataset, weight in self.dataset_weights)
+        return sum(len(dataset) for dataset in self.datasets)
 
-    def __iter__(self) -> Iterator[T_sample]:
+    @trace_iter(
+        name=lambda self: "BlendDataset",
+        call_args={
+            "config": lambda self: self._own_config(),
+        },
+    )
+    def __iter__(self, trace_iter: TraceIter) -> Iterator[T_sample]:
         assert self.worker_has_samples(), "Cannot blend all empty datasets"
 
-        trace_span = self.worker_config.worker_trace_span()
-        with (
-            trace_span.span("BlendDataset.__iter__", args={"config": self._own_config()}, level=1),
-            self.worker_config.worker_trace_writer().generator(
-                "BlendDataset.__iter__.next", level=2
-            ) as trace_gen,
-        ):
-            # Create a list of datasets and their weights, but
-            # set the weight to 0 if the dataset has no samples on this worker.
+        # Create a list of datasets and their weights, but
+        # set the weight to 0 if the dataset has no samples on this worker.
 
-            dataset_iters = []
-            weights = []
+        dataset_iters = []
+        weights = []
+        for idx, (dataset, weight) in enumerate(self.dataset_weights):
+            assert weight > 0, "All blending weights must be > 0"
+
+            if dataset.worker_has_samples():
+                dataset_iters.append(iter(dataset))
+                weights.append(weight)
+            else:
+                dataset_iters.append(None)
+                weights.append(0)
+
+        weights = torch.tensor(weights, dtype=torch.float32)
+        if weights.sum() == 0:
+            raise RuntimeError(
+                "There is a worker with no samples in any of the blended datasets. "
+                "This can happen if you have a lot of workers and your dataset is too small. "
+                "Currently this case is not supported."
+            )
+
+        # Some may already be exhausted on this worker when restoring a state.
+        for idx, exhausted in enumerate(self.exhausted):
+            if exhausted:
+                weights[idx] = 0
+                dataset_iters[idx] = None
+
+        while True:
+            ds_idx = self._worker_rng.choice_idx(probs=weights)
+
+            if dataset_iters[ds_idx] is None:
+                if all(dataset_iter is None for dataset_iter in dataset_iters):
+                    break
+                continue
             try:
-                for idx, (dataset, weight) in enumerate(self.dataset_weights):
-                    assert weight > 0, "All blending weights must be > 0"
+                sample = next(dataset_iters[ds_idx])
+            except StopIteration:
+                dataset_iters[ds_idx] = None
+                weights[ds_idx] = 0
+                self.exhausted[ds_idx] = True
+                if all(dataset_iter is None for dataset_iter in dataset_iters):
+                    break
+            else:
+                yield add_sample_restore_key(sample, ds_idx, src=self)
 
-                    if dataset.worker_has_samples():
-                        dataset_iters.append(iter(dataset))
-                        weights.append(weight)
-                    else:
-                        dataset_iters.append(None)
-                        weights.append(0)
-
-                weights = torch.tensor(weights, dtype=torch.float32)
-                if weights.sum() == 0:
-                    raise RuntimeError(
-                        "There is a worker with no samples in any of the blended datasets. "
-                        "This can happen if you have a lot of workers and your dataset is too small. "
-                        "Currently this case is not supported."
-                    )
-
-                # Some may already be exhausted on this worker when restoring a state.
-                for idx, exhausted in enumerate(self.exhausted):
-                    if exhausted:
-                        weights[idx] = 0
-                        dataset_iters[idx] = None
-
-                while True:
-                    ds_idx = self._worker_rng.choice_idx(probs=weights)
-                    trace_span.instant(
-                        "BlendDataset.__iter__.sample",
-                        args={"weights": weights, "ds_idx": ds_idx},
-                        level=2,
-                    )
-
-                    if dataset_iters[ds_idx] is None:
-                        if all(dataset_iter is None for dataset_iter in dataset_iters):
-                            break
-                        continue
-                    try:
-                        sample = next(dataset_iters[ds_idx])
-                    except StopIteration:
-                        trace_span.instant(
-                            "BlendDataset.__iter__.exhausted", args={"ds_idx": ds_idx}, level=1
-                        )
-                        dataset_iters[ds_idx] = None
-                        weights[ds_idx] = 0
-                        self.exhausted[ds_idx] = True
-                        if all(dataset_iter is None for dataset_iter in dataset_iters):
-                            break
-                    else:
-                        with trace_gen.yield_():
-                            yield add_sample_restore_key(sample, ds_idx, src=self)
-
-                trace_span.instant("BlendDataset.__iter__.reset", level=1)
-                self.exhausted = [False] * len(self.dataset_weights)
-            finally:
-                for it in dataset_iters:
-                    if hasattr(it, "close"):
-                        it.close()
+        self.exhausted = [False] * len(self.dataset_weights)
 
     def _own_config(self) -> Dict[str, Any]:
         return {
-            "dataset_weights": [weight for _, weight in self.dataset_weights],
+            "weights": self.weights,
         }
 
     def config(self) -> Dict[str, Any]:

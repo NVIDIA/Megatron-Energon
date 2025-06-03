@@ -3,7 +3,11 @@
 
 from typing import Any, Dict, Generic, Iterator, Optional, TypeVar
 
-from megatron.energon.flavors.base_dataset import SavableDataset
+from megatron.energon.flavors.base_dataset import (
+    SavableDataset,
+    add_sample_restore_key,
+)
+from megatron.energon.flavors.trace import TraceIter, trace_iter
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset
 
@@ -48,8 +52,13 @@ class EpochizeDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample])
     def reset_state_own(self) -> None:
         self._offset = 0
 
-    def __iter__(self) -> Iterator[T_sample]:
-        trace_span = self.worker_config.worker_trace_span()
+    @trace_iter(
+        name=lambda self: "EpochizeDataset",
+        call_args={
+            "config": lambda self: self._own_config(),
+        },
+    )
+    def __iter__(self, trace_iter: TraceIter) -> Iterator[T_sample]:
         # Compute the local length for this worker, i.e. all worker's lengths sum up to the total
         if self.worker_config.num_workers <= 1:
             local_length = self.length
@@ -58,42 +67,31 @@ class EpochizeDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample])
             if self.worker_config.rank_worker_id() < self.length % self.worker_config.num_workers:
                 local_length += 1
 
-        with (
-            trace_span.span(
-                "EpochizeDataset.__iter__",
-                args={
-                    "offset": self._offset,
-                    "local_length": local_length,
-                    "config": self._own_config(),
-                },
-                level=1,
-            ),
-            self.worker_config.worker_trace_writer().generator(
-                "EpochizeDataset.__iter__.next", level=2
-            ) as trace_gen,
-        ):
+        while self._offset < local_length:
             try:
-                offset_range = list(range(self._offset, local_length))
+                if self._active_iter is None:
+                    self._active_iter = iter(self.dataset)
 
-                # Only iterate if there are samples to iterate
-                if len(offset_range) > 0:
-                    if self._active_iter is None:
-                        self._active_iter = iter(self.dataset)
+                sample_offset = self._offset
+                self._offset += 1
+                try:
+                    sample = next(self._active_iter)
+                except StopIteration:
+                    self._active_iter = None
+                    break
 
-                    for idx in offset_range:
-                        self._offset = (idx + 1) % local_length
-                        try:
-                            sample = next(self._active_iter)
-                        except StopIteration:
-                            break
-                        with trace_gen.yield_():
-                            yield sample
-                trace_span.instant("EpochizeDataset.__iter__.done", level=1)
+                yield add_sample_restore_key(
+                    sample,
+                    sample_offset,
+                    src=self,
+                )
             except GeneratorExit:
                 if self._active_iter is not None and hasattr(self._active_iter, "close"):
                     self._active_iter.close()
                     self._active_iter = None
                 raise
+        if self._offset >= local_length:
+            self._offset = 0
 
     def __len__(self) -> int:
         return self.length
@@ -108,6 +106,7 @@ class EpochizeDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample])
             "type": type(self).__qualname__,
             "dataset": self.dataset.config(),
             "length": self.length,
+            "worker_config": self.worker_config.config(),
         }
 
     def __str__(self):

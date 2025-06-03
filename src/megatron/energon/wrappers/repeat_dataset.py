@@ -5,6 +5,7 @@ import math
 from typing import Any, Dict, Generic, Iterator, Optional, TypeVar, Union
 
 from megatron.energon.flavors.base_dataset import SavableDataset
+from megatron.energon.flavors.trace import TraceIter, trace_iter
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset
 
@@ -52,73 +53,58 @@ class RepeatDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
             return len(self.dataset)
         return int(len(self.dataset) * self.repeats)
 
-    def __iter__(self) -> Iterator[T_sample]:
+    @trace_iter(
+        next_args={
+            "idx": lambda self: self._index,
+        },
+        call_args={
+            "repetition": lambda self: self._repetition,
+            "inner_len": lambda self: len(self.dataset),
+            "config": lambda self: self._own_config(),
+        },
+    )
+    def __iter__(self, trace_iter: TraceIter) -> Iterator[T_sample]:
         assert self.repeats is not None or self.dataset.worker_has_samples(), (
             "Cannot repeat empty dataset indefinitely"
         )
 
+        @trace_iter.wrap_inner(
+            call_args=lambda stop_after: {
+                "repetition": self._repetition,
+                "inner_len": len(self.dataset),
+                "stop_after": stop_after,
+            }
+        )
+        def repeat(stop_after: Optional[int]):
+            for sample in self.dataset:
+                self._index += 1
+                yield sample
+
+                if stop_after is not None and self._index >= stop_after:
+                    break
+
         ds_len = len(self.dataset)
 
-        trace_span = self.worker_config.worker_trace_span()
-        with (
-            trace_span.span(
-                "RepeatDataset.__iter__",
-                args={
-                    "repetition": self._repetition,
-                    "inner_len": ds_len,
-                    "config": self._own_config(),
-                },
-                level=2,
-            ),
-            self.worker_config.worker_trace_writer().generator(
-                "RepeatDataset.__iter__.next", next_args={"idx": self._index}, level=2
-            ) as trace_gen,
-        ):
-            while self.repeats is None or self._repetition < self.repeats:
-                with trace_span.span(
-                    "RepeatDataset.__iter__.repeat",
-                    args={
-                        "repetition": self._repetition,
-                        "repeats": self.repeats,
-                    },
-                    level=2,
-                ):
-                    if self.repeats is not None and self._repetition == math.floor(self.repeats):
-                        # Last iteration, adjust the number of samples
-                        fraction = self.repeats - math.floor(self.repeats)
-                        stop_after = math.floor(ds_len * fraction)
-                        if self._index >= stop_after:
-                            # We restored an index and it is already past the stop_after
-                            trace_span.instant("RepeatDataset.__iter__.break(stop_after)", level=2)
-                            break
-                    else:
-                        stop_after = None
-
-                    for sample in self.dataset:
-                        trace_span.instant(
-                            "RepeatDataset.__iter__.__iter__.yield",
-                            args={
-                                "idx": self._index,
-                            },
-                            level=2,
-                        )
-                        self._index += 1
-                        with trace_gen.yield_(next_args={"idx": self._index}):
-                            yield sample
-
-                        if stop_after is not None and self._index >= stop_after:
-                            trace_span.instant(
-                                "RepeatDataset.__iter__.__iter__.break(stop_after)", level=2
-                            )
-                            break
-                self._repetition += 1
-                self._index = 0
-
-            if self.restart:
-                self._repetition = 0
+        while self.repeats is None or self._repetition < self.repeats:
+            if self.repeats is not None and self._repetition == math.floor(self.repeats):
+                # Last iteration, adjust the number of samples
+                fraction = self.repeats - math.floor(self.repeats)
+                stop_after = math.floor(ds_len * fraction)
+                if self._index >= stop_after:
+                    # We restored an index and it is already past the stop_after
+                    break
             else:
-                # No more repeats
-                self._repetition = math.ceil(self.repeats)
+                stop_after = None
+
+            yield from repeat(stop_after)
+            self._repetition += 1
+            self._index = 0
+
+        if self.restart:
+            self._repetition = 0
+        else:
+            # No more repeats
+            self._repetition = math.ceil(self.repeats)
 
     def _own_config(self) -> Dict[str, Any]:
         return {
