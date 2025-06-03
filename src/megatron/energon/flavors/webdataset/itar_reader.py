@@ -486,12 +486,12 @@ class SqliteITarEntryReader(ITarReader[str]):
         """
 
         if not slow_mode:
-            res = self.sqlite_reader.list_sample_parts(sample_key)
-            return res
+            yield from self.sqlite_reader.list_sample_parts(sample_key)
         else:
             sample_pointer = self._get_itar_sample_pointer(sample_key)
 
-            sample = self._get_item_by_sample_pointer(sample_pointer, None, entry_match_fn=None)
+            sample = self._get_item_by_sample_pointer(sample_pointer, 0, entry_match_fn=None)
+            assert isinstance(sample, dict), f"Sample not found: {sample_pointer}"
 
             for ext in sample.keys():
                 if not ext.startswith("__"):
@@ -501,16 +501,14 @@ class SqliteITarEntryReader(ITarReader[str]):
         return self.sqlite_reader.get_total_size()
 
     @overload
-    def __getitem__(
-        self, key: str
-    ) -> Optional[Union[FilteredSample, tuple[bytes, SourceInfo]]]: ...
+    def __getitem__(self, key: str) -> Union[FilteredSample, tuple[bytes, SourceInfo]]: ...
 
     @overload
     def __getitem__(self, key: slice) -> "ITarReader": ...
 
     def __getitem__(
         self, key: Union[slice, str]
-    ) -> Union[FilteredSample, tuple[bytes, SourceInfo], ITarReader, None]:
+    ) -> Union[FilteredSample, tuple[bytes, SourceInfo], ITarReader]:
         """
         Either get a sample from the dataset by the sample key including all its entries,
         or get the bytes of a specific entry by the full filename of the entry inside the tar.
