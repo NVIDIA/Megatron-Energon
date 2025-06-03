@@ -1665,18 +1665,22 @@ class TestDataset(unittest.TestCase):
             world_size=1,
             num_workers=2,
             worker_log_level=3,
-            worker_debug_path=str(self.dataset_path) + "/worker_debug/{worker_id}.jsonl",
+            worker_debug_path=str(self.dataset_path) + "/worker_debug/{worker_id}.json",
+            # worker_debug_path="./tmp_worker_debug/{worker_id}.json",
         )
 
         # Reset this to 0 to make sure the test is deterministic
         SavableDataLoader._next_id = 0
 
         loader = get_savable_loader(
-            get_val_dataset(
+            get_train_dataset(
                 self.dataset_path,
                 split_part="train",
                 batch_size=5,
                 worker_config=worker_config,
+                shuffle_buffer_size=10,
+                max_samples_per_sequence=None,
+                virtual_epoch_length=10,
             ),
         )
 
@@ -1684,35 +1688,35 @@ class TestDataset(unittest.TestCase):
 
         samples = [[batch.__key__ for batch in loader] for _ in range(2)]
         print(samples)
+        del loader
+        gc.collect()
 
         debug_log_path = self.dataset_path / "worker_debug"
-        assert (debug_log_path / "0.jsonl").is_file()
-        assert (debug_log_path / "1.jsonl").is_file()
-        assert (debug_log_path / "2.jsonl").is_file()
+        assert (debug_log_path / "0.json").is_file(), f"{list(debug_log_path.iterdir())}"
+        assert (debug_log_path / "1.json").is_file(), f"{list(debug_log_path.iterdir())}"
+        assert (debug_log_path / "2.json").is_file(), f"{list(debug_log_path.iterdir())}"
 
-        collected_keys_order = [[None] * 10 for _ in range(2)]
-        with (debug_log_path / "0.jsonl").open() as rf:
-            for line in rf:
-                line_data = json.loads(line)
-                if line_data["t"] == "SavableDataLoader.yield":
-                    print(line_data)
-                    for i in range(len(collected_keys_order)):
-                        if collected_keys_order[i][line_data["idx"]] is None:
-                            collected_keys_order[i][line_data["idx"]] = line_data["keys"]
-                            break
-                    else:
-                        assert False, "Too many entries for key"
+        collected_keys = defaultdict(list)
+        with (debug_log_path / "0.json").open() as rf:
+            raw = json.load(rf)
+            for entry in raw:
+                if entry["ph"] == "n" and entry["name"] == "SavableDataLoader.yield":
+                    # print(entry)
+                    collected_keys[entry["args"]["global_sample_idx"]].extend(entry["args"]["keys"])
+            assert len(raw) > 0
+        dst_keys = [
+            [collected_keys[i] for i in range(10)],
+            [collected_keys[i] for i in range(10, 20)],
+        ]
 
-        print(collected_keys_order)
-        assert collected_keys_order == samples
+        print(dst_keys)
+        assert dst_keys == samples
 
         runner = CliRunner()
         result = runner.invoke(
             analyze_debug_command,
             [
                 str(debug_log_path),
-                "--include-modality",
-                "train,val",
                 "--heatmap-path",
                 str(self.dataset_path / "heatmap.png"),
             ],
