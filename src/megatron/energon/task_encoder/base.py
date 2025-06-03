@@ -1014,11 +1014,10 @@ class DefaultTaskEncoder(
     ABC,
     Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch],
 ):
-    """
-    The default task encoder supports automagically mapping to target types.
+    """The default task encoder supports automagically mapping to target types.
     You may override any methods to customize the behavior. By default, `encode_sample` is the
-    identity function, `batch` calls `_batch` with the type of the first sample, and `encode_batch`
-    is also the identity function. If you set any of `encoded_sample_type`, 'raw_batch_type' or
+    identity function, `batch` calls `\\_batch` with the type of the first sample, and `encode_batch`
+    is also the identity function. If you set any of `encoded_sample_type`, `raw_batch_type` or
     `batch_type`, the corresponding method return that type, where it automatically maps the fields
     (by name) to your new type.
     """
