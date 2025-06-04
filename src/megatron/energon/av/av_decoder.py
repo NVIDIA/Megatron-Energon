@@ -583,7 +583,11 @@ class AVDecoder:
         return float(duration) if duration is not None else None, num_frames
 
     def get_metadata(self, get_frame_count: bool = True) -> "AVMetadata":
-        """Get the metadata of the media object."""
+        """Get the metadata of the media object.
+
+        Args:
+            get_frame_count: Whether to return the number of frames in the video. This is a more costly operation.
+        """
         self.stream.seek(0)
         with av.open(self.stream) as input_container:
             initialize_av_container(input_container)
@@ -623,6 +627,11 @@ class AVDecoder:
                 if get_frame_count and num_frames is None:
                     num_frames = sum(1 for p in input_container.demux(video=0) if p.pts is not None)
                     metadata["video_num_frames"] = num_frames
+
+                if video_stream.average_rate is not None:
+                    metadata["video_fps"] = float(video_stream.average_rate)
+                else:
+                    metadata["video_fps"] = num_frames / video_duration
 
                 # Get the first frame to reliably get the width and height
                 for first_frame in input_container.decode(video=0):
