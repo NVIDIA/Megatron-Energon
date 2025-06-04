@@ -18,8 +18,8 @@ SPDX-License-Identifier: BSD-3-Clause -->
 * **Packing**
     * For Energon, with "packing" we mean "sequence packing". See "Sequence Packing" below.
 * **Polylithic Dataset**
-    * Used to split the text-based data from the (usually larger) media-data.
-    * Each modality will be put in its own dataset and one can refer to the other by file names.
+    * Used to split the text-based data from the (usually larger) media data.
+    * Each modality will be put in its own dataset and one dataset can refer to the other by file names.
     * For more information see [](polylithic-dataset)
 * **Sequence Packing**
     * A method to better utilize the available context length / sequence length of a model and reduce padding.
