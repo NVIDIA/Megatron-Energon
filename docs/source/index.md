@@ -37,6 +37,7 @@ basic/basics_flow
 basic/task_encoder
 basic/metadataset
 basic/save_restore
+basic/glossary
 ```
 
 
