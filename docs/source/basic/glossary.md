@@ -21,6 +21,13 @@ SPDX-License-Identifier: BSD-3-Clause -->
     * Used to split the text-based data from the (usually larger) media data.
     * Each modality will be put in its own dataset and one dataset can refer to the other by file names.
     * For more information see [](polylithic-dataset)
+* **Sample**
+    * In Energon, by sample we typically mean an instance of {py:class}`Sample <megatron.energon.Sample>` (e.g. one of its subclasses)
+    * Sometimes we also call the source files that are inside the WebDataset and are used to create that dataclass instance a "sample"
+        * For example inside one tar file there may be `004.jpg` and `004.txt` (image and label) together forming a captioning sample
+    * The {py:class}`Sample <megatron.energon.Sample>` dataclass has several mandatory and optional fields that describe one piece of training data for your ML workload. Typically it contains the input data to the model and the label data.
+* **Sample Part**
+    * A "sample part" is one of the components of a sample inside the WebDataset tar file. A captioning sample may be created from `004.jpg` and `004.txt` and each of those files is a sample part. This sample with the *key* `004` has two *parts* `txt` and `jpg`.
 * **Sequence Packing**
     * A method to better utilize the available context length / sequence length of a model and reduce padding.
     * Explained in [](../advanced/packing.md)
