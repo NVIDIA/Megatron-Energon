@@ -24,7 +24,7 @@ However, there are a few reasons why the other option may be needed:
 * You need to keep the original media and you don't want to duplicate it
 * Your media data is very large (e.g. long videos) and you need to keep your primary dataset small
 * You want to re-use the same media with different labels or you want to train on different subsets
-* You want to train with [online-packing](TODO) and can't fit all the media of the packing buffer in memory
+* You want to train with [online packing](../advanced/packing.md) and can't fit all the media of the packing buffer in memory
 
 **How to shard the data**
 
