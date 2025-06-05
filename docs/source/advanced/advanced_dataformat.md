@@ -195,12 +195,3 @@ Probably you noticed the {py:meth}`basic_sample_keys <megatron.energon.task_enco
 
 In a real use-case you will want to do a lot more here and we recommend keeping the cook methods in separate files and importing them where you define your TaskEncoder.
 
-## Other Filters for Cookers
-
-You can filter using a custom filtering, by providing a method to filter the sample:
-
-```python
-Cooker(cook_text, condition=lambda sample: return sample['myprop'] == 'yes_thats_it')
-```
-
-If you use multiple filters, they must all be satisfied for the sample to match.

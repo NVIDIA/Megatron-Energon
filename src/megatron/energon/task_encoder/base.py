@@ -738,7 +738,6 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                     dict(
                         cook=SavableDataset._function_config(cooker.cook),
                         has_subflavors=cooker.has_subflavors,
-                        condition=cooker.condition,
                     )
                     for cooker in self.cookers
                 ],

@@ -84,12 +84,7 @@ class Cooker(Generic[T_sample]):
 
     #: The subflavors to be present in the sample to be cooked by this cooker. All keys and values
     # must match.
-    # If combined with `condition`, all must be satisfied.
     has_subflavors: Optional[dict] = None
-    #: The custom condition on the raw sample to check if the sample should be cooked by this
-    # cooker.
-    # If combined with `has_subflavors`, all must be satisfied.
-    condition: Optional[Callable[[CrudeSample], bool]] = None
 
     @property
     def need_primary(self) -> bool:
@@ -109,10 +104,6 @@ class Cooker(Generic[T_sample]):
                     or crude_sample["__subflavors__"][k] != v
                 ):
                     return False
-
-        if self.condition is not None:
-            if not self.condition(crude_sample):
-                return False
 
         return True
 
