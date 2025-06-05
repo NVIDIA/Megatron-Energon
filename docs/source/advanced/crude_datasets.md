@@ -25,7 +25,7 @@ sample_loader: sample_loader.py:sample_loader
 part_filter: sample_loader.py:part_filter
 ```
 
-New `dataset.yaml` (or `crude.yaml`):
+New `dataset.yaml` (or `crude.yaml` of you like):
 ```yaml
 __module__: megatron.energon
 __class__: CrudeWebdataset
@@ -33,21 +33,22 @@ subflavors:
   example_crude_selector: foobar
 ```
 
-We recommend that you assign [subflavors](sect-subflavors) to differentiate the data.
-This helps, if you decide to mix different crude datasets or crude with non-crude data using a [Metadataset](../basic/metadataset).
-You can then use the subflavors to assign how each sample shall be processed.
-If you like, you can specify any subflavors in the metadataset later instead.
+As shown above, [subflavors](sect-subflavors) can be assigned directly in the dataset yaml, however we recommend
+to define them in the [Metadataset](../basic/metadataset) instead.
+Subflavors can be used to differentiate the data origin when you mix different crude datasets or crude with non-crude data using a [Metadataset](../basic/metadataset).
+You can then use the subflavors to determine how each sample shall be processed, as explained below.
 
 Let's see how we set up our [Task Encoder](../basic/task_encoder) to cook the crude samples and turn them into real samples like {py:class}`TextSample <megatron.energon.TextSample>`.
 
-A crude sample is essentially a dictionary ({py:class}`CrudeSample <megatron.energon.CrudeSample>` inherits from `dict`) and the loader will look for a {py:class}`Cooker <megatron.energon.task_encoder.Cooker>` that can handle and convert your crude samples.
+A crude sample is essentially a dictionary ({py:class}`CrudeSample <megatron.energon.CrudeSample>` inherits from `dict`) and the loader will look for a {py:class}`Cooker <megatron.energon.Cooker>` that can handle and convert your crude samples.
 You can provide cookers as follows:
 
 ```python
-from megatron.energon.task_encoder.cooking import Cooker, basic_sample_keys
+from megatron.energon import Cooker, basic_sample_keys
 
 # ...
 
+# We recommend to place your cooker functions in a separate file (esp. if they are larger)
 def cook_text(sample: dict) -> TextSample:
     return TextSample(
         **basic_sample_keys(sample),
@@ -170,7 +171,7 @@ You can then retrieve files by their names from the primary dataset.
 Cache pools allow the user to defer the data transfer if the content will be needed at some point in the future but not immediately.
 This is only needed if the media data is rather large and does not reside on a local disk, but rather on a network file system (e.g. lustre) or a remote file system (e.g. object storage).
 
-For example, when using [online packing](../advanced/packing), we may need to keep a buffer of several thousand samples to optimize for the best packing,
+Cache pools are especially beneficial if you are using buffers in your pipeline, like a shuffle buffer or a packing buffer. For example, when using [online packing](../advanced/packing), we may need to keep a buffer of several thousand samples to optimize for the best packing,
 but we cannot keep several thousand images in memory, also we don't need the actual image content to optimize the packing.
 Hence we will use auxiliary datasets as explained above.
 
@@ -180,7 +181,7 @@ Initially we want to load some information about the sample and its image but no
 Later, when the packing is computed, we need to retrieve the pixel values.
 
 In practice, this means the cooker will use a cache pool to queue the data retrieval from an auxiliary data source and obtain a lazy object (a handle to this future data). In a later stage (like {py:meth}`pack_selected_samples <megatron.energon.TaskEncoder.pack_selected_samples>`), the lazy object can be used to retrieve the content.
-Ideally, in the mean-time the cache pool has already downloaded the data to a local SSD.
+Ideally, in the mean-time, the cache pool has already downloaded the data to a local SSD.
 
 ### Using a Cache Pool
 

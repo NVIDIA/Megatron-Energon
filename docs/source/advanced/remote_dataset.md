@@ -8,7 +8,7 @@ This means you can train or validate with your data right from any storage by si
 
 ## Prerequisites
 
-For using a remote dataset, install one or more of the extras:
+For using a remote dataset, install energon with one or more of the extras:
 * `s3`
 * `aistore`
 * `azure-blob-storage`
@@ -21,8 +21,27 @@ pip install megatron-energon[s3,oci]
 ```
 
 Set up the msc config as described in [Multi Storage Client documentation](https://nvidia.github.io/multi-storage-client/).
-
 You can also use the rclone config with msc, as was described prior to 5.2.0.
+
+For fast data loading we recommend to activate MSC local caching:
+
+```yaml
+cache:
+  size: 500G
+  use_etag: true
+  eviction_policy:
+    policy: "fifo"
+    refresh_interval: 3600
+  cache_backend:
+    cache_path: /tmp/msc_cache # prefer to use local NVMe, but Lustre path also works
+```
+
+And point MSC to the config with 
+
+```sh
+export MSC_CONFIG=/path/to/msc_config.yaml
+```
+
 
 ## The URL syntax
 

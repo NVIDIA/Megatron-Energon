@@ -22,9 +22,9 @@ If you can, you should go for the monolithic option, because it's faster to load
 However, there are a few reasons why the other option may be needed:
 
 * You need to keep the original media and you don't want to duplicate it
-* Your media data is very large (e.g. long videos) and you need to keep your primary dataset small
+* Your media data is very large (e.g. long videos) and you need to keep your primary dataset small (containing just the text-base data and meta information)
 * You want to re-use the same media with different labels or you want to train on different subsets
-* You want to train with [online packing](../advanced/packing.md) and can't fit all the media of the packing buffer in memory
+* You want to train with [online packing](../advanced/packing.md) and can't fit all the media of the packing buffer in memory. With polylithic datasets you can use caching to avoid that issue.
 
 **How to shard the data**
 
@@ -56,7 +56,7 @@ Keep in mind that others may also want to use your dataset for a different proje
 These are the typical steps to get your data ready:
 
 1. Create a normal [WebDataset](https://github.com/webdataset/webdataset) from your data (including all the media content)
-2. Run our preparation tool `energon prepare` to convert to an energon-compatible format
+2. Run our preparation tool [`energon prepare`](energon-prepare) create additional metadata needed by energon. See [](data-on-disk).
 
 (polylithic-dataset)=
 ## Steps to Create a Polylithic Dataset
@@ -436,7 +436,7 @@ Note that the `shards` folder is just an example. The shards and their folder ca
 ### Files in `.nv-meta`
 #### dataset.yaml (user editable)
 The `dataset.yaml` contains the dataset definition, i.e. the dataset class to use as loader, optional decoders.
-If you want to create such a file, you should consider using the [CLI preparation tool](energon_data_prepare).
+If you want to create such a file, you should consider using the [CLI preparation tool](energon-prepare).
 
 Here's an example:
 ```yaml

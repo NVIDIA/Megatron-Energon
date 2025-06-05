@@ -92,7 +92,7 @@ Note that the image path corresponds to the filename of the image after the firs
 
 ### Usage with Energon
 
-To make this work with Energon, in the `energon prepare` [CLI preparation tool](energon_data_prepare), you can either tell the wizard to create a custom sample loader template for you, or change the files accordingly. Here is the example with the structure above:
+To make this work with Energon, in the `energon prepare` [CLI preparation tool](energon-prepare), you can either tell the wizard to create a custom sample loader template for you, or change the files accordingly. Here is the example with the structure above:
 
 `.nv-meta/dataset.yaml`:
 ```yaml
