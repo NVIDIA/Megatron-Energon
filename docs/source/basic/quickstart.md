@@ -262,6 +262,8 @@ for batch in loader:
     break
 ```
 
+For a detailed discussion on parallelism, check out [](../advanced/parallelism).
+
 ## Tutorial 5: Saving and Restoring
 
 For saving and restoring the state (e.g. when pausing and resuming training), the loader must be instantiated with the savable loader.

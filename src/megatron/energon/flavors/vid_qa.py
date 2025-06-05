@@ -5,20 +5,20 @@ from typing import List, Optional
 
 import torch
 
-from megatron.energon.av import VideoData
-from megatron.energon.dataclass_slots import dataclass_slots
+from megatron.energon.av import AVDecoder
+from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib.epath import EPath
 from megatron.energon.errors import warn_deprecated
 from megatron.energon.flavors.base_dataset import Sample
 from megatron.energon.flavors.webdataset import DefaultDecoderWebdatasetFactory
 
 
-@dataclass_slots
+@edataclass
 class VidQASample(Sample):
     """Sample type for video question answering."""
 
     #: The video data containing the image and audio info.
-    video: VideoData
+    video: AVDecoder
     #: The context/question for the image.
     context: str
     #: The possible answers. Not set for testing.

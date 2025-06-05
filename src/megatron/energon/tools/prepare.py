@@ -16,6 +16,10 @@ from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import BaseWebdatasetFactory, CrudeWebdataset
 from megatron.energon.flavors.base_dataset import Sample
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset.metadata import (
+    check_dataset_info_present,
+    get_dataset_info,
+)
 from megatron.energon.metadataset.loader import prepare_metadataset
 
 
@@ -39,7 +43,7 @@ def sample_loader_template(fields: dict, parts: list):
 
     fields_str = ""
     for field in fields:
-        if field.name in ("__key__", "__restore_key__", "__subflavor__", "__subflavors__"):
+        if field.name in ("__key__", "__restore_key__", "__subflavors__"):
             continue
         line = f"""        {field.name}=raw["TODO"],  # expected type: {type_str(field.type)}"""
         if field.default is not dataclasses.MISSING:
@@ -138,14 +142,10 @@ def command(
         return
 
     if tar_index_only:
-        assert (path / MAIN_FOLDER_NAME / ".info.yaml").is_file(), "No .info.yaml found"
-        with (path / MAIN_FOLDER_NAME / ".info.yaml").open("r") as f:
-            info = yaml.safe_load(f)
+        info = get_dataset_info(path)
         all_tars = list(info["shard_counts"].keys())
     else:
-        if (path / MAIN_FOLDER_NAME / "dataset.yaml").is_file() or (
-            path / MAIN_FOLDER_NAME / ".info.yaml"
-        ).is_file():
+        if check_dataset_info_present(path):
             if not click.confirm(
                 "It seems the dataset had already been prepared. Do you want to continue?"
             ):
@@ -200,8 +200,7 @@ def command(
                 show_pos=True,
                 length=length,
             ) as bar:
-                for el in bar:
-                    yield el
+                yield from bar
 
     else:
 
@@ -330,8 +329,8 @@ def command(
                     if field.name in (
                         "__key__",
                         "__restore_key__",
-                        "__subflavor__",
                         "__subflavors__",
+                        "__sources__",
                     ):
                         continue
                     while True:

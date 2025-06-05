@@ -124,7 +124,6 @@ splits:
   val:
     # Only use coco val for val
     path: ./coco
-    subflavor: small_images
     subflavors:
       augmentation_type: small_images
       text_length: short
@@ -137,6 +136,10 @@ In the above example, the coco training samples will now have the subflavor `aug
 Note that subflavors are entirely custom and you can use any name and any value for them, for example `foo: bar`
 In the code they will be passed around as a dictionary.
 
+## Auxiliary Data
+
+In the metadataset, you can also specify auxiliary data for each blended dataset.
+Please check out [Auxiliary Data](aux-data), for more information.
 
 ## Classes
 * {py:class}`DatasetLoaderInterface <megatron.energon.DatasetLoaderInterface>`: Common interface for dataset loaders. Provides methods for constructing/loading the actual train- or val-mode dataset.

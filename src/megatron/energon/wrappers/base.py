@@ -76,16 +76,16 @@ class BaseWrapperDataset(SavableDataset[T_sample_out], Generic[T_sample_in, T_sa
                     return res
         return None
 
-    def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_sample_out:
+    def restore_sample(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> T_sample_out:
         if len(self.datasets) == 1:
-            return self.datasets[0].restore_sample(index)
+            return self.datasets[0].restore_sample(restore_key)
         else:
-            id, ds_idx = index[:2]
+            id, ds_idx = restore_key[:2]
             assert id == type(self).__name__
-            index = index[2:]
+            restore_key = restore_key[2:]
             assert isinstance(ds_idx, int)
             return add_sample_restore_key(
-                self.datasets[ds_idx].restore_sample(index),
+                self.datasets[ds_idx].restore_sample(restore_key),
                 ds_idx,
                 src=self,
             )

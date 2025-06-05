@@ -3,14 +3,14 @@
 
 import hashlib
 import random
-from typing import Any, List, Optional, TypeVar
+from typing import Any, List, Mapping, Optional, Sequence, TypeVar
 
 import numpy
 import torch
 import torch.distributed
 import torch.utils.data
 
-from megatron.energon.dataclass_slots import dataclass_slots
+from megatron.energon.edataclass import edataclass
 from megatron.energon.savable import FlexState, Savable
 from megatron.energon.worker import WorkerConfig
 
@@ -55,7 +55,15 @@ class WorkerRng(Savable):
         if len(probs) == 1:
             return 0
         else:
-            return torch.multinomial(probs, 1, replacement=True, generator=self.rng).item()
+            # Custom implementation of multinomial to ensure consistency
+            # Torch changed their implementation of torch.multinomial in 2.7.0 and to be
+            # consistent with any torch version, we use a custom implementation here instead.
+            # This is anyways just a very simple case of multinomial, thus this should be fine.
+            # Actually, benchmarks show that this is faster than torch.multinomial by a factor of
+            # 10 even on CPU.
+            cdf = torch.cumsum(probs, dim=0)
+            val = torch.rand(1, generator=self.rng) * cdf[-1]
+            return torch.searchsorted(cdf, val).item()
 
     def choice(self, l: List[T], probs: Optional[torch.Tensor] = None) -> T:
         if probs is None:
@@ -81,7 +89,7 @@ class WorkerRng(Savable):
             self._restore_state = state["rng"]
 
 
-@dataclass_slots
+@edataclass
 class SystemRngState:
     """The state of the global random generators.
 
@@ -97,8 +105,25 @@ class SystemRngState:
     numpy: Any  # Currently `dict[str, Any] | tuple[str, NDArray[uint32], int, int, float]`
     random: Any  # Currently a nested tuple
 
+    def _hashable_value(self, value: Any) -> Any:
+        if isinstance(value, (int, float, bool, str)) or value is None:
+            return value
+        elif isinstance(value, torch.Tensor):
+            return self._hashable_value(value.tolist())
+        elif isinstance(value, numpy.ndarray):
+            return self._hashable_value(value.tolist())
+        elif isinstance(value, Mapping):
+            return tuple(
+                (self._hashable_value(k), self._hashable_value(v)) for k, v in value.items()
+            )
+        elif isinstance(value, Sequence):
+            return tuple(self._hashable_value(v) for v in value)
+        else:
+            raise ValueError(f"Cannot hash value of type {type(value)}: {value!r}")
+
     def __repr__(self):
-        return f"SystemRngState(torch={self.torch[:3]}..., numpy={self.numpy!r}, random={self.random!r})"
+        # If the hash is the same, the state is the same. Should suffice to identify the state.
+        return f"SystemRngState(hash={hash(self._hashable_value((self.torch, self.numpy, self.random)))})"
 
 
 class SystemRng:

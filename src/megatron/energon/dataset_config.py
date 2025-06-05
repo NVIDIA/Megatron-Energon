@@ -4,11 +4,11 @@
 from pathlib import Path
 from typing import Any, Dict, Optional, Type, TypeVar, Union
 
-import yaml
-
 from megatron.energon.epathlib import EPath
+from megatron.energon.eyaml import load_yaml
 from megatron.energon.flavors import BaseCoreDatasetFactory, StandardWebdatasetFactory
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset.metadata import check_dataset_info_present
 from megatron.energon.typed_converter import JsonParser
 from megatron.energon.worker import WorkerConfig
 
@@ -37,8 +37,8 @@ def load_config(
         data = path
     else:
         # Read the config from a file
-        with path.open() as f:
-            data: dict = yaml.safe_load(f)
+        with path.open("rb") as f:
+            data: dict = load_yaml(f)
 
     if default_kwargs is not None:
         new_data = default_kwargs.copy()
@@ -58,7 +58,6 @@ def get_dataset_from_config(
     split_config: str = "split.yaml",
     split_part: str = "train",
     training: bool = True,
-    subflavor: Optional[str] = None,
     subflavors: Optional[Dict[str, Any]] = None,
     worker_config: WorkerConfig,
     sample_type: Optional[Type[T_sample]] = None,
@@ -73,7 +72,6 @@ def get_dataset_from_config(
         split_config: Filename of the split config file (`path / '.nv-meta' / split_config`)
         split_part: Name of the split to load.
         training: If true, apply training randomization and loop the dataset.
-        subflavor: Override the __subflavor__ property of each sample.
         subflavors: Merge-Override the __subflavors__ property of each sample.
         worker_config: If set, use this worker config instead of the default one.
         sample_type: Type of the samples to load, only used to ensure typing.
@@ -83,9 +81,9 @@ def get_dataset_from_config(
         The instantiated dataset
     """
     path = EPath(path)
-    if not (path / MAIN_FOLDER_NAME / ".info.yaml").is_file():
+    if not check_dataset_info_present(path):
         raise ValueError(
-            f"Path {path} does not contain a {MAIN_FOLDER_NAME}/.info.yaml file. Did you forget to "
+            f"Path {path} does not contain a {MAIN_FOLDER_NAME}/.info.yaml or .info.json file. Did you forget to "
             f"prepare the dataset? Please check the documentation for an introduction to dataset "
             f"preparation."
         )
@@ -96,15 +94,12 @@ def get_dataset_from_config(
             split_config=split_config,
             split_part=split_part,
             training=training,
-            subflavor=subflavor,
             worker_config=worker_config,
             **kwargs,
         ),
         default_type=StandardWebdatasetFactory,
     )
-    if dataset.subflavors is None:
-        dataset.subflavors = subflavors
-    elif subflavors is not None:
+    if subflavors is not None:
         dataset.subflavors.update(subflavors)
     if sample_type is not None:
         assert issubclass(dataset.__sample_type__, sample_type), (

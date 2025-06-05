@@ -8,10 +8,69 @@ The aim of data preparation is to convert your data to a format that the energon
 The outcome will be a [WebDataset](https://github.com/webdataset/webdataset) with some extra information stored in a folder called `.nv-meta`.
 Below in [](data-on-disk) we explain the details about this format.
 
+## Important Considerations
+
+Depending on what your data looks like and how you are planning to use it, you will have to make a few choices,
+**before you prepare your dataset**:
+
+**Monolithic Dataset vs. Polylithic (primary and auxiliary) Datasets**
+
+You can include the media (images/video/audio) inside the same webdataset along with the text and metadata of each sample.
+Or you can keep the media separate (either in another indexed webdataset or as individual files on disk)
+
+If you can, you should go for the monolithic option, because it's faster to load.
+However, there are a few reasons why the other option may be needed:
+
+* You need to keep the original media and you don't want to duplicate it
+* Your media data is very large (e.g. long videos) and you need to keep your primary dataset small (containing just the text-base data and meta information)
+* You want to re-use the same media with different labels or you want to train on different subsets
+* You want to train with [online packing](../advanced/packing.md) and can't fit all the media of the packing buffer in memory. With polylithic datasets you can use caching to avoid that issue.
+
+**How to shard the data**
+
+The WebDataset will be split into a bunch of shards (i.e. tar files). You'll have to decide how many samples to put in one shard and how many shards to get overall.
+
+To maximize the loading speed, use as few shards as possible. Even a single shard can work well!
+However, if you cannot handle files above a certain size you may need to split the shards more.
+A good rule of thumb is to keep your **number of shards below 10k**.
+
+If you are using remote filesystems like S3, there may be an opposing constraint: S3 [limits the number of requests per second](https://docs.aws.amazon.com/AmazonS3/latest/userguide/optimizing-performance.html)
+that you can make for a single prefix (e.g. filename). By using more shards, you can increase the overall rate. Ideally, you would still want to stay below 10k shards.
+
+
+**Raw vs. baked data**
+
+When using images for example, you could put either the encoded JPG, the decoded pixel values or even the encoded features into the dataset.
+
+Typically, we recommend to go with the "original form" (e.g. JPG) and do all the processing on the fly inside the [cooker](crude-data) and [task encoder](../basic/task_encoder).
+This way, you can change the processing and keep your dataset.
+
+However, if the processing becomes a bottleneck, you can move some of it into the dataset creation phase by baking the information in.
+
+Keep in mind that others may also want to use your dataset for a different project.
+
+
+(monolithic-dataset)=
+## Steps to Create a Monolithic Dataset
+
 These are the typical steps to get your data ready:
 
-1. Create a normal [WebDataset](https://github.com/webdataset/webdataset) from your data
-2. Run our preparation tool `energon prepare` to convert to an energon-compatible format
+1. Create a normal [WebDataset](https://github.com/webdataset/webdataset) from your data (including all the media content)
+2. Run our preparation tool [`energon prepare`](energon-prepare) create additional metadata needed by energon. See [](data-on-disk).
+
+(polylithic-dataset)=
+## Steps to Create a Polylithic Dataset
+
+1. Create the primary [WebDataset](https://github.com/webdataset/webdataset) from your text-based part of the data (meta information, labels, sizes etc.)
+    * Include the file names (don't use absolute paths) of the media that belongs to each sample (e.g. as strings inside a json entry)
+2. Create the auxiliary dataset(s). Can be multiple datasets, e.g. one per modality.
+    * Either as a folder on disk with all the media files inside
+    * Or as another WebDataset that contains just the media files (with the exact same names)
+3. Run our preparation tool `energon prepare` **on both WebDatasets** to convert to an energon-compatible format
+    * Configure both datasets as `CrudeWebdataset`
+4. Create a [metadataset](../basic/metadataset) that specifies what auxiliary data to load for each primary dataset
+    * For more details read about [crude data](crude-data)
+
 
 (wds-format)=
 ## Step 1: Creating a WebDataset
@@ -39,6 +98,7 @@ shards
 
 In the example you can see two shards (i.e. tar files) with multiple samples. Each group of files with the same basename makes one sample.
 So `sample_0000.jpg`, `sample_0000.txt` and `sample_0000.detail.json` are three parts that belong to the first sample.
+This shows a monolithic dataset, for polylithic you would drop the JPGs in the primary dataset.
 
 Note that each sample may have a different number of parts, for example some samples may have more images than others.
 In this case, they should still have the same basename, for example `sample_0000.img1.jpg` and `sample_0000.img2.jpg`. For an advanced example for interleaved data, check out [this section](interleaved-sample-loader).
@@ -82,8 +142,9 @@ The command will
 * Search for all `*.tar` files in the given folder
 * Index them so samples can be accessed randomly
 * Ask you how you want to split the data into train/val/test paritions
-* Ask you how to decode the data (field map or sample_loader.py)
-* store all this information in a subfolder `.nv-meta/`, see details [below](data-on-disk).
+* Ask you about the sample type (optionally crude)
+* Ask you how to decode the data if not using crude data (field map or sample_loader.py)
+* Store all this information in a subfolder `.nv-meta/`, see details [below](data-on-disk).
 
 ### Splitting the dataset into train/val/test
 
@@ -126,6 +187,8 @@ Commandline:
 > energon prepare --split-parts 'train:shards/train_.*' --split-parts 'val:shards/val_.*' ./
 ```
 
+Note that the pattern matching syntax uses regexes, so for arbitrary characters insert `.*` not just `*`
+
 #### Example 3: Presplit shards by folder
 ```text
 shards
@@ -144,18 +207,25 @@ Commandline:
 > energon prepare --split-parts 'train:shards/train/.*' --split-parts 'val:shards/val/.*' ./
 ```
 
+```{admonition} Good to know
+:class: tip
+You can inspect your prepared dataset like a normal file system by using the [`energon mount`](energon-mount) feature.
+```
+
 ### Sample Types
 
 After the split is set up, the assistant will ask you which sample type you want to use.
 We provide a set of common sample types such as for image captioning or visual question answering, they are listed below.
 
-If none of these fits, you may need to set up your own new sample type.
+This will be sufficient in a simple scenario and if none of these fits, you may even create your own new sample type.
 Here are your options:
 
 * You have a new type sample which is rather common but not in our list below
   * Please add your type to energon and create a pull request so we can add it
-* Your sample type is experimental or used temporarily only
+* Your sample type is experimental very special or used temporarily only
   * You can add the sample type class in your code repository and create the `dataset.yaml` manually, referring to your class with `__class__`
+  * You can add the sample type class in your code repository, use a crude dataset and cookers (no need to put the sample type in `dataset.yaml`)
+
 
 (sect-sample-types)=
 #### Available Sample Types
@@ -166,7 +236,6 @@ These are the possible integrated types you can currently choose from:
   * Attributes:
     * {py:attr}`__key__: str <megatron.energon.Sample.__key__>`: Unique identifier of the sample within the dataset. Useful for backtracking the source of a single sample.
     * {py:attr}`__key__: str <megatron.energon.Sample.__restore_key__>`: Structured key of the sample, which can be used to regenerate the sample without storing the whole sample.
-    * {py:attr}`__subflavor__: str <megatron.energon.Sample.__subflavor__>`: Deprecated.
     * {py:attr}`__subflavors__: dict[str, Any] | None <megatron.energon.Sample.__subflavors__>`: Represents the subflavors (i.e. custom dict data) set for the source dataset (typically in the metadataset).
   * {py:class}`CaptioningSample <megatron.energon.CaptioningSample>`: Represents a sample for captioning
     * Attributes:
@@ -228,23 +297,33 @@ These are the possible integrated types you can currently choose from:
       * {py:attr}`words_text: list[str] | None <megatron.energon.VQAOCRSample.words_text>`: The text content of the text words
 
 
+(sample-loading)=
 ### Sample Loading
 
-There are multiple options for how to convert the data stored in the tar files to an instance of one of the sample types above.
+When you actually use and load your dataset, the data stored in the tar files needs to be converted to an instance of your chosen sample type.
+There are three options:
 
-After choosing the sample type, `energon prepare` will ask if you want to use a "simple field map" or a "sample loader".
-There is a also a third method called "CrudeWebdataset".
+1. The conversion is a simple 1:1 mapping of files to fields of the sample type class
+    * You can use a simple field map
+2. Otherwise the now preferred way is to use a CrudeWebdataset and do the conversion inside a [cooker](crude-data).
+3. There is another (now legacy) way, i.e. to create a custom `sample_loader.py` file next to your dataset.
+    * This option will continue to work, but we encourage to move to crude datasets in the future.
 
-#### Field Map
+When running `energon prepare`, you can choose "Crude sample" as the sample type and the assistant will end.
+If you picked another sample type, the assistant will ask if you want to use a "simple field map" or a "sample loader".
+
+#### Simple Field Map
 
 If your data consists of simple text, json and images that can be decoded by the standard [webdataset auto decoder](https://rom1504.github.io/webdataset/api/webdataset/autodecode.html),
 and they map directly to the attributes of your chosen sample type from the list above, use a "field map".
 The field map stores which file extension in the webdataset shall be mapped to which attribute of the sample class.
 
-#### Sample Loader
+#### Sample Loader (Deprecated)
 
-If your data needs some custom decoding code to compute the sample attributes from the data in the tar, you should use a custom sample loader.
-The code shall only contain the dataset-specific decoding, no project-specific decoding.
+If your data needs some custom decoding code to compute the sample attributes from the data in the tar, you can use a custom sample loader.
+However, starting from Energon 7, we recommend to use crude datasets and a [cooker](crude-data) instead.
+
+If you use a `sample_loader.py`, its code shall only contain the dataset-specific decoding, no project-specific decoding.
 
 Example for a special format (e.g. ocr dataset) for which we will use a custom `sample_loader.py`:
 
@@ -328,23 +407,6 @@ def part_filter(part: str) -> bool:
 
 For more information please also read [](custom-sample-loader).
 
-(wds-format-special)=
-### Special format
-Sometimes, your data will not be easily represented as a `field_map` explained above. 
-For example, your data may contain
-
-* structured data like nested boxes for each sample
-* custom binary formats
-* xml / html / pickle etc.
-
-In those cases you have two options:
-
-1. Creating a custom `sample_loader.py` in the `.nv-meta` folder as explained above.
-    * This will typically do the job and is preferred if you only have to do some small conversions.
-2. Using a `CrudeWebdataset`
-    * For more intricate conversions, you can use a CrudeWebdataset that will pass your samples in a raw form into your TaskEncoder where you can then convert them based on the subflavor for example. For more details see [](crude-data).
-
-Even for these specific wds formats, you would start preparing your data using the [dataset preparation command](#energon_data_prepare), but you will need to define a custom sample loader or select `CrudeWebdataset` in the dataprep wizard. 
 
 (data-on-disk)=
 ## Dataset Format on Disk
@@ -359,7 +421,9 @@ my_dataset
 ├── .nv-meta
 │   ├── dataset.yaml
 │   ├── split.yaml
-│   └── .info.yaml
+│   ├── .info.json
+│   ├── index.sqlite
+│   └── index.uuid
 ├── shards
 │   ├── shard_000.tar
 │   ├── shard_001.tar
@@ -368,10 +432,11 @@ my_dataset
 
 Note that the `shards` folder is just an example. The shards and their folder can be named differently, but the `.nv-meta` structure is always the same.
 
+
 ### Files in `.nv-meta`
-#### dataset.yaml 
+#### dataset.yaml (user editable)
 The `dataset.yaml` contains the dataset definition, i.e. the dataset class to use as loader, optional decoders.
-If you want to create such a file, you should consider using the [CLI preparation tool](energon_data_prepare).
+If you want to create such a file, you should consider using the [CLI preparation tool](energon-prepare).
 
 Here's an example:
 ```yaml
@@ -382,6 +447,13 @@ field_map:
   image: jpg
   caption: txt
 ```
+
+For a crude dataset the `dataset.yaml` will simply be
+```yaml
+__module__: megatron.energon
+__class__: CrudeWebdataset
+```
+
 
 The `__class__` and `__module__` values help the library construct the correct object.
 The `field_map` specifies how the fields from each webdataset sample are mapped to the members of the sample dataclass.
@@ -394,10 +466,7 @@ class CaptioningSample(Sample):
     caption: str
 ```
 
-In some scenarios, you might need a more advanced way to map samples into the dataclass.
-In that case, please check out [this page](../advanced/advanced_dataformat).
-
-#### split.yaml
+#### split.yaml (user editable)
 This file contains the splits (i.e. train, val, test), each a list of the shards for each split.
 It can also contain an "exclude list" to exclude certain samples or shards from training.
 Example:
@@ -426,14 +495,57 @@ split_parts:
 ```
 The above code excludes the entire shard `004` and two samples from the shard `001`.
 
-#### .info.yaml
-The hidden info file is auto-generated and contains statistics about each shard.
+#### .info.json (read-only)
+The hidden info file is auto-generated and contains a list of all shards and the number of samples in each.
 
 Example:
-```yaml
-shard_counts:
-  shards/000.tar: 1223
-  shards/001.tar: 1420
-  shards/002.tar: 1418
-  shards/003.tar: 1358
+```json
+{
+  "shard_counts": {
+    "shards/000.tar": 1223,
+    "shards/001.tar": 1420,
+    "shards/002.tar": 1418,
+    "shards/003.tar": 1358
+  }
+}
 ```
+
+The order of tar files is important, as it's used by the sqlite database below.
+
+#### index.sqlite and index.uuid (read-only)
+
+The sqlite database was introduced in Energon 7 and allows for fully random access of samples and files by their names.
+This is a precondition for polylithic datasets and for the [`energon mount`](energon-mount) command.
+
+Below there is some detailed information for the interested reader. Note that the internal table structure can
+change in any release without notice.
+
+The database contains an entry for each sample and sample part including their byte offsets and sizes in the tar files.
+
+Example `samples` table:
+| tar_file_id | sample_key | sample_index | byte_offset | byte_size |
+| --- | --- | --- | --- | --- |
+| 0 | 00000 | 0 | 0 | 35840 |
+| 0 | 00001 | 1 | 35840 | 35840 |
+| 0 | 00002 | 2 | 71680 | 35840 |
+| 0 | ... | | | |
+
+The byte offsets describe the range around all the tar entries that are part of that sample including the tar headers.
+
+Corresponding example `sample_parts` table:
+
+| tar_file_id | sample_index | part_name | content_byte_offset | content_byte_size |
+| --- | --- | --- | --- | --- |
+| 0 | 0 | json | 1536 | 31 |
+| 0 | 0 | png | 3584 | 30168 |
+| 0 | 0 | txt | 35328 | 16 |
+| 0 | 1 | json | 37376 | 31 |
+| 0 | 1 | png | 39424 | 30168 |
+| 0 | 1 | txt | 71168 | 16 |
+| 0 | ... | | | |
+
+The byte offsets in the `sample_parts` table refer to the byte ranges of the actual file content and can be used to
+directly access the content without parsing the tar header.
+
+Both tables can be joined over the `tar_file_id` and the `sample_index`. Note that the `tar_file_id` refers to the list
+of tar files in the `.info.json` file.

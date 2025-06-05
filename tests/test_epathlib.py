@@ -12,6 +12,7 @@ import sys
 import unittest
 
 from megatron.energon.epathlib import EPath
+from tests.epath_s3_emulator import setup_s3_emulator
 
 
 class TestEPath(unittest.TestCase):
@@ -115,7 +116,7 @@ class TestEPath(unittest.TestCase):
 
     def test_s3_path_resolution(self):
         """Test s3 path resolution"""
-        rclone_config_path = EPath("/tmp/XDG_CONFIG_HOME/rclone/rclone.conf")
+        rclone_config_path = EPath("/tmp/XDG_CONFIG_HOME/.config/rclone/rclone.conf")
         with rclone_config_path.open("w") as f:
             f.write(
                 "\n".join(
@@ -132,7 +133,12 @@ class TestEPath(unittest.TestCase):
             )
 
         orig_xdg_config_home = os.environ.get("XDG_CONFIG_HOME")
-        os.environ["XDG_CONFIG_HOME"] = "/tmp/XDG_CONFIG_HOME"
+        os.environ["XDG_CONFIG_HOME"] = "/tmp/XDG_CONFIG_HOME/.config"
+        os.environ["HOME"] = "/tmp/XDG_CONFIG_HOME"
+        # Hack to clear the cache of the rclone config for msc to get the "s3" profile
+        from multistorageclient.rclone import read_rclone_config
+
+        read_rclone_config.cache_clear()
         try:
             # Test globbing
             p = EPath("msc://s3/tmp/path/subpath.txt")
@@ -253,6 +259,18 @@ class TestEPath(unittest.TestCase):
         finally:
             multiprocessing.set_start_method(orig_start_method, force=True)
             p.unlink()
+
+    def test_msc_s3(self):
+        # Test S3 with MSC
+        with setup_s3_emulator(profile_name="s3test_msc"):
+            p = EPath("msc://s3test_msc/test/file.txt")
+            assert not p.is_file()
+            p.write_text("dummy")
+            assert p.is_file()
+            assert p.size() > 0
+            assert p.read_text() == "dummy"
+            p.unlink()
+            assert not p.is_file()
 
 
 def _multiproc_test_func(p: EPath, test_function: bool):

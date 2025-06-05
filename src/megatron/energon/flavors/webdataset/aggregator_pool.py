@@ -5,16 +5,19 @@ from __future__ import annotations
 
 import multiprocessing
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Iterable, List, Optional
+from typing import Any, Callable, Generic, Iterable, List, Optional, TypeVar
+
+T_result = TypeVar("T_result")
+T_aggregation_data = TypeVar("T_aggregation_data")
+T_input_data = TypeVar("T_input_data")
 
 
-class BaseAggregator(ABC):
+class BaseAggregator(ABC, Generic[T_aggregation_data, T_result]):
     """
     Base class for a user-defined aggregator.
     Implement on_start, on_item, and on_finish to handle aggregator logic.
     """
 
-    @abstractmethod
     def on_start(self, aggregator_pool: AggregatorPool) -> None:
         """
         Called exactly once in the aggregator process before receiving any items.
@@ -22,27 +25,26 @@ class BaseAggregator(ABC):
         pass
 
     @abstractmethod
-    def on_item(self, item: Any, aggregator_pool: AggregatorPool) -> None:
+    def on_item(self, item: T_aggregation_data, aggregator_pool: AggregatorPool) -> None:
         """
         Called for each item produced by the workers.
         """
-        pass
+        ...
 
-    @abstractmethod
     def on_finish(self, aggregator_pool: AggregatorPool) -> None:
         """
         Called once when all workers have signaled completion (i.e. all items are processed).
         """
         pass
 
-    def get_final_result_data(self) -> Any:
+    def get_final_result_data(self) -> T_result:
         """
         Called after on_finish to retrieve any final data produced by the aggregator.
         """
         return None
 
 
-class AggregatorPool:
+class AggregatorPool(Generic[T_input_data, T_aggregation_data, T_result]):
     """
     A pool that manages multiple worker processes sending results to
     a single aggregator process.
@@ -53,34 +55,35 @@ class AggregatorPool:
                     which implements on_start, on_item, on_finish, etc.
     """
 
+    num_workers: int
+    user_produce_data: Callable[[T_input_data], Iterable[Any]]
+    aggregator: BaseAggregator[T_aggregation_data, T_result]
+
+    task_queue: multiprocessing.Queue[Optional[T_input_data]]
+    result_queue: multiprocessing.Queue[Optional[T_aggregation_data]]
+
     def __init__(
         self,
         num_workers: int,
-        user_produce_data: Callable[[Any], Iterable[Any]],
-        aggregator: BaseAggregator,
+        user_produce_data: Callable[[T_input_data], Iterable[Any]],
+        aggregator: BaseAggregator[T_aggregation_data, T_result],
     ) -> None:
         """
-        :param num_workers: number of worker processes
-        :param user_produce_data: function(task) -> yields items (the "large" data stream)
-        :param aggregator: an instance of a user-defined class for handling aggregator logic
+        Args:
+            num_workers: Number of worker processes.
+            user_produce_data: Function that takes a task and yields items (the "large" data stream).
+            aggregator: An instance of a user-defined class for handling aggregator logic.
         """
-        self.num_workers: int = num_workers
-        self.user_produce_data: Callable[[Any], Iterable[Any]] = user_produce_data
-        self.aggregator: BaseAggregator = aggregator
+        self.num_workers = num_workers
+        self.user_produce_data = user_produce_data
+        self.aggregator = aggregator
 
         # Queues for tasks and results
-        self.task_queue: multiprocessing.Queue[Any] = multiprocessing.Queue()
-        self.result_queue: multiprocessing.Queue[Any] = multiprocessing.Queue()
+        self.task_queue = multiprocessing.Queue()
+        self.result_queue = multiprocessing.Queue()
 
         # Queue to pass final aggregator data back to the main process
-        self._final_result_data_queue: multiprocessing.Queue[Any] = multiprocessing.Queue()
-
-        # Keep track of how many workers have finished
-        self._finished_workers = multiprocessing.Value("i", 0)
-
-        # Processes
-        self.workers: List[multiprocessing.Process] = []
-        self.aggregator_process: Optional[multiprocessing.Process] = None
+        self._final_result_data_queue = multiprocessing.Queue()
 
         # Will store whatever is pulled from _final_data_queue in close()
         self._aggregator_final_result_data: Optional[Any] = None
@@ -100,7 +103,7 @@ class AggregatorPool:
         # After finishing all tasks, send a sentinel to the aggregator
         self.result_queue.put(None)
 
-    def _aggregator_run(self) -> None:
+    def _aggregator_run(self) -> T_result:
         """
         Function that runs in the aggregator process.
         Keeps reading items from result_queue.
@@ -110,19 +113,13 @@ class AggregatorPool:
         # Let the aggregator do any initialization it needs
         self.aggregator.on_start(self)
 
-        local_finished_workers = 0
+        finished_workers = 0
 
-        while True:
+        while finished_workers < self.num_workers:
             item = self.result_queue.get()
             if item is None:
                 # A worker has finished all of its tasks
-                local_finished_workers += 1
-                with self._finished_workers.get_lock():
-                    self._finished_workers.value = local_finished_workers
-
-                # Check if all workers are done
-                if local_finished_workers == self.num_workers:
-                    break
+                finished_workers += 1
             else:
                 # Process the item in the aggregator
                 self.aggregator.on_item(item, self)
@@ -131,69 +128,36 @@ class AggregatorPool:
         self.aggregator.on_finish(self)
 
         # After finishing, serialize the aggregator's final data
-        final_result_data = self.aggregator.get_final_result_data()
-        self._send_final_aggregator_data(final_result_data)
+        return self.aggregator.get_final_result_data()
 
-    def _send_final_aggregator_data(self, data: Any) -> None:
-        """
-        Called in the aggregator process to push the aggregator's final
-        data back to the main process.
-        """
-        self._final_result_data_queue.put(data)
-
-    def is_done(self) -> bool:
-        """
-        For optional use inside aggregator methods to check
-        if all workers have signaled completion.
-        """
-        with self._finished_workers.get_lock():
-            return self._finished_workers.value == self.num_workers
-
-    def start(self) -> None:
-        """
-        Start the aggregator process and the worker processes.
-        """
-        # Start aggregator process
-        self.aggregator_process = multiprocessing.Process(target=self._aggregator_run, daemon=True)
-        self.aggregator_process.start()
-
-        # Start worker processes
-        for w_id in range(self.num_workers):
-            p = multiprocessing.Process(target=self._worker, args=(w_id,), daemon=True)
-            p.start()
-            self.workers.append(p)
-
-    def submit_task(self, task: Any) -> None:
+    def submit_task(self, task: T_input_data) -> None:
         """
         Submit a task to be processed by a worker.
         """
         self.task_queue.put(task)
 
-    def close(self) -> None:
+    def process(self) -> T_result:
         """
-        Signal all workers to exit, wait for them, and then
-        wait for the aggregator to finish. Finally, retrieve
-        the aggregator's final data from the queue (if any).
+        Starts the worker processes and runs the aggregation in the main process.
+        Waits for all workers to finish and retrieves the aggregator's final data.
         """
+        workers: List[multiprocessing.Process] = []
+
+        # Start worker processes
+        for w_id in range(self.num_workers):
+            p = multiprocessing.Process(target=self._worker, args=(w_id,), daemon=True)
+            p.start()
+            workers.append(p)
+
         # Send the sentinel (None) to each worker
         for _ in range(self.num_workers):
             self.task_queue.put(None)
 
+        # Now wait for aggregator to finish reading the queue
+        result = self._aggregator_run()
+
         # Wait for all workers to finish
-        for p in self.workers:
+        for p in workers:
             p.join()
 
-        # Now wait for aggregator to finish reading the queue
-        if self.aggregator_process is not None:
-            self.aggregator_process.join()
-
-        # Retrieve aggregator final data from the queue (if aggregator posted any)
-        # We only expect one item in this queue: the aggregator's final data.
-        if not self._final_result_data_queue.empty():
-            self._aggregator_final_result_data = self._final_result_data_queue.get()
-
-    def get_final_aggregator_data(self) -> Any:
-        """
-        Access whatever final data the aggregator produced, after close() is called.
-        """
-        return self._aggregator_final_result_data
+        return result

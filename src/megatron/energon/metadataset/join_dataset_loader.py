@@ -15,7 +15,7 @@ from typing import (
     Union,
 )
 
-from megatron.energon.dataclass_slots import dataclass_slots
+from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib.epath import EPath
 from megatron.energon.flavors import (
     BaseCoreDatasetFactory,
@@ -27,7 +27,12 @@ from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
 from megatron.energon.flavors.webdataset.indexing import JoinIndexWriter
 from megatron.energon.flavors.webdataset.metadata import WebdatasetMeta
 from megatron.energon.metadataset.dataset_loader import DatasetLoader
-from megatron.energon.metadataset.loader_interface import DatasetBlendMode, DatasetLoaderInterface
+from megatron.energon.metadataset.loader_interface import (
+    DatasetBlendMode,
+    DatasetLoaderInterface,
+    LoadedDataset,
+    LoadedDatasetList,
+)
 from megatron.energon.worker import WorkerConfig
 
 
@@ -316,7 +321,7 @@ def join_multiple_indices(
     conn.close()
 
 
-@dataclass_slots
+@edataclass
 class JoinedDatasetInfo:
     """Internal for passing the joined datasets."""
 
@@ -325,7 +330,7 @@ class JoinedDatasetInfo:
     nonmatch: Literal["skip", "none", "error"]
 
 
-@dataclass_slots
+@edataclass
 class JoinedDatasetMetaInfo:
     """Internal for passing the joined datasets."""
 
@@ -337,7 +342,7 @@ class JoinedDatasetMetaInfo:
     nonmatch: Literal["skip", "none", "error"]
 
 
-@dataclass_slots
+@edataclass
 class JoinDatasetLoader(DatasetLoaderInterface):
     """Loads a joined dataset from a path."""
 
@@ -347,7 +352,6 @@ class JoinDatasetLoader(DatasetLoaderInterface):
 
     split_part: Optional[str] = None
     split_config: Optional[str] = None
-    subflavor: Optional[str] = None
     subflavors: Optional[Dict[str, Any]] = None
     shuffle_over_epochs_multiplier: Optional[int] = 1
 
@@ -447,7 +451,6 @@ class JoinDatasetLoader(DatasetLoaderInterface):
         training: bool,
         split_part: Optional[str] = None,
         worker_config: WorkerConfig,
-        subflavor: Optional[str] = None,
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs: Optional[int] = 1,
         split_config: Optional[str] = None,
@@ -459,7 +462,6 @@ class JoinDatasetLoader(DatasetLoaderInterface):
             split_part: Default split part to use.
             worker_config: Worker configuration.
             shuffle_buffer_size: Size of the sample shuffle buffer (before task encoding).
-            subflavor: Subflavor to use, might be overridden by inner datasets.
             subflavors: Subflavors to use, might be overridden by inner datasets.
             shuffle_over_epochs: Shuffle the dataset over this many epochs.
             **kwargs: Additional arguments to the dataset constructor.
@@ -473,11 +475,8 @@ class JoinDatasetLoader(DatasetLoaderInterface):
             split_part = self.split_part
         if split_part is None:
             raise ValueError("Missing split part")
-        if subflavor is None:
-            subflavor = self.subflavor
         if self.subflavors is not None:
             subflavors = {**self.subflavors, **(subflavors or {})}
-
         join_index_path, _ = self._get_joined_meta(split_part)
 
         if isinstance(self.datasets, list):
@@ -486,7 +485,6 @@ class JoinDatasetLoader(DatasetLoaderInterface):
                     training=training,
                     split_part=split_part,
                     worker_config=worker_config,
-                    subflavor=subflavor,
                     subflavors=subflavors,
                     shuffle_over_epochs=shuffle_over_epochs,
                     split_config=split_config,
@@ -503,7 +501,6 @@ class JoinDatasetLoader(DatasetLoaderInterface):
                     training=training,
                     split_part=split_part,
                     worker_config=worker_config,
-                    subflavor=subflavor,
                     subflavors=subflavors,
                     shuffle_over_epochs=shuffle_over_epochs,
                     split_config=split_config,
@@ -516,6 +513,8 @@ class JoinDatasetLoader(DatasetLoaderInterface):
             )
         else:
             raise ValueError("Invalid join type")
+        # Remove decoder from kwargs, it is already handled by the inner datasets
+        kwargs.pop("decoder", None)
         return JoinedWebdatasetFactory(
             inner_datasets=inner_datasets,
             training=training,
@@ -532,22 +531,23 @@ class JoinDatasetLoader(DatasetLoaderInterface):
         training: bool,
         split_part: Union[Literal["train", "val", "test"], str],
         worker_config: WorkerConfig,
-        subflavor: Optional[str] = None,
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: Optional[int] = 1,
         **kwargs,
-    ) -> Tuple[DatasetBlendMode, List[Tuple[BaseCoreDatasetFactory, Union[float, int, None]]]]:
-        return DatasetBlendMode.NONE, [
-            (
-                self.get_dataset(
-                    training=training,
-                    split_part=split_part,
-                    worker_config=worker_config,
-                    subflavor=subflavor,
-                    subflavors=subflavors,
-                    shuffle_over_epochs=shuffle_over_epochs_multiplier,
-                    **kwargs,
-                ),
-                None,
-            )
-        ]
+    ) -> LoadedDatasetList:
+        return LoadedDatasetList(
+            blend_mode=DatasetBlendMode.NONE,
+            datasets=[
+                LoadedDataset(
+                    dataset=self.get_dataset(
+                        training=training,
+                        split_part=split_part,
+                        worker_config=worker_config,
+                        subflavors=subflavors,
+                        shuffle_over_epochs=shuffle_over_epochs_multiplier,
+                        **kwargs,
+                    ),
+                    weight=None,
+                )
+            ],
+        )

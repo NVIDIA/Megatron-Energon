@@ -21,7 +21,7 @@ Here is an example structure of the datasets within the tar files:
 ```
 ds1
 ├── .nv-meta
-│   ├── .info.yaml
+│   ├── .info.json
 │   ├── split.yaml
 │   └── dataset.yaml
 ├── shard1.tar
@@ -32,7 +32,7 @@ ds1
 
 ds2
 ├── .nv-meta
-│   ├── .info.yaml
+│   ├── .info.json
 │   ├── split.yaml
 │   └── dataset.yaml
 ├── shard1.tar
@@ -157,9 +157,9 @@ splits:
           __class__: JoinedSample # Type should implement from_joined(ds1, ds2)
         split_config: split.yaml  # Sets this for all joined datasets
         split_part: train  # Sets this for all joined datasets
-        subflavor: ds1  # Sets this for all joined datasets
         subflavors:  # Sets this for all joined datasets (it will be merged with their individual subflavors)
           source: metadataset.yaml
+          src: ds1
 ```
 
 ## Custom Join Type

@@ -6,7 +6,7 @@ SPDX-License-Identifier: BSD-3-Clause -->
 The "Task Encoder" is an Energon-specific concept. It is a class that describes how each sample is going to be processed at different stages of the pipeline.
 Please also take a look at [](basics_flow) to see the pipeline.
 
-If you don't specify any task encoder, a default version, the {py:meth}`DefaultTaskEncoder <megatron.energon.DefaultTaskEncoder>` will be used.
+If you don't specify any task encoder, a default version, the {py:class}`DefaultTaskEncoder <megatron.energon.DefaultTaskEncoder>` will be used.
 
 For writing your own task encoder, create a class based on {py:class}`DefaultTaskEncoder <megatron.energon.DefaultTaskEncoder>`
 and override one or more of the following methods. The data flow of {py:func}`get_train_dataset <megatron.energon.get_train_dataset>` or {py:func}`get_val_dataset <megatron.energon.get_val_dataset>` is as follows:
@@ -15,8 +15,14 @@ and override one or more of the following methods. The data flow of {py:func}`ge
   - Optional. Define when using [crude data](crude-data).
 - {py:func}`def encode_sample(self, sample: T_sample) -> T_encoded_sample <megatron.energon.DefaultTaskEncoder.encode_sample>`
   - Transform the raw data from the dataset (e.g. augment/transform images, tokenize a single sample).
+  - Alternatively, you can use {py:meth}`preencode_sample <megatron.energon.TaskEncoder.preencode_sample>` and {py:meth}`postencode_sample <megatron.energon.TaskEncoder.postencode_sample>`. This is especially useful when you use packing and you want to defer loading to when the packed samples are known.
+- {py:meth}`def preencode_sample(self, sample: T_sample) -> T_sample <megatron.energon.TaskEncoder.preencode_sample>`
+  - Can be used as a replacement to {py:func}`encode_sample <megatron.energon.DefaultTaskEncoder.encode_sample>`
+  - Only used together with {py:meth}`postencode_sample <megatron.energon.TaskEncoder.postencode_sample>` (below). Use it if you need to instantiate lazy data before packing the selected samples. But it will also work when not using packing.
 - {py:meth}`def select_samples_to_pack(self, samples: List[T_encoded_sample]) -> List[List[T_encoded_sample]] <megatron.energon.TaskEncoder.select_samples_to_pack>`
   - Optional. Allows for efficient sample packing. See [](../advanced/packing).
+- {py:meth}`def postencode_sample(self, sample: T_sample) -> T_encoded_sample <megatron.energon.TaskEncoder.postencode_sample>`
+  - Only used together with {py:meth}`preencode_sample <megatron.energon.TaskEncoder.preencode_sample>`. Use it if you need to instantiate lazy data before packing the selected samples. But it will also work when not using packing.
 - {py:meth}`def pack_selected_samples(self, samples: List[T_encoded_sample]) -> T_batch_sample] <megatron.energon.TaskEncoder.pack_selected_samples>`
   - Required if select_samples_to_pack is used. Compresses a group of samples to a single sample.
 - (samples are collected for a batch)
@@ -39,14 +45,12 @@ from typing import Callable, List, Optional
 
 import torch
 
-from megatron.energon import CaptioningSample, DefaultTaskEncoder, batch_list, batch_stack
+from megatron.energon import Batch, CaptioningSample, DefaultTaskEncoder, batch_list, batch_stack
 
 
 # Type for intermediate batch, after batching operation
 @dataclass
-class CaptioningRawBatch:
-    # (n,)
-    __key__: List[str]
+class CaptioningRawBatch(Batch):
     # (n, c, h, w)
     image: torch.Tensor
     # (n,)
@@ -55,8 +59,7 @@ class CaptioningRawBatch:
 
 # Typing for the resulting batch data
 @dataclass
-class CaptioningBatch:
-    __keys__: List[str]
+class CaptioningBatch(Batch):
     # (n, c, h, w)
     images: torch.Tensor
     # (n, c)
@@ -70,6 +73,8 @@ class CaptioningTaskEncoder(
     DefaultTaskEncoder[CaptioningSample, CaptioningSample, CaptioningRawBatch, CaptioningBatch]
 ):
     """A simple task encoder for captioning."""
+
+    decoder = SampleDecoder(image_decode="torchrgb")
 
     def __init__(
         self,
@@ -90,24 +95,24 @@ class CaptioningTaskEncoder(
     
     def batch(self, samples: List[CaptioningSample]) -> CaptioningRawBatch:
         # Batch the samples
-        # The actions dict specifies how to batch each field of the sample. In addition to these, you may use 
-        # `batch_pad_stack` as well.
         # By default, `batch_pad_stack` is used for all tensor fields, and `batch_list` is used for all non-tensor 
         # fields. This example matches the default implementation (not overwriting the `batch` method).
-        return self._batch(samples, result_type=CaptioningRawBatch, actions={"image": batch_stack, "caption": batch_list})
+        return CaptioningRawBatch.from_samples(samples)
 
     def encode_batch(self, batch_data: CaptioningRawBatch) -> CaptioningBatch:
         # Run the encoder on the batch of captions.
         tokenized = self.tokenizer(batch_data.caption)
         # Return the final batch, going into the network
-        return CaptioningBatch(
-            __keys__=batch_data.__key__,
+        return CaptioningBatch.derive_from(
+            batch_data,
             images=batch_data.image,
             text_tokens=tokenized["input_ids"],
             text_attn_mask=tokenized["attention_mask"],
         )
 
 ```
+
+If you're wondering about the `decoder` assignment, check out [](../basic/data_decoding).
 
 Usage in your training script:
 ```python
@@ -133,10 +138,6 @@ train_loader = get_loader(get_train_dataset(
         tokenizer=AutoTokenizer.from_pretrained('gpt2'),
         image_transform=train_img_transform,
     ),
-    # Change this to set how images are decoded.
-    # E.g. "pil" is another commonly used valid option.
-    # See `webdataset.imagehandler` for more options.
-    image_decode="torchrgb",
 ))
 
 for data in train_loader:

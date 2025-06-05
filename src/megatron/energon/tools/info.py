@@ -2,16 +2,17 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from importlib import import_module
-from io import StringIO
 from typing import Type
 
+import braceexpand
 import click
-import yaml
 
 import megatron.energon
 from megatron.energon.epathlib import EPath
+from megatron.energon.eyaml import load_yaml, load_yaml_json
 from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset.metadata import get_dataset_info
 
 fmt = """
 * {dataset_name}: `{path}` ({samples_count:,} samples, {samples_size} in {shards_count} shards)
@@ -53,9 +54,10 @@ def command(
     Get summarizing information about a dataset.
     """
 
-    ds_config = yaml.safe_load(StringIO((path / MAIN_FOLDER_NAME / dataset_config).read_text()))
-    info_config = yaml.safe_load(StringIO((path / MAIN_FOLDER_NAME / ".info.yaml").read_text()))
-    split_config = yaml.safe_load(StringIO((path / MAIN_FOLDER_NAME / split_config).read_text()))
+    ds_config = load_yaml((path / MAIN_FOLDER_NAME / dataset_config).read_bytes())
+    info_config = get_dataset_info(path)
+    split_config_obj = load_yaml_json(path / MAIN_FOLDER_NAME / split_config)
+
     samples_count = sum(info_config["shard_counts"].values())
     dict_sample_type = ds_config["sample_type"]
     sample_module = import_module(dict_sample_type["__module__"])
@@ -76,6 +78,14 @@ def command(
         except ValueError:
             return 3
 
+    # Brace expand all the split part files
+    expanded_split_parts = {}
+    for split_name, split_parts in split_config_obj["split_parts"].items():
+        expanded_split_parts[split_name] = []
+        for split_part in split_parts:
+            for name in braceexpand.braceexpand(split_part):
+                expanded_split_parts[split_name].append(name)
+
     splits_str = "".join(
         split_fmt.format(
             split_name=split_name,
@@ -88,7 +98,7 @@ def command(
             split_samples_count=sum(info_config["shard_counts"][shard] for shard in split_parts),
             split_shards_count=len(split_parts),
         )
-        for split_name, split_parts in sorted(split_config["split_parts"].items(), key=srt_key)
+        for split_name, split_parts in sorted(expanded_split_parts.items(), key=srt_key)
     )
     print(
         fmt.format(

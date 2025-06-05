@@ -2,11 +2,13 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import functools
+import json
 import logging
 import random
 import re
 import tarfile
 import uuid
+from dataclasses import asdict
 from pathlib import Path
 from typing import (
     Any,
@@ -26,7 +28,10 @@ from typing import (
 import braceexpand
 import yaml
 
+from megatron.energon.bracecollapse import collapse
+from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
+from megatron.energon.eyaml import load_yaml
 from megatron.energon.flavors.webdataset.aggregator_pool import AggregatorPool, BaseAggregator
 from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME, skip_meta_re, split_name_re
 from megatron.energon.flavors.webdataset.indexing import SqliteIndexWriter
@@ -39,7 +44,45 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T", covariant=True)
 
 
-class SqliteIndexWriterAggregator(BaseAggregator):
+@edataclass
+class IndexAggregatable:
+    """
+    A base class for all objects that can be returned/yielded by `_preprocess_tar` and
+    received by `SqliteIndexWriterAggregator.on_item`.
+    """
+
+    ...
+
+
+@edataclass
+class IndexSample(IndexAggregatable):
+    tar_file_id: int
+    sample_key: str
+    sample_index: int
+    byte_offset: int
+    byte_size: int
+
+
+@edataclass
+class IndexSamplePart(IndexAggregatable):
+    tar_file_id: int
+    sample_index: int
+    part_name: str
+    content_byte_offset: int
+    content_byte_size: int
+
+
+@edataclass
+class IndexShardInfo(IndexAggregatable):
+    shard_info: ShardInfo
+    parts: Set[str]
+
+
+class SqliteIndexWriterAggregator(
+    BaseAggregator[
+        Tuple[ShardInfo, Set[str]], Tuple[List[ShardInfo], Set[str], bool, List[Tuple[str, int]]]
+    ]
+):
     sqlite_path: EPath
     total_tasks: int
     progress_fn: Optional[Callable]
@@ -47,7 +90,7 @@ class SqliteIndexWriterAggregator(BaseAggregator):
     had_update: bool
     shards: List[ShardInfo]
     found_parts: Set[str]
-    prog_iter: Optional[Iterator]
+    prog_iter: Iterator
 
     def __init__(
         self,
@@ -57,7 +100,6 @@ class SqliteIndexWriterAggregator(BaseAggregator):
     ):
         self.sqlite_path = sqlite_path
         self.total_tasks = total_tasks
-        self.progress_fn = progress_fn
         self.writer = None
         self.had_update = False
         self.shards = []
@@ -66,22 +108,27 @@ class SqliteIndexWriterAggregator(BaseAggregator):
         if progress_fn is not None:
             self.prog_iter = progress_fn(iter(range(self.total_tasks)), self.total_tasks)
         else:
-            self.prog_iter = None
+            self.prog_iter = iter(range(self.total_tasks))
 
     def on_start(self, aggregator_pool: AggregatorPool) -> None:
         self.writer = SqliteIndexWriter(self.sqlite_path)
 
-    def on_item(self, item: Any, aggregator_pool: AggregatorPool) -> None:
+    def on_item(
+        self,
+        item: IndexAggregatable,
+        aggregator_pool: AggregatorPool,
+    ) -> None:
         assert self.writer is not None, "Writer is not initialized."
-        if isinstance(item, dict):
-            self.writer.append_sample(**item)
+        if isinstance(item, IndexSample):
+            self.writer.append_sample(**asdict(item))
             self.had_update = True
-        elif isinstance(item, tuple):
+        elif isinstance(item, IndexSamplePart):
+            self.writer.append_part(**asdict(item))
+        elif isinstance(item, IndexShardInfo):
             # This is a (shard_info, parts) tuple
-            if self.prog_iter is not None:
-                next(self.prog_iter)
+            next(self.prog_iter)
 
-            shard_info, cur_parts = item
+            shard_info, cur_parts = item.shard_info, item.parts
             assert shard_info.count != 0, f"Shard {shard_info.name} has no samples."
             self.shards.append(shard_info)
             if len(self.found_parts) < 50:
@@ -91,7 +138,9 @@ class SqliteIndexWriterAggregator(BaseAggregator):
         assert self.writer is not None, "Writer is not initialized."
         self.writer.close()
 
-    def get_final_result_data(self) -> Any:
+    def get_final_result_data(
+        self,
+    ) -> Tuple[List[ShardInfo], Set[str], bool, List[Tuple[str, int]]]:
         assert self.writer is not None, "Writer is not initialized."
         return self.shards, self.found_parts, self.had_update, self.writer.duplicates
 
@@ -103,17 +152,23 @@ class WebdatasetPreparator:
         shard_to_idx: Dict[str, int],
         parent_path: EPath,
         max_parts: int,
-    ) -> Generator[Tuple[ShardInfo, Set[str]], None, None]:
+    ) -> Generator[IndexAggregatable, None, None]:
         """Process a single tar file, i.e. read the tarinfos, generate the tar index and return
         stats.
+        This method is passed to the `user_produce_data` argument of AggregatorPool.
 
         Args:
             path: Path to the tar file.
+            shard_to_idx: Mapping from shard path to its index
             parent_path: Root path of the dataset.
             max_parts: Maximum number of different parts to return
 
         Returns:
-            Tuple of shard info and found keys of the loaded dicts.
+            A generator of items that will be processed by SqliteIndexWriterAggregator.
+            See method `on_item` of SqliteIndexWriterAggregator.
+            The items are either:
+            - A sample dictionary with information about the offset, key etc.
+            - Or a tuple of shard info and a set of found parts for statistics.
         """
         shard_info = ShardInfo(name=path, path=parent_path / path, count=0)
 
@@ -127,7 +182,11 @@ class WebdatasetPreparator:
                     TarIndexWriter(shard_info.path) as iw,
                 ):
                     count = 0
+
+                    # The parts set is used to collect various file endings that are
+                    # available in the dataset. This is used for the interactive prepare wizard.
                     parts = set()
+
                     last_base_name = None
                     member: tarfile.TarInfo
 
@@ -156,7 +215,7 @@ class WebdatasetPreparator:
                                 next_index_sample["byte_size"] = (
                                     member.offset - next_index_sample["byte_offset"]
                                 )
-                                yield next_index_sample
+                                yield IndexSample(**next_index_sample)
 
                             next_index_sample = dict(
                                 tar_file_id=shard_to_idx[path],
@@ -166,18 +225,28 @@ class WebdatasetPreparator:
                             )
                             last_base_name = base_name
                             count += 1
+
+                        # Yield this part of the sample to the aggregator
+                        yield IndexSamplePart(
+                            tar_file_id=shard_to_idx[path],
+                            sample_index=count - 1,
+                            part_name=name_match.group(2),
+                            content_byte_offset=member.offset_data,
+                            content_byte_size=member.size,
+                        )
+
                     shard_info.count = count
                     iw.append(tar.offset)
                     if next_index_sample is not None:
                         next_index_sample["byte_size"] = (
                             tar.offset - next_index_sample["byte_offset"]
                         )
-                        yield next_index_sample
-            yield shard_info, parts
+                        yield IndexSample(**next_index_sample)
+            yield IndexShardInfo(shard_info=shard_info, parts=parts)
             return
         except BaseException:
             logger.exception(f"Shard failed to load: {path!r}. Skipping it.")
-            yield shard_info, set()
+            yield IndexShardInfo(shard_info=shard_info, parts=set())
             return
 
     @staticmethod
@@ -232,10 +301,9 @@ class WebdatasetPreparator:
         *,
         split_parts_ratio: Optional[List[Tuple[str, float]]] = None,
         split_parts_patterns: Optional[List[Tuple[str, str]]] = None,
-        info_config: str = ".info.yaml",
         split_config: str = "split.yaml",
         shuffle_seed: Optional[int] = 42,
-        progress_fn: Callable[[Iterator[T], int], Iterator[T]] = (lambda x, l: x),
+        progress_fn: Callable[[Iterator[Any], int], Iterator[T]] = (lambda x, y: x),
         workers: int = 32,
         tar_index_only: bool = False,
     ) -> Tuple[Set[str], List[Tuple[str, int]]]:
@@ -248,8 +316,7 @@ class WebdatasetPreparator:
             paths: Paths to the shards
             split_parts_ratio: Names of splits and their ratio (will be normalized)
             split_parts_patterns: Names of splits and their path patterns
-            info_config: Filename for the info config (`parent_path / '.nv-meta' / info_config`)
-            split_config: Filename for the info config (`parent_path / '.nv-meta' / split_config`)
+            split_config: Filename for the split config (`parent_path / '.nv-meta' / split_config`), may be yaml or json
             shuffle_seed: Seed for shuffling shards before splitting into split_parts. None to
                 disable.
             progress_fn: Callback for progress bar
@@ -269,7 +336,9 @@ class WebdatasetPreparator:
         (parent_path / MAIN_FOLDER_NAME).mkdir(exist_ok=True)
 
         aggregator = SqliteIndexWriterAggregator(
-            parent_path / MAIN_FOLDER_NAME / "index.sqlite", total_tasks=len(paths)
+            parent_path / MAIN_FOLDER_NAME / "index.sqlite",
+            total_tasks=len(paths),
+            progress_fn=progress_fn,
         )
 
         process_tar = functools.partial(
@@ -285,22 +354,25 @@ class WebdatasetPreparator:
             aggregator=aggregator,
         )
 
-        pool.start()
-
         for path in paths:
             pool.submit_task(path)
 
-        pool.close()
-
-        # Get final results
-        shards, found_parts, had_update, duplicates = pool.get_final_aggregator_data()
+        shards, found_parts, had_update, duplicates = pool.process()
 
         if had_update:
             logger.info("Regenerating dataset UUID...")
             with (parent_path / MAIN_FOLDER_NAME / "index.uuid").open("w") as f:
                 f.write(str(uuid.uuid4()))
 
+        json_info_config = parent_path / MAIN_FOLDER_NAME / ".info.json"
+        yaml_info_config = parent_path / MAIN_FOLDER_NAME / ".info.yaml"
+
         if tar_index_only:
+            if yaml_info_config.is_file() and not json_info_config.is_file():
+                # Convert legacy .info.yaml to .info.json
+                with json_info_config.open("w") as f:
+                    json.dump(load_yaml(yaml_info_config.read_bytes()), f, indent=2)
+
             return found_parts, duplicates
 
         assert len(shards) == len(shard_to_idx), (
@@ -318,9 +390,16 @@ class WebdatasetPreparator:
         info = WebdatasetInfo(
             shard_counts={shard.name: shard.count for shard in shards},
         )
-        print(f"Saving info to {parent_path / MAIN_FOLDER_NAME / info_config}")
-        with (parent_path / MAIN_FOLDER_NAME / info_config).open("w") as wf:
-            yaml.dump(to_json_object(info), wf)
+        print(f"Saving info to {json_info_config}")
+
+        with json_info_config.open("w") as wf:
+            json.dump(to_json_object(info), wf)
+
+        if yaml_info_config.is_file():
+            # If a .info.yaml existed previously, let's also update it
+            # to keep them in sync
+            with yaml_info_config.open("w") as wf:
+                yaml.dump(to_json_object(info), wf)
 
         if split_parts_ratio is not None:
             # Normalize ratio
@@ -355,9 +434,21 @@ class WebdatasetPreparator:
                     for shard in shards
                     if any(pattern.match(shard.name) for pattern in patterns)
                 ]
+
+        # Optimize the split parts by trying to bracecollapse the shard names
+        print("Collapsing split parts... ", flush=True, end="")
+        for split_part in split_shards:
+            split_shards[split_part] = collapse(split_shards[split_part], keep_order=True)
+        print("Done", flush=True)
+
         # Save split config
         splits_config = WebdatasetSplits(split_parts=split_shards)
         with (parent_path / MAIN_FOLDER_NAME / split_config).open("w") as wf:
-            yaml.dump(to_json_object(splits_config), wf)
+            if split_config.endswith(".yaml"):
+                yaml.dump(to_json_object(splits_config), wf, sort_keys=False)
+            elif split_config.endswith(".json"):
+                json.dump(to_json_object(splits_config), wf, indent=2)
+            else:
+                raise ValueError(f"Invalid split config extension: {split_config}")
 
         return found_parts, duplicates

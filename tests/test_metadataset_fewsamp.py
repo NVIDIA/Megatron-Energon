@@ -24,6 +24,13 @@ from megatron.energon import (
 )
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 
+# Speed up tests significantly by reducing the torch status check interval for broken worker shutdown
+try:
+    torch.utils.data._utils.worker.MP_STATUS_CHECK_INTERVAL = 0.1
+    torch.utils.data._utils.MP_STATUS_CHECK_INTERVAL = 0.1
+except AttributeError:
+    pass
+
 
 def _norng_state(state):
     if isinstance(state, bytes):
@@ -178,12 +185,14 @@ class TestDataset(unittest.TestCase):
             checkpoint_every_min_n_samples=1,
         )
 
-        data1a = list(zip(train_loader, range(3)))  # noqa: F841. Load 3 samples
+        # Load 3 samples
+        list(zip(train_loader, range(3)))
 
         # Save state mid epoch
         state1 = train_loader.save_state_rank()
 
-        data1b = list(zip(train_loader, range(5)))  # Load 5 samples
+        # Load 5 samples
+        data1b = list(zip(train_loader, range(5)))
 
         # Restore state
         train_loader = get_savable_loader(
@@ -198,7 +207,8 @@ class TestDataset(unittest.TestCase):
             checkpoint_every_min_n_samples=1,
         )
         train_loader.restore_state_rank(state1)
-        data2_restore = list(zip(train_loader, range(5)))  # Load 5 samples
+        # Load 5 samples
+        data2_restore = list(zip(train_loader, range(5)))
 
         # Check that the restored state is the same
         order1b = [(s[0].__key__[0], int(s[0].text[0])) for s in data1b]

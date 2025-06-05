@@ -3,8 +3,10 @@
 
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Sequence, Union
 
+from megatron.energon.cache import FileStore
+from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory
 from megatron.energon.worker import WorkerConfig
@@ -19,6 +21,20 @@ class DatasetBlendMode(Enum):
     NONE = "none"
     DATASET_WEIGHT = "dataset_weight"
     SAMPLE_REPETITIONS = "sample_repetitions"
+
+
+@edataclass
+class LoadedDataset:
+    dataset: BaseCoreDatasetFactory
+    weight: Union[float, int, None] = None
+    repetitions: Union[float, int, None] = None
+    aux: Optional[Dict[str, FileStore]] = None
+
+
+@edataclass
+class LoadedDatasetList:
+    datasets: List[LoadedDataset]
+    blend_mode: DatasetBlendMode = DatasetBlendMode.NONE
 
 
 class DatasetLoaderInterface(ABC):
@@ -36,11 +52,10 @@ class DatasetLoaderInterface(ABC):
         training: bool,
         split_part: Union[Literal["train", "val", "test"], str],
         worker_config: WorkerConfig,
-        subflavor: Optional[str] = None,
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: Optional[int] = 1,
         **kwargs,
-    ) -> Tuple[DatasetBlendMode, List[Tuple[BaseCoreDatasetFactory, Union[float, int, None]]]]:
+    ) -> LoadedDatasetList:
         """
         Calls :func:`megatron.energon.dataset_config.get_dataset_from_config` (loads the raw dataset)
         for all innermost datasets and resolves their relative weights to absolute weights.
@@ -49,7 +64,6 @@ class DatasetLoaderInterface(ABC):
             training: If true, apply training randomization.
             split_part: Default split part to use.
             worker_config: Worker configuration to use.
-            subflavor: Set the default subflavor for all datasets.
             subflavors: Set the default subflavors for all datasets.
             shuffle_over_epochs_multiplier: Multiply the inner datasets
                 `shuffle_over_epochs(_multiplier)` by this factor. E.g. if the inner dataset

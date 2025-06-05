@@ -7,8 +7,13 @@ from typing import Any, Callable, Dict, Generic, List, Optional, Sequence, TypeV
 
 import numpy as np
 
+from megatron.energon.cache import FileStore
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory, SavableDataset
+from megatron.energon.flavors.base_dataset import (
+    BaseCoreDatasetFactory,
+    SavableDataset,
+    legacy_handler,
+)
 from megatron.energon.flavors.webdataset.error_handler import ErrorHandler
 from megatron.energon.flavors.webdataset.metadata import WebdatasetMeta
 from megatron.energon.flavors.webdataset.prepare import WebdatasetPreparator
@@ -18,6 +23,7 @@ from megatron.energon.flavors.webdataset.sample_loader import (
 )
 from megatron.energon.flavors.webdataset.sharder import Sharder
 from megatron.energon.flavors.webdataset.structs import FilteredSample, ShardInfo, reraise_exception
+from megatron.energon.source_info import SourceInfo
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.map_dataset import MapDataset
 
@@ -57,10 +63,11 @@ class BaseWebdatasetFactory(
         shuffle_over_epochs: Optional[int] = 1,
         parallel_shard_iters: Optional[int] = None,
         max_samples_per_sequence: Optional[int] = None,
-        info_config: str = ".info.yaml",
         split_config: str = "split.yaml",
         part_filter: Optional[Callable[[str], bool]] = None,
-        handler: Callable[[Exception, Optional[str]], None] = reraise_exception,
+        handler: Callable[
+            [Exception, Optional[str], Optional[list[SourceInfo]]], None
+        ] = reraise_exception,
     ):
         """
         Base factory for the webdataset sample loader.
@@ -80,14 +87,13 @@ class BaseWebdatasetFactory(
             parallel_shard_iters: Number of parallel opened shards per worker, shuffling between.
             max_samples_per_sequence: Maximum number of samples per sequence (=how many samples
                     will be sequentially iterated).
-            info_config: Config file to use for sample metadata.
             split_config: Config file to use for shard split definitions.
             part_filter: (internal) Function for filtering tar files by dict keys
             handler: Exception handler. Args: (exception, key).
         """
         assert self.__sample_type__ is not None, f"Class {type(self)} must define __sample_type__"
         wds_meta = WebdatasetMeta.from_config(
-            path=path, split_part=split_part, info_config=info_config, split_config=split_config
+            path=path, split_part=split_part, split_config=split_config
         )
         self.path = path
         self.paths = [path]
@@ -100,7 +106,7 @@ class BaseWebdatasetFactory(
         self.parallel_shard_iters = parallel_shard_iters
         self.max_samples_per_sequence = max_samples_per_sequence
         self.part_filter = part_filter
-        self.handler = handler
+        self.handler = legacy_handler(handler)
 
     def __len__(self) -> int:
         return sum(shard.count for shard in self.shards)
@@ -139,7 +145,6 @@ class BaseWebdatasetFactory(
             worker_config=self.worker_config,
             shuffle_over_epochs=self.shuffle_over_epochs if self.training else None,
             parallel_slice_iters=parallel_shard_iters,
-            handler=self.sample_error_handler,
         )
         return MapDataset(
             dataset,
@@ -149,6 +154,11 @@ class BaseWebdatasetFactory(
             map_fn_config=self.config,
             worker_config=self.worker_config,
         )
+
+    def as_file_store(self) -> "FileStore":
+        from megatron.energon.cache.file_store import WebdatasetFileStore
+
+        return WebdatasetFileStore(self.path)
 
     def sample_filter(self, key: str) -> bool:
         return key not in self.sample_excludes

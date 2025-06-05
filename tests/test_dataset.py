@@ -15,8 +15,9 @@ import tempfile
 import unittest
 import warnings
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Hashable, List, Tuple, Type, Union
+from typing import Hashable, List, Tuple, Type, Union
 
 import numpy as np
 import torch
@@ -33,6 +34,7 @@ from megatron.energon import (
     DefaultTaskEncoder,
     MapDataset,
     MixBatchDataset,
+    Sample,
     SavableDataLoader,
     TaskEncoder,
     WorkerConfig,
@@ -43,8 +45,8 @@ from megatron.energon import (
     get_val_dataset,
     homogeneous_concat_mix,
 )
-from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.dataset_config import get_dataset_from_config
+from megatron.energon.edataclass import edataclass
 from megatron.energon.flavors import BaseWebdatasetFactory
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 from megatron.energon.task_encoder.base import stateless
@@ -54,35 +56,39 @@ from megatron.energon.tools.lint import command as lint_command
 from megatron.energon.tools.prepare import command as prepare_command
 from megatron.energon.tools.preview import command as preview_command
 
+# Speed up tests significantly by reducing the torch status check interval for broken worker shutdown
+try:
+    torch.utils.data._utils.worker.MP_STATUS_CHECK_INTERVAL = 0.1
+    torch.utils.data._utils.MP_STATUS_CHECK_INTERVAL = 0.1
+except AttributeError:
+    pass
+
+
 DATASET_SIZE = 50
 
 no_worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0)
 
 
-@dataclass_slots
+@edataclass
 class ExtendedCaptioningSample(CaptioningSample):
     batch_index: int
     sample_index: int
     rand_num: int
 
 
-@dataclass_slots
-class EncodedCaptioningSample:
-    __key__: str
-    __restore_key__: Tuple[Union[str, int, tuple], ...]
+@edataclass
+class EncodedCaptioningSample(Sample):
     image: torch.Tensor
     caption: torch.Tensor
 
 
-@dataclass_slots
+@edataclass
 class CaptioningEncodedBatch(CaptioningSample):
     pass
 
 
-@dataclass_slots
+@edataclass
 class CaptioningBatch(Batch):
-    __key__: List[str]
-    __restore_key__: Tuple[Union[str, int, tuple], ...]
     image: torch.Tensor
     caption: torch.Tensor
 
@@ -305,7 +311,6 @@ class TestDataset(unittest.TestCase):
             lambda x: CaptioningSample(
                 __key__=x.__key__,
                 __restore_key__=x.__restore_key__,
-                __subflavor__=x.__subflavor__,
                 __subflavors__=x.__subflavors__,
                 image=x.image,
                 caption=torch.tensor(np.frombuffer(x.caption.encode(), dtype=np.uint8)),
@@ -459,9 +464,8 @@ class TestDataset(unittest.TestCase):
                 super().__init__(raw_batch_type=CaptioningBatch)
 
             def encode_sample(self, sample: CaptioningSample) -> EncodedCaptioningSample:
-                return EncodedCaptioningSample(
-                    __key__=sample.__key__,
-                    __restore_key__=sample.__restore_key__,
+                return EncodedCaptioningSample.derive_from(
+                    sample,
                     image=sample.image,
                     caption=torch.frombuffer(bytearray(sample.caption.encode()), dtype=torch.uint8),
                 )
@@ -547,6 +551,23 @@ class TestDataset(unittest.TestCase):
             assert sample.image.shape == (10, 3, 100, 100)
             n_samples += sample.image.shape[0]
         assert n_samples == 50
+
+    def test_no_batching(self):
+        train_loader = get_loader(
+            get_train_dataset(
+                self.dataset_path,
+                batch_size=None,
+                worker_config=no_worker_config,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+            )
+        )
+
+        one_sample = next(iter(train_loader))
+
+        # Single sample without batching
+        assert isinstance(one_sample.image, torch.Tensor)
+        assert isinstance(one_sample.caption, str)
 
     def test_dataset_len(self):
         torch.manual_seed(42)
@@ -671,12 +692,8 @@ class TestDataset(unittest.TestCase):
 
         torch.manual_seed(42)
 
-        @dataclass_slots
+        @edataclass
         class WeightedCaptioningBatch(Batch):
-            __key__: List[str]
-            __restore_key__: Tuple[Union[str, int], ...]
-            __subflavor__: List[str]
-            __subflavors__: List[Dict[str, Any]]
             image: torch.Tensor
             caption: List[str]
             weight: float
@@ -735,12 +752,8 @@ class TestDataset(unittest.TestCase):
         assert 750 <= bs_hist[20] <= 850
 
     def test_mixing_homogeneous(self):
-        @dataclass_slots
+        @dataclass
         class TestBatch(Batch):
-            __key__: List[str]
-            __restore_key__: Tuple[Union[str, int], ...]
-            __subflavor__: List[str]
-            __subflavors__: List[Dict[str, Any]]
             image: torch.Tensor
             caption: List[str]
             source: int
@@ -791,17 +804,13 @@ class TestDataset(unittest.TestCase):
         assert 7500 <= source_hist[1] <= 8500
 
     def test_mixing_heterogeneous(self):
-        @dataclass_slots
+        @dataclass
         class TestBatch1(Batch):
-            __key__: List[str]
-            __restore_key__: Tuple[Union[str, int], ...]
-            __subflavor__: List[str]
-            __subflavors__: List[Dict[str, Any]]
             image: torch.Tensor
             caption: List[str]
             source: int
 
-        @dataclass_slots
+        @dataclass
         class TestBatch2(TestBatch1):
             pass
 
@@ -1349,9 +1358,8 @@ class TestDataset(unittest.TestCase):
 
             @stateless
             def encode_sample(self, sample: CaptioningSample) -> EncodedCaptioningSample:
-                return EncodedCaptioningSample(
-                    __key__=sample.__key__,
-                    __restore_key__=sample.__restore_key__,
+                return EncodedCaptioningSample.derive_from(
+                    sample,
                     image=sample.image,
                     caption=torch.frombuffer(sample.caption.encode(), dtype=torch.uint8),
                 )
@@ -1472,6 +1480,86 @@ class TestDataset(unittest.TestCase):
         ] == [[16, 1], [16, 1], [4, 16], [4, 16], [1, 4], [1, 4], [16, 1], [16, 1]]
 
         assert all(s0.__key__ == s1.__key__ for s0, s1 in zip(samples_r0_cmp, samples_r0_restored))
+
+    def test_packing_val(self):
+        torch.manual_seed(42)
+
+        class TestTaskEncoder(DefaultTaskEncoder):
+            def __init__(self):
+                super().__init__(raw_batch_type=CaptioningBatch)
+
+            @stateless
+            def encode_sample(self, sample: CaptioningSample) -> EncodedCaptioningSample:
+                return EncodedCaptioningSample.derive_from(
+                    sample,
+                    image=sample.image,
+                    caption=torch.frombuffer(sample.caption.encode(), dtype=torch.uint8),
+                )
+
+            def select_samples_to_pack(
+                self, samples: List[EncodedCaptioningSample]
+            ) -> List[List[EncodedCaptioningSample]]:
+                assert len(samples) in (1 + 3 + 5 + 2, 50 % 11)
+                if len(samples) < 11:
+                    return []
+                return [
+                    samples[1 + 3 + 5 : 1 + 3 + 5 + 2],
+                    samples[1 + 3 : 1 + 3 + 5],
+                    samples[1 : 1 + 3],
+                    samples[:1],
+                ]
+
+            @stateless
+            def pack_selected_samples(
+                self, samples: List[EncodedCaptioningSample]
+            ) -> EncodedCaptioningSample:
+                return EncodedCaptioningSample(
+                    __key__=",".join([sample.__key__ for sample in samples]),
+                    __restore_key__=(),
+                    image=torch.stack([sample.image for sample in samples]),
+                    caption=torch.cat([sample.caption for sample in samples]),
+                )
+
+        loader = get_loader(
+            get_val_dataset(
+                self.dataset_path,
+                batch_size=2,
+                packing_buffer_size=11,
+                worker_config=no_worker_config,
+                task_encoder=TestTaskEncoder(),
+                split_part="train",
+            )
+        )
+
+        assert len(loader) == 25, f"len(loader) == {len(loader)}"
+
+        samples = list(loader)
+
+        print([batch.__key__ for batch in samples])
+        print([batch.__restore_key__ for batch in samples])
+        print([len(batch.__key__) for batch in samples])
+        print([[len(batch_key.split(",")) for batch_key in batch.__key__] for batch in samples])
+
+        # Each batch should have 2 samples
+        assert [len(batch.__key__) for batch in samples] == [
+            2,
+            2,
+            2,
+            2,
+            2,
+            2,
+            2,
+            2,
+        ]
+
+        # The packs of lengths 1, 4, 16 should be unrolled repeatedly across the batches of size 2
+        assert [
+            [len(batch_key.split(",")) for batch_key in batch.__key__] for batch in samples
+        ] == [[2, 5], [3, 1], [2, 5], [3, 1], [2, 5], [3, 1], [2, 5], [3, 1]]
+
+        restored_sample_1 = loader.restore_sample(samples[1].__restore_key__)
+        assert restored_sample_1.__key__ == samples[1].__key__
+        assert restored_sample_1.__restore_key__ == samples[1].__restore_key__
 
     def test_group_batch(self):
         class GroupingTaskEncoder(

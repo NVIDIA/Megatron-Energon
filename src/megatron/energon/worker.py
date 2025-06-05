@@ -4,20 +4,21 @@
 import hashlib
 import json
 import multiprocessing
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, ClassVar, Dict, List, Optional, TextIO, TypeVar
 
 import torch.distributed
 import torch.utils.data
 
-from megatron.energon.dataclass_slots import dataclass_slots
-from megatron.energon.epathlib import EPath
+from megatron.energon.cache import CachePool
 
 __all__ = ("WorkerConfig",)
 
 T = TypeVar("T")
 
 
-@dataclass_slots(eq=False)
+@dataclass(slots=True, kw_only=True, eq=False)
 class WorkerConfig:
     """
     Provides information about the current worker and the global configuration. This gives each
@@ -69,13 +70,22 @@ class WorkerConfig:
     #: The global rank override for the worker. Required for restoring samples.
     _worker_override_global_rank: ClassVar[Optional[List[int]]] = None
 
-    def worker_activate(self, sample_index: int, override_global_rank: Optional[int] = None):
+    #: The current cache pool for the worker.
+    _cache_pool: "ClassVar[Optional[CachePool]]" = None
+
+    def worker_activate(
+        self,
+        sample_index: int,
+        override_global_rank: Optional[int] = None,
+        cache_pool: "Optional[CachePool]" = None,
+    ):
         """Activates the worker config for the current worker and sets it as actively iterating.
         Must be called before next() call on the datasets."""
         assert WorkerConfig.active_worker_config is None
         WorkerConfig._sample_index_stack = [sample_index]
         WorkerConfig.active_worker_config = self
         WorkerConfig._worker_override_global_rank = override_global_rank
+        WorkerConfig._cache_pool = cache_pool
 
     def worker_push_sample_index(self, sample_index: int):
         """Pushes a new sample index to the sample index stack. Should be set by wrapping datasets
@@ -168,9 +178,12 @@ class WorkerConfig:
         if worker_info is None:
             return self.worker_id_offset
         assert worker_info.num_workers == self.num_workers
-        return (
-            worker_info.id + worker_info.num_workers - self.worker_id_offset
-        ) % worker_info.num_workers
+        # Apply the worker_id_offset as a left rotation of the logical worker ids.
+        # This ensures that after restoring a checkpoint the first physical
+        # worker (id=0) corresponds to the logical worker that should emit the
+        # next sample. For example, if `worker_id_offset` is 1, logical worker
+        # 1 becomes the first to emit a sample, shifting the ordering forward.
+        return (worker_info.id + self.worker_id_offset) % worker_info.num_workers
 
     def assert_worker(self):
         """Checks if the current process is a worker (if configured so), and that the workers are
@@ -253,7 +266,7 @@ class WorkerConfig:
             if self._worker_debug_file is None or self._worker_debug_file_worker_id != worker_id:
                 if self._worker_debug_file is not None:
                     self._worker_debug_file.close()
-                path = EPath(
+                path = Path(
                     self.worker_debug_path.format(
                         worker_id=worker_id, pid=multiprocessing.current_process().ident
                     )

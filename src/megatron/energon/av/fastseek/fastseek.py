@@ -4,6 +4,7 @@ from typing import Literal, Optional
 
 import filetype
 from bitstring.bits import BitsType
+from sortedcontainers import SortedList
 
 from .containers.matroska import parse_matroska
 from .containers.mpeg import parse_mpeg
@@ -23,13 +24,13 @@ class Fastseek:
     - MP4/MOV: frames are indexed by number and frame counting can be used to get the exact frame
     - Matroska/WebM: frames are indexed by time and inter-frame duration must be accounted for to get to the right frame
 
-    If your container is not list above, pass "probe=True" to the constructor, this will use ffmpeg to parse the stream
+    If your container is not listed above, pass "probe=True" to the constructor, this will use ffmpeg to parse the stream
     without decoding it. Frames will be indexed by number. This is not as fast as using a supported container but is still
     significantly faster than sequential decoding.
     """
 
-    keyframes: dict[int, list[KeyframeInfo]]
-    unit: Literal["count", "time"]
+    keyframes: dict[int, SortedList[KeyframeInfo]]
+    unit: Literal["frames", "pts"]
     mime: str
 
     def __init__(self, file: BitsType, probe: bool = False) -> None:
@@ -45,24 +46,36 @@ class Fastseek:
         """
         if probe:
             self.keyframes = parse_probe(file)
-            self.unit = "count"
+            self.unit = "frames"
         else:
             ftype = filetype.guess(file)
 
             if ftype is None:
-                raise ValueError("Unable to determine file type")
+                raise ValueError(
+                    "Unable to determine file type (hint: try passing probe=True to the Fastseek constructor)"
+                )
 
             self.mime = ftype.mime
 
             if ftype.mime in ["video/mp4", "video/quicktime"]:
                 self.keyframes = parse_mpeg(file)
-                self.unit = "count"
+                self.unit = "frames"
             elif ftype.mime in ["video/x-matroska", "video/webm"]:
                 self.keyframes = parse_matroska(file)
-                self.unit = "time"
+                self.unit = "pts"
             else:
                 raise ValueError(
                     f"Unsupported container: {ftype.mime} (hint: try passing probe=True to the Fastseek constructor)"
+                )
+
+            if len(self.keyframes) == 0:
+                raise ValueError(
+                    f"The parser for {ftype.mime} was unable to find any streams (hint: try passing probe=True to the Fastseek constructor)"
+                )
+
+            if all(len(kf) == 0 for kf in self.keyframes.values()):
+                raise ValueError(
+                    f"The parser for {ftype.mime} was unable to find any keyframes (hint: try passing probe=True to the Fastseek constructor)"
                 )
 
     def should_seek(self, current: int, target: int, stream: int = 0) -> Optional[KeyframeInfo]:
@@ -89,7 +102,11 @@ class Fastseek:
             - For Matroska/WebM: timestamps (time-based)
         """
         nearest_iframe: KeyframeInfo = self.nearest_keyframe(target, stream)
-        return nearest_iframe if current < nearest_iframe.index <= target else None
+        return (
+            nearest_iframe
+            if (current < nearest_iframe.index <= target) or (target < current)
+            else None
+        )
 
     def nearest_keyframe(self, target: int, stream: int = 0) -> KeyframeInfo:
         """Find the nearest keyframe that comes before the target frame.
@@ -113,8 +130,14 @@ class Fastseek:
             as some video containers don't report track IDs correctly. This is a temporary
             workaround and may be updated in the future.
         """
-        # HACK some videos don't report track ID correctly, so just use a list for now
-        nearest_iframe_to_target_index: int = (
-            list(self.keyframes.values())[stream].bisect_left(target) - 1
-        )
-        return list(self.keyframes.values())[stream][max(0, nearest_iframe_to_target_index)]
+
+        if stream >= len(self.keyframes):
+            raise ValueError(f"No stream with index {stream}")
+
+        stream_id = list(self.keyframes.keys())[stream]
+
+        if len(self.keyframes[stream_id]) == 0:
+            raise ValueError(f"No keyframes found for stream {stream}")
+
+        nearest_iframe_to_target_index: int = self.keyframes[stream_id].bisect_left(target) - 1
+        return self.keyframes[stream_id][max(0, nearest_iframe_to_target_index)]

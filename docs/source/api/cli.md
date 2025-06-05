@@ -24,7 +24,7 @@ Below, you can see the available sub-commands under `energon`.
    :nested: short
 ```
 
-(energon_data_prepare)=
+(energon-prepare)=
 ## energon prepare
 
 An interactive tool to generate metadata for your existing webdataset.
@@ -45,6 +45,32 @@ Prints information about the dataset such as overall number of samples and size.
 
 You can execute this tool on the prepared dataset to check if the data is valid and loadable.
 It will report any problems such as non-readable images.
+
+(energon-mount)=
+## energon mount
+
+Use this to mount your [prepared dataset](../basic/data_prep) as a virtual read-only filesystem and inspect it using `ls` or other file browsing tools.
+It is as simple as running
+
+```shell
+energon mount /PATH/TO/DATASET ./MY_MOUNT_POINT
+```
+
+This will leave the process in the foreground and the mount will exist as long as the program is running.
+If you want to detach the process to the background, use the `-d` or `--detach` flag.
+
+
+Two modes are supported by `energon mount`:
+
+|     | Flat mode (default)  | Sample folder mode (flag `-s`)  |
+| --- | --- | --- |
+| Description  | All files from all shards listed at<br/>the root of the mount point.  | One folder per sample key,<br/>each folder containing files<br/>named by the sample part extension   |
+| Example      | `001.jpg`<br/>`001.txt`<br/>`002.jpg`<br/>`002.txt`<br/>`...`  | `001/`<br/>`┣ jpg`<br/>`┗ txt`<br/>`002/`<br/>`┣ jpg`<br/>`┗ txt`<br/>`...`   |
+
+```{warning}
+You should not use the same sample keys in multiple shards of the same dataset.
+If you do, `energon mount` will not work as intended and it will display WARNING files in the virtual mount.
+```
 
 
 ## energon preview

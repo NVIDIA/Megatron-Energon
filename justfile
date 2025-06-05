@@ -13,24 +13,26 @@ prod-sync:
     uv sync --all-extras --no-dev --cache-dir .uv_cache
 
 # Fix the code style and format
-fix:
+fix: dev-sync
     uv run ruff check --fix
     uv run ruff format
+    uv run scripts/license_headers.py src --fix
+    uv run scripts/license_headers.py tests --fix
 
 # Execute the ruff code linter and format checker
-check:
+check: dev-sync
     uv run ruff check
 
 # Execute all unit tests
-test:
-    uv run -m unittest discover -s tests
+test: dev-sync
+    uv run -m unittest discover -v -s tests
 
 # Build the docs
-docs:
+docs: dev-sync
     uv run sphinx-build -b html docs/source docs/build
 
 # Build the release package
-build:
+build: dev-sync
     rm -rf dist
     uv build --wheel
     uv build --sdist

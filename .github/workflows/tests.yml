@@ -21,11 +21,11 @@ jobs:
       uses: astral-sh/setup-uv@v5
 
     - name: Install just
-      uses: ./.github/actions/setupjust
+      uses: extractions/setup-just@v3
 
     - name: Install minimum supported python version
       run: |
-        uv python pin 3.9
+        uv python pin 3.10
 
     - name: Install dependencies
       run: |

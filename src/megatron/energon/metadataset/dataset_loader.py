@@ -1,23 +1,27 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Dict, Literal, Optional, Union
 
-from megatron.energon.dataclass_slots import dataclass_slots
 from megatron.energon.dataset_config import get_dataset_from_config
+from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import BaseCoreDatasetFactory
-from megatron.energon.metadataset.loader_interface import DatasetBlendMode, DatasetLoaderInterface
+from megatron.energon.metadataset.loader_interface import (
+    DatasetBlendMode,
+    DatasetLoaderInterface,
+    LoadedDataset,
+    LoadedDatasetList,
+)
 from megatron.energon.worker import WorkerConfig
 
 
-@dataclass_slots
+@edataclass
 class DatasetLoader(DatasetLoaderInterface):
     """Loads a dataset from a path."""
 
     path: Union[str, EPath]
     split_part: Optional[str] = None
-    subflavor: Optional[str] = None
     subflavors: Optional[Dict[str, Any]] = None
     shuffle_over_epochs_multiplier: Optional[int] = 1
     dataset_config: str = "dataset.yaml"
@@ -32,7 +36,6 @@ class DatasetLoader(DatasetLoaderInterface):
         training: bool,
         split_part: Optional[str] = None,
         worker_config: WorkerConfig,
-        subflavor: Optional[str] = None,
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs: Optional[int] = 1,
         split_config: Optional[str] = None,
@@ -45,7 +48,6 @@ class DatasetLoader(DatasetLoaderInterface):
             split_part: Default split part to use.
             worker_config: Worker configuration.
             shuffle_buffer_size: Size of the sample shuffle buffer (before task encoding).
-            subflavor: Subflavor to use, might be overridden by inner datasets.
             subflavors: Subflavors to use, might be overridden by inner datasets.
             shuffle_over_epochs: Shuffle the dataset over this many epochs.
             **kwargs: Additional arguments to the dataset constructor.
@@ -57,8 +59,6 @@ class DatasetLoader(DatasetLoaderInterface):
             split_part = self.split_part
         if split_part is None:
             raise ValueError("Missing split part")
-        if subflavor is None:
-            subflavor = self.subflavor
         if self.subflavors is not None:
             subflavors = {**self.subflavors, **(subflavors or {})}
         if split_config is None:
@@ -70,7 +70,6 @@ class DatasetLoader(DatasetLoaderInterface):
             training=training,
             split_part=split_part,
             worker_config=worker_config,
-            subflavor=subflavor,
             subflavors=subflavors,
             dataset_config=dataset_config,
             split_config=split_config,
@@ -84,22 +83,23 @@ class DatasetLoader(DatasetLoaderInterface):
         training: bool,
         split_part: Union[Literal["train", "val", "test"], str],
         worker_config: WorkerConfig,
-        subflavor: Optional[str] = None,
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: Optional[int] = 1,
         **kwargs,
-    ) -> Tuple[DatasetBlendMode, List[Tuple[BaseCoreDatasetFactory, Union[float, int, None]]]]:
-        return DatasetBlendMode.NONE, [
-            (
-                self.get_dataset(
-                    training=training,
-                    split_part=split_part,
-                    worker_config=worker_config,
-                    subflavor=subflavor,
-                    subflavors=subflavors,
-                    shuffle_over_epochs=shuffle_over_epochs_multiplier,
-                    **kwargs,
-                ),
-                None,
-            )
-        ]
+    ) -> LoadedDatasetList:
+        return LoadedDatasetList(
+            blend_mode=DatasetBlendMode.NONE,
+            datasets=[
+                LoadedDataset(
+                    dataset=self.get_dataset(
+                        training=training,
+                        split_part=split_part,
+                        worker_config=worker_config,
+                        subflavors=subflavors,
+                        shuffle_over_epochs=shuffle_over_epochs_multiplier,
+                        **kwargs,
+                    ),
+                    weight=None,
+                )
+            ],
+        )

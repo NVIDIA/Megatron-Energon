@@ -1,10 +1,14 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+import dataclasses
 import itertools
 import warnings
 from functools import wraps
 from typing import Any, Type, TypeVar, Union
+
+import numpy as np
+import torch
 
 
 def compact_str(
@@ -49,12 +53,28 @@ def compact_str(
             )
             + "]"
         )
+    elif isinstance(value, tuple):
+        if depth <= 0:
+            return "(...)"
+        return (
+            "("
+            + ", ".join(
+                compact_str(v, depth - 1, max_items, max_str_len) for v in value[:max_items]
+            )
+            + ")"
+        )
     elif isinstance(value, str):
         if len(value) > max_str_len:
             return repr(value[:max_str_len] + "...")
         return repr(value)
+    elif isinstance(value, torch.Tensor):
+        return f"Tensor(shape={value.shape}, dtype={value.dtype}, device={value.device})"
+    elif isinstance(value, np.ndarray):
+        return f"np.ndarray(shape={value.shape}, dtype={value.dtype})"
+    elif dataclasses.is_dataclass(value):
+        return f"{value.__class__.__name__}({', '.join(f'{field.name}={compact_str(getattr(value, field.name))}' for field in dataclasses.fields(value))})"
     else:
-        return repr(value)
+        return compact_str(repr(value), depth, max_items, max_str_len)
 
 
 T = TypeVar("T")
@@ -66,8 +86,10 @@ class SampleException(ValueError):
         return cls(f"Sample {sample_key} failed")
 
     @classmethod
-    def from_sample(cls: Type[T], sample: Any) -> T:
-        return cls(f"Sample {compact_str(sample)} failed")
+    def from_sample(cls: Type[T], sample: Any, message: str = "") -> T:
+        if message:
+            message = f": {message}"
+        return cls(f"Sample {compact_str(sample)} failed{message}")
 
 
 class FatalSampleError(SampleException):

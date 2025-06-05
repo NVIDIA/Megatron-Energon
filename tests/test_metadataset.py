@@ -12,12 +12,13 @@ import unittest
 import warnings
 from collections import Counter
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 import torch
 import webdataset as wds
 
 from megatron.energon import (
+    SavableDataset,
     WorkerConfig,
     get_loader,
     get_savable_loader,
@@ -28,6 +29,13 @@ from megatron.energon import (
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 from megatron.energon.metadataset.loader_interface import DatasetBlendMode
 from megatron.energon.wrappers.blend_dataset import BlendDataset
+
+# Speed up tests significantly by reducing the torch status check interval for broken worker shutdown
+try:
+    torch.utils.data._utils.worker.MP_STATUS_CHECK_INTERVAL = 0.1
+    torch.utils.data._utils.MP_STATUS_CHECK_INTERVAL = 0.1
+except AttributeError:
+    pass
 
 
 def _norng_state(state):
@@ -47,6 +55,70 @@ def _norng_state(state):
         return type(state)(_norng_state(v) for v in state)
     else:
         return state
+
+
+def get_blend_dataset(ds: SavableDataset):
+    if isinstance(ds, BlendDataset):
+        return ds
+    else:
+        if hasattr(ds, "dataset"):
+            return get_blend_dataset(ds.dataset)
+        else:
+            raise ValueError("No blend dataset found")
+
+
+def assert_nested_equal(a: Any, b: Any, path: str = "") -> None:
+    """
+    Recursively checks that two nested data structures (consisting of dicts, lists, tuples,
+    and other basic types) are equal. If they are not equal, prints the path of the first mismatch
+    and raises an AssertionError.
+
+    :param a: First nested structure to compare.
+    :param b: Second nested structure to compare.
+    :param path: Internal parameter used to pass the current traversal path (do not set this manually).
+    :raises AssertionError: If a mismatch is found.
+    """
+    # Check if types differ
+    if type(a) is not type(b):
+        mismatch_details = f"Type mismatch at {path or '<root>'}: {type(a)} != {type(b)}"
+        print(mismatch_details)
+        raise AssertionError(mismatch_details)
+
+    # If they are both dictionaries, compare each key and value
+    if isinstance(a, dict):
+        # Check if they have the same keys
+        a_keys = set(a.keys())
+        b_keys = set(b.keys())
+        if a_keys != b_keys:
+            missing_in_a = b_keys - a_keys
+            missing_in_b = a_keys - b_keys
+            mismatch_details = (
+                f"Key mismatch at {path or '<root>'}:\n"
+                f"Missing in first object: {missing_in_a}\n"
+                f"Missing in second object: {missing_in_b}"
+            )
+            print(mismatch_details)
+            raise AssertionError(mismatch_details)
+        for key in a:
+            sub_path = f"{path}['{key}']" if path else f"['{key}']"
+            assert_nested_equal(a[key], b[key], sub_path)
+
+    # If they are lists (or tuples), compare elements in order
+    elif isinstance(a, (list, tuple)):
+        if len(a) != len(b):
+            mismatch_details = f"Length mismatch at {path or '<root>'}: {len(a)} != {len(b)}"
+            print(mismatch_details)
+            raise AssertionError(mismatch_details)
+        for index, (item_a, item_b) in enumerate(zip(a, b)):
+            sub_path = f"{path}[{index}]" if path else f"[{index}]"
+            assert_nested_equal(item_a, item_b, sub_path)
+
+    # Otherwise, compare values directly
+    else:
+        if a != b:
+            mismatch_details = f"Value mismatch at {path or '<root>'}: {repr(a)} != {repr(b)}"
+            print(mismatch_details)
+            raise AssertionError(mismatch_details)
 
 
 class TestDataset(unittest.TestCase):
@@ -212,9 +284,9 @@ class TestDataset(unittest.TestCase):
         assert all(48 <= v <= 52 for v in Counter(train_order1).values())
 
         train_subflavors = [
-            subflavor
+            subflavor["__subflavor__"]
             for idx, data in zip(range(55), train_loader1)
-            for subflavor in data.__subflavor__
+            for subflavor in data.__subflavors__
         ]
         print(train_subflavors[:10])
         print(Counter(train_subflavors))
@@ -264,36 +336,32 @@ class TestDataset(unittest.TestCase):
 
         dataset = load_dataset(self.nested_mds_path)
 
-        blend_mode, raw_datasets = dataset.get_datasets(
+        raw_datasets = dataset.get_datasets(
             training=False, split_part="train", worker_config=worker_config
         )
-        assert blend_mode == DatasetBlendMode.DATASET_WEIGHT
-        assert [weight for _raw_dataset, weight in raw_datasets] == [0.4, 0.4, 0.1, 0.1]
-        assert [raw_dataset.paths[0].name for raw_dataset, _weight in raw_datasets] == [
+        assert raw_datasets.blend_mode == DatasetBlendMode.DATASET_WEIGHT
+        assert [raw_dataset.weight for raw_dataset in raw_datasets.datasets] == [0.4, 0.4, 0.1, 0.1]
+        assert [raw_dataset.dataset.paths[0].name for raw_dataset in raw_datasets.datasets] == [
             "ds1",
             "ds2",
             "ds1",
             "ds2",
         ]
-        assert [raw_dataset.subflavor for raw_dataset, _weight in raw_datasets] == [
-            "train",
-            "train",
-            None,
-            None,
-        ]
-        print([raw_dataset.subflavors for raw_dataset, _weight in raw_datasets])
-        assert [raw_dataset.subflavors for raw_dataset, _weight in raw_datasets] == [
+        print([raw_dataset.dataset.subflavors for raw_dataset in raw_datasets.datasets])
+        assert [raw_dataset.dataset.subflavors for raw_dataset in raw_datasets.datasets] == [
             {
                 "source": "nested_metadataset.yaml",
                 "dataset.yaml": True,
                 "number": 43,
                 "mds": "nested_train",
+                "__subflavor__": "train",
             },
             {
                 "source": "nested_metadataset.yaml",
                 "dataset.yaml": True,
                 "number": 44,
                 "mds": "nested_train",
+                "__subflavor__": "train",
             },
             {
                 "source": "nested_metadataset.yaml",
@@ -331,9 +399,9 @@ class TestDataset(unittest.TestCase):
         assert all(48 <= v <= 53 for v in Counter(train_order1).values())
 
         train_subflavors = [
-            subflavor
+            subflavor.get("__subflavor__")
             for idx, data in zip(range(55), train_loader1)
-            for subflavor in data.__subflavor__
+            for subflavor in data.__subflavors__
         ]
         cnt = Counter(train_subflavors)
         print(train_subflavors[:10])
@@ -359,6 +427,7 @@ class TestDataset(unittest.TestCase):
                     ("source", "nested_metadataset.yaml"),
                     ("dataset.yaml", True),
                     ("number", 43),
+                    ("__subflavor__", "train"),
                     ("mds", "nested_train"),
                 )
             ]
@@ -371,6 +440,7 @@ class TestDataset(unittest.TestCase):
                     ("source", "nested_metadataset.yaml"),
                     ("dataset.yaml", True),
                     ("number", 44),
+                    ("__subflavor__", "train"),
                     ("mds", "nested_train"),
                 )
             ]
@@ -443,7 +513,7 @@ class TestDataset(unittest.TestCase):
                     max_samples_per_sequence=None,
                 )
 
-                blend_dataset = train_dataset.dataset.dataset.dataset
+                blend_dataset = get_blend_dataset(train_dataset)
                 assert isinstance(blend_dataset, BlendDataset)
 
                 ds_weights = blend_dataset.dataset_weights
@@ -663,8 +733,10 @@ class TestDataset(unittest.TestCase):
             "num_workers": 0,
             "data_parallel_group": None,
         }
+        print("loader.config():")
         print(loader.config())
-        assert loader.config() == {
+        print()
+        reference_config = {
             "type": "SavableDataLoader",
             "num_workers": 0,
             "persistent_workers": False,
@@ -758,17 +830,18 @@ class TestDataset(unittest.TestCase):
                                                 "shuffle_over_epochs": 6,
                                                 "parallel_shard_iters": 2,
                                                 "max_samples_per_sequence": None,
-                                                "subflavor": "ds1",
                                                 "subflavors": {
                                                     "source": "metadataset.yaml",
                                                     "dataset.yaml": True,
                                                     "number": 43,
                                                     "mds": "mds",
+                                                    "__subflavor__": "ds1",
                                                 },
                                                 "sample_loader": "megatron.energon.flavors.webdataset.default_generic_webdataset.DefaultGenericWebdatasetFactory.__init__.<locals>.<lambda>",
                                                 "image_decode": "torchrgb",
-                                                "ignore_decoder_errors": False,
-                                                "video_decode": "torch",
+                                                "av_decode": "AVDecoder",
+                                                "video_decode_audio": False,
+                                                "guess_content": False,
                                             },
                                             "map_fn_stateless": True,
                                         },
@@ -850,17 +923,18 @@ class TestDataset(unittest.TestCase):
                                                 "shuffle_over_epochs": 2,
                                                 "parallel_shard_iters": 2,
                                                 "max_samples_per_sequence": None,
-                                                "subflavor": "ds2",
                                                 "subflavors": {
                                                     "source": "metadataset.yaml",
                                                     "dataset.yaml": True,
                                                     "number": 44,
                                                     "mds": "mds",
+                                                    "__subflavor__": "ds2",
                                                 },
                                                 "sample_loader": "megatron.energon.flavors.webdataset.default_generic_webdataset.DefaultGenericWebdatasetFactory.__init__.<locals>.<lambda>",
                                                 "image_decode": "torchrgb",
-                                                "ignore_decoder_errors": False,
-                                                "video_decode": "torch",
+                                                "av_decode": "AVDecoder",
+                                                "video_decode_audio": False,
+                                                "guess_content": False,
                                             },
                                             "map_fn_stateless": True,
                                         },
@@ -880,6 +954,8 @@ class TestDataset(unittest.TestCase):
                 "map_fn_stateless": True,
             },
         }
+        print("Comparing dataset configs in test_save_restore_state_train.")
+        assert_nested_equal(loader.config(), reference_config)
 
     def test_save_restore_state_train_workers(self):
         torch.manual_seed(42)
@@ -1163,7 +1239,10 @@ class TestDataset(unittest.TestCase):
                 )
                 loader = get_loader(ds)
 
-                subflavors = [data.__subflavor__[0] for idx, data in zip(range(25), loader)]
+                subflavors = [
+                    data.__subflavors__[0].get("__subflavor__")
+                    for idx, data in zip(range(25), loader)
+                ]
 
                 all_ranks_subflavors.append(subflavors)
 
@@ -1179,6 +1258,186 @@ class TestDataset(unittest.TestCase):
             # Delete all locals, otherwise loaders might be kept alive
             locals().clear()
             gc.collect()
+
+    def test_slice_iter_shuffle_over_epochs(self):
+        torch.manual_seed(42)
+
+        worker_config = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=0,
+            seed_offset=42,
+        )
+
+        def new_loader():
+            return get_savable_loader(
+                get_train_dataset(
+                    self.mds_path,
+                    worker_config=worker_config,
+                    batch_size=10,
+                    parallel_shard_iters=2,
+                    shuffle_buffer_size=None,
+                    max_samples_per_sequence=None,
+                    shuffle_over_epochs_multiplier=-1,
+                ),
+            )
+
+        # Train mode dataset
+        loader = new_loader()
+        _ = [data.text for idx, data in zip(range(1000), loader)]
+
+    def test_save_restore_next(self):
+        torch.manual_seed(42)
+
+        wc = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=6,
+        )
+
+        initial_loader = get_savable_loader(
+            get_train_dataset(
+                self.nested_mds_path,
+                worker_config=wc,
+                batch_size=1,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+            ),
+            checkpoint_every_sec=0,
+            checkpoint_every_min_n_samples=0,
+        )
+        skip_initial = 9
+
+        previous_cp = initial_loader.save_state_rank()
+        print("initial_samples:")
+        for i, sample in zip(range(skip_initial), initial_loader):
+            print(f"sample[@{i}]: {sample.text}")
+            print("previous_cp:", previous_cp)
+            rst_loader = get_savable_loader(
+                get_train_dataset(
+                    self.nested_mds_path,
+                    worker_config=wc,
+                    batch_size=1,
+                    shuffle_buffer_size=None,
+                    max_samples_per_sequence=None,
+                ),
+                checkpoint_every_sec=0,
+                checkpoint_every_min_n_samples=0,
+            )
+            rst_loader.restore_state_rank(previous_cp)
+            for i, rst_sample in zip(range(1), rst_loader):
+                print(f"rst_sample[@{i}]: {rst_sample.text}")
+            assert sample.text == rst_sample.text, f"{sample} != {rst_sample}"
+            assert sample.__key__ == rst_sample.__key__, f"{sample} != {rst_sample}"
+            assert sample.__restore_key__ == rst_sample.__restore_key__, f"{sample} != {rst_sample}"
+            previous_cp = initial_loader.save_state_rank()
+
+        # Iterate 10 samples, the save state and store the next 10 samples for reference.
+        state_initial = initial_loader.save_state_rank()
+        print("state_initial:", str(state_initial))
+        initial_samples = [sample for _, sample in zip(range(20), initial_loader)]
+        print(
+            "initial_samples:"
+            + "".join(
+                f"\n [@{idx}] {sample.text}"
+                for idx, sample in enumerate(initial_samples, start=skip_initial)
+            )
+        )
+
+        del initial_loader
+        gc.collect()
+
+        second_loader = get_savable_loader(
+            get_train_dataset(
+                self.nested_mds_path,
+                worker_config=wc,
+                batch_size=1,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+            ),
+            checkpoint_every_sec=0,
+            checkpoint_every_min_n_samples=0,
+        )
+        second_loader.restore_state_rank(state_initial)
+
+        # Save the state again, to check that it is the same as the just restored state
+        same_state = second_loader.save_state_rank()
+        print("same_state:", same_state)
+        assert same_state == state_initial
+
+        for offset in range(10):
+            try:
+                # Save state and restore in next loader
+                state_offset = second_loader.save_state_rank()
+                # Get 1 sample from the current loader
+                samples = [sample for _, sample in zip(range(1), second_loader)]
+                assert len(samples) == 1
+                sample = samples[0]
+
+                # Check that the sample is the same as the initial loader's reference sample
+                print(f"sample[@{offset + skip_initial}]: {sample.text}")
+                try:
+                    assert sample.text == initial_samples[offset].text, (
+                        f"{sample} != {initial_samples[offset]}"
+                    )
+                    assert sample.__key__ == initial_samples[offset].__key__, (
+                        f"{sample} != {initial_samples[offset]}"
+                    )
+                    assert sample.__restore_key__ == initial_samples[offset].__restore_key__, (
+                        f"{sample} != {initial_samples[offset]}"
+                    )
+                except Exception as e:
+                    print(
+                        "samples:"
+                        + f"\n [@{offset + skip_initial}] {sample.text}"
+                        + "".join(
+                            f"\n [@{idx}] {sample.text}"
+                            for idx, sample in zip(
+                                range(skip_initial + offset + 1, skip_initial + offset + 6),
+                                second_loader,
+                            )
+                        )
+                    )
+                    raise ValueError(f"Failed to iterate @{offset + skip_initial} samples") from e
+
+                # Restore state in a new loader
+                ref_loader = get_savable_loader(
+                    get_train_dataset(
+                        self.nested_mds_path,
+                        worker_config=wc,
+                        batch_size=1,
+                        shuffle_buffer_size=None,
+                        max_samples_per_sequence=None,
+                    ),
+                    checkpoint_every_sec=0,
+                    checkpoint_every_min_n_samples=0,
+                )
+                ref_loader.restore_state_rank(state_offset)
+
+                # Get 1 sample from the restored loader
+                next_loader_samples = [sample for _, sample in zip(range(6), ref_loader)]
+                assert len(next_loader_samples) == 6
+                next_loader_sample = next_loader_samples[0]
+                print(
+                    "next_loader_samples:"
+                    + f"\n [@{offset + skip_initial}] {sample.text}"
+                    + "".join(
+                        f"\n [@{idx}] {sample}"
+                        for idx, sample in zip(
+                            range(skip_initial + offset, skip_initial + offset + 6),
+                            next_loader_samples,
+                        )
+                    )
+                )
+                assert next_loader_sample.text == sample.text, f"{next_loader_sample} != {sample}"
+                assert next_loader_sample.__key__ == sample.__key__, (
+                    f"{next_loader_sample} != {sample}"
+                )
+                assert next_loader_sample.__restore_key__ == sample.__restore_key__, (
+                    f"{next_loader_sample} != {sample}"
+                )
+            except Exception as e:
+                raise ValueError(f"Failed to iterate @{skip_initial}+{offset} samples") from e
 
 
 if __name__ == "__main__":

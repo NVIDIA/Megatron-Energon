@@ -1,31 +1,83 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+import re
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Literal, Optional, Sequence, Tuple, Type, Union
+from typing import Any, Callable, Dict, List, Literal, Optional, Sequence, Type, Union
 
-from megatron.energon.dataclass_slots import dataclass_slots
+from megatron.energon.cache import FileStore
+from megatron.energon.cache.file_store import (
+    SystemFileStore,
+    WebdatasetFileStore,
+)
 from megatron.energon.dataset_config import load_config
+from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors import BaseCoreDatasetFactory, Sample
+from megatron.energon.flavors import Sample
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset.metadata import check_dataset_info_present
 from megatron.energon.metadataset.dataset_loader import DatasetLoader
 from megatron.energon.metadataset.join_dataset_loader import JoinDatasetLoader, JoinedDatasetInfo
-from megatron.energon.metadataset.loader_interface import DatasetBlendMode, DatasetLoaderInterface
+from megatron.energon.metadataset.loader_interface import (
+    DatasetBlendMode,
+    DatasetLoaderInterface,
+    LoadedDatasetList,
+)
 from megatron.energon.metadataset.metadataset import Metadataset
 from megatron.energon.worker import WorkerConfig
 
+# Regex for any URL-like string (any protocol)
+url_regex = re.compile(r"^(?P<protocol>[a-z][a-z0-9+.-]*)://(?P<path>.*)", re.IGNORECASE)
 
-@dataclass_slots
+
+@edataclass
+class AuxDatasetReference:
+    path: Union[str, EPath]
+
+    def post_initialize(self, mds_path: Optional[EPath] = None) -> None:
+        assert mds_path is not None
+        if not isinstance(self.path, EPath):
+            self.path = mds_path.parent / self.path
+        assert not self.path.is_file(), (
+            "Auxiliary datasets must not be metadataset, but direct dataset references"
+        )
+        assert (self.path / MAIN_FOLDER_NAME / "index.sqlite").is_file(), (
+            "Auxiliary datasets must be prepared Energon dataset"
+        )
+
+    def get_file_store(self) -> FileStore:
+        assert isinstance(self.path, EPath), "Missing call to post_initialize"
+        return WebdatasetFileStore(self.path)
+
+
+@edataclass
+class AuxFilesystemReference:
+    fs_path: Union[str, EPath]
+
+    def post_initialize(self, mds_path: Optional[EPath] = None) -> None:
+        assert mds_path is not None
+        if not isinstance(self.fs_path, EPath):
+            self.fs_path = mds_path.parent / self.fs_path
+
+    def get_file_store(self) -> FileStore:
+        assert isinstance(self.fs_path, EPath), "Missing call to post_initialize"
+        return SystemFileStore(self.fs_path)
+
+
+@edataclass
 class DatasetReference(DatasetLoaderInterface):
     path: Union[str, EPath]
 
     split_part: Optional[str] = None
-    subflavor: Optional[str] = None
     subflavors: Optional[Dict[str, Any]] = None
     shuffle_over_epochs_multiplier: Optional[int] = 1
     dataset_config: str = "dataset.yaml"
     split_config: str = "split.yaml"
+
+    #: Auxiliary datasets. May only be specified for crude datasets for cooking. Cooking will get
+    # these references to load data from. If specified as string, it will be interpreted as a
+    # dataset path.
+    aux: Optional[Dict[str, str]] = None
 
     _dataset: Optional[DatasetLoaderInterface] = None
 
@@ -34,6 +86,7 @@ class DatasetReference(DatasetLoaderInterface):
         if not isinstance(self.path, EPath):
             self.path = mds_path.parent / self.path
         if self.path.is_file():
+            assert self.aux is None, "Cannot specify auxiliary datasets for crude datasets"
             assert self.dataset_config == "dataset.yaml", "Must not set dataset_config"
             assert self.split_config == "split.yaml", "Must not set split_config"
             # Note: For backwards compatibility, the type must be Metadataset (V1).
@@ -43,17 +96,22 @@ class DatasetReference(DatasetLoaderInterface):
                 default_kwargs=dict(path=self.path),
             )
             self._dataset.post_initialize()
-        elif (self.path / MAIN_FOLDER_NAME / ".info.yaml").is_file():
-            self._dataset = DatasetLoader(
-                path=self.path,
-                split_part=self.split_part,
-                subflavor=self.subflavor,
-                subflavors=self.subflavors,
-                shuffle_over_epochs_multiplier=self.shuffle_over_epochs_multiplier,
-                dataset_config=self.dataset_config,
-                split_config=self.split_config,
-            )
+        elif check_dataset_info_present(self.path):
+            self._dataset = DatasetLoader(path=self.path)
             self._dataset.post_initialize()
+            if self.aux is not None:
+                new_aux = {}
+                for k, v in self.aux.items():
+                    if m := url_regex.match(v):
+                        if m.group("protocol") == "filesystem":
+                            new_aux[k] = AuxFilesystemReference(fs_path=m.group("path"))
+                        else:
+                            raise ValueError(f"Unsupported protocol: {m.group('protocol')}")
+                    else:
+                        new_aux[k] = AuxDatasetReference(path=v)
+
+                    new_aux[k].post_initialize(mds_path)
+                self.aux = new_aux
         else:
             raise FileNotFoundError(self.path)
 
@@ -67,11 +125,10 @@ class DatasetReference(DatasetLoaderInterface):
         training: bool,
         split_part: Union[Literal["train", "val", "test"], str],
         worker_config: WorkerConfig,
-        subflavor: Optional[str] = None,
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: Optional[int] = 1,
         **kwargs,
-    ) -> Tuple[DatasetBlendMode, List[Tuple[BaseCoreDatasetFactory, Union[float, int, None]]]]:
+    ) -> LoadedDatasetList:
         if self.subflavors is not None:
             subflavors = {**self.subflavors, **(subflavors or {})}
         assert self._dataset is not None
@@ -87,19 +144,25 @@ class DatasetReference(DatasetLoaderInterface):
             new_shuffle_over_epochs_multiplier = (
                 shuffle_over_epochs_multiplier * self.shuffle_over_epochs_multiplier
             )
-
-        return self._dataset.get_datasets(
+        result = self._dataset.get_datasets(
             training=training,
             split_part=self.split_part or split_part,
             worker_config=worker_config,
-            subflavor=subflavor or self.subflavor,
             subflavors=subflavors,
             shuffle_over_epochs_multiplier=new_shuffle_over_epochs_multiplier,
             **kwargs,
         )
+        if self.aux is not None:
+            aux = {k: v.get_file_store() for k, v in self.aux.items()}
+            for loaded_dataset in result.datasets:
+                if loaded_dataset.aux is None:
+                    loaded_dataset.aux = aux
+                else:
+                    loaded_dataset.aux.update(aux)
+        return result
 
 
-@dataclass_slots
+@edataclass
 class JoinDatasetReference(DatasetReference):
     nonmatch: Literal["skip", "none", "error"] = "error"
 
@@ -109,11 +172,10 @@ class JoinDatasetReference(DatasetReference):
         # Do not store the loader, the parent MetadatasetJoin will do that.
         if not isinstance(self.path, EPath):
             self.path = mds_path.parent / self.path
-        if (self.path / MAIN_FOLDER_NAME / ".info.yaml").is_file():
+        if check_dataset_info_present(self.path):
             return DatasetLoader(
                 path=self.path,
                 split_part=self.split_part,
-                subflavor=self.subflavor,
                 subflavors=self.subflavors,
                 shuffle_over_epochs_multiplier=self.shuffle_over_epochs_multiplier,
                 dataset_config=self.dataset_config,
@@ -130,19 +192,18 @@ class JoinDatasetReference(DatasetReference):
     def get_datasets(
         self,
         **kwargs,
-    ) -> Tuple[DatasetBlendMode, List[Tuple[BaseCoreDatasetFactory, Union[float, int, None]]]]:
+    ) -> LoadedDatasetList:
         assert False, (
             "JoinDatasetReference should not be used directly, but only by MetadatasetJoin"
         )
 
 
-@dataclass_slots
+@edataclass
 class MetadatasetJoin(DatasetLoaderInterface):
     join: Union[List[JoinDatasetReference], Dict[str, JoinDatasetReference]]
     joiner: Union[Type[Sample], Callable[..., Sample]]
 
     split_part: Optional[str] = None
-    subflavor: Optional[str] = None
     subflavors: Optional[Dict[str, Any]] = None
     shuffle_over_epochs_multiplier: Optional[int] = 1
     dataset_config: str = "dataset.yaml"
@@ -180,7 +241,6 @@ class MetadatasetJoin(DatasetLoaderInterface):
             datasets=inner_loaders,
             joiner=self.joiner,
             split_part=self.split_part,
-            subflavor=self.subflavor,
             subflavors=self.subflavors,
             shuffle_over_epochs_multiplier=self.shuffle_over_epochs_multiplier,
             split_config=self.split_config,
@@ -197,17 +257,15 @@ class MetadatasetJoin(DatasetLoaderInterface):
         training: bool,
         split_part: Union[Literal["train", "val", "test"], str],
         worker_config: WorkerConfig,
-        subflavor: Optional[str] = None,
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: Optional[int] = 1,
         **kwargs,
-    ) -> Tuple[DatasetBlendMode, List[Tuple[BaseCoreDatasetFactory, Union[float, int, None]]]]:
+    ) -> LoadedDatasetList:
         assert self._dataset is not None, "Missing post_initialize call."
         return self._dataset.get_datasets(
             training=training,
             split_part=split_part,
             worker_config=worker_config,
-            subflavor=subflavor,
             subflavors=subflavors,
             shuffle_over_epochs_multiplier=shuffle_over_epochs_multiplier,
             **kwargs,
@@ -219,17 +277,17 @@ class BlendWeightMixin:
     weight: float = 1.0
 
 
-@dataclass_slots
+@edataclass
 class BlendDatasetReference(BlendWeightMixin, DatasetReference):
     pass
 
 
-@dataclass_slots
+@edataclass
 class BlendJoinDatasetReference(BlendWeightMixin, MetadatasetJoin):
     pass
 
 
-@dataclass_slots
+@edataclass
 class MetadatasetBlend(DatasetLoaderInterface):
     """Blending of datasets by specifying the sampling weight for the inner datasets."""
 
@@ -252,35 +310,42 @@ class MetadatasetBlend(DatasetLoaderInterface):
         training: bool,
         split_part: Union[Literal["train", "val", "test"], str],
         worker_config: WorkerConfig,
-        subflavor: Optional[str] = None,
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: Optional[int] = 1,
         **kwargs,
-    ) -> Tuple[DatasetBlendMode, List[Tuple[BaseCoreDatasetFactory, Union[float, int, None]]]]:
+    ) -> LoadedDatasetList:
         sum_weight = sum(dataset.weight for dataset in self.blend)
         datasets = []
         for dataset in self.blend:
-            inner_blend_mode, inner_datasets = dataset.get_datasets(
+            inner_result = dataset.get_datasets(
                 training=training,
                 split_part=split_part,
                 worker_config=worker_config,
-                subflavor=subflavor,
                 subflavors=subflavors,
                 shuffle_over_epochs_multiplier=shuffle_over_epochs_multiplier,
                 **kwargs,
             )
-            if inner_blend_mode not in (DatasetBlendMode.NONE, DatasetBlendMode.DATASET_WEIGHT):
+            if inner_result.blend_mode not in (
+                DatasetBlendMode.NONE,
+                DatasetBlendMode.DATASET_WEIGHT,
+            ):
                 raise ValueError(
                     "Can only blend datasets which are of the same blend mode. Cannot mix blend with blend_epochized."
                 )
-            for loaded_dataset, weight in inner_datasets:
-                if inner_blend_mode == DatasetBlendMode.DATASET_WEIGHT:
-                    assert isinstance(weight, float)
+            for loaded_dataset in inner_result.datasets:
+                if inner_result.blend_mode == DatasetBlendMode.DATASET_WEIGHT:
+                    assert isinstance(loaded_dataset.weight, float)
                 else:
-                    assert weight is None
-                    weight = 1.0
-                datasets.append((loaded_dataset, weight * dataset.weight / sum_weight))
-        return DatasetBlendMode.DATASET_WEIGHT, datasets
+                    assert inner_result.blend_mode == DatasetBlendMode.NONE
+                    assert loaded_dataset.weight is None
+                    assert loaded_dataset.repetitions is None
+                    loaded_dataset.weight = 1.0
+                loaded_dataset.weight = loaded_dataset.weight * dataset.weight / sum_weight
+                datasets.append(loaded_dataset)
+        return LoadedDatasetList(
+            blend_mode=DatasetBlendMode.DATASET_WEIGHT,
+            datasets=datasets,
+        )
 
 
 @dataclass
@@ -288,17 +353,17 @@ class BlendRepetitionsMixin:
     repetitions: Union[int, float] = 1
 
 
-@dataclass_slots
+@edataclass
 class BlendEpochizedDatasetReference(BlendRepetitionsMixin, DatasetReference):
     pass
 
 
-@dataclass_slots
+@edataclass
 class BlendEpochizedJoinDatasetReference(BlendRepetitionsMixin, MetadatasetJoin):
     pass
 
 
-@dataclass_slots
+@edataclass
 class MetadatasetBlendEpochized(DatasetLoaderInterface):
     """Blending of datasets, by specifying the number of repetitions for samples from the inner
     datasets. Ensures that the constraint, that samples are seen exactly this many times before
@@ -324,37 +389,43 @@ class MetadatasetBlendEpochized(DatasetLoaderInterface):
         training: bool,
         split_part: Union[Literal["train", "val", "test"], str],
         worker_config: WorkerConfig,
-        subflavor: Optional[str] = None,
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: Optional[int] = 1,
         **kwargs,
-    ) -> Tuple[DatasetBlendMode, List[Tuple[BaseCoreDatasetFactory, Union[float, int, None]]]]:
+    ) -> LoadedDatasetList:
         datasets = []
         for dataset in self.blend_epochized:
-            inner_blend_mode, inner_datasets = dataset.get_datasets(
+            inner_result = dataset.get_datasets(
                 training=training,
                 split_part=split_part,
                 worker_config=worker_config,
-                subflavor=subflavor,
                 subflavors=subflavors,
                 shuffle_over_epochs_multiplier=shuffle_over_epochs_multiplier,
                 **kwargs,
             )
-            if inner_blend_mode not in (DatasetBlendMode.NONE, DatasetBlendMode.SAMPLE_REPETITIONS):
+            if inner_result.blend_mode not in (
+                DatasetBlendMode.NONE,
+                DatasetBlendMode.SAMPLE_REPETITIONS,
+            ):
                 raise ValueError(
                     "Can only blend datasets which are of the same blend mode. Cannot mix blend with blend_epochized."
                 )
-            for loaded_dataset, repetitions in inner_datasets:
-                if inner_blend_mode == DatasetBlendMode.SAMPLE_REPETITIONS:
-                    assert isinstance(repetitions, int)
+            for loaded_dataset in inner_result.datasets:
+                if inner_result.blend_mode == DatasetBlendMode.SAMPLE_REPETITIONS:
+                    assert isinstance(loaded_dataset.repetitions, (int, float))
                 else:
-                    assert repetitions is None
-                    repetitions = 1
-                datasets.append((loaded_dataset, dataset.repetitions * repetitions))
-        return DatasetBlendMode.SAMPLE_REPETITIONS, datasets
+                    assert loaded_dataset.weight is None
+                    assert loaded_dataset.repetitions is None
+                    loaded_dataset.repetitions = 1
+                loaded_dataset.repetitions = dataset.repetitions * loaded_dataset.repetitions
+                datasets.append(loaded_dataset)
+        return LoadedDatasetList(
+            blend_mode=DatasetBlendMode.SAMPLE_REPETITIONS,
+            datasets=datasets,
+        )
 
 
-@dataclass_slots
+@edataclass
 class MetadatasetV2(DatasetLoaderInterface):
     path: EPath
     splits: Dict[
@@ -393,16 +464,14 @@ class MetadatasetV2(DatasetLoaderInterface):
         training: bool,
         split_part: Union[Literal["train", "val", "test"], str],
         worker_config: WorkerConfig,
-        subflavor: Optional[str] = None,
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: Optional[int] = 1,
         **kwargs,
-    ) -> Tuple[DatasetBlendMode, List[Tuple[BaseCoreDatasetFactory, Union[float, int, None]]]]:
+    ) -> LoadedDatasetList:
         return self.splits[split_part].get_datasets(
             training=training,
             split_part=split_part,
             worker_config=worker_config,
-            subflavor=subflavor,
             subflavors=subflavors,
             shuffle_over_epochs_multiplier=shuffle_over_epochs_multiplier,
             **kwargs,

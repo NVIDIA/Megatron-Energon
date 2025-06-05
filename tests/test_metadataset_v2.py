@@ -13,6 +13,7 @@ import warnings
 from collections import Counter
 from pathlib import Path
 from typing import Iterable
+from unittest.mock import patch
 
 import torch
 import webdataset as wds
@@ -26,11 +27,21 @@ from megatron.energon import (
     get_train_dataset,
     load_dataset,
 )
-from megatron.energon.dataclass_slots import dataclass_slots
+from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib.epath import EPath
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 from megatron.energon.metadataset.loader import prepare_metadataset
 from megatron.energon.metadataset.loader_interface import DatasetBlendMode
+from megatron.energon.task_encoder.base import DefaultTaskEncoder
+from megatron.energon.wrappers.watchdog_dataset import WatchdogDataset
+from tests.epath_s3_emulator import setup_s3_emulator
+
+# Speed up tests significantly by reducing the torch status check interval for broken worker shutdown
+try:
+    torch.utils.data._utils.worker.MP_STATUS_CHECK_INTERVAL = 0.1
+    torch.utils.data._utils.MP_STATUS_CHECK_INTERVAL = 0.1
+except AttributeError:
+    pass
 
 
 def _norng_state(state):
@@ -52,7 +63,7 @@ def _norng_state(state):
         return state
 
 
-@dataclass_slots
+@edataclass
 class TestJoinedSample(Sample):
     text1: torch.Tensor
     text2: torch.Tensor
@@ -116,7 +127,6 @@ class TestDataset(unittest.TestCase):
                         "    blend:",
                         "      - weight: 1",
                         "        path: ds1",
-                        "        subflavor: ds1",
                         "        subflavors:",
                         "          source: metadataset_v2.yaml",
                         "          number: 43",
@@ -124,7 +134,6 @@ class TestDataset(unittest.TestCase):
                         "        shuffle_over_epochs_multiplier: 3",
                         "      - weight: 1",
                         "        path: ds2",
-                        "        subflavor: ds2",
                         "        subflavors:",
                         "          source: metadataset_v2.yaml",
                         "          number: 44",
@@ -153,7 +162,6 @@ class TestDataset(unittest.TestCase):
                         "      - weight: 4",
                         "        path: ./metadataset_v2.yaml",
                         "        split_part: train",
-                        "        subflavor: train",
                         "        subflavors:",
                         "          source: nested_metadataset.yaml",
                         "          mds: nested_train",
@@ -259,27 +267,24 @@ class TestDataset(unittest.TestCase):
 
         dataset = load_dataset(self.nested_mds_path)
 
-        blend_mode, raw_datasets = dataset.get_datasets(
+        raw_datasets = dataset.get_datasets(
             training=False, split_part="train", worker_config=worker_config
         )
-        assert blend_mode == DatasetBlendMode.DATASET_WEIGHT
-        assert [weight for _raw_dataset, weight in raw_datasets] == [0.4, 0.4, 0.1, 0.1], [
-            weight for _raw_dataset, weight in raw_datasets
-        ]
-        assert [raw_dataset.paths[0].name for raw_dataset, _weight in raw_datasets] == [
+        assert raw_datasets.blend_mode == DatasetBlendMode.DATASET_WEIGHT
+        assert [raw_dataset.weight for raw_dataset in raw_datasets.datasets] == [
+            0.4,
+            0.4,
+            0.1,
+            0.1,
+        ], [raw_dataset.weight for raw_dataset in raw_datasets.datasets]
+        assert [raw_dataset.dataset.paths[0].name for raw_dataset in raw_datasets.datasets] == [
             "ds1",
             "ds2",
             "ds1",
             "ds2",
         ]
-        assert [raw_dataset.subflavor for raw_dataset, _weight in raw_datasets] == [
-            "train",
-            "train",
-            None,
-            None,
-        ]
-        print([raw_dataset.subflavors for raw_dataset, _weight in raw_datasets])
-        assert [raw_dataset.subflavors for raw_dataset, _weight in raw_datasets] == [
+        print([raw_dataset.dataset.subflavors for raw_dataset in raw_datasets.datasets])
+        assert [raw_dataset.dataset.subflavors for raw_dataset in raw_datasets.datasets] == [
             {
                 "source": "nested_metadataset.yaml",
                 "dataset.yaml": True,
@@ -963,6 +968,8 @@ class TestDataset(unittest.TestCase):
             checkpoint_every_min_n_samples=1,
         )
 
+        assert len(train_loader) == 38 + 55 + 27, len(train_loader)
+
         data = list(enumerate(train_loader))
 
         # Check the overall number of samples
@@ -1094,6 +1101,116 @@ class TestDataset(unittest.TestCase):
         assert sample_counts_save_restore == sample_counts, (
             "Sample counts do not match when using save/restore"
         )
+
+        # Try in repeat mode
+        # Train mode dataset
+        train_loader = get_savable_loader(
+            get_train_dataset(
+                fixed_epochs_mds_path,
+                worker_config=worker_config,
+                batch_size=1,
+                shuffle_buffer_size=None,
+                shuffle_over_epochs_multiplier=None,
+                parallel_shard_iters=1,
+                max_samples_per_sequence=None,
+            ),
+            checkpoint_every_sec=0,
+            checkpoint_every_min_n_samples=1,
+        )
+
+        data = list(zip(range(200), train_loader))
+        assert len(train_loader) == 38 + 55 + 27, len(train_loader)
+
+        # Check the overall number of samples
+        # Should be 0.7*len(ds1) + 1.5*len(ds2) = 38 + 55 + 27 (floor rounding)
+        assert len(data) == 200, len(data)
+
+    @patch.object(WatchdogDataset, "_watchdog_trigger")
+    def test_watchdog_dataset(self, mock_watchdog_trigger):
+        class TestTaskEncoder(DefaultTaskEncoder):
+            def __init__(self):
+                super().__init__()
+                self.did_sleep = False
+
+            def encode_sample(self, sample: TextSample) -> TextSample:
+                if sample.text == "13":
+                    import time
+
+                    if not self.did_sleep:
+                        print("Sleeping for 5 seconds on encode_sample to simulate stuck worker")
+                        time.sleep(5)
+                        self.did_sleep = True
+
+                return sample
+
+        worker_config = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=0,
+            seed_offset=42,
+        )
+
+        # Train mode dataset
+        train_dataset = get_train_dataset(
+            self.mds_path,
+            worker_config=worker_config,
+            batch_size=1,
+            shuffle_buffer_size=None,
+            max_samples_per_sequence=None,
+            task_encoder=TestTaskEncoder(),
+        )
+
+        train_loader = get_loader(
+            train_dataset,
+            watchdog_timeout_seconds=3,
+            fail_on_timeout=False,
+        )
+
+        for idx, data in enumerate(train_loader):
+            print(idx, data.text[0])
+            if idx > 255:
+                break
+
+        mock_watchdog_trigger.assert_called()
+
+    def test_s3(self):
+        # Create a joined dataset configuration
+        mixed_mds_path = self.dataset_path / "metadataset_mixed.yaml"
+        with open(mixed_mds_path, "w") as f:
+            f.write(
+                "\n".join(
+                    [
+                        "__module__: megatron.energon",
+                        "__class__: MetadatasetV2",
+                        "splits:",
+                        "  train:",
+                        "    path: msc://s3test_metadataset/test/dataset/nested_metadataset_v2.yaml",
+                    ]
+                )
+            )
+
+        with setup_s3_emulator(profile_name="s3test_metadataset") as emu:
+            # Upload the dataset to the S3 emulator
+            # EPath(self.dataset_path).copy(EPath("msc://s3/test/dataset"))
+            emu.add_file(self.dataset_path, "test/dataset")
+
+            train_dataset = get_loader(
+                get_train_dataset(
+                    mixed_mds_path,
+                    worker_config=WorkerConfig(
+                        rank=0,
+                        world_size=1,
+                        num_workers=2,
+                    ),
+                    batch_size=1,
+                    shuffle_buffer_size=10,
+                    max_samples_per_sequence=None,
+                    virtual_epoch_length=10,
+                )
+            )
+
+            data = list(enumerate(train_dataset))
+            assert len(data) == 10, len(data)
 
 
 if __name__ == "__main__":
