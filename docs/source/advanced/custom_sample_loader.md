@@ -5,9 +5,8 @@ SPDX-License-Identifier: BSD-3-Clause -->
 # Custom Sample Loader
 
 ```{warning}
-The custom sample loader is now considered a legacy feature and will be deprecated some time
-in the future.
-Please migrate your new datasets to [crude datasets](../advanced/crude_datasets.md) and cookers instead.
+The custom sample loader is a legacy feature and using [crude datasets](../advanced/crude_datasets.md) with cookers is usually the preferred way.
+This feature might be deprecated at some point in the future.
 ```
 Instead of using a `field_map` in your `dataset.yaml`, you can create custom python code for sample loading
 right next to your dataset inside the `.nv-meta` folder.

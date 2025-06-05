@@ -89,8 +89,8 @@ and one or more additional auxiliary data sources that contain the (larger) medi
 
 An auxiliary data source can be either
 
-* A folder on the local or a remote file system
 * Another energon-prepared WebDataset
+* A folder on the local or a remote file system
 
 You can specify it in your [metadataset](../basic/metadataset) yaml as follows (look at the `aux:` section)
 ```yaml
@@ -102,6 +102,7 @@ splits:
     aux:
       foo_bar_source: ./aux_ds123
       fs_source: filesystem://./images
+      fs_source_abs: filesystem:///absolute/path/to/images
       remote_source: msc://mybucket/path/ds
     subflavors:
       crude_type: my_dual_aux_example
@@ -139,7 +140,7 @@ def cook_text(sample: dict, foo_bar_source: FileStore) -> TextSample:
 # ...
 ```
 
-You can use multiple sources, but you don't have to specify an arg for each source that was defined in the metadataset.
+You can use multiple sources. You'll have to specify a cooker argument for each source that was defined in the metadataset.
 
 For easier debugging, you should always keep track of all the sources you used. The `get` method takes care of this if you pass it the sample like this:
 
