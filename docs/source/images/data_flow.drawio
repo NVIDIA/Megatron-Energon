@@ -1,11 +1,11 @@
 <mxfile host="65bd71144e">
     <diagram id="07fea595-8f29-1299-0266-81d95cde20df" name="Page-1">
-        <mxGraphModel dx="2484" dy="5516" grid="1" gridSize="10" guides="0" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1000" pageHeight="4000" background="none" math="0" shadow="0">
+        <mxGraphModel dx="2309" dy="5338" grid="1" gridSize="10" guides="0" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1000" pageHeight="4000" background="none" math="0" shadow="0">
             <root>
                 <mxCell id="0"/>
                 <mxCell id="1" parent="0"/>
                 <mxCell id="EeR23cp9OgTQIamsDvA7-231" value="&lt;font color=&quot;#23497d&quot;&gt;TaskEncoder&lt;/font&gt;" style="swimlane;whiteSpace=wrap;fillColor=none;swimlaneFillColor=#BAC8D3;fontColor=#2F5B7C;fontFamily=Tahoma;html=1;strokeColor=none;opacity=50;align=right;startSize=15;verticalAlign=bottom;" parent="1" vertex="1">
-                    <mxGeometry x="80" y="240" width="550" height="1420" as="geometry">
+                    <mxGeometry x="80" y="210" width="550" height="1420" as="geometry">
                         <mxRectangle x="24.5" y="88.5" width="80" height="23" as="alternateBounds"/>
                     </mxGeometry>
                 </mxCell>
@@ -170,8 +170,8 @@
                         <mxPoint x="370" y="-20" as="sourcePoint"/>
                         <mxPoint x="240" y="28.5" as="targetPoint"/>
                         <Array as="points">
-                            <mxPoint x="370" y="-50"/>
-                            <mxPoint x="240" y="-50"/>
+                            <mxPoint x="370" y="-20"/>
+                            <mxPoint x="240" y="-20"/>
                         </Array>
                     </mxGeometry>
                 </mxCell>
@@ -261,30 +261,30 @@
                 <mxCell id="2y5nxieE3EETo1UtqVLI-179" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#2F5B7C;strokeWidth=3;endFill=1;" parent="1" target="219" edge="1">
                     <mxGeometry relative="1" as="geometry">
                         <Array as="points">
-                            <mxPoint x="320" y="270"/>
-                            <mxPoint x="450" y="270"/>
+                            <mxPoint x="320" y="240"/>
+                            <mxPoint x="450" y="240"/>
                         </Array>
-                        <mxPoint x="320" y="250" as="sourcePoint"/>
+                        <mxPoint x="320" y="220" as="sourcePoint"/>
                     </mxGeometry>
                 </mxCell>
                 <mxCell id="214" style="edgeStyle=orthogonalEdgeStyle;shape=connector;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;labelBackgroundColor=default;strokeColor=#2F5B7C;strokeWidth=3;fontFamily=Helvetica;fontSize=11;fontColor=default;endArrow=block;endFill=1;" parent="1" target="183" edge="1">
                     <mxGeometry relative="1" as="geometry">
-                        <mxPoint x="320" y="600" as="sourcePoint"/>
-                        <mxPoint x="539" y="641.5" as="targetPoint"/>
+                        <mxPoint x="320" y="570" as="sourcePoint"/>
+                        <mxPoint x="539" y="611.5" as="targetPoint"/>
                         <Array as="points">
-                            <mxPoint x="320" y="640"/>
-                            <mxPoint x="450" y="640"/>
+                            <mxPoint x="320" y="610"/>
+                            <mxPoint x="450" y="610"/>
                         </Array>
                     </mxGeometry>
                 </mxCell>
                 <mxCell id="222" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#2F5B7C;strokeWidth=3;endFill=1;" edge="1" parent="1" target="EeR23cp9OgTQIamsDvA7-233">
                     <mxGeometry relative="1" as="geometry">
                         <Array as="points">
-                            <mxPoint x="320" y="400"/>
-                            <mxPoint x="450" y="400"/>
+                            <mxPoint x="320" y="370"/>
+                            <mxPoint x="450" y="370"/>
                         </Array>
-                        <mxPoint x="320" y="370" as="sourcePoint"/>
-                        <mxPoint x="460" y="200" as="targetPoint"/>
+                        <mxPoint x="320" y="340" as="sourcePoint"/>
+                        <mxPoint x="460" y="170" as="targetPoint"/>
                     </mxGeometry>
                 </mxCell>
                 <mxCell id="226" style="edgeStyle=orthogonalEdgeStyle;shape=connector;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;labelBackgroundColor=default;strokeColor=#2F5B7C;strokeWidth=3;fontFamily=Helvetica;fontSize=11;fontColor=default;endArrow=block;endFill=1;" edge="1" parent="1" source="EeR23cp9OgTQIamsDvA7-249" target="EeR23cp9OgTQIamsDvA7-241">
@@ -307,23 +307,23 @@
                     </mxGeometry>
                 </mxCell>
                 <mxCell id="217" value="&lt;h1 style=&quot;line-height: 110%;&quot;&gt;Packing&lt;/h1&gt;&lt;p style=&quot;line-height: 120%;&quot;&gt;For example sequence packing (compressing text samples into a single sample, reduing padding)&lt;/p&gt;" style="text;html=1;strokeColor=#6c8ebf;fillColor=#dae8fc;spacing=7;spacingTop=-20;whiteSpace=wrap;overflow=hidden;rounded=0;" parent="1" vertex="1">
-                    <mxGeometry x="-10" y="650" width="240" height="410" as="geometry"/>
+                    <mxGeometry x="-10" y="620" width="240" height="410" as="geometry"/>
                 </mxCell>
                 <mxCell id="EeR23cp9OgTQIamsDvA7-275" value="&lt;b&gt;model.forward()&lt;/b&gt;" style="whiteSpace=wrap;strokeColor=none;fillColor=#2f5b7c;shadow=0;fontColor=#FFFFFF;fontFamily=Helvetica;fontStyle=0;html=1;fontSize=12;spacing=6;verticalAlign=middle;dashed=1;dashPattern=12 12;" parent="1" vertex="1">
-                    <mxGeometry x="241" y="1690" width="158" height="60" as="geometry"/>
+                    <mxGeometry x="241" y="1660" width="158" height="60" as="geometry"/>
                 </mxCell>
                 <mxCell id="186" style="edgeStyle=orthogonalEdgeStyle;shape=connector;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;labelBackgroundColor=default;strokeColor=#2F5B7C;strokeWidth=3;fontFamily=Helvetica;fontSize=11;fontColor=default;endArrow=block;endFill=1;" parent="1" source="EeR23cp9OgTQIamsDvA7-264" target="EeR23cp9OgTQIamsDvA7-275" edge="1">
                     <mxGeometry relative="1" as="geometry">
-                        <mxPoint x="410" y="1175" as="sourcePoint"/>
-                        <mxPoint x="320" y="1680" as="targetPoint"/>
+                        <mxPoint x="410" y="1145" as="sourcePoint"/>
+                        <mxPoint x="320" y="1650" as="targetPoint"/>
                         <Array as="points">
-                            <mxPoint x="320" y="1470"/>
-                            <mxPoint x="320" y="1470"/>
+                            <mxPoint x="320" y="1440"/>
+                            <mxPoint x="320" y="1440"/>
                         </Array>
                     </mxGeometry>
                 </mxCell>
                 <mxCell id="260" value="&lt;h1 style=&quot;line-height: 110%;&quot;&gt;Blending&lt;/h1&gt;&lt;p style=&quot;line-height: 120%;&quot;&gt;Blend multiple datasets together as specified in the metadataset yaml file.&lt;/p&gt;" style="text;html=1;strokeColor=#6c8ebf;fillColor=#dae8fc;spacing=7;spacingTop=-20;whiteSpace=wrap;overflow=hidden;rounded=0;" vertex="1" parent="1">
-                    <mxGeometry x="-10" y="80" width="240" height="100" as="geometry"/>
+                    <mxGeometry x="-10" y="90" width="240" height="90" as="geometry"/>
                 </mxCell>
                 <mxCell id="261" value="Other Dataset" style="swimlane;whiteSpace=wrap;fillColor=none;swimlaneFillColor=#BAC8D3;fontColor=#2F5B7C;fontFamily=Tahoma;html=1;strokeColor=none;opacity=50;align=right;" vertex="1" parent="1">
                     <mxGeometry x="480" y="-560" width="200" height="630" as="geometry">
