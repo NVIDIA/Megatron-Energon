@@ -37,6 +37,7 @@ basic/basics_flow
 basic/task_encoder
 basic/metadataset
 basic/save_restore
+basic/glossary
 ```
 
 
@@ -46,7 +47,8 @@ caption: Advanced Usage
 maxdepth: 2
 ---
 advanced/remote_dataset
-advanced/advanced_dataformat
+advanced/crude_datasets
+advanced/custom_sample_loader
 advanced/repro_scaling
 advanced/packing
 advanced/grouping

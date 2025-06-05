@@ -12,8 +12,9 @@ The most important features are:
 
 * Comes with a standardized WebDataset-based format on disk
 * Optimized for high-speed multi-rank training
+* Can handle very large datasets
 * Can easily mix and blend multiple datasets
-* Its state is savable and restorable
-* Handles various kinds of multi-modal data even in one training
+* Its state is savable and restorable (deterministic resumability)
+* Handles various kinds of multi-modal data even in one training run
 
 Energon also comes with a command line tool that you can use to prepare your datasets.

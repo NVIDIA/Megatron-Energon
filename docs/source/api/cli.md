@@ -24,7 +24,7 @@ Below, you can see the available sub-commands under `energon`.
    :nested: short
 ```
 
-(energon_data_prepare)=
+(energon-prepare)=
 ## energon prepare
 
 An interactive tool to generate metadata for your existing webdataset.
