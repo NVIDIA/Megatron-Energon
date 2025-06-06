@@ -9,13 +9,14 @@ import os
 import sys
 import time
 import unittest
+from pathlib import Path
 
 import av
 import numpy as np
 import torch
 import torchvision.transforms as transforms
 
-from megatron.energon.av import AVDecoder, get_clips_uniform, get_single_frames_uniform
+from megatron.energon.av import AVDecoder, AVMetadata, get_clips_uniform, get_single_frames_uniform
 
 # Set multiprocessing start method to 'spawn' on macOS to avoid DataLoader cleanup issues
 if sys.platform == "darwin":
@@ -97,11 +98,7 @@ class TestVideoDecode(unittest.TestCase):
 
     def test_decode_all_frames(self):
         """Test decoding all frames from a video file."""
-        with open("tests/data/sync_test.mp4", "rb") as f:
-            raw_bytes = f.read()
-            stream = io.BytesIO(raw_bytes)
-
-        av_decoder = AVDecoder(stream)
+        av_decoder = AVDecoder(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes()))
         av_data = av_decoder.get_frames()
         video_tensor = av_data.video_clips[0]
 
@@ -110,16 +107,56 @@ class TestVideoDecode(unittest.TestCase):
             "Energon decoded video does not match baseline"
         )
 
+    def test_decode_metadata(self):
+        """Test decoding metadata."""
+        expected_metadata = [
+            AVMetadata(
+                video_duration=63.054,
+                video_num_frames=1891,
+                video_fps=30.0,
+                video_width=192,
+                video_height=108,
+                audio_duration=63.103,
+                audio_channels=2,
+                audio_sample_rate=48000,
+            ),
+            AVMetadata(
+                video_duration=63.03333333333333,
+                video_num_frames=1891,
+                video_fps=30.0,
+                video_width=192,
+                video_height=108,
+                audio_duration=63.068,
+                audio_channels=2,
+                audio_sample_rate=48000,
+            ),
+        ]
+        for video_file, expected_metadata in zip(
+            ["tests/data/sync_test.mkv", "tests/data/sync_test.mp4"], expected_metadata
+        ):
+            av_decoder = AVDecoder(io.BytesIO(Path(video_file).read_bytes()))
+            assert av_decoder.get_metadata() == expected_metadata, (
+                f"Metadata does not match expected metadata for {video_file}"
+            )
+
+            assert av_decoder.get_video_duration(get_frame_count=False) in (
+                (expected_metadata.video_duration, None),
+                (expected_metadata.video_duration, expected_metadata.video_num_frames),
+            )
+            assert av_decoder.get_video_duration(get_frame_count=True) == (
+                expected_metadata.video_duration,
+                expected_metadata.video_num_frames,
+            )
+
+            assert av_decoder.get_audio_duration() == expected_metadata.audio_duration
+            assert av_decoder.get_video_fps() == expected_metadata.video_fps
+            assert av_decoder.get_audio_samples_per_second() == expected_metadata.audio_sample_rate
+
     def test_decode_strided_resized(self):
         """Test decoding a subset of frames with resizing."""
         for video_file in ["tests/data/sync_test.mkv", "tests/data/sync_test.mp4"]:
             print(f"================= Testing {video_file} ==================")
-            with open(video_file, "rb") as f:
-                raw_bytes = f.read()
-                stream = io.BytesIO(raw_bytes)
-
-            av_decoder = AVDecoder(stream)
-            video_duration, frame_count = av_decoder.get_video_duration(get_frame_count=True)
+            av_decoder = AVDecoder(io.BytesIO(Path(video_file).read_bytes()))
 
             video_tensor = get_single_frames_uniform(
                 av_decoder=av_decoder,
@@ -142,11 +179,7 @@ class TestVideoDecode(unittest.TestCase):
 
     def test_video_audio_sync(self):
         """Test decoding video frames and audio clips together."""
-        with open("tests/data/sync_test.mp4", "rb") as f:
-            raw_bytes = f.read()
-            stream = io.BytesIO(raw_bytes)
-
-        av_decoder = AVDecoder(stream)
+        av_decoder = AVDecoder(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes()))
 
         # Extract a single frame every 2 seconds and an audio clip (0.05 seconds long) at the same time.
         # We extract the frames from the sync video that shows the full white circle on the left,
@@ -391,6 +424,31 @@ class TestAudioDecode(unittest.TestCase):
             audio_tensor_soundfile = torch.from_numpy(audio_data).transpose(0, 1)
         end_time = time.perf_counter()
         print(f"Soundfile time: {end_time - start_time} seconds")
+
+    def test_decode_metadata(self):
+        """Test decoding metadata."""
+        expected_metadata = [
+            AVMetadata(
+                audio_duration=10.0,
+                audio_channels=1,
+                audio_sample_rate=32000,
+            ),
+            AVMetadata(
+                audio_duration=12.782585034013605,
+                audio_channels=2,
+                audio_sample_rate=44100,
+            ),
+        ]
+        for audio_file, expected_metadata in zip(
+            ["tests/data/test_audio.flac", "tests/data/test_audio.wav"], expected_metadata
+        ):
+            av_decoder = AVDecoder(io.BytesIO(Path(audio_file).read_bytes()))
+            assert av_decoder.get_metadata() == expected_metadata, (
+                f"Metadata does not match expected metadata for {audio_file}: {av_decoder.get_metadata()}"
+            )
+
+            assert av_decoder.get_audio_duration() == expected_metadata.audio_duration
+            assert av_decoder.get_audio_samples_per_second() == expected_metadata.audio_sample_rate
 
 
 if __name__ == "__main__":

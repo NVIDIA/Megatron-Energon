@@ -10,6 +10,8 @@ from typing import BinaryIO, Literal, Optional, Sequence, Union, overload
 import numpy as np
 import torch
 
+from megatron.energon.edataclass import edataclass
+
 # Try importing optional dependencies
 try:
     import av
@@ -90,7 +92,7 @@ class AVDecoder:
 
         self.stream.seek(0)  # Reset the video stream so that pyav can read the entire container
 
-        with av.open(self.stream) as input_container:
+        with av.open(self.stream, "r") as input_container:
             initialize_av_container(input_container)
 
             assert len(input_container.streams.video) > 0, (
@@ -254,7 +256,7 @@ class AVDecoder:
 
         self.stream.seek(0)  # Reset the video stream so that pyav can read the entire container
 
-        with av.open(self.stream) as input_container:
+        with av.open(self.stream, "r") as input_container:
             initialize_av_container(input_container)
             assert len(input_container.streams.audio) > 0, (
                 "No audio stream found, but audio_clips are requested"
@@ -468,33 +470,37 @@ class AVDecoder:
 
     def get_video_fps(self) -> float:
         """Get the FPS of the video stream."""
-        self.stream.seek(0)
-        with av.open(self.stream) as input_container:
-            initialize_av_container(input_container)
-            video_stream = input_container.streams.video[0]
-            assert video_stream.average_rate is not None
-            return float(video_stream.average_rate)
+        metadata = self.get_metadata(
+            get_video=True,
+            get_video_duration=False,
+            get_video_frame_count=False,
+            get_video_frame_size=False,
+            get_audio=False,
+        )
+        assert metadata.video_fps is not None
+        return metadata.video_fps
 
     def get_audio_samples_per_second(self) -> int:
         """Get the number of samples per second of the audio stream."""
-        self.stream.seek(0)
-        with av.open(self.stream) as input_container:
-            initialize_av_container(input_container)
-            audio_stream = input_container.streams.audio[0]
-            assert audio_stream.sample_rate is not None
-            return int(audio_stream.sample_rate)
+        metadata = self.get_metadata(
+            get_video=False,
+            get_audio=True,
+            get_audio_duration=False,
+        )
+        assert metadata.audio_sample_rate is not None
+        return metadata.audio_sample_rate
 
     def has_audio_stream(self) -> bool:
         """Check if the stream has an audio stream."""
         self.stream.seek(0)
-        with av.open(self.stream) as input_container:
+        with av.open(self.stream, "r") as input_container:
             initialize_av_container(input_container)
             return len(input_container.streams.audio) > 0
 
     def has_video_stream(self) -> bool:
         """Check if the stream has a video stream."""
         self.stream.seek(0)
-        with av.open(self.stream) as input_container:
+        with av.open(self.stream, "r") as input_container:
             initialize_av_container(input_container)
             return len(input_container.streams.video) > 0
 
@@ -505,22 +511,12 @@ class AVDecoder:
             The duration of the audio stream in seconds
         """
 
-        self.stream.seek(0)
-
-        with av.open(self.stream) as input_container:
-            initialize_av_container(input_container)
-            if input_container.streams.audio:
-                audio_time_base = input_container.streams.audio[0].time_base
-                audio_start_pts = input_container.streams.audio[0].start_time
-                if audio_start_pts is None:
-                    audio_start_pts = 0.0
-
-                audio_duration = input_container.streams.audio[0].duration
-                if audio_time_base is not None and audio_duration is not None:
-                    duration = int(audio_duration - audio_start_pts) * audio_time_base
-                    return float(duration)
-
-        return None
+        metadata = self.get_metadata(
+            get_video=False,
+            get_audio=True,
+            get_audio_duration=True,
+        )
+        return metadata.audio_duration
 
     @overload
     def get_video_duration(self, get_frame_count: Literal[True]) -> tuple[Optional[float], int]: ...
@@ -542,45 +538,108 @@ class AVDecoder:
             A tuple containing the duration in seconds, and the number of frames in the video
         """
 
-        video_duration = None
-        num_frames = None
-        duration = None
+        metadata = self.get_metadata(
+            get_video=True,
+            get_video_duration=True,
+            get_video_frame_count=get_frame_count,
+            get_video_frame_size=False,
+            get_audio=False,
+            get_audio_duration=False,
+        )
+        return metadata.video_duration, metadata.video_num_frames
 
-        self.stream.seek(0)  # Reset the video stream so that pyav can read the entire container
+    def get_metadata(
+        self,
+        get_video: bool = True,
+        get_video_duration: bool = True,
+        get_video_frame_count: bool = True,
+        get_video_frame_size: bool = True,
+        get_audio: bool = True,
+        get_audio_duration: bool = True,
+    ) -> "AVMetadata":
+        """Get the metadata of the media object.
 
-        with av.open(self.stream) as input_container:
+        Args:
+            get_video: Compute video metadata.
+            get_video_duration: Compute video duration if not found in header.
+            get_video_frame_count: Compute video frame count if not found in header.
+            get_video_frame_size: Compute video frame size if not found in header.
+            get_audio: Compute audio metadata.
+            get_audio_duration: Compute audio duration if not found in header.
+        """
+        self.stream.seek(0)
+        with av.open(self.stream, "r") as input_container:
             initialize_av_container(input_container)
-            if input_container.streams.video:
+
+            metadata = AVMetadata()
+
+            if get_video and input_container.streams.video:
                 video_stream = input_container.streams.video[0]
-                assert video_stream.time_base is not None
 
-                video_start_pts = video_stream.start_time
-                if video_start_pts is None:
-                    video_start_pts = 0.0
+                metadata.video_duration = video_stream.duration
 
-                video_duration = video_stream.duration
+                if get_video_duration and metadata.video_duration is None:
+                    # If duration isn't found in header the whole video is decoded to
+                    # determine the duration.
+                    metadata.video_num_frames = 0
+                    last_packet = None
+                    for packet in input_container.demux(video=0):
+                        if packet.pts is not None:
+                            metadata.video_num_frames += 1
+                            last_packet = packet
 
-            if video_duration is None:
-                # If duration isn't found in header the whole video is decoded to
-                # determine the duration.
-                num_frames = 0
-                last_packet = None
-                for packet in input_container.demux(video=0):
-                    if packet.pts is not None:
-                        num_frames += 1
-                        last_packet = packet
+                    if last_packet is not None and last_packet.duration is not None:
+                        assert last_packet.pts is not None
+                        metadata.video_duration = last_packet.pts + last_packet.duration
+                if metadata.video_duration is not None:
+                    if video_stream.start_time is not None:
+                        metadata.video_duration -= video_stream.start_time
+                    if video_stream.time_base is not None:
+                        metadata.video_duration *= float(video_stream.time_base)
 
-                if last_packet is not None and last_packet.duration is not None:
-                    assert last_packet.pts is not None
-                    video_duration = last_packet.pts + last_packet.duration
+                if get_video_frame_count and metadata.video_num_frames is None:
+                    metadata.video_num_frames = sum(
+                        1 for p in input_container.demux(video=0) if p.pts is not None
+                    )
 
-            if video_duration is not None and video_stream.time_base is not None:
-                duration = int(video_duration - video_start_pts) * video_stream.time_base
+                if video_stream.average_rate is not None:
+                    metadata.video_fps = float(video_stream.average_rate)
+                elif metadata.video_num_frames is not None and metadata.video_duration is not None:
+                    metadata.video_fps = metadata.video_num_frames / metadata.video_duration
+                if get_video_frame_size:
+                    input_container.seek(0, stream=video_stream)
+                    for first_frame in input_container.decode(video=0):
+                        metadata.video_width = first_frame.width
+                        metadata.video_height = first_frame.height
+                        break
+                    else:
+                        metadata.video_width = video_stream.width
+                        metadata.video_height = video_stream.height
 
-            if get_frame_count and num_frames is None:
-                num_frames = sum(1 for p in input_container.demux(video=0) if p.pts is not None)
+            if get_audio and input_container.streams.audio:
+                audio_stream = input_container.streams.audio[0]
+                metadata.audio_sample_rate = audio_stream.sample_rate
+                metadata.audio_duration = audio_stream.duration
+                if get_audio_duration and metadata.audio_duration is None:
+                    last_packet = None
+                    input_container.seek(0, stream=audio_stream)
+                    for packet in input_container.demux(audio=0):
+                        if packet.pts is not None:
+                            last_packet = packet
 
-        return float(duration) if duration is not None else None, num_frames
+                    if last_packet is not None and last_packet.duration is not None:
+                        assert last_packet.pts is not None
+                        metadata.audio_duration = last_packet.pts + last_packet.duration
+
+                if metadata.audio_duration is not None:
+                    if audio_stream.start_time is not None:
+                        metadata.audio_duration -= audio_stream.start_time
+                    if audio_stream.time_base is not None:
+                        metadata.audio_duration *= float(audio_stream.time_base)
+
+                metadata.audio_channels = audio_stream.channels
+
+        return metadata
 
     def __repr__(self):
         return f"AVDecoder(stream={self.stream!r})"
@@ -665,6 +724,21 @@ class AVWebdatasetDecoder:
             )
         else:
             raise ValueError(f"Invalid av_decode value: {self.av_decode}")
+
+
+@edataclass
+class AVMetadata:
+    """Metadata of the media object."""
+
+    video_duration: Optional[float] = None
+    video_num_frames: Optional[int] = None
+    video_fps: Optional[float] = None
+    video_width: Optional[int] = None
+    video_height: Optional[int] = None
+
+    audio_duration: Optional[float] = None
+    audio_channels: Optional[int] = None
+    audio_sample_rate: Optional[int] = None
 
 
 def initialize_av_container(input_container: "av.container.InputContainer") -> None:

@@ -14,6 +14,7 @@ from megatron.energon.cache import (
     NoCachePool,
     SystemFileStore,
 )
+from megatron.energon.edataclass import edataclass
 from megatron.energon.flavors import (
     BaseCoreDatasetFactory,
     BaseWebdatasetFactory,
@@ -127,6 +128,7 @@ __all__ = [
     "DefaultTaskEncoder",
     "DirectLazy",
     "EpochizeDataset",
+    "edataclass",
     "FileCacheLazy",
     "FileStore",
     "FileStoreCachePool",

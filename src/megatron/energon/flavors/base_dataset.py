@@ -145,7 +145,9 @@ class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
             The new sample.
         """
         base_kwargs = {
-            field.name: getattr(base_sample, field.name) for field in dataclasses.fields(Sample)
+            field.name: getattr(base_sample, field.name)
+            for field in dataclasses.fields(Sample)
+            if field.name not in kwargs
         }
         return cls(
             **base_kwargs,
