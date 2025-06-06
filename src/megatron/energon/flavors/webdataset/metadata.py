@@ -114,7 +114,8 @@ def get_dataset_info(path: EPath) -> dict:
     yaml_info_config = path / MAIN_FOLDER_NAME / ".info.yaml"
 
     if info_config.is_file():
-        return json.load(info_config.open("r"))
+        with info_config.open("r") as rf:
+            return json.load(rf)
     elif yaml_info_config.is_file():
         return load_yaml(yaml_info_config.read_bytes())
     else:
