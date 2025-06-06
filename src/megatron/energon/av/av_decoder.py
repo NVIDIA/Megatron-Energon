@@ -607,7 +607,7 @@ class AVDecoder:
                 elif metadata.video_num_frames is not None and metadata.video_duration is not None:
                     metadata.video_fps = metadata.video_num_frames / metadata.video_duration
                 if get_video_frame_size:
-                    input_container.seek(0, backward=False, stream=video_stream)
+                    input_container.seek(0, stream=video_stream)
                     for first_frame in input_container.decode(video=0):
                         metadata.video_width = first_frame.width
                         metadata.video_height = first_frame.height
@@ -622,6 +622,7 @@ class AVDecoder:
                 metadata.audio_duration = audio_stream.duration
                 if get_audio_duration and metadata.audio_duration is None:
                     last_packet = None
+                    input_container.seek(0, stream=audio_stream)
                     for packet in input_container.demux(audio=0):
                         if packet.pts is not None:
                             last_packet = packet
