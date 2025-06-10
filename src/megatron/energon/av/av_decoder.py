@@ -432,14 +432,10 @@ class AVDecoder:
         self,
         video_decode_audio: bool = False,
     ) -> Optional[AVData]:
-        """Decode the audio/video data with the specified parameters.
+        """Decode the entire audio/video data and return an AVData object.
 
         Args:
-            audio_clip_duration: Duration of each audio clip in seconds
-            audio_num_clips: Number of audio clips to extract (-1 for all)
             video_decode_audio: Whether to decode audio from video
-            video_num_frames: Number of video frames to extract
-            video_out_frame_size: Output size for video frames (width, height)
 
         Returns:
             VideoData containing the decoded frames and metadata, or None if decoding failed
@@ -447,7 +443,10 @@ class AVDecoder:
             The audio tensor is in the shape (channels, samples)
         """
         extension = self._get_extension()
-        if extension in ("mov", "mp4", "webm", "mkv"):
+        if extension is not None:
+            extension = extension.lower()
+
+        if extension in ("mov", "mp4", "webm", "mkv", "avi", "m4v"):
             if video_decode_audio:
                 return self.get_video_with_audio()
             else:
@@ -615,11 +614,10 @@ class AVWebdatasetDecoder:
         self.video_decode_audio = video_decode_audio
         self.av_decode = av_decode
 
-    def read_av_data(self, key: str, data: bytes) -> AVDecoder:
+    def read_av_data(self, data: bytes) -> AVDecoder:
         """Decoder function that returns an AVData object for flexible decoding.
 
         Args:
-            key: The file extension or key
             data: The raw bytes of the media file
 
         Returns:
@@ -645,13 +643,14 @@ class AVWebdatasetDecoder:
             If av_decode is "pyav", returns an av.container.InputContainer or av.container.OutputContainer instance.
             Returns None if decoding failed or file type is not supported.
         """
+        key = key.lower()
         if not any(
             key == ext or key.endswith("." + ext)
             for ext in ("mp4", "avi", "mov", "webm", "mkv", "flac", "mp3", "wav")
         ):
             return None
 
-        av_decoder = self.read_av_data(key, data)
+        av_decoder = self.read_av_data(data)
 
         if self.av_decode == "AVDecoder":
             return av_decoder
