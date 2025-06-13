@@ -4,6 +4,7 @@
 from typing import Any, Dict, Generic, Iterator, TypeVar
 
 from megatron.energon.flavors.base_dataset import SavableDataset
+from megatron.energon.flavors.trace import TraceIter, trace_iter
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset
 
@@ -46,7 +47,12 @@ class LimitDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
     def __len__(self) -> int:
         return min(self.length, len(self.dataset))
 
-    def __iter__(self) -> Iterator[T_sample]:
+    @trace_iter(
+        call_args={
+            "config": lambda self: self._own_config(),
+        },
+    )
+    def __iter__(self, trace_iter: TraceIter) -> Iterator[T_sample]:
         worker_id = self.worker_config.rank_worker_id()
 
         # Compute the local limit for this worker, i.e. all worker's limits sum up to the total
@@ -56,18 +62,6 @@ class LimitDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
             local_limit = self.length // self.worker_config.num_workers
             if worker_id < self.length % self.worker_config.num_workers:
                 local_limit += 1
-
-        if self.worker_config.should_log(level=2):
-            self.worker_config.worker_log(
-                {
-                    "t": "LimitDataset.start",
-                    "r": self.worker_config.rank,
-                    "w": worker_id,
-                    "offset": self.current_offset,
-                    "local_limit": local_limit,
-                    "limit": self.length,
-                }
-            )
 
         offset_range = list(range(self.current_offset, local_limit))
         # Only iterate self.dataset if there are samples to iterate
@@ -79,26 +73,19 @@ class LimitDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
                 self.current_offset = offset + 1
                 yield sample
 
-        if self.worker_config.should_log(level=2):
-            self.worker_config.worker_log(
-                {
-                    "t": "LimitDataset.done",
-                    "r": self.worker_config.rank,
-                    "w": worker_id,
-                    "offset": self.current_offset,
-                    "local_limit": local_limit,
-                    "limit": self.length,
-                }
-            )
-
         # Reset the inner dataset
-        self.dataset.reset_state_deep()
         self.current_offset = 0
         if self.reset_after_epoch:
             self.dataset.reset_state_deep()
 
     def worker_has_samples(self) -> bool:
         return super().worker_has_samples() and self.length > 0
+
+    def _own_config(self) -> Dict[str, Any]:
+        return {
+            "length": self.length,
+            "reset_after_epoch": self.reset_after_epoch,
+        }
 
     def config(self) -> Dict[str, Any]:
         return {

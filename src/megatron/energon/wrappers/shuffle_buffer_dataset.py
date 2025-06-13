@@ -1,9 +1,10 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from typing import Any, Dict, Generic, Iterator, Tuple, TypeVar, Union
+from typing import Any, Dict, Generic, Iterator, List, TypeVar
 
 from megatron.energon.flavors.base_dataset import SavableDataset
+from megatron.energon.flavors.trace import TraceIter, trace_iter
 from megatron.energon.rng import WorkerRng
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset
@@ -18,8 +19,10 @@ class ShuffleBufferDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sam
     size: int
     _worker_rng: WorkerRng
     _active_buffer: SavableSampleBuffer[T_sample]
+    _iterations: int
+    _sample_creation: List[int]
 
-    _savable_fields = ("_active_buffer", "_worker_rng")
+    _savable_fields = ("_active_buffer", "_worker_rng", "_iterations", "_sample_creation")
 
     def __init__(
         self,
@@ -36,28 +39,55 @@ class ShuffleBufferDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sam
     def reset_state_own(self) -> None:
         self._worker_rng = WorkerRng(self.worker_config)
         self._active_buffer = SavableSampleBuffer(self.dataset, worker_config=self.worker_config)
+        self._iterations = 0
+        self._sample_creation = []
 
     def __len__(self) -> int:
         return len(self.dataset)
 
-    def __iter__(self) -> Iterator[T_sample]:
+    @trace_iter(
+        call_args={
+            "config": lambda self: self._own_config(),
+        },
+        next_args={
+            "idx": lambda self: self._sample_creation[-1],
+        },
+    )
+    def __iter__(self, trace_iter: TraceIter) -> Iterator[T_sample]:
         self._active_buffer.worker_start()
         it = iter(self._active_buffer.append_iter())
-        while True:
-            if len(self._active_buffer) >= self.size:
-                pop_idx = self._worker_rng.randbelow(len(self._active_buffer))
-                yield self._active_buffer.pop(pop_idx)
-            else:
-                try:
-                    next(it)
-                except StopIteration:
-                    break
+        try:
+            while True:
+                if len(self._active_buffer) >= self.size:
+                    pop_idx = self._worker_rng.randbelow(len(self._active_buffer))
+                    sample_creation = self._sample_creation.pop(pop_idx)
+                    trace_iter.sample(
+                        self._active_buffer.pop(pop_idx),
+                        {
+                            "idx": pop_idx,
+                            "sample_creation": sample_creation,
+                            "sample_age": self._iterations - sample_creation,
+                        },
+                    )
+                    yield self._active_buffer.pop(pop_idx)
+                else:
+                    try:
+                        next(it)
+                        self._sample_creation.append(self._iterations)
+                        self._iterations += 1
+                    except StopIteration:
+                        break
+        finally:
+            if hasattr(it, "close"):
+                it.close()
         while len(self._active_buffer) > 0:
             pop_idx = self._worker_rng.randbelow(len(self._active_buffer))
             yield self._active_buffer.pop(pop_idx)
 
-    def restore_sample(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> T_sample:
-        return self._active_buffer.restore_sample(restore_key)
+    def _own_config(self) -> Dict[str, Any]:
+        return {
+            "size": self.size,
+        }
 
     def config(self) -> Dict[str, Any]:
         return {
