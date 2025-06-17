@@ -27,7 +27,8 @@ import numpy as np
 import torch
 import torch.distributed
 import torch.multiprocessing
-from torch.utils.data import DataLoader, IterableDataset
+from torch.utils.data import IterableDataset, DataLoader
+from megatron.energon.threaded_loader import patch_data_loader
 
 from megatron.energon.cache import CachePool
 from megatron.energon.edataclass import edataclass
@@ -48,6 +49,33 @@ from megatron.energon.wrappers.watchdog_dataset import WatchdogDataset
 
 T = TypeVar("T")
 
+patch_data_loader()
+
+def patch_fork():
+    """Method to patch the fork function to print the full stack trace, so
+    we can see where the fork is happening.
+    """
+    import multiprocessing
+    import torch.multiprocessing
+    import traceback
+
+    def new_fork(self, *args, **kwargs):
+        print("PForking...")
+        traceback.print_stack()
+        return super().fork(*args, **kwargs)
+
+    multiprocessing.Process.fork = new_fork
+
+    # Patch os.fork
+    import os
+    def new_fork(*args, **kwargs):
+        print("PForking...")
+        traceback.print_stack()
+        return super().fork(*args, **kwargs)
+    os.fork = new_fork
+
+
+patch_fork()
 
 def _init_worker(seed_per_worker: List[int], worker_id: int):
     """Initializes the the worker process.
