@@ -97,7 +97,11 @@ class DatasetReference(DatasetLoaderInterface):
             )
             self._dataset.post_initialize()
         elif check_dataset_info_present(self.path):
-            self._dataset = DatasetLoader(path=self.path)
+            self._dataset = DatasetLoader(
+                path=self.path,
+                split_config=self.split_config,
+                dataset_config=self.dataset_config,
+            )
             self._dataset.post_initialize()
             if self.aux is not None:
                 new_aux = {}
