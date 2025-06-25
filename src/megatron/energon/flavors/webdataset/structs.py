@@ -13,10 +13,10 @@ from megatron.energon.source_info import SourceInfo
 class WebdatasetInfo:
     """Info about a webdataset. Format for `.nv-meta/.info.yaml` or `.nv-meta/.info.json`."""
 
-    # Maps shard name to number of samples in that shard
+    #: The version of the energon library that was used to prepare the dataset
+    energon_version: Optional[str] = None
+    #: Maps shard name to number of samples in that shard
     shard_counts: Dict[str, int]
-    # The version of the energon library that was used to prepare the dataset
-    energon_version: str
 
 
 @edataclass
@@ -24,9 +24,9 @@ class WebdatasetSplits:
     """Info about the splits of a webdataset. Format for `.nv-meta/split.yaml` or `.nv-meta/split.json`
     (or custom user yaml/json)."""
 
-    # Maps split part to list of shard names
+    #: Maps split part to list of shard names
     split_parts: Dict[str, List[str]]
-    # Set of "<shard name>" or "<shard name>/<sample index>" to exclude
+    #: Set of "<shard name>" or "<shard name>/<sample index>" to exclude
     exclude: List[str] = field(default_factory=list)
 
 

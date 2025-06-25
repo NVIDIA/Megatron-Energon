@@ -372,10 +372,7 @@ class WebdatasetPreparator:
             if yaml_info_config.is_file() and not json_info_config.is_file():
                 # Convert legacy .info.yaml to .info.json
                 with json_info_config.open("w") as f:
-                    json_obj = load_yaml(yaml_info_config.read_bytes())
-                    # Update or add the version
-                    json_obj["energon_version"] = __version__
-                    json.dump(json_obj, f, indent=2)
+                    json.dump(load_yaml(yaml_info_config.read_bytes()), f, indent=2)
 
             return found_parts, duplicates
 
@@ -392,8 +389,8 @@ class WebdatasetPreparator:
         )
 
         info = WebdatasetInfo(
-            shard_counts={shard.name: shard.count for shard in shards},
             energon_version=__version__,
+            shard_counts={shard.name: shard.count for shard in shards},
         )
         print(f"Saving info to {json_info_config}")
 
