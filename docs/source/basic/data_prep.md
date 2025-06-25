@@ -501,6 +501,7 @@ The hidden info file is auto-generated and contains a list of all shards and the
 Example:
 ```json
 {
+  "energon_version": "7.1.0",
   "shard_counts": {
     "shards/000.tar": 1223,
     "shards/001.tar": 1420,
