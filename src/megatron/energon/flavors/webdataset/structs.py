@@ -15,6 +15,8 @@ class WebdatasetInfo:
 
     # Maps shard name to number of samples in that shard
     shard_counts: Dict[str, int]
+    # The version of the energon library that was used to prepare the dataset
+    energon_version: str
 
 
 @edataclass
