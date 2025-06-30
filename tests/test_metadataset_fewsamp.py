@@ -221,6 +221,137 @@ class TestDataset(unittest.TestCase):
 
         assert order1b == order2, "The restored state does not match the original state."
 
+    def test_too_few_samples(self):
+        # Will only give a single sample, as there are 117 samples in total, and 100 ranks
+        ws = 100
+        lens = []
+        for i_rank in range(ws):
+            worker_config = WorkerConfig(rank=i_rank, world_size=ws, num_workers=0)
+            loader = get_savable_loader(
+                get_train_dataset(
+                    self.mds_path,
+                    batch_size=1,
+                    worker_config=worker_config,
+                    shuffle_buffer_size=None,
+                    max_samples_per_sequence=None,
+                ),
+                checkpoint_every_min_n_samples=1,
+                checkpoint_every_sec=0,
+            )
+            lens.append(len(loader))
+
+            txts = []
+
+            for i, sample in zip(range(10), loader):
+                txts.extend(sample.text)
+
+            assert len(set(txts)) == len(loader), (
+                f"Rank {i_rank} should have exactly {len(loader)} sample, but got {txts}"
+            )
+
+        assert lens == [
+            2,
+            1,
+            1,
+            2,
+            1,
+            1,
+            2,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2,
+            1,
+            1,
+            1,
+            1,
+            1,
+            2,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+        ], "Each rank should have exactly one sample"
+
 
 if __name__ == "__main__":
     # unittest.main()

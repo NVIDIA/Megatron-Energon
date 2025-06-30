@@ -71,6 +71,7 @@ class BlendDataset(BaseWrapperDataset[T_sample, T_sample]):
             else:
                 dataset_iters.append(None)
                 weights.append(0)
+                self.exhausted[idx] = True
 
         weights = torch.tensor(weights, dtype=torch.float32)
         if weights.sum() == 0:
