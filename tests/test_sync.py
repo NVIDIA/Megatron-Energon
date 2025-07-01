@@ -27,7 +27,7 @@ from megatron.energon import (
     stateless,
 )
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
-from megatron.energon.sync_end_of_dataset import RedistributeLoader, StopFirstLoader
+from megatron.energon.sync_end import RedistributeLoader, StopFirstLoader
 
 # Speed up tests significantly by reducing the torch status check interval for broken worker shutdown
 try:
