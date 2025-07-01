@@ -74,6 +74,10 @@ class SavableSampleBuffer(BaseWrapperDataset[T_sample, T_sample], Generic[T_samp
         self._restore_keys.clear()
         return buffer, restore_key
 
+    @property
+    def buffer(self) -> List[T_sample]:
+        return self._buffer
+
     def __iter__(self) -> Iterator[T_sample]:
         return iter(self._buffer)
 
@@ -91,8 +95,15 @@ class SavableSampleBuffer(BaseWrapperDataset[T_sample, T_sample], Generic[T_samp
         del self._buffer[index]
         del self._restore_keys[index]
 
-    def __len__(self) -> int:
+    def len_worker(self, worker_idx: int | None = None) -> int:
+        self.worker_config.assert_worker()
+        assert worker_idx is None or worker_idx == self.worker_config.rank_worker_id(), (
+            "SavableSampleBuffer.len_worker only available for the current worker"
+        )
         return len(self._restore_keys)
+
+    def len_rank(self) -> int:
+        raise NotImplementedError("len_rank is not available for SavableSampleBuffer")
 
     def save_state(self) -> FlexState:
         # Don't call super().save_state() because we don't want to save the wrapped datasets

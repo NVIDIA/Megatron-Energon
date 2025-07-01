@@ -47,17 +47,22 @@ class RepeatDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
         self._repetition = 0
         self._index = 0
 
-    def __len__(self):
+    def len_worker(self, worker_idx: int | None = None) -> int:
         if self.repeats is None:
-            return len(self.dataset)
-        return int(len(self.dataset) * self.repeats)
+            return self.dataset.len_worker(worker_idx)
+        return int(self.dataset.len_worker(worker_idx) * self.repeats)
 
     def __iter__(self) -> Iterator[T_sample]:
         assert self.repeats is not None or self.dataset.worker_has_samples(), (
             "Cannot repeat empty dataset indefinitely"
         )
 
-        ds_len = len(self.dataset)
+        # TODO: There is a small difference in the total sum of samples (across ranks) * repeats
+        # and the sum(len_worker() for all workers across ranks).
+        # This is due to the fact that the number of samples is not exactly divisible by the number of workers.
+
+        # The dataset length is the size for the current rank. Need to divide by the number of workers
+        ds_len = self.dataset.len_worker()
 
         while self.repeats is None or self._repetition < self.repeats:
             if self.repeats is not None and self._repetition == math.floor(self.repeats):

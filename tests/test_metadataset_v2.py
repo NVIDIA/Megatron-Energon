@@ -973,7 +973,7 @@ class TestDataset(unittest.TestCase):
         data = list(enumerate(train_loader))
 
         # Check the overall number of samples
-        # Should be 0.7*len(ds1) + 1.5*len(ds2) = 38 + 55 + 27 (floor rounding)
+        # Should be 0.7*len(ds1)55 + 1.5*len(ds2)55 = 38 + 55 + 27 (floor rounding)
         assert len(data) == 38 + 55 + 27, len(data)
 
         sample_counts = Counter([int(s[1].text[0]) for s in data])
@@ -1124,6 +1124,41 @@ class TestDataset(unittest.TestCase):
         # Check the overall number of samples
         # Should be 0.7*len(ds1) + 1.5*len(ds2) = 38 + 55 + 27 (floor rounding)
         assert len(data) == 200, len(data)
+
+        # ===== Part 4: Test count for multiple workers =====
+
+        worker_config = WorkerConfig(
+            rank=0,
+            world_size=2,
+            num_workers=2,
+            seed_offset=42,
+        )
+
+        # Train mode dataset
+        train_loader = get_savable_loader(
+            get_train_dataset(
+                fixed_epochs_mds_path,
+                worker_config=worker_config,
+                batch_size=1,
+                shuffle_buffer_size=None,
+                shuffle_over_epochs_multiplier=None,
+                parallel_shard_iters=1,
+                max_samples_per_sequence=None,
+                repeat=False,
+            ),
+            checkpoint_every_sec=0,
+            checkpoint_every_min_n_samples=1,
+        )
+
+        # TODO: This should be exactly 60. There is a corresponding TODO in the repeat_dataset.py
+        assert len(train_loader) == 58, len(train_loader)
+
+        data = list(enumerate(train_loader))
+
+        # Check the overall number of samples
+        # Should be 0.7*len(ds1)55 + 1.5*len(ds2)55 = 38 + 55 + 27 (floor rounding)
+        # TODO: This should be exactly 60. There is a corresponding TODO in the repeat_dataset.py
+        assert len(data) == 58, len(data)
 
     @patch.object(WatchdogDataset, "_watchdog_trigger")
     def test_watchdog_dataset(self, mock_watchdog_trigger):

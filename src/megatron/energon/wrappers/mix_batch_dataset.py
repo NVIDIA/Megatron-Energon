@@ -117,8 +117,8 @@ class MixBatchDataset(BaseWrapperDataset[T_batch_in, T_batch], Generic[T_batch_i
     def reset_state_own(self) -> None:
         return
 
-    def __len__(self) -> int:
-        return len(self.dataset)
+    def len_worker(self, worker_idx: int | None = None) -> int:
+        return self.dataset.len_worker(worker_idx)
 
     def __iter__(self) -> Iterator[T_batch]:
         yield from self.dataset

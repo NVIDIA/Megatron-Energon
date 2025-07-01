@@ -77,8 +77,8 @@ class LogSampleDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]
     def reset_state_own(self) -> None:
         self._step = 0
 
-    def __len__(self):
-        return len(self.dataset)
+    def len_worker(self, worker_idx: int | None = None) -> int:
+        return self.dataset.len_worker(worker_idx)
 
     def _log(self, sample: T_sample) -> None:
         if self.worker_config.should_log(level=1):
