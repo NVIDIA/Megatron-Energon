@@ -34,7 +34,8 @@ class StopFirstDataLoaderState(State):
 class StopFirstLoader(Generic[T]):
     """
     A loader that stops as soon as the first rank is exhausted.
-    If continuing a second time, it will restart the previously exhausted rank and iterate until the next rank is exhausted.
+    If continuing a second time, it will restart the previously exhausted rank and iterate until the next rank is
+    exhausted, restarting all ranks once.
 
     This is useful for trainings where the dataset is not repeated.
     """

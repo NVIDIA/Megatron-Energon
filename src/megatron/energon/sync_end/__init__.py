@@ -1,5 +1,7 @@
-from megatron.energon.sync_end.redistribute import RedistributeLoader, RedistributeDataLoaderState
-from megatron.energon.sync_end.stop_first_end import StopFirstLoader, StopFirstDataLoaderState
+# Copyright (c) 2025, NVIDIA CORPORATION.
+# SPDX-License-Identifier: BSD-3-Clause
+from megatron.energon.sync_end.redistribute import RedistributeDataLoaderState, RedistributeLoader
+from megatron.energon.sync_end.stop_first_end import StopFirstDataLoaderState, StopFirstLoader
 
 """
 Provides wrappers for the dataset loaders that allow for synchronization at the end of the dataset.
@@ -11,4 +13,9 @@ The wrappers are:
 - StopFirstLoader: Stops iterating as soon as the first rank is exhausted.
 """
 
-__all__ = ["RedistributeLoader", "RedistributeDataLoaderState", "StopFirstLoader", "StopFirstDataLoaderState"]
+__all__ = [
+    "RedistributeLoader",
+    "RedistributeDataLoaderState",
+    "StopFirstLoader",
+    "StopFirstDataLoaderState",
+]

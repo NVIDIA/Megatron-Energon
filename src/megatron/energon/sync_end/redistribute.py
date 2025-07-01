@@ -51,6 +51,7 @@ class RedistributeLoader(Generic[T]):
     If starting a new iterator after global exhaustion, perform another epoch (also emitting the samples from the last
     incomplete batch).
     """
+
     # large int64 number we'll never reach for overuse counts.
     OVERUSE_COUNT_MAX = 0x1000000000000000
 
