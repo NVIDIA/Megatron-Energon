@@ -25,7 +25,8 @@ splits:
         split_part: val
 ```
 
-Now, the call to `get_train_dataset` requires the additional parameter `repeat=False` to interrupt iterating after one epoch and use the `RedistributeLoader` to synchronize the last samples when some ranks have already exhausted their data:
+Now, the call to `get_train_dataset` requires the additional parameter `repeat=False` to interrupt iterating after one epoch.
+In addition, the `RedistributeLoader` is used to synchronize the last samples when some ranks have already exhausted their data:
 
 ```py
 from megatron.energon import get_train_dataset, get_loader, WorkerConfig
@@ -33,7 +34,7 @@ from megatron.energon.sync_end import RedistributeLoader
 
 
 # Set repeat=False to avoid repeating the dataset.
-# Also add RedistributeLoader to synchronize the end of rank exhaustion. Only works with initialized torch distributed.
+# Use RedistributeLoader to synchronize the end of rank exhaustion. Only works with initialized torch distributed.
 loader = RedistributeLoader(get_loader(get_train_dataset(
     'metadataset.yaml',
     batch_size=2,
@@ -57,6 +58,10 @@ for batch in loader:
 
 If used as dataset for `get_val_dataset`, the `repetitions` are ignored.
 The metadataset would also work without setting `repeat=False`, but then the shuffle buffer will shuffle samples across bounderies of epochs.
-There are two available end of iteration synchronizers:
+
+## Sample Redistribution
+
+There are two options for handling the end of the data iteration:
+
 * `RedistributeLoader`: Redistributes samples when a rank is exhausted before other ranks. On next epoch, includes the incomplete batches' samples.
 * `StopFirstLoader`: Stop as soon as the first rank is exhausted. The next epoch will iterate until the next loader stops, restarting all ranks once.
