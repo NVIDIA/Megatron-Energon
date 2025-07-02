@@ -132,7 +132,7 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
             batch.clear()
             sample_restore_keys = []
 
-        def flush():
+        def flush() -> Generator[T_batch, None, None]:
             nonlocal last_batch_failures
 
             try:

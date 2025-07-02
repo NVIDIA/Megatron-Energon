@@ -123,6 +123,7 @@ class GroupBatchDataset(
         self._buckets = {}
 
     def len_worker(self, worker_idx: int | None = None) -> int:
+        # Return an upper bound. This is for sure not correct.
         return self.dataset.len_worker(worker_idx)
 
     def __iter__(self) -> Iterator[T_batch]:

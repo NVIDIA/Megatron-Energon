@@ -973,7 +973,7 @@ class TestDataset(unittest.TestCase):
         data = list(enumerate(train_loader))
 
         # Check the overall number of samples
-        # Should be 0.7*len(ds1)55 + 1.5*len(ds2)55 = 38 + 55 + 27 (floor rounding)
+        # Should be 0.7*len(ds1) + 1.5*len(ds2) = 0.7*55 + 1.5*55 = 38 + 55 + 27 (floor rounding)
         assert len(data) == 38 + 55 + 27, len(data)
 
         sample_counts = Counter([int(s[1].text[0]) for s in data])

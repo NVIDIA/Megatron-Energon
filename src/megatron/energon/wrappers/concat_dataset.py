@@ -32,9 +32,6 @@ class ConcatDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
     def len_worker(self, worker_idx: int | None = None) -> int:
         return sum(dataset.len_worker(worker_idx) for dataset in self.datasets)
 
-    def len_rank(self) -> int:
-        return sum(dataset.len_rank() for dataset in self.datasets)
-
     def __iter__(self) -> Iterator[T_sample]:
         for ds_idx, dataset in enumerate(self.datasets):
             for sample in dataset:
