@@ -60,6 +60,24 @@ def _split_deprecated_decoder_kwargs(kwargs: dict, task_encoder: TaskEncoder) ->
             + ". Instead, set the decoder directly in your task encoder."
         )
 
+        if (
+            hasattr(task_encoder, "decoder")
+            and task_encoder.decoder is not None
+            and task_encoder.decoder is not DefaultTaskEncoder.decoder
+        ):
+            # The task encoder already has a decoder set.
+            # The user might be reusing the task encoder in multiple calls to get_train_dataset
+            # and get_val_dataset.
+            # We need to check if the decoder is the same as the one we are setting here.
+            # If it is, we can return.
+            if task_encoder.decoder.config() == SampleDecoder(**decoder_kwargs).config():
+                # It's the same decoder, nothing to do.
+                return
+            else:
+                raise ValueError(
+                    "Task encoder already has a decoder, and you are setting a different decoder, which is not allowed."
+                )
+
         assert (
             not hasattr(task_encoder, "decoder")
             or task_encoder.decoder is DefaultTaskEncoder.decoder
