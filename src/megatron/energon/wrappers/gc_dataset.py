@@ -97,8 +97,8 @@ class GcDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
     def reset_state_own(self) -> None:
         return
 
-    def __len__(self):
-        return len(self.dataset)
+    def len_worker(self, worker_idx: int | None = None) -> int:
+        return self.dataset.len_worker(worker_idx)
 
     def __iter__(self) -> Iterator[T_sample]:
         in_worker = torch.utils.data.get_worker_info() is not None

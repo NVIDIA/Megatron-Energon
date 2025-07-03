@@ -123,9 +123,9 @@ class GroupBatchDataset(
         self._batch_sample_index = SampleIndex(self.worker_config, src=self)
         self._buckets = {}
 
-    def __len__(self):
+    def len_worker(self, worker_idx: int | None = None) -> int:
         # Return an upper bound. This is for sure not correct.
-        return len(self.dataset)
+        return self.dataset.len_worker(worker_idx)
 
     def __iter__(self) -> Iterator[T_batch]:
         buckets = self._buckets
@@ -209,12 +209,12 @@ class GroupBatchDataset(
                     f"Got different batch size for group {bucket_key}: {bucket.batch_size} != {batch_size}."
                 )
             bucket.samples.append(sample)
-            if len(bucket.samples) >= bucket.batch_size:
+            if bucket.samples.len_worker() >= bucket.batch_size:
                 yield from flush(bucket)
         # Flush out last samples
         if not self.drop_last:
             for bucket in buckets.values():
-                if len(bucket.samples) > 0:
+                if bucket.samples.len_worker() > 0:
                     yield from flush(bucket)
         # Clear the buckets
         self._buckets.clear()

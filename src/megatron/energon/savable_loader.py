@@ -91,8 +91,8 @@ class SimpleSavableDatasetWrapper(BaseWrapperDataset[T, Tuple[int, int, T]], Gen
         self._sample_index = 0
         self._state_restored = False
 
-    def inner_len(self):
-        return len(self.dataset)
+    def len_worker(self, worker_idx: int | None = None) -> int:
+        return self.dataset.len_worker(worker_idx)
 
     @property
     def __len__(self):
@@ -309,8 +309,16 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
             pass
             # print(f"{id(self)}:{multiprocessing.current_process().ident} Worker command thread closing")
 
-    def inner_len(self):
-        return len(self.dataset)
+    def len_worker(self, worker_idx: int | None = None) -> int:
+        return self.dataset.len_worker(worker_idx)
+
+    def len_rank(self):
+        return self.dataset.len_rank()
+
+    @property
+    def __len__(self):
+        # Note: This disables hasattr(self, "__len__"), because that attr will
+        raise AttributeError("Disabled direct length access to avoid DataLoader warnings.")
 
     def __del__(self):
         if self._cmd_thread is not None:
@@ -807,7 +815,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
 
     def __len__(self):
         # We override this, because otherwise we'll see warnings
-        return self.dataset.inner_len()
+        return self.dataset.len_rank()
 
     def __iter__(self):
         def _inner_generator(iterator):
@@ -971,7 +979,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
             )
 
             assert len(state.worker_states) == 1
-            assert isinstance(state.worker_states[0], SavableDatasetState)
+            assert isinstance(state.worker_states[0], FlexState)
             self.dataset.restore_state(state.worker_states[0])
         else:
             # Workers configured
@@ -1292,7 +1300,7 @@ class BasicDataLoader(DataLoader[T], Generic[T]):
 
     def __len__(self):
         # We override this, because otherwise we'll see warnings
-        return self.dataset.inner_len()
+        return self.dataset.len_rank()
 
     def __iter__(self):
         def _inner_generator(iterator):

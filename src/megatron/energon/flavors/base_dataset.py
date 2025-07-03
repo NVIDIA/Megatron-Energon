@@ -267,7 +267,27 @@ class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC)
         self.worker_config = worker_config
 
     @abstractmethod
-    def __len__(self) -> int: ...
+    def len_worker(self, worker_idx: int | None = None) -> int:
+        """Returns the length of the dataset for the current or a specific worker.
+        The length is the number of different available samples.
+        The number of actually yielded samples may be different (considering skipping samples or generator functions).
+
+        Args:
+            worker_idx: The index of the worker to return the length for.
+                If None, the length of the current worker is returned (must be in worker context).
+        """
+        ...
+
+    def len_rank(self) -> int:
+        """Returns the length of the dataset for the current rank.
+        The length is the number of different available samples.
+        The number of actually yielded samples may be different (considering skipping samples or generator functions).
+        """
+        return sum(self.len_worker(i) for i in range(self.worker_config.num_workers or 1))
+
+    def __len__(self) -> int:
+        """Returns the length of the dataset for the current rank. Corresponds to `len_rank`."""
+        return self.len_rank()
 
     def save_state(self) -> FlexState:
         """

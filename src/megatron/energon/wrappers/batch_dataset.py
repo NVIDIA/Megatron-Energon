@@ -90,23 +90,12 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
         self._generator_sample_keys = None
         self._generator_offset = None
 
-    def __len__(self):
-        n_samples = len(self.dataset)
-        num_workers = max(self.worker_config.num_workers, 1)
-        n_samples_per_worker_floor = n_samples // num_workers
-        remaining_n_sample_workers = n_samples % num_workers
-        n_batches_per_worker_floor = n_samples_per_worker_floor // self.batch_size
-        if n_samples_per_worker_floor % self.batch_size != 0 and not self.drop_last:
-            n_batches_per_worker_floor += 1
-        # Correct number of batches for the workers which yield 1 more sample (to balance)
-        n_batches_per_worker_ceil = (n_samples_per_worker_floor + 1) // self.batch_size
-        if n_batches_per_worker_ceil % self.batch_size != 0 and not self.drop_last:
-            n_batches_per_worker_ceil += 1
-
-        return (
-            n_batches_per_worker_floor * (num_workers - remaining_n_sample_workers)
-            + n_batches_per_worker_ceil * remaining_n_sample_workers
-        )
+    def len_worker(self, worker_idx: int | None = None) -> int:
+        n_samples = self.dataset.len_worker(worker_idx)
+        n_batches = n_samples // self.batch_size
+        if n_samples % self.batch_size != 0 and not self.drop_last:
+            n_batches += 1
+        return n_batches
 
     def __iter__(self) -> Iterator[T_batch]:
         batch: List[T_batch_sample] = []
@@ -144,7 +133,7 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
             batch.clear()
             sample_restore_keys = []
 
-        def flush():
+        def flush() -> Generator[T_batch, None, None]:
             nonlocal last_batch_failures
 
             try:

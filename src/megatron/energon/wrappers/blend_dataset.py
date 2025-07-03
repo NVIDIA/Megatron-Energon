@@ -52,9 +52,9 @@ class BlendDataset(BaseWrapperDataset[T_sample, T_sample]):
         self._worker_rng = WorkerRng(self.worker_config)
         self.exhausted = [False] * len(self.weights)
 
-    def __len__(self) -> int:
+    def len_worker(self, worker_idx: int | None = None) -> int:
         # Give the number of samples in inner datasets, disregarding the weight
-        return sum(len(dataset) for dataset in self.datasets)
+        return sum(dataset.len_worker(worker_idx) for dataset in self.datasets)
 
     def __iter__(self) -> Iterator[T_sample]:
         assert self.worker_has_samples(), "Cannot blend all empty datasets"

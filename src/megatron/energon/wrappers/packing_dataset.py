@@ -156,11 +156,10 @@ class PackingDataset(
         self._final_packing_sample_index = SampleIndex(self.worker_config, src=self)
         self._sample_encoder_sample_index = SampleIndex(self.worker_config, src=self)
 
-    def __len__(self):
-        """The real length is unknown, since it depends on the packing function.
-        We approximate it by the length of the source dataset."""
-
-        return len(self.dataset)
+    def len_worker(self, worker_idx: int | None = None) -> int:
+        # The real length is unknown, since it depends on the packing function.
+        # We approximate it by the length of the source dataset.
+        return self.dataset.len_worker(worker_idx)
 
     def _fill_reading_buffer(self, source_iter: Iterator, log_progress: bool = False) -> bool:
         """
@@ -183,7 +182,10 @@ class PackingDataset(
             pbar = None
 
         with pbar_ctx:
-            while len(self._reading_buffer) + len(self._pre_packing_buffer) < self.buffer_size:
+            while (
+                self._reading_buffer.len_worker() + self._pre_packing_buffer.len_worker()
+                < self.buffer_size
+            ):
                 try:
                     sample = next(source_iter)
                     self._reading_buffer.append(sample)
@@ -249,10 +251,10 @@ class PackingDataset(
             together."""
             nonlocal last_pre_pack_failures
 
-            assert len(self._pre_packing_buffer) == 0
-            if len(self._reading_buffer) > 0:
+            assert self._pre_packing_buffer.len_worker() == 0
+            if self._reading_buffer.len_worker() > 0:
                 # Take all samples from the reading buffer and pre_pack them
-                samples = list(self._reading_buffer)
+                samples = self._reading_buffer.buffer.copy()
                 # Clear buffer and pre_packing_lengths
                 self._reading_buffer.clear()
                 pre_packing_lengths.clear()
@@ -290,7 +292,7 @@ class PackingDataset(
             """Yield the next packs from the buffer. The final packer is called on the fly."""
             nonlocal last_final_pack_failures
 
-            pack = list(self._pre_packing_buffer[: pre_packing_lengths[0]])
+            pack = self._pre_packing_buffer.buffer[: pre_packing_lengths[0]].copy()
             if len(pack) == 0:
                 return
             pack = encode_pack_samples(pack)
@@ -353,8 +355,8 @@ class PackingDataset(
 
             # Create new pre packs if necessary
             if len(pre_packing_lengths) == 0:
-                assert len(self._pre_packing_buffer) == 0
-                assert len(self._reading_buffer) == self.buffer_size
+                assert self._pre_packing_buffer.len_worker() == 0
+                assert self._reading_buffer.len_worker() == self.buffer_size
                 next_pre_pack()
                 if len(pre_packing_lengths) == 0:
                     # Retry packing, nothing was returned.
@@ -372,7 +374,7 @@ class PackingDataset(
 
         # If there are still samples in the partial reading buffer, pre-pack them and yield the
         # resulting (partial) packs
-        if len(self._reading_buffer) > 0:
+        if self._reading_buffer.len_worker() > 0:
             next_pre_pack()
 
         # Yield the remaining packs, flushing the collecting buffer
