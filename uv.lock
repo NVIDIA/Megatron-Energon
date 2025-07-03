@@ -1121,7 +1121,7 @@ transforms = [
 
 [package.metadata]
 requires-dist = [
-    { name = "av", marker = "extra == 'av-decode'", specifier = ">=13.0.0" },
+    { name = "av", marker = "extra == 'av-decode'", specifier = ">=14.4.0" },
     { name = "bitstring", marker = "extra == 'av-decode'", specifier = ">=4.2.3" },
     { name = "braceexpand" },
     { name = "click" },
