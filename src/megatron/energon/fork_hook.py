@@ -1,55 +1,102 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+import functools
 import os
 import weakref
 from dataclasses import dataclass
 from typing import Callable
 
-_after_in_child_fork_hooks = dict()
-_after_in_parent_fork_hooks = dict()
-_before_fork_hooks = dict()
+
+def _cleanup(hooks, key, wr):
+    hooks.pop(key)
 
 
-def before_fork_hook(callable: Callable[[], None]):
+class WeakCallbacks:
     """
-    Run function before the fork of a worker process. The function must be persistent.
+    A class that manages weak references to callback functions.
     """
-    if getattr(callable, "__self__", None):
-        self = callable.__self__
-        _before_fork_hooks[id(self)] = callable
-        weakref.finalize(self, lambda: _before_fork_hooks.pop(id(self)))
-    else:
-        _before_fork_hooks[id(callable)] = callable
-        weakref.finalize(callable, lambda: _before_fork_hooks.pop(id(callable)))
+
+    # A dictionary of weak (or strong) references to functions.
+    _hooks: dict[int, Callable[[], Callable[..., None] | None]]
+
+    def __init__(self):
+        """
+        Initialize the registry.
+        """
+        self._hooks: dict[int, Callable[[], Callable[..., None] | None]] = {}
+
+    def add_hook(self, callable: Callable[..., None], make_persistent: bool = False) -> None:
+        """
+        Add a callback to the registry.
+
+        Args:
+            callable: The function to run before the fork of a worker process.
+            make_persistent: If True, the function will be stored as a strong reference, otherwise a weak reference is used.
+        """
+        if make_persistent:
+            # Not a weakref, but always return the callable.
+            self._hooks[id(callable)] = lambda: callable
+        elif getattr(callable, "__self__", None):
+            # Add a method reference to the hooks
+            key = id(callable.__self__)
+            self._hooks[key] = weakref.WeakMethod(
+                callable, functools.partial(_cleanup, self._hooks, key)
+            )
+        else:
+            # Add a function reference to the hooks
+            key = id(callable)
+            self._hooks[key] = weakref.ref(callable, functools.partial(_cleanup, self._hooks, key))
+
+    def run(self, *args, **kwargs) -> None:
+        """
+        Run all the callbacks in the registry, passing the given arguments.
+        """
+        for hook in self._hooks.values():
+            ref = hook()
+            if ref is not None:
+                ref(*args, **kwargs)
 
 
-def after_in_parent_fork_hook(callable: Callable[[], None]):
-    """
-    Run function after the fork of a worker process. The function must be persistent.
-    """
-    # print(f"Adding after_in_child_fork_hook for {callable.__name__}\n", end="")
-    if getattr(callable, "__self__", None):
-        self = callable.__self__
-        _after_in_parent_fork_hooks[id(self)] = callable
-        weakref.finalize(self, lambda: _after_in_parent_fork_hooks.pop(id(self)))
-    else:
-        _after_in_parent_fork_hooks[id(callable)] = callable
-        weakref.finalize(callable, lambda: _after_in_parent_fork_hooks.pop(id(callable)))
+_after_in_child_fork_hooks = WeakCallbacks()
+_after_in_parent_fork_hooks = WeakCallbacks()
+_before_fork_hooks = WeakCallbacks()
 
 
-def after_in_child_fork_hook(callable: Callable[[], None]):
+def before_fork_hook(callable: Callable[[], None], make_persistent: bool = False):
     """
-    Run function after the fork of a worker process. The function must be persistent.
+    Run function before the fork of a worker process.
+    The function must be persistent (i.e. not a lambda) or an instance method.
+
+    Args:
+        callable: The function to run before the fork of a worker process.
+        make_persistent: If True, the function will be stored as a strong reference, otherwise a weak reference is used.
     """
-    # print(f"Adding after_in_child_fork_hook for {callable.__name__}\n", end="")
-    if getattr(callable, "__self__", None):
-        self = callable.__self__
-        _after_in_child_fork_hooks[id(self)] = callable
-        weakref.finalize(self, lambda: _after_in_child_fork_hooks.pop(id(self)))
-    else:
-        _after_in_child_fork_hooks[id(callable)] = callable
-        weakref.finalize(callable, lambda: _after_in_child_fork_hooks.pop(id(callable)))
+    _before_fork_hooks.add_hook(callable, make_persistent)
+
+
+def after_in_parent_fork_hook(callable: Callable[[], None], make_persistent: bool = False):
+    """
+    Run function after the fork of a worker process.
+    The function must be persistent (i.e. not a lambda) or an instance method.
+
+    Args:
+        callable: The function to run after the fork of a worker process.
+        make_persistent: If True, the function will be stored as a strong reference, otherwise a weak reference is used.
+    """
+    _after_in_parent_fork_hooks.add_hook(callable, make_persistent)
+
+
+def after_in_child_fork_hook(callable: Callable[[], None], make_persistent: bool = False):
+    """
+    Run function after the fork of a worker process.
+    The function must be persistent (i.e. not a lambda) or an instance method.
+
+    Args:
+        callable: The function to run after the fork of a worker process.
+        make_persistent: If True, the function will be stored as a strong reference, otherwise a weak reference is used.
+    """
+    _after_in_child_fork_hooks.add_hook(callable, make_persistent)
 
 
 class ForkMixin:
@@ -133,38 +180,8 @@ class DataclassForkMixin:
         pass
 
 
-def _run_before_fork_hooks():
-    """
-    Run all the functions that were registered with the before_fork_hook decorator.
-    """
-    # print(f"Running before_fork_hooks for pid={os.getpid()}")
-    for hook in _before_fork_hooks.values():
-        # print(f"Running before_fork_hook for {hook}\n", end="")
-        hook()
-
-
-def _run_after_in_child_fork_hooks():
-    """
-    Run all the functions that were registered with the after_in_child_fork_hook decorator.
-    """
-    # print(f"Running after_in_child_fork_hooks for pid={os.getpid()}")
-    for hook in _after_in_child_fork_hooks.values():
-        # print(f"Running after_in_child_fork_hook for {hook}\n", end="")
-        hook()
-
-
-def _run_after_in_parent_fork_hooks():
-    """
-    Run all the functions that were registered with the after_in_parent_fork_hook decorator.
-    """
-    # print(f"Running after_in_parent_fork_hooks for pid={os.getpid()}")
-    for hook in _after_in_parent_fork_hooks.values():
-        # print(f"Running after_in_parent_fork_hook for {hook}\n", end="")
-        hook()
-
-
 os.register_at_fork(
-    before=_run_before_fork_hooks,
-    after_in_child=_run_after_in_child_fork_hooks,
-    after_in_parent=_run_after_in_parent_fork_hooks,
+    before=_before_fork_hooks.run,
+    after_in_child=_after_in_child_fork_hooks.run,
+    after_in_parent=_after_in_parent_fork_hooks.run,
 )
