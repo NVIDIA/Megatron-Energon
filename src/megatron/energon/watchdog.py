@@ -277,23 +277,14 @@ class Watchdog:
         Returns:
             An iterator that wraps the input iterable and watches for timeouts.
         """
-
-        it = iter(iterable)
-        while True:
-            # Automatically resets timer
+        try:
             self.enable()
-            try:
-                item = next(it)
-            except StopIteration:
-                self.disable()
-                break
-            except:
-                # On any error, disable watchdog before re-raising
-                self.disable()
-                raise
-            else:
+            for item in iterable:
                 self.disable()
                 yield item
+                self.enable()
+        finally:
+            self.disable()
 
 
 def repr_short(obj: Any) -> str:

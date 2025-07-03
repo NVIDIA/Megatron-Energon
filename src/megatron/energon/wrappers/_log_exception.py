@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import traceback
-from typing import Optional
+from typing import Optional, Sequence
 
 from megatron.energon.source_info import SourceInfo
 
 
-def log_exception(_e: Exception, sample, sources: Optional[list[SourceInfo]] = None):
+def log_exception(_e: Exception, sample, sources: Optional[Sequence[SourceInfo]] = None):
     traceback.print_exc()
     print("-" * 10)
 

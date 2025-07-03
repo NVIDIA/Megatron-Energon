@@ -91,8 +91,13 @@ class SimpleSavableDatasetWrapper(BaseWrapperDataset[T, Tuple[int, int, T]], Gen
         self._sample_index = 0
         self._state_restored = False
 
-    def __len__(self):
+    def inner_len(self):
         return len(self.dataset)
+
+    @property
+    def __len__(self):
+        # Note: This disables hasattr(self, "__len__"), because that attr will
+        raise AttributeError("Disabled direct length access to avoid DataLoader warnings.")
 
     def __iter__(self):
         self._state_restored = True
@@ -304,7 +309,7 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
             pass
             # print(f"{id(self)}:{multiprocessing.current_process().ident} Worker command thread closing")
 
-    def __len__(self):
+    def inner_len(self):
         return len(self.dataset)
 
     def __del__(self):
@@ -440,13 +445,6 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
 
     def _save_state(self) -> SavableDatasetState:
         """Saves the internal state"""
-        (
-            np_tp,
-            np_state,
-            pos,
-            has_gauss,
-            cached_gaussian,
-        ) = np.random.get_state()
         return SavableDatasetState(
             rng=SystemRng.save_state(),
             dataset_state=self.dataset.save_state(),
@@ -658,6 +656,8 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
     #: Instance of the current data iterator. There shall be only one active iterator, such that the
     # dataset is not iterated multiple times in parallel. The state will proceed.
     _persistent_iterator: Optional[Iterator[T]] = None
+    #: Whether the dataloader has running workers.
+    _has_workers: bool = False
     #: The index of the current worker. -1 if not started yet.
     _worker_sample_counters: List[int]
     #: Id of the next worker to retrieve data from
@@ -805,97 +805,80 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
         SavableDataLoader._next_id += 1
         return next_id
 
+    def __len__(self):
+        # We override this, because otherwise we'll see warnings
+        return self.dataset.inner_len()
+
     def __iter__(self):
-        outerself = self
-
-        class InnerIterator:
-            """Internal class which keeps the iterator alive across multiple `iter()` calls.
-            If the inner iterator is exhausted, will also exhaust and a new instance is needed.
-            Also saves the last sample index and the next worker id.
-            """
-
-            finished: bool = False
-            iter_idx: int = 0
-            id: int
-
-            def __init__(self, iterator):
-                self._iterator = iterator
-                self.id = outerself.next_id()
-                if outerself.worker_config.should_log(level=1):
-                    outerself.worker_config.worker_log(
-                        {
-                            "t": "SavableDataLoader.iter",
-                            "r": outerself.worker_config.rank,
-                            "w": None,
-                            "id": outerself.id,
-                            "iter_id": self.id,
-                        }
-                    )
-
-                # self._debugf = open(
-                #     f"worker_samples_rank{outerself.worker_config.rank:02}_t{int(time.time())}.log", "w"
-                # )
-
-            def __iter__(self):
-                return self
-
-            def __next__(self):
-                try:
-                    worker_id, sample_idx, sample = next(self._iterator)
-                    outerself._worker_sample_counters[worker_id] = sample_idx
+        def _inner_generator(iterator):
+            iter_idx = 0
+            id = self.next_id()
+            if self.worker_config.should_log(level=1):
+                self.worker_config.worker_log(
+                    {
+                        "t": "SavableDataLoader.iter",
+                        "r": self.worker_config.rank,
+                        "w": None,
+                        "id": self.id,
+                        "iter_id": id,
+                    }
+                )
+            try:
+                for worker_id, sample_idx, sample in iterator:
+                    self._worker_sample_counters[worker_id] = sample_idx
                     # If the next sample will be from the first worker, we can safely resume
-                    outerself._next_worker_id = (worker_id + 1) % max(outerself.num_workers, 1)
+                    self._next_worker_id = (worker_id + 1) % max(self.num_workers, 1)
                     # self._debugf.write(
                     #     f"[w={worker_id}, s={sample_idx}] {self._sample_str(sample)}\n"
                     # )
                     # self._debugf.flush()
-                    if outerself.worker_config.should_log(level=1):
+                    if self.worker_config.should_log(level=1):
                         keys = default_get_keys(sample)
-                        outerself.worker_config.worker_log(
+                        self.worker_config.worker_log(
                             {
                                 **{
                                     "t": "SavableDataLoader.yield",
-                                    "r": outerself.worker_config.rank,
+                                    "r": self.worker_config.rank,
                                     "w": None,
-                                    "id": outerself.id,
-                                    "iter_id": self.id,
+                                    "id": self.id,
+                                    "iter_id": id,
                                     "worker_id": worker_id,
                                     "worker_idx": sample_idx,
-                                    "idx": outerself._sample_idx,
-                                    "iter_idx": self.iter_idx,
-                                    "global_idx": outerself._global_sample_idx,
+                                    "idx": self._sample_idx,
+                                    "iter_idx": iter_idx,
+                                    "global_idx": self._global_sample_idx,
                                 },
                                 **({} if keys is None else {"keys": keys}),
                             }
                         )
-                    outerself._sample_idx += 1
-                    outerself._global_sample_idx += 1
-                    self.iter_idx += 1
-                    return sample
-                except StopIteration:
-                    self.finished = True
-                    outerself._next_worker_id = 0
-                    if outerself.worker_config.should_log(level=1):
-                        outerself.worker_config.worker_log(
-                            {
-                                "t": "SavableDataLoader.StopIteration",
-                                "r": outerself.worker_config.rank,
-                                "w": None,
-                                "id": outerself.id,
-                                "iter_id": self.id,
-                            }
-                        )
-                    raise
+                    self._sample_idx += 1
+                    self._global_sample_idx += 1
+                    iter_idx += 1
+                    yield sample
+                self._persistent_iterator = None
+                self._next_worker_id = 0
+            finally:
+                if self.worker_config.should_log(level=1):
+                    self.worker_config.worker_log(
+                        {
+                            "t": "SavableDataLoader.StopIteration",
+                            "r": self.worker_config.rank,
+                            "w": None,
+                            "id": self.id,
+                            "iter_id": self.id,
+                        }
+                    )
 
         if self.num_workers > 0:
             # Always keep same iterator alive, as long as it yields data
-            if self._persistent_iterator is None or self._persistent_iterator.finished:
-                self._persistent_iterator = InnerIterator(super().__iter__())
+            if self._persistent_iterator is None:
+                self._persistent_iterator = _inner_generator(super().__iter__())
                 self._sample_idx = 0
+                self._has_workers = True
                 # print("New Iterator", self._persistent_iterator)
             return self._persistent_iterator
         else:
-            return InnerIterator(super().__iter__())
+            return _inner_generator(super().__iter__())
 
     def _worker_command(self, *cmd_args) -> List[Any]:
         """Executes a command in all workers and returns the results."""
@@ -914,7 +897,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
 
     def _get_batch_size(self) -> Optional[int]:
         """Try to infer micro batch size from the dataset"""
-        if isinstance(self.dataset, SavableDatasetWrapper):
+        if isinstance(self.dataset, (SavableDatasetWrapper, SimpleSavableDatasetWrapper)):
             dataset = self.dataset.dataset
         else:
             dataset = self.dataset
@@ -942,14 +925,14 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
             assert isinstance(self.dataset, SimpleSavableDatasetWrapper)
             worker_states = [self.dataset.save_state()]
             assert self._next_worker_id == 0
-        elif self._persistent_iterator is None:
+        elif self._has_workers:
+            # Fetch from worker processes
+            worker_states = self._worker_command("get_checkpoint", self._worker_sample_counters)
+        else:
             # Workers configured, but not started yet.
             # If a state has already been restored, it will be returned.
             assert isinstance(self.dataset, SavableDatasetWrapper)
             worker_states = self.dataset.get_initial_checkpoint()
-        else:
-            # Fetch from worker processes
-            worker_states = self._worker_command("get_checkpoint", self._worker_sample_counters)
 
         if worker_states is None:
             return None
@@ -971,7 +954,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
         Args:
             state: The state to restore, as saved by `save_state_rank`.
         """
-        assert self._persistent_iterator is None, "Cannot restore state while workers are running"
+        assert not self._has_workers, "Cannot restore state while workers are running"
         if state is None:
             # Assume initial state
             return
@@ -980,15 +963,18 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
         old_micro_batch_size = state.micro_batch_size
         micro_batch_size = self._get_batch_size()
 
-        if isinstance(self.dataset, SavableDataset):
+        if self.num_workers == 0:
+            # No workers configured
+            assert isinstance(self.dataset, SimpleSavableDatasetWrapper)
             assert micro_batch_size == old_micro_batch_size, (
                 "Changing micro batch size is not allowed without workers"
             )
 
             assert len(state.worker_states) == 1
-            assert isinstance(state.worker_states[0], FlexState)
+            assert isinstance(state.worker_states[0], SavableDatasetState)
             self.dataset.restore_state(state.worker_states[0])
         else:
+            # Workers configured
             assert isinstance(self.dataset, SavableDatasetWrapper)
             assert all(isinstance(s, SavableDatasetCheckpoint) for s in state.worker_states)
 
@@ -1304,85 +1290,71 @@ class BasicDataLoader(DataLoader[T], Generic[T]):
                 }
             )
 
+    def __len__(self):
+        # We override this, because otherwise we'll see warnings
+        return self.dataset.inner_len()
+
     def __iter__(self):
-        outerself = self
+        def _inner_generator(iterator):
+            iter_idx = 0
+            id = SavableDataLoader.next_id()
 
-        class InnerIterator:
-            """Internal class which keeps the iterator alive across multiple `iter()` calls.
-            If the inner iterator is exhausted, will also exhaust and a new instance is needed.
-            Also saves the last sample index and the next worker id.
-            """
+            if self.worker_config.should_log(level=1):
+                self.worker_config.worker_log(
+                    {
+                        "t": "BasicDataLoader.iter",
+                        "r": self.worker_config.rank,
+                        "w": None,
+                        "id": self.id,
+                        "iter_id": id,
+                    }
+                )
 
-            iter_idx: int = 0
-            id: int
-
-            def __init__(self, iterator):
-                self._iterator = iterator
-                self.id = SavableDataLoader.next_id()
-
-                if outerself.worker_config.should_log(level=1):
-                    outerself.worker_config.worker_log(
-                        {
-                            "t": "BasicDataLoader.iter",
-                            "r": outerself.worker_config.rank,
-                            "w": None,
-                            "id": outerself.id,
-                            "iter_id": self.id,
-                        }
-                    )
-
-            def __iter__(self):
-                return self
-
-            def __next__(self):
-                try:
-                    worker_id, sample_idx, sample = next(self._iterator)
+            try:
+                for worker_id, sample_idx, sample in iterator:
                     # If the next sample will be from the first worker, we can safely resume
-                    self.next_worker_id = (worker_id + 1) % max(outerself.num_workers, 1)
-                    if outerself.worker_config.should_log(level=1):
+                    if self.worker_config.should_log(level=1):
                         keys = default_get_keys(sample)
-                        outerself.worker_config.worker_log(
+                        self.worker_config.worker_log(
                             {
                                 **{
                                     "t": "BasicDataLoader.yield",
-                                    "r": outerself.worker_config.rank,
+                                    "r": self.worker_config.rank,
                                     "w": None,
-                                    "id": outerself.id,
+                                    "id": self.id,
                                     "iter_id": self.id,
                                     "worker_id": worker_id,
                                     "worker_idx": sample_idx,
-                                    "idx": self.iter_idx,
-                                    "iter_idx": self.iter_idx,
-                                    "global_idx": outerself._sample_idx,
+                                    "idx": iter_idx,
+                                    "iter_idx": iter_idx,
+                                    "global_idx": self._sample_idx,
                                 },
                                 **({} if keys is None else {"keys": keys}),
                             }
                         )
-                    outerself._sample_idx += 1
-                    self.iter_idx += 1
-                    return sample
-                except StopIteration:
-                    self.next_worker_id = 0
-                    if outerself.worker_config.should_log(level=1):
-                        outerself.worker_config.worker_log(
-                            {
-                                "t": "BasicDataLoader.StopIteration",
-                                "r": outerself.worker_config.rank,
-                                "w": None,
-                                "id": outerself.id,
-                                "iter_id": self.id,
-                            }
-                        )
-                    raise
+                    self._sample_idx += 1
+                    iter_idx += 1
+                    yield sample
+            finally:
+                if self.worker_config.should_log(level=1):
+                    self.worker_config.worker_log(
+                        {
+                            "t": "BasicDataLoader.StopIteration",
+                            "r": self.worker_config.rank,
+                            "w": None,
+                            "id": self.id,
+                            "iter_id": id,
+                        }
+                    )
 
-        return InnerIterator(super().__iter__())
+        return _inner_generator(super().__iter__())
 
     def config(self):
         """Get the configuration, which defines the dataset. Useful in conjunction with `save_state`
         and `restore_state` to match the configuration as well."""
         return {
             "type": type(self).__qualname__,
-            "num_workers": self.num_workers,
+            "num_workers": self.worker_config.num_workers,
             "persistent_workers": self.persistent_workers,
             "pin_memory": self.pin_memory,
             "prefetch_factor": None if self.num_workers == 0 else self.prefetch_factor,

@@ -11,6 +11,7 @@ from typing import (
     Iterator,
     List,
     Optional,
+    Sequence,
     Tuple,
     TypeVar,
     Union,
@@ -34,7 +35,7 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
     batch_size: int
     batcher: Callable[[List[T_batch_sample]], T_batch]
     drop_last: bool
-    error_handler: Callable[[Exception, list[T_batch_sample], list[SourceInfo]], None]
+    error_handler: Callable[[Exception, List[T_batch_sample], Sequence[SourceInfo]], None]
     _sample_index: SampleIndex
     _generator_sample_keys: Optional[Any]
     _generator_offset: Optional[int]
@@ -51,7 +52,7 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
         batcher_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]] = None,
         drop_last: bool = False,
         error_handler: Callable[
-            [Exception, List[T_batch_sample], List[SourceInfo]], None
+            [Exception, List[T_batch_sample], Sequence[SourceInfo]], None
         ] = log_exception,
         failure_tolerance: Optional[int] = 100,
         worker_config: WorkerConfig,
@@ -173,6 +174,7 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
                     last_batch_failures = 0
                     set_sample_restore_key(batch_sample, sample_idx, *sample_restore_keys, src=self)
                     yield batch_sample
+                sample_restore_keys.clear()
             except GeneratorExit:
                 raise
             except SkipSample:
