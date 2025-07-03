@@ -402,10 +402,12 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
         #     f"slice iters exhausted for {self.worker_config.rank}:{self.worker_config.rank_worker_id()} after {cnt} samples"
         # )
 
-    def __len__(self) -> int:
-        return sum(
-            slice_offsets[-1] - slice_offsets[0] for slice_offsets in self.workers_slice_offsets
-        )
+    def len_worker(self, worker_idx: int | None = None) -> int:
+        if worker_idx is None:
+            self.worker_config.assert_worker()
+            worker_idx = self.worker_config.rank_worker_id()
+        worker_slice_offsets = self.workers_slice_offsets[worker_idx]
+        return worker_slice_offsets[-1] - worker_slice_offsets[0]
 
     def worker_has_samples(self) -> bool:
         self.worker_config.assert_worker()

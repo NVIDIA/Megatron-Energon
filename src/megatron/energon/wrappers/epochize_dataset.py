@@ -97,8 +97,18 @@ class EpochizeDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample])
                 }
             )
 
-    def __len__(self) -> int:
-        return self.length
+    def len_worker(self, worker_idx: int | None = None) -> int:
+        if worker_idx is None:
+            self.worker_config.assert_worker()
+            worker_idx = self.worker_config.rank_worker_id()
+        if self.worker_config.num_workers <= 1:
+            assert worker_idx == 0
+            return self.length
+        else:
+            local_length = self.length // self.worker_config.num_workers
+            if worker_idx < self.length % self.worker_config.num_workers:
+                local_length += 1
+            return local_length
 
     def config(self) -> Dict[str, Any]:
         return {

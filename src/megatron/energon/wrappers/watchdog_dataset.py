@@ -41,8 +41,8 @@ class WatchdogDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample])
     def reset_state_own(self) -> None:
         pass
 
-    def __len__(self):
-        return len(self.dataset)
+    def len_worker(self, worker_idx: int | None = None) -> int:
+        return self.dataset.len_worker(worker_idx)
 
     def _watchdog_trigger(self) -> None:
         if self.fail_on_timeout:

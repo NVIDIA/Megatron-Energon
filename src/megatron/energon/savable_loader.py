@@ -91,8 +91,8 @@ class SimpleSavableDatasetWrapper(BaseWrapperDataset[T, Tuple[int, int, T]], Gen
         self._sample_index = 0
         self._state_restored = False
 
-    def __len__(self):
-        return len(self.dataset)
+    def len_worker(self, worker_idx: int | None = None) -> int:
+        return self.dataset.len_worker(worker_idx)
 
     def __iter__(self):
         self._state_restored = True
