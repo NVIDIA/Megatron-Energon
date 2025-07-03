@@ -85,9 +85,6 @@ class EpochizeDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample])
                     break
                 yield sample
 
-        if self._offset >= local_length:
-            self._offset = 0
-
         if self.worker_config.should_log(level=2):
             self.worker_config.worker_log(
                 {

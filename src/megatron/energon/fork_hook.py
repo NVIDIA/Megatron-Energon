@@ -148,16 +148,19 @@ class DataclassForkMixin:
     """
 
     def __post_init__(self):
-        if getattr(self.__before_fork__, "__func__", None) is not ForkMixin.__before_fork__:
+        if (
+            getattr(self.__before_fork__, "__func__", None)
+            is not DataclassForkMixin.__before_fork__
+        ):
             before_fork_hook(self.__before_fork__)
         if (
             getattr(self.__after_in_child_fork__, "__func__", None)
-            is not ForkMixin.__after_in_child_fork__
+            is not DataclassForkMixin.__after_in_child_fork__
         ):
             after_in_child_fork_hook(self.__after_in_child_fork__)
         if (
             getattr(self.__after_in_parent_fork__, "__func__", None)
-            is not ForkMixin.__after_in_parent_fork__
+            is not DataclassForkMixin.__after_in_parent_fork__
         ):
             after_in_parent_fork_hook(self.__after_in_parent_fork__)
 
