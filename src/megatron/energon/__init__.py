@@ -1,6 +1,14 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+try:
+    from importlib.metadata import version
+
+    __version__ = version("megatron-energon")
+except Exception:
+    # Fallback for development mode when package is not installed
+    __version__ = "unknown"
+
 from megatron.energon.cache import (
     CachePool,
     DecodeFileStore,
@@ -14,6 +22,7 @@ from megatron.energon.cache import (
     NoCachePool,
     SystemFileStore,
 )
+from megatron.energon.edataclass import edataclass
 from megatron.energon.flavors import (
     BaseCoreDatasetFactory,
     BaseWebdatasetFactory,
@@ -100,6 +109,7 @@ from megatron.energon.wrappers import (
 )
 
 __all__ = [
+    "__version__",
     "AugmentTaskEncoder",
     "BaseCoreDatasetFactory",
     "BaseWebdatasetFactory",
@@ -127,6 +137,7 @@ __all__ = [
     "DefaultTaskEncoder",
     "DirectLazy",
     "EpochizeDataset",
+    "edataclass",
     "FileCacheLazy",
     "FileStore",
     "FileStoreCachePool",

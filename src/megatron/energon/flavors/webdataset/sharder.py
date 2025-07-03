@@ -61,9 +61,7 @@ class Sharder:
         for start_offset, end_offset in zip(offsets, offsets[1:]):
             # Find shard idx for end
             end_index = start_index
-            while True:
-                if end_offset <= shard_cumsums[end_index + 1]:
-                    break
+            while end_index + 1 < len(shard_cumsums) and end_offset > shard_cumsums[end_index + 1]:
                 end_index += 1
             if start_index == end_index:
                 yield (

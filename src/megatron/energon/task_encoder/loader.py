@@ -39,27 +39,50 @@ def _split_deprecated_decoder_kwargs(kwargs: dict, task_encoder: TaskEncoder) ->
     av_decode: AVDecoder = "AVDecoder",
     video_decode_audio: bool = False,
     """
+    auto_decode = True
+
     decoder_kwargs = {}
     if "auto_decode" in kwargs:
-        decoder_kwargs["auto_decode"] = kwargs.pop("auto_decode")
+        auto_decode = kwargs.pop("auto_decode")
     if "image_decode" in kwargs:
         decoder_kwargs["image_decode"] = kwargs.pop("image_decode")
-    if "ignore_decoder_errors" in kwargs:
-        decoder_kwargs["ignore_decoder_errors"] = kwargs.pop("ignore_decoder_errors")
     if "av_decode" in kwargs:
         decoder_kwargs["av_decode"] = kwargs.pop("av_decode")
     if "video_decode_audio" in kwargs:
         decoder_kwargs["video_decode_audio"] = kwargs.pop("video_decode_audio")
-    if len(decoder_kwargs) > 0:
+
+    if not auto_decode:
+        task_encoder.decoder = None
+    elif len(decoder_kwargs) > 0:
         warn_deprecated(
             "The following decoder kwargs are deprecated and will be removed in a future version: "
             + ", ".join(decoder_kwargs.keys())
             + ". Instead, set the decoder directly in your task encoder."
         )
+
+        if (
+            hasattr(task_encoder, "decoder")
+            and task_encoder.decoder is not None
+            and task_encoder.decoder is not DefaultTaskEncoder.decoder
+        ):
+            # The task encoder already has a decoder set.
+            # The user might be reusing the task encoder in multiple calls to get_train_dataset
+            # and get_val_dataset.
+            # We need to check if the decoder is the same as the one we are setting here.
+            # If it is, we can return.
+            if task_encoder.decoder.config() == SampleDecoder(**decoder_kwargs).config():
+                # It's the same decoder, nothing to do.
+                return
+            else:
+                raise ValueError(
+                    "Task encoder already has a decoder, and you are setting a different decoder, which is not allowed."
+                )
+
         assert (
             not hasattr(task_encoder, "decoder")
             or task_encoder.decoder is DefaultTaskEncoder.decoder
         ), "Task encoder already has a decoder, and setting using deprecated kwargs is not allowed."
+
         task_encoder.decoder = SampleDecoder(**decoder_kwargs)
 
 

@@ -28,6 +28,7 @@ from typing import (
 import braceexpand
 import yaml
 
+from megatron.energon import __version__
 from megatron.energon.bracecollapse import collapse
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
@@ -388,12 +389,13 @@ class WebdatasetPreparator:
         )
 
         info = WebdatasetInfo(
+            energon_version=__version__,
             shard_counts={shard.name: shard.count for shard in shards},
         )
         print(f"Saving info to {json_info_config}")
 
         with json_info_config.open("w") as wf:
-            json.dump(to_json_object(info), wf)
+            json.dump(to_json_object(info), wf, indent=2)
 
         if yaml_info_config.is_file():
             # If a .info.yaml existed previously, let's also update it

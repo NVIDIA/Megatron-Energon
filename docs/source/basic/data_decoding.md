@@ -9,7 +9,7 @@ As explained [here](wds-format), each sample in the underlying `.tar` file can h
 Just like WebDataset itself, energon uses the [auto decode](https://rom1504.github.io/webdataset/api/webdataset/autodecode.html) functionality of WebDataset to transform those raw bytes from the tar file entries
 to usable objects. Images for example shall be decoded to arrays or tensors of pixel data.
 
-In Energon, the class responsible for data decoding is {py:class}`DefaultDecoderWebdatasetFactory <megatron.energon.DefaultDecoderWebdatasetFactory>`. In its `__init__` method, it contains a piece of code that initializes the auto decoder and tells it which data types shall be decoded and how.
+In Energon, the class responsible for data decoding is {py:class}`DefaultDecoderWebdatasetFactory <megatron.energon.DefaultDecoderWebdatasetFactory>` (which usually you don't need to touch directly). In its `__init__` method, it contains a piece of code that initializes the auto decoder and tells it which data types shall be decoded and how.
 
 Decoders typically convert
 
@@ -20,13 +20,19 @@ Decoders typically convert
 * Torch PTH files to tensors
 * NPY files to numpy arrays
 
-
 ## How to control data decoding
 
-When calling {py:func}`get_train_dataset <megatron.energon.get_train_dataset>` or {py:func}`get_val_dataset <megatron.energon.get_val_dataset>`, you can pass one or more of the following arguments, which will be passed on to {py:class}`DefaultDecoderWebdatasetFactory <megatron.energon.DefaultDecoderWebdatasetFactory>`:
+Starting with Energon 7.0.0, the new way to configure data decoding is to specify a `decoder` as a class variable of your [Task Encoder](../basic/task_encoder):
+```python
+class MyTaskEncoder(DefaultTaskEncoder):
+    decoder = SampleDecoder(image_decode="pilrgb")
+```
 
-* `auto_decode` (bool)
-    * Set to `False` to disable all automatic decoding of the data. In your sample loader, you will then get raw bytes. The default setting is `True`
+Typically, you will just instantiate a {py:class}`SampleDecoder <megatron.energon.SampleDecoder>` and provide the arguments to configure it, as shown above.
+If you do **not** want automatic decoding at all, you have to explicitely set `decoder = None` in your TaskEncoder.
+
+Here are the different options you can pass to {py:class}`SampleDecoder <megatron.energon.SampleDecoder>`:
+
 * `image_decode` (str)
     * Can be set to an image decoder from webdataset. Here are some examples:
         * `pil`: Returns the image as a PIL image
@@ -38,6 +44,25 @@ When calling {py:func}`get_train_dataset <megatron.energon.get_train_dataset>` o
     * The `pyav` option is for advanced use cases where you need direct access to the object returned by `av.open()`
 * `video_decode_audio` (bool)
     * If `True`, videos that have an audio track will decode both the video and the audio. Otherwise, only the video frames are decoded.
+* `guess_content` (bool)
+    * *New in Energon 7.0.0*
+    * Whether to guess the contents of the file using the `filetype` package. Useful if you have files without extensions in your data.
+
+### Legacy method before Energon 7.0.0
+
+
+```{warning}
+The below method of configuring auto decoding was deprecated in Energon 7.0.0. Please migrate to the above new method with `SampleDecoder`
+```
+
+In older versions of Energon, you could pass arguments when calling {py:func}`get_train_dataset <megatron.energon.get_train_dataset>` or {py:func}`get_val_dataset <megatron.energon.get_val_dataset>`.
+The arguments are more or less identical to what can be passed to `SampleDecoder` above, except:
+
+* `auto_decode` (bool)
+    * Set to `False` to disable all automatic decoding of the data. In your sample loader, you will then get raw bytes. The default setting is `True`
+    * Setting to `False` is equivalent to setting `decoder = None` in the new version.
+* `guess_content` (bool)
+    * Not available in older versions
 
 
 (av-decoder)=

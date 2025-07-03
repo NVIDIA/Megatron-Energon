@@ -85,8 +85,8 @@ class JoinedWebdatasetFactory(
 
         Args:
             inner_dataset: The inner datasets. Must be loaded internally with `_is_composed=True`.
-                Either a list (*args for joiner) or a dict (**kwargs for joiner) of datasets,
-                where the samples will be passed to the joiner function as *args or **kwargs.
+                Either a list (\\*args for joiner) or a dict (\\*\\*kwargs for joiner) of datasets,
+                where the samples will be passed to the joiner function as \\*args or \\*\\*kwargs.
             training: If true, apply shuffling and loop the dataset.
             worker_config: Configuration for the workers.
             shuffle_over_epochs: Only effective if training=True.

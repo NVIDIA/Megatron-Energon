@@ -16,7 +16,8 @@ from megatron.energon.flavors.webdataset.metadata import get_dataset_info
 
 fmt = """
 * {dataset_name}: `{path}` ({samples_count:,} samples, {samples_size} in {shards_count} shards)
-  * Sample Type: {{py:class}}`{sample_name} <{sample_fullname}>`
+  * Created with energon version: {energon_version}
+  * Sample Type: {{py:class}}`{sample_name} <{sample_fullname}>`  
   * Default Splits:
 {splits_str}
 """
@@ -58,6 +59,7 @@ def command(
     info_config = get_dataset_info(path)
     split_config_obj = load_yaml_json(path / MAIN_FOLDER_NAME / split_config)
 
+    ds_energon_version = info_config.get("energon_version", "unknown")
     samples_count = sum(info_config["shard_counts"].values())
     dict_sample_type = ds_config["sample_type"]
     sample_module = import_module(dict_sample_type["__module__"])
@@ -112,5 +114,6 @@ def command(
             sample_name=sample_name,
             sample_fullname=sample_fullname,
             splits_str=splits_str,
+            energon_version=ds_energon_version,
         )
     )

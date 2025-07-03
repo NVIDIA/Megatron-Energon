@@ -24,7 +24,7 @@ Below, you can see the available sub-commands under `energon`.
    :nested: short
 ```
 
-(energon_data_prepare)=
+(energon-prepare)=
 ## energon prepare
 
 An interactive tool to generate metadata for your existing webdataset.
@@ -39,6 +39,7 @@ See [Data Preparation](../basic/data_prep) for more details on how to use this c
 ## energon info
 
 Prints information about the dataset such as overall number of samples and size.
+It also prints the energon version that was used to prepare the dataset, if a recent version was used.
 
 
 ## energon lint
