@@ -1,11 +1,15 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from typing import Any, Dict, Iterator, List, Tuple, TypeVar
+from typing import Any, Dict, Iterator, List, Sequence, Tuple, TypeVar
 
 import torch
 
-from megatron.energon.flavors.base_dataset import SavableDataset, add_sample_restore_key
+from megatron.energon.flavors.base_dataset import (
+    SavableDataset,
+    add_sample_restore_key,
+)
+from megatron.energon.flavors.trace import TraceIter, trace_iter
 from megatron.energon.rng import WorkerRng
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset
@@ -19,7 +23,9 @@ class BlendDataset(BaseWrapperDataset[T_sample, T_sample]):
     The datasets may be infinite. This dataset is always infinite.
     """
 
+    datasets: List[SavableDataset[T_sample]]
     weights: Tuple[float, ...]
+    dataset_weights: Sequence[Tuple[SavableDataset[T_sample], float]]
     exhausted: List[bool]
     _worker_rng: WorkerRng
 
@@ -52,9 +58,15 @@ class BlendDataset(BaseWrapperDataset[T_sample, T_sample]):
 
     def __len__(self) -> int:
         # Give the number of samples in inner datasets, disregarding the weight
-        return sum(len(dataset) for dataset, weight in self.dataset_weights)
+        return sum(len(dataset) for dataset in self.datasets)
 
-    def __iter__(self) -> Iterator[T_sample]:
+    @trace_iter(
+        name=lambda self: "BlendDataset",
+        call_args={
+            "config": lambda self: self._own_config(),
+        },
+    )
+    def __iter__(self, trace_iter: TraceIter) -> Iterator[T_sample]:
         assert self.worker_has_samples(), "Cannot blend all empty datasets"
 
         # Create a list of datasets and their weights, but
@@ -106,6 +118,11 @@ class BlendDataset(BaseWrapperDataset[T_sample, T_sample]):
                 yield add_sample_restore_key(sample, ds_idx, src=self)
 
         self.exhausted = [False] * len(self.dataset_weights)
+
+    def _own_config(self) -> Dict[str, Any]:
+        return {
+            "weights": self.weights,
+        }
 
     def config(self) -> Dict[str, Any]:
         return {

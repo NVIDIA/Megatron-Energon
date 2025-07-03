@@ -139,6 +139,7 @@ class TestEPath(unittest.TestCase):
         from multistorageclient.rclone import read_rclone_config
 
         read_rclone_config.cache_clear()
+
         try:
             # Test globbing
             p = EPath("msc://s3/tmp/path/subpath.txt")

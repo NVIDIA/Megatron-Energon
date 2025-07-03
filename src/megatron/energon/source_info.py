@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from dataclasses import dataclass
-from typing import Any, Union
+from typing import Any, Sequence, Union
 
 from megatron.energon.epathlib import EPath
 
@@ -36,3 +36,14 @@ def add_source_info(sample: Any, *source_infos: SourceInfo) -> Any:
         else:
             sample["__sources__"] = (*sample["__sources__"], *source_infos)
     return sample
+
+
+def get_source_info(sample: Any) -> Sequence[SourceInfo]:
+    """Get the source info of a sample."""
+    from megatron.energon.flavors.base_dataset import Sample
+
+    if isinstance(sample, Sample) or hasattr(sample, "__sources__"):
+        return sample.__sources__ or ()
+    elif isinstance(sample, dict):
+        return sample.get("__sources__") or ()
+    return ()

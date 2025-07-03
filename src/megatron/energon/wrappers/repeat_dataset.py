@@ -5,6 +5,7 @@ import math
 from typing import Any, Dict, Generic, Iterator, Optional, TypeVar, Union
 
 from megatron.energon.flavors.base_dataset import SavableDataset
+from megatron.energon.flavors.trace import TraceIter, trace_iter
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset
 
@@ -52,10 +53,35 @@ class RepeatDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
             return len(self.dataset)
         return int(len(self.dataset) * self.repeats)
 
-    def __iter__(self) -> Iterator[T_sample]:
+    @trace_iter(
+        next_args={
+            "idx": lambda self: self._index,
+        },
+        call_args={
+            "repetition": lambda self: self._repetition,
+            "inner_len": lambda self: len(self.dataset),
+            "config": lambda self: self._own_config(),
+        },
+    )
+    def __iter__(self, trace_iter: TraceIter) -> Iterator[T_sample]:
         assert self.repeats is not None or self.dataset.worker_has_samples(), (
             "Cannot repeat empty dataset indefinitely"
         )
+
+        @trace_iter.wrap_inner(
+            call_args=lambda stop_after: {
+                "repetition": self._repetition,
+                "inner_len": len(self.dataset),
+                "stop_after": stop_after,
+            }
+        )
+        def repeat(stop_after: Optional[int]):
+            for sample in self.dataset:
+                self._index += 1
+                yield sample
+
+                if stop_after is not None and self._index >= stop_after:
+                    break
 
         ds_len = len(self.dataset)
 
@@ -70,22 +96,7 @@ class RepeatDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
             else:
                 stop_after = None
 
-            for sample in self.dataset:
-                self._index += 1
-                yield sample
-                if stop_after is not None and self._index >= stop_after:
-                    break
-
-            if self.worker_config.should_log(level=2):
-                self.worker_config.worker_log(
-                    {
-                        "t": "RepeatDataset.repeat",
-                        "r": self.worker_config.rank,
-                        "w": self.worker_config.rank_worker_id(),
-                        "offset": self._repetition,
-                        "repeats": self.repeats,
-                    }
-                )
+            yield from repeat(stop_after)
             self._repetition += 1
             self._index = 0
 
@@ -94,6 +105,11 @@ class RepeatDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
         else:
             # No more repeats
             self._repetition = math.ceil(self.repeats)
+
+    def _own_config(self) -> Dict[str, Any]:
+        return {
+            "repeats": self.repeats,
+        }
 
     def config(self) -> Dict[str, Any]:
         return {

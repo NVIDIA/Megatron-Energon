@@ -197,42 +197,53 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
         """Iterates the samples in a list of slices, possibly using multiple parallel iterators over
         the slices."""
 
-        assert self.slice_offsets is not None
+        trace = self.worker_config.worker_trace_span()
 
-        active_slice_probs = torch.zeros(self.parallel_slice_iters, dtype=torch.float32)
-        active_slices = self._active_slice_state
-        pending_slice_indexes = self._pending_slice_indexes
-
-        def slice_at(idx: int) -> SliceState:
+        with trace.span(
+            "WebdatasetSampleLoaderDataset._slices_iter",
+            args={
+                "base_paths": [str(reader.base_path) for reader in self.join_readers],
+                "shuffle_over_epochs": self.shuffle_over_epochs,
+                "parallel_slice_iters": self.parallel_slice_iters,
+                "sample_count": self._sample_count,
+                "epoch_idx": self._epoch_count,
+                "epoch_sample_count": self._epoch_sample_count,
+            },
+            level=1,
+        ) as fn_span:
             assert self.slice_offsets is not None
-            return SliceState(
-                index=idx,
-                current=self.slice_offsets[idx],
-            )
 
-        # Weight the slices by their size to get a more even distribution of samples
-        if any(s is not None for s in active_slices) or self._pending_slices_offset is not None:
-            # Having an active state, or pending slices. This means we are resuming an epoch.
-            if pending_slice_indexes is None:
-                # Need to restore the pending slices
-                pending_slice_indexes = self._slices_once()
-            assert pending_slice_indexes is not None
+            active_slice_probs = torch.zeros(self.parallel_slice_iters, dtype=torch.float32)
+            active_slices = self._active_slice_state
+            pending_slice_indexes = self._pending_slice_indexes
 
-            # Restore the state
-            assert len(active_slices) == self.parallel_slice_iters
-            for idx, slice_state in enumerate(active_slices):
-                if slice_state is not None:
-                    active_slice_probs[idx] = (
-                        self.slice_offsets[slice_state.index + 1]
-                        - self.slice_offsets[slice_state.index]
-                    )
+            def slice_at(idx: int) -> SliceState:
+                assert self.slice_offsets is not None
+                return SliceState(
+                    index=idx,
+                    current=self.slice_offsets[idx],
+                )
 
-            if self.worker_config.should_log(level=1):
-                self.worker_config.worker_log(
+            # Weight the slices by their size to get a more even distribution of samples
+            if any(s is not None for s in active_slices) or self._pending_slices_offset is not None:
+                # Having an active state, or pending slices. This means we are resuming an epoch.
+                if pending_slice_indexes is None:
+                    # Need to restore the pending slices
+                    pending_slice_indexes = self._slices_once()
+                assert pending_slice_indexes is not None
+
+                # Restore the state
+                assert len(active_slices) == self.parallel_slice_iters
+                for idx, slice_state in enumerate(active_slices):
+                    if slice_state is not None:
+                        active_slice_probs[idx] = (
+                            self.slice_offsets[slice_state.index + 1]
+                            - self.slice_offsets[slice_state.index]
+                        )
+
+                fn_span.update_args(
                     {
-                        "t": "WebdatasetSampleLoaderDataset._slices_iter.resume_epoch",
-                        "r": self.worker_config.rank,
-                        "w": self.worker_config.rank_worker_id(),
+                        "mode": "resume_epoch",
                         "pending_slice_indexes": pending_slice_indexes,
                         "active_slices": [
                             (
@@ -245,162 +256,188 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
                             )
                             for state in active_slices
                         ],
-                        "count": self._sample_count,
-                        "epoch": self._epoch_count,
-                        "epoch_count": self._epoch_sample_count,
                         "probs": active_slice_probs.tolist(),
                     }
                 )
-
-        else:
-            # Start a new epoch
-            assert pending_slice_indexes is None
-            pending_slice_indexes = self._slices_once()
-
-            if self.worker_config.should_log(level=1):
-                self.worker_config.worker_log(
-                    {
-                        "t": "WebdatasetSampleLoaderDataset._slices_iter.next_epoch",
-                        "r": self.worker_config.rank,
-                        "w": self.worker_config.rank_worker_id(),
+                trace.instant(
+                    "WebdatasetSampleLoaderDataset._slices_iter.resume_epoch",
+                    args={
                         "pending_slice_indexes": pending_slice_indexes,
-                        "count": self._sample_count,
-                        "epoch": self._epoch_count,
-                        "epoch_count": self._epoch_sample_count,
+                        "active_slices": [
+                            (
+                                None
+                                if state is None
+                                else {
+                                    "index": state.index,
+                                    "current": state.current,
+                                }
+                            )
+                            for state in active_slices
+                        ],
+                        "sample_count": self._sample_count,
+                        "epoch_idx": self._epoch_count,
+                        "epoch_sample_count": self._epoch_sample_count,
                         "probs": active_slice_probs.tolist(),
                         "shuffle_over_epochs": self.shuffle_over_epochs,
+                        "parallel_slice_iters": self.parallel_slice_iters,
+                    },
+                    level=1,
+                )
+
+            else:
+                # Start a new epoch
+                assert pending_slice_indexes is None
+                pending_slice_indexes = self._slices_once()
+
+                fn_span.update_args(
+                    {
+                        "mode": "next_epoch",
+                        "pending_slice_indexes": pending_slice_indexes,
+                        "probs": active_slice_probs.tolist(),
                     }
                 )
-
-            assert self._pending_slices_offset is not None
-
-            # List of slice iterators, always of length `parallel_slice_iters`. May contain `None`.
-            active_slices.clear()
-            # Fill up the slice iterators
-            while len(pending_slice_indexes) > 0 and len(active_slices) < self.parallel_slice_iters:
-                slice_index = pending_slice_indexes.pop()
-                self._pending_slices_offset += 1
-                slice_state = slice_at(slice_index)
-                active_slice_probs[len(active_slices)] = (
-                    self.slice_offsets[slice_state.index + 1]
-                    - self.slice_offsets[slice_state.index]
+                trace.instant(
+                    "WebdatasetSampleLoaderDataset._slices_iter.next_epoch",
+                    args={
+                        "pending_slice_indexes": pending_slice_indexes,
+                        "sample_count": self._sample_count,
+                        "epoch_idx": self._epoch_count,
+                        "epoch_sample_count": self._epoch_sample_count,
+                        "probs": active_slice_probs.tolist(),
+                        "shuffle_over_epochs": self.shuffle_over_epochs,
+                        "parallel_slice_iters": self.parallel_slice_iters,
+                    },
+                    level=1,
                 )
-                active_slices.append(slice_state)
-            # Fill up the slice iterators with None
-            for _ in range(len(active_slices), self.parallel_slice_iters):
-                active_slices.append(None)
+                assert self._pending_slices_offset is not None
 
-        # print(
-        #     f"Next slice iters generated for {self.worker_config.rank}:{self.worker_config.rank_worker_id()}: probs={active_slice_probs}"
-        # )
-        # for slice_state in active_slices:
-        #     if slice_state is None:
-        #         print("  - None")
-        #     else:
-        #         print(
-        #             f"  - [{slice_offsets[slice_state.index]}, {slice_offsets[slice_state.index + 1]}] at {slice_state.current}"
-        #         )
+                # List of slice iterators, always of length `parallel_slice_iters`. May contain `None`.
+                active_slices.clear()
+                # Fill up the slice iterators
+                while (
+                    len(pending_slice_indexes) > 0
+                    and len(active_slices) < self.parallel_slice_iters
+                ):
+                    slice_index = pending_slice_indexes.pop()
+                    self._pending_slices_offset += 1
+                    slice_state = slice_at(slice_index)
+                    active_slice_probs[len(active_slices)] = (
+                        self.slice_offsets[slice_state.index + 1]
+                        - self.slice_offsets[slice_state.index]
+                    )
+                    active_slices.append(slice_state)
+                # Fill up the slice iterators with None
+                for _ in range(len(active_slices), self.parallel_slice_iters):
+                    active_slices.append(None)
 
-        # Iterate over the slice iterators while there is an iterator left
-        while torch.count_nonzero(active_slice_probs).item() > 0:
-            if self.shuffle_over_epochs is None:
-                # No shuffling, deterministic order, always the same
-                assert self.parallel_slice_iters == 1
-                slice_idx = 0
-            else:
-                # Take a random slice iterator
-                slice_idx = self._worker_rng.choice_idx(active_slice_probs)
-            slice_state = active_slices[slice_idx]
-            assert slice_state is not None
-            sample = self._get_sample(slice_state.current)
-            # print(f"Read sample at {slice_state.current} -> {'None' if sample is None or sample.data[0] is None else sample.data[0]['__key__']}")
-            slice_state.current += 1
-            self._sample_count += 1
-            self._epoch_sample_count += 1
-            if slice_state.current >= self.slice_offsets[slice_state.index + 1]:
-                # Iterator exhausted -> take next / remove from list
-                if len(pending_slice_indexes) > 0 or self.shuffle_over_epochs == -1:
-                    if len(pending_slice_indexes) > 0:
-                        # Take the next slice (without replacement)
-                        next_idx = pending_slice_indexes.pop()
-                        assert self._pending_slices_offset is not None
-                        self._pending_slices_offset += 1
+            # print(
+            #     f"Next slice iters generated for {self.worker_config.rank}:{self.worker_config.rank_worker_id()}: probs={active_slice_probs}"
+            # )
+            # for slice_state in active_slices:
+            #     if slice_state is None:
+            #         print("  - None")
+            #     else:
+            #         print(
+            #             f"  - [{slice_offsets[slice_state.index]}, {slice_offsets[slice_state.index + 1]}] at {slice_state.current}"
+            #         )
+
+            # Iterate over the slice iterators while there is an iterator left
+            while torch.count_nonzero(active_slice_probs).item() > 0:
+                with trace.span("WebdatasetSampleLoaderDataset._slices_iter.iter", level=1):
+                    if self.shuffle_over_epochs is None:
+                        # No shuffling, deterministic order, always the same
+                        assert self.parallel_slice_iters == 1
+                        slice_idx = 0
                     else:
-                        # Randomly select a new slice directly (with replacement)
-                        num_slices = len(self.slice_offsets) - 1
-                        next_idx = self._worker_rng.randbelow(num_slices)
-                    next_slice_state = slice_at(next_idx)
-                    active_slice_probs[slice_idx] = (
-                        self.slice_offsets[next_slice_state.index + 1]
-                        - self.slice_offsets[next_slice_state.index]
-                    )
-                    active_slices[slice_idx] = next_slice_state
-                    # print(
-                    #     f"Slice iter for {self.worker_config.rank}:{self.worker_config.rank_worker_id()} "
-                    #     f"[{slice_offsets[slice_state.index]}, {slice_offsets[slice_state.index + 1]}] exhausted at {slice_state.current}, "
-                    #     f"taking next slice {next_slice_state} [{slice_offsets[next_slice_state.index]}, {slice_offsets[next_slice_state.index + 1]}], "
-                    #     f"{len(pending_slice_indexes)} slices left, probs={active_slice_probs.tolist()}"
-                    # )
-                else:
-                    active_slice_probs[slice_idx] = 0
-                    active_slices[slice_idx] = None
-                    # print(
-                    #     f"Slice iter for {self.worker_config.rank}:{self.worker_config.rank_worker_id()} "
-                    #     f"[{slice_offsets[slice_state.index]}, {slice_offsets[slice_state.index + 1]}] exhausted at {slice_state.current}, "
-                    #     f"no next slice, probs={active_slice_probs.tolist()}"
-                    # )
-                if self.worker_config.should_log(level=2):
-                    self.worker_config.worker_log(
-                        {
-                            "t": "WebdatasetSampleLoaderDataset._slices_iter.exhausted",
-                            "r": self.worker_config.rank,
-                            "w": self.worker_config.rank_worker_id(),
-                            "remaining": len(pending_slice_indexes),
-                            "count": self._sample_count,
-                            "epoch": self._epoch_count,
-                            "epoch_count": self._epoch_sample_count,
-                            "probs": active_slice_probs.tolist(),
-                        }
-                    )
-            if sample.data[0] is not None:
-                # Otherwise the sample was skipped.
-                if self.worker_config.should_log(level=1):
-                    self.worker_config.worker_log(
-                        {
-                            "t": "WebdatasetSampleLoaderDataset._slices_iter.yield",
-                            "r": self.worker_config.rank,
-                            "w": self.worker_config.rank_worker_id(),
-                            "index": sample.__restore_key__[1],
-                            "key": sample.data[0]["__key__"],
-                            "shard": sample.data[0]["__shard__"],
-                            "count": self._sample_count,
-                            "epoch": self._epoch_count,
-                            "epoch_count": self._epoch_sample_count,
-                        }
-                    )
-                # Now, yield the sample
-                yield sample
-                del sample
-        if self.worker_config.should_log(level=2):
-            self.worker_config.worker_log(
-                {
-                    "t": "WebdatasetSampleLoaderDataset._slices_iter.all_exhausted",
-                    "r": self.worker_config.rank,
-                    "w": self.worker_config.rank_worker_id(),
-                    "count": self._sample_count,
-                    "epoch": self._epoch_count,
-                    "epoch_count": self._epoch_sample_count,
-                }
-            )
+                        # Take a random slice iterator
+                        slice_idx = self._worker_rng.choice_idx(active_slice_probs)
+                    slice_state = active_slices[slice_idx]
+                    assert slice_state is not None
+                    sample = self._get_sample(slice_state.current)
+                    # print(f"Read sample at {slice_state.current} -> {'None' if sample is None or sample.data[0] is None else sample.data[0]['__key__']}")
+                    slice_state.current += 1
+                    self._sample_count += 1
+                    self._epoch_sample_count += 1
+                    if slice_state.current >= self.slice_offsets[slice_state.index + 1]:
+                        # Iterator exhausted -> take next / remove from list
+                        if len(pending_slice_indexes) > 0 or self.shuffle_over_epochs == -1:
+                            if len(pending_slice_indexes) > 0:
+                                # Take the next slice (without replacement)
+                                next_idx = pending_slice_indexes.pop()
+                                assert self._pending_slices_offset is not None
+                                self._pending_slices_offset += 1
+                            else:
+                                # Randomly select a new slice directly (with replacement)
+                                num_slices = len(self.slice_offsets) - 1
+                                next_idx = self._worker_rng.randbelow(num_slices)
+                            next_slice_state = slice_at(next_idx)
+                            active_slice_probs[slice_idx] = (
+                                self.slice_offsets[next_slice_state.index + 1]
+                                - self.slice_offsets[next_slice_state.index]
+                            )
+                            active_slices[slice_idx] = next_slice_state
+                            # print(
+                            #     f"Slice iter for {self.worker_config.rank}:{self.worker_config.rank_worker_id()} "
+                            #     f"[{slice_offsets[slice_state.index]}, {slice_offsets[slice_state.index + 1]}] exhausted at {slice_state.current}, "
+                            #     f"taking next slice {next_slice_state} [{slice_offsets[next_slice_state.index]}, {slice_offsets[next_slice_state.index + 1]}], "
+                            #     f"{len(pending_slice_indexes)} slices left, probs={active_slice_probs.tolist()}"
+                            # )
+                        else:
+                            active_slice_probs[slice_idx] = 0
+                            active_slices[slice_idx] = None
+                            # print(
+                            #     f"Slice iter for {self.worker_config.rank}:{self.worker_config.rank_worker_id()} "
+                            #     f"[{slice_offsets[slice_state.index]}, {slice_offsets[slice_state.index + 1]}] exhausted at {slice_state.current}, "
+                            #     f"no next slice, probs={active_slice_probs.tolist()}"
+                            # )
+                        trace.instant(
+                            "WebdatasetSampleLoaderDataset._slices_iter.exhausted",
+                            args={
+                                "remaining": len(pending_slice_indexes),
+                                "sample_count": self._sample_count,
+                                "epoch_idx": self._epoch_count,
+                                "epoch_sample_count": self._epoch_sample_count,
+                                "probs": active_slice_probs.tolist(),
+                            },
+                            level=2,
+                        )
+                    if sample.data[0] is not None:
+                        # Otherwise the sample was skipped.
+                        trace.instant(
+                            "WebdatasetSampleLoaderDataset._slices_iter.yield",
+                            args={
+                                "base_path": str(self.join_readers[0].base_path),
+                                "global_sample_index": sample.__restore_key__[1],
+                                "key": sample.data[0]["__key__"],
+                                "shard": sample.data[0]["__shard__"],
+                                "sample_count": self._sample_count,
+                                "epoch_idx": self._epoch_count,
+                                "epoch_sample_count": self._epoch_sample_count,
+                            },
+                            level=2,
+                        )
+                        # Now, yield the sample
+                        yield sample
+                        del sample
+            if self.worker_config.should_log(level=2):
+                trace.instant(
+                    "WebdatasetSampleLoaderDataset._slices_iter.all_exhausted",
+                    args={
+                        "sample_count": self._sample_count,
+                        "epoch_idx": self._epoch_count,
+                        "epoch_sample_count": self._epoch_sample_count,
+                    },
+                    level=2,
+                )
 
-        # Epoch has finished, reset states.
-        self._epoch_count += 1
-        self._epoch_sample_count = 0
-        self._pending_slice_indexes = None
-        self._pending_slices_offset = None
-        # print(
-        #     f"slice iters exhausted for {self.worker_config.rank}:{self.worker_config.rank_worker_id()} after {cnt} samples"
-        # )
+            # Epoch has finished, reset states.
+            self._epoch_count += 1
+            self._epoch_sample_count = 0
+            self._pending_slice_indexes = None
+            self._pending_slices_offset = None
+            # print(
+            #     f"slice iters exhausted for {self.worker_config.rank}:{self.worker_config.rank_worker_id()} after {cnt} samples"
+            # )
 
     def __len__(self) -> int:
         return sum(
@@ -418,18 +455,6 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
 
         self.ensure_slice_offsets()
         assert self.slice_offsets is not None
-
-        if self.worker_config.should_log(level=1):
-            self.worker_config.worker_log(
-                {
-                    "t": "WebdatasetSampleLoaderDataset.__iter__",
-                    "r": self.worker_config.rank,
-                    "w": self.worker_config.rank_worker_id(),
-                    "slice_offsets": self.slice_offsets,
-                    "parallel_slice_iters": self.parallel_slice_iters,
-                    "shuffle_over_epochs": self.shuffle_over_epochs,
-                }
-            )
 
         if len(self.slice_offsets) <= 1:
             return

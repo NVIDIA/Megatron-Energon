@@ -279,21 +279,25 @@ class Watchdog:
         """
 
         it = iter(iterable)
-        while True:
-            # Automatically resets timer
-            self.enable()
-            try:
-                item = next(it)
-            except StopIteration:
-                self.disable()
-                break
-            except:
-                # On any error, disable watchdog before re-raising
-                self.disable()
-                raise
-            else:
-                self.disable()
-                yield item
+        try:
+            while True:
+                # Automatically resets timer
+                self.enable()
+                try:
+                    item = next(it)
+                except StopIteration:
+                    self.disable()
+                    break
+                except:
+                    # On any error, disable watchdog before re-raising
+                    self.disable()
+                    raise
+                else:
+                    self.disable()
+                    yield item
+        finally:
+            if hasattr(it, "close"):
+                it.close()
 
 
 def repr_short(obj: Any) -> str:

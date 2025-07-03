@@ -5,6 +5,7 @@ import warnings
 from typing import Any, Dict, Generic, Iterator, Optional, TypeVar
 
 from megatron.energon.flavors.base_dataset import SavableDataset
+from megatron.energon.flavors.trace import TraceIter, trace_iter
 from megatron.energon.watchdog import Watchdog
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset
@@ -45,6 +46,7 @@ class WatchdogDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample])
         return len(self.dataset)
 
     def _watchdog_trigger(self) -> None:
+        self.worker_config.worker_trace_span().instant("WatchdogDataset._watchdog_trigger", level=2)
         if self.fail_on_timeout:
             # Raising an exception here will kill the whole process
             raise TimeoutError(
@@ -56,7 +58,13 @@ class WatchdogDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample])
                 RuntimeWarning,
             )
 
-    def __iter__(self) -> Iterator[T_sample]:
+    @trace_iter(
+        name=lambda self: f"WatchdogDataset({self._function_config(self.dataset)})",
+        call_args={
+            "config": lambda self: self._own_config(),
+        },
+    )
+    def __iter__(self, trace_iter: TraceIter) -> Iterator[T_sample]:
         if self.timeout_seconds is None:
             yield from self.dataset
         else:
@@ -67,6 +75,13 @@ class WatchdogDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample])
                 enabled=False,
             )
             yield from watchdog.watch_iter(self.dataset)
+
+    def _own_config(self) -> Dict[str, Any]:
+        return {
+            "timeout_seconds": self.timeout_seconds,
+            "initial_timeout_seconds": self.initial_timeout_seconds,
+            "fail_on_timeout": self.fail_on_timeout,
+        }
 
     def config(self) -> Dict[str, Any]:
         # Watchdog is transparent, it won't change the samples
