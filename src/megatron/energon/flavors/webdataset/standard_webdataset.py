@@ -53,6 +53,12 @@ class StandardWebdatasetFactory(DefaultDecoderWebdatasetFactory[T_sample], Gener
             parallel_shard_iters: Number of parallel opened shards per worker, shuffling between.
             max_samples_per_sequence: Maximum number of samples per sequence (=how many samples
                     will be sequentially iterated).
+            subset_ratio: If specified, the dataset will be subsetted to the given ratio.
+                E.g.: [0.2, 0.8] will load 20% of the dataset from the first dataset and 80% from the second.
+            subset_samples: If specified, the dataset will be subsetted to the given samples.
+                E.g.: [100, 200] will load samples from 100 to 200. If both, ``subset_ratio`` and
+                ``subset_samples`` are specified, the ``subset_samples`` will be applied first then
+                the ``subset_ratio``.
             split_config: Config file to use for shard split definitions.
             handler: Exception handler. Args: (exception, key).
         """

@@ -454,6 +454,7 @@ class JoinDatasetLoader(DatasetLoaderInterface):
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs: Optional[int] = 1,
         split_config: Optional[str] = None,
+        subset_ratio: Optional[tuple[float, float]] = None,
         **kwargs,
     ) -> BaseCoreDatasetFactory:
         """
@@ -464,6 +465,7 @@ class JoinDatasetLoader(DatasetLoaderInterface):
             shuffle_buffer_size: Size of the sample shuffle buffer (before task encoding).
             subflavors: Subflavors to use, might be overridden by inner datasets.
             shuffle_over_epochs: Shuffle the dataset over this many epochs.
+            subset_ratio: If specified, the inner dataset(s) will be subsetted to the given ratio.
             **kwargs: Additional arguments to the dataset constructor.
 
         Returns:
@@ -522,6 +524,7 @@ class JoinDatasetLoader(DatasetLoaderInterface):
             shuffle_over_epochs=shuffle_over_epochs,
             join_index=join_index_path,
             joiner=self.joiner,
+            subset_ratio=subset_ratio,
             **kwargs,
         )
 
@@ -533,6 +536,7 @@ class JoinDatasetLoader(DatasetLoaderInterface):
         worker_config: WorkerConfig,
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: Optional[int] = 1,
+        subset_ratio: Optional[tuple[float, float]] = None,
         **kwargs,
     ) -> LoadedDatasetList:
         return LoadedDatasetList(
@@ -545,6 +549,7 @@ class JoinDatasetLoader(DatasetLoaderInterface):
                         worker_config=worker_config,
                         subflavors=subflavors,
                         shuffle_over_epochs=shuffle_over_epochs_multiplier,
+                        subset_ratio=subset_ratio,
                         **kwargs,
                     ),
                     weight=None,

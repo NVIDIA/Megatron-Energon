@@ -54,6 +54,7 @@ class DatasetLoaderInterface(ABC):
         worker_config: WorkerConfig,
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: Optional[int] = 1,
+        subset_ratio: Optional[tuple[float, float]] = None,
         **kwargs,
     ) -> LoadedDatasetList:
         """
@@ -73,6 +74,7 @@ class DatasetLoaderInterface(ABC):
                 exactly `n` times in `n` epochs of the inner dataset. Use -1 for shuffling over
                 an infinite number of epochs (effectively, this will draw shard slices with
                 replacement).
+            subset_ratio: If specified, the inner dataset(s) will be subsetted to the given ratio.
             **kwargs: Additional arguments to the dataset constructor.
 
         Returns:

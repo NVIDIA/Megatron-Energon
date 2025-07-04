@@ -46,12 +46,24 @@ class BaseWebdatasetFactory(
     """
 
     path: EPath
+    paths: list[EPath]
+
+    shards: List[ShardInfo]
+    sample_excludes: set[str]
+    split_part_files: list[str]
 
     training: bool
     worker_config: WorkerConfig
 
-    shards: List[ShardInfo]
-    rank_shards: List[List[Sequence[ShardInfo]]]
+    shuffle_over_epochs: Optional[int]
+    parallel_shard_iters: Optional[int]
+    max_samples_per_sequence: Optional[int]
+
+    subset_ratio: Optional[tuple[float, float]]
+    subset_samples: Optional[tuple[int, int | None]]
+
+    part_filter: Optional[Callable[[str], bool]]
+    handler: Callable[[Exception, Optional[str], Optional[list[SourceInfo]]], None]
 
     def __init__(
         self,
@@ -63,6 +75,8 @@ class BaseWebdatasetFactory(
         shuffle_over_epochs: Optional[int] = 1,
         parallel_shard_iters: Optional[int] = None,
         max_samples_per_sequence: Optional[int] = None,
+        subset_ratio: Optional[tuple[float, float]] = None,
+        subset_samples: Optional[tuple[int, int | None]] = None,
         split_config: str = "split.yaml",
         part_filter: Optional[Callable[[str], bool]] = None,
         handler: Callable[
@@ -87,9 +101,12 @@ class BaseWebdatasetFactory(
             parallel_shard_iters: Number of parallel opened shards per worker, shuffling between.
             max_samples_per_sequence: Maximum number of samples per sequence (=how many samples
                     will be sequentially iterated).
+            subset_ratio: If specified, the dataset will be subsetted to the given ratio.
+            subset_samples: If specified, the dataset will be subsetted to the given number of samples.
+                If both subset_ratio and subset_samples are specified, subset_samples is applied first, then the ratio.
             split_config: Config file to use for shard split definitions.
             part_filter: (internal) Function for filtering tar files by dict keys
-            handler: Exception handler. Args: (exception, key).
+            handler: Exception handler. Args: (exception, key, source_info).
         """
         assert self.__sample_type__ is not None, f"Class {type(self)} must define __sample_type__"
         wds_meta = WebdatasetMeta.from_config(
@@ -105,6 +122,8 @@ class BaseWebdatasetFactory(
         self.shuffle_over_epochs = shuffle_over_epochs
         self.parallel_shard_iters = parallel_shard_iters
         self.max_samples_per_sequence = max_samples_per_sequence
+        self.subset_ratio = subset_ratio
+        self.subset_samples = subset_samples
         self.part_filter = part_filter
         self.handler = legacy_handler(handler)
 
@@ -128,6 +147,8 @@ class BaseWebdatasetFactory(
             worker_config=self.worker_config,
             max_samples_per_sequence=self.max_samples_per_sequence,
             rotation_offset=worker_rotation_offset,
+            subset_ratio=self.subset_ratio,
+            subset_samples=self.subset_samples,
         )
         _print_shard_slices(self.worker_config, self.shards, workers_sample_slice_offsets)
 
@@ -190,6 +211,8 @@ class BaseWebdatasetFactory(
             shuffle_over_epochs=self.shuffle_over_epochs,
             parallel_shard_iters=self.parallel_shard_iters,
             max_samples_per_sequence=self.max_samples_per_sequence,
+            subset_ratio=self.subset_ratio,
+            subset_samples=self.subset_samples,
         )
 
     def __str__(self):
