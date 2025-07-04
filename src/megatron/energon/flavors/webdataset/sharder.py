@@ -190,7 +190,8 @@ class Sharder:
     @classmethod
     def split_samples_to_workers(
         cls,
-        total_samples: int,
+        start_samples: int,
+        end_samples: int,
         worker_config: WorkerConfig,
         *,
         rotation_offset: int = 0,
@@ -199,6 +200,7 @@ class Sharder:
         # Note that the global number of workers intentionally stays the same if you
         # divide the number of ranks by N, and multiply the number of workers per rank by N.
         # This allows to reproduce the same global batches with a different number of ranks.
+        total_samples = end_samples - start_samples
 
         num_workers = max(1, worker_config.num_workers)
 
@@ -247,8 +249,8 @@ class Sharder:
         num_samples_per_global_worker = new_num_samples_per_global_worker
 
         # 3. Compute the global worker sample start and end indices
-        global_worker_sample_split_offsets = [0]
-        cur_offset = 0
+        global_worker_sample_split_offsets = [start_samples]
+        cur_offset = start_samples
         for global_worker_idx in range(global_workers):
             cur_offset += num_samples_per_global_worker[global_worker_idx]
             global_worker_sample_split_offsets.append(cur_offset)
@@ -272,6 +274,39 @@ class Sharder:
             int(offsets[-1]),
         )
 
+    @staticmethod
+    def _compute_subset(
+        total_samples: int,
+        subset_ratio: Optional[tuple[float, float]],
+        subset_samples: Optional[tuple[int, int | None]],
+    ) -> tuple[int, int]:
+        start_samples = 0
+        end_samples = total_samples
+
+        if subset_samples is not None:
+            start_samples, end_samples = subset_samples
+            if end_samples is None:
+                end_samples = total_samples
+            assert end_samples <= total_samples, (
+                f"Subset samples {subset_samples} {end_samples=} > {total_samples=}"
+            )
+            assert start_samples <= end_samples, (
+                f"Subset samples {subset_samples} {start_samples=} > {end_samples=}"
+            )
+            assert start_samples >= 0, f"Subset samples {subset_samples} {start_samples=} < 0"
+        if subset_ratio is not None:
+            previous_total = end_samples - start_samples
+            end_samples = start_samples + int(previous_total * subset_ratio[1])
+            start_samples += int(previous_total * subset_ratio[0])
+            assert end_samples <= total_samples, (
+                f"Subset ratio {subset_ratio} {end_samples=} is larger than total samples {total_samples}"
+            )
+            assert start_samples <= end_samples, (
+                f"Subset ratio {subset_ratio} {start_samples=} > {end_samples=}"
+            )
+            assert start_samples >= 0, f"Subset ratio {subset_ratio} {start_samples=} < 0"
+        return start_samples, end_samples
+
     @classmethod
     def shard_workers(
         cls,
@@ -279,6 +314,8 @@ class Sharder:
         worker_config: WorkerConfig,
         *,
         max_samples_per_sequence: Optional[int],
+        subset_ratio: Optional[tuple[float, float]] = None,
+        subset_samples: Optional[tuple[int, int | None]] = None,
         rotation_offset: int = 0,
     ) -> Sequence[Sequence[int]]:
         """
@@ -289,14 +326,23 @@ class Sharder:
         Args:
             shards: The shards to split
             worker_config: The config for the current rank and workers
+            max_samples_per_sequence: Maximum number of samples per sequence (=how many samples
+                  will be sequential).
+            subset_ratio: If specified, the dataset will be subsetted to the given ratio.
+            subset_samples: If specified, the dataset will be subsetted to the given number of samples.
+                If both subset_ratio and subset_samples are specified, subset_samples is applied first, then the ratio.
+            rotation_offset: The offset to use for the worker rotation.
 
         Returns:
             The shards for the current rank and all workers
         """
-        total_samples = sum(shard.count for shard in shards)
+        start_samples, end_samples = cls._compute_subset(
+            sum(shard.count for shard in shards), subset_ratio, subset_samples
+        )
 
         local_worker_sample_split_offsets = cls.split_samples_to_workers(
-            total_samples,
+            start_samples,
+            end_samples,
             worker_config,
             rotation_offset=rotation_offset,
         )
@@ -320,6 +366,8 @@ class Sharder:
         worker_config: WorkerConfig,
         *,
         max_samples_per_sequence: Optional[int],
+        subset_ratio: Optional[tuple[float, float]] = None,
+        subset_samples: Optional[tuple[int, int | None]] = None,
         rotation_offset: int = 0,
     ) -> Sequence[Sequence[int]]:
         """
@@ -330,12 +378,23 @@ class Sharder:
         Args:
             total_samples: The total number of samples
             worker_config: The config for the current rank and workers
+            max_samples_per_sequence: Maximum number of samples per sequence (=how many samples
+                  will be sequential).
+            subset_ratio: If specified, the dataset will be subsetted to the given ratio.
+            subset_samples: If specified, the dataset will be subsetted to the given number of samples.
+                If both subset_ratio and subset_samples are specified, subset_samples is applied first, then the ratio.
+            rotation_offset: The offset to use for the worker rotation.
 
         Returns:
             The shards for the current rank and all workers
         """
+        start_samples, end_samples = cls._compute_subset(
+            total_samples, subset_ratio, subset_samples
+        )
+
         local_worker_sample_split_offsets = cls.split_samples_to_workers(
-            total_samples,
+            start_samples,
+            end_samples,
             worker_config,
             rotation_offset=rotation_offset,
         )

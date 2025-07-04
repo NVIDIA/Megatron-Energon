@@ -54,6 +54,9 @@ class JoinedWebdatasetFactory(
     shuffle_over_epochs: Optional[int] = 1
     parallel_shard_iters: Optional[int]
     max_samples_per_sequence: Optional[int]
+    subset_ratio: Optional[tuple[float, float]]
+    subset_samples: Optional[tuple[int, int | None]]
+
     join_index: EPath
     handler: Callable[[Exception, Optional[str], Optional[list[SourceInfo]]], None]
 
@@ -73,6 +76,8 @@ class JoinedWebdatasetFactory(
         shuffle_over_epochs: Optional[int] = 1,
         parallel_shard_iters: Optional[int] = None,
         max_samples_per_sequence: Optional[int] = None,
+        subset_ratio: Optional[tuple[float, float]] = None,
+        subset_samples: Optional[tuple[int, int | None]] = None,
         join_index: EPath,
         joiner: Union[Type[T_sample], Callable[..., T_sample]],
         handler: Callable[
@@ -99,6 +104,9 @@ class JoinedWebdatasetFactory(
             parallel_shard_iters: Number of parallel opened shards per worker, shuffling between.
             max_samples_per_sequence: Maximum number of samples per sequence (=how many samples
                     will be sequentially iterated).
+            subset_ratio: If specified, the inner dataset(s) will be subsetted to the given ratio.
+            subset_samples: If specified, the inner dataset(s) will be subsetted to the given number of samples.
+                If both subset_ratio and subset_samples are specified, subset_samples is applied first, then the ratio.
             join_index: Path to the join index file. Only required for join_method="left".
             joiner: Type of the joined samples or a method for joining the samples.
             handler: Exception handler. Args: (exception, key).
@@ -130,6 +138,8 @@ class JoinedWebdatasetFactory(
         self.shuffle_over_epochs = shuffle_over_epochs
         self.parallel_shard_iters = parallel_shard_iters
         self.max_samples_per_sequence = max_samples_per_sequence
+        self.subset_ratio = subset_ratio
+        self.subset_samples = subset_samples
         self.handler = legacy_handler(handler)
 
     def __len__(self) -> int:
@@ -161,6 +171,8 @@ class JoinedWebdatasetFactory(
             worker_config=self.worker_config,
             max_samples_per_sequence=self.max_samples_per_sequence,
             rotation_offset=worker_rotation_offset,
+            subset_ratio=self.subset_ratio,
+            subset_samples=self.subset_samples,
         )
 
         for worker_idx, sample_slice_offsets in enumerate(workers_sample_slice_offsets):

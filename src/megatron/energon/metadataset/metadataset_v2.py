@@ -65,7 +65,55 @@ class AuxFilesystemReference:
 
 
 @edataclass
-class DatasetReference(DatasetLoaderInterface):
+class SubsetRatioMixin:
+    subset_ratio: Optional[tuple[float | str, float | str]] = None
+
+    def _post_initialize_subset_ratio(self) -> None:
+        if self.subset_ratio is not None:
+            if isinstance(self.subset_ratio[0], str):
+                self.subset_ratio = (
+                    float(self.subset_ratio[0].removesuffix("%")) / 100.0,
+                    self.subset_ratio[1],
+                )
+            if isinstance(self.subset_ratio[1], str):
+                self.subset_ratio = (
+                    self.subset_ratio[0],
+                    float(self.subset_ratio[1].removesuffix("%")) / 100.0,
+                )
+            assert isinstance(self.subset_ratio[0], (float, int))
+            assert isinstance(self.subset_ratio[1], (float, int))
+            assert 0.0 <= self.subset_ratio[0] <= 1.0, f"Invalid subset ratio: {self.subset_ratio}"
+            assert 0.0 <= self.subset_ratio[1] <= 1.0, f"Invalid subset ratio: {self.subset_ratio}"
+            assert self.subset_ratio[0] <= self.subset_ratio[1], (
+                f"Invalid subset ratio: {self.subset_ratio}"
+            )
+
+    def _get_subset_ratio(
+        self, parent_subset_ratio: Optional[tuple[float, float]]
+    ) -> Optional[tuple[float, float]]:
+        if parent_subset_ratio is not None:
+            if self.subset_ratio is not None:
+                assert isinstance(self.subset_ratio[0], (float, int))
+                assert isinstance(self.subset_ratio[1], (float, int))
+                # Assuming inner ratio: [0.25, 0.75] and outer ratio: [0, 0.5]
+                # Then the total ratio is supposed to be: [0.25 + 0*0.5, 0.25 + 0.5 * 0.5] = [0.25, 0.5]
+                total = self.subset_ratio[1] - self.subset_ratio[0]
+                return (
+                    self.subset_ratio[0] + parent_subset_ratio[0] * total,
+                    self.subset_ratio[0] + parent_subset_ratio[1] * total,
+                )
+            else:
+                return parent_subset_ratio
+        elif self.subset_ratio is not None:
+            assert isinstance(self.subset_ratio[0], (float, int))
+            assert isinstance(self.subset_ratio[1], (float, int))
+            return (self.subset_ratio[0], self.subset_ratio[1])
+        else:
+            return None
+
+
+@edataclass
+class DatasetReference(SubsetRatioMixin, DatasetLoaderInterface):
     path: Union[str, EPath]
 
     split_part: Optional[str] = None
@@ -73,6 +121,10 @@ class DatasetReference(DatasetLoaderInterface):
     shuffle_over_epochs_multiplier: Optional[int] = 1
     dataset_config: str = "dataset.yaml"
     split_config: str = "split.yaml"
+
+    #: If specified, the dataset will be subsetted to the given samples.
+    # E.g.: [100, 200] or [100, None] (i.e. starting at 100, to the end of the dataset).
+    subset_samples: Optional[tuple[int, int | None]] = None
 
     #: Auxiliary datasets. May only be specified for crude datasets for cooking. Cooking will get
     # these references to load data from. If specified as string, it will be interpreted as a
@@ -85,10 +137,18 @@ class DatasetReference(DatasetLoaderInterface):
         assert mds_path is not None
         if not isinstance(self.path, EPath):
             self.path = mds_path.parent / self.path
+        self._post_initialize_subset_ratio()
         if self.path.is_file():
-            assert self.aux is None, "Cannot specify auxiliary datasets for crude datasets"
-            assert self.dataset_config == "dataset.yaml", "Must not set dataset_config"
-            assert self.split_config == "split.yaml", "Must not set split_config"
+            assert self.aux is None, "Cannot specify auxiliary datasets for referenced metadatasets"
+            assert self.dataset_config == "dataset.yaml", (
+                "Must not set dataset_config for referenced metadatasets"
+            )
+            assert self.split_config == "split.yaml", (
+                "Must not set split_config for referenced metadatasets"
+            )
+            assert self.subset_samples is None, (
+                "Cannot specify subset_samples for referenced metadatasets"
+            )
             # Note: For backwards compatibility, the type must be Metadataset (V1).
             self._dataset = load_config(
                 self.path,
@@ -127,6 +187,7 @@ class DatasetReference(DatasetLoaderInterface):
         worker_config: WorkerConfig,
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: Optional[int] = 1,
+        subset_ratio: Optional[tuple[float, float]] = None,
         **kwargs,
     ) -> LoadedDatasetList:
         if self.subflavors is not None:
@@ -144,12 +205,17 @@ class DatasetReference(DatasetLoaderInterface):
             new_shuffle_over_epochs_multiplier = (
                 shuffle_over_epochs_multiplier * self.shuffle_over_epochs_multiplier
             )
+        subset_ratio = self._get_subset_ratio(subset_ratio)
+        if self.subset_samples is not None:
+            kwargs["subset_samples"] = self.subset_samples
+
         result = self._dataset.get_datasets(
             training=training,
             split_part=self.split_part or split_part,
             worker_config=worker_config,
             subflavors=subflavors,
             shuffle_over_epochs_multiplier=new_shuffle_over_epochs_multiplier,
+            subset_ratio=subset_ratio,
             **kwargs,
         )
         if self.aux is not None:
@@ -199,7 +265,7 @@ class JoinDatasetReference(DatasetReference):
 
 
 @edataclass
-class MetadatasetJoin(DatasetLoaderInterface):
+class MetadatasetJoin(SubsetRatioMixin, DatasetLoaderInterface):
     join: Union[List[JoinDatasetReference], Dict[str, JoinDatasetReference]]
     joiner: Union[Type[Sample], Callable[..., Sample]]
 
@@ -218,6 +284,7 @@ class MetadatasetJoin(DatasetLoaderInterface):
         assert self.dataset_config == "dataset.yaml", (
             "Cannot set dataset_config for joining datasets"
         )
+        self._post_initialize_subset_ratio()
         if isinstance(self.join, list):
             inner_loaders = [
                 JoinedDatasetInfo(
@@ -259,15 +326,18 @@ class MetadatasetJoin(DatasetLoaderInterface):
         worker_config: WorkerConfig,
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: Optional[int] = 1,
+        subset_ratio: Optional[tuple[float, float]] = None,
         **kwargs,
     ) -> LoadedDatasetList:
         assert self._dataset is not None, "Missing post_initialize call."
+        subset_ratio = self._get_subset_ratio(subset_ratio)
         return self._dataset.get_datasets(
             training=training,
             split_part=split_part,
             worker_config=worker_config,
             subflavors=subflavors,
             shuffle_over_epochs_multiplier=shuffle_over_epochs_multiplier,
+            subset_ratio=subset_ratio,
             **kwargs,
         )
 
@@ -288,13 +358,14 @@ class BlendJoinDatasetReference(BlendWeightMixin, MetadatasetJoin):
 
 
 @edataclass
-class MetadatasetBlend(DatasetLoaderInterface):
+class MetadatasetBlend(DatasetLoaderInterface, SubsetRatioMixin):
     """Blending of datasets by specifying the sampling weight for the inner datasets."""
 
     blend: List[Union[BlendDatasetReference, BlendJoinDatasetReference]]
 
     def post_initialize(self, mds_path: Optional[EPath] = None):
         assert mds_path is not None
+        self._post_initialize_subset_ratio()
         for dataset in self.blend:
             dataset.post_initialize(mds_path)
 
@@ -312,8 +383,10 @@ class MetadatasetBlend(DatasetLoaderInterface):
         worker_config: WorkerConfig,
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: Optional[int] = 1,
+        subset_ratio: Optional[tuple[float, float]] = None,
         **kwargs,
     ) -> LoadedDatasetList:
+        subset_ratio = self._get_subset_ratio(subset_ratio)
         sum_weight = sum(dataset.weight for dataset in self.blend)
         datasets = []
         for dataset in self.blend:
@@ -323,6 +396,7 @@ class MetadatasetBlend(DatasetLoaderInterface):
                 worker_config=worker_config,
                 subflavors=subflavors,
                 shuffle_over_epochs_multiplier=shuffle_over_epochs_multiplier,
+                subset_ratio=subset_ratio,
                 **kwargs,
             )
             if inner_result.blend_mode not in (
@@ -364,7 +438,7 @@ class BlendEpochizedJoinDatasetReference(BlendRepetitionsMixin, MetadatasetJoin)
 
 
 @edataclass
-class MetadatasetBlendEpochized(DatasetLoaderInterface):
+class MetadatasetBlendEpochized(SubsetRatioMixin, DatasetLoaderInterface):
     """Blending of datasets, by specifying the number of repetitions for samples from the inner
     datasets. Ensures that the constraint, that samples are seen exactly this many times before
     repeating the "epoch" (i.e. one epoch contains the total number of repetitions for each inner
@@ -374,6 +448,7 @@ class MetadatasetBlendEpochized(DatasetLoaderInterface):
 
     def post_initialize(self, mds_path: Optional[EPath] = None):
         assert mds_path is not None
+        self._post_initialize_subset_ratio()
         for dataset in self.blend_epochized:
             dataset.post_initialize(mds_path)
 
@@ -391,8 +466,10 @@ class MetadatasetBlendEpochized(DatasetLoaderInterface):
         worker_config: WorkerConfig,
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: Optional[int] = 1,
+        subset_ratio: Optional[tuple[float, float]] = None,
         **kwargs,
     ) -> LoadedDatasetList:
+        subset_ratio = self._get_subset_ratio(subset_ratio)
         datasets = []
         for dataset in self.blend_epochized:
             inner_result = dataset.get_datasets(
@@ -401,6 +478,7 @@ class MetadatasetBlendEpochized(DatasetLoaderInterface):
                 worker_config=worker_config,
                 subflavors=subflavors,
                 shuffle_over_epochs_multiplier=shuffle_over_epochs_multiplier,
+                subset_ratio=subset_ratio,
                 **kwargs,
             )
             if inner_result.blend_mode not in (
@@ -466,6 +544,7 @@ class MetadatasetV2(DatasetLoaderInterface):
         worker_config: WorkerConfig,
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: Optional[int] = 1,
+        subset_ratio: Optional[tuple[float, float]] = None,
         **kwargs,
     ) -> LoadedDatasetList:
         return self.splits[split_part].get_datasets(
@@ -474,5 +553,6 @@ class MetadatasetV2(DatasetLoaderInterface):
             worker_config=worker_config,
             subflavors=subflavors,
             shuffle_over_epochs_multiplier=shuffle_over_epochs_multiplier,
+            subset_ratio=subset_ratio,
             **kwargs,
         )

@@ -70,6 +70,7 @@ class DatasetReference:
         worker_config: WorkerConfig,
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: Optional[int] = 1,
+        subset_ratio: Optional[tuple[float, float]] = None,
         **kwargs,
     ) -> LoadedDatasetList:
         if self.subflavors is not None:
@@ -94,6 +95,7 @@ class DatasetReference:
             worker_config=worker_config,
             subflavors=subflavors,
             shuffle_over_epochs_multiplier=new_shuffle_over_epochs_multiplier,
+            subset_ratio=subset_ratio,
             **kwargs,
         )
 
@@ -117,6 +119,7 @@ class MetadatasetBlender:
         worker_config: WorkerConfig,
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: Optional[int] = 1,
+        subset_ratio: Optional[tuple[float, float]] = None,
         **kwargs,
     ) -> LoadedDatasetList:
         sum_weight = sum(dataset.weight for dataset in self.datasets)
@@ -128,6 +131,7 @@ class MetadatasetBlender:
                 worker_config=worker_config,
                 subflavors=subflavors,
                 shuffle_over_epochs_multiplier=shuffle_over_epochs_multiplier,
+                subset_ratio=subset_ratio,
                 **kwargs,
             )
             if inner_result.blend_mode not in (
@@ -179,6 +183,7 @@ class Metadataset(DatasetLoaderInterface):
         worker_config: WorkerConfig,
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: Optional[int] = 1,
+        subset_ratio: Optional[tuple[float, float]] = None,
         **kwargs,
     ) -> LoadedDatasetList:
         return self._splits[split_part].get_datasets(
@@ -187,5 +192,6 @@ class Metadataset(DatasetLoaderInterface):
             worker_config=worker_config,
             subflavors=subflavors,
             shuffle_over_epochs_multiplier=shuffle_over_epochs_multiplier,
+            subset_ratio=subset_ratio,
             **kwargs,
         )
