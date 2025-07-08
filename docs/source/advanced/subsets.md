@@ -8,15 +8,13 @@ portion of the available samples. This is useful for rapid prototyping, ablation
 constructing disjoint train/validation/test splits that differ from the original dataset
 configuration.
 
-A subset is defined by a two-element `range` list. Each element can be either
+A subset is defined by a two-element `range` list consisting of `[start, end]` (where `start` is inclusive, `end` exclusive).
+Each element can be either
 
 * a **percentage** string (e.g. `"0%"`, `"12.5%"`, `"100%"`) – interpreted relative to the parent
   dataset size, or
 * an **absolute** integer – interpreted as a sample index. Absolute indices are only allowed for
   *leaf* datasets (`path` to a prepared dataset containing `.nv-meta`).
-
-Percentages are inclusive of the lower bound and exclusive of the upper bound. If the upper bound
-is omitted (`null`), the subset continues to the end of the dataset.
 
 ## Basic example
 
