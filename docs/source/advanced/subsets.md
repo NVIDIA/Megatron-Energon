@@ -9,7 +9,7 @@ This is useful for rapid prototyping, ablation studies, different training stage
 A subset is defined by a two-element `range` list consisting of `[start, end]` (where `start` is inclusive, `end` exclusive).
 Each element can be either
 
-* a **percentage** string (e.g. `"0%"`, `"12.5%"`, `"100%"`) – interpreted relative to the parent
+* a **percentage** string (e.g. `"0%"`, `"12.5%"`, `"100%"`) – interpreted relative to each inner
   dataset size, or
 * an **absolute** integer – interpreted as a sample index. Absolute indices are only allowed for
   *leaf* datasets (`path` to a prepared dataset containing `.nv-meta`).
@@ -25,13 +25,11 @@ __class__: MetadatasetV2
 splits:
   train:
     path: ./coyo
-    subset:
-      range: ["0%", "80%"]
+    subset: {range: ["0%", "80%"]}
   val:
     path: ./coyo
     split: train
-    subset:
-      range: ["80%", "100%"]
+    subset: {range: ["80%", "100%"]}
 ```
 
 ## Nested subsets and merging rules
