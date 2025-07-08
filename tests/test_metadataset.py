@@ -837,8 +837,7 @@ class TestDataset(unittest.TestCase):
                                                 "shuffle_over_epochs": 6,
                                                 "parallel_shard_iters": 2,
                                                 "max_samples_per_sequence": None,
-                                                "subset_ratio": None,
-                                                "subset_samples": None,
+                                                "subset": None,
                                                 "subflavors": {
                                                     "source": "metadataset.yaml",
                                                     "dataset.yaml": True,
@@ -932,8 +931,7 @@ class TestDataset(unittest.TestCase):
                                                 "shuffle_over_epochs": 2,
                                                 "parallel_shard_iters": 2,
                                                 "max_samples_per_sequence": None,
-                                                "subset_ratio": None,
-                                                "subset_samples": None,
+                                                "subset": None,
                                                 "subflavors": {
                                                     "source": "metadataset.yaml",
                                                     "dataset.yaml": True,
