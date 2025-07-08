@@ -3,10 +3,8 @@ SPDX-License-Identifier: BSD-3-Clause -->
 
 # Dataset Subsets
 
-Dataset subsets allow restricting a dataset (or parts of a metadataset hierarchy) to a specific
-portion of the available samples. This is useful for rapid prototyping, ablation studies, or
-constructing disjoint train/validation/test splits that differ from the original dataset
-configuration.
+Dataset subsets allow restricting a dataset (or parts of a metadataset hierarchy) to a specific portion of the available samples.
+This is useful for rapid prototyping, ablation studies, different training stages, or constructing disjoint train/validation/test splits that differ from the original dataset configuration.
 
 A subset is defined by a two-element `range` list consisting of `[start, end]` (where `start` is inclusive, `end` exclusive).
 Each element can be either
