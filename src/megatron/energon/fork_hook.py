@@ -4,48 +4,99 @@
 import functools
 import os
 import weakref
-from typing import Callable, Protocol, Type, TypeVar
-
-_after_in_child_fork_hooks = weakref.WeakKeyDictionary()
-_after_in_parent_fork_hooks = weakref.WeakKeyDictionary()
-_before_fork_hooks = weakref.WeakKeyDictionary()
+from dataclasses import dataclass
+from typing import Callable
 
 
-T = TypeVar("T", bound=Callable[[], None])
+def _cleanup(hooks, key, wr):
+    hooks.pop(key)
 
 
-def before_fork_hook(callable: Callable[[], None]):
+class WeakCallbacks:
     """
-    Run function before the fork of a worker process. The function must be persistent.
+    A class that manages weak references to callback functions.
     """
-    # Make sure, that callable is a method of object
-    assert getattr(callable, "__self__", None) is None, (
-        f"Callable must not be a method: {callable.__name__}"
-    )
-    # print(f"Adding before_fork_hook for {callable.__name__}\n", end="")
-    _before_fork_hooks[callable] = callable
+
+    # A dictionary of weak (or strong) references to functions.
+    _hooks: dict[int, Callable[[], Callable[..., None] | None]]
+
+    def __init__(self):
+        """
+        Initialize the registry.
+        """
+        self._hooks: dict[int, Callable[[], Callable[..., None] | None]] = {}
+
+    def add_hook(self, callable: Callable[..., None], make_persistent: bool = False) -> None:
+        """
+        Add a callback to the registry.
+
+        Args:
+            callable: The function to run before the fork of a worker process.
+            make_persistent: If True, the function will be stored as a strong reference, otherwise a weak reference is used.
+        """
+        if make_persistent:
+            # Not a weakref, but always return the callable.
+            self._hooks[id(callable)] = lambda: callable
+        elif getattr(callable, "__self__", None):
+            # Add a method reference to the hooks
+            key = id(callable.__self__)
+            self._hooks[key] = weakref.WeakMethod(
+                callable, functools.partial(_cleanup, self._hooks, key)
+            )
+        else:
+            # Add a function reference to the hooks
+            key = id(callable)
+            self._hooks[key] = weakref.ref(callable, functools.partial(_cleanup, self._hooks, key))
+
+    def run(self, *args, **kwargs) -> None:
+        """
+        Run all the callbacks in the registry, passing the given arguments.
+        """
+        for hook in self._hooks.values():
+            ref = hook()
+            if ref is not None:
+                ref(*args, **kwargs)
 
 
-def after_in_parent_fork_hook(callable: T):
-    """
-    Run function after the fork of a worker process. The function must be persistent.
-    """
-    # print(f"Adding after_in_child_fork_hook for {callable.__name__}\n", end="")
-    assert getattr(callable, "__self__", None) is None, (
-        f"Callable must not be a method: {callable.__name__}"
-    )
-    _after_in_parent_fork_hooks[callable] = callable
+_after_in_child_fork_hooks = WeakCallbacks()
+_after_in_parent_fork_hooks = WeakCallbacks()
+_before_fork_hooks = WeakCallbacks()
 
 
-def after_in_child_fork_hook(callable: T):
+def before_fork_hook(callable: Callable[[], None], make_persistent: bool = False):
     """
-    Run function after the fork of a worker process. The function must be persistent.
+    Run function before the fork of a worker process.
+    The function must be persistent (i.e. not a lambda) or an instance method.
+
+    Args:
+        callable: The function to run before the fork of a worker process.
+        make_persistent: If True, the function will be stored as a strong reference, otherwise a weak reference is used.
     """
-    # print(f"Adding after_in_child_fork_hook for {callable.__name__}\n", end="")
-    assert getattr(callable, "__self__", None) is None, (
-        f"Callable must not be a method: {callable.__name__}"
-    )
-    _after_in_child_fork_hooks[callable] = callable
+    _before_fork_hooks.add_hook(callable, make_persistent)
+
+
+def after_in_parent_fork_hook(callable: Callable[[], None], make_persistent: bool = False):
+    """
+    Run function after the fork of a worker process.
+    The function must be persistent (i.e. not a lambda) or an instance method.
+
+    Args:
+        callable: The function to run after the fork of a worker process.
+        make_persistent: If True, the function will be stored as a strong reference, otherwise a weak reference is used.
+    """
+    _after_in_parent_fork_hooks.add_hook(callable, make_persistent)
+
+
+def after_in_child_fork_hook(callable: Callable[[], None], make_persistent: bool = False):
+    """
+    Run function after the fork of a worker process.
+    The function must be persistent (i.e. not a lambda) or an instance method.
+
+    Args:
+        callable: The function to run after the fork of a worker process.
+        make_persistent: If True, the function will be stored as a strong reference, otherwise a weak reference is used.
+    """
+    _after_in_child_fork_hooks.add_hook(callable, make_persistent)
 
 
 class ForkMixin:
@@ -55,18 +106,21 @@ class ForkMixin:
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.__post_init__()
+
+    def __post_init__(self):
         if getattr(self.__before_fork__, "__func__", None) is not ForkMixin.__before_fork__:
-            _before_fork_hooks[self] = "__before_fork__"
+            before_fork_hook(self.__before_fork__)
         if (
             getattr(self.__after_in_child_fork__, "__func__", None)
             is not ForkMixin.__after_in_child_fork__
         ):
-            _after_in_child_fork_hooks[self] = "__after_in_child_fork__"
+            after_in_child_fork_hook(self.__after_in_child_fork__)
         if (
             getattr(self.__after_in_parent_fork__, "__func__", None)
             is not ForkMixin.__after_in_parent_fork__
         ):
-            _after_in_parent_fork_hooks[self] = "__after_in_parent_fork__"
+            after_in_parent_fork_hook(self.__after_in_parent_fork__)
 
     def __after_in_child_fork__(self):
         """
@@ -87,101 +141,50 @@ class ForkMixin:
         pass
 
 
-class ForkHookProtocol(Protocol):
+@dataclass
+class DataclassForkMixin:
     """
-    A protocol that defines a method that runs before and after the fork of a worker process.
+    A mixin that runs a method after the fork of a worker process.
     """
+
+    def __post_init__(self):
+        if (
+            getattr(self.__before_fork__, "__func__", None)
+            is not DataclassForkMixin.__before_fork__
+        ):
+            before_fork_hook(self.__before_fork__)
+        if (
+            getattr(self.__after_in_child_fork__, "__func__", None)
+            is not DataclassForkMixin.__after_in_child_fork__
+        ):
+            after_in_child_fork_hook(self.__after_in_child_fork__)
+        if (
+            getattr(self.__after_in_parent_fork__, "__func__", None)
+            is not DataclassForkMixin.__after_in_parent_fork__
+        ):
+            after_in_parent_fork_hook(self.__after_in_parent_fork__)
 
     def __after_in_child_fork__(self):
         """
         A method that runs after the fork in the child process.
         """
-        ...
+        pass
 
     def __after_in_parent_fork__(self):
         """
         A method that runs after the fork in the parent process.
         """
-        ...
+        pass
 
     def __before_fork__(self):
         """
         A method that runs before the fork of a worker process.
         """
-        ...
-
-
-T_CLS = TypeVar("T_CLS", bound=Type[ForkHookProtocol])
-
-
-def fork_hook_class(cls: T_CLS) -> T_CLS:
-    """
-    A decorator that runs a function after the fork of a worker process.
-    """
-    if hasattr(cls, "__init__"):
-        orig_init = cls.__init__
-
-        @functools.wraps(orig_init)
-        def __init__(self, *args, **kwargs):
-            _after_in_child_fork_hooks[self] = "__after_in_child_fork__"
-            _after_in_parent_fork_hooks[self] = "__after_in_parent_fork__"
-            _before_fork_hooks[self] = "__before_fork__"
-            orig_init(self, *args, **kwargs)
-
-        cls.__init__ = __init__
-    else:
-
-        def __init__(self, *args, **kwargs):
-            _after_in_child_fork_hooks[cls] = "__after_in_child_fork__"
-            _after_in_parent_fork_hooks[cls] = "__after_in_parent_fork__"
-            _before_fork_hooks[cls] = "__before_fork__"
-            cls(*args, **kwargs)
-
-        cls.__init__ = __init__
-    return cls
-
-
-def _run_before_fork_hooks():
-    """
-    Run all the functions that were registered with the before_fork_hook decorator.
-    """
-    # print(f"Running before_fork_hooks for pid={os.getpid()}")
-    for obj, hook in _before_fork_hooks.items():
-        # print(f"Running before_fork_hook for {hook}\n", end="")
-        if callable(hook):
-            hook()
-        else:
-            getattr(obj, hook)()
-
-
-def _run_after_in_child_fork_hooks():
-    """
-    Run all the functions that were registered with the after_in_child_fork_hook decorator.
-    """
-    # print(f"Running after_in_child_fork_hooks for pid={os.getpid()}")
-    for obj, hook in _after_in_child_fork_hooks.items():
-        # print(f"Running after_in_child_fork_hook for {hook}\n", end="")
-        if callable(hook):
-            hook()
-        else:
-            getattr(obj, hook)()
-
-
-def _run_after_in_parent_fork_hooks():
-    """
-    Run all the functions that were registered with the after_in_parent_fork_hook decorator.
-    """
-    # print(f"Running after_in_parent_fork_hooks for pid={os.getpid()}")
-    for obj, hook in _after_in_parent_fork_hooks.items():
-        # print(f"Running after_in_parent_fork_hook for {hook}\n", end="")
-        if callable(hook):
-            hook()
-        else:
-            getattr(obj, hook)()
+        pass
 
 
 os.register_at_fork(
-    before=_run_before_fork_hooks,
-    after_in_child=_run_after_in_child_fork_hooks,
-    after_in_parent=_run_after_in_parent_fork_hooks,
+    before=_before_fork_hooks.run,
+    after_in_child=_after_in_child_fork_hooks.run,
+    after_in_parent=_after_in_parent_fork_hooks.run,
 )
