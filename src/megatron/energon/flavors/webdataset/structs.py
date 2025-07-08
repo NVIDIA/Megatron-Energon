@@ -58,6 +58,24 @@ class FilteredSample(TypedDict):
     __sources__: tuple[SourceInfo, ...]
 
 
+@edataclass
+class DatasetSubset:
+    """A subset of a dataset.
+    The range is a tuple of two values, where the first value is the start of the subset and the second value is the end of the subset.
+    The range can be either a percentage or an absolute sample index value.
+    The absolute range can only be used for leaf datasets.
+    """
+
+    range: tuple[float, float] | None = None
+    absolute_range: tuple[int, int | None] | None = None
+
+    def config(self) -> dict:
+        return {
+            "range": self.range,
+            "absolute_range": self.absolute_range,
+        }
+
+
 def reraise_exception(
     exc: Exception, key: Optional[str], sources: Optional[list[SourceInfo]] = None
 ) -> None:
