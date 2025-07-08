@@ -33,6 +33,7 @@ splits:
       range: ["0%", "80%"]
   val:
     path: ./coyo
+    split: train
     subset:
       range: ["80%", "100%"]
 ```
