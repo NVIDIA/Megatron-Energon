@@ -8,6 +8,7 @@ from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
 from megatron.energon.errors import warn_deprecated
 from megatron.energon.flavors.webdataset.metadata import check_dataset_info_present
+from megatron.energon.flavors.webdataset.structs import DatasetSubset
 from megatron.energon.metadataset.dataset_loader import DatasetLoader
 from megatron.energon.metadataset.loader_interface import (
     DatasetBlendMode,
@@ -70,7 +71,7 @@ class DatasetReference:
         worker_config: WorkerConfig,
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: Optional[int] = 1,
-        subset_ratio: Optional[tuple[float, float]] = None,
+        subset: Optional[DatasetSubset] = None,
         **kwargs,
     ) -> LoadedDatasetList:
         if self.subflavors is not None:
@@ -95,7 +96,7 @@ class DatasetReference:
             worker_config=worker_config,
             subflavors=subflavors,
             shuffle_over_epochs_multiplier=new_shuffle_over_epochs_multiplier,
-            subset_ratio=subset_ratio,
+            subset=subset,
             **kwargs,
         )
 
@@ -119,7 +120,7 @@ class MetadatasetBlender:
         worker_config: WorkerConfig,
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: Optional[int] = 1,
-        subset_ratio: Optional[tuple[float, float]] = None,
+        subset: Optional[DatasetSubset] = None,
         **kwargs,
     ) -> LoadedDatasetList:
         sum_weight = sum(dataset.weight for dataset in self.datasets)
@@ -131,7 +132,7 @@ class MetadatasetBlender:
                 worker_config=worker_config,
                 subflavors=subflavors,
                 shuffle_over_epochs_multiplier=shuffle_over_epochs_multiplier,
-                subset_ratio=subset_ratio,
+                subset=subset,
                 **kwargs,
             )
             if inner_result.blend_mode not in (
@@ -183,7 +184,7 @@ class Metadataset(DatasetLoaderInterface):
         worker_config: WorkerConfig,
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: Optional[int] = 1,
-        subset_ratio: Optional[tuple[float, float]] = None,
+        subset: Optional[DatasetSubset] = None,
         **kwargs,
     ) -> LoadedDatasetList:
         return self._splits[split_part].get_datasets(
@@ -192,6 +193,6 @@ class Metadataset(DatasetLoaderInterface):
             worker_config=worker_config,
             subflavors=subflavors,
             shuffle_over_epochs_multiplier=shuffle_over_epochs_multiplier,
-            subset_ratio=subset_ratio,
+            subset=subset,
             **kwargs,
         )

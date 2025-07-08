@@ -1208,7 +1208,7 @@ class TestDataset(unittest.TestCase):
 
         mock_watchdog_trigger.assert_called()
 
-    def test_dataset_with_ratio(self):
+    def test_dataset_with_subset_ratio(self):
         worker_config = WorkerConfig(
             rank=0,
             world_size=1,
@@ -1226,7 +1226,7 @@ class TestDataset(unittest.TestCase):
                         "  train:",
                         # 20% of the dataset will be from ds1, 80% from ds2
                         # I.e. sample range: [0.2*55, 0.8*55] = [11, 44]
-                        "    subset_ratio: [0.2, 0.8]",
+                        "    subset: {range: [20%, 80%]}",
                         "    blend_epochized:",
                         "      - path: ds1",
                         "        subflavors:",
@@ -1279,15 +1279,15 @@ class TestDataset(unittest.TestCase):
                         "  train:",
                         # take [10, 30] from ds1, [20, 40] from ds2 and then only [20%, 80%]
                         # I.e. sample range: [14, 26], 2 * [124, 136]
-                        "    subset_ratio: [20%, 80%]",
+                        "    subset: {range: [20%, 80%]}",
                         "    blend_epochized:",
                         "      - path: ds1",
-                        "        subset_samples: [10, 30]",
+                        "        subset: {range: [10, 30]}",
                         "        subflavors:",
                         "          source: ds1",
                         "          number: 43",
                         "      - repetitions: 2",
-                        "        subset_samples: [20, 40]",
+                        "        subset: {range: [20, 40]}",
                         "        path: ds2",
                         "        subflavors:",
                         "          source: ds2",
@@ -1331,11 +1331,11 @@ class TestDataset(unittest.TestCase):
                         "__class__: MetadatasetV2",
                         "splits:",
                         "  train:",
-                        "    subset_ratio: [0, 50%]",
+                        "    subset: {range: [0%, 50%]}",
                         "    blend_epochized:",
                         "      - path: ds3",
                         # take [30, 50] from ds3, then first 50%, resulting in samples [230, 240]
-                        "        subset_samples: [30, 50]",
+                        "        subset: {range: [30, 50]}",
                         "        subflavors:",
                         "          source: ds3",
                         "          number: 45",
@@ -1344,7 +1344,7 @@ class TestDataset(unittest.TestCase):
                         # Applying subset ratio 25%-75%: [17, 23], 2*[127, 133], total=3*6=18
                         # Applying outer 50%: [17, 20], 2*[127, 130], total=3*3=9
                         # Applying repetition: 2*[17, 20], 4*[127, 130], total=2*9=18
-                        "        subset_ratio: [0.25, 75%]",
+                        "        subset: {range: [25%, 75%]}",
                         "        path: metadataset_ratio2.yaml",
                     ]
                 )
