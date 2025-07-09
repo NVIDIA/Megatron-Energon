@@ -42,6 +42,7 @@ class QueueProtocol(Protocol[TSample]):
     def put(self, item: TSample, /) -> None: ...
 
 
+
 class Future(Protocol[R]):
     def get(self) -> R: ...
 
@@ -123,6 +124,7 @@ class DataLoaderWorker(Generic[TSample]):
             assert initial_state["__class__"] == "DataLoaderWorker", "Worker type mismatch"
             self._sample_index.restore_state(initial_state["_sample_index"])
             self.dataset.restore_state(initial_state["datasets"][0])
+            # TODO: exhausted
 
     def new_iter(self) -> None:
         self._dataset_iter = iter(self.dataset)
@@ -147,11 +149,12 @@ class DataLoaderWorker(Generic[TSample]):
             __class__="DataLoaderWorker",
             rng=SystemRng.save_state(),
             dataset=self.dataset.save_state(),
+            exhausted=self.exhausted,
             _sample_index=self._sample_index.save_state(),
         )
 
 
-class _DataLoaderAsyncWorker(DataLoaderWorker[TSample]):
+class _DataLoaderAsynchronousWorker(DataLoaderWorker[TSample]):
     """
     Extension of the `DataLoaderWorker`, which implements commands via a command and results queue.
 
@@ -187,15 +190,14 @@ class _DataLoaderAsyncWorker(DataLoaderWorker[TSample]):
     @edataclass
     class WorkerResult:
         """Internal class for communicating a result from the worker via the result queue."""
-
         future_id: int
         result: Any = None
         exception: Exception | None = None
+    
 
     @edataclass
     class WorkerCommand:
         """Internal class for communicating a command to the worker via the command queue."""
-
         cmd: str
         args: tuple[Any, ...]
         kwargs: dict[str, Any]
@@ -203,21 +205,20 @@ class _DataLoaderAsyncWorker(DataLoaderWorker[TSample]):
 
     class FutureImpl(Future[Any]):
         """Class for returning a future result from the worker.."""
-
-        _outerself: "_DataLoaderAsyncWorker"
+        _worker: "_DataLoaderAsynchronousWorker"
         _future_id: int
         _result: Any
         _exception: Exception
 
-        def __init__(self, outerself: "_DataLoaderAsyncWorker", future_id: int):
-            self._outerself = outerself
+        def __init__(self, worker: "_DataLoaderAsynchronousWorker", future_id: int):
+            self._worker = worker
             self._future_id = future_id
 
         def get(self) -> Any:
+            if not hasattr(self, "_result") and not hasattr(self, "_exception"):
+                self._worker._wait_for_worker_result(self._future_id)
             if hasattr(self, "_exception"):
                 raise self._exception
-            if not hasattr(self, "_result"):
-                self._outerself._wait_for_worker_result(self._future_id)
             return self._result
 
         def _set_result(self, result: Any) -> None:
@@ -240,7 +241,7 @@ class _DataLoaderAsyncWorker(DataLoaderWorker[TSample]):
         return cast(Callable[P, R], wrapper)
 
     @staticmethod
-    def worker_call_async(fn: Callable[P, R]) -> Callable[P, Future[R]]:
+    def worker_call_future(fn: Callable[P, R]) -> Callable[P, Future[R]]:
         """Make the function be called in the worker process via the command and result queues.
         The function must be a method of the `DataLoaderWorker` class."""
 
@@ -276,18 +277,13 @@ class _DataLoaderAsyncWorker(DataLoaderWorker[TSample]):
         return self._futures[future_id]
 
     def _worker_run(
-        self,
-        worker_id: int,
-        cmd_queue: QueueProtocol[WorkerCommand],
-        result_queue: QueueProtocol[WorkerResult],
-        seed: int,
+        self, cmd_queue: QueueProtocol[WorkerCommand], result_queue: QueueProtocol[WorkerResult], seed: int
     ) -> None:
         SystemRng.seed(seed)
-        self._worker_id = worker_id
         import torch.utils.data._utils
 
         torch.utils.data._utils.worker._worker_info = torch.utils.data._utils.worker.WorkerInfo(
-            id=worker_id,
+            id=self._rank_worker_id,
             num_workers=self.worker_config.num_workers,
             seed=seed,
             dataset=self.dataset,
@@ -299,10 +295,11 @@ class _DataLoaderAsyncWorker(DataLoaderWorker[TSample]):
             try:
                 fn = getattr(self, cmd.cmd)
                 result = getattr(fn, "_orig")(self, *cmd.args, **cmd.kwargs)
-                result_queue.put(self.WorkerResult(future_id=cmd.future_id, result=result))
-                del result
             except Exception as e:
                 result_queue.put(self.WorkerResult(future_id=cmd.future_id, exception=e))
+            else:
+                result_queue.put(self.WorkerResult(future_id=cmd.future_id, result=result))
+                del result
             if cmd.cmd == "_shutdown_worker":
                 break
 
@@ -325,8 +322,11 @@ class _DataLoaderAsyncWorker(DataLoaderWorker[TSample]):
         super().new_iter()
 
     @override
-    @worker_call_async
+    @worker_call_future
     def prefetch_next(self) -> TSample:
+        # The super class implementation already returns a resolved future (to be interface compatible),
+        # so immediately resolve the future to the result (get returns immediately).
+        # The worker_call_future will wrap the result again in a future implicitly.
         return super().prefetch_next().get()
 
     @override
@@ -335,7 +335,7 @@ class _DataLoaderAsyncWorker(DataLoaderWorker[TSample]):
         return super().save_state()
 
 
-class ForkDataLoaderWorker(_DataLoaderAsyncWorker[TSample], Generic[TSample]):
+class ForkDataLoaderWorker(_DataLoaderAsynchronousWorker[TSample], Generic[TSample]):
     """
     Implements the `DataLoaderWorker` interface using processes.
     """
@@ -364,29 +364,29 @@ class ForkDataLoaderWorker(_DataLoaderAsyncWorker[TSample], Generic[TSample]):
     def _check_parent_process(self, evt_exit: threading.Event) -> None:
         """Check if the parent process is alive. If it is not, exit the worker process."""
         parent_proc = multiprocessing.parent_process()
+        parent_pid = os.getppid()
         if parent_proc is None:
             print("No parent process, exiting", file=sys.stderr)
             os._exit(-1)
         while not evt_exit.wait(1):
-            if parent_proc.exitcode is not None:
+            if parent_proc.exitcode is not None or os.getppid() != parent_pid:
                 print("Parent process died, exiting", file=sys.stderr)
                 os._exit(-1)
 
     def _worker_run(
         self,
-        worker_id: int,
         cmd_queue: multiprocessing.Queue,
         result_queue: multiprocessing.Queue,
         seed: int,
     ) -> None:
-        gc_init_worker(worker_id)
+        gc_init_worker(self._rank_worker_id)
         worker_exit_evt = threading.Event()
         parent_check_thread = threading.Thread(
             target=self._check_parent_process, args=(worker_exit_evt,), daemon=True
         )
         parent_check_thread.start()
         try:
-            super()._worker_run(worker_id, cmd_queue, result_queue, seed)
+            super()._worker_run(cmd_queue, result_queue, seed)
         finally:
             worker_exit_evt.set()
             parent_check_thread.join()
@@ -397,9 +397,10 @@ class ForkDataLoaderWorker(_DataLoaderAsyncWorker[TSample], Generic[TSample]):
 
     @override
     def start(self) -> None:
+        # TODO: seed per worker
         self._process = multiprocessing.Process(
             target=self._worker_run,
-            args=(self._rank_worker_id, self._cmd_queue, self._result_queue),
+            args=(self._cmd_queue, self._result_queue, seed),
         )
         self._process.start()
 
@@ -428,11 +429,10 @@ class ForkDataLoaderWorker(_DataLoaderAsyncWorker[TSample], Generic[TSample]):
         assert self._process.is_alive(), "Worker died"
 
 
-class ThreadDataLoaderWorker(_DataLoaderAsyncWorker[TSample], Generic[TSample]):
+class ThreadDataLoaderWorker(_DataLoaderAsynchronousWorker[TSample], Generic[TSample]):
     """
     Implements the `DataLoaderWorker` interface using threads.
     """
-
     _thread: threading.Thread | None = None
 
     def __init__(
@@ -452,11 +452,11 @@ class ThreadDataLoaderWorker(_DataLoaderAsyncWorker[TSample], Generic[TSample]):
         )
 
     def _worker_run(
-        self, worker_id: int, cmd_queue: queue.Queue, result_queue: queue.Queue, seed: int
+        self, cmd_queue: queue.Queue, result_queue: queue.Queue, seed: int
     ) -> None:
         # TODO: Implement init_thread which should hook all randomness such that it's thread local.
         SystemRng.init_thread()
-        super()._worker_run(worker_id, cmd_queue, result_queue, seed)
+        super()._worker_run(cmd_queue, result_queue, seed)
 
     @override
     def start(self) -> None:
@@ -508,20 +508,26 @@ class DataLoader(Generic[TSample]):
     def __init__(
         self,
         dataset: SavableDataset,
-        worker_config: WorkerConfig,
         prefetch_factor: int = 2,
         worker_type: WorkerType = ForkDataLoaderWorker,
         cache_pool: CachePool = NoCachePool(),
     ):
-        if self._worker_config.num_workers == 0 and worker_type == ForkDataLoaderWorker:
+        if dataset.worker_config.num_workers == 0 and worker_type == ForkDataLoaderWorker:
             worker_type = DataLoaderWorker
         self._dataset = dataset
-        self._worker_config = worker_config
+        self._worker_config = dataset.worker_config
         self._prefetch_factor = prefetch_factor
         self._worker_type = worker_type
         self._cache_pool = cache_pool
         self._prefetching_samples = [[] for _ in range(self._worker_config.num_workers)]
         self._exhausted_workers = [False] * self._worker_config.num_workers
+
+        if self._worker_config.num_workers == 0:
+            assert prefetch_factor == 1, "prefetch_factor must be 1 for num_workers == 0"
+        else:
+            assert prefetch_factor > 0, "prefetch_factor must be > 0 for num_workers > 0"
+
+        # TODO: Seed per worker from SavableDataLoader
 
         self._spawning_process = os.getpid()
 
@@ -537,8 +543,10 @@ class DataLoader(Generic[TSample]):
                 worker.new_iter()
 
     def _epoch_iter(self) -> Generator[TSample, None, None]:
+        """Iterate over the dataset for one epoch (i.e. all workers StopIteration).
+        One epoch may also be infinite (if looping the dataset)."""
         if self._workers is None:
-            self.start()
+            self._start()
             for worker, exhausted in zip(self._workers, self._exhausted_workers):
                 if not exhausted:
                     worker.new_iter()
@@ -573,20 +581,20 @@ class DataLoader(Generic[TSample]):
             self._next_worker_id = (worker_idx + 1) % self._worker_config.num_workers
             if self._exhausted_workers[worker_idx]:
                 continue
+            # Pop the first sample future from the prefetching samples.
+            sample_future = self._prefetching_samples[worker_idx].pop(0)
             # Prefetch samples from the worker.
             while len(self._prefetching_samples[worker_idx]) < self._prefetch_factor:
                 # Add a new sample future to the prefetching samples if the worker has not prefetched enough samples.
                 self._prefetching_samples[worker_idx].append(worker.prefetch_next())
-            # Pop the first sample future from the prefetching samples.
-            sample_future = self._prefetching_samples[worker_idx].pop(0)
             try:
                 # Get the sample from the sample future (may wait for the sample to be ready).
                 sample = sample_future.get()
-            except Exception as e:
-                # If the sample future raises an exception, remove the worker from the list.
+            except StopIteration:
+                # If the sample future raises StopIteration, remove the worker from the list.
                 self._prefetching_samples[worker_idx] = []
                 self._exhausted_workers[worker_idx] = True
-                raise e
+                continue
             else:
                 # Yield the sample.
                 yield sample
@@ -621,7 +629,7 @@ class DataLoader(Generic[TSample]):
 
     def save_state(self) -> FlexState:
         prefetched_samples_keys = [
-            [get_sample_restore_key(sample.get()) for sample in prefetching_sample]
+            [get_sample_restore_key(sample_fut.get()) for sample_fut in prefetching_sample]
             for prefetching_sample in self._prefetching_samples
         ]
         if self._workers is None:
@@ -638,7 +646,7 @@ class DataLoader(Generic[TSample]):
             micro_batch_size=self._get_batch_size(),
         )
 
-    def start(self, initial_state: FlexState | None = None) -> None:
+    def _start(self, initial_state: FlexState | None = None) -> None:
         assert self._workers is None and self._current_epoch_iter is None, (
             "DataLoader already started"
         )
@@ -669,6 +677,7 @@ class DataLoader(Generic[TSample]):
         if initial_state is not None:
             self._prefetching_samples = [
                 [
+                    # TODO: Use a callback future
                     DoneFuture(self.restore_sample(sample_key))
                     for sample_key in prefetched_samples_keys
                 ]
