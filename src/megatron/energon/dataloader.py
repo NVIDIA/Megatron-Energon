@@ -30,17 +30,16 @@ from megatron.energon.wrappers.base import BaseWrapperDataset, SampleIndex, get_
 from megatron.energon.wrappers.batch_dataset import BatchDataset
 from megatron.energon.wrappers.gc_dataset import gc_init_worker
 
-
-class QueueProtocol(Protocol):
-    def get(self, /) -> Any: ...
-
-    def put(self, item: Any, /) -> None: ...
-
-
 P = ParamSpec("P")
 R = TypeVar("R", covariant=True)
 TSelf = TypeVar("TSelf", bound="DataLoaderWorker")
 TSample = TypeVar("TSample")
+
+
+class QueueProtocol(Protocol[TSample]):
+    def get(self, /) -> TSample: ...
+
+    def put(self, item: TSample, /) -> None: ...
 
 
 class Future(Protocol[R]):
@@ -48,11 +47,23 @@ class Future(Protocol[R]):
 
 
 class DoneFuture(Future[TSample]):
+    """Future that is already done."""
+
     def __init__(self, result: TSample):
         self._result = result
 
     def get(self) -> TSample:
         return self._result
+
+
+class ExceptionFuture(Future[Any]):
+    """Future that raises an exception."""
+
+    def __init__(self, exception: Exception):
+        self._exception = exception
+
+    def get(self) -> Any:
+        raise self._exception
 
 
 class DataLoaderWorker(Generic[TSample]):
@@ -63,9 +74,18 @@ class DataLoaderWorker(Generic[TSample]):
     The async extension implements the main commands via a command and results queue.
     """
 
+    dataset: SavableDataset[TSample]
+    worker_config: WorkerConfig
+
+    _rank_worker_id: int
+    _global_worker_id: int
+    _cache_pool: CachePool
+
+    exhausted: bool = True
+
     def __init__(
         self,
-        dataset: SavableDataset,
+        dataset: SavableDataset[TSample],
         worker_config: WorkerConfig,
         rank_worker_id: int,
         cache_pool: CachePool,
@@ -106,6 +126,7 @@ class DataLoaderWorker(Generic[TSample]):
 
     def new_iter(self) -> None:
         self._dataset_iter = iter(self.dataset)
+        self.exhausted = False
 
     def prefetch_next(self) -> Future[TSample]:
         assert self._dataset_iter is not None, "start_iter must be called before prefetch_next"
@@ -114,6 +135,9 @@ class DataLoaderWorker(Generic[TSample]):
             try:
                 next_sample = next(self._dataset_iter)
                 add_sample_restore_key(next_sample, self._global_worker_id, sample_idx, src=self)
+            except StopIteration as e:
+                self.exhausted = True
+                return ExceptionFuture(e)
             finally:
                 self.worker_config.worker_deactivate()
         return DoneFuture(next_sample)
@@ -136,13 +160,18 @@ class _DataLoaderAsyncWorker(DataLoaderWorker[TSample]):
     - :class:`ThreadDataLoaderWorker` - A worker that uses threads to execute the commands.
     """
 
+    _cmd_queue: QueueProtocol["WorkerCommand"]
+    _result_queue: QueueProtocol["WorkerResult"]
+    _next_future_id: int
+    _futures: dict[int, "FutureImpl"]
+
     def __init__(
         self,
         dataset: SavableDataset,
         worker_config: WorkerConfig,
         rank_worker_id: int,
-        cmd_queue: QueueProtocol,
-        result_queue: QueueProtocol,
+        cmd_queue: QueueProtocol["WorkerCommand"],
+        result_queue: QueueProtocol["WorkerResult"],
         cache_pool: CachePool,
     ):
         super().__init__(dataset, worker_config, rank_worker_id, cache_pool)
@@ -155,31 +184,47 @@ class _DataLoaderAsyncWorker(DataLoaderWorker[TSample]):
     # ------------------------------------------------------------------------------------------------
     # Section: Remote call implementation
 
-    class FutureImpl(Future):
+    @edataclass
+    class WorkerResult:
+        """Internal class for communicating a result from the worker via the result queue."""
+
+        future_id: int
+        result: Any = None
+        exception: Exception | None = None
+
+    @edataclass
+    class WorkerCommand:
+        """Internal class for communicating a command to the worker via the command queue."""
+
+        cmd: str
+        args: tuple[Any, ...]
+        kwargs: dict[str, Any]
+        future_id: int
+
+    class FutureImpl(Future[Any]):
+        """Class for returning a future result from the worker.."""
+
         _outerself: "_DataLoaderAsyncWorker"
         _future_id: int
         _result: Any
+        _exception: Exception
 
         def __init__(self, outerself: "_DataLoaderAsyncWorker", future_id: int):
             self._outerself = outerself
             self._future_id = future_id
 
         def get(self) -> Any:
+            if hasattr(self, "_exception"):
+                raise self._exception
             if not hasattr(self, "_result"):
                 self._outerself._wait_for_worker_result(self._future_id)
-            if isinstance(self._result, Exception):
-                raise self._result
             return self._result
 
         def _set_result(self, result: Any) -> None:
             self._result = result
 
-    @edataclass
-    class WorkerCommand:
-        cmd: str
-        args: tuple[Any, ...]
-        kwargs: dict[str, Any]
-        future_id: int
+        def _set_exception(self, exception: Exception) -> None:
+            self._exception = exception
 
     @staticmethod
     def worker_call(fn: Callable[P, R]) -> Callable[P, R]:
@@ -208,11 +253,16 @@ class _DataLoaderAsyncWorker(DataLoaderWorker[TSample]):
 
     def _wait_for_worker_result(self, future_id: int) -> None:
         while True:
-            future_id, res = self._result_queue.get()
-            fut = self._futures.pop(future_id)
-            fut._set_result(res)
-            if future_id == future_id:
+            res = self._result_queue.get()
+            fut = self._futures.pop(res.future_id)
+            if res.exception is not None:
+                fut._set_exception(res.exception)
+            else:
+                fut._set_result(res.result)
+            if res.future_id == future_id:
                 return
+            else:
+                continue
 
     def _worker_call(self, fn: str, *args: Any, **kwargs: Any) -> Future[Any]:
         self._assert_running()
@@ -226,7 +276,11 @@ class _DataLoaderAsyncWorker(DataLoaderWorker[TSample]):
         return self._futures[future_id]
 
     def _worker_run(
-        self, worker_id: int, cmd_queue: QueueProtocol, result_queue: QueueProtocol, seed: int
+        self,
+        worker_id: int,
+        cmd_queue: QueueProtocol[WorkerCommand],
+        result_queue: QueueProtocol[WorkerResult],
+        seed: int,
     ) -> None:
         SystemRng.seed(seed)
         self._worker_id = worker_id
@@ -241,19 +295,24 @@ class _DataLoaderAsyncWorker(DataLoaderWorker[TSample]):
         self._global_worker_id = self.worker_config.global_worker_id()
         self.worker_config.assert_worker()
         while True:
-            cmd: _DataLoaderAsyncWorker.WorkerCommand | None = cmd_queue.get()
-            if cmd is None:
-                break
+            cmd = cmd_queue.get()
             try:
                 fn = getattr(self, cmd.cmd)
                 result = getattr(fn, "_orig")(self, *cmd.args, **cmd.kwargs)
-                result_queue.put((cmd.future_id, result))
+                result_queue.put(self.WorkerResult(future_id=cmd.future_id, result=result))
                 del result
             except Exception as e:
-                result_queue.put((cmd.future_id, e))
+                result_queue.put(self.WorkerResult(future_id=cmd.future_id, exception=e))
+            if cmd.cmd == "_shutdown_worker":
+                break
 
     # ------------------------------------------------------------------------------------------------
     # Section: Worker methods - now calling to workers via queues.
+
+    @worker_call
+    def _shutdown_worker(self) -> None:
+        """Shutdown the worker. The actual shutdown is handled in the _worker_run method."""
+        pass
 
     @override
     @worker_call
@@ -277,9 +336,11 @@ class _DataLoaderAsyncWorker(DataLoaderWorker[TSample]):
 
 
 class ForkDataLoaderWorker(_DataLoaderAsyncWorker[TSample], Generic[TSample]):
-    _cmd_queue: multiprocessing.Queue
-    _result_queue: multiprocessing.Queue
-    _process: multiprocessing.Process | None
+    """
+    Implements the `DataLoaderWorker` interface using processes.
+    """
+
+    _process: multiprocessing.Process | None = None
 
     _spawning_process: int
 
@@ -351,7 +412,7 @@ class ForkDataLoaderWorker(_DataLoaderAsyncWorker[TSample], Generic[TSample]):
             )
             return
         if self._process is not None:
-            self._cmd_queue.put(None)
+            self._shutdown_worker()
             self._process.join()
             self._cmd_queue.cancel_join_thread()
             self._cmd_queue.close()
@@ -368,6 +429,12 @@ class ForkDataLoaderWorker(_DataLoaderAsyncWorker[TSample], Generic[TSample]):
 
 
 class ThreadDataLoaderWorker(_DataLoaderAsyncWorker[TSample], Generic[TSample]):
+    """
+    Implements the `DataLoaderWorker` interface using threads.
+    """
+
+    _thread: threading.Thread | None = None
+
     def __init__(
         self,
         dataset: SavableDataset,
@@ -402,7 +469,7 @@ class ThreadDataLoaderWorker(_DataLoaderAsyncWorker[TSample], Generic[TSample]):
     @override
     def shutdown(self) -> None:
         if self._thread is not None:
-            self._cmd_queue.put(None)
+            self._shutdown_worker()
             self._thread.join()
             self._thread = None
 
@@ -457,8 +524,6 @@ class DataLoader(Generic[TSample]):
         self._exhausted_workers = [False] * self._worker_config.num_workers
 
         self._spawning_process = os.getpid()
-
-        self._restore_state = None
 
     def shutdown(self) -> None:
         if self._workers is not None:
