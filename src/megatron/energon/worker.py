@@ -128,6 +128,11 @@ class WorkerConfig:
             WorkerConfig._sample_index_stack[0] * max(self.num_workers, 1) + self.rank_worker_id()
         )
 
+    @property
+    def safe_num_workers(self) -> int:
+        """Returns the number of workers, but at least 1."""
+        return max(self.num_workers, 1)
+
     def global_rank(self) -> int:
         """Returns the global rank of this worker config but as a global rank, not
         as a rank within the data parallel group."""

@@ -2,11 +2,14 @@
 # SPDX-License-Identifier: BSD-3-Clause
 import functools
 import multiprocessing
+import multiprocessing.managers
 import os
 import queue
 import sys
 import threading
+import traceback
 import warnings
+from abc import abstractmethod
 from typing import (
     Any,
     Callable,
@@ -24,7 +27,7 @@ from megatron.energon.flavors.base_dataset import SavableDataset, add_sample_res
 from megatron.energon.rng import SystemRng
 from megatron.energon.state import FlexState
 from megatron.energon.worker import WorkerConfig
-from megatron.energon.wrappers.base import BaseWrapperDataset, SampleIndex, get_sample_restore_key
+from megatron.energon.wrappers.base import BaseWrapperDataset, get_sample_restore_key
 from megatron.energon.wrappers.batch_dataset import BatchDataset
 from megatron.energon.wrappers.gc_dataset import GC_DEFAULT_EVERY_N_ITER, GcDataset, gc_init_worker
 from megatron.energon.wrappers.watchdog_dataset import WatchdogDataset
@@ -116,7 +119,7 @@ class DataLoaderWorker(Generic[TSample]):
     _global_worker_id: int
     _seed: int
     _cache_pool: CachePool | None
-    _sample_index: SampleIndex
+    _sample_index: int = 0
     _exhausted: bool = True
 
     def __init__(
@@ -151,9 +154,12 @@ class DataLoaderWorker(Generic[TSample]):
         """
         pass
 
-    def shutdown(self) -> None:
+    def shutdown(self, in_del: bool = False) -> None:
         """
         Shutdown the worker.
+
+        Args:
+            in_del: If True, the worker is being deleted.
         """
         pass
 
@@ -169,6 +175,9 @@ class DataLoaderWorker(Generic[TSample]):
         """
         assert self.running(), "Worker must be running"
 
+    def __del__(self) -> None:
+        self.shutdown(in_del=True)
+
     # ------------------------------------------------------------------------------------------------
     # Section: Worker methods
 
@@ -181,20 +190,25 @@ class DataLoaderWorker(Generic[TSample]):
             state: The state to restore the worker from or None for using the initial state.
         """
         # This is called in the worker context (process/thread).
-        self._sample_index = SampleIndex(worker_config=self.worker_config, src=self)
         assert self._global_worker_id == self.worker_config.global_worker_id(), (
             "Global worker ID mismatch"
         )
         assert self._seed == self.worker_config.worker_seed(self._rank_worker_id), "Seed mismatch"
+        print(f"dataset_init {state=}\n", end="")
         if state is None:
+            self._sample_index = 0
             self.dataset.reset_state_deep()
+            print("dataset_init reset_state_deep\n", end="")
             self.new_iter()
+            print("dataset_init new_iter\n", end="")
         else:
-            assert state["__class__"] == "DataLoaderWorker", "Worker type mismatch"
-            self._sample_index.restore_state(state["_sample_index"])
-            self.dataset.restore_state(state["datasets"][0])
+            assert state["__class__"] == "DataLoaderWorker", "state type mismatch"
+            self._sample_index = state["sample_index"]
+            SystemRng.restore_state(state["rng"])
+            self.dataset.restore_state(state["dataset"])
             if not state["exhausted"]:
                 self.new_iter()
+            assert self._exhausted == state["exhausted"], "Exhausted state mismatch"
 
     def new_iter(self) -> None:
         """
@@ -204,8 +218,10 @@ class DataLoaderWorker(Generic[TSample]):
         Updates the exhausted flag to False.
         """
         # This is called in the worker context (process/thread).
+        print("new_iter\n", end="")
         self._dataset_iter = iter(self.dataset)
         self._exhausted = False
+        print("new_iter done\n", end="")
 
     def prefetch_next(self) -> Future[TSample]:
         """
@@ -217,16 +233,24 @@ class DataLoaderWorker(Generic[TSample]):
         """
         # This is called in the worker context (process/thread).
         assert self._dataset_iter is not None, "start_iter must be called before prefetch_next"
-        with self._sample_index.ctx() as sample_idx:
-            self.worker_config.worker_activate(sample_idx, cache_pool=self._cache_pool)
+        if self._exhausted:
             try:
-                next_sample = next(self._dataset_iter)
-                add_sample_restore_key(next_sample, self._global_worker_id, sample_idx, src=self)
+                raise StopIteration()
             except StopIteration as e:
-                self._exhausted = True
                 return ExceptionFuture(e)
-            finally:
-                self.worker_config.worker_deactivate()
+        sample_idx = self._sample_index
+        self.worker_config.worker_activate(sample_idx, cache_pool=self._cache_pool)
+        try:
+            next_sample = next(self._dataset_iter)
+            self._sample_index += 1
+            next_sample = add_sample_restore_key(
+                next_sample, self._global_worker_id, sample_idx, src=self
+            )
+        except StopIteration as e:
+            self._exhausted = True
+            return ExceptionFuture(e)
+        finally:
+            self.worker_config.worker_deactivate()
         return DoneFuture(next_sample)
 
     def save_state(self) -> FlexState:
@@ -239,7 +263,7 @@ class DataLoaderWorker(Generic[TSample]):
             rng=SystemRng.save_state(),
             dataset=self.dataset.save_state(),
             exhausted=self._exhausted,
-            _sample_index=self._sample_index.save_state(),
+            sample_index=self._sample_index,
         )
 
 
@@ -327,15 +351,19 @@ class _DataLoaderAsynchronousWorker(DataLoaderWorker[TSample]):
             future_id: The ID of the future to wait for.
         """
         while True:
+            print(f"[fut={future_id}] waiting for result\n", end="")
             res = self._result_queue.get()
             fut = self._futures.pop(res.future_id)
             if res.exception is not None:
                 fut._set_exception(res.exception)
             else:
                 fut._set_result(res.result)
+            # self._result_queue.task_done()
             if res.future_id == future_id:
+                print(f"[fut={future_id}] got result, return\n", end="")
                 return
             else:
+                print(f"[fut={future_id}] got result for {res.future_id=}, continue\n", end="")
                 continue
 
     def _worker_call(self, fn: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> Future[R]:
@@ -350,14 +378,20 @@ class _DataLoaderAsynchronousWorker(DataLoaderWorker[TSample]):
             **kwargs: The keyword arguments to pass to the function.
         """
         self._assert_running()
+        assert not self._in_worker(), "worker_call must not be called in the worker"
         future_id = self._next_future_id
         self._next_future_id += 1
 
-        self._futures[future_id] = self.FutureImpl(self, future_id)
+        self._futures[future_id] = future = self.FutureImpl(self, future_id)
+        print(
+            f"[wrk={self._rank_worker_id}] worker_call {fn.__name__=} {args=} {kwargs=} {future_id=}\n",
+            end="",
+        )
         self._cmd_queue.put(
             self.WorkerCommand(cmd=fn.__name__, args=args, kwargs=kwargs, future_id=future_id)
         )
-        return self._futures[future_id]
+        print(f"[wrk={self._rank_worker_id}] queue: {self._cmd_queue.qsize()}\n", end="")
+        return future
 
     def _worker_run(
         self, cmd_queue: QueueProtocol[WorkerCommand], result_queue: QueueProtocol[WorkerResult]
@@ -373,45 +407,65 @@ class _DataLoaderAsynchronousWorker(DataLoaderWorker[TSample]):
             cmd_queue: The command queue to wait for commands.
             result_queue: The result queue to put the results into.
         """
-        SystemRng.seed(self._seed)
-        import torch.utils.data._utils
+        assert self._in_worker(), "_worker_run must be called in the worker"
+        try:
+            SystemRng.seed(self._seed)
+            import torch.utils.data._utils
 
-        torch.utils.data._utils.worker._worker_info = torch.utils.data._utils.worker.WorkerInfo(
-            id=self._rank_worker_id,
-            num_workers=self.worker_config.num_workers,
-            seed=self._seed,
-            dataset=self.dataset,
-        )
-        self._global_worker_id = self.worker_config.global_worker_id()
-        self.worker_config.assert_worker()
-        while True:
-            cmd = cmd_queue.get()
-            if cmd.cmd == "_shutdown_worker":
-                break
-            try:
-                fn = getattr(self, cmd.cmd)
-                result = getattr(fn, "_orig")(self, *cmd.args, **cmd.kwargs)
-            except Exception as e:
-                result_queue.put(self.WorkerResult(future_id=cmd.future_id, exception=e))
-            else:
-                result_queue.put(self.WorkerResult(future_id=cmd.future_id, result=result))
-                del result
+            torch.utils.data._utils.worker._worker_info = torch.utils.data._utils.worker.WorkerInfo(
+                id=self._rank_worker_id,
+                num_workers=self.worker_config.num_workers,
+                seed=self._seed,
+                dataset=self.dataset,
+            )
+            self._global_worker_id = self.worker_config.global_worker_id()
+            self.worker_config.assert_worker()
+            while True:
+                print(
+                    f"[wrk={self._rank_worker_id}] waiting for command, len: {cmd_queue.qsize()}\n",
+                    end="",
+                )
+                cmd = cmd_queue.get()
+                print(
+                    f"[fut={cmd.future_id}] got command {cmd.cmd=} {cmd.args=} {cmd.kwargs=}\n",
+                    end="",
+                )
+                try:
+                    fn = getattr(self, cmd.cmd)
+                    result = fn(*cmd.args, **cmd.kwargs)
+                except Exception as e:
+                    print(f"[fut={cmd.future_id}] send exception {e!r}\n", end="")
+                    result_queue.put(self.WorkerResult(future_id=cmd.future_id, exception=e))
+                else:
+                    print(f"[fut={cmd.future_id}] send result {result!r}\n", end="")
+                    result_queue.put(self.WorkerResult(future_id=cmd.future_id, result=result))
+                    del result
+                # cmd_queue.task_done()
+                if cmd.cmd == self._wrk_shutdown_worker.__name__:
+                    print(f"[fut={cmd.future_id}] got shutdown command, exit\n", end="")
+                    break
+                print(f"[fut={cmd.future_id}] processed, waiting for next command\n", end="")
+        except:
+            traceback.print_exc()
+            raise
+
+    @abstractmethod
+    def _in_worker(self) -> bool:
+        """Check if the execution is within the worker."""
+        ...
 
     # ------------------------------------------------------------------------------------------------
     # Section: Worker methods - now calling to workers via queues.
 
     def _wrk_shutdown_worker(self) -> None:
+        """Does nothing. The actual shutdown is handled in the _worker_run method."""
+        assert self._in_worker(), "_wrk_shutdown_worker must be called in the worker"
+
+    def _shutdown_worker(self) -> None:
         """Shutdown the worker. The actual shutdown is handled in the _worker_run method."""
+        assert not self._in_worker(), "shutdown_worker must not be called in the worker"
         # This is not actually a recursive call, because the worker loop will exit before calling this method.
-        self._worker_call(self._wrk_shutdown_worker)
-
-    def _wrk_dataset_init(self, initial_state: FlexState | None) -> None:
-        """Wraps the super class method to call it in the worker process."""
-        super().dataset_init(initial_state)
-
-    def _wrk_new_iter(self) -> None:
-        """Wraps the super class method to call it in the worker process."""
-        super().new_iter()
+        self._worker_call(self._wrk_shutdown_worker).get()
 
     def _wrk_prefetch_next(self) -> TSample:
         """Wraps the super class method to call it in the worker process."""
@@ -419,26 +473,33 @@ class _DataLoaderAsynchronousWorker(DataLoaderWorker[TSample]):
         # so immediately resolve the future to the result (get returns immediately).
         return super().prefetch_next().get()
 
-    def _wrk_save_state(self) -> FlexState:
-        """Wraps the super class method to call it in the worker process."""
-        return super().save_state()
-
     @override
     def dataset_init(self, initial_state: FlexState | None) -> None:
-        self._worker_call(self._wrk_dataset_init, initial_state).get()
+        if self._in_worker():
+            return super().dataset_init(initial_state)
+        else:
+            return self._worker_call(self.dataset_init, initial_state).get()
 
     @override
     def new_iter(self) -> None:
-        self._worker_call(self._wrk_new_iter).get()
+        if self._in_worker():
+            return super().new_iter()
+        else:
+            return self._worker_call(self.new_iter).get()
 
     @override
     def prefetch_next(self) -> Future[TSample]:
         # Do not resolve the future here, but return it.
+        if self._in_worker():
+            return super().prefetch_next()
         return self._worker_call(self._wrk_prefetch_next)
 
     @override
     def save_state(self) -> FlexState:
-        return self._worker_call(self._wrk_save_state).get()
+        if self._in_worker():
+            return super().save_state()
+        else:
+            return self._worker_call(self.save_state).get()
 
 
 class ForkDataLoaderWorker(_DataLoaderAsynchronousWorker[TSample], Generic[TSample]):
@@ -450,6 +511,8 @@ class ForkDataLoaderWorker(_DataLoaderAsynchronousWorker[TSample], Generic[TSamp
     _cmd_queue: multiprocessing.Queue
     _result_queue: multiprocessing.Queue
 
+    _threaded_shutdown: threading.Thread | None = None
+
     _spawning_process: int
 
     def __init__(
@@ -459,6 +522,7 @@ class ForkDataLoaderWorker(_DataLoaderAsynchronousWorker[TSample], Generic[TSamp
         rank_worker_id: int,
         cache_pool: CachePool | None,
     ):
+        multiprocessing.set_start_method("fork", force=True)
         super().__init__(
             dataset,
             worker_config=worker_config,
@@ -487,6 +551,8 @@ class ForkDataLoaderWorker(_DataLoaderAsynchronousWorker[TSample], Generic[TSamp
         result_queue: multiprocessing.Queue,
     ) -> None:
         gc_init_worker(self._rank_worker_id)
+        # cmd_queue is read only, so we can cancel the join thread.
+        cmd_queue.cancel_join_thread()
         worker_exit_evt = threading.Event()
         parent_check_thread = threading.Thread(
             target=self._check_parent_process, args=(worker_exit_evt,), daemon=True
@@ -495,23 +561,35 @@ class ForkDataLoaderWorker(_DataLoaderAsynchronousWorker[TSample], Generic[TSamp
         try:
             super()._worker_run(cmd_queue, result_queue)
         finally:
+            print(f"[wrk={self._rank_worker_id}] shutting down\n", end="")
             worker_exit_evt.set()
+            print(
+                f"[wrk={self._rank_worker_id}] shutting down, wait for parent_check_thread\n",
+                end="",
+            )
             parent_check_thread.join()
-            cmd_queue.cancel_join_thread()
-            cmd_queue.close()
-            result_queue.cancel_join_thread()
+            print(f"[wrk={self._rank_worker_id}] shutting down, close queues\n", end="")
             result_queue.close()
+            result_queue.join_thread()
+            cmd_queue.close()
+            cmd_queue.cancel_join_thread()
+            print(f"[wrk={self._rank_worker_id}] shutting down, done\n", end="")
+
+    @override
+    def _in_worker(self) -> bool:
+        return multiprocessing.current_process() == self._process
 
     @override
     def start(self) -> None:
         self._process = multiprocessing.Process(
             target=self._worker_run,
             args=(self._cmd_queue, self._result_queue),
+            daemon=True,
         )
         self._process.start()
 
     @override
-    def shutdown(self) -> None:
+    def shutdown(self, in_del: bool = False) -> None:
         if self._spawning_process != os.getpid():
             # Should avoid forked process containing a forked worker on exit.
             warnings.warn(
@@ -519,12 +597,41 @@ class ForkDataLoaderWorker(_DataLoaderAsynchronousWorker[TSample], Generic[TSamp
             )
             return
         if self._process is not None:
-            self._wrk_shutdown_worker()
-            self._process.join()
-            self._cmd_queue.cancel_join_thread()
-            self._cmd_queue.close()
-            self._result_queue.cancel_join_thread()
-            self._result_queue.close()
+            if in_del:
+                # It seems that the ResourceWarning does not work in the gc loop? Also print a warning here.
+                warnings.warn(
+                    "Explicitly call DataLoader.shutdown() to avoid leaking processes. Terminating worker process.",
+                    ResourceWarning,
+                )
+                print(
+                    "WARNING: Explicitly call DataLoader.shutdown() to avoid leaking processes. Terminating worker process.\n",
+                    end="",
+                    file=sys.stderr,
+                )
+                self._cmd_queue.close()
+                self._cmd_queue.cancel_join_thread()
+                self._result_queue.close()
+                self._result_queue.cancel_join_thread()
+                # Kill the process, because we cannot communicate with it in the gc loop.
+                self._process.terminate()
+                self._process = None
+            else:
+                try:
+                    self._shutdown_worker()
+                except Exception:
+                    self._process.join(10)
+                    if self._process.is_alive():
+                        self._process.terminate()
+                else:
+                    self._process.join()
+                    assert self._process.exitcode == 0, (
+                        f"Process exit code {self._process.exitcode}"
+                    )
+                self._process = None
+                self._cmd_queue.close()
+                self._cmd_queue.cancel_join_thread()
+                self._result_queue.close()
+                self._result_queue.cancel_join_thread()
 
     @override
     def running(self) -> bool:
@@ -564,23 +671,52 @@ class ThreadDataLoaderWorker(_DataLoaderAsynchronousWorker[TSample], Generic[TSa
         super()._worker_run(cmd_queue, result_queue)
 
     @override
+    def _in_worker(self) -> bool:
+        return threading.current_thread() == self._thread
+
+    @override
     def start(self) -> None:
         self._thread = threading.Thread(
             target=self._worker_run,
             args=(self._cmd_queue, self._result_queue),
+            daemon=True,
         )
         self._thread.start()
 
     @override
-    def shutdown(self) -> None:
+    def shutdown(self, in_del: bool = False) -> None:
         if self._thread is not None:
-            self._wrk_shutdown_worker()
-            self._thread.join()
-            self._thread = None
+            if in_del:
+                # It seems that the ResourceWarning does not work in the gc loop? Also print a warning here.
+                warnings.warn(
+                    "Explicitly call DataLoader.shutdown() to avoid leaking threads.",
+                    ResourceWarning,
+                )
+                print(
+                    "WARNING: Explicitly call DataLoader.shutdown() to avoid leaking threads.\n",
+                    end="",
+                    file=sys.stderr,
+                )
+                # Just try to enqueue the shutdown command to the thread and hope for the best. Ignore the result.
+                self._cmd_queue.put(
+                    self.WorkerCommand(
+                        cmd=self._wrk_shutdown_worker.__name__, args=(), kwargs={}, future_id=-1
+                    )
+                )
+                self._thread = None
+            else:
+                self._shutdown_worker()
+                self._thread.join()
+                self._thread = None
 
     @override
     def running(self) -> bool:
         return self._thread is not None
+
+    @override
+    def _assert_running(self) -> None:
+        assert self._thread is not None, "Thread must be started first"
+        assert self._thread.is_alive(), "Thread died"
 
 
 class WorkerType(Protocol[TSample]):
@@ -614,7 +750,7 @@ class DataLoader(Generic[TSample]):
         self,
         dataset: SavableDataset,
         *,
-        prefetch_factor: int = 2,
+        prefetch_factor: int = 1,
         worker_type: WorkerType = ForkDataLoaderWorker,
         cache_pool: CachePool | None = None,
         # Garbage collection configuration
@@ -671,8 +807,8 @@ class DataLoader(Generic[TSample]):
         self._prefetch_factor = prefetch_factor
         self._worker_type = worker_type
         self._cache_pool = cache_pool
-        self._prefetching_samples = [[] for _ in range(self._worker_config.num_workers)]
-        self._exhausted_workers = [False] * self._worker_config.num_workers
+        self._prefetching_samples = [[] for _ in range(self._worker_config.safe_num_workers)]
+        self._exhausted_workers = [False] * self._worker_config.safe_num_workers
 
         if self._worker_config.num_workers == 0:
             assert prefetch_factor == 1, "prefetch_factor must be 1 for num_workers == 0"
@@ -681,11 +817,24 @@ class DataLoader(Generic[TSample]):
 
         self._spawning_process = os.getpid()
 
-    def shutdown(self) -> None:
+    def shutdown(self, in_del: bool = False) -> None:
         if self._workers is not None:
+            if in_del:
+                warnings.warn(
+                    "Explicitly call DataLoader.shutdown() to avoid leaking workers.",
+                    ResourceWarning,
+                )
+                print(
+                    "WARNING: Explicitly call DataLoader.shutdown() to avoid leaking workers.\n",
+                    end="",
+                    file=sys.stderr,
+                )
             for worker in self._workers:
-                worker.shutdown()
+                worker.shutdown(in_del=in_del)
             self._workers = None
+
+    def __del__(self) -> None:
+        self.shutdown(in_del=True)
 
     def start_iter(self) -> None:
         if self._workers is not None:
@@ -703,7 +852,7 @@ class DataLoader(Generic[TSample]):
             # All workers are exhausted, restart for the next epoch.
             for worker in self._workers:
                 worker.new_iter()
-            self._exhausted_workers = [False] * self._worker_config.num_workers
+            self._exhausted_workers = [False] * self._worker_config.safe_num_workers
 
         # For all workers, enqueue prefetching samples.
         for worker_idx, (worker, exhausted) in enumerate(
@@ -720,15 +869,19 @@ class DataLoader(Generic[TSample]):
         # - Pop the first sample future from the prefetching samples.
         # - Get the sample from the sample future (may wait for the sample to be prefetched).
         # - Yield the sample.
+        print(f"{self._exhausted_workers=}\n", end="")
         while not all(self._exhausted_workers):
             # Get the next worker to prefetch samples from.
             worker_idx = self._next_worker_id
             worker = self._workers[worker_idx]
-            self._next_worker_id = (worker_idx + 1) % self._worker_config.num_workers
+            print(f"{worker_idx=} {worker=}\n", end="")
+            self._next_worker_id = (worker_idx + 1) % self._worker_config.safe_num_workers
             if self._exhausted_workers[worker_idx]:
+                print(f"{worker_idx=} exhausted, continue with next worker\n", end="")
                 continue
             # Pop the first sample future from the prefetching samples.
             sample_future = self._prefetching_samples[worker_idx].pop(0)
+            print(f"{sample_future=}\n", end="")
             # Prefetch samples from the worker.
             while len(self._prefetching_samples[worker_idx]) < self._prefetch_factor:
                 # Add a new sample future to the prefetching samples if the worker has not prefetched enough samples.
@@ -737,11 +890,13 @@ class DataLoader(Generic[TSample]):
                 # Get the sample from the sample future (may wait for the sample to be ready).
                 sample = sample_future.get()
             except StopIteration:
+                print(f"{worker_idx=} exhausted, remove from prefetching samples\n", end="")
                 # If the sample future raises StopIteration, remove the worker from the list.
                 self._prefetching_samples[worker_idx] = []
                 self._exhausted_workers[worker_idx] = True
                 continue
             else:
+                print(f"{worker_idx=} got sample, yield\n", end="")
                 # Yield the sample.
                 yield sample
 
@@ -753,11 +908,6 @@ class DataLoader(Generic[TSample]):
         yield from self._current_epoch_iter
         # Reset the epoch iterator, it was exhausted.
         self._current_epoch_iter = None
-
-    def __del__(self) -> None:
-        if self._spawning_process == os.getpid():
-            # Otherwise we may be in a forked process which is not the one that spawned the DataLoader.
-            self.shutdown()
 
     def __len__(self):
         return len(self._dataset)
@@ -773,7 +923,7 @@ class DataLoader(Generic[TSample]):
         else:
             return None
 
-    def save_state(self) -> FlexState:
+    def save_state_rank(self) -> FlexState:
         # TODO: The redist tool must be able to change the batch size.
         # That means that the redist tool shall split a saved restore key for the "BatchDataset".
         # It should also change the saved micro batch size to match that.
@@ -783,7 +933,7 @@ class DataLoader(Generic[TSample]):
             for prefetching_sample in self._prefetching_samples
         ]
         if self._workers is None:
-            worker_states = [None] * self._worker_config.num_workers
+            worker_states = [None] * self._worker_config.safe_num_workers
         else:
             worker_states = [worker.save_state() for worker in self._workers]
 
@@ -796,12 +946,9 @@ class DataLoader(Generic[TSample]):
         )
 
     def _start(self, initial_state: FlexState | None = None) -> None:
-        assert self._workers is None and self._current_epoch_iter is None, (
-            "DataLoader already started"
-        )
         self._workers = [
             self._worker_type(self._dataset, self._worker_config, local_worker_id, self._cache_pool)
-            for local_worker_id in range(max(self._worker_config.num_workers, 1))
+            for local_worker_id in range(self._worker_config.safe_num_workers)
         ]
         for worker in self._workers:
             worker.start()
@@ -812,11 +959,11 @@ class DataLoader(Generic[TSample]):
                 self._restore_state = None
 
         if initial_state is None:
-            worker_states = [None] * self._worker_config.num_workers
+            worker_states = [None] * self._worker_config.safe_num_workers
         else:
             worker_states = initial_state["worker_states"]
 
-        assert len(worker_states) == self._worker_config.num_workers, (
+        assert len(worker_states) == self._worker_config.safe_num_workers, (
             "Number of initial states must match number of workers"
         )
 
