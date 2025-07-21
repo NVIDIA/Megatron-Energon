@@ -106,7 +106,6 @@ class AVDecoder:
             assert average_rate, "Video stream has no FPS."
 
             time_base: Fraction = video_stream.time_base  # Seconds per PTS unit
-            average_frame_duration: int = int(1 / average_rate / time_base)  # PTS units per frame
 
             if video_clip_ranges is not None:
                 # Convert video_clip_ranges to seeker unit
@@ -183,11 +182,10 @@ class AVDecoder:
                     # Container uses time, the target frame might not correspond exactly to any metadata but the desired timestamp should
                     # fall within a frames display period
                     if self.seeker.unit == "pts":
-                        if start_frame_index <= frame.pts + average_frame_duration:
+                        if start_frame_index <= (frame.pts + frame.duration):
                             take_frame = True
-                        if (
-                            end_frame_index is not None
-                            and end_frame_index <= frame.pts + average_frame_duration
+                        if end_frame_index is not None and end_frame_index <= (
+                            frame.pts + frame.duration
                         ):
                             last_frame = True
 
@@ -206,9 +204,7 @@ class AVDecoder:
                         if clip_timestamp_start is None:
                             clip_timestamp_start = float(frame.pts * frame.time_base)
 
-                        clip_timestamp_end = float(
-                            (frame.pts + average_frame_duration) * frame.time_base
-                        )
+                        clip_timestamp_end = float((frame.pts + frame.duration) * frame.time_base)
 
                     previous_frame_index += 1
 
@@ -314,7 +310,7 @@ class AVDecoder:
                 for frame in input_container.decode(audio=0):
                     assert frame.pts is not None, "Audio frame has no PTS timestamp"
                     cur_frame_time = float(frame.pts * frame.time_base)
-                    cur_frame_duration = float(frame.samples / audio_sample_rate)
+                    cur_frame_duration = float(frame.duration * frame.time_base)
 
                     if cur_frame_time < start_time:
                         # Skip frames before the start time
@@ -606,7 +602,7 @@ class AVDecoder:
                 elif metadata.video_num_frames is not None and metadata.video_duration is not None:
                     metadata.video_fps = metadata.video_num_frames / metadata.video_duration
                 if get_video_frame_size:
-                    input_container.seek(0, stream=video_stream)
+                    input_container.seek(0)
                     for first_frame in input_container.decode(video=0):
                         metadata.video_width = first_frame.width
                         metadata.video_height = first_frame.height
@@ -621,7 +617,7 @@ class AVDecoder:
                 metadata.audio_duration = audio_stream.duration
                 if get_audio_duration and metadata.audio_duration is None:
                     last_packet = None
-                    input_container.seek(0, stream=audio_stream)
+                    input_container.seek(0)
                     for packet in input_container.demux(audio=0):
                         if packet.pts is not None:
                             last_packet = packet
