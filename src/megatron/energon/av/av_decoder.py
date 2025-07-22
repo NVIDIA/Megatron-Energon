@@ -10,6 +10,7 @@ from typing import BinaryIO, Literal, Optional, Sequence, Union, overload
 import numpy as np
 import torch
 
+from megatron.energon.av.av_init import av_open
 from megatron.energon.edataclass import edataclass
 
 # Try importing optional dependencies
@@ -49,6 +50,10 @@ class AVDecoder:
             )
         self.stream = stream
         self.suppress_warnings = suppress_warnings
+
+        assert "t" not in getattr(stream, "mode", "rb") and not isinstance(stream, io.TextIOBase), (
+            "Stream must not be opened in text mode"
+        )
 
         try:
             self.seeker = Fastseek(self.stream)
@@ -92,9 +97,7 @@ class AVDecoder:
 
         self.stream.seek(0)  # Reset the video stream so that pyav can read the entire container
 
-        with av.open(self.stream, "r") as input_container:
-            initialize_av_container(input_container)
-
+        with av_open(self.stream) as input_container:
             assert len(input_container.streams.video) > 0, (
                 "No video stream found, but video_clips are requested"
             )
@@ -252,8 +255,7 @@ class AVDecoder:
 
         self.stream.seek(0)  # Reset the video stream so that pyav can read the entire container
 
-        with av.open(self.stream, "r") as input_container:
-            initialize_av_container(input_container)
+        with av_open(self.stream) as input_container:
             assert len(input_container.streams.audio) > 0, (
                 "No audio stream found, but audio_clips are requested"
             )
@@ -488,15 +490,13 @@ class AVDecoder:
     def has_audio_stream(self) -> bool:
         """Check if the stream has an audio stream."""
         self.stream.seek(0)
-        with av.open(self.stream, "r") as input_container:
-            initialize_av_container(input_container)
+        with av_open(self.stream) as input_container:
             return len(input_container.streams.audio) > 0
 
     def has_video_stream(self) -> bool:
         """Check if the stream has a video stream."""
         self.stream.seek(0)
-        with av.open(self.stream, "r") as input_container:
-            initialize_av_container(input_container)
+        with av_open(self.stream) as input_container:
             return len(input_container.streams.video) > 0
 
     def get_audio_duration(self) -> Optional[float]:
@@ -563,9 +563,7 @@ class AVDecoder:
             get_audio_duration: Compute audio duration if not found in header.
         """
         self.stream.seek(0)
-        with av.open(self.stream, "r") as input_container:
-            initialize_av_container(input_container)
-
+        with av_open(self.stream) as input_container:
             metadata = AVMetadata()
 
             if get_video and input_container.streams.video:
@@ -695,13 +693,13 @@ class AVWebdatasetDecoder:
         Returns:
             If av_decode is "torch", returns VideoData containing the decoded frames and metadata.
             If av_decode is "AVDecoder", returns an AVDecoder instance for flexible decoding.
-            If av_decode is "pyav", returns an av.container.InputContainer or av.container.OutputContainer instance.
+            If av_decode is "pyav", returns an av.container.InputContainer instance.
             Returns None if decoding failed or file type is not supported.
         """
         key = key.lower()
         if not any(
             key == ext or key.endswith("." + ext)
-            for ext in ("mp4", "avi", "mov", "webm", "mkv", "flac", "mp3", "wav")
+            for ext in ("mp4", "avi", "mov", "webm", "mkv", "flac", "mp3", "wav", "flv")
         ):
             return None
 
@@ -710,9 +708,7 @@ class AVWebdatasetDecoder:
         if self.av_decode == "AVDecoder":
             return av_decoder
         elif self.av_decode == "pyav":
-            input_container = av.open(av_decoder.stream)
-            initialize_av_container(input_container)
-            return input_container
+            return av_open(av_decoder.stream)
         elif self.av_decode == "torch":
             return av_decoder.get_frames(
                 video_decode_audio=self.video_decode_audio,
@@ -734,20 +730,3 @@ class AVMetadata:
     audio_duration: Optional[float] = None
     audio_channels: Optional[int] = None
     audio_sample_rate: Optional[int] = None
-
-
-def initialize_av_container(input_container: "av.container.InputContainer") -> None:
-    """Every PyAV container should be initialized with this function.
-
-    This function ensures that no additional threads are created.
-    This is to avoid deadlocks in ffmpeg when when deallocating the container.
-    Furthermore, we cannot have multiple threads before forking the process when
-    using torch data loaders with multiple workers.
-    """
-
-    for stream in input_container.streams:
-        cc = stream.codec_context
-
-        if cc is not None:
-            cc.thread_type = "NONE"
-            cc.thread_count = 0
