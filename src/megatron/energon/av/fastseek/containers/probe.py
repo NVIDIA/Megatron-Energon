@@ -1,15 +1,15 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-import av
 from sortedcontainers import SortedList
 
+from ...av_init import av_open
 from ..keyframeinfo import KeyframeInfo
 
 
 def parse_probe(file):
     keyframes = {}
-    with av.open(file) as input_container:
+    with av_open(file) as input_container:
         for stream_idx, stream in enumerate(input_container.streams.video):
             packet_pts = [
                 (index, p.pts)
