@@ -7,19 +7,20 @@ import threading
 import warnings
 from typing import Generic, TypeVar, override
 
-from megatron.energon.cache.base import CachePool
-from megatron.energon.flavors.base_dataset import SavableDataset
-from megatron.energon.loader.workers.async_worker import DataLoaderAsynchronousWorker
-from megatron.energon.worker import WorkerConfig
+from megatron.energon.dataloader.workers.async_worker import (
+    AsynchronousMixin,
+    DataLoaderAsynchronousWorker,
+    QueueProtocol,
+    WorkerCommand,
+    WorkerResult,
+)
 from megatron.energon.wrappers.gc_dataset import gc_init_worker
 
 TSample = TypeVar("TSample", covariant=True)
 
 
-class ForkDataLoaderWorker(DataLoaderAsynchronousWorker[TSample], Generic[TSample]):
-    """
-    Implements the `DataLoaderWorker` interface using processes.
-    """
+class ForkAsynchronousMixin(AsynchronousMixin):
+    """Mixin for asynchronous workers that use processes."""
 
     _process: multiprocessing.Process | None = None
     _cmd_queue: multiprocessing.Queue
@@ -29,42 +30,33 @@ class ForkDataLoaderWorker(DataLoaderAsynchronousWorker[TSample], Generic[TSampl
 
     _spawning_process: int
 
-    def __init__(
-        self,
-        dataset: SavableDataset,
-        worker_config: WorkerConfig,
-        rank_worker_id: int,
-        cache_pool: CachePool | None,
-    ):
-        multiprocessing.set_start_method("fork", force=True)
-        super().__init__(
-            dataset,
-            worker_config=worker_config,
-            rank_worker_id=rank_worker_id,
-            cmd_queue=multiprocessing.Queue(),
-            result_queue=multiprocessing.Queue(),
-            cache_pool=cache_pool,
-        )
+    @override
+    def _asynchronous_init(self, name: str) -> None:
+        super()._asynchronous_init(name)
         self._spawning_process = os.getpid()
+
+    @override
+    def _queues(self) -> tuple[QueueProtocol[WorkerCommand], QueueProtocol[WorkerResult]]:
+        return multiprocessing.Queue(), multiprocessing.Queue()
 
     def _check_parent_process(self, evt_exit: threading.Event) -> None:
         """Check if the parent process is alive. If it is dead, exit the worker process."""
         parent_proc = multiprocessing.parent_process()
         parent_pid = os.getppid()
         if parent_proc is None:
-            print("No parent process, exiting", file=sys.stderr)
+            print(f"[{self._name}] No parent process, exiting", file=sys.stderr)
             os._exit(-1)
         while not evt_exit.wait(1):
             if parent_proc.exitcode is not None or os.getppid() != parent_pid:
-                print("Parent process died, exiting", file=sys.stderr)
+                print(f"[{self._name}] Parent process died, exiting", file=sys.stderr)
                 os._exit(-1)
 
+    @override
     def _worker_run(
         self,
         cmd_queue: multiprocessing.Queue,
         result_queue: multiprocessing.Queue,
     ) -> None:
-        gc_init_worker(self._rank_worker_id)
         # cmd_queue is read only, so we can cancel the join thread.
         cmd_queue.cancel_join_thread()
         worker_exit_evt = threading.Event()
@@ -75,19 +67,19 @@ class ForkDataLoaderWorker(DataLoaderAsynchronousWorker[TSample], Generic[TSampl
         try:
             super()._worker_run(cmd_queue, result_queue)
         finally:
-            print(f"[wrk={self._rank_worker_id}] shutting down\n", end="")
+            print(f"[{self._name}] shutting down\n", end="")
             worker_exit_evt.set()
             print(
-                f"[wrk={self._rank_worker_id}] shutting down, wait for parent_check_thread\n",
+                f"[{self._name}] shutting down, wait for parent_check_thread\n",
                 end="",
             )
             parent_check_thread.join()
-            print(f"[wrk={self._rank_worker_id}] shutting down, close queues\n", end="")
+            print(f"[{self._name}] shutting down, close queues\n", end="")
             result_queue.close()
             result_queue.join_thread()
             cmd_queue.close()
             cmd_queue.cancel_join_thread()
-            print(f"[wrk={self._rank_worker_id}] shutting down, done\n", end="")
+            print(f"[{self._name}] shutting down, done\n", end="")
 
     @override
     def _in_worker(self) -> bool:
@@ -95,11 +87,12 @@ class ForkDataLoaderWorker(DataLoaderAsynchronousWorker[TSample], Generic[TSampl
 
     @override
     def start(self) -> None:
+        multiprocessing.set_start_method("fork", force=True)
         self._process = multiprocessing.Process(
             target=self._worker_run,
             args=(self._cmd_queue, self._result_queue),
             daemon=True,
-            name=f"ForkDataLoaderWorker-{self._rank_worker_id}",
+            name=f"ForkDataLoaderWorker-{self._name}",
         )
         self._process.start()
 
@@ -130,6 +123,7 @@ class ForkDataLoaderWorker(DataLoaderAsynchronousWorker[TSample], Generic[TSampl
                 # Kill the process, because we cannot communicate with it in the gc loop.
                 self._process.terminate()
                 self._process = None
+                self._cancel_futures()
             else:
                 try:
                     self._shutdown_worker()
@@ -152,6 +146,23 @@ class ForkDataLoaderWorker(DataLoaderAsynchronousWorker[TSample], Generic[TSampl
     def running(self) -> bool:
         return self._process is not None
 
+    @override
     def _assert_running(self) -> None:
         assert self._process is not None, "Worker must be started first"
         assert self._process.is_alive(), "Worker died"
+
+
+class ForkDataLoaderWorker(
+    ForkAsynchronousMixin, DataLoaderAsynchronousWorker[TSample], Generic[TSample]
+):
+    """
+    Implements the `DataLoaderWorker` interface using processes.
+    """
+
+    def _worker_run(
+        self,
+        cmd_queue: multiprocessing.Queue,
+        result_queue: multiprocessing.Queue,
+    ) -> None:
+        gc_init_worker(self._rank_worker_id)
+        super()._worker_run(cmd_queue, result_queue)

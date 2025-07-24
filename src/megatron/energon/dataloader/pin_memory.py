@@ -2,12 +2,13 @@
 # SPDX-License-Identifier: BSD-3-Clause
 import queue
 import threading
-from typing import Generic, Protocol, TypeVar, cast, override
+from typing import Generic, TypeVar, cast
 
 import torch
 
+from megatron.energon.dataloader.future import CallableFuture, Future
+from megatron.energon.dataloader.workers.async_worker import AsynchronousMixin
 from megatron.energon.flavors.base_dataset import PinMemoryMixin
-from megatron.energon.loader.future import CallableFuture, Future
 
 TSample = TypeVar("TSample")
 T = TypeVar("T")
@@ -47,19 +48,7 @@ class NoPinMemory(PinMemory[TSample]):
         return sample
 
 
-class QueueProtocol(Protocol[T]):
-    def get(self, /) -> T: ...
-
-    def put(self, item: T, /) -> None: ...
-
-    def qsize(self, /) -> int: ...
-
-    def task_done(self, /) -> None: ...
-
-    def join(self, /) -> None: ...
-
-
-class PinMemoryThread(PinMemory[TSample], Generic[TSample]):
+class PinMemoryThread(PinMemory[TSample], AsynchronousMixin, Generic[TSample]):
     """Threaded implementation of :class:`PinMemory`.
 
     Pins the memory of samples in a separate thread in the background.
@@ -71,36 +60,18 @@ class PinMemoryThread(PinMemory[TSample], Generic[TSample]):
 
     _thread: threading.Thread | None = None
 
-    _item_queue: QueueProtocol[Future[TSample]]
-    _result_queue: QueueProtocol[tuple[TSample, None] | tuple[None, Exception]]
-
     def __init__(
         self,
         device: str | torch.device,
     ):
         super().__init__(device)
-        self._item_queue = queue.Queue()
-        self._result_queue = queue.Queue()
+        self._asynchronous_init(cmd_queue=queue.Queue(), result_queue=queue.Queue())
 
-    def _run(self) -> None:
-        """The pin memory thread. It will fetch the sample from the item future queue and pin the memory."""
-        while True:
-            try:
-                sample = self._item_queue.get()
-                if sample is self._SHUTDOWN:
-                    break
-                sample = self._pin_memory(sample.get())
-            except Exception as e:
-                self._result_queue.put((None, e))
-            else:
-                self._result_queue.put((sample, None))
-            self._item_queue.task_done()
+    def _wrk_pin_memory(self, sample: Future[TSample]) -> TSample:
+        return self._pin_memory(sample.get())
 
-    def _get_next_result(self) -> TSample:
-        result, exception = self._result_queue.get()
-        if exception is not None:
-            raise exception
-        return cast(TSample, result)
+    def _worker_pin_memory(self, sample: Future[TSample]) -> Future[TSample]:
+        return self._worker_call(self._wrk_pin_memory, sample)
 
     def __call__(self, sample: Future[TSample]) -> Future[TSample]:
         """
@@ -108,16 +79,4 @@ class PinMemoryThread(PinMemory[TSample], Generic[TSample]):
         Submits the sample future to the thread to fetch it and pins the memory in the thread,
         then returns a future for fetching the pinned sample.
         """
-        if self._thread is None:
-            self._thread = threading.Thread(target=self._run, daemon=True, name="PinMemoryThread")
-            self._thread.start()
-        self._item_queue.put(sample)
-        return CallableFuture(self._get_next_result)
-
-    @override
-    def shutdown(self) -> None:
-        if self._thread is not None:
-            self._item_queue.put(self._SHUTDOWN)
-            self._item_queue.join()
-            self._thread.join()
-            self._thread = None
+        return self._worker_pin_memory(sample)

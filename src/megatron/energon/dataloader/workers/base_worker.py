@@ -3,8 +3,8 @@
 from typing import Generic, TypeVar
 
 from megatron.energon.cache.base import CachePool
+from megatron.energon.dataloader.future import DoneFuture, ExceptionFuture, Future
 from megatron.energon.flavors.base_dataset import SavableDataset, add_sample_restore_key
-from megatron.energon.loader.future import DoneFuture, ExceptionFuture, Future
 from megatron.energon.rng import SystemRng
 from megatron.energon.state import FlexState
 from megatron.energon.worker import WorkerConfig

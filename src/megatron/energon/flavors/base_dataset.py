@@ -67,7 +67,13 @@ class PinMemoryMixin:
             return batch
 
     def pin_memory(self: Self, device: torch.device | str | None = None) -> Self:
-        return self.sample_pin_memory(self, device)
+        assert dataclasses.is_dataclass(self), "Must be a dataclass"
+        return type(self)(
+            **{
+                field.name: self.sample_pin_memory(getattr(self, field.name), device)
+                for field in dataclasses.fields(self)
+            }
+        )
 
 
 class ExtendableDataclassMixin:

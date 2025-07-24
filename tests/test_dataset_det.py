@@ -23,12 +23,12 @@ from megatron.energon import (
     TextSample,
     WorkerConfig,
     get_loader,
+    get_savable_loader,
     get_train_dataset,
+    stateless,
 )
 from megatron.energon.dataset_config import get_dataset_from_config
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
-from megatron.energon.loader import get_savable_loader
-from megatron.energon.task_encoder.base import stateless
 from megatron.energon.tools.checkpoint import command_redist
 
 # Speed up tests significantly by reducing the torch status check interval for broken worker shutdown

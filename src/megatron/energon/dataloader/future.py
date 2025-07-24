@@ -7,11 +7,35 @@ R = TypeVar("R", covariant=True)
 T = TypeVar("T", covariant=True)
 
 
+class CancelledError(Exception):
+    """Exception raised when a future was cancelled."""
+
+    @classmethod
+    def with_current_traceback(cls):
+        try:
+            raise cls()
+        except cls as e:
+            if e.__traceback__ is not None and e.__traceback__.tb_next is not None:
+                return e.with_traceback(e.__traceback__.tb_next)
+            return e
+
+
 class Future(Generic[R]):
     """Base class for abstract futures."""
 
     @abstractmethod
-    def get(self) -> R: ...
+    def get(self) -> R:
+        """Get the result of the future. Waits until the future is done."""
+        ...
+
+    @abstractmethod
+    def cancel(self) -> bool:
+        """Cancel the future.
+
+        Returns:
+            True if the future was cancelled, False if already done.
+        """
+        ...
 
 
 class DoneFuture(Future[R]):
@@ -23,18 +47,26 @@ class DoneFuture(Future[R]):
     def get(self) -> R:
         return self._result
 
+    def cancel(self) -> bool:
+        return False
+
 
 class CallableFuture(Future[R]):
     """Future that calls a callable to get the result."""
 
+    __slots__ = ("_callable", "_value", "_exception", "_cancelled")
+
     _callable: Callable[[], R]
     _value: R
     _exception: Exception
+    _cancelled: bool
 
     def __init__(self, callable: Callable[[], R]):
         self._callable = callable
 
     def get(self) -> R:
+        if getattr(self, "_cancelled", False):
+            raise CancelledError("Future was cancelled")
         if not hasattr(self, "_value") and not hasattr(self, "_exception"):
             try:
                 self._value = self._callable()
@@ -43,6 +75,14 @@ class CallableFuture(Future[R]):
         if hasattr(self, "_exception"):
             raise self._exception
         return self._value
+
+    def cancel(self) -> bool:
+        if getattr(self, "_cancelled", False):
+            return True
+        if hasattr(self, "_value") or hasattr(self, "_exception"):
+            return False
+        self._cancelled = True
+        return True
 
     @staticmethod
     def chain(future: Future[T], fn: Callable[[Future[T]], R]) -> Future[R]:
@@ -67,3 +107,6 @@ class ExceptionFuture(Future[Any]):
 
     def get(self) -> Any:
         raise self._exception
+
+    def cancel(self) -> bool:
+        return False

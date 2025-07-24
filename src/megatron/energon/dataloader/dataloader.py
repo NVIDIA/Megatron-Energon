@@ -17,11 +17,11 @@ from typing import (
 import torch.distributed
 
 from megatron.energon.cache.base import CachePool
+from megatron.energon.dataloader.future import CallableFuture, Future
+from megatron.energon.dataloader.pin_memory import NoPinMemory, PinMemory, PinMemoryThread
+from megatron.energon.dataloader.workers.base_worker import DataLoaderWorker
+from megatron.energon.dataloader.workers.fork_worker import ForkDataLoaderWorker
 from megatron.energon.flavors.base_dataset import SavableDataset, add_sample_restore_key
-from megatron.energon.loader.future import CallableFuture, Future
-from megatron.energon.loader.pin_memory import NoPinMemory, PinMemory, PinMemoryThread
-from megatron.energon.loader.workers.base_worker import DataLoaderWorker
-from megatron.energon.loader.workers.fork_worker import ForkDataLoaderWorker
 from megatron.energon.state import FlexState
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset, get_sample_restore_key
