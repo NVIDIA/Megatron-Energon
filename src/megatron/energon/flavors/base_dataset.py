@@ -41,32 +41,33 @@ T = TypeVar("T", covariant=True)
 class PinMemoryMixin:
     """A mixin class providing a generic `pin_memory` function."""
 
-    def _pin_memory(self, batch: T, device: Union[torch.device, str, None] = None) -> T:
+    @classmethod
+    def sample_pin_memory(cls, batch: T, device: Union[torch.device, str, None] = None) -> T:
         """Pin memory of a batch. Uses recursion to handle nested structures. Supports nested
         structures of dicts, dataclasses, namedtuples, lists and tuples."""
-        if isinstance(batch, torch.Tensor):
+        if hasattr(batch, "pin_memory"):
             return batch.pin_memory(device)
-        elif isinstance(batch, dict):
-            return {key: self._pin_memory(value, device) for key, value in batch.items()}
+        if isinstance(batch, dict):
+            return {key: cls.sample_pin_memory(value, device) for key, value in batch.items()}
         elif dataclasses.is_dataclass(batch):
             return type(batch)(
                 **{
-                    field.name: self._pin_memory(getattr(batch, field.name), device)
+                    field.name: cls.sample_pin_memory(getattr(batch, field.name), device)
                     for field in dataclasses.fields(batch)
                 }
             )
-        elif isinstance(batch, (tuple, list)):
+        elif not isinstance(batch, (str, bytes)) and isinstance(batch, (tuple, list)):
             if hasattr(batch, "_fields"):
                 # NamedTuple
-                return type(batch)(*[self._pin_memory(val, device) for val in batch])
+                return type(batch)(*[cls.sample_pin_memory(val, device) for val in batch])
             else:
                 # list / tuple
-                return type(batch)(self._pin_memory(val, device) for val in batch)
+                return type(batch)(cls.sample_pin_memory(val, device) for val in batch)
         else:
             return batch
 
-    def pin_memory(self: Self) -> Self:
-        return self._pin_memory(self)
+    def pin_memory(self: Self, device: torch.device | str | None = None) -> Self:
+        return self.sample_pin_memory(self, device)
 
 
 class ExtendableDataclassMixin:
