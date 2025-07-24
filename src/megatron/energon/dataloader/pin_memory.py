@@ -1,13 +1,12 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
-import queue
 import threading
 from typing import Generic, TypeVar, cast
 
 import torch
 
+from megatron.energon.dataloader.asynchronous import ThreadAsynchronous
 from megatron.energon.dataloader.future import CallableFuture, Future
-from megatron.energon.dataloader.workers.async_worker import AsynchronousMixin
 from megatron.energon.flavors.base_dataset import PinMemoryMixin
 
 TSample = TypeVar("TSample")
@@ -30,8 +29,13 @@ class PinMemory(Generic[TSample]):
         """Pin the memory of a sample. The default implementation runs in the main thread."""
         return CallableFuture.chain(sample, lambda fut: self._pin_memory(fut.get()))
 
-    def shutdown(self) -> None:
-        """Shutdown any running threads."""
+    def shutdown(self, in_del: bool = False) -> None:
+        """
+        Shutdown any running threads.
+
+        Args:
+            in_del: Whether the shutdown is called from the garbage collector.
+        """
         pass
 
 
@@ -48,12 +52,12 @@ class NoPinMemory(PinMemory[TSample]):
         return sample
 
 
-class PinMemoryThread(PinMemory[TSample], AsynchronousMixin, Generic[TSample]):
+class PinMemoryThread(PinMemory[TSample], ThreadAsynchronous, Generic[TSample]):
     """Threaded implementation of :class:`PinMemory`.
 
     Pins the memory of samples in a separate thread in the background.
 
-    Creates the thread on first use and shuts it down on shutdown. May be reused after shutdown.
+    Creates the thread on first use.
     """
 
     _SHUTDOWN = cast(Future[TSample], object())
@@ -65,10 +69,15 @@ class PinMemoryThread(PinMemory[TSample], AsynchronousMixin, Generic[TSample]):
         device: str | torch.device,
     ):
         super().__init__(device)
-        self._asynchronous_init(cmd_queue=queue.Queue(), result_queue=queue.Queue())
+        self._asynchronous_init(name="pin-memory")
 
     def _wrk_pin_memory(self, sample: Future[TSample]) -> TSample:
-        return self._pin_memory(sample.get())
+        print(
+            f"[{self._name}] Pinning memory of sample {sample}, waiting for sample data\n", end=""
+        )
+        sample_data = sample.get()
+        print(f"[{self._name}] Got sample data\n", end="")
+        return self._pin_memory(sample_data)
 
     def _worker_pin_memory(self, sample: Future[TSample]) -> Future[TSample]:
         return self._worker_call(self._wrk_pin_memory, sample)
@@ -79,4 +88,6 @@ class PinMemoryThread(PinMemory[TSample], AsynchronousMixin, Generic[TSample]):
         Submits the sample future to the thread to fetch it and pins the memory in the thread,
         then returns a future for fetching the pinned sample.
         """
+        if not self.running():
+            self.start()
         return self._worker_pin_memory(sample)

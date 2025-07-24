@@ -113,7 +113,6 @@ class TestDataloader(unittest.TestCase):
                 max_samples_per_sequence=None,
                 repeat=False,
             ),
-            pin_memory=None,
         )
         assert len(train_loader) == 6, len(train_loader)
 
@@ -143,7 +142,6 @@ class TestDataloader(unittest.TestCase):
                 max_samples_per_sequence=None,
                 repeat=False,
             ),
-            pin_memory=None,
         )
 
         train_loader.restore_state_rank(state1)
@@ -178,7 +176,6 @@ class TestDataloader(unittest.TestCase):
             gc_freeze_at_start=True,
             watchdog_timeout_seconds=60,
             fail_on_timeout=True,
-            pin_memory=None,
         )
         assert len(train_loader) == 6, len(train_loader)
 
@@ -216,7 +213,6 @@ class TestDataloader(unittest.TestCase):
             gc_freeze_at_start=True,
             watchdog_timeout_seconds=60,
             fail_on_timeout=True,
-            pin_memory=None,
         )
 
         train_loader.restore_state_rank(state1)
@@ -250,7 +246,6 @@ class TestDataloader(unittest.TestCase):
             gc_collect_every_n_steps=0,
             watchdog_timeout_seconds=60,
             fail_on_timeout=True,
-            pin_memory=None,
         )
         assert len(train_loader) == 6, len(train_loader)
 
@@ -285,7 +280,6 @@ class TestDataloader(unittest.TestCase):
             gc_collect_every_n_steps=0,
             watchdog_timeout_seconds=60,
             fail_on_timeout=True,
-            pin_memory=None,
         )
 
         train_loader.restore_state_rank(state1)
