@@ -104,7 +104,7 @@ class TestDataloader(unittest.TestCase):
         )
 
         # Train mode dataset
-        train_loader = DataLoader(
+        with DataLoader(
             get_train_dataset(
                 self.ds1_path,
                 worker_config=worker_config,
@@ -113,27 +113,25 @@ class TestDataloader(unittest.TestCase):
                 max_samples_per_sequence=None,
                 repeat=False,
             ),
-        )
-        assert len(train_loader) == 6, len(train_loader)
+        ) as train_loader:
+            assert len(train_loader) == 6, len(train_loader)
 
-        train_order1 = [
-            text for idx, data in zip(range(55 * 10), train_loader) for text in data.text
-        ]
-        print(train_order1[:10])
-        print(Counter(train_order1))
-        assert len(train_order1) == 55, len(train_order1)
-        assert len(Counter(train_order1)) == 55, Counter(train_order1)
-        assert all(v == 1 for v in Counter(train_order1).values()), Counter(train_order1)
+            train_order1 = [
+                text for idx, data in zip(range(55 * 10), train_loader) for text in data.text
+            ]
+            print(train_order1[:10])
+            print(Counter(train_order1))
+            assert len(train_order1) == 55, len(train_order1)
+            assert len(Counter(train_order1)) == 55, Counter(train_order1)
+            assert all(v == 1 for v in Counter(train_order1).values()), Counter(train_order1)
 
-        state1 = train_loader.save_state_rank()
+            state1 = train_loader.save_state_rank()
 
-        train_order2 = [
-            text for idx, data in zip(range(55 * 10), train_loader) for text in data.text
-        ]
+            train_order2 = [
+                text for idx, data in zip(range(55 * 10), train_loader) for text in data.text
+            ]
 
-        train_loader.shutdown()
-
-        train_loader = DataLoader(
+        with DataLoader(
             get_train_dataset(
                 self.ds1_path,
                 worker_config=worker_config,
@@ -142,14 +140,11 @@ class TestDataloader(unittest.TestCase):
                 max_samples_per_sequence=None,
                 repeat=False,
             ),
-        )
-
-        train_loader.restore_state_rank(state1)
-
-        cmp_order2 = [text for idx, data in zip(range(55 * 10), train_loader) for text in data.text]
-        assert train_order2 == cmp_order2, (train_order1, cmp_order2)
-
-        train_loader.shutdown()
+        ).with_restored_state_rank(state1) as train_loader:
+            cmp_order2 = [
+                text for idx, data in zip(range(55 * 10), train_loader) for text in data.text
+            ]
+            assert train_order2 == cmp_order2, (train_order1, cmp_order2)
 
     def test_dataloader_fork(self):
         torch.manual_seed(42)
@@ -161,7 +156,7 @@ class TestDataloader(unittest.TestCase):
         )
 
         # Train mode dataset
-        train_loader = DataLoader(
+        with DataLoader(
             get_train_dataset(
                 self.ds1_path,
                 worker_config=worker_config,
@@ -176,29 +171,27 @@ class TestDataloader(unittest.TestCase):
             gc_freeze_at_start=True,
             watchdog_timeout_seconds=60,
             fail_on_timeout=True,
-        )
-        assert len(train_loader) == 6, len(train_loader)
+        ) as train_loader:
+            assert len(train_loader) == 6, len(train_loader)
 
-        train_order1 = [
-            text for idx, data in zip(range(55 * 10), train_loader) for text in data.text
-        ]
-        print(train_order1[:10])
-        print(Counter(train_order1))
-        assert len(train_order1) == 55, len(train_order1)
-        assert len(Counter(train_order1)) == 55, Counter(train_order1)
-        assert all(v == 1 for v in Counter(train_order1).values()), Counter(train_order1)
+            train_order1 = [
+                text for idx, data in zip(range(55 * 10), train_loader) for text in data.text
+            ]
+            print(train_order1[:10])
+            print(Counter(train_order1))
+            assert len(train_order1) == 55, len(train_order1)
+            assert len(Counter(train_order1)) == 55, Counter(train_order1)
+            assert all(v == 1 for v in Counter(train_order1).values()), Counter(train_order1)
 
-        state1 = train_loader.save_state_rank()
+            state1 = train_loader.save_state_rank()
 
-        train_order2 = [
-            text for idx, data in zip(range(55 * 10), train_loader) for text in data.text
-        ]
+            train_order2 = [
+                text for idx, data in zip(range(55 * 10), train_loader) for text in data.text
+            ]
 
-        assert len(train_order1) == len(train_order2), (len(train_order1), len(train_order2))
+            assert len(train_order1) == len(train_order2), (len(train_order1), len(train_order2))
 
-        train_loader.shutdown()
-
-        train_loader = DataLoader(
+        with DataLoader(
             get_train_dataset(
                 self.ds1_path,
                 worker_config=worker_config,
@@ -213,14 +206,11 @@ class TestDataloader(unittest.TestCase):
             gc_freeze_at_start=True,
             watchdog_timeout_seconds=60,
             fail_on_timeout=True,
-        )
-
-        train_loader.restore_state_rank(state1)
-
-        cmp_order2 = [text for idx, data in zip(range(55 * 10), train_loader) for text in data.text]
-        assert train_order2 == cmp_order2, (train_order1, cmp_order2)
-
-        train_loader.shutdown()
+        ).with_restored_state_rank(state1) as train_loader:
+            cmp_order2 = [
+                text for idx, data in zip(range(55 * 10), train_loader) for text in data.text
+            ]
+            assert train_order2 == cmp_order2, (train_order1, cmp_order2)
 
     def test_dataloader_thread(self):
         torch.manual_seed(42)
@@ -232,7 +222,7 @@ class TestDataloader(unittest.TestCase):
         )
 
         # Train mode dataset
-        train_loader = DataLoader(
+        with DataLoader(
             get_train_dataset(
                 self.ds1_path,
                 worker_config=worker_config,
@@ -246,27 +236,25 @@ class TestDataloader(unittest.TestCase):
             gc_collect_every_n_steps=0,
             watchdog_timeout_seconds=60,
             fail_on_timeout=True,
-        )
-        assert len(train_loader) == 6, len(train_loader)
+        ) as train_loader:
+            assert len(train_loader) == 6, len(train_loader)
 
-        train_order1 = [
-            text for idx, data in zip(range(55 * 10), train_loader) for text in data.text
-        ]
-        print(train_order1[:10])
-        print(Counter(train_order1))
-        assert len(train_order1) == 55, len(train_order1)
-        assert len(Counter(train_order1)) == 55, Counter(train_order1)
-        assert all(v == 1 for v in Counter(train_order1).values()), Counter(train_order1)
+            train_order1 = [
+                text for idx, data in zip(range(55 * 10), train_loader) for text in data.text
+            ]
+            print(train_order1[:10])
+            print(Counter(train_order1))
+            assert len(train_order1) == 55, len(train_order1)
+            assert len(Counter(train_order1)) == 55, Counter(train_order1)
+            assert all(v == 1 for v in Counter(train_order1).values()), Counter(train_order1)
 
-        state1 = train_loader.save_state_rank()
+            state1 = train_loader.save_state_rank()
 
-        train_order2 = [
-            text for idx, data in zip(range(55 * 10), train_loader) for text in data.text
-        ]
+            train_order2 = [
+                text for idx, data in zip(range(55 * 10), train_loader) for text in data.text
+            ]
 
-        train_loader.shutdown()
-
-        train_loader = DataLoader(
+        with DataLoader(
             get_train_dataset(
                 self.ds1_path,
                 worker_config=worker_config,
@@ -280,14 +268,11 @@ class TestDataloader(unittest.TestCase):
             gc_collect_every_n_steps=0,
             watchdog_timeout_seconds=60,
             fail_on_timeout=True,
-        )
-
-        train_loader.restore_state_rank(state1)
-
-        cmp_order2 = [text for idx, data in zip(range(55 * 10), train_loader) for text in data.text]
-        assert train_order2 == cmp_order2, (train_order1, cmp_order2)
-
-        train_loader.shutdown()
+        ).with_restored_state_rank(state1) as train_loader:
+            cmp_order2 = [
+                text for idx, data in zip(range(55 * 10), train_loader) for text in data.text
+            ]
+            assert train_order2 == cmp_order2, (train_order1, cmp_order2)
 
 
 if __name__ == "__main__":
