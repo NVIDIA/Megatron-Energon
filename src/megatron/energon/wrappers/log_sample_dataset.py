@@ -72,13 +72,8 @@ class LogSampleDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]
         self.get_keys_fn = get_keys_fn
         self.mode = mode
 
-        self.reset_state_own()
-
     def reset_state_own(self) -> None:
         self._step = 0
-
-    def len_worker(self, worker_idx: int | None = None) -> int:
-        return self.dataset.len_worker(worker_idx)
 
     def _log(self, sample: T_sample) -> None:
         if self.worker_config.should_log(level=1):

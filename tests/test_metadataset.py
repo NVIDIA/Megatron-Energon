@@ -977,8 +977,6 @@ class TestDataset(unittest.TestCase):
                     shuffle_buffer_size=None,
                     max_samples_per_sequence=None,
                 ),
-                checkpoint_every_sec=0.5,
-                checkpoint_every_min_n_samples=1,
             )
 
         # Train mode dataset
@@ -1303,8 +1301,6 @@ class TestDataset(unittest.TestCase):
                 shuffle_buffer_size=None,
                 max_samples_per_sequence=None,
             ),
-            checkpoint_every_sec=0,
-            checkpoint_every_min_n_samples=0,
         )
         skip_initial = 9
 
@@ -1321,8 +1317,6 @@ class TestDataset(unittest.TestCase):
                     shuffle_buffer_size=None,
                     max_samples_per_sequence=None,
                 ),
-                checkpoint_every_sec=0,
-                checkpoint_every_min_n_samples=0,
             )
             rst_loader.restore_state_rank(previous_cp)
             for i, rst_sample in zip(range(1), rst_loader):
@@ -1355,8 +1349,6 @@ class TestDataset(unittest.TestCase):
                 shuffle_buffer_size=None,
                 max_samples_per_sequence=None,
             ),
-            checkpoint_every_sec=0,
-            checkpoint_every_min_n_samples=0,
         )
         second_loader.restore_state_rank(state_initial)
 
@@ -1409,8 +1401,6 @@ class TestDataset(unittest.TestCase):
                         shuffle_buffer_size=None,
                         max_samples_per_sequence=None,
                     ),
-                    checkpoint_every_sec=0,
-                    checkpoint_every_min_n_samples=0,
                 )
                 ref_loader.restore_state_rank(state_offset)
 

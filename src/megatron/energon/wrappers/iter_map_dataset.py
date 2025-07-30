@@ -83,8 +83,6 @@ class IterMapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sampl
         self.stateless_iter_fn = stateless_iter_fn
         self.iter_map_fn_config = iter_map_fn_config
 
-        self.reset_state_own()
-
     def reset_state_own(self) -> None:
         self._sample_index = SampleIndex(self.worker_config, src=self)
 

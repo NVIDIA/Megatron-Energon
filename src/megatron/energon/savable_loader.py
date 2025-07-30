@@ -85,8 +85,6 @@ class SimpleSavableDatasetWrapper(BaseWrapperDataset[T, Tuple[int, int, T]], Gen
         super().__init__(dataset, worker_config=worker_config)
         self.cache_pool = cache_pool
 
-        self.reset_state_own()
-
     def reset_state_own(self) -> None:
         self._sample_index = 0
         self._state_restored = False
@@ -353,13 +351,13 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
                     my_state = self._workers_restore_from[self._worker_id]
                     my_ds_state = my_state.dataset_state
                     assert my_state is not None
-                    if my_ds_state is None:
-                        self.dataset.reset_state_deep()
-                    else:
+                    self.dataset.reset_state()
+                    if my_ds_state is not None:
                         self.dataset.restore_state(my_ds_state)
                     self._restore_state(my_state)
                     self._workers_restore_from[self._worker_id] = None
                 else:
+                    self.dataset.reset_state()
                     # Store the initial state of the worker if we stop before the first sample
                     self._store_checkpoint()
                 # If skipping, also restart the iterator to reach the start of the restored

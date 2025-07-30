@@ -4,7 +4,6 @@ import queue
 import sys
 import threading
 import warnings
-from typing import override
 
 from megatron.energon.dataloader.asynchronous.base import (
     Asynchronous,
@@ -19,15 +18,12 @@ class ThreadAsynchronous(Asynchronous):
 
     _thread: threading.Thread | None = None
 
-    @override
     def _queues(self) -> tuple[QueueProtocol[WorkerCommand], QueueProtocol[WorkerResult]]:
         return queue.Queue(), queue.Queue()
 
-    @override
     def _in_worker(self) -> bool:
         return threading.current_thread() == self._thread
 
-    @override
     def start(self) -> None:
         self._thread = threading.Thread(
             target=self._worker_run,
@@ -37,7 +33,6 @@ class ThreadAsynchronous(Asynchronous):
         )
         self._thread.start()
 
-    @override
     def shutdown(self, in_del: bool = False) -> None:
         if self._thread is not None:
             if in_del:
@@ -64,11 +59,9 @@ class ThreadAsynchronous(Asynchronous):
                 self._thread.join()
                 self._thread = None
 
-    @override
     def running(self) -> bool:
         return self._thread is not None
 
-    @override
     def _assert_running(self) -> None:
         assert self._thread is not None, "Thread must be started first"
         assert self._thread.is_alive(), "Thread died"

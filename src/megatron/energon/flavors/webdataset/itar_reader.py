@@ -1,6 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+import threading
 from abc import ABC, abstractmethod
 from bisect import bisect_right
 from typing import (
@@ -328,7 +329,7 @@ class ShardInfosITarReader(ITarReader[int]):
     shard_infos: List[ShardInfo]
     shard_tar_file_idxs: List[int]
     shard_count_cumsum: List[int]
-    cached_offset_reader: CachedItarOffsetReader
+    _thread_local: threading.local
 
     def __init__(
         self,
@@ -365,8 +366,8 @@ class ShardInfosITarReader(ITarReader[int]):
         tar_filenames = list(cur_tar_files.keys())
         tar_filepaths = [p[1] for p in cur_tar_files.values()]
 
-        # Instantiate cached reader for the .tar.idx files
-        self.cached_offset_reader = CachedItarOffsetReader(cache_size=itar_cache_size)
+        self._itar_cache_size = itar_cache_size
+        self._thread_local = threading.local()
 
         super().__init__(
             base_path=base_path,
@@ -376,6 +377,14 @@ class ShardInfosITarReader(ITarReader[int]):
             itar_cache_size=itar_cache_size,
             sample_filter=sample_filter,
         )
+
+    @property
+    def cached_offset_reader(self) -> CachedItarOffsetReader:
+        if not hasattr(self._thread_local, "_cached_offset_reader"):
+            self._thread_local._cached_offset_reader = CachedItarOffsetReader(
+                cache_size=self._itar_cache_size
+            )
+        return self._thread_local._cached_offset_reader
 
     def _get_itar_sample_pointer(self, idx: int) -> ITarSamplePointer:
         """

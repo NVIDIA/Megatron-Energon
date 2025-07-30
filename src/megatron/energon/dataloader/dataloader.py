@@ -156,6 +156,81 @@ class DataLoader(Generic[TSample]):
 
         self._spawning_process = os.getpid()
 
+    def _start(self) -> None:
+        """Start the workers and restore the state if available."""
+        self._workers = [
+            self._worker_type(self._dataset, self._worker_config, local_worker_id, self._cache_pool)
+            for local_worker_id in range(self._worker_config.safe_num_workers)
+        ]
+        for worker in self._workers:
+            worker.start()
+
+        if self._restore_state is None:
+            worker_states = [None] * self._worker_config.safe_num_workers
+        else:
+            worker_states = self._restore_state["worker_states"]
+
+        assert len(worker_states) == self._worker_config.safe_num_workers, (
+            "Number of initial states must match number of workers"
+        )
+
+        for worker, worker_state in zip(self._workers, worker_states):
+            worker.dataset_init(worker_state)
+
+        if self._restore_state is not None:
+            self._prefetching_samples = [
+                [
+                    self._pin_memory(
+                        CallableFuture(functools.partial(self.restore_sample, sample_key))
+                    )
+                    for sample_key in prefetched_samples_keys
+                ]
+                for prefetched_samples_keys in self._restore_state["prefetched_samples_keys"]
+            ]
+            self._next_worker_id = self._restore_state["next_worker_id"]
+            self._exhausted_workers = [
+                False if worker_state is None else worker_state["exhausted"]
+                for worker_state in worker_states
+            ]
+            # State was restored, clear
+            self._restore_state = None
+
+    def shutdown(self, in_del: bool = False) -> None:
+        """
+        Shutdown the workers and the pin memory thread.
+
+        Args:
+            in_del: Whether the shutdown is called from the garbage collector (in __del__).
+                Users should not need to set this.
+        """
+        if self._workers is not None:
+            if in_del:
+                warnings.warn(
+                    "Explicitly call DataLoader.shutdown() to avoid leaking workers or run as context manager.",
+                    ResourceWarning,
+                )
+                print(
+                    "WARNING: Explicitly call DataLoader.shutdown() to avoid leaking workers or run as context manager.\n",
+                    end="",
+                    file=sys.stderr,
+                )
+            for worker in self._workers:
+                worker.shutdown(in_del=in_del)
+            self._workers = None
+        self._pin_memory.shutdown(in_del=in_del)
+
+    def __del__(self) -> None:
+        self.shutdown(in_del=True)
+
+    def __enter__(self) -> "DataLoader[TSample]":
+        # Already start if using the context manager. This ensures the lifecycle is fixed.
+        # Otherwise, will start when iterating.
+        self._start()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self.shutdown()
+
     def _epoch_iter(self) -> Generator[TSample, None, None]:
         """Iterate over the dataset for one epoch (i.e. all workers StopIteration).
         One epoch may also be infinite (if looping the dataset)."""
@@ -318,81 +393,6 @@ class DataLoader(Generic[TSample]):
         else:
             # Not distributed -> return the merged state
             return [merged_state]
-
-    def _start(self) -> None:
-        """Start the workers and restore the state if available."""
-        self._workers = [
-            self._worker_type(self._dataset, self._worker_config, local_worker_id, self._cache_pool)
-            for local_worker_id in range(self._worker_config.safe_num_workers)
-        ]
-        for worker in self._workers:
-            worker.start()
-
-        if self._restore_state is None:
-            worker_states = [None] * self._worker_config.safe_num_workers
-        else:
-            worker_states = self._restore_state["worker_states"]
-
-        assert len(worker_states) == self._worker_config.safe_num_workers, (
-            "Number of initial states must match number of workers"
-        )
-
-        for worker, worker_state in zip(self._workers, worker_states):
-            worker.dataset_init(worker_state)
-
-        if self._restore_state is not None:
-            self._prefetching_samples = [
-                [
-                    self._pin_memory(
-                        CallableFuture(functools.partial(self.restore_sample, sample_key))
-                    )
-                    for sample_key in prefetched_samples_keys
-                ]
-                for prefetched_samples_keys in self._restore_state["prefetched_samples_keys"]
-            ]
-            self._next_worker_id = self._restore_state["next_worker_id"]
-            self._exhausted_workers = [
-                False if worker_state is None else worker_state["exhausted"]
-                for worker_state in worker_states
-            ]
-            # State was restored, clear
-            self._restore_state = None
-
-    def shutdown(self, in_del: bool = False) -> None:
-        """
-        Shutdown the workers and the pin memory thread.
-
-        Args:
-            in_del: Whether the shutdown is called from the garbage collector (in __del__).
-                Users should not need to set this.
-        """
-        if self._workers is not None:
-            if in_del:
-                warnings.warn(
-                    "Explicitly call DataLoader.shutdown() to avoid leaking workers or run as context manager.",
-                    ResourceWarning,
-                )
-                print(
-                    "WARNING: Explicitly call DataLoader.shutdown() to avoid leaking workers or run as context manager.\n",
-                    end="",
-                    file=sys.stderr,
-                )
-            for worker in self._workers:
-                worker.shutdown(in_del=in_del)
-            self._workers = None
-        self._pin_memory.shutdown(in_del=in_del)
-
-    def __del__(self) -> None:
-        self.shutdown(in_del=True)
-
-    def __enter__(self) -> "DataLoader[TSample]":
-        # Already start if using the context manager. This ensures the lifecycle is fixed.
-        # Otherwise, will start when iterating.
-        self._start()
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback) -> None:
-        self.shutdown()
 
     def restore_state_rank(self, state: FlexState | None) -> None:
         """

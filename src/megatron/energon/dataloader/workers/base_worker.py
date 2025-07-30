@@ -103,9 +103,9 @@ class DataLoaderWorker(Generic[TSample]):
         )
         assert self._seed == self.worker_config.worker_seed(self._rank_worker_id), "Seed mismatch"
         print(f"dataset_init {state=}\n", end="")
+        self.dataset.reset_state()
         if state is None:
             self._sample_index = 0
-            self.dataset.reset_state_deep()
             print("dataset_init reset_state_deep\n", end="")
             self.new_iter()
             print("dataset_init new_iter\n", end="")

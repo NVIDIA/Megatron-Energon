@@ -362,8 +362,6 @@ class TestDataset(unittest.TestCase):
 
         train_loader = get_savable_loader(
             train_dataset,
-            checkpoint_every_sec=0,
-            checkpoint_every_min_n_samples=1,
         )
 
         data = list(zip(range(2 * 55), train_loader))
@@ -403,8 +401,6 @@ class TestDataset(unittest.TestCase):
                 shuffle_buffer_size=None,
                 max_samples_per_sequence=None,
             ),
-            checkpoint_every_sec=0,
-            checkpoint_every_min_n_samples=1,
         )
 
         train_loader.restore_state_rank(state)
@@ -473,8 +469,6 @@ class TestDataset(unittest.TestCase):
 
         train_loader = get_savable_loader(
             train_dataset,
-            checkpoint_every_sec=0,
-            checkpoint_every_min_n_samples=1,
         )
 
         data = list(zip(range(2 * 55), train_loader))
@@ -553,8 +547,6 @@ class TestDataset(unittest.TestCase):
 
         train_loader = get_savable_loader(
             train_dataset,
-            checkpoint_every_sec=0,
-            checkpoint_every_min_n_samples=1,
         )
 
         data = list(zip(range(2 * 55), train_loader))
@@ -712,8 +704,6 @@ class TestDataset(unittest.TestCase):
 
         train_loader = get_savable_loader(
             train_dataset,
-            checkpoint_every_sec=0,
-            checkpoint_every_min_n_samples=1,
         )
 
         data = list(zip(range(2 * 55), train_loader))
@@ -828,8 +818,6 @@ class TestDataset(unittest.TestCase):
 
         train_loader = get_savable_loader(
             train_dataset,
-            checkpoint_every_sec=0,
-            checkpoint_every_min_n_samples=1,
         )
 
         data = list(enumerate(train_loader))
@@ -889,8 +877,6 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
                 repeat=False,
             ),
-            checkpoint_every_sec=0,
-            checkpoint_every_min_n_samples=1,
         )
         train_loader.restore_state_rank(state1)
         data2_restore = list(enumerate(train_loader))
@@ -964,8 +950,6 @@ class TestDataset(unittest.TestCase):
 
         train_loader = get_savable_loader(
             train_dataset,
-            checkpoint_every_sec=0,
-            checkpoint_every_min_n_samples=1,
         )
 
         assert len(train_loader) == 38 + 55 + 27, len(train_loader)
@@ -1002,8 +986,6 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
                 repeat=False,
             ),
-            checkpoint_every_sec=0,
-            checkpoint_every_min_n_samples=1,
         )
 
         data1 = list(zip(range(95), train_loader))
@@ -1020,8 +1002,6 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
                 repeat=False,
             ),
-            checkpoint_every_sec=0,
-            checkpoint_every_min_n_samples=1,
         )
         train_loader.restore_state_rank(state1)
         data2_restore = list(enumerate(train_loader))
@@ -1055,8 +1035,6 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
                 repeat=False,
             ),
-            checkpoint_every_sec=0,
-            checkpoint_every_min_n_samples=1,
         )
 
         ds1_counter = 0
@@ -1082,8 +1060,6 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
                 repeat=False,
             ),
-            checkpoint_every_sec=0,
-            checkpoint_every_min_n_samples=1,
         )
         train_loader.restore_state_rank(state1)
         data2_restore = list(enumerate(train_loader))
@@ -1114,8 +1090,6 @@ class TestDataset(unittest.TestCase):
                 parallel_shard_iters=1,
                 max_samples_per_sequence=None,
             ),
-            checkpoint_every_sec=0,
-            checkpoint_every_min_n_samples=1,
         )
 
         data = list(zip(range(200), train_loader))
@@ -1146,8 +1120,6 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
                 repeat=False,
             ),
-            checkpoint_every_sec=0,
-            checkpoint_every_min_n_samples=1,
         )
 
         # TODO: This should be exactly 60. There is a corresponding TODO in the repeat_dataset.py

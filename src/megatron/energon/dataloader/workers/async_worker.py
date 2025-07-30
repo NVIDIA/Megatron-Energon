@@ -1,6 +1,6 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
-from typing import Generic, TypeVar, override
+from typing import Generic, TypeVar
 
 from megatron.energon.cache.base import CachePool
 from megatron.energon.dataloader.asynchronous import (
@@ -46,14 +46,6 @@ class DataLoaderAsynchronousWorker(DataLoaderWorker[TSample], Asynchronous, Gene
         self, cmd_queue: QueueProtocol[WorkerCommand], result_queue: QueueProtocol[WorkerResult]
     ) -> None:
         SystemRng.seed(self._seed)
-        import torch.utils.data._utils
-
-        torch.utils.data._utils.worker._worker_info = torch.utils.data._utils.worker.WorkerInfo(
-            id=self._rank_worker_id,
-            num_workers=self.worker_config.num_workers,
-            seed=self._seed,
-            dataset=self.dataset,
-        )
         self._global_worker_id = self.worker_config.global_worker_id()
 
         super()._worker_run(cmd_queue, result_queue)
@@ -64,28 +56,24 @@ class DataLoaderAsynchronousWorker(DataLoaderWorker[TSample], Asynchronous, Gene
         # so immediately resolve the future to the result (get returns immediately).
         return super().prefetch_next().get()
 
-    @override
     def dataset_init(self, initial_state: FlexState | None) -> None:
         if self._in_worker():
             return super().dataset_init(initial_state)
         else:
             return self._worker_call(self.dataset_init, initial_state).get()
 
-    @override
     def new_iter(self) -> None:
         if self._in_worker():
             return super().new_iter()
         else:
             return self._worker_call(self.new_iter).get()
 
-    @override
     def prefetch_next(self) -> Future[TSample]:
         # Do not resolve the future here, but return it.
         if self._in_worker():
             return super().prefetch_next()
         return self._worker_call(self._wrk_prefetch_next)
 
-    @override
     def save_state(self) -> FlexState:
         if self._in_worker():
             return super().save_state()

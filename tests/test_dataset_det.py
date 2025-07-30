@@ -659,7 +659,6 @@ class TestDataset(unittest.TestCase):
         n1 = 18
         n2 = 109
         n3 = 28
-        ces = 0
 
         # This seed is used by the dataset to shuffle the data
         torch.manual_seed(42)
@@ -673,7 +672,7 @@ class TestDataset(unittest.TestCase):
             max_samples_per_sequence=2,
             parallel_shard_iters=psi,
         )
-        loader = get_savable_loader(ds, checkpoint_every_sec=ces)
+        loader = get_savable_loader(ds)
 
         # print("save state")
         state_0 = loader.save_state_rank()

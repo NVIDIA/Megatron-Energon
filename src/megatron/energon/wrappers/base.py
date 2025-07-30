@@ -1,6 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+import threading
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from typing import Any, Generator, Generic, Iterable, Optional, Tuple, Type, TypeVar, Union
@@ -54,6 +55,9 @@ class BaseWrapperDataset(SavableDataset[T_sample_out], Generic[T_sample_in, T_sa
         assert len(self.datasets) == 1
         return self.datasets[0]
 
+    def len_worker(self, worker_idx: int | None = None) -> int:
+        return sum(ds.len_worker(worker_idx) for ds in self.datasets)
+
     def can_restore_sample(self) -> bool:
         return all(ds.can_restore_sample() for ds in self.datasets)
 
@@ -90,6 +94,20 @@ class BaseWrapperDataset(SavableDataset[T_sample_out], Generic[T_sample_in, T_sa
                 src=self,
             )
 
+    @abstractmethod
+    def reset_state_own(self) -> None:
+        """Resets the state of the dataset, excl. the inner datasets."""
+        ...
+
+    def reset_state(self) -> None:
+        """Resets the state of the inner datasets and then the own state."""
+
+        for ds in self.datasets:
+            ds.reset_state()
+
+        super().reset_state()
+        self.reset_state_own()
+
     def save_state(self) -> FlexState:
         own_state = super().save_state()
 
@@ -101,22 +119,6 @@ class BaseWrapperDataset(SavableDataset[T_sample_out], Generic[T_sample_in, T_sa
             dataset.restore_state(dstate)
 
         super().restore_state(state)
-
-    def reset_state_deep(self) -> None:
-        """Resets the state of the inner datasets and then the own state."""
-
-        for ds in self.datasets:
-            if isinstance(ds, BaseWrapperDataset):
-                ds.reset_state_deep()
-            else:
-                ds.reset_state_own()
-
-        self.reset_state_own()
-
-    @abstractmethod
-    def reset_state_own(self) -> None:
-        """Resets the state of the dataset, excl. the inner datasets."""
-        ...
 
 
 class SampleIndex(Savable):
@@ -141,7 +143,9 @@ class SampleIndex(Savable):
     def ctx(self, sample_idx: Optional[int] = None):
         if sample_idx is None:
             sample_idx = self.get_next()
-        assert WorkerConfig.active_worker_config is not None
+        assert WorkerConfig.active_worker_config is not None, (
+            f"WorkerConfig.active_worker_config is None on thread {threading.get_ident()}"
+        )
         WorkerConfig.active_worker_config.worker_push_sample_index(sample_idx)
         # print("  " * SampleIndex.actives + f"Activated from {type(self.src).__name__}({id(self.src)}) {sample_idx} -> {WorkerConfig.active_worker_config._sample_index_stack}")
         SampleIndex.actives += 1

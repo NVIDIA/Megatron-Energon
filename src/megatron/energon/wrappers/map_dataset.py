@@ -81,15 +81,10 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
         self.map_fn_config = map_fn_config
         self.failure_tolerance = failure_tolerance
 
-        self.reset_state_own()
-
     def reset_state_own(self) -> None:
         self._sample_index = SampleIndex(self.worker_config, src=self)
         self._generator_sample_key = None
         self._generator_offset = None
-
-    def len_worker(self, worker_idx: int | None = None) -> int:
-        return self.dataset.len_worker(worker_idx)
 
     def __iter__(self) -> Iterator[T_sample_out]:
         last_map_failures = 0

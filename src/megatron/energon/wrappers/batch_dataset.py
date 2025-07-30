@@ -83,8 +83,6 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
         self.error_handler = error_handler
         self.failure_tolerance = failure_tolerance
 
-        self.reset_state_own()
-
     def reset_state_own(self) -> None:
         self._sample_index = SampleIndex(self.worker_config, src=self)
         self._generator_sample_keys = None

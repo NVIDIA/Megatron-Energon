@@ -25,4 +25,13 @@ class ForkDataLoaderWorker(
         result_queue: multiprocessing.Queue,
     ) -> None:
         gc_init_worker(self._rank_worker_id)
+        import torch.utils.data._utils
+
+        torch.utils.data._utils.worker._worker_info = torch.utils.data._utils.worker.WorkerInfo(
+            id=self._rank_worker_id,
+            num_workers=self.worker_config.num_workers,
+            seed=self._seed,
+            dataset=self.dataset,
+        )
+
         super()._worker_run(cmd_queue, result_queue)

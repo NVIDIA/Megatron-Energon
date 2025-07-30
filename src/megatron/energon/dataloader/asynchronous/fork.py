@@ -5,7 +5,6 @@ import os
 import sys
 import threading
 import warnings
-from typing import override
 
 from megatron.energon.dataloader.asynchronous.base import (
     Asynchronous,
@@ -26,12 +25,10 @@ class ForkAsynchronous(Asynchronous):
 
     _spawning_process: int
 
-    @override
     def _asynchronous_init(self, name: str) -> None:
         super()._asynchronous_init(name)
         self._spawning_process = os.getpid()
 
-    @override
     def _queues(self) -> tuple[QueueProtocol[WorkerCommand], QueueProtocol[WorkerResult]]:
         return multiprocessing.Queue(), multiprocessing.Queue()
 
@@ -47,7 +44,6 @@ class ForkAsynchronous(Asynchronous):
                 print(f"[{self._name}] Parent process died, exiting", file=sys.stderr)
                 os._exit(-1)
 
-    @override
     def _worker_run(
         self,
         cmd_queue: multiprocessing.Queue,
@@ -77,11 +73,9 @@ class ForkAsynchronous(Asynchronous):
             cmd_queue.cancel_join_thread()
             print(f"[{self._name}] shutting down, done\n", end="")
 
-    @override
     def _in_worker(self) -> bool:
         return multiprocessing.current_process() == self._process
 
-    @override
     def start(self) -> None:
         multiprocessing.set_start_method("fork", force=True)
         self._process = multiprocessing.Process(
@@ -92,7 +86,6 @@ class ForkAsynchronous(Asynchronous):
         )
         self._process.start()
 
-    @override
     def shutdown(self, in_del: bool = False) -> None:
         if self._spawning_process != os.getpid():
             # Should avoid forked process containing a forked worker on exit.
@@ -138,11 +131,9 @@ class ForkAsynchronous(Asynchronous):
                 self._result_queue.close()
                 self._result_queue.cancel_join_thread()
 
-    @override
     def running(self) -> bool:
         return self._process is not None
 
-    @override
     def _assert_running(self) -> None:
         assert self._process is not None, "Worker must be started first"
         assert self._process.is_alive(), "Worker died"

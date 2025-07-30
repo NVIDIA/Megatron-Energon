@@ -401,8 +401,6 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
                 packing_buffer_size=2,
             ),
-            checkpoint_every_sec=0,
-            checkpoint_every_min_n_samples=1,
         )
         samples = [s.__key__ for idx, s in zip(range(100), loader)]
 
@@ -423,8 +421,6 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
                 packing_buffer_size=2,
             ),
-            checkpoint_every_sec=0,
-            checkpoint_every_min_n_samples=1,
         )
 
         loader.restore_state_rank(state)
@@ -454,8 +450,6 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
                 packing_buffer_size=2,
             ),
-            checkpoint_every_sec=0,
-            checkpoint_every_min_n_samples=1,
         )
 
         print("Iterating from dataset")
@@ -483,8 +477,6 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
                 packing_buffer_size=2,
             ),
-            checkpoint_every_sec=0,
-            checkpoint_every_min_n_samples=1,
         )
 
         loader.restore_state_rank(state)
@@ -514,8 +506,6 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
                 packing_buffer_size=2,
             ),
-            checkpoint_every_sec=0,
-            checkpoint_every_min_n_samples=1,
             cache_pool=FileStoreCachePool(
                 parent_cache_dir=self.dataset_path / "cache",
                 num_workers=1,
@@ -548,8 +538,6 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
                 packing_buffer_size=2,
             ),
-            checkpoint_every_sec=0,
-            checkpoint_every_min_n_samples=1,
             cache_pool=FileStoreCachePool(
                 parent_cache_dir=self.dataset_path / "cache",
                 num_workers=1,
@@ -583,8 +571,6 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
                 packing_buffer_size=2,
             ),
-            checkpoint_every_sec=0,
-            checkpoint_every_min_n_samples=1,
             cache_pool=FileStoreCachePool(
                 parent_cache_dir=self.dataset_path / "cache",
                 num_workers=1,
@@ -617,8 +603,6 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
                 packing_buffer_size=2,
             ),
-            checkpoint_every_sec=0,
-            checkpoint_every_min_n_samples=1,
             cache_pool=FileStoreCachePool(
                 parent_cache_dir=self.dataset_path / "cache",
                 num_workers=1,
@@ -718,8 +702,6 @@ class TestDataset(unittest.TestCase):
                 shuffle_buffer_size=None,
                 max_samples_per_sequence=None,
             ),
-            checkpoint_every_sec=0,
-            checkpoint_every_min_n_samples=1,
         )
         samples = [s.__key__ for idx, s in zip(range(100), loader)]
 

@@ -118,12 +118,11 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
         self.workers_slice_offsets = workers_sample_slice_offsets
         self.slice_offsets = None
 
-        self.reset_state_own()
-
         assert shuffle_over_epochs is None or shuffle_over_epochs == -1 or shuffle_over_epochs >= 1
         assert self.parallel_slice_iters >= 1
 
-    def reset_state_own(self) -> None:
+    def reset_state(self) -> None:
+        super().reset_state()
         self._worker_rng = WorkerRng(self.worker_config)
         self._pending_slice_indexes = None
         self._pending_slices_offset = None

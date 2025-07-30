@@ -151,7 +151,7 @@ class TestDataloader(unittest.TestCase):
         worker_config = WorkerConfig(
             rank=0,
             world_size=1,
-            num_workers=1,
+            num_workers=2,
             seed_offset=42,
         )
 
@@ -217,7 +217,7 @@ class TestDataloader(unittest.TestCase):
         worker_config = WorkerConfig(
             rank=0,
             world_size=1,
-            num_workers=1,
+            num_workers=2,
             seed_offset=42,
         )
 

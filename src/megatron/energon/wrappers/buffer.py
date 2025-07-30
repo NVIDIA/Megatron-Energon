@@ -33,7 +33,6 @@ class SavableSampleBuffer(BaseWrapperDataset[T_sample, T_sample], Generic[T_samp
 
     def __init__(self, dataset: SavableDataset[T_sample], *, worker_config: WorkerConfig):
         super().__init__(dataset, worker_config=worker_config)
-        self.reset_state_own()
 
     def reset_state_own(self) -> None:
         self._buffer = []

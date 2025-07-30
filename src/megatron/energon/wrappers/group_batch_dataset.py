@@ -112,8 +112,6 @@ class GroupBatchDataset(
         self.error_handler = error_handler
         self.failure_tolerance = failure_tolerance
 
-        self.reset_state_own()
-
         assert not inspect.isgeneratorfunction(batcher), (
             f"Batcher {batcher} must not be a generator function for grouped batching."
         )

@@ -3,6 +3,7 @@
 
 import dataclasses
 import inspect
+import threading
 import typing
 from abc import ABC, abstractmethod
 from copy import deepcopy
@@ -249,6 +250,9 @@ class State(ABC, ExtendableDataclassMixin):
     """
 
 
+THREAD_SAFE = True
+
+
 class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC):
     """A dataset that can be saved and restored (i.e. the random state, internal buffers, etc.).
     I.e. it can be resumed from a checkpoint.
@@ -272,6 +276,8 @@ class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC)
 
     def __init__(self, worker_config: WorkerConfig):
         self.worker_config = worker_config
+        if THREAD_SAFE:
+            self._thread_state = threading.local()
 
     @abstractmethod
     def len_worker(self, worker_idx: int | None = None) -> int:
@@ -348,14 +354,12 @@ class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC)
             else:
                 setattr(self, key, value)
 
-    @abstractmethod
-    def reset_state_own(self) -> None:
-        """Resets the state of the dataset to the initial state. Can only be called in a worker process."""
-        ...
-
-    def reset_state_deep(self) -> None:
-        """Resets the state of the dataset to the initial state. Can only be called in a worker process."""
-        self.reset_state_own()
+    def reset_state(self) -> None:
+        """
+        Resets the state of the dataset. Called at least once in the worker process before iterating.
+        Recursively resets the state of all wrapped datasets as well.
+        """
+        pass
 
     @abstractmethod
     def worker_has_samples(self) -> bool:
@@ -400,6 +404,30 @@ class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC)
         raise NotImplementedError(
             "This dataset does not support indexing, because it is not safely deterministic."
         )
+
+    if THREAD_SAFE:
+
+        def __getattribute__(self, name: str) -> Any:
+            if name in ("_savable_fields", "_thread_state", "worker_config"):
+                return object.__getattribute__(self, name)
+            elif name in self._savable_fields:
+                return getattr(self._thread_state, name)
+            else:
+                return object.__getattribute__(self, name)
+
+        def __delattr__(self, name: str) -> None:
+            if name in self._savable_fields:
+                delattr(self._thread_state, name)
+            else:
+                object.__delattr__(self, name)
+
+        def __setattr__(self, name: str, value: Any) -> None:
+            if name in ("_savable_fields", "_thread_state", "worker_config"):
+                object.__setattr__(self, name, value)
+            elif name in self._savable_fields:
+                setattr(self._thread_state, name, value)
+            else:
+                object.__setattr__(self, name, value)
 
 
 class BaseCoreDatasetFactory(Generic[T_sample], ABC):

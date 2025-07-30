@@ -46,7 +46,6 @@ class BlendDataset(BaseWrapperDataset[T_sample, T_sample]):
         super().__init__(self.datasets, worker_config=worker_config)
 
         self.dataset_weights = dataset_weights
-        self.reset_state_own()
 
     def reset_state_own(self) -> None:
         self._worker_rng = WorkerRng(self.worker_config)

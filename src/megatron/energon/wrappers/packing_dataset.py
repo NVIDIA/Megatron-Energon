@@ -144,8 +144,6 @@ class PackingDataset(
         self.final_packer_failure_tolerance = final_packer_failure_tolerance
         self.sample_encoder_failure_tolerance = sample_encoder_failure_tolerance
 
-        self.reset_state_own()
-
     def reset_state_own(self) -> None:
         self._reading_buffer = SavableSampleBuffer(self.dataset, worker_config=self.worker_config)
         self._pre_packing_buffer = SavableSampleBuffer(

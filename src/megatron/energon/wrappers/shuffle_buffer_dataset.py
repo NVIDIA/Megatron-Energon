@@ -31,14 +31,10 @@ class ShuffleBufferDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sam
         """Create a shuffle buffer for the dataset."""
         super().__init__(dataset, worker_config=worker_config)
         self.size = size
-        self.reset_state_own()
 
     def reset_state_own(self) -> None:
         self._worker_rng = WorkerRng(self.worker_config)
         self._active_buffer = SavableSampleBuffer(self.dataset, worker_config=self.worker_config)
-
-    def len_worker(self, worker_idx: int | None = None) -> int:
-        return self.dataset.len_worker(worker_idx)
 
     def __iter__(self) -> Iterator[T_sample]:
         self._active_buffer.worker_start()

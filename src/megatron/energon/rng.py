@@ -89,6 +89,47 @@ class WorkerRng(Savable):
             self._restore_state = state["rng"]
 
 
+class UserRng:
+    """User random generators. To be used within the task encoder, providing local seeding."""
+
+    def __init__(self, seed: int):
+        self.torch = torch.Generator()
+        self.torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            self.torch_cuda = torch.Generator(device="cuda")
+            self.torch_cuda.manual_seed(seed)
+
+        self.numpy = numpy.random.default_rng(seed=seed)
+        self.random = random.Random(seed)
+
+    def seed(self, seed: int) -> None:
+        self.torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            self.torch_cuda.manual_seed(seed)
+        self.numpy.bit_generator.state = numpy.random.default_rng(seed).bit_generator.state
+        self.random.seed(seed)
+
+    def seed_args(self, *args: Any) -> None:
+        self.seed(SystemRng.get_seed_from_args(*args))
+
+    def save_state(self) -> FlexState:
+        state = FlexState(
+            torch=self.torch.get_state().tolist(),
+            numpy=self.numpy.bit_generator.state,
+            random=self.random.getstate(),
+        )
+        if torch.cuda.is_available():
+            state["torch_cuda"] = self.torch_cuda.get_state().tolist()
+        return state
+
+    def restore_state(self, state: FlexState):
+        self.torch.set_state(torch.as_tensor(state["torch"]))
+        if torch.cuda.is_available():
+            self.torch_cuda.set_state(torch.as_tensor(state["torch_cuda"], device="cuda"))
+        self.numpy.bit_generator.state = state["numpy"]
+        self.random.setstate(state["random"])
+
+
 @edataclass
 class SystemRngState:
     """The state of the global random generators.
