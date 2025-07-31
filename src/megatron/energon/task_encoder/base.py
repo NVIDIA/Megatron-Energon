@@ -21,6 +21,7 @@ from typing import (
     Type,
     TypeVar,
     Union,
+    cast,
     overload,
 )
 
@@ -120,8 +121,11 @@ def batch_list(batch: List[Any]) -> Any:
 P = ParamSpec("P")
 
 
+use_default = cast(int, object())
+
+
 @overload
-def stateless(*, restore_seeds: bool = False) -> Callable[[Callable[P, T]], Callable[P, T]]: ...
+def stateless(*, restore_seeds: bool = False, failure_tolerance: Optional[int] = use_default) -> Callable[[Callable[P, T]], Callable[P, T]]: ...
 
 
 @overload
@@ -132,7 +136,7 @@ def stateless(
     fn: Optional[Callable[..., T]] = None,
     *,
     restore_seeds: bool = False,
-    failure_tolerance: Optional[int] = None,
+    failure_tolerance: Optional[int] = use_default,
 ) -> Union[Callable[[Callable[..., T]], Callable[..., T]], Callable[..., T]]:
     """Decorator to mark a function of the task encoder as restorable.
 
@@ -238,7 +242,8 @@ def stateless(
             return seed_wrapper
 
     setattr(fn, "__stateless__", True)
-    setattr(fn, "__failure_tolerance__", failure_tolerance)
+    if failure_tolerance is not use_default:
+        setattr(fn, "__failure_tolerance__", failure_tolerance)
     return fn
 
 
