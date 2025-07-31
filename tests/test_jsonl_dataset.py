@@ -197,12 +197,12 @@ class TestJsonlDataset(unittest.TestCase):
                         "__class__: MetadatasetV2",
                         "splits:",
                         "  train:",
-                        "    path: msc://s3test_metadataset/test/dataset/metadataset_all.yaml",
+                        "    path: msc://s3test_jsonl_dataset/test/dataset/metadataset_all.yaml",
                     ]
                 )
             )
 
-        with setup_s3_emulator(profile_name="s3test_metadataset") as emu:
+        with setup_s3_emulator(profile_name="s3test_jsonl_dataset") as emu:
             # Upload the dataset to the S3 emulator
             # EPath(self.dataset_path).copy(EPath("msc://s3/test/dataset"))
             emu.add_file(self.dataset_path, "test/dataset")
