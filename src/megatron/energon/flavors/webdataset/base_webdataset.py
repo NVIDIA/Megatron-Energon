@@ -51,7 +51,6 @@ class BaseWebdatasetFactory(
     worker_config: WorkerConfig
 
     shards: List[ShardInfo]
-    rank_shards: List[List[Sequence[ShardInfo]]]
 
     def __init__(
         self,

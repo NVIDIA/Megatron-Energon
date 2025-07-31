@@ -9,6 +9,10 @@ from megatron.energon.flavors.base_dataset import (
 )
 from megatron.energon.flavors.captioning import CaptioningSample, CaptioningWebdataset
 from megatron.energon.flavors.crude import CrudeSample, CrudeWebdataset
+from megatron.energon.flavors.crude_jsonl_dataset import (
+    CrudeJsonlDatasetFactory,
+    DecoderCrudeJsonlDatasetFactory,
+)
 from megatron.energon.flavors.image import ImageSample, ImageWebdataset
 from megatron.energon.flavors.image_classification import (
     ImageClassificationSample,
@@ -48,8 +52,10 @@ __all__ = [
     "BaseWebdatasetFactory",
     "CaptioningSample",
     "CaptioningWebdataset",
+    "CrudeJsonlDatasetFactory",
     "CrudeSample",
     "CrudeWebdataset",
+    "DecoderCrudeJsonlDatasetFactory",
     "DefaultDecoderWebdatasetFactory",
     "DefaultGenericWebdatasetFactory",
     "EmptyDatasetError",

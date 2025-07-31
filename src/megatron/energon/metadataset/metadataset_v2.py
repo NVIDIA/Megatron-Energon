@@ -85,7 +85,8 @@ class DatasetReference(DatasetLoaderInterface):
         assert mds_path is not None
         if not isinstance(self.path, EPath):
             self.path = mds_path.parent / self.path
-        if self.path.is_file():
+        is_file = self.path.is_file()
+        if is_file and not self.path.name.endswith(".jsonl"):
             assert self.aux is None, "Cannot specify auxiliary datasets for crude datasets"
             assert self.dataset_config == "dataset.yaml", "Must not set dataset_config"
             assert self.split_config == "split.yaml", "Must not set split_config"
@@ -96,7 +97,9 @@ class DatasetReference(DatasetLoaderInterface):
                 default_kwargs=dict(path=self.path),
             )
             self._dataset.post_initialize()
-        elif check_dataset_info_present(self.path):
+        elif check_dataset_info_present(self.path) or (
+            is_file and self.path.name.endswith(".jsonl")
+        ):
             self._dataset = DatasetLoader(
                 path=self.path,
                 split_config=self.split_config,

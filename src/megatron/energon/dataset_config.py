@@ -6,7 +6,12 @@ from typing import Any, Dict, Optional, Type, TypeVar, Union
 
 from megatron.energon.epathlib import EPath
 from megatron.energon.eyaml import load_yaml
-from megatron.energon.flavors import BaseCoreDatasetFactory, StandardWebdatasetFactory
+from megatron.energon.flavors import (
+    BaseCoreDatasetFactory,
+    DecoderCrudeJsonlDatasetFactory,
+    StandardWebdatasetFactory,
+)
+from megatron.energon.flavors.crude import CrudeSample
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 from megatron.energon.flavors.webdataset.metadata import check_dataset_info_present
 from megatron.energon.typed_converter import JsonParser
@@ -81,24 +86,44 @@ def get_dataset_from_config(
         The instantiated dataset
     """
     path = EPath(path)
-    if not check_dataset_info_present(path):
-        raise ValueError(
-            f"Path {path} does not contain a {MAIN_FOLDER_NAME}/.info.yaml or .info.json file. Did you forget to "
-            f"prepare the dataset? Please check the documentation for an introduction to dataset "
-            f"preparation."
+    dataset: BaseCoreDatasetFactory[T_sample]
+    if path.name.endswith(".jsonl"):
+        assert sample_type is CrudeSample or sample_type is None, (
+            f"Sample type must be CrudeSample for jsonl datasets, but got {sample_type}"
         )
-    dataset: BaseCoreDatasetFactory[T_sample] = load_config(
-        path / MAIN_FOLDER_NAME / dataset_config,
-        default_kwargs=dict(
-            path=path,
-            split_config=split_config,
+        assert dataset_config == "dataset.yaml", (
+            f"Dataset config must be 'dataset.yaml' for jsonl datasets, but got {dataset_config}"
+        )
+        assert split_config == "split.yaml", (
+            f"Split config must be 'split.yaml' for jsonl datasets, but got {split_config}"
+        )
+        dataset = DecoderCrudeJsonlDatasetFactory(
+            path,
             split_part=split_part,
             training=training,
+            subflavors=subflavors,
             worker_config=worker_config,
             **kwargs,
-        ),
-        default_type=StandardWebdatasetFactory,
-    )
+        )
+    elif check_dataset_info_present(path):
+        dataset = load_config(
+            path / MAIN_FOLDER_NAME / dataset_config,
+            default_kwargs=dict(
+                path=path,
+                split_config=split_config,
+                split_part=split_part,
+                training=training,
+                worker_config=worker_config,
+                **kwargs,
+            ),
+            default_type=StandardWebdatasetFactory,
+        )
+    else:
+        raise ValueError(
+            f"Path {path} does not contain a {MAIN_FOLDER_NAME}/.info.yaml or .info.json file nor is it a jsonl file. "
+            f"Did you forget to prepare the dataset? Please check the documentation for an introduction to dataset "
+            f"preparation."
+        )
     if subflavors is not None:
         dataset.subflavors.update(subflavors)
     if sample_type is not None:

@@ -161,7 +161,9 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
             except Exception as e:
                 self.error_handler(e, sample)
                 self._last_map_failures += 1
-                print(f"MapDataset {self.map_fn} failed {self._last_map_failures}/{self.failure_tolerance} times in a row.")
+                print(
+                    f"MapDataset {self.map_fn} failed {self._last_map_failures}/{self.failure_tolerance} times in a row."
+                )
                 if (
                     self.failure_tolerance is not None
                     and self._last_map_failures >= self.failure_tolerance

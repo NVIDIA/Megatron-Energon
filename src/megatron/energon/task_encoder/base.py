@@ -125,7 +125,9 @@ use_default = cast(int, object())
 
 
 @overload
-def stateless(*, restore_seeds: bool = False, failure_tolerance: Optional[int] = use_default) -> Callable[[Callable[P, T]], Callable[P, T]]: ...
+def stateless(
+    *, restore_seeds: bool = False, failure_tolerance: Optional[int] = use_default
+) -> Callable[[Callable[P, T]], Callable[P, T]]: ...
 
 
 @overload

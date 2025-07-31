@@ -43,6 +43,7 @@ class ITarReader(ABC, Generic[T_index]):
         tar_filepaths: The corresponding list of full paths to the tar files.
         part_filter: An optional filter function to select parts of the samples.
         itar_cache_size: The number of tar readers to keep open at the same time.
+        sample_filter: An optional filter function to select samples by their key.
     """
 
     base_path: EPath
@@ -85,6 +86,12 @@ class ITarReader(ABC, Generic[T_index]):
         """
         raise NotImplementedError
 
+    def close(self):
+        for tar_file in self.itar_files_cache.values():
+            tar_file.fileobj.close()
+            tar_file.close()
+        self.itar_files_cache.clear()
+
     @abstractmethod
     def _get_itar_sample_pointer(self, idx: T_index) -> ITarSamplePointer:
         """Get the ITarSample object for the given index."""
@@ -115,9 +122,9 @@ class ITarReader(ABC, Generic[T_index]):
     def _get_item_by_sample_pointer(
         self,
         sample_pointer: ITarSamplePointer,
-        restore_index: Union[str, int],
+        restore_index: str | int,
         entry_match_fn: Optional[Callable[[str], bool]] = None,
-    ) -> Union["ITarReader", FilteredSample, None]:
+    ) -> FilteredSample | None:
         """
         Get a sample from the dataset or slice it.
 
@@ -199,27 +206,12 @@ class ITarReader(ABC, Generic[T_index]):
             **group_parts,
         )
 
-    @overload
-    def __getitem__(self, key: T_index) -> Optional[FilteredSample]: ...
-
-    @overload
-    def __getitem__(self, key: slice) -> "ITarReader": ...
-
-    def __getitem__(self, key: Union[slice, T_index]) -> Union["ITarReader", FilteredSample, None]:
+    def __getitem__(self, idx: T_index) -> FilteredSample | None:
         """
         Get a sample from the dataset or slice it.
         """
-
-        if isinstance(key, slice):
-            # Return a new reader with a sliced samples tensor
-            raise NotImplementedError("Slicing is not yet implemented")
-        elif isinstance(key, int):
-            idx = key
-        else:
-            raise TypeError("Invalid argument type for __getitem__")
-
+        assert isinstance(idx, int), f"Invalid argument type for __getitem__: {type(idx)}"
         sample_pointer = self._get_itar_sample_pointer(idx)
-
         return self._get_item_by_sample_pointer(sample_pointer, idx)
 
 
@@ -461,9 +453,19 @@ class SqliteITarEntryReader(ITarReader[str]):
         return self.sqlite_reader.get_sample_pointer_by_key(sample_key)
 
     def list_all_samples(self) -> Generator[Tuple[str, int, int], None, None]:
+        """List all samples in the jsonl file.
+
+        Returns:
+            A generator of tuples of (sample_key, size, tar_file_id)
+        """
         return self.sqlite_reader.list_all_samples()
 
     def list_all_sample_parts(self) -> Generator[Tuple[str, int, int], None, None]:
+        """List all sample parts in the jsonl file.
+
+        Returns:
+            A generator of tuples of (sample_key + "." + part_name, size, tar_file_id)
+        """
         return self.sqlite_reader.list_all_sample_parts()
 
     def list_sample_parts(
