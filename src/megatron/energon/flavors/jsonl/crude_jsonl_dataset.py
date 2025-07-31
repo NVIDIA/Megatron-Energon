@@ -13,9 +13,9 @@ from megatron.energon.flavors.base_dataset import (
 )
 from megatron.energon.flavors.crude import CrudeSample
 from megatron.energon.flavors.jsonl.ijsonl import IJsonlIndexReader
+from megatron.energon.flavors.jsonl.jsonl_prepare import JsonlPreparator
 from megatron.energon.flavors.webdataset.base_webdataset import _print_shard_slices
 from megatron.energon.flavors.webdataset.error_handler import ErrorHandler
-from megatron.energon.flavors.webdataset.jsonl_prepare import JsonlPreparator
 from megatron.energon.flavors.webdataset.sample_decoder import DEFAULT_DECODER, SampleDecoder
 from megatron.energon.flavors.webdataset.sample_loader import (
     RawSampleData,

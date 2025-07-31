@@ -54,13 +54,15 @@ class JsonlPreparator:
         # Processing is lagging behind. The offsets include empty lines. The whole file must be covered!
         last_offset = 0
         with IJsonlIndexWriter(EPath(path)) as iw:
-            with path.open("rb") as f:
-                for line in f:
+            with EPath(path).open("rb") as f:
+                while True:
+                    line = f.readline()
+                    if not line:
+                        break
                     line = line.strip()
                     if not line:
                         if last_offset:
                             last_offset = f.tell()
-                        print(f"Skipping empty line at {f.tell()}")
                         continue
                     assert line.startswith(b"{") and line.endswith(b"}"), (
                         f"Line {line} does not start and end with a json object {{}}."

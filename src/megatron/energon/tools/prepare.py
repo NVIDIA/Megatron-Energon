@@ -143,11 +143,14 @@ def command(
 
     if path.is_file():
         if path.name.endswith(".yaml"):
+            print("Preparing metadataset...")
             prepare_metadataset(path)
         elif path.name.endswith(".jsonl"):
             print("Preparing jsonl dataset...")
             count = CrudeJsonlDatasetFactory.prepare_dataset(path)
             print(f"Done. Found {count} samples.")
+        else:
+            raise click.BadArgumentUsage(f"Unknown file extension {path.name}. Exiting.")
         return
 
     if tar_index_only:

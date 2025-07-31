@@ -28,9 +28,9 @@ class IJsonlSamplePointer:
 class IJsonlIndexReader:
     def __init__(self, jsonl_path: Union[EPath, str]):
         jsonl_path = EPath(jsonl_path)
-        self.ijsonl = jsonl_path.with_suffix(IJSONL_SUFFIX).open("rb")
-        self.ijsonl.seek(0, 2)
-        self._length = self.ijsonl.tell() // 8
+        index_path = jsonl_path.with_suffix(IJSONL_SUFFIX)
+        self._length = index_path.size() // 8
+        self.ijsonl = index_path.open("rb")
 
     def __getitem__(self, index: int) -> int:
         if index >= self._length or index < 0:

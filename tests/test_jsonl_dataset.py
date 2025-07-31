@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Iterable
 
 import torch
+from click.testing import CliRunner
 
 from megatron.energon import (
     Cooker,
@@ -29,6 +30,7 @@ from megatron.energon import (
     get_train_dataset,
     stateless,
 )
+from megatron.energon.tools.prepare import command as prepare_command
 from tests.epath_s3_emulator import setup_s3_emulator
 
 # Speed up tests significantly by reducing the torch status check interval for broken worker shutdown
@@ -226,6 +228,50 @@ class TestJsonlDataset(unittest.TestCase):
             cnt = Counter(t for _, entry in data for t in entry.text)
             assert len(cnt) == 55 * 3
             assert all(2 <= v <= 5 for v in cnt.values())
+
+    def test_prepare(self):
+        print("Creating new dataset")
+        with open(self.dataset_path / "ds_prep.jsonl", "w") as f:
+            for i in range(10):
+                f.write(json.dumps({"idx": i, "txt": f"{i}"}) + "\n\n")
+
+        runner = CliRunner()
+        result = runner.invoke(
+            prepare_command,
+            [str(self.dataset_path / "ds_prep.jsonl")],
+            catch_exceptions=False,
+        )
+        print(result.stdout)
+        assert result.exit_code == 0, "Prepare failed, see output"
+        assert "Done" in result.stdout, "Prepare failed, see output"
+        assert "Found 10 samples" in result.stdout, "Prepare failed, see output"
+        assert (self.dataset_path / "ds_prep.jsonl.idx").exists()
+
+        torch.manual_seed(42)
+
+        # Train mode dataset
+        train_loader = get_loader(
+            get_train_dataset(
+                self.dataset_path / "ds_prep.jsonl",
+                worker_config=WorkerConfig(
+                    rank=0,
+                    world_size=1,
+                    num_workers=0,
+                    seed_offset=42,
+                ),
+                batch_size=1,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                task_encoder=SimpleCookingTaskEncoder(),
+            )
+        )
+        assert len(train_loader) == 10, f"Expected 10 samples, got {len(train_loader)}"
+
+        train_order1 = [text for _, data in zip(range(50), train_loader) for text in data.text]
+        print(train_order1[:10])
+        print(Counter(train_order1))
+        assert len(Counter(train_order1)) == 10
+        assert all(v == 5 for v in Counter(train_order1).values())
 
 
 if __name__ == "__main__":
