@@ -26,7 +26,7 @@ def load_dataset(
         )
         return mds
     path = EPath(path)
-    if path.is_file():
+    if path.is_file() and not path.name.endswith(".jsonl"):
         mds = load_config(
             path,
             default_type=Metadataset,

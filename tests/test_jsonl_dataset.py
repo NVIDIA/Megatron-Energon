@@ -78,23 +78,7 @@ class TestJsonlDataset(unittest.TestCase):
         )
         self.create_text_test_dataset(self.dataset_path / "ds3.jsonl", range(200, 255), range(55))
 
-        self.mds_simple_path = self.dataset_path / "metadataset_simple.yaml"
         self.mds_all_path = self.dataset_path / "metadataset_all.yaml"
-        with open(self.mds_simple_path, "w") as f:
-            f.write(
-                "\n".join(
-                    [
-                        "__module__: megatron.energon",
-                        "__class__: MetadatasetV2",
-                        "splits:",
-                        "  train:",
-                        "    path: ds1.jsonl",
-                        "    subflavors:",
-                        "      subflavors: simple",
-                    ]
-                )
-            )
-
         with open(self.mds_all_path, "w") as f:
             f.write(
                 "\n".join(
@@ -138,7 +122,7 @@ class TestJsonlDataset(unittest.TestCase):
 
         CrudeJsonlDatasetFactory.prepare_dataset(path)
 
-    def test_metadataset(self):
+    def test_dataset(self):
         torch.manual_seed(42)
         worker_config = WorkerConfig(
             rank=0,
@@ -149,7 +133,7 @@ class TestJsonlDataset(unittest.TestCase):
 
         # Train mode dataset
         train_dataset = get_train_dataset(
-            self.mds_simple_path,
+            self.dataset_path / "ds1.jsonl",
             worker_config=worker_config,
             batch_size=1,
             shuffle_buffer_size=None,
