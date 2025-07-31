@@ -12,7 +12,7 @@ from typing import (
 )
 
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.webdataset.ijsonl import IJsonlFile, IJsonlIndexWriter
+from megatron.energon.flavors.jsonl.ijsonl import IJsonlFile, IJsonlIndexWriter
 
 logger = logging.getLogger(__name__)
 

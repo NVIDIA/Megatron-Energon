@@ -12,9 +12,9 @@ from megatron.energon.flavors.base_dataset import (
     legacy_handler,
 )
 from megatron.energon.flavors.crude import CrudeSample
+from megatron.energon.flavors.jsonl.ijsonl import IJsonlIndexReader
 from megatron.energon.flavors.webdataset.base_webdataset import _print_shard_slices
 from megatron.energon.flavors.webdataset.error_handler import ErrorHandler
-from megatron.energon.flavors.webdataset.ijsonl import IJsonlIndexReader
 from megatron.energon.flavors.webdataset.jsonl_prepare import JsonlPreparator
 from megatron.energon.flavors.webdataset.sample_decoder import DEFAULT_DECODER, SampleDecoder
 from megatron.energon.flavors.webdataset.sample_loader import (
@@ -109,7 +109,7 @@ class CrudeJsonlDatasetFactory(
         return self._len
 
     def build(self, worker_rotation_offset: int = 0) -> SavableDataset[CrudeSample]:
-        from megatron.energon.flavors.webdataset.ijsonl_reader import IJsonlReader
+        from megatron.energon.flavors.jsonl.ijsonl_reader import IJsonlReader
 
         if self.parallel_shard_iters is None:
             if self.training:
@@ -137,9 +137,7 @@ class CrudeJsonlDatasetFactory(
         _print_shard_slices(self.worker_config, virtual_shards, workers_sample_slice_offsets)
 
         itar_reader = IJsonlReader(
-            self.path.parent,
             self.path,
-            jsonl_filename=self.path.name,
             index_cache_size=parallel_shard_iters,
         )
 

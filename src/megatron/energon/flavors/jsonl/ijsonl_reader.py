@@ -11,13 +11,12 @@ from typing import (
 )
 
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.webdataset.ijsonl import (
+from megatron.energon.flavors.jsonl.ijsonl import (
     CachedIJsonlOffsetReader,
     IJsonlFile,
     IJsonlIndexReader,
     IJsonlSamplePointer,
 )
-from megatron.energon.flavors.webdataset.metadata import get_info_shard_files
 from megatron.energon.flavors.webdataset.structs import FilteredSample
 from megatron.energon.source_info import SourceInfo
 
@@ -40,9 +39,7 @@ class IJsonlReader(ABC):
         index_cache_size: The size of the index cache.
     """
 
-    base_path: EPath
     jsonl_path: EPath
-    jsonl_filename: str
     sample_filter: Optional[Callable[[str], bool]]
 
     cached_offset_reader: CachedIJsonlOffsetReader
@@ -50,15 +47,11 @@ class IJsonlReader(ABC):
 
     def __init__(
         self,
-        base_path: EPath,
         jsonl_path: EPath,
-        jsonl_filename: str,
         sample_filter: Optional[Callable[[str], bool]] = None,
         index_cache_size: int = 5,
     ):
-        self.base_path = base_path
         self.jsonl_path = jsonl_path
-        self.jsonl_filename = jsonl_filename
         self.sample_filter = sample_filter
         self.cached_offset_reader = CachedIJsonlOffsetReader(
             jsonl_path, cache_size=index_cache_size
@@ -68,7 +61,7 @@ class IJsonlReader(ABC):
         return len(self.cached_offset_reader)
 
     def __str__(self) -> str:
-        return f"IJsonlReader(base_path={self.base_path}, jsonl_path={self.jsonl_path}, jsonl_filename={self.jsonl_filename})"
+        return f"IJsonlReader(jsonl_path={self.jsonl_path})"
 
     def _get_item_by_sample_pointer(
         self,
@@ -97,14 +90,14 @@ class IJsonlReader(ABC):
             return None
 
         return FilteredSample(
-            __key__=f"{self.jsonl_filename}/{key}",
-            __shard__=self.jsonl_filename,
+            __key__=f"{self.jsonl_path.name}/{key}",
+            __shard__=self.jsonl_path.name,
             __restore_key__=("Webdataset", sample_pointer.index),
             __sources__=(
                 SourceInfo(
-                    dataset_path=self.base_path,
+                    dataset_path=str(self.jsonl_path),
                     index=sample_pointer.index,
-                    shard_name=self.jsonl_filename,
+                    shard_name=self.jsonl_path.name,
                     file_names=(f"{key}.json",),
                 ),
             ),
@@ -195,13 +188,3 @@ class IJsonlReader(ABC):
         if self.ijsonl_file is not None:
             self.ijsonl_file.close()
         self.cached_offset_reader.close()
-
-    @staticmethod
-    def get_path_filename(
-        base_path: EPath,
-    ) -> Tuple[EPath, str]:
-        jsonl_filenames = get_info_shard_files(base_path)
-        assert len(jsonl_filenames) == 1, "Only one shard is supported for KeyIJsonlReader"
-        jsonl_filepath = base_path / jsonl_filenames[0]
-
-        return jsonl_filepath, jsonl_filenames[0]

@@ -8,10 +8,10 @@ from megatron.energon.epathlib import EPath
 from megatron.energon.eyaml import load_yaml
 from megatron.energon.flavors import (
     BaseCoreDatasetFactory,
+    CrudeSample,
     DecoderCrudeJsonlDatasetFactory,
     StandardWebdatasetFactory,
 )
-from megatron.energon.flavors.crude import CrudeSample
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 from megatron.energon.flavors.webdataset.metadata import check_dataset_info_present
 from megatron.energon.typed_converter import JsonParser
