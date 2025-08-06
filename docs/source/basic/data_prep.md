@@ -5,8 +5,9 @@ SPDX-License-Identifier: BSD-3-Clause -->
 # Data Preparation
 
 The aim of data preparation is to convert your data to a format that the energon loader can understand and iterate.
-The outcome will be a [WebDataset](https://github.com/webdataset/webdataset) with some extra information stored in a folder called `.nv-meta`.
+Energon's primary data format is [WebDataset](https://github.com/webdataset/webdataset) with some extra information stored in a folder called `.nv-meta`.
 Below in [](data-on-disk) we explain the details about this format.
+We also support a simpler JSONL format which will always be interpreted as [crude data](crude-data).
 
 ## Important Considerations
 
@@ -16,19 +17,20 @@ Depending on what your data looks like and how you are planning to use it, you w
 **Monolithic Dataset vs. Polylithic (primary and auxiliary) Datasets**
 
 You can include the media (images/video/audio) inside the same webdataset along with the text and metadata of each sample.
-Or you can keep the media separate (either in another indexed webdataset or as individual files on disk)
+Or you can keep the media separate (either in another indexed webdataset or as individual files on disk).
+When using JSONL, the media will always be separate, so JSONL datasets are always polylithic unless they are text-only.
 
 If you can, you should go for the monolithic option, because it's faster to load.
 However, there are a few reasons why the other option may be needed:
 
 * You need to keep the original media and you don't want to duplicate it
-* Your media data is very large (e.g. long videos) and you need to keep your primary dataset small (containing just the text-base data and meta information)
+* Your media data is very large (e.g. long videos) and you need to keep your primary dataset small (containing just the text-based data and meta information)
 * You want to re-use the same media with different labels or you want to train on different subsets
 * You want to train with [online packing](../advanced/packing.md) and can't fit all the media of the packing buffer in memory. With polylithic datasets you can use caching to avoid that issue.
 
 **How to shard the data**
 
-The WebDataset will be split into a bunch of shards (i.e. tar files). You'll have to decide how many samples to put in one shard and how many shards to get overall.
+When using a WebDataset, it will be split into a bunch of shards (i.e. tar files). You'll have to decide how many samples to put in one shard and how many shards to get overall.
 
 To maximize the loading speed, use as few shards as possible. Even a single shard can work well!
 However, if you cannot handle files above a certain size you may need to split the shards more.
@@ -71,6 +73,69 @@ These are the typical steps to get your data ready:
 4. Create a [metadataset](../basic/metadataset) that specifies what auxiliary data to load for each primary dataset
     * For more details read about [crude data](crude-data)
 
+(create-jsonl-dataset)=
+## Steps to Create a JSONL Dataset
+
+A JSONL dataset is a simplified alternative to a full-blown WebDataset with tar files.
+It has fewer features, but can easily be read using a standard editor.
+
+```{admonition} Good to know
+:class: tip
+A JSONL dataset cannot contain media files, but it can reference media files elsewhere (auxiliary data).
+It does not have a train/val/test split.
+It cannot be used as an auxiliary dataset by other primary datasets.
+It cannot be mounted using `energon mount`.
+```
+
+A single JSONL file will contain all of your text-based data, one JSON entry per line. For example:
+
+```
+{"id": 0, "question": "What is 1+2?", "answer": "3"}
+{"id": 1, "question": "Who is Jensen Huang?", "answer": "The CEO of NVIDIA."}
+```
+
+And it is essentially equivalent to using a WebDataset with files
+
+```
+00000000.json
+00000001.json
+```
+
+each file containing the JSON from one of the lines above.
+
+None of the JSON fields is mandatory. The data is considered to be crude data and will be interpreted by your custom [cooker](crude-data).
+If you want to include media, you should include file names of the media files in the JSON.
+A metadataset with [auxiliary data](aux-data) can then be used to load the media on the fly.
+
+Here's an example of how a polylithic JSONL dataset with images might look like:
+
+```
+{"image": "computer_01.jpg", "caption": "A desktop computer with two monitors."}
+{"image": "mountains_123.jpg", "caption": "A beautiful landscape with mountains on a sunny day."}
+```
+
+Steps needed:
+
+1. Create the JSONL file according to your needs
+2. Run `energon prepare /path/to/my_dataset.jsonl` to create an index next to it
+3. Optionally create a [metadataset](../basic/metadataset) that specifies what auxiliary data to load for each primary dataset
+    * For more details read about [crude data](crude-data)
+
+The metadataset would then refer to the JSONL dataset while specifying the auxiliary data source:
+
+```yaml
+__module__: megatron.energon
+__class__: MetadatasetV2
+splits:
+  train:
+    path: /path/to/my_dataset.jsonl
+    aux:
+      foo_bar_source: ./aux_ds123
+      image_source: filesystem://./relative_image_folder
+```
+
+An auxiliary data source can be a local or remote folder, or other energon-prepared webdatasets. Even multiple auxiliary sources can be used.
+For all the options and to see how to specify a matching cooker, please check out the section on [auxiliary data](aux-data).
 
 (wds-format)=
 ## Step 1: Creating a WebDataset
@@ -409,10 +474,10 @@ For more information please also read [](custom-sample-loader).
 
 
 (data-on-disk)=
-## Dataset Format on Disk
+## Dataset Format on Disk (WebDataset)
 
 The energon library supports loading large multi-modal datasets from disk.
-To load the dataset, it must comply with the format described in this section.
+To load the dataset, it must comply with the format described in this section unless it's a JSONL dataset.
 
 A valid energon dataset must contain an `.nv-meta` folder with certain files as shown below.
 
@@ -550,3 +615,14 @@ directly access the content without parsing the tar header.
 
 Both tables can be joined over the `tar_file_id` and the `sample_index`. Note that the `tar_file_id` refers to the list
 of tar files in the `.info.json` file.
+
+(data-on-disk-jsonl)=
+## Dataset Format on Disk for JSONL Datasets
+
+For the simpler JSONL option, you will still need to run `energon prepare`, but this will not create a full `.nv-meta` folder.
+Instead, only an index file with the same base filename will be created.
+
+So if your dataset is named `my_dataset.jsonl`, a new file `my_dataset.jsonl.idx` will appear next to it when preparing it.
+
+That's all. The dataset type will always be `CrudeWebdataset` and the split part is `train` by default. However, when loading the dataset
+you can change the split type to `val` or `test`.

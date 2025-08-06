@@ -3,8 +3,8 @@ SPDX-License-Identifier: BSD-3-Clause -->
 <a name="top"></a>
 
 <div align="center">
-  <h3 align="center">Megatron's multi-modal data loader</h3>
-  <h3 align="center">Megatron Energon</h3>
+  <h4 align="center">Megatron's multi-modal data loader</h4>
+  <h2 align="center">Megatron Energon</h2>
   <p align="center">
     <a href="https://github.com/NVIDIA/Megatron-Energon/actions/workflows/tests.yml"><img src="https://github.com/NVIDIA/Megatron-Energon/actions/workflows/tests.yml/badge.svg" alt="Tests"></a> <a href="https://nvidia.github.io/Megatron-Energon/"><img src="https://github.com/NVIDIA/Megatron-Energon/actions/workflows/documentation.yml/badge.svg" alt="Documentation"></a>
     <br />
@@ -69,7 +69,7 @@ Here are some examples for things you can do:
 
 ## Usage of the library
 
-To get started, pick a [WebDataset](https://github.com/webdataset/webdataset)-compliant dataset and run `energon prepare DATASET_ROOT` on it, to run the interactive assistant and create the `.nv-meta` folder.
+To get started, pick a [WebDataset](https://github.com/webdataset/webdataset)-compliant dataset and run `energon prepare DATASET_ROOT` on it, to run the interactive assistant and create the `.nv-meta` folder. As an alternative to WebDataset, Energon also supports the JSONL format, see [here](https://nvidia.github.io/Megatron-Energon/basic/data_prep.html).
 
 Once done, try to load it from your Python program:
 
