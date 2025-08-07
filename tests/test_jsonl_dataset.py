@@ -174,7 +174,7 @@ class TestJsonlDataset(unittest.TestCase):
             task_encoder=SimpleCookingTaskEncoder(),
         )
         print(len(train_dataset))
-        assert len(train_dataset) == 55 * 3, f"Expected 55 samples, got {len(train_dataset)}"
+        assert len(train_dataset) == 55 * 3, f"Expected 55 * 3 samples, got {len(train_dataset)}"
 
         train_loader1 = get_loader(train_dataset)
 
@@ -186,6 +186,41 @@ class TestJsonlDataset(unittest.TestCase):
         assert len(Counter(train_order1)) == 55 * 3
         assert all(2 <= v <= 5 for v in Counter(train_order1).values())
 
+    def test_metadataset_multirank(self):
+        torch.manual_seed(42)
+
+        sample_counts = Counter()
+        expected_lens = [19, 19, 17]
+
+        for cur_rank in range(3):
+            worker_config = WorkerConfig(
+                rank=cur_rank,
+                world_size=3,
+                num_workers=5,
+                seed_offset=42,
+            )
+
+            # Train mode dataset
+            train_dataset = get_train_dataset(
+                self.dataset_path / "ds1.jsonl",
+                worker_config=worker_config,
+                batch_size=1,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                task_encoder=SimpleCookingTaskEncoder(),
+                repeat=False,
+            )
+            print(len(train_dataset))
+            assert len(train_dataset) == expected_lens[cur_rank], f"Expected {expected_lens[cur_rank]} samples, got {len(train_dataset)}"
+
+            train_loader1 = get_loader(train_dataset)
+        
+            for data in train_loader1:
+                sample_counts[int(data.text[0])] += 1
+
+        for i in range(55):
+            assert sample_counts[i] == 1, f"Sample {i} should have been seen exactly once, but was seen {sample_counts[i]} times."
+    
     def test_s3(self):
         # Create a joined dataset configuration
         mixed_mds_path = self.dataset_path / "metadataset_mixed.yaml"
