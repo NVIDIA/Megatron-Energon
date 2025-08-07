@@ -54,7 +54,7 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
         error_handler: Callable[
             [Exception, List[T_batch_sample], List[SourceInfo]], None
         ] = log_exception,
-        failure_tolerance: Optional[int] = 100,
+        failure_tolerance: int = 100,
         worker_config: WorkerConfig,
     ):
         """Construct a BatchDataset.
@@ -71,7 +71,7 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
             drop_last: If True, the last batch is dropped if it is smaller than the batch size.
             error_handler: Function which handles exceptions raised by the batcher. The default
                 implementation logs the exception.
-            failure_tolerance: The number of consecutive failures after which the dataset is considered broken.
+            failure_tolerance: The number of consecutive failures after which the dataset is considered broken. Set to 0 to disable.
             worker_config: Configuration for the workers.
         """
         super().__init__(dataset, worker_config=worker_config)
@@ -169,7 +169,7 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
                 self.error_handler(e, batch)
                 self._last_batch_failures += 1
                 if (
-                    self.failure_tolerance is not None
+                    self.failure_tolerance > 0
                     and self._last_batch_failures >= self.failure_tolerance
                 ):
                     raise FatalSampleError.from_sample(

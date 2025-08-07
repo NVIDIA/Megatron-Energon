@@ -53,7 +53,7 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
         error_handler: Callable[[Exception, T_sample, list[SourceInfo]], None] = log_exception,
         stateless_map_fn: bool = False,
         map_fn_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]] = None,
-        failure_tolerance: Optional[int] = 100,
+        failure_tolerance: int = 100,
         worker_config: WorkerConfig,
     ):
         """Construct a MapDataset.
@@ -71,7 +71,7 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
                 (thus key for random access can propagate to inner dataset). Defaults to False.
             map_fn_config: Configuration for the map_fn function. If callable, it should return the
                 configuration. Defaults to None.
-            failure_tolerance: The number of consecutive failures after which the dataset is considered broken.
+            failure_tolerance: The number of consecutive failures after which the dataset is considered broken. Set to 0 to disable.
             worker_config: Worker configuration.
         """
         super().__init__(dataset, worker_config=worker_config)
@@ -163,7 +163,7 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
                 self._last_map_failures += 1
                 print(f"MapDataset {self.map_fn} failed {self._last_map_failures}/{self.failure_tolerance} times in a row.")
                 if (
-                    self.failure_tolerance is not None
+                    self.failure_tolerance > 0
                     and self._last_map_failures >= self.failure_tolerance
                 ):
                     raise FatalSampleError.from_sample(

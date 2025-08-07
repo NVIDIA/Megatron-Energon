@@ -121,11 +121,8 @@ def batch_list(batch: List[Any]) -> Any:
 P = ParamSpec("P")
 
 
-use_default = cast(int, object())
-
-
 @overload
-def stateless(*, restore_seeds: bool = False, failure_tolerance: Optional[int] = use_default) -> Callable[[Callable[P, T]], Callable[P, T]]: ...
+def stateless(*, restore_seeds: bool = False, failure_tolerance: Optional[int] = None) -> Callable[[Callable[P, T]], Callable[P, T]]: ...
 
 
 @overload
@@ -136,7 +133,7 @@ def stateless(
     fn: Optional[Callable[..., T]] = None,
     *,
     restore_seeds: bool = False,
-    failure_tolerance: Optional[int] = use_default,
+    failure_tolerance: Optional[int] = None,
 ) -> Union[Callable[[Callable[..., T]], Callable[..., T]], Callable[..., T]]:
     """Decorator to mark a function of the task encoder as restorable.
 
@@ -146,7 +143,7 @@ def stateless(
             from the sample index and the worker seed, such that they can be restored when a sample
             is restored from that function.
         failure_tolerance: The number of consecutive exceptions that are handled, after which a `FatalSampleError` is
-            raised for this function.
+            raised for this function. Set to 0 to disable.
 
     Usage:
 
@@ -242,7 +239,7 @@ def stateless(
             return seed_wrapper
 
     setattr(fn, "__stateless__", True)
-    if failure_tolerance is not use_default:
+    if failure_tolerance is not None:
         setattr(fn, "__failure_tolerance__", failure_tolerance)
     return fn
 
