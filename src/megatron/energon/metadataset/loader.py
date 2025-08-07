@@ -6,7 +6,7 @@ from typing import Any, Union
 
 from megatron.energon.dataset_config import load_config
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.webdataset.metadata import get_dataset_type, EnergonDatasetType
+from megatron.energon.flavors.webdataset.metadata import EnergonDatasetType, get_dataset_type
 from megatron.energon.metadataset.dataset_loader import DatasetLoader
 from megatron.energon.metadataset.loader_interface import DatasetLoaderInterface
 from megatron.energon.metadataset.metadataset import Metadataset
@@ -42,6 +42,7 @@ def load_dataset(
         return ds
     else:
         raise ValueError(f"Invalid dataset at {path}")
+
 
 class MockJsonParser(JsonParser):
     """Json Parser, which translates unknown objects to a mock class."""

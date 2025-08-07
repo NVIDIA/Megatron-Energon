@@ -117,7 +117,7 @@ class IJsonlReader(ABC):
                 idx = int(num_idx)
             except ValueError:
                 raise ValueError(f"Invalid JSONLsample key: {idx}")
-        
+
         byte_offset, byte_size = self.cached_offset_reader.get_ijsonl_byte_offset(idx)
         sample: FilteredSample | None = self._get_item_by_sample_pointer(
             IJsonlSamplePointer(
@@ -173,11 +173,11 @@ class IJsonlReader(ABC):
         Returns:
             A generator of tuples of (part_name, size, tar_file_id)
         """
-        try:        
+        try:
             sample_idx = int(sample_key)
         except ValueError:
             raise ValueError(f"Invalid JSONL sample key: {sample_key}")
-        
+
         _, byte_size = self.cached_offset_reader.get_ijsonl_byte_offset(sample_idx)
         yield f"{sample_key}.json", byte_size, 0
 

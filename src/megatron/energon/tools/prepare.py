@@ -21,10 +21,10 @@ from megatron.energon.flavors import (
 )
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 from megatron.energon.flavors.webdataset.metadata import (
+    EnergonDatasetType,
     check_dataset_info_present,
     get_dataset_info,
     get_dataset_type,
-    EnergonDatasetType,
 )
 from megatron.energon.metadataset.loader import prepare_metadataset
 
@@ -153,7 +153,7 @@ def command(
         count = CrudeJsonlDatasetFactory.prepare_dataset(path)
         print(f"Done. Found {count} samples.")
         return
-    
+
     assert path.is_dir(), f"Path {path} is not a known dataset type"
 
     if tar_index_only:

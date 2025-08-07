@@ -26,6 +26,7 @@ class EnergonDatasetType(Enum):
     JSONL = "jsonl"
     INVALID = "invalid"
 
+
 @edataclass
 class WebdatasetMeta:
     """Class for getting metadata from a webdataset."""
@@ -136,6 +137,7 @@ def check_dataset_info_present(path: EPath) -> bool:
     return (path / MAIN_FOLDER_NAME / ".info.json").is_file() or (
         path / MAIN_FOLDER_NAME / ".info.yaml"
     ).is_file()
+
 
 def get_dataset_type(path: EPath) -> EnergonDatasetType:
     if path.is_file() and path.name.endswith(".jsonl"):

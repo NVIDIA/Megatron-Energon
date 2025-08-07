@@ -17,7 +17,6 @@ from megatron.energon.flavors.jsonl.ijsonl import IJsonlIndexReader
 from megatron.energon.flavors.jsonl.jsonl_prepare import JsonlPreparator
 from megatron.energon.flavors.webdataset.base_webdataset import _print_shard_slices
 from megatron.energon.flavors.webdataset.error_handler import ErrorHandler
-from megatron.energon.flavors.webdataset.sample_decoder import DEFAULT_DECODER, SampleDecoder
 from megatron.energon.flavors.webdataset.sample_loader import (
     RawSampleData,
     WebdatasetSampleLoaderDataset,
@@ -39,7 +38,7 @@ class CrudeJsonlDatasetFactory(
 ):
     """
     Factory class for creating a crude dataset from JSONL (JSON Lines) files.
-    
+
     This factory creates datasets from JSONL files where each line contains a JSON object.
     The samples are returned as CrudeSample objects (dictionary-like) containing the raw JSON data.
     """
@@ -195,7 +194,7 @@ class DefaultCrudeJsonlDatasetFactory(CrudeJsonlDatasetFactory):
 
     def _load_sample(self, sample: FilteredSample) -> CrudeSample:
         sample["__subflavors__"] = self.subflavors
-        
+
         # Instead of using a decoder, we just load the json here, as we know it's json.
         sample["json"] = json.loads(sample["json"])
 
