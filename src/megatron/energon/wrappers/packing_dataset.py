@@ -100,9 +100,9 @@ class PackingDataset(
         error_handler: Callable[
             [Exception, List[T_sample], list[SourceInfo]], None
         ] = log_exception,
-        pre_packer_failure_tolerance: Optional[int] = 100,
-        final_packer_failure_tolerance: Optional[int] = 100,
-        sample_encoder_failure_tolerance: Optional[int] = 100,
+        pre_packer_failure_tolerance: int = 100,
+        final_packer_failure_tolerance: int = 100,
+        sample_encoder_failure_tolerance: int = 100,
         worker_config: WorkerConfig,
     ):
         """Construct a PackingDataset which is used for sequence packing.
@@ -126,9 +126,9 @@ class PackingDataset(
                 configuration. Defaults to None.
             error_handler: Function which handles exceptions raised by the batcher. The default
                 implementation logs the exception.
-            pre_packer_failure_tolerance: Maximum number of pre-packer failures before raising an error.
-            final_packer_failure_tolerance: Maximum number of final-packer failures before raising an error.
-            sample_encoder_failure_tolerance: Maximum number of sample-encoder failures before raising an error.
+            pre_packer_failure_tolerance: Maximum number of pre-packer failures before raising an error. Set to 0 to disable.
+            final_packer_failure_tolerance: Maximum number of final-packer failures before raising an error. Set to 0 to disable.
+            sample_encoder_failure_tolerance: Maximum number of sample-encoder failures before raising an error. Set to 0 to disable.
             worker_config: Configuration for the workers.
         """
         super().__init__(dataset, worker_config=worker_config)
@@ -237,7 +237,7 @@ class PackingDataset(
                     self.error_handler(e, [sample])
                     self._last_sample_encoder_failures += 1
                     if (
-                        self.sample_encoder_failure_tolerance is not None
+                        self.sample_encoder_failure_tolerance > 0
                         and self._last_sample_encoder_failures
                         >= self.sample_encoder_failure_tolerance
                     ):
@@ -272,7 +272,7 @@ class PackingDataset(
                     pre_packs = []
                     self._last_pre_pack_failures += 1
                     if (
-                        self.pre_packer_failure_tolerance is not None
+                        self.pre_packer_failure_tolerance > 0
                         and self._last_pre_pack_failures >= self.pre_packer_failure_tolerance
                     ):
                         raise FatalSampleError.from_sample(
@@ -334,7 +334,7 @@ class PackingDataset(
                 self.error_handler(e, pack)
                 self._last_final_pack_failures += 1
                 if (
-                    self.final_packer_failure_tolerance is not None
+                    self.final_packer_failure_tolerance > 0
                     and self._last_final_pack_failures >= self.final_packer_failure_tolerance
                 ):
                     raise FatalSampleError.from_sample(
@@ -345,10 +345,7 @@ class PackingDataset(
         # Main loop:
         pre_pack_round = 0
         while True:
-            if (
-                self.pre_packer_failure_tolerance is not None
-                and pre_pack_round > self.pre_packer_failure_tolerance
-            ):
+            if self.pre_packer_failure_tolerance is not None and pre_pack_round > self.pre_packer_failure_tolerance:
                 raise RuntimeError(
                     f"Pre packer {self.pre_packer} did not yield any packs after {pre_pack_round} rounds. Likely your code or dataset are broken."
                 )

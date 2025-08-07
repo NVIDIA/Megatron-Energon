@@ -86,7 +86,7 @@ class GroupBatchDataset(
         error_handler: Callable[
             [Exception, List[T_batch_sample], list[SourceInfo]], None
         ] = log_exception,
-        failure_tolerance: Optional[int] = 100,
+        failure_tolerance: int = 100,
         worker_config: WorkerConfig,
     ):
         """Construct a GroupBatchDataset.
@@ -99,7 +99,7 @@ class GroupBatchDataset(
                 :exc:`megatron.energon.SkipSample` to skip a sample.
             drop_last: If True, the last batch is dropped if it is smaller than the batch size.
             error_handler: Handler for errors. Defaults to logging and ignoring the exception.
-            failure_tolerance: The number of consecutive failures after which the dataset is considered broken.
+            failure_tolerance: The number of consecutive failures after which the dataset is considered broken. Set to 0 to disable.
             worker_config: Configuration for the workers.
         """
         super().__init__(dataset, worker_config=worker_config)
@@ -168,7 +168,7 @@ class GroupBatchDataset(
                 self.error_handler(e, batch_items)
                 self._last_batch_failures += 1
                 if (
-                    self.failure_tolerance is not None
+                    self.failure_tolerance > 0
                     and self._last_batch_failures >= self.failure_tolerance
                 ):
                     raise FatalSampleError.from_sample(
