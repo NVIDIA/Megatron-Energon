@@ -1,6 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+import json
 import logging
 from typing import Any, Callable, Dict, Optional
 
@@ -37,7 +38,10 @@ class CrudeJsonlDatasetFactory(
     ErrorHandler,
 ):
     """
-    Factory class for a jsonl file as a crude dataset.
+    Factory class for creating a crude dataset from JSONL (JSON Lines) files.
+    
+    This factory creates datasets from JSONL files where each line contains a JSON object.
+    The samples are returned as CrudeSample objects (dictionary-like) containing the raw JSON data.
     """
 
     __sample_type__ = CrudeSample
@@ -51,8 +55,6 @@ class CrudeJsonlDatasetFactory(
         self,
         path: EPath,
         *,
-        as_split_part: str = "train",
-        split_part: str,
         training: bool,
         worker_config: WorkerConfig,
         shuffle_over_epochs: Optional[int] = 1,
@@ -68,8 +70,6 @@ class CrudeJsonlDatasetFactory(
 
         Args:
             path: Path to the dataset.
-            as_split_part: The split part to use for the jsonl file.
-            split_part: Which part to load (e.g. 'train', 'val', 'test'). If it does not match the as_split_part, the dataset will be empty.
             training: If true, apply shuffling and loop the dataset.
             worker_config: Configuration for the workers.
             shuffle_over_epochs: Only effective if training=True.
@@ -82,14 +82,12 @@ class CrudeJsonlDatasetFactory(
             parallel_shard_iters: Number of parallel opened shards per worker, shuffling between.
             max_samples_per_sequence: Maximum number of samples per sequence (=how many samples
                     will be sequentially iterated).
-            split_config: Config file to use for shard split definitions.
             part_filter: (internal) Function for filtering tar files by dict keys
             handler: Exception handler. Args: (exception, key).
         """
         assert self.__sample_type__ is not None, f"Class {type(self)} must define __sample_type__"
         self.path = path
         self.paths = [path]
-        self.split_part = split_part
         self.training = training
         self.worker_config = worker_config
         self.shuffle_over_epochs = shuffle_over_epochs
@@ -97,7 +95,7 @@ class CrudeJsonlDatasetFactory(
         self.max_samples_per_sequence = max_samples_per_sequence
         self.part_filter = part_filter
         self.handler = legacy_handler(handler)
-        if as_split_part == split_part and (part_filter is None or part_filter("json")):
+        if part_filter is None or part_filter("json"):
             self._len = IJsonlIndexReader.count_samples(path)
         else:
             self._len = 0
@@ -188,7 +186,7 @@ class CrudeJsonlDatasetFactory(
 
 class DefaultCrudeJsonlDatasetFactory(CrudeJsonlDatasetFactory):
     """
-    Adds subflavors to the sample.
+    Adds subflavors to the sample and loads the json.
     """
 
     def __init__(self, path: EPath, *, subflavors: Optional[Dict[str, Any]] = None, **kwargs):
@@ -197,33 +195,14 @@ class DefaultCrudeJsonlDatasetFactory(CrudeJsonlDatasetFactory):
 
     def _load_sample(self, sample: FilteredSample) -> CrudeSample:
         sample["__subflavors__"] = self.subflavors
+        
+        # Instead of using a decoder, we just load the json here, as we know it's json.
+        sample["json"] = json.loads(sample["json"])
+
         return super()._load_sample(sample)
 
     def config(self) -> Dict[str, Any]:
         return dict(
             **super().config(),
             subflavors=self.subflavors,
-        )
-
-
-class DecoderCrudeJsonlDatasetFactory(DefaultCrudeJsonlDatasetFactory):
-    """
-    Decodes the sample using the decoder.
-    """
-
-    def __init__(
-        self, path: EPath, *, decoder: Optional[SampleDecoder] = DEFAULT_DECODER, **kwargs
-    ):
-        super().__init__(path, **kwargs)
-        self.decoder = decoder
-
-    def _load_sample(self, sample: FilteredSample) -> CrudeSample:
-        if self.decoder is not None:
-            sample = self.decoder(sample)
-        return super()._load_sample(sample)
-
-    def config(self) -> Dict[str, Any]:
-        return dict(
-            **super().config(),
-            **(self.decoder.config() if self.decoder is not None else {}),
         )

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import json
+from enum import Enum
 from typing import List, Set
 
 import braceexpand
@@ -18,6 +19,12 @@ from megatron.energon.flavors.webdataset.structs import (
 )
 from megatron.energon.typed_converter import JsonParser
 
+
+class EnergonDatasetType(Enum):
+    METADATASET = "metadataset"
+    WEBDATASET = "webdataset"
+    JSONL = "jsonl"
+    INVALID = "invalid"
 
 @edataclass
 class WebdatasetMeta:
@@ -129,3 +136,13 @@ def check_dataset_info_present(path: EPath) -> bool:
     return (path / MAIN_FOLDER_NAME / ".info.json").is_file() or (
         path / MAIN_FOLDER_NAME / ".info.yaml"
     ).is_file()
+
+def get_dataset_type(path: EPath) -> EnergonDatasetType:
+    if path.is_file() and path.name.endswith(".jsonl"):
+        return EnergonDatasetType.JSONL
+    elif path.is_file() and path.name.endswith(".yaml"):
+        return EnergonDatasetType.METADATASET
+    elif path.is_dir() and check_dataset_info_present(path):
+        return EnergonDatasetType.WEBDATASET
+    else:
+        return EnergonDatasetType.INVALID

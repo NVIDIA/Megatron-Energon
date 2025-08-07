@@ -22,8 +22,6 @@ from megatron.energon.source_info import SourceInfo
 
 T_index = TypeVar("T_index", covariant=False)
 
-KEY_LENGTH = 8
-
 
 class IJsonlReader(ABC):
     """
@@ -78,7 +76,7 @@ class IJsonlReader(ABC):
             The sample or None if the sample is invalid.
         """
 
-        key = f"{sample_pointer.index:0{KEY_LENGTH}d}"
+        key = str(sample_pointer.index)
         if self.sample_filter is not None and not self.sample_filter(key):
             return None
 
@@ -113,14 +111,13 @@ class IJsonlReader(ABC):
         full_entry_name = False
         if isinstance(idx, str):
             if idx.endswith(".json"):
-                idx = idx[:-5]
-                assert len(idx) == KEY_LENGTH, (
-                    f"Sample key must be {KEY_LENGTH} digits and end with .json"
-                )
+                num_idx = idx.removesuffix(".json")
                 full_entry_name = True
-            else:
-                assert len(idx) == KEY_LENGTH, f"Sample key must be {KEY_LENGTH} digits"
-            idx = int(idx)
+            try:
+                idx = int(num_idx)
+            except ValueError:
+                raise ValueError(f"Invalid JSONLsample key: {idx}")
+        
         byte_offset, byte_size = self.cached_offset_reader.get_ijsonl_byte_offset(idx)
         sample: FilteredSample | None = self._get_item_by_sample_pointer(
             IJsonlSamplePointer(
@@ -150,7 +147,7 @@ class IJsonlReader(ABC):
             for sample_idx, byte_offset in enumerate(ijsonl_index_reader):
                 if last_byte_offset == byte_offset:
                     continue
-                yield f"{sample_idx:0{KEY_LENGTH}d}", byte_offset - last_byte_offset, 0
+                yield str(sample_idx), byte_offset - last_byte_offset, 0
                 last_byte_offset = byte_offset
 
     def list_all_sample_parts(self) -> Generator[Tuple[str, int, int], None, None]:
@@ -164,11 +161,11 @@ class IJsonlReader(ABC):
             for sample_idx, byte_offset in enumerate(ijsonl_index_reader):
                 if last_byte_offset == byte_offset:
                     continue
-                yield f"{sample_idx:0{KEY_LENGTH}d}.json", byte_offset - last_byte_offset, 0
+                yield f"{sample_idx}.json", byte_offset - last_byte_offset, 0
                 last_byte_offset = byte_offset
 
     def list_sample_parts(self, sample_key: str) -> Generator[Tuple[str, int, int], None, None]:
-        """Given a sample key, list all its parts. (E.g. given 001, list 001.jpg, 001.json, etc.)
+        """Given a sample key, list all its parts. (E.g. given 1, list 1.jpg, 1.json, etc.)
 
         Args:
             sample_key: The sample key to list the parts of.
@@ -176,8 +173,11 @@ class IJsonlReader(ABC):
         Returns:
             A generator of tuples of (part_name, size, tar_file_id)
         """
-        assert len(sample_key) == KEY_LENGTH, f"Sample key must be {KEY_LENGTH} digits"
-        sample_idx = int(sample_key)
+        try:        
+            sample_idx = int(sample_key)
+        except ValueError:
+            raise ValueError(f"Invalid JSONL sample key: {sample_key}")
+        
         _, byte_size = self.cached_offset_reader.get_ijsonl_byte_offset(sample_idx)
         yield f"{sample_key}.json", byte_size, 0
 

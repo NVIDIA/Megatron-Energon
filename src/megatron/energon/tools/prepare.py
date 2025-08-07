@@ -23,6 +23,8 @@ from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 from megatron.energon.flavors.webdataset.metadata import (
     check_dataset_info_present,
     get_dataset_info,
+    get_dataset_type,
+    EnergonDatasetType,
 )
 from megatron.energon.metadataset.loader import prepare_metadataset
 
@@ -141,17 +143,18 @@ def command(
     details.
     """
 
-    if path.is_file():
-        if path.name.endswith(".yaml"):
-            print("Preparing metadataset...")
-            prepare_metadataset(path)
-        elif path.name.endswith(".jsonl"):
-            print("Preparing jsonl dataset...")
-            count = CrudeJsonlDatasetFactory.prepare_dataset(path)
-            print(f"Done. Found {count} samples.")
-        else:
-            raise click.BadArgumentUsage(f"Unknown file extension {path.name}. Exiting.")
+    ds_type = get_dataset_type(path)
+    if ds_type == EnergonDatasetType.METADATASET:
+        print("Preparing metadataset...")
+        prepare_metadataset(path)
         return
+    elif ds_type == EnergonDatasetType.JSONL:
+        print("Preparing jsonl dataset...")
+        count = CrudeJsonlDatasetFactory.prepare_dataset(path)
+        print(f"Done. Found {count} samples.")
+        return
+    
+    assert path.is_dir(), f"Path {path} is not a known dataset type"
 
     if tar_index_only:
         info = get_dataset_info(path)

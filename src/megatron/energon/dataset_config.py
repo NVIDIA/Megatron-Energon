@@ -9,11 +9,11 @@ from megatron.energon.eyaml import load_yaml
 from megatron.energon.flavors import (
     BaseCoreDatasetFactory,
     CrudeSample,
-    DecoderCrudeJsonlDatasetFactory,
+    DefaultCrudeJsonlDatasetFactory,
     StandardWebdatasetFactory,
 )
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
-from megatron.energon.flavors.webdataset.metadata import check_dataset_info_present
+from megatron.energon.flavors.webdataset.metadata import EnergonDatasetType, get_dataset_type
 from megatron.energon.typed_converter import JsonParser
 from megatron.energon.worker import WorkerConfig
 
@@ -59,9 +59,9 @@ T_sample = TypeVar("T_sample", covariant=True)
 def get_dataset_from_config(
     path: Union[EPath, Path, str],
     *,
-    dataset_config: str = "dataset.yaml",
-    split_config: str = "split.yaml",
-    split_part: str = "train",
+    dataset_config: str | None = None,
+    split_config: str | None = None,
+    split_part: str | None = None,
     training: bool = True,
     subflavors: Optional[Dict[str, Any]] = None,
     worker_config: WorkerConfig,
@@ -69,13 +69,13 @@ def get_dataset_from_config(
     **kwargs,
 ) -> BaseCoreDatasetFactory[T_sample]:
     """
-    Gets a dataset from a config path.
+    Gets a dataset from a config path or path to a jsonl file.
 
     Args:
-        path: Path to the folder where the `.nv-meta` folder is contained.
-        dataset_config: Filename of the dataset config file (`path / '.nv-meta' / config`)
-        split_config: Filename of the split config file (`path / '.nv-meta' / split_config`)
-        split_part: Name of the split to load.
+        path: Path to the folder where the `.nv-meta` folder is contained, or path to a jsonl file.
+        dataset_config: Filename of the dataset config file (`path / '.nv-meta' / config`), or None for jsonl datasets.
+        split_config: Filename of the split config file (`path / '.nv-meta' / split_config`), or None for jsonl datasets.
+        split_part: Name of the split to load, or None for jsonl datasets.
         training: If true, apply training randomization and loop the dataset.
         subflavors: Merge-Override the __subflavors__ property of each sample.
         worker_config: If set, use this worker config instead of the default one.
@@ -87,25 +87,35 @@ def get_dataset_from_config(
     """
     path = EPath(path)
     dataset: BaseCoreDatasetFactory[T_sample]
-    if path.name.endswith(".jsonl"):
+    ds_type = get_dataset_type(path)
+    if ds_type == EnergonDatasetType.JSONL:
         assert sample_type is CrudeSample or sample_type is None, (
             f"Sample type must be CrudeSample for jsonl datasets, but got {sample_type}"
         )
-        assert dataset_config == "dataset.yaml", (
-            f"Dataset config must be 'dataset.yaml' for jsonl datasets, but got {dataset_config}"
+        assert dataset_config is None, (
+            f"Dataset config must be None for jsonl datasets, but got {dataset_config}"
         )
-        assert split_config == "split.yaml", (
-            f"Split config must be 'split.yaml' for jsonl datasets, but got {split_config}"
+        assert split_config is None, (
+            f"Split config must be None for jsonl datasets, but got {split_config}"
         )
-        dataset = DecoderCrudeJsonlDatasetFactory(
+        assert split_part is None, (
+            f"Split part must be None for jsonl datasets, but got {split_part}"
+        )
+        dataset = DefaultCrudeJsonlDatasetFactory(
             path,
-            split_part=split_part,
             training=training,
             subflavors=subflavors,
             worker_config=worker_config,
             **kwargs,
         )
-    elif check_dataset_info_present(path):
+    elif ds_type == EnergonDatasetType.WEBDATASET:
+        if dataset_config is None:
+            dataset_config = "dataset.yaml"
+        if split_config is None:
+            split_config = "split.yaml"
+        if split_part is None:
+            split_part = "train"
+
         dataset = load_config(
             path / MAIN_FOLDER_NAME / dataset_config,
             default_kwargs=dict(

@@ -91,7 +91,7 @@ class WebdatasetFileStore(SqliteITarEntryReader, FileStore[bytes]):
 
 
 class JsonlFileStore(IJsonlReader, FileStore[bytes]):
-    """This dataset will directly read files from the dataset tar files from a prepared energon dataset."""
+    """This dataset will directly read entries from a jsonl file."""
 
     def get_path(self) -> str:
         return str(self.jsonl_path)

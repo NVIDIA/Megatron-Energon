@@ -117,7 +117,7 @@ class TestJsonlDataset(unittest.TestCase):
         # Write jsonl file
         with open(path, "w") as wf:
             for key, txt in zip(key_range, txt_range):
-                # Write individual files to shards
+                # Write JSON entries to the file, one per line.
                 wf.write(json.dumps({"idx": key, "txt": f"{prefix}{txt}"}) + "\n")
 
         from megatron.energon.flavors import CrudeJsonlDatasetFactory

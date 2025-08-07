@@ -15,7 +15,7 @@ from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import Sample
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
-from megatron.energon.flavors.webdataset.metadata import check_dataset_info_present
+from megatron.energon.flavors.webdataset.metadata import get_dataset_type, EnergonDatasetType
 from megatron.energon.metadataset.dataset_loader import DatasetLoader
 from megatron.energon.metadataset.join_dataset_loader import JoinDatasetLoader, JoinedDatasetInfo
 from megatron.energon.metadataset.loader_interface import (
@@ -85,8 +85,8 @@ class DatasetReference(DatasetLoaderInterface):
         assert mds_path is not None
         if not isinstance(self.path, EPath):
             self.path = mds_path.parent / self.path
-        is_file = self.path.is_file()
-        if is_file and not self.path.name.endswith(".jsonl"):
+        ds_type = get_dataset_type(self.path)
+        if ds_type == EnergonDatasetType.METADATASET:
             assert self.aux is None, "Cannot specify auxiliary datasets for crude datasets"
             assert self.dataset_config == "dataset.yaml", "Must not set dataset_config"
             assert self.split_config == "split.yaml", "Must not set split_config"
@@ -97,9 +97,7 @@ class DatasetReference(DatasetLoaderInterface):
                 default_kwargs=dict(path=self.path),
             )
             self._dataset.post_initialize()
-        elif check_dataset_info_present(self.path) or (
-            is_file and self.path.name.endswith(".jsonl")
-        ):
+        elif ds_type in (EnergonDatasetType.WEBDATASET, EnergonDatasetType.JSONL):
             self._dataset = DatasetLoader(
                 path=self.path,
                 split_config=self.split_config,
@@ -179,7 +177,8 @@ class JoinDatasetReference(DatasetReference):
         # Do not store the loader, the parent MetadatasetJoin will do that.
         if not isinstance(self.path, EPath):
             self.path = mds_path.parent / self.path
-        if check_dataset_info_present(self.path):
+        ds_type = get_dataset_type(self.path)
+        if ds_type == EnergonDatasetType.WEBDATASET:
             return DatasetLoader(
                 path=self.path,
                 split_part=self.split_part,
@@ -189,7 +188,7 @@ class JoinDatasetReference(DatasetReference):
                 split_config=self.split_config,
             )
         else:
-            raise FileNotFoundError(self.path)
+            raise ValueError(f"Not a joinabledataset at {self.path}")
 
     def prepare(self, split_part: Optional[str] = None):
         assert False, (
