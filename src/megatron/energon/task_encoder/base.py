@@ -21,7 +21,6 @@ from typing import (
     Type,
     TypeVar,
     Union,
-    cast,
     overload,
 )
 
@@ -122,7 +121,9 @@ P = ParamSpec("P")
 
 
 @overload
-def stateless(*, restore_seeds: bool = False, failure_tolerance: Optional[int] = None) -> Callable[[Callable[P, T]], Callable[P, T]]: ...
+def stateless(
+    *, restore_seeds: bool = False, failure_tolerance: Optional[int] = None
+) -> Callable[[Callable[P, T]], Callable[P, T]]: ...
 
 
 @overload

@@ -161,11 +161,10 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
             except Exception as e:
                 self.error_handler(e, sample)
                 self._last_map_failures += 1
-                print(f"MapDataset {self.map_fn} failed {self._last_map_failures}/{self.failure_tolerance} times in a row.")
-                if (
-                    self.failure_tolerance > 0
-                    and self._last_map_failures >= self.failure_tolerance
-                ):
+                print(
+                    f"MapDataset {self.map_fn} failed {self._last_map_failures}/{self.failure_tolerance} times in a row."
+                )
+                if self.failure_tolerance > 0 and self._last_map_failures >= self.failure_tolerance:
                     raise FatalSampleError.from_sample(
                         sample,
                         f"MapDataset {self.map_fn} failed {self._last_map_failures} times in a row. Likely your code or dataset are broken.",

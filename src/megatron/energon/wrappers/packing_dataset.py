@@ -238,7 +238,8 @@ class PackingDataset(
                     self._last_sample_encoder_failures += 1
                     if (
                         self.sample_encoder_failure_tolerance > 0
-                        and self._last_sample_encoder_failures >= self.sample_encoder_failure_tolerance
+                        and self._last_sample_encoder_failures
+                        >= self.sample_encoder_failure_tolerance
                     ):
                         raise FatalSampleError.from_sample(
                             pack,
@@ -344,7 +345,10 @@ class PackingDataset(
         # Main loop:
         pre_pack_round = 0
         while True:
-            if self.pre_packer_failure_tolerance > 0 and pre_pack_round > self.pre_packer_failure_tolerance:
+            if (
+                self.pre_packer_failure_tolerance > 0
+                and pre_pack_round > self.pre_packer_failure_tolerance
+            ):
                 raise RuntimeError(
                     f"Pre packer {self.pre_packer} did not yield any packs after {pre_pack_round} rounds. Likely your code or dataset are broken."
                 )
