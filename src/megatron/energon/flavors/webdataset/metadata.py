@@ -41,7 +41,7 @@ class WebdatasetMeta:
         path: EPath,
         *,
         split_part: str,
-        split_config: str = "split.yaml",
+        split_config: str | None = None,
     ) -> "WebdatasetMeta":
         """
         Loads the metadata for a webdataset, i.e. the shards and sample excludes.
@@ -50,6 +50,9 @@ class WebdatasetMeta:
             split_part: Which part to load (e.g. 'train', 'val', 'test').
             split_config: Config file to use for shard split definitions.
         """
+        if split_config is None:
+            split_config = "split.yaml"
+
         parser = JsonParser(strict=True)
         info_object = get_dataset_info(path)
 

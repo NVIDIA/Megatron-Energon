@@ -25,8 +25,8 @@ class DatasetReference:
     subflavor: Optional[str] = None
     subflavors: Optional[Dict[str, Any]] = None
     shuffle_over_epochs_multiplier: Optional[int] = 1
-    dataset_config: str = "dataset.yaml"
-    split_config: str = "split.yaml"
+    dataset_config: Optional[str] = None
+    split_config: Optional[str] = None
 
     weight: float = 1.0
 
@@ -48,8 +48,8 @@ class DatasetReference:
         if not isinstance(self.path, EPath):
             self.path = mds_path.parent / self.path
         if self.path.is_file():
-            assert self.dataset_config == "dataset.yaml", "Must not set dataset_config"
-            assert self.split_config == "split.yaml", "Must not set split_config"
+            assert self.dataset_config is None, "Must not set dataset_config"
+            assert self.split_config is None, "Must not set split_config"
             self._dataset = load_config(
                 self.path,
                 default_type=Metadataset,

@@ -71,8 +71,8 @@ class DatasetReference(DatasetLoaderInterface):
     split_part: Optional[str] = None
     subflavors: Optional[Dict[str, Any]] = None
     shuffle_over_epochs_multiplier: Optional[int] = 1
-    dataset_config: str = "dataset.yaml"
-    split_config: str = "split.yaml"
+    dataset_config: Optional[str] = None
+    split_config: Optional[str] = None
 
     #: Auxiliary datasets. May only be specified for crude datasets for cooking. Cooking will get
     # these references to load data from. If specified as string, it will be interpreted as a
@@ -88,8 +88,8 @@ class DatasetReference(DatasetLoaderInterface):
         ds_type = get_dataset_type(self.path)
         if ds_type == EnergonDatasetType.METADATASET:
             assert self.aux is None, "Cannot specify auxiliary datasets for crude datasets"
-            assert self.dataset_config == "dataset.yaml", "Must not set dataset_config"
-            assert self.split_config == "split.yaml", "Must not set split_config"
+            assert self.dataset_config is None, "Must not set dataset_config"
+            assert self.split_config is None, "Must not set split_config"
             # Note: For backwards compatibility, the type must be Metadataset (V1).
             self._dataset = load_config(
                 self.path,
@@ -212,8 +212,8 @@ class MetadatasetJoin(DatasetLoaderInterface):
     split_part: Optional[str] = None
     subflavors: Optional[Dict[str, Any]] = None
     shuffle_over_epochs_multiplier: Optional[int] = 1
-    dataset_config: str = "dataset.yaml"
-    split_config: str = "split.yaml"
+    dataset_config: Optional[str] = None
+    split_config: Optional[str] = None
 
     _dataset: Optional[JoinDatasetLoader] = None
 
@@ -221,9 +221,8 @@ class MetadatasetJoin(DatasetLoaderInterface):
         assert mds_path is not None
         assert self.join is not None
         assert self.joiner is not None, "Must set joiner for joining datasets"
-        assert self.dataset_config == "dataset.yaml", (
-            "Cannot set dataset_config for joining datasets"
-        )
+        assert self.dataset_config is None, "Cannot set dataset_config for joining datasets"
+        assert self.split_config is None, "Cannot set split_config for joining datasets"
         if isinstance(self.join, list):
             inner_loaders = [
                 JoinedDatasetInfo(

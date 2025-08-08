@@ -62,7 +62,7 @@ class BaseWebdatasetFactory(
         shuffle_over_epochs: Optional[int] = 1,
         parallel_shard_iters: Optional[int] = None,
         max_samples_per_sequence: Optional[int] = None,
-        split_config: str = "split.yaml",
+        split_config: Optional[str] = None,
         part_filter: Optional[Callable[[str], bool]] = None,
         handler: Callable[
             [Exception, Optional[str], Optional[list[SourceInfo]]], None

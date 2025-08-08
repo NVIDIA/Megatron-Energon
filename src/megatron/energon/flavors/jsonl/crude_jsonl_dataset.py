@@ -189,6 +189,8 @@ class DefaultCrudeJsonlDatasetFactory(CrudeJsonlDatasetFactory):
     """
 
     def __init__(self, path: EPath, *, subflavors: Optional[Dict[str, Any]] = None, **kwargs):
+        if "decoder" in kwargs:
+            del kwargs["decoder"]
         super().__init__(path, **kwargs)
         self.subflavors = subflavors
 

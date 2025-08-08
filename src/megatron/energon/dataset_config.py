@@ -98,9 +98,8 @@ def get_dataset_from_config(
         assert split_config is None, (
             f"Split config must be None for jsonl datasets, but got {split_config}"
         )
-        assert split_part is None, (
-            f"Split part must be None for jsonl datasets, but got {split_part}"
-        )
+        # Note: We ignore split_part for jsonl datasets and always return the full dataset.
+
         dataset = DefaultCrudeJsonlDatasetFactory(
             path,
             training=training,
