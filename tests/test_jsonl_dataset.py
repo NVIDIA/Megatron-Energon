@@ -211,16 +211,20 @@ class TestJsonlDataset(unittest.TestCase):
                 repeat=False,
             )
             print(len(train_dataset))
-            assert len(train_dataset) == expected_lens[cur_rank], f"Expected {expected_lens[cur_rank]} samples, got {len(train_dataset)}"
+            assert len(train_dataset) == expected_lens[cur_rank], (
+                f"Expected {expected_lens[cur_rank]} samples, got {len(train_dataset)}"
+            )
 
             train_loader1 = get_loader(train_dataset)
-        
+
             for data in train_loader1:
                 sample_counts[int(data.text[0])] += 1
 
         for i in range(55):
-            assert sample_counts[i] == 1, f"Sample {i} should have been seen exactly once, but was seen {sample_counts[i]} times."
-    
+            assert sample_counts[i] == 1, (
+                f"Sample {i} should have been seen exactly once, but was seen {sample_counts[i]} times."
+            )
+
     def test_s3(self):
         # Create a joined dataset configuration
         mixed_mds_path = self.dataset_path / "metadataset_mixed.yaml"
