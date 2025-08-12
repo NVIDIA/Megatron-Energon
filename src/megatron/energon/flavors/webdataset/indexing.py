@@ -33,7 +33,7 @@ class SqliteIndexWriter:
                          part_name TEXT,
                          content_byte_offset INTEGER,
                          content_byte_size INTEGER)
-        Also creates indexes: 
+        Also creates indexes:
           - samples(sample_key)
           - samples(tar_file_id, sample_index)
           - sample_parts(tar_file_id, sample_index, content_byte_offset)
@@ -266,17 +266,20 @@ class SqliteIndexReader:
         )
 
         self.db = ThreadLocalSqlite(path)
-    
+
     def db_version(self) -> int:
         """Get the version of the database.
-        
+
         Returns:
             1: No sample_parts table
             2: sample_parts table exists
         """
         assert self.db is not None, "Database is closed"
 
-        db_exists = self.db.select_one("SELECT name FROM sqlite_master WHERE type='table' AND name='sample_parts'")
+        db_exists = self.db.select_one(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='sample_parts'"
+        )
+        self.db.thread_close()
         return 2 if db_exists else 1
 
     def list_all_samples(self) -> Generator[Tuple[str, int, int], None, None]:
@@ -353,14 +356,14 @@ class SqliteIndexReader:
 
         count = self.db.select_one("SELECT COUNT(*) FROM samples")
         return count[0] if count else 0
-    
+
     def get_sample_part(self, key: str, part_name: str) -> ITarSamplePointer:
         """Get a sample part by its key name and part name.
-        
+
         Args:
             key: The sample key to look up
             part_name: The part name to look up
-        
+
         Returns:
             Pointer to the sample part raw data.
         """
@@ -375,7 +378,9 @@ class SqliteIndexReader:
             (key, part_name),
         )
         if row is None:
-            raise KeyError(f"Sample part not found: key={key}, part_name={part_name} in {self.sqlite_path}")
+            raise KeyError(
+                f"Sample part not found: key={key}, part_name={part_name} in {self.sqlite_path}"
+            )
         return ITarSamplePointer(
             tar_file_id=row[0],
             byte_offset=row[1],

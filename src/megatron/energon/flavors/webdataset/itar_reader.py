@@ -139,7 +139,7 @@ class ITarReader(ABC, Generic[T_index]):
 
         return raw_data, SourceInfo(
             dataset_path=self.base_path,
-            index=0,
+            index=entry_name,
             shard_name=shard_name,
             file_names=(entry_name,),
         )
@@ -565,7 +565,9 @@ class SqliteITarEntryReader(ITarReader[str]):
             if self.db_version >= 2:
                 # Directly fetch the sample part (byte offset and size) from the database
                 raw_sample_pointer = self.sqlite_reader.get_sample_part(sample_key, sample_ext)
-                raw_data, source_info = self._get_part_by_raw_sample_pointer(raw_sample_pointer, key)
+                raw_data, source_info = self._get_part_by_raw_sample_pointer(
+                    raw_sample_pointer, key
+                )
                 return raw_data, source_info
         else:
             sample_key = key
