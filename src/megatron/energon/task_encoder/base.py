@@ -707,6 +707,7 @@ class TaskEncoder(Savable, Generic[T_sample, T_encoded_sample, T_raw_batch, T_ba
                 fixed_batch_size=batch_size,
                 sample_group_key=self.batch_group_criterion,
                 batcher=self.batch,
+                batcher_stateless=get_stateless(self.batch),
                 drop_last=batch_drop_last,
                 worker_config=worker_config,
                 failure_tolerance=get_failure_tolerance(

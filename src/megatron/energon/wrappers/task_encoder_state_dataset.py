@@ -57,7 +57,7 @@ class TaskEncoderStateDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_
 
     def restore_sample(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> T_sample:
         inner_sample = self.dataset.restore_sample(restore_key)
-        self._task_encoder.restore_sample()
+        inner_sample = self._task_encoder.restore_sample(inner_sample)
         return inner_sample
 
     def config(self) -> Dict[str, Any]:

@@ -212,14 +212,14 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
             id, sample_idx, *samples_restore_keys = restore_key
             assert id == type(self).__name__
         batch = [self.dataset.restore_sample(inner_idx) for inner_idx in samples_restore_keys]
-        with self._sample_index.ctx(sample_idx):
+        with SampleIndex(self.worker_config, src=self).ctx(sample_idx):
             batch_sample = self.batcher(batch)
         if isinstance(batch_sample, Generator):
             assert inspect.isgeneratorfunction(self.batcher), (
                 f"Generator in {self.batcher} but not marked as such."
             )
             for cur_batch_sub_idx, (sample_idx, inner_batch_sample) in enumerate(
-                self._sample_index.iter_ctx(batch_sample, sample_idx)
+                SampleIndex(self.worker_config, src=self).iter_ctx(batch_sample, sample_idx)
             ):
                 if cur_batch_sub_idx == batch_sub_idx:
                     return set_sample_restore_key(

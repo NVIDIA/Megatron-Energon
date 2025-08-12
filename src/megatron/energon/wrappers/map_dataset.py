@@ -188,14 +188,14 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
             assert id == type(self).__name__
             restore_key = restore_key[2:]
         inner_sample = self.dataset.restore_sample(restore_key)
-        with self._sample_index.ctx(sample_idx):
+        with SampleIndex(self.worker_config, src=self).ctx(sample_idx):
             mapped_sample = self.map_fn(inner_sample)
         if isinstance(mapped_sample, Generator):
             assert inspect.isgeneratorfunction(self.map_fn), (
                 f"Generator in {self.map_fn} but not marked as such."
             )
             for idx, (sample_idx, res_sample) in enumerate(
-                self._sample_index.iter_ctx(mapped_sample, sample_idx)
+                SampleIndex(self.worker_config, src=self).iter_ctx(mapped_sample, sample_idx)
             ):
                 if idx == local_idx:
                     return add_sample_restore_key(res_sample, sample_idx, local_idx, src=self)

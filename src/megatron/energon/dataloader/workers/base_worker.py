@@ -102,7 +102,7 @@ class DataLoaderWorker(Generic[TSample]):
             "Global worker ID mismatch"
         )
         assert self._seed == self.worker_config.worker_seed(self._rank_worker_id), "Seed mismatch"
-        print(f"dataset_init {state=}\n", end="")
+        print("dataset_init\n", end="")
         self.dataset.reset_state()
         if state is None:
             self._sample_index = 0
@@ -152,7 +152,7 @@ class DataLoaderWorker(Generic[TSample]):
             next_sample = next(self._dataset_iter)
             self._sample_index += 1
             next_sample = add_sample_restore_key(
-                next_sample, self._global_worker_id, sample_idx, src=self
+                next_sample, self._global_worker_id, sample_idx, src=DataLoaderWorker.__name__
             )
         except StopIteration as e:
             self._exhausted = True

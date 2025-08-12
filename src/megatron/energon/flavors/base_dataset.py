@@ -274,6 +274,9 @@ class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC)
     #: List of names of the fields that are saved and restored in the state.
     _savable_fields: ClassVar[Tuple[str, ...]] = ()
 
+    #: List of names of the fields that are not saved, but are still part of the state (i.e. not shared between workers).
+    _state_fields: ClassVar[Tuple[str, ...]] = ()
+
     def __init__(self, worker_config: WorkerConfig):
         self.worker_config = worker_config
         if THREAD_SAFE:
@@ -408,23 +411,26 @@ class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC)
     if THREAD_SAFE:
 
         def __getattribute__(self, name: str) -> Any:
-            if name in ("_savable_fields", "_thread_state", "worker_config"):
+            if name in ("_savable_fields", "_state_fields", "_thread_state", "worker_config"):
                 return object.__getattribute__(self, name)
-            elif name in self._savable_fields:
-                return getattr(self._thread_state, name)
+            elif name in self._savable_fields or name in self._state_fields:
+                try:
+                    return getattr(self._thread_state, name)
+                except AttributeError:
+                    return object.__getattribute__(self, name)
             else:
                 return object.__getattribute__(self, name)
 
         def __delattr__(self, name: str) -> None:
-            if name in self._savable_fields:
+            if name in self._savable_fields or name in self._state_fields:
                 delattr(self._thread_state, name)
             else:
                 object.__delattr__(self, name)
 
         def __setattr__(self, name: str, value: Any) -> None:
-            if name in ("_savable_fields", "_thread_state", "worker_config"):
+            if name in ("_savable_fields", "_state_fields", "_thread_state", "worker_config"):
                 object.__setattr__(self, name, value)
-            elif name in self._savable_fields:
+            elif name in self._savable_fields or name in self._state_fields:
                 setattr(self._thread_state, name, value)
             else:
                 object.__setattr__(self, name, value)
@@ -461,13 +467,15 @@ def add_sample_restore_key(
     """Adds a key to a sample. The sample must be a valid `Sample` or dict containing
     __restore_key__, which is a tuple of keys that can be used to restore the inner sample.
     This restore key is prepended with the `key`."""
+    if not isinstance(src, str):
+        src = type(src).__name__
     if isinstance(sample, Sample) or hasattr(sample, "__restore_key__"):
         try:
-            sample.__restore_key__ = (type(src).__name__, *key, *sample.__restore_key__)
+            sample.__restore_key__ = (src, *key, *sample.__restore_key__)
         except KeyError:
             pass
     elif isinstance(sample, dict) and "__restore_key__" in sample:
-        sample["__restore_key__"] = (type(src).__name__, *key, *sample["__restore_key__"])
+        sample["__restore_key__"] = (src, *key, *sample["__restore_key__"])
     elif fail_otherwise:
         raise RuntimeError(
             "Did not yield a sample with a restore key, but is marked stateless/deterministic."
@@ -481,13 +489,15 @@ def set_sample_restore_key(
     """Sets the restore key for a sample. The sample must be a valid `Sample` or dict containing
     __restore_key__, which is a tuple of keys that can be used to restore the inner sample.
     This restore key is prepended with the `key`."""
+    if not isinstance(src, str):
+        src = type(src).__name__
     if isinstance(sample, Sample) or hasattr(sample, "__restore_key__"):
         try:
-            sample.__restore_key__ = (type(src).__name__, *key)
+            sample.__restore_key__ = (src, *key)
         except KeyError:
             pass
     elif isinstance(sample, dict) and "__restore_key__" in sample:
-        sample["__restore_key__"] = (type(src).__name__, *key)
+        sample["__restore_key__"] = (src, *key)
     elif fail_otherwise:
         raise RuntimeError(
             "Did not yield a sample with a restore key, but is marked stateless/deterministic."

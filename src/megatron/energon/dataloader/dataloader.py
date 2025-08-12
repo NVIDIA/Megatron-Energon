@@ -499,14 +499,17 @@ class DataLoader(Generic[TSample]):
             The restored sample.
         """
         id, global_worker_id, sample_idx = restore_key[:3]
-        assert id == type(self).__name__
+        assert id == "DataLoaderWorker", f"id {id} != DataLoaderWorker"
         restore_key = restore_key[3:]
         self._worker_config.worker_activate(
             sample_idx, override_global_rank=global_worker_id, cache_pool=self._cache_pool
         )
         try:
             return add_sample_restore_key(
-                self._dataset.restore_sample(restore_key), global_worker_id, sample_idx, src=self
+                self._dataset.restore_sample(restore_key),
+                global_worker_id,
+                sample_idx,
+                src=DataLoaderWorker.__name__,
             )
         finally:
             self._worker_config.worker_deactivate()
@@ -526,6 +529,10 @@ class DataLoader(Generic[TSample]):
         """
         self.restore_state_global(state, src_rank=src_rank)
         return self
+
+    def can_restore_sample(self) -> bool:
+        """Check if the dataset can save and restore samples."""
+        return self._dataset.can_restore_sample()
 
     def config(self) -> dict[str, Any]:
         """Get the configuration of the dataset."""

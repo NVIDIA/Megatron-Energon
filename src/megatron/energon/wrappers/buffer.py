@@ -16,25 +16,24 @@ from typing import (
 )
 
 from megatron.energon.flavors.base_dataset import FlexState, SavableDataset
+from megatron.energon.savable import Savable
 from megatron.energon.worker import WorkerConfig
-from megatron.energon.wrappers.base import BaseWrapperDataset, get_sample_restore_key
+from megatron.energon.wrappers.base import get_sample_restore_key
 
 T_sample = TypeVar("T_sample")
 
 
-class SavableSampleBuffer(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
-    """A buffer of samples, savable."""
+class SavableSampleBuffer(Savable, Generic[T_sample]):
+    """A buffer of samples, savable. State is shared, create a state-local instance."""
 
     _buffer: List[T_sample]
     _restore_keys: List[Tuple[Union[str, int, tuple], ...]]
 
-    _savable_fields = ("_restore_keys",)
     _restore_pending: bool = False
 
     def __init__(self, dataset: SavableDataset[T_sample], *, worker_config: WorkerConfig):
-        super().__init__(dataset, worker_config=worker_config)
-
-    def reset_state_own(self) -> None:
+        self.dataset = dataset
+        self.worker_config = worker_config
         self._buffer = []
         self._restore_keys = []
 
@@ -43,7 +42,7 @@ class SavableSampleBuffer(BaseWrapperDataset[T_sample, T_sample], Generic[T_samp
             assert len(self._buffer) == 0
             self._restore_pending = False
             for restore_key in self._restore_keys:
-                self._buffer.append(self.restore_sample(restore_key))
+                self._buffer.append(self.dataset.restore_sample(restore_key))
         assert len(self._buffer) == len(self._restore_keys)
 
     def append(self, sample: T_sample) -> T_sample:
@@ -107,13 +106,18 @@ class SavableSampleBuffer(BaseWrapperDataset[T_sample, T_sample], Generic[T_samp
     def save_state(self) -> FlexState:
         # Don't call super().save_state() because we don't want to save the wrapped datasets
         # Just save the own state
-        return SavableDataset.save_state(self)
+        return FlexState(
+            __class__=type(self).__name__,
+            _restore_keys=self._restore_keys,
+        )
 
     def restore_state(self, state: FlexState) -> None:
         # Don't call super().restore_state() because we don't want to restore the wrapped datasets
         # Just restore the own state
-        SavableDataset.restore_state(self, state)
-
+        assert state["__class__"] == type(self).__name__, (
+            f"Expected class {type(self).__name__}, got {state['__class__']}"
+        )
+        self._restore_keys = state["_restore_keys"].copy()
         self._restore_pending = True
 
     def restore_key(self) -> Tuple[Union[str, int], ...]:
@@ -125,7 +129,7 @@ class SavableSampleBuffer(BaseWrapperDataset[T_sample, T_sample], Generic[T_samp
         buffer = []
         restore_keys = []
         for sub_index in index:
-            sample = self.restore_sample(sub_index)
+            sample = self.dataset.restore_sample(sub_index)
             restore_keys.append(get_sample_restore_key(sample))
             buffer.append(sample)
         return tuple(restore_keys), buffer

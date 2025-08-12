@@ -73,6 +73,10 @@ class GroupBatchDataset(
     _batch_sample_index: SampleIndex
     _buckets: Dict[Hashable, Bucket[T_batch_sample]]
 
+    _savable_fields = ("_group_key_sample_index", "_batch_sample_index")
+    # Buckets are saved manually
+    _state_fields = ("_buckets",)
+
     def __init__(
         self,
         dataset: SavableDataset[T_batch_sample],
@@ -219,17 +223,13 @@ class GroupBatchDataset(
 
     def save_state(self) -> FlexState:
         return FlexState(
-            bucket_sample_index=self._group_key_sample_index.save_state(),
-            batch_sample_index=self._batch_sample_index.save_state(),
-            buckets={key: bucket.save_state() for key, bucket in self._buckets.items()},
             **super().save_state(),
+            buckets={key: bucket.save_state() for key, bucket in self._buckets.items()},
         )
 
     def restore_state(self, state: FlexState) -> None:
         super().restore_state(state)
 
-        self._group_key_sample_index.restore_state(state["bucket_sample_index"])
-        self._batch_sample_index.restore_state(state["batch_sample_index"])
         for key, bucket_state in state["buckets"].items():
             self._buckets[key] = Bucket(
                 batch_size=-1,
@@ -251,7 +251,7 @@ class GroupBatchDataset(
         id, sample_idx, *sample_restore_keys = index
         assert id == type(self).__name__
         batch = [self.dataset.restore_sample(inner_idx) for inner_idx in sample_restore_keys]
-        with self._batch_sample_index.ctx(sample_idx):
+        with SampleIndex(self.worker_config, src=self).ctx(sample_idx):
             batch_sample = self.batcher(batch)
         set_sample_restore_key(batch_sample, sample_idx, *sample_restore_keys, src=self)
         return batch_sample

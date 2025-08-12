@@ -6,6 +6,8 @@ import sys
 import threading
 import warnings
 
+import torch.multiprocessing
+
 from megatron.energon.dataloader.asynchronous.base import (
     Asynchronous,
     QueueProtocol,
@@ -30,11 +32,11 @@ class ForkAsynchronous(Asynchronous):
         self._spawning_process = os.getpid()
 
     def _queues(self) -> tuple[QueueProtocol[WorkerCommand], QueueProtocol[WorkerResult]]:
-        return multiprocessing.Queue(), multiprocessing.Queue()
+        return torch.multiprocessing.Queue(), torch.multiprocessing.Queue()
 
     def _check_parent_process(self, evt_exit: threading.Event) -> None:
         """Check if the parent process is alive. If it is dead, exit the worker process."""
-        parent_proc = multiprocessing.parent_process()
+        parent_proc = torch.multiprocessing.parent_process()
         parent_pid = os.getppid()
         if parent_proc is None:
             print(f"[{self._name}] No parent process, exiting", file=sys.stderr)
@@ -49,6 +51,21 @@ class ForkAsynchronous(Asynchronous):
         cmd_queue: multiprocessing.Queue,
         result_queue: multiprocessing.Queue,
     ) -> None:
+        try:
+            from torch.utils.data._utils import signal_handling
+
+            signal_handling._set_worker_signal_handlers()
+        except (ImportError, AttributeError):
+            pass
+
+        try:
+            torch.multiprocessing._set_thread_name("pt_data_worker")
+        except (ImportError, AttributeError):
+            pass
+
+        # Disable torch internal multithreading, it may deadlock the forked process.
+        torch.set_num_threads(1)
+
         # cmd_queue is read only, so we can cancel the join thread.
         cmd_queue.cancel_join_thread()
         worker_exit_evt = threading.Event()
@@ -74,17 +91,22 @@ class ForkAsynchronous(Asynchronous):
             print(f"[{self._name}] shutting down, done\n", end="")
 
     def _in_worker(self) -> bool:
-        return multiprocessing.current_process() == self._process
+        return torch.multiprocessing.current_process() == self._process
 
     def start(self) -> None:
-        multiprocessing.set_start_method("fork", force=True)
-        self._process = multiprocessing.Process(
+        torch.multiprocessing.set_start_method("fork", force=True)
+        orig_num_threads = torch.get_num_threads()
+        # Disable torch internal multithreading, it may deadlock the forked process.
+        torch.set_num_threads(1)
+        self._process = torch.multiprocessing.Process(
             target=self._worker_run,
             args=(self._cmd_queue, self._result_queue),
             daemon=True,
             name=f"ForkDataLoaderWorker-{self._name}",
         )
         self._process.start()
+        # Revert the original number of threads in the main process.
+        torch.set_num_threads(orig_num_threads)
 
     def shutdown(self, in_del: bool = False) -> None:
         if self._spawning_process != os.getpid():

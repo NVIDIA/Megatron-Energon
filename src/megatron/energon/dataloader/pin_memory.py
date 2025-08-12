@@ -71,6 +71,13 @@ class PinMemoryThread(PinMemory[TSample], ThreadAsynchronous, Generic[TSample]):
         super().__init__(device)
         self._asynchronous_init(name="pin-memory")
 
+    def _worker_run(self, *args, **kwargs) -> None:
+        try:
+            torch.multiprocessing._set_thread_name("pt_data_pin")
+        except AttributeError:
+            pass
+        super()._worker_run(*args, **kwargs)
+
     def _wrk_pin_memory(self, sample: Future[TSample]) -> TSample:
         print(
             f"[{self._name}] Pinning memory of sample {sample}, waiting for sample data\n", end=""

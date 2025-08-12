@@ -19,7 +19,7 @@ class ShuffleBufferDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sam
     _worker_rng: WorkerRng
     _active_buffer: SavableSampleBuffer[T_sample]
 
-    _savable_fields = ("_active_buffer", "_worker_rng")
+    _savable_fields = ("_worker_rng", "_active_buffer")
 
     def __init__(
         self,
@@ -53,7 +53,7 @@ class ShuffleBufferDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sam
             yield self._active_buffer.pop(pop_idx)
 
     def restore_sample(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> T_sample:
-        return self._active_buffer.restore_sample(restore_key)
+        return self.dataset.restore_sample(restore_key)
 
     def config(self) -> Dict[str, Any]:
         return {

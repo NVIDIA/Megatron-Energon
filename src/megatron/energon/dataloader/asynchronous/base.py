@@ -83,6 +83,9 @@ class FutureImpl(Future[Any]):
     def _set_exception(self, exception: Exception) -> None:
         self._exception = exception
 
+    def __str__(self) -> str:
+        return f"FutureImpl(worker={self._worker._name!r}, future_id={self._future_id!r}, done={self.done()!r}, exception={getattr(self, '_exception', '<no exception>')})"
+
 
 class Asynchronous:
     """Asynchronous base class."""
@@ -168,13 +171,13 @@ class Asynchronous:
 
         self._pending_futures[future_id] = future = FutureImpl(self, future_id)
         print(
-            f"[{self._name}] worker_call {fn.__name__=} {args=} {kwargs=} {future_id=}\n",
+            f"[{self._name}] worker_call {fn.__name__=} {future_id=}\n",
             end="",
         )
         self._cmd_queue.put(
             WorkerCommand(cmd=fn.__name__, args=args, kwargs=kwargs, future_id=future_id)
         )
-        print(f"[{self._name}] queue: {self._cmd_queue.qsize()}\n", end="")
+        print(f"[{self._name}] cmd_queue: {self._cmd_queue.qsize()=}\n", end="")
         return future
 
     def _worker_run(
@@ -200,7 +203,7 @@ class Asynchronous:
                 )
                 cmd = cmd_queue.get()
                 print(
-                    f"[{self._name}, fut={cmd.future_id}] got command {cmd.cmd=} {cmd.args=} {cmd.kwargs=}\n",
+                    f"[{self._name}, fut={cmd.future_id}] got command {cmd.cmd=}\n",
                     end="",
                 )
                 try:
@@ -209,9 +212,11 @@ class Asynchronous:
                 except Exception as e:
                     print(f"[{self._name}, fut={cmd.future_id}] send exception {e!r}\n", end="")
                     result_queue.put(WorkerResult(future_id=cmd.future_id, exception=e))
+                    print(f"[{self._name}] result_queue: {result_queue.qsize()=}\n", end="")
                 else:
-                    print(f"[{self._name}, fut={cmd.future_id}] send result {result!r}\n", end="")
+                    print(f"[{self._name}, fut={cmd.future_id}] send result\n", end="")
                     result_queue.put(WorkerResult(future_id=cmd.future_id, result=result))
+                    print(f"[{self._name}] result_queue: {result_queue.qsize()=}\n", end="")
                     del result
                 # cmd_queue.task_done()
                 if cmd.cmd == self._wrk_shutdown_worker.__name__:

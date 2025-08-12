@@ -212,6 +212,93 @@ class TestDataloader(unittest.TestCase):
             ]
             assert train_order2 == cmp_order2, (train_order1, cmp_order2)
 
+    def test_dataloader_fork_multi_parallel(self):
+        torch.manual_seed(42)
+        worker_config_r0 = WorkerConfig(
+            rank=0,
+            world_size=2,
+            num_workers=2,
+            seed_offset=42,
+        )
+        worker_config_r1 = WorkerConfig(
+            rank=1,
+            world_size=2,
+            num_workers=2,
+            seed_offset=42,
+        )
+
+        # Train mode dataset
+        train_loader_r0 = DataLoader(
+            get_train_dataset(
+                self.ds1_path,
+                worker_config=worker_config_r0,
+                batch_size=10,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                repeat=False,
+            ),
+            prefetch_factor=2,
+            worker_type=ForkDataLoaderWorker,
+            gc_collect_every_n_steps=10,
+            gc_freeze_at_start=True,
+            watchdog_timeout_seconds=60,
+            fail_on_timeout=True,
+        )
+        assert len(train_loader_r0) == 4, len(train_loader_r0)
+
+        train_order1_r0 = [
+            text for idx, data in zip(range(55 * 10), train_loader_r0) for text in data.text
+        ]
+        print(train_order1_r0[:10])
+        print(Counter(train_order1_r0))
+        assert len(train_order1_r0) == 28, len(train_order1_r0)
+        assert len(Counter(train_order1_r0)) == 28, Counter(train_order1_r0)
+        assert all(v == 1 for v in Counter(train_order1_r0).values()), Counter(train_order1_r0)
+
+        train_loader_r1 = DataLoader(
+            get_train_dataset(
+                self.ds1_path,
+                worker_config=worker_config_r1,
+                batch_size=10,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                repeat=False,
+            ),
+            prefetch_factor=2,
+            worker_type=ForkDataLoaderWorker,
+            gc_collect_every_n_steps=10,
+            gc_freeze_at_start=True,
+            watchdog_timeout_seconds=60,
+            fail_on_timeout=True,
+        )
+        assert len(train_loader_r1) == 4, len(train_loader_r1)
+
+        train_order1_r1 = [
+            text for idx, data in zip(range(55 * 10), train_loader_r1) for text in data.text
+        ]
+        print(train_order1_r1[:10])
+        print(Counter(train_order1_r1))
+        assert len(train_order1_r1) == 27, len(train_order1_r1)
+        assert len(Counter(train_order1_r1)) == 27, Counter(train_order1_r1)
+        assert all(v == 1 for v in Counter(train_order1_r1).values()), Counter(train_order1_r1)
+
+        train_loader_r1.save_state_rank()
+
+        train_loader_r0.save_state_rank()
+
+        train_order2_r0 = [
+            text for idx, data in zip(range(55 * 10), train_loader_r0) for text in data.text
+        ]
+        assert len(train_order2_r0) == 28
+
+        train_order2_r1 = [
+            text for idx, data in zip(range(55 * 10), train_loader_r1) for text in data.text
+        ]
+        assert len(train_order2_r1) == 27
+
+        train_loader_r0.shutdown()
+        train_loader_r1.shutdown()
+
     def test_dataloader_thread(self):
         torch.manual_seed(42)
         worker_config = WorkerConfig(

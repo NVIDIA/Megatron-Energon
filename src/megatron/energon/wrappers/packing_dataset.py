@@ -416,19 +416,19 @@ class PackingDataset(
                 assert isinstance(sample_idx, int)
             sample = self.dataset.restore_sample(inner_idx)
             if self.sample_encoder is not None:
-                with self._sample_encoder_sample_index.ctx(sample_idx):
+                with SampleIndex(self.worker_config, src=self).ctx(sample_idx):
                     sample = self.sample_encoder(sample)
                 assert not isinstance(sample, Generator), "Generator not supported"
                 sample = add_sample_restore_key(sample, sample_idx, src=self)
             pack.append(sample)
-        with self._final_packing_sample_index.ctx(pack_idx):
+        with SampleIndex(self.worker_config, src=self).ctx(pack_idx):
             final_pack = self.final_packer(pack)
         if isinstance(final_pack, Generator):
             assert inspect.isgeneratorfunction(self.final_packer), (
                 f"Generator in {self.final_packer} but not marked as such."
             )
             for cur_batch_sub_idx, (pack_idx, inner_batch_sample) in enumerate(
-                self._final_packing_sample_index.iter_ctx(final_pack, pack_idx)
+                SampleIndex(self.worker_config, src=self).iter_ctx(final_pack, pack_idx)
             ):
                 if cur_batch_sub_idx == pack_sub_idx:
                     return set_sample_restore_key(

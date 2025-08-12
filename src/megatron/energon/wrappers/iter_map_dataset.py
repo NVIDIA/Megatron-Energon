@@ -150,12 +150,13 @@ class IterMapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sampl
             )
         )
         try:
+            sample_index = SampleIndex(self.worker_config, src=self)
             # Skip inner yielded samples to get the correct sample
             for skip_idx in range(iter_idx):
-                with self._sample_index.ctx(sample_idx - iter_idx + skip_idx):
+                with sample_index.ctx(sample_idx - iter_idx + skip_idx):
                     next(inner_iter)
             # This is the sample to restore
-            with self._sample_index.ctx(sample_idx):
+            with sample_index.ctx(sample_idx):
                 sample = next(inner_iter)
             return set_sample_restore_key(
                 sample,
