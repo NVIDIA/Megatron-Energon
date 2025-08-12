@@ -112,6 +112,38 @@ class ITarReader(ABC, Generic[T_index]):
 
         return self.itar_files_cache[tar_file_id]
 
+    def _get_part_by_raw_sample_pointer(
+        self,
+        raw_sample_pointer: ITarSamplePointer,
+        entry_name: str,
+    ) -> tuple[bytes, SourceInfo]:
+        """
+        Get a sample from the dataset.
+
+        Args:
+            raw_sample_pointer: The raw data sample pointer to get the sample from.
+
+        Returns:
+            The raw data bytes.
+        """
+
+        # Open the tar file (cached)
+        tar_file = self._get_itarfile_cached(raw_sample_pointer.tar_file_id)
+        shard_name = self.tar_filenames[raw_sample_pointer.tar_file_id]
+
+        # Get the raw data from the tar file
+        rest = tar_file.fileobj.tell()
+        tar_file.fileobj.seek(raw_sample_pointer.byte_offset)
+        raw_data = tar_file.fileobj.read(raw_sample_pointer.byte_size)
+        tar_file.fileobj.seek(rest)
+
+        return raw_data, SourceInfo(
+            dataset_path=self.base_path,
+            index=0,
+            shard_name=shard_name,
+            file_names=(entry_name,),
+        )
+
     def _get_item_by_sample_pointer(
         self,
         sample_pointer: ITarSamplePointer,
@@ -422,6 +454,7 @@ class SqliteITarEntryReader(ITarReader[str]):
     """
 
     sqlite_reader: SqliteIndexReader
+    db_version: int
 
     def __init__(
         self,
@@ -441,6 +474,8 @@ class SqliteITarEntryReader(ITarReader[str]):
         # Initialize the SQLite reader
         sqlite_path = base_path / MAIN_FOLDER_NAME / "index.sqlite"
         self.sqlite_reader = SqliteIndexReader(sqlite_path)
+
+        self.db_version = self.sqlite_reader.db_version()
 
         self.key_is_full_entryname = key_is_full_entryname
 
@@ -526,6 +561,12 @@ class SqliteITarEntryReader(ITarReader[str]):
 
             sample_key, sample_ext = m.groups()
             entry_match_fn = lambda fname: key == fname
+
+            if self.db_version >= 2:
+                # Directly fetch the sample part (byte offset and size) from the database
+                raw_sample_pointer = self.sqlite_reader.get_sample_part(sample_key, sample_ext)
+                raw_data, source_info = self._get_part_by_raw_sample_pointer(raw_sample_pointer, key)
+                return raw_data, source_info
         else:
             sample_key = key
             sample_ext = None
