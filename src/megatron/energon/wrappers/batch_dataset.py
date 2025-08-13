@@ -163,7 +163,6 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
                     last_batch_failures = 0
                     set_sample_restore_key(batch_sample, sample_idx, *sample_restore_keys, src=self)
                     yield batch_sample
-                sample_restore_keys.clear()
             except GeneratorExit:
                 raise
             except SkipSample:
