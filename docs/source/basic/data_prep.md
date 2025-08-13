@@ -97,8 +97,8 @@ A single JSONL file will contain all of your text-based data, one JSON entry per
 And it is essentially equivalent to using a WebDataset with files
 
 ```
-00000000.json
-00000001.json
+0.json
+1.json
 ```
 
 each file containing the JSON from one of the lines above.
