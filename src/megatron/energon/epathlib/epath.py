@@ -178,7 +178,10 @@ class EPath:
         return self.profile == "default"
 
     def is_dir(self) -> bool:
-        return self.fs.info(self._internal_str_path).type == "directory"
+        try:
+            return self.fs.info(self._internal_str_path).type == "directory"
+        except FileNotFoundError:
+            return False
 
     def is_file(self) -> bool:
         return self.fs.is_file(self._internal_str_path)
