@@ -143,11 +143,22 @@ def check_dataset_info_present(path: EPath) -> bool:
 
 
 def get_dataset_type(path: EPath) -> EnergonDatasetType:
-    if path.is_file() and path.name.endswith(".jsonl"):
-        return EnergonDatasetType.JSONL
-    elif path.is_file() and path.name.endswith(".yaml"):
+    """Get the type of the dataset at the given path.
+
+    Args:
+        path: The path to the dataset as specified by the user.
+
+    Returns:
+        The type of the dataset.
+    """
+    if path.is_file():
+        if path.name.endswith(".jsonl"):
+            return EnergonDatasetType.JSONL
+        elif path.name.endswith(".yaml"):
+            return EnergonDatasetType.METADATASET
+        else:
+            return EnergonDatasetType.INVALID
+    elif check_dataset_info_present(path):
         return EnergonDatasetType.METADATASET
-    elif path.is_dir() and check_dataset_info_present(path):
-        return EnergonDatasetType.WEBDATASET
     else:
         return EnergonDatasetType.INVALID

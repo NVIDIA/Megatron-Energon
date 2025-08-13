@@ -68,7 +68,7 @@ class CrudeJsonlDatasetFactory(
         Factory for a jsonl file as a crude dataset.
 
         Args:
-            path: Path to the dataset.
+            path: Path to the jsonl file.
             training: If true, apply shuffling and loop the dataset.
             worker_config: Configuration for the workers.
             shuffle_over_epochs: Only effective if training=True.

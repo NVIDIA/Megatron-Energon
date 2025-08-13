@@ -116,7 +116,7 @@ class IJsonlReader(ABC):
             try:
                 idx = int(num_idx)
             except ValueError:
-                raise ValueError(f"Invalid JSONLsample key: {idx}")
+                raise ValueError(f"Invalid JSONL sample key: {idx}")
 
         byte_offset, byte_size = self.cached_offset_reader.get_ijsonl_byte_offset(idx)
         sample: FilteredSample | None = self._get_item_by_sample_pointer(
