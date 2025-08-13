@@ -159,6 +159,6 @@ def get_dataset_type(path: EPath) -> EnergonDatasetType:
         else:
             return EnergonDatasetType.INVALID
     elif check_dataset_info_present(path):
-        return EnergonDatasetType.METADATASET
+        return EnergonDatasetType.WEBDATASET
     else:
         return EnergonDatasetType.INVALID
