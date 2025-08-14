@@ -71,7 +71,6 @@ class BaseWebdatasetFactory(
 
     shards: List[ShardInfo]
 
-
     def __init__(
         self,
         path: EPath,
