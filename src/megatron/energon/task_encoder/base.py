@@ -121,7 +121,9 @@ P = ParamSpec("P")
 
 
 @overload
-def stateless(*, restore_seeds: bool = False) -> Callable[[Callable[P, T]], Callable[P, T]]: ...
+def stateless(
+    *, restore_seeds: bool = False, failure_tolerance: Optional[int] = None
+) -> Callable[[Callable[P, T]], Callable[P, T]]: ...
 
 
 @overload
@@ -142,7 +144,7 @@ def stateless(
             from the sample index and the worker seed, such that they can be restored when a sample
             is restored from that function.
         failure_tolerance: The number of consecutive exceptions that are handled, after which a `FatalSampleError` is
-            raised for this function.
+            raised for this function. Set to 0 to disable.
 
     Usage:
 
@@ -238,7 +240,8 @@ def stateless(
             return seed_wrapper
 
     setattr(fn, "__stateless__", True)
-    setattr(fn, "__failure_tolerance__", failure_tolerance)
+    if failure_tolerance is not None:
+        setattr(fn, "__failure_tolerance__", failure_tolerance)
     return fn
 
 

@@ -69,6 +69,9 @@ class BaseWebdatasetFactory(
     part_filter: Optional[Callable[[str], bool]]
     handler: Callable[[Exception, Optional[str], Optional[list[SourceInfo]]], None]
 
+    shards: List[ShardInfo]
+
+
     def __init__(
         self,
         path: EPath,
@@ -80,7 +83,7 @@ class BaseWebdatasetFactory(
         parallel_shard_iters: Optional[int] = None,
         max_samples_per_sequence: Optional[int] = None,
         subset: Optional[DatasetSubset] = None,
-        split_config: str = "split.yaml",
+        split_config: Optional[str] = None,
         part_filter: Optional[Callable[[str], bool]] = None,
         handler: Callable[
             [Exception, Optional[str], Optional[list[SourceInfo]]], None

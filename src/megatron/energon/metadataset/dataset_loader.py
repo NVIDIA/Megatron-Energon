@@ -25,8 +25,8 @@ class DatasetLoader(DatasetLoaderInterface):
     split_part: Optional[str] = None
     subflavors: Optional[Dict[str, Any]] = None
     shuffle_over_epochs_multiplier: Optional[int] = 1
-    dataset_config: str = "dataset.yaml"
-    split_config: str = "split.yaml"
+    dataset_config: Optional[str] = None
+    split_config: Optional[str] = None
 
     def post_initialize(self, mds_path: Optional[EPath] = None):
         pass

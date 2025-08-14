@@ -10,6 +10,7 @@ from typing import BinaryIO, Literal, Optional, Sequence, Union, overload
 import numpy as np
 import torch
 
+from megatron.energon.av.av_init import av_open
 from megatron.energon.edataclass import edataclass
 
 # Try importing optional dependencies
@@ -49,6 +50,10 @@ class AVDecoder:
             )
         self.stream = stream
         self.suppress_warnings = suppress_warnings
+
+        assert "t" not in getattr(stream, "mode", "rb") and not isinstance(stream, io.TextIOBase), (
+            "Stream must not be opened in text mode"
+        )
 
         try:
             self.seeker = Fastseek(self.stream)
@@ -92,9 +97,7 @@ class AVDecoder:
 
         self.stream.seek(0)  # Reset the video stream so that pyav can read the entire container
 
-        with av.open(self.stream, "r") as input_container:
-            initialize_av_container(input_container)
-
+        with av_open(self.stream) as input_container:
             assert len(input_container.streams.video) > 0, (
                 "No video stream found, but video_clips are requested"
             )
@@ -106,7 +109,6 @@ class AVDecoder:
             assert average_rate, "Video stream has no FPS."
 
             time_base: Fraction = video_stream.time_base  # Seconds per PTS unit
-            average_frame_duration: int = int(1 / average_rate / time_base)  # PTS units per frame
 
             if video_clip_ranges is not None:
                 # Convert video_clip_ranges to seeker unit
@@ -183,11 +185,10 @@ class AVDecoder:
                     # Container uses time, the target frame might not correspond exactly to any metadata but the desired timestamp should
                     # fall within a frames display period
                     if self.seeker.unit == "pts":
-                        if start_frame_index <= frame.pts + average_frame_duration:
+                        if start_frame_index <= (frame.pts + frame.duration):
                             take_frame = True
-                        if (
-                            end_frame_index is not None
-                            and end_frame_index <= frame.pts + average_frame_duration
+                        if end_frame_index is not None and end_frame_index <= (
+                            frame.pts + frame.duration
                         ):
                             last_frame = True
 
@@ -206,9 +207,7 @@ class AVDecoder:
                         if clip_timestamp_start is None:
                             clip_timestamp_start = float(frame.pts * frame.time_base)
 
-                        clip_timestamp_end = float(
-                            (frame.pts + average_frame_duration) * frame.time_base
-                        )
+                        clip_timestamp_end = float((frame.pts + frame.duration) * frame.time_base)
 
                     previous_frame_index += 1
 
@@ -256,8 +255,7 @@ class AVDecoder:
 
         self.stream.seek(0)  # Reset the video stream so that pyav can read the entire container
 
-        with av.open(self.stream, "r") as input_container:
-            initialize_av_container(input_container)
+        with av_open(self.stream) as input_container:
             assert len(input_container.streams.audio) > 0, (
                 "No audio stream found, but audio_clips are requested"
             )
@@ -314,7 +312,7 @@ class AVDecoder:
                 for frame in input_container.decode(audio=0):
                     assert frame.pts is not None, "Audio frame has no PTS timestamp"
                     cur_frame_time = float(frame.pts * frame.time_base)
-                    cur_frame_duration = float(frame.samples / audio_sample_rate)
+                    cur_frame_duration = float(frame.duration * frame.time_base)
 
                     if cur_frame_time < start_time:
                         # Skip frames before the start time
@@ -492,15 +490,13 @@ class AVDecoder:
     def has_audio_stream(self) -> bool:
         """Check if the stream has an audio stream."""
         self.stream.seek(0)
-        with av.open(self.stream, "r") as input_container:
-            initialize_av_container(input_container)
+        with av_open(self.stream) as input_container:
             return len(input_container.streams.audio) > 0
 
     def has_video_stream(self) -> bool:
         """Check if the stream has a video stream."""
         self.stream.seek(0)
-        with av.open(self.stream, "r") as input_container:
-            initialize_av_container(input_container)
+        with av_open(self.stream) as input_container:
             return len(input_container.streams.video) > 0
 
     def get_audio_duration(self) -> Optional[float]:
@@ -567,9 +563,7 @@ class AVDecoder:
             get_audio_duration: Compute audio duration if not found in header.
         """
         self.stream.seek(0)
-        with av.open(self.stream, "r") as input_container:
-            initialize_av_container(input_container)
-
+        with av_open(self.stream) as input_container:
             metadata = AVMetadata()
 
             if get_video and input_container.streams.video:
@@ -606,7 +600,7 @@ class AVDecoder:
                 elif metadata.video_num_frames is not None and metadata.video_duration is not None:
                     metadata.video_fps = metadata.video_num_frames / metadata.video_duration
                 if get_video_frame_size:
-                    input_container.seek(0, stream=video_stream)
+                    input_container.seek(0)
                     for first_frame in input_container.decode(video=0):
                         metadata.video_width = first_frame.width
                         metadata.video_height = first_frame.height
@@ -621,7 +615,7 @@ class AVDecoder:
                 metadata.audio_duration = audio_stream.duration
                 if get_audio_duration and metadata.audio_duration is None:
                     last_packet = None
-                    input_container.seek(0, stream=audio_stream)
+                    input_container.seek(0)
                     for packet in input_container.demux(audio=0):
                         if packet.pts is not None:
                             last_packet = packet
@@ -699,13 +693,13 @@ class AVWebdatasetDecoder:
         Returns:
             If av_decode is "torch", returns VideoData containing the decoded frames and metadata.
             If av_decode is "AVDecoder", returns an AVDecoder instance for flexible decoding.
-            If av_decode is "pyav", returns an av.container.InputContainer or av.container.OutputContainer instance.
+            If av_decode is "pyav", returns an av.container.InputContainer instance.
             Returns None if decoding failed or file type is not supported.
         """
         key = key.lower()
         if not any(
             key == ext or key.endswith("." + ext)
-            for ext in ("mp4", "avi", "mov", "webm", "mkv", "flac", "mp3", "wav")
+            for ext in ("mp4", "avi", "mov", "webm", "mkv", "flac", "mp3", "wav", "flv")
         ):
             return None
 
@@ -714,9 +708,7 @@ class AVWebdatasetDecoder:
         if self.av_decode == "AVDecoder":
             return av_decoder
         elif self.av_decode == "pyav":
-            input_container = av.open(av_decoder.stream)
-            initialize_av_container(input_container)
-            return input_container
+            return av_open(av_decoder.stream)
         elif self.av_decode == "torch":
             return av_decoder.get_frames(
                 video_decode_audio=self.video_decode_audio,
@@ -738,20 +730,3 @@ class AVMetadata:
     audio_duration: Optional[float] = None
     audio_channels: Optional[int] = None
     audio_sample_rate: Optional[int] = None
-
-
-def initialize_av_container(input_container: "av.container.InputContainer") -> None:
-    """Every PyAV container should be initialized with this function.
-
-    This function ensures that no additional threads are created.
-    This is to avoid deadlocks in ffmpeg when when deallocating the container.
-    Furthermore, we cannot have multiple threads before forking the process when
-    using torch data loaders with multiple workers.
-    """
-
-    for stream in input_container.streams:
-        cc = stream.codec_context
-
-        if cc is not None:
-            cc.thread_type = "NONE"
-            cc.thread_count = 0

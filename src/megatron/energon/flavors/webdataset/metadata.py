@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import json
+from enum import Enum
 from typing import List, Set
 
 import braceexpand
@@ -19,6 +20,13 @@ from megatron.energon.flavors.webdataset.structs import (
 from megatron.energon.typed_converter import JsonParser
 
 
+class EnergonDatasetType(Enum):
+    METADATASET = "metadataset"
+    WEBDATASET = "webdataset"
+    JSONL = "jsonl"
+    INVALID = "invalid"
+
+
 @edataclass
 class WebdatasetMeta:
     """Class for getting metadata from a webdataset."""
@@ -33,7 +41,7 @@ class WebdatasetMeta:
         path: EPath,
         *,
         split_part: str,
-        split_config: str = "split.yaml",
+        split_config: str | None = None,
     ) -> "WebdatasetMeta":
         """
         Loads the metadata for a webdataset, i.e. the shards and sample excludes.
@@ -42,6 +50,9 @@ class WebdatasetMeta:
             split_part: Which part to load (e.g. 'train', 'val', 'test').
             split_config: Config file to use for shard split definitions.
         """
+        if split_config is None:
+            split_config = "split.yaml"
+
         parser = JsonParser(strict=True)
         info_object = get_dataset_info(path)
 
@@ -129,3 +140,25 @@ def check_dataset_info_present(path: EPath) -> bool:
     return (path / MAIN_FOLDER_NAME / ".info.json").is_file() or (
         path / MAIN_FOLDER_NAME / ".info.yaml"
     ).is_file()
+
+
+def get_dataset_type(path: EPath) -> EnergonDatasetType:
+    """Get the type of the dataset at the given path.
+
+    Args:
+        path: The path to the dataset as specified by the user.
+
+    Returns:
+        The type of the dataset.
+    """
+    if path.is_file():
+        if path.name.endswith(".jsonl"):
+            return EnergonDatasetType.JSONL
+        elif path.name.endswith(".yaml"):
+            return EnergonDatasetType.METADATASET
+        else:
+            return EnergonDatasetType.INVALID
+    elif check_dataset_info_present(path):
+        return EnergonDatasetType.WEBDATASET
+    else:
+        return EnergonDatasetType.INVALID

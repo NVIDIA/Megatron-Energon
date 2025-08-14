@@ -5,6 +5,7 @@ from typing import Any, Optional, Union
 
 from megatron.energon.cache.base import FileStore, FileStoreDecoder
 from megatron.energon.epathlib import EPath
+from megatron.energon.flavors.jsonl.ijsonl_reader import IJsonlReader
 from megatron.energon.flavors.webdataset.itar_reader import SqliteITarEntryReader
 from megatron.energon.source_info import SourceInfo
 
@@ -87,3 +88,10 @@ class WebdatasetFileStore(SqliteITarEntryReader, FileStore[bytes]):
 
     def get_path(self) -> str:
         return str(self.base_path)
+
+
+class JsonlFileStore(IJsonlReader, FileStore[bytes]):
+    """This dataset will directly read entries from a jsonl file."""
+
+    def get_path(self) -> str:
+        return str(self.jsonl_path)

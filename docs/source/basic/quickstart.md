@@ -4,6 +4,7 @@ SPDX-License-Identifier: BSD-3-Clause -->
 # Quickstart
 
 You can use Megatron Energon to load datasets in the energon dataset format. This format is essentially [WebDataset](https://github.com/webdataset/webdataset) with some meta data added.
+Since version 7.2.0, we also support [JSONL](create-jsonl-dataset) as a simpler format with fewer features.
 
 For a moment let's assume you already have prepared a dataset in the needed format, and it's stored on
 disk at `/my/dataset/path`. If you want to create a dataset now, check out [](data_prep).
