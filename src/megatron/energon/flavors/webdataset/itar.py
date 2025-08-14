@@ -29,6 +29,22 @@ class ITarSamplePointer:
     byte_size: int
 
 
+@edataclass
+class ITarRawSamplePartPointer:
+    """
+    Points to a part of a sample inside some tar file on disk.
+    The tar_file_id refers to the tar_filenames in the reader.
+    The raw_byte_offset and raw_byte_size refer to the sample's part's raw data in the tar file.
+    """
+
+    # The index of the tar file, to be matched with the tar_filenames in the reader.
+    tar_file_id: int
+    # The byte offset of the file's data in the tar file.
+    raw_byte_offset: int
+    # The size of the file's data in the tar file.
+    raw_byte_size: int
+
+
 class TarIndexReader:
     def __init__(self, tar_path: Union[EPath, str]):
         tar_path = EPath(tar_path)

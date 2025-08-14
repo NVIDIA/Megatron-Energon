@@ -22,6 +22,7 @@ from megatron.energon.flavors.webdataset.indexing import JoinIndexReader, Sqlite
 from megatron.energon.flavors.webdataset.itar import (
     CachedItarOffsetReader,
     ITarFile,
+    ITarRawSamplePartPointer,
     ITarSamplePointer,
 )
 from megatron.energon.flavors.webdataset.metadata import get_info_shard_files
@@ -114,11 +115,11 @@ class ITarReader(ABC, Generic[T_index]):
 
     def _get_part_by_raw_sample_pointer(
         self,
-        raw_sample_pointer: ITarSamplePointer,
+        raw_sample_pointer: ITarRawSamplePartPointer,
         entry_name: str,
     ) -> tuple[bytes, SourceInfo]:
         """
-        Get a sample from the dataset.
+        Get a sample part and the source info from the dataset.
 
         Args:
             raw_sample_pointer: The raw data sample pointer to get the sample from.
@@ -133,8 +134,8 @@ class ITarReader(ABC, Generic[T_index]):
 
         # Get the raw data from the tar file
         rest = tar_file.fileobj.tell()
-        tar_file.fileobj.seek(raw_sample_pointer.byte_offset)
-        raw_data = tar_file.fileobj.read(raw_sample_pointer.byte_size)
+        tar_file.fileobj.seek(raw_sample_pointer.raw_byte_offset)
+        raw_data = tar_file.fileobj.read(raw_sample_pointer.raw_byte_size)
         tar_file.fileobj.seek(rest)
 
         return raw_data, SourceInfo(
@@ -454,7 +455,7 @@ class SqliteITarEntryReader(ITarReader[str]):
     """
 
     sqlite_reader: SqliteIndexReader
-    db_version: int
+    db_has_sample_parts: int
 
     def __init__(
         self,
@@ -475,7 +476,7 @@ class SqliteITarEntryReader(ITarReader[str]):
         sqlite_path = base_path / MAIN_FOLDER_NAME / "index.sqlite"
         self.sqlite_reader = SqliteIndexReader(sqlite_path)
 
-        self.db_version = self.sqlite_reader.db_version()
+        self.db_has_sample_parts = self.sqlite_reader.db_has_sample_parts()
 
         self.key_is_full_entryname = key_is_full_entryname
 
@@ -562,7 +563,7 @@ class SqliteITarEntryReader(ITarReader[str]):
             sample_key, sample_ext = m.groups()
             entry_match_fn = lambda fname: key == fname
 
-            if self.db_version >= 2:
+            if self.db_has_sample_parts:
                 # Directly fetch the sample part (byte offset and size) from the database
                 raw_sample_pointer = self.sqlite_reader.get_sample_part(sample_key, sample_ext)
                 raw_data, source_info = self._get_part_by_raw_sample_pointer(

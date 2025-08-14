@@ -9,7 +9,7 @@ from typing import BinaryIO, Generator, List, Optional, Tuple, Union
 from numpy import int8
 
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.webdataset.itar import ITarSamplePointer
+from megatron.energon.flavors.webdataset.itar import ITarRawSamplePartPointer, ITarSamplePointer
 from megatron.energon.flavors.webdataset.thread_local_sqlite import ThreadLocalSqlite
 from megatron.energon.local_copy import ensure_local_copy
 
@@ -267,12 +267,11 @@ class SqliteIndexReader:
 
         self.db = ThreadLocalSqlite(path)
 
-    def db_version(self) -> int:
-        """Get the version of the database.
+    def db_has_sample_parts(self) -> bool:
+        """Check if the database has a sample_parts table.
 
         Returns:
-            1: No sample_parts table
-            2: sample_parts table exists
+            True if sample_parts table exists, False otherwise.
         """
         assert self.db is not None, "Database is closed"
 
@@ -280,7 +279,7 @@ class SqliteIndexReader:
             "SELECT name FROM sqlite_master WHERE type='table' AND name='sample_parts'"
         )
         self.db.thread_close()
-        return 2 if db_exists else 1
+        return db_exists is not None
 
     def list_all_samples(self) -> Generator[Tuple[str, int, int], None, None]:
         """List all sample keys in the database.
@@ -357,7 +356,7 @@ class SqliteIndexReader:
         count = self.db.select_one("SELECT COUNT(*) FROM samples")
         return count[0] if count else 0
 
-    def get_sample_part(self, key: str, part_name: str) -> ITarSamplePointer:
+    def get_sample_part(self, key: str, part_name: str) -> ITarRawSamplePartPointer:
         """Get a sample part by its key name and part name.
 
         Args:
@@ -381,10 +380,10 @@ class SqliteIndexReader:
             raise KeyError(
                 f"Sample part not found: key={key}, part_name={part_name} in {self.sqlite_path}"
             )
-        return ITarSamplePointer(
+        return ITarRawSamplePartPointer(
             tar_file_id=row[0],
-            byte_offset=row[1],
-            byte_size=row[2],
+            raw_byte_offset=row[1],
+            raw_byte_size=row[2],
         )
 
     def get_sample_pointer_by_key(self, key: str) -> ITarSamplePointer:
