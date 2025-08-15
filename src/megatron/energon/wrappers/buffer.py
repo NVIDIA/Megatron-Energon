@@ -15,12 +15,20 @@ from typing import (
     Union,
 )
 
-from megatron.energon.flavors.base_dataset import FlexState, SavableDataset
+from megatron.energon.edataclass import edataclass
+from megatron.energon.flavors.base_dataset import SavableDataset
 from megatron.energon.savable import Savable
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import get_sample_restore_key
 
 T_sample = TypeVar("T_sample")
+
+
+@edataclass
+class SavableSampleBufferState:
+    """State of a SavableSampleBuffer."""
+
+    restore_keys: List[Tuple[Union[str, int, tuple], ...]]
 
 
 class SavableSampleBuffer(Savable, Generic[T_sample]):
@@ -103,21 +111,15 @@ class SavableSampleBuffer(Savable, Generic[T_sample]):
     def len_rank(self) -> int:
         raise NotImplementedError("len_rank is not available for SavableSampleBuffer")
 
-    def save_state(self) -> FlexState:
+    def save_state(self) -> SavableSampleBufferState:
         # Don't call super().save_state() because we don't want to save the wrapped datasets
         # Just save the own state
-        return FlexState(
-            __class__=type(self).__name__,
-            _restore_keys=self._restore_keys,
-        )
+        return SavableSampleBufferState(restore_keys=self._restore_keys.copy())
 
-    def restore_state(self, state: FlexState) -> None:
+    def restore_state(self, state: SavableSampleBufferState) -> None:
         # Don't call super().restore_state() because we don't want to restore the wrapped datasets
         # Just restore the own state
-        assert state["__class__"] == type(self).__name__, (
-            f"Expected class {type(self).__name__}, got {state['__class__']}"
-        )
-        self._restore_keys = state["_restore_keys"].copy()
+        self._restore_keys = state.restore_keys.copy()
         self._restore_pending = True
 
     def restore_key(self) -> Tuple[Union[str, int], ...]:

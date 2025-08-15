@@ -35,7 +35,6 @@ from megatron.energon import (
     MapDataset,
     MixBatchDataset,
     Sample,
-    SavableDataLoader,
     TaskEncoder,
     WorkerConfig,
     generic_batch,
@@ -45,6 +44,7 @@ from megatron.energon import (
     get_val_dataset,
     homogeneous_concat_mix,
 )
+from megatron.energon.dataloader.dataloader import DataLoader
 from megatron.energon.dataset_config import get_dataset_from_config
 from megatron.energon.edataclass import edataclass
 from megatron.energon.flavors import BaseWebdatasetFactory
@@ -877,6 +877,8 @@ class TestDataset(unittest.TestCase):
 
         samples = [[batch.__key__ for batch in loader] for _ in range(10)]
         print(samples)
+        for s in samples:
+            print(" -", s)
         assert all(samples[0] == one_ep_samples for one_ep_samples in samples)
 
         worker_config = WorkerConfig(rank=0, world_size=1, num_workers=2)
@@ -894,8 +896,13 @@ class TestDataset(unittest.TestCase):
         assert len(loader) == 3
 
         samples_wrk2 = [[batch.__key__ for batch in loader] for _ in range(10)]
-        print(samples)
-        assert all(samples_wrk2[0] == one_ep_samples for one_ep_samples in samples_wrk2)
+        print(samples_wrk2)
+        for s in samples_wrk2:
+            print(" -", s)
+        assert all(
+            all(a == b for a, b in zip(samples_wrk2[0], one_ep_samples))
+            for one_ep_samples in samples_wrk2
+        )
 
     def test_current_batch_index(self):
         # Tests if the get_current_batch_index works properly
@@ -1260,7 +1267,6 @@ class TestDataset(unittest.TestCase):
                 shuffle_buffer_size=20,
                 max_samples_per_sequence=10,
             ),
-            worker_config=worker_config_r0,
         )
         loader_r1 = get_savable_loader(
             get_train_dataset(
@@ -1271,7 +1277,6 @@ class TestDataset(unittest.TestCase):
                 shuffle_buffer_size=20,
                 max_samples_per_sequence=10,
             ),
-            worker_config=worker_config_r1,
         )
 
         batches = list(zip(range(20), loader))
@@ -1328,7 +1333,6 @@ class TestDataset(unittest.TestCase):
                 shuffle_buffer_size=20,
                 max_samples_per_sequence=10,
             ),
-            worker_config=worker_config_r0,
         )
         loader.restore_state_rank(state)
 
@@ -1659,7 +1663,7 @@ class TestDataset(unittest.TestCase):
         )
 
         # Reset this to 0 to make sure the test is deterministic
-        SavableDataLoader._next_id = 0
+        DataLoader._next_id = 0
 
         loader = get_savable_loader(
             get_val_dataset(

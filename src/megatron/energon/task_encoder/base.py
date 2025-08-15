@@ -1079,10 +1079,10 @@ class TaskEncoder(Savable, Generic[T_sample, T_encoded_sample, T_raw_batch, T_ba
         assert WorkerConfig.active_worker_config is not None, (
             "The cache can only be fetched within the worker, and to be usable, you must use the get_(savable_)loader methods provided from the package."
         )
-        assert WorkerConfig.active_worker_config._cache_pool is not None, (
+        assert WorkerConfig.active_worker_config._active_state.cache_pool is not None, (
             "Cache pool must be set by the loader."
         )
-        return WorkerConfig.active_worker_config._cache_pool
+        return WorkerConfig.active_worker_config._active_state.cache_pool
 
 
 class DefaultTaskEncoder(

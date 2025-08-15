@@ -12,6 +12,8 @@ from megatron.energon.flavors.base_dataset import PinMemoryMixin
 TSample = TypeVar("TSample")
 T = TypeVar("T")
 
+DEBUG_LEVEL = 1
+
 
 class PinMemory(Generic[TSample]):
     """Base class for pinning memory of samples.
@@ -79,11 +81,14 @@ class PinMemoryThread(PinMemory[TSample], ThreadAsynchronous, Generic[TSample]):
         super()._worker_run(*args, **kwargs)
 
     def _wrk_pin_memory(self, sample: Future[TSample]) -> TSample:
-        print(
-            f"[{self._name}] Pinning memory of sample {sample}, waiting for sample data\n", end=""
-        )
+        if DEBUG_LEVEL >= 2:
+            print(
+                f"[{self._name}] Pinning memory of sample {sample}, waiting for sample data\n",
+                end="",
+            )
         sample_data = sample.get()
-        print(f"[{self._name}] Got sample data\n", end="")
+        if DEBUG_LEVEL >= 2:
+            print(f"[{self._name}] Got sample data\n", end="")
         return self._pin_memory(sample_data)
 
     def __call__(self, sample: Future[TSample]) -> Future[TSample]:

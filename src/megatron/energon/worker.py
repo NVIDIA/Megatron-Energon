@@ -105,10 +105,6 @@ class WorkerConfig:
         WorkerConfig._active_state.worker_config = self
         WorkerConfig._active_state.override_global_rank = override_global_rank
         WorkerConfig._active_state.cache_pool = cache_pool
-        print(
-            f"worker_activate {self.rank} {self.num_workers} {self.rank_worker_id()} on {threading.get_ident()}\n",
-            end="",
-        )
 
     def worker_push_sample_index(self, sample_index: int):
         """Pushes a new sample index to the sample index stack. Should be set by wrapping datasets
@@ -217,7 +213,7 @@ class WorkerConfig:
         # worker (id=0) corresponds to the logical worker that should emit the
         # next sample. For example, if `worker_id_offset` is 1, logical worker
         # 1 becomes the first to emit a sample, shifting the ordering forward.
-        return (worker_info.id + self.worker_id_offset) % worker_info.num_workers
+        return (worker_info.id + self.worker_id_offset) % max(worker_info.num_workers, 1)
 
     def assert_worker(self):
         """Checks if the current process is a worker (if configured so), and that the workers are

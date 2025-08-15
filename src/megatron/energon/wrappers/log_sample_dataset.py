@@ -4,6 +4,7 @@
 from typing import Any, Callable, Dict, Generic, Iterator, List, Literal, Optional, TypeVar
 
 from megatron.energon.flavors.base_dataset import SavableDataset
+from megatron.energon.state import FlexState
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset
 
@@ -95,6 +96,14 @@ class LogSampleDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]
             self._log(sample)
             self._step += 1
             yield sample
+
+    def save_state(self) -> FlexState:
+        # Just delegate, make self transparent
+        return self.dataset.save_state()
+
+    def restore_state(self, state: FlexState):
+        # Just delegate, make self transparent
+        return self.dataset.restore_state(state)
 
     def config(self) -> Dict[str, Any]:
         # Transparent logger, it won't change the samples

@@ -3,6 +3,7 @@
 
 """This module defines tests for meta datasets."""
 
+import dataclasses
 import gc
 import logging
 import sys
@@ -14,6 +15,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Iterable
 
+import numpy as np
 import torch
 import webdataset as wds
 
@@ -73,19 +75,21 @@ def assert_nested_equal(a: Any, b: Any, path: str = "") -> None:
     and other basic types) are equal. If they are not equal, prints the path of the first mismatch
     and raises an AssertionError.
 
-    :param a: First nested structure to compare.
-    :param b: Second nested structure to compare.
-    :param path: Internal parameter used to pass the current traversal path (do not set this manually).
-    :raises AssertionError: If a mismatch is found.
+    Args:
+        a: First nested structure to compare.
+        b: Second nested structure to compare.
+        path: Internal parameter used to pass the current traversal path (do not set this manually).
+
+    Raises:
+        AssertionError: If a mismatch is found.
     """
-    # Check if types differ
     if type(a) is not type(b):
+        # Check if types differ
         mismatch_details = f"Type mismatch at {path or '<root>'}: {type(a)} != {type(b)}"
         print(mismatch_details)
         raise AssertionError(mismatch_details)
-
-    # If they are both dictionaries, compare each key and value
     if isinstance(a, dict):
+        # If they are both dictionaries, compare each key and value
         # Check if they have the same keys
         a_keys = set(a.keys())
         b_keys = set(b.keys())
@@ -102,9 +106,8 @@ def assert_nested_equal(a: Any, b: Any, path: str = "") -> None:
         for key in a:
             sub_path = f"{path}['{key}']" if path else f"['{key}']"
             assert_nested_equal(a[key], b[key], sub_path)
-
-    # If they are lists (or tuples), compare elements in order
     elif isinstance(a, (list, tuple)):
+        # If they are lists (or tuples), compare elements in order
         if len(a) != len(b):
             mismatch_details = f"Length mismatch at {path or '<root>'}: {len(a)} != {len(b)}"
             print(mismatch_details)
@@ -112,9 +115,31 @@ def assert_nested_equal(a: Any, b: Any, path: str = "") -> None:
         for index, (item_a, item_b) in enumerate(zip(a, b)):
             sub_path = f"{path}[{index}]" if path else f"[{index}]"
             assert_nested_equal(item_a, item_b, sub_path)
-
-    # Otherwise, compare values directly
+    elif isinstance(a, torch.Tensor):
+        if a.shape != b.shape:
+            mismatch_details = f"Shape mismatch at {path or '<root>'}: {a.shape} != {b.shape}"
+            print(mismatch_details)
+            raise AssertionError(mismatch_details)
+        if not torch.all(a == b):
+            mismatch_details = f"Value mismatch at {path or '<root>'}: {repr(a)} != {repr(b)}"
+            print(mismatch_details)
+            raise AssertionError(mismatch_details)
+    elif isinstance(a, np.ndarray):
+        if a.shape != b.shape:
+            mismatch_details = f"Shape mismatch at {path or '<root>'}: {a.shape} != {b.shape}"
+            print(mismatch_details)
+            raise AssertionError(mismatch_details)
+        if not np.all(a == b):
+            mismatch_details = f"Value mismatch at {path or '<root>'}: {repr(a)} != {repr(b)}"
+            print(mismatch_details)
+            raise AssertionError(mismatch_details)
+    elif dataclasses.is_dataclass(a):
+        for field in dataclasses.fields(a):
+            assert_nested_equal(
+                getattr(a, field.name), getattr(b, field.name), f"{path}.{field.name}"
+            )
     else:
+        # Otherwise, compare values directly
         if a != b:
             mismatch_details = f"Value mismatch at {path or '<root>'}: {repr(a)} != {repr(b)}"
             print(mismatch_details)
@@ -288,8 +313,8 @@ class TestDataset(unittest.TestCase):
             for idx, data in zip(range(55), train_loader1)
             for subflavor in data.__subflavors__
         ]
-        print(train_subflavors[:10])
-        print(Counter(train_subflavors))
+        print("train_subflavors[:10]", train_subflavors[:10])
+        print("Counter(train_subflavors)", Counter(train_subflavors))
         assert len(Counter(train_subflavors)) == 2
         assert all(250 <= v <= 300 for v in Counter(train_subflavors).values())
 
@@ -737,222 +762,203 @@ class TestDataset(unittest.TestCase):
         print(loader.config())
         print()
         reference_config = {
-            "type": "SavableDataLoader",
-            "num_workers": 0,
-            "persistent_workers": False,
-            "pin_memory": True,
-            "prefetch_factor": None,
+            "type": "MapDataset",
             "dataset": {
-                "type": "MapDataset",
+                "type": "BatchDataset",
+                "batch_size": 10,
+                "batcher": "megatron.energon.task_encoder.base.DefaultTaskEncoder.batch",
+                "batcher_stateless": True,
+                "drop_last": False,
+                "error_handler": "megatron.energon.wrappers._log_exception.log_exception",
+                "worker_config": wrk_cfg,
                 "dataset": {
-                    "type": "BatchDataset",
-                    "batch_size": 10,
-                    "batcher": "megatron.energon.task_encoder.base.DefaultTaskEncoder.batch",
-                    "batcher_stateless": True,
-                    "drop_last": False,
-                    "error_handler": "megatron.energon.wrappers._log_exception.log_exception",
-                    "worker_config": wrk_cfg,
+                    "type": "MapDataset",
                     "dataset": {
-                        "type": "MapDataset",
-                        "dataset": {
-                            "type": "BlendDataset",
-                            "dataset_weights": [
-                                (
-                                    {
-                                        "type": "RepeatDataset",
+                        "type": "BlendDataset",
+                        "dataset_weights": [
+                            (
+                                {
+                                    "type": "RepeatDataset",
+                                    "dataset": {
+                                        "type": "MapDataset",
                                         "dataset": {
-                                            "type": "MapDataset",
-                                            "dataset": {
-                                                "type": "WebdatasetSampleLoaderDataset",
-                                                "joins": 1,
-                                                "len": 55,
-                                                "slice_offsets": [[0, 10, 20, 30, 40, 50, 55]],
-                                                "worker_config": wrk_cfg,
-                                                "shuffle_over_epochs": 6,
-                                                "parallel_slice_iters": 2,
-                                            },
-                                            "map_fn": "megatron.energon.flavors.webdataset.base_webdataset.BaseWebdatasetFactory._load_sample_raw",
-                                            "map_fn_config": {
-                                                "type": "StandardWebdatasetFactory",
-                                                "training": True,
-                                                "_path": str(self.dataset_path / "ds1"),
-                                                "shards": [
-                                                    {
-                                                        "name": "parts/data-0.tar",
-                                                        "count": 10,
-                                                        "_path": str(
-                                                            self.dataset_path
-                                                            / "ds1/parts/data-0.tar"
-                                                        ),
-                                                    },
-                                                    {
-                                                        "name": "parts/data-1.tar",
-                                                        "count": 10,
-                                                        "_path": str(
-                                                            self.dataset_path
-                                                            / "ds1/parts/data-1.tar"
-                                                        ),
-                                                    },
-                                                    {
-                                                        "name": "parts/data-2.tar",
-                                                        "count": 10,
-                                                        "_path": str(
-                                                            self.dataset_path
-                                                            / "ds1/parts/data-2.tar"
-                                                        ),
-                                                    },
-                                                    {
-                                                        "name": "parts/data-3.tar",
-                                                        "count": 10,
-                                                        "_path": str(
-                                                            self.dataset_path
-                                                            / "ds1/parts/data-3.tar"
-                                                        ),
-                                                    },
-                                                    {
-                                                        "name": "parts/data-4.tar",
-                                                        "count": 10,
-                                                        "_path": str(
-                                                            self.dataset_path
-                                                            / "ds1/parts/data-4.tar"
-                                                        ),
-                                                    },
-                                                    {
-                                                        "name": "parts/data-5.tar",
-                                                        "count": 5,
-                                                        "_path": str(
-                                                            self.dataset_path
-                                                            / "ds1/parts/data-5.tar"
-                                                        ),
-                                                    },
-                                                ],
-                                                "sample_excludes": [],
-                                                "shuffle_over_epochs": 6,
-                                                "parallel_shard_iters": 2,
-                                                "max_samples_per_sequence": None,
-                                                "subflavors": {
-                                                    "source": "metadataset.yaml",
-                                                    "dataset.yaml": True,
-                                                    "number": 43,
-                                                    "mds": "mds",
-                                                    "__subflavor__": "ds1",
-                                                },
-                                                "sample_loader": "megatron.energon.flavors.webdataset.default_generic_webdataset.DefaultGenericWebdatasetFactory.__init__.<locals>.<lambda>",
-                                                "image_decode": "torchrgb",
-                                                "av_decode": "AVDecoder",
-                                                "video_decode_audio": False,
-                                                "guess_content": False,
-                                            },
-                                            "map_fn_stateless": True,
+                                            "type": "WebdatasetSampleLoaderDataset",
+                                            "joins": 1,
+                                            "len": 55,
+                                            "slice_offsets": [[0, 10, 20, 30, 40, 50, 55]],
+                                            "worker_config": wrk_cfg,
+                                            "shuffle_over_epochs": 6,
+                                            "parallel_slice_iters": 2,
                                         },
-                                        "repeats": None,
-                                        "worker_config": wrk_cfg,
+                                        "map_fn": "megatron.energon.flavors.webdataset.base_webdataset.BaseWebdatasetFactory._load_sample_raw",
+                                        "map_fn_config": {
+                                            "type": "StandardWebdatasetFactory",
+                                            "training": True,
+                                            "_path": str(self.dataset_path / "ds1"),
+                                            "shards": [
+                                                {
+                                                    "name": "parts/data-0.tar",
+                                                    "count": 10,
+                                                    "_path": str(
+                                                        self.dataset_path / "ds1/parts/data-0.tar"
+                                                    ),
+                                                },
+                                                {
+                                                    "name": "parts/data-1.tar",
+                                                    "count": 10,
+                                                    "_path": str(
+                                                        self.dataset_path / "ds1/parts/data-1.tar"
+                                                    ),
+                                                },
+                                                {
+                                                    "name": "parts/data-2.tar",
+                                                    "count": 10,
+                                                    "_path": str(
+                                                        self.dataset_path / "ds1/parts/data-2.tar"
+                                                    ),
+                                                },
+                                                {
+                                                    "name": "parts/data-3.tar",
+                                                    "count": 10,
+                                                    "_path": str(
+                                                        self.dataset_path / "ds1/parts/data-3.tar"
+                                                    ),
+                                                },
+                                                {
+                                                    "name": "parts/data-4.tar",
+                                                    "count": 10,
+                                                    "_path": str(
+                                                        self.dataset_path / "ds1/parts/data-4.tar"
+                                                    ),
+                                                },
+                                                {
+                                                    "name": "parts/data-5.tar",
+                                                    "count": 5,
+                                                    "_path": str(
+                                                        self.dataset_path / "ds1/parts/data-5.tar"
+                                                    ),
+                                                },
+                                            ],
+                                            "sample_excludes": [],
+                                            "shuffle_over_epochs": 6,
+                                            "parallel_shard_iters": 2,
+                                            "max_samples_per_sequence": None,
+                                            "subflavors": {
+                                                "source": "metadataset.yaml",
+                                                "dataset.yaml": True,
+                                                "number": 43,
+                                                "mds": "mds",
+                                                "__subflavor__": "ds1",
+                                            },
+                                            "sample_loader": "megatron.energon.flavors.webdataset.default_generic_webdataset.DefaultGenericWebdatasetFactory.__init__.<locals>.<lambda>",
+                                            "image_decode": "torchrgb",
+                                            "av_decode": "AVDecoder",
+                                            "video_decode_audio": False,
+                                            "guess_content": False,
+                                        },
+                                        "map_fn_stateless": True,
                                     },
-                                    0.5,
-                                ),
-                                (
-                                    {
-                                        "type": "RepeatDataset",
+                                    "repeats": None,
+                                    "worker_config": wrk_cfg,
+                                },
+                                0.5,
+                            ),
+                            (
+                                {
+                                    "type": "RepeatDataset",
+                                    "dataset": {
+                                        "type": "MapDataset",
                                         "dataset": {
-                                            "type": "MapDataset",
-                                            "dataset": {
-                                                "type": "WebdatasetSampleLoaderDataset",
-                                                "joins": 1,
-                                                "len": 55,
-                                                "slice_offsets": [[0, 10, 20, 30, 40, 50, 55]],
-                                                "worker_config": wrk_cfg,
-                                                "shuffle_over_epochs": 2,
-                                                "parallel_slice_iters": 2,
-                                            },
-                                            "map_fn": "megatron.energon.flavors.webdataset.base_webdataset.BaseWebdatasetFactory._load_sample_raw",
-                                            "map_fn_config": {
-                                                "type": "StandardWebdatasetFactory",
-                                                "training": True,
-                                                "_path": str(self.dataset_path / "ds2"),
-                                                "shards": [
-                                                    {
-                                                        "name": "parts/data-0.tar",
-                                                        "count": 10,
-                                                        "_path": str(
-                                                            self.dataset_path
-                                                            / "ds2/parts/data-0.tar"
-                                                        ),
-                                                    },
-                                                    {
-                                                        "name": "parts/data-1.tar",
-                                                        "count": 10,
-                                                        "_path": str(
-                                                            self.dataset_path
-                                                            / "ds2/parts/data-1.tar"
-                                                        ),
-                                                    },
-                                                    {
-                                                        "name": "parts/data-2.tar",
-                                                        "count": 10,
-                                                        "_path": str(
-                                                            self.dataset_path
-                                                            / "ds2/parts/data-2.tar"
-                                                        ),
-                                                    },
-                                                    {
-                                                        "name": "parts/data-3.tar",
-                                                        "count": 10,
-                                                        "_path": str(
-                                                            self.dataset_path
-                                                            / "ds2/parts/data-3.tar"
-                                                        ),
-                                                    },
-                                                    {
-                                                        "name": "parts/data-4.tar",
-                                                        "count": 10,
-                                                        "_path": str(
-                                                            self.dataset_path
-                                                            / "ds2/parts/data-4.tar"
-                                                        ),
-                                                    },
-                                                    {
-                                                        "name": "parts/data-5.tar",
-                                                        "count": 5,
-                                                        "_path": str(
-                                                            self.dataset_path
-                                                            / "ds2/parts/data-5.tar"
-                                                        ),
-                                                    },
-                                                ],
-                                                "sample_excludes": [],
-                                                "shuffle_over_epochs": 2,
-                                                "parallel_shard_iters": 2,
-                                                "max_samples_per_sequence": None,
-                                                "subflavors": {
-                                                    "source": "metadataset.yaml",
-                                                    "dataset.yaml": True,
-                                                    "number": 44,
-                                                    "mds": "mds",
-                                                    "__subflavor__": "ds2",
-                                                },
-                                                "sample_loader": "megatron.energon.flavors.webdataset.default_generic_webdataset.DefaultGenericWebdatasetFactory.__init__.<locals>.<lambda>",
-                                                "image_decode": "torchrgb",
-                                                "av_decode": "AVDecoder",
-                                                "video_decode_audio": False,
-                                                "guess_content": False,
-                                            },
-                                            "map_fn_stateless": True,
+                                            "type": "WebdatasetSampleLoaderDataset",
+                                            "joins": 1,
+                                            "len": 55,
+                                            "slice_offsets": [[0, 10, 20, 30, 40, 50, 55]],
+                                            "worker_config": wrk_cfg,
+                                            "shuffle_over_epochs": 2,
+                                            "parallel_slice_iters": 2,
                                         },
-                                        "repeats": None,
-                                        "worker_config": wrk_cfg,
+                                        "map_fn": "megatron.energon.flavors.webdataset.base_webdataset.BaseWebdatasetFactory._load_sample_raw",
+                                        "map_fn_config": {
+                                            "type": "StandardWebdatasetFactory",
+                                            "training": True,
+                                            "_path": str(self.dataset_path / "ds2"),
+                                            "shards": [
+                                                {
+                                                    "name": "parts/data-0.tar",
+                                                    "count": 10,
+                                                    "_path": str(
+                                                        self.dataset_path / "ds2/parts/data-0.tar"
+                                                    ),
+                                                },
+                                                {
+                                                    "name": "parts/data-1.tar",
+                                                    "count": 10,
+                                                    "_path": str(
+                                                        self.dataset_path / "ds2/parts/data-1.tar"
+                                                    ),
+                                                },
+                                                {
+                                                    "name": "parts/data-2.tar",
+                                                    "count": 10,
+                                                    "_path": str(
+                                                        self.dataset_path / "ds2/parts/data-2.tar"
+                                                    ),
+                                                },
+                                                {
+                                                    "name": "parts/data-3.tar",
+                                                    "count": 10,
+                                                    "_path": str(
+                                                        self.dataset_path / "ds2/parts/data-3.tar"
+                                                    ),
+                                                },
+                                                {
+                                                    "name": "parts/data-4.tar",
+                                                    "count": 10,
+                                                    "_path": str(
+                                                        self.dataset_path / "ds2/parts/data-4.tar"
+                                                    ),
+                                                },
+                                                {
+                                                    "name": "parts/data-5.tar",
+                                                    "count": 5,
+                                                    "_path": str(
+                                                        self.dataset_path / "ds2/parts/data-5.tar"
+                                                    ),
+                                                },
+                                            ],
+                                            "sample_excludes": [],
+                                            "shuffle_over_epochs": 2,
+                                            "parallel_shard_iters": 2,
+                                            "max_samples_per_sequence": None,
+                                            "subflavors": {
+                                                "source": "metadataset.yaml",
+                                                "dataset.yaml": True,
+                                                "number": 44,
+                                                "mds": "mds",
+                                                "__subflavor__": "ds2",
+                                            },
+                                            "sample_loader": "megatron.energon.flavors.webdataset.default_generic_webdataset.DefaultGenericWebdatasetFactory.__init__.<locals>.<lambda>",
+                                            "image_decode": "torchrgb",
+                                            "av_decode": "AVDecoder",
+                                            "video_decode_audio": False,
+                                            "guess_content": False,
+                                        },
+                                        "map_fn_stateless": True,
                                     },
-                                    0.5,
-                                ),
-                            ],
-                            "worker_config": wrk_cfg,
-                        },
-                        "map_fn": "megatron.energon.task_encoder.base.DefaultTaskEncoder.encode_sample",
-                        "map_fn_stateless": True,
+                                    "repeats": None,
+                                    "worker_config": wrk_cfg,
+                                },
+                                0.5,
+                            ),
+                        ],
+                        "worker_config": wrk_cfg,
                     },
+                    "map_fn": "megatron.energon.task_encoder.base.DefaultTaskEncoder.encode_sample",
+                    "map_fn_stateless": True,
                 },
-                "map_fn": "megatron.energon.task_encoder.base.DefaultTaskEncoder.encode_batch",
-                "map_fn_stateless": True,
             },
+            "map_fn": "megatron.energon.task_encoder.base.DefaultTaskEncoder.encode_batch",
+            "map_fn_stateless": True,
         }
         print("Comparing dataset configs in test_save_restore_state_train.")
         assert_nested_equal(loader.config(), reference_config)
@@ -1356,6 +1362,13 @@ class TestDataset(unittest.TestCase):
         same_state = second_loader.save_state_rank()
         print("same_state:", same_state)
         assert same_state == state_initial
+
+        # This will propagate the state to the workers.
+        second_loader._start()
+        # Save the state again, to check that it is the same as the just restored state
+        same_state = second_loader.save_state_rank()
+        print("same_state:", same_state)
+        assert_nested_equal(same_state, state_initial)
 
         for offset in range(10):
             try:

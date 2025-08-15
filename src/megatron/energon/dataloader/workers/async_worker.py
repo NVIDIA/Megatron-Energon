@@ -10,10 +10,9 @@ from megatron.energon.dataloader.asynchronous import (
     WorkerResult,
 )
 from megatron.energon.dataloader.future import Future
-from megatron.energon.dataloader.workers.base_worker import DataLoaderWorker
+from megatron.energon.dataloader.workers.base_worker import DataLoaderWorker, WorkerState
 from megatron.energon.flavors.base_dataset import SavableDataset
 from megatron.energon.rng import SystemRng
-from megatron.energon.state import FlexState
 from megatron.energon.worker import WorkerConfig
 
 TSample = TypeVar("TSample", covariant=True)
@@ -56,7 +55,7 @@ class DataLoaderAsynchronousWorker(DataLoaderWorker[TSample], Asynchronous, Gene
         # so immediately resolve the future to the result (get returns immediately).
         return super().prefetch_next().get()
 
-    def dataset_init(self, initial_state: FlexState | None) -> None:
+    def dataset_init(self, initial_state: WorkerState | None) -> None:
         if self._in_worker():
             return super().dataset_init(initial_state)
         else:
@@ -74,7 +73,7 @@ class DataLoaderAsynchronousWorker(DataLoaderWorker[TSample], Asynchronous, Gene
             return super().prefetch_next()
         return self._worker_call(self._wrk_prefetch_next)
 
-    def save_state(self) -> FlexState:
+    def save_state(self) -> WorkerState:
         if self._in_worker():
             return super().save_state()
         else:

@@ -35,6 +35,7 @@ class ErrorHandler(Generic[T_sample]):
             Tuple[Union[T_sample, dict, FilteredSample, None], ...],
         ],
     ):
+        sources: list[SourceInfo] | None
         if isinstance(sample, dict):
             key = sample.get("__key__")
             sources = sample.get("__sources__")

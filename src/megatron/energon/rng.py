@@ -17,6 +17,31 @@ from megatron.energon.worker import WorkerConfig
 T = TypeVar("T")
 
 
+@edataclass
+class WorkerRngState:
+    rng: Any
+
+    def _hashable_value(self, value: Any) -> Any:
+        if isinstance(value, (int, float, bool, str)) or value is None:
+            return value
+        elif isinstance(value, torch.Tensor):
+            return self._hashable_value(value.tolist())
+        elif isinstance(value, numpy.ndarray):
+            return self._hashable_value(value.tolist())
+        elif isinstance(value, Mapping):
+            return tuple(
+                (self._hashable_value(k), self._hashable_value(v)) for k, v in value.items()
+            )
+        elif isinstance(value, Sequence):
+            return tuple(self._hashable_value(v) for v in value)
+        else:
+            raise ValueError(f"Cannot hash value of type {type(value)}: {value!r}")
+
+    def __repr__(self):
+        # If the hash is the same, the state is the same. Should suffice to identify the state.
+        return f"WorkerRngState(hash={hash(self._hashable_value((self.rng)))})"
+
+
 class WorkerRng(Savable):
     """Helper class for getting a worker random generator, which is still in itself deterministic.
     If not in a worker, uses the global random generator's seed to initialize a new rng."""
@@ -79,14 +104,16 @@ class WorkerRng(Savable):
     def rand_pop(self, l: List[T]) -> T:
         return l.pop(self.randbelow(len(l)))
 
-    def save_state(self) -> FlexState:
-        return FlexState(rng=None if self.rng is None else bytes(self.rng.get_state().tolist()))
+    def save_state(self) -> WorkerRngState:
+        return WorkerRngState(
+            rng=None if self.rng is None else bytes(self.rng.get_state().tolist())
+        )
 
-    def restore_state(self, state: FlexState):
-        if state["rng"] is None:
+    def restore_state(self, state: WorkerRngState):
+        if state.rng is None:
             self._restore_state = None
         else:
-            self._restore_state = state["rng"]
+            self._restore_state = state.rng
 
 
 class UserRng:
@@ -210,4 +237,5 @@ class SystemRng:
     @staticmethod
     def seed_args(*args: Any) -> None:
         """Seeds the global random generators deterministically from the given arguments."""
+        print(f"Seeding with args: {args}")
         SystemRng.seed(SystemRng.get_seed_from_args(*args))

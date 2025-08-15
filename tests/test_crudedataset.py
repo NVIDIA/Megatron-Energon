@@ -95,6 +95,7 @@ class CookingTaskEncoder(DefaultTaskEncoder[TextSample, TextSample, TextBatch, T
         Cooker(cook_aux, has_subflavors={"crude_type": "aux_random_access"}),
     ]
 
+    @stateless
     def batch(self, samples: List[TextSample]) -> TextBatch:
         return TextBatch.from_samples(
             samples,
@@ -163,6 +164,7 @@ class LazyCookingTaskEncoder(
             text=samples[0].txt + "|" + next_txt,
         )
 
+    @stateless
     def batch(self, samples: List[TextSample]) -> TextBatch:
         return TextBatch.from_samples(
             samples,
@@ -196,6 +198,7 @@ class LazyCookingTaskEncoderWithPostencode(
         assert len(samples) == 1
         return samples[0]
 
+    @stateless
     def batch(self, samples: List[TextSample]) -> TextBatch:
         return TextBatch.from_samples(
             samples,

@@ -4,12 +4,31 @@ from typing import Generic, TypeVar
 
 from megatron.energon.cache.base import CachePool
 from megatron.energon.dataloader.future import DoneFuture, ExceptionFuture, Future
+from megatron.energon.edataclass import edataclass
 from megatron.energon.flavors.base_dataset import SavableDataset, add_sample_restore_key
-from megatron.energon.rng import SystemRng
+from megatron.energon.rng import SystemRng, SystemRngState
 from megatron.energon.state import FlexState
 from megatron.energon.worker import WorkerConfig
 
 TSample = TypeVar("TSample", covariant=True)
+
+
+@edataclass
+class WorkerState:
+    """
+    State of a worker.
+    """
+
+    rng: SystemRngState
+    dataset: FlexState
+    exhausted: bool
+    sample_index: int
+
+    def __str__(self):
+        from hashlib import sha256
+
+        rng_hash = sha256(str(self.rng).encode()).hexdigest()
+        return f"WorkerState(dataset={self.dataset}, exhausted={self.exhausted}, sample_index={self.sample_index}, rng_hash={rng_hash})"
 
 
 class DataLoaderWorker(Generic[TSample]):
@@ -89,7 +108,7 @@ class DataLoaderWorker(Generic[TSample]):
     # ------------------------------------------------------------------------------------------------
     # Section: Worker methods
 
-    def dataset_init(self, state: FlexState | None) -> None:
+    def dataset_init(self, state: WorkerState | None) -> None:
         """
         Initialize the worker (may restore the state).
         Calls `new_iter` if the worker is not exhausted and also initially (`state=None`).
@@ -110,13 +129,13 @@ class DataLoaderWorker(Generic[TSample]):
             self.new_iter()
             print("dataset_init new_iter\n", end="")
         else:
-            assert state["__class__"] == "DataLoaderWorker", "state type mismatch"
-            self._sample_index = state["sample_index"]
-            SystemRng.restore_state(state["rng"])
-            self.dataset.restore_state(state["dataset"])
-            if not state["exhausted"]:
+            print(f"dataset_init restore_state: {state=}\n", end="")
+            self._sample_index = state.sample_index
+            SystemRng.restore_state(state.rng)
+            self.dataset.restore_state(state.dataset)
+            if not state.exhausted:
                 self.new_iter()
-            assert self._exhausted == state["exhausted"], "Exhausted state mismatch"
+            assert self._exhausted == state.exhausted, "Exhausted state mismatch"
 
     def new_iter(self) -> None:
         """
@@ -161,15 +180,24 @@ class DataLoaderWorker(Generic[TSample]):
             self.worker_config.worker_deactivate()
         return DoneFuture(next_sample)
 
-    def save_state(self) -> FlexState:
+    def save_state(self) -> WorkerState:
         """
         Save the state of the worker.
         """
         # This is called in the worker context (process/thread).
-        return FlexState(
-            __class__="DataLoaderWorker",
+        print(f"save_state: {self._sample_index=}, {self._exhausted=}\n", end="")
+        return WorkerState(
             rng=SystemRng.save_state(),
             dataset=self.dataset.save_state(),
             exhausted=self._exhausted,
             sample_index=self._sample_index,
         )
+
+
+class DataLoaderNoWorker(DataLoaderWorker[TSample], Generic[TSample]):
+    """
+    DataLoader without async worker.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)

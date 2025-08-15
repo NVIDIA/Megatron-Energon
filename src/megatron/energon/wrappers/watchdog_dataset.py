@@ -5,6 +5,7 @@ import warnings
 from typing import Any, Dict, Generic, Iterator, Optional, TypeVar
 
 from megatron.energon.flavors.base_dataset import SavableDataset
+from megatron.energon.state import FlexState
 from megatron.energon.watchdog import Watchdog
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset
@@ -14,6 +15,10 @@ T_sample = TypeVar("T_sample")
 
 class WatchdogDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
     """This dataset wraps another dataset and watches the time it takes to yield samples."""
+
+    timeout_seconds: Optional[float]
+    initial_timeout_seconds: Optional[float]
+    fail_on_timeout: bool
 
     def __init__(
         self,
@@ -64,6 +69,14 @@ class WatchdogDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample])
                 enabled=False,
             )
             yield from watchdog.watch_iter(self.dataset)
+
+    def save_state(self) -> FlexState:
+        # Just delegate, make self transparent
+        return self.dataset.save_state()
+
+    def restore_state(self, state: FlexState):
+        # Just delegate, make self transparent
+        return self.dataset.restore_state(state)
 
     def config(self) -> Dict[str, Any]:
         # Watchdog is transparent, it won't change the samples

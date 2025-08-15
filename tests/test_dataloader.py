@@ -22,6 +22,24 @@ from megatron.energon import (
 )
 from megatron.energon.dataloader import DataLoader, ForkDataLoaderWorker, ThreadDataLoaderWorker
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
+from megatron.energon.task_encoder.base import DefaultTaskEncoder, stateless
+
+
+class VerifyWorkerTaskEncoder(DefaultTaskEncoder):
+    def __init__(self, expected_num_workers: int):
+        self.expected_num_workers = expected_num_workers
+        super().__init__()
+
+    @stateless
+    def encode_sample(self, sample):
+        sample = super().encode_sample(sample)
+        worker_info = torch.utils.data.get_worker_info()
+        if self.expected_num_workers > 0:
+            assert worker_info is not None
+            assert worker_info.num_workers == self.expected_num_workers
+        else:
+            assert worker_info is None
+        return sample
 
 
 class TestDataloader(unittest.TestCase):
@@ -112,6 +130,7 @@ class TestDataloader(unittest.TestCase):
                 shuffle_buffer_size=None,
                 max_samples_per_sequence=None,
                 repeat=False,
+                task_encoder=VerifyWorkerTaskEncoder(expected_num_workers=0),
             ),
         ) as train_loader:
             assert len(train_loader) == 6, len(train_loader)
@@ -139,6 +158,7 @@ class TestDataloader(unittest.TestCase):
                 shuffle_buffer_size=None,
                 max_samples_per_sequence=None,
                 repeat=False,
+                task_encoder=VerifyWorkerTaskEncoder(expected_num_workers=0),
             ),
         ).with_restored_state_rank(state1) as train_loader:
             cmp_order2 = [
@@ -164,6 +184,7 @@ class TestDataloader(unittest.TestCase):
                 shuffle_buffer_size=None,
                 max_samples_per_sequence=None,
                 repeat=False,
+                task_encoder=VerifyWorkerTaskEncoder(expected_num_workers=2),
             ),
             prefetch_factor=2,
             worker_type=ForkDataLoaderWorker,
@@ -199,6 +220,9 @@ class TestDataloader(unittest.TestCase):
                 shuffle_buffer_size=None,
                 max_samples_per_sequence=None,
                 repeat=False,
+                task_encoder=VerifyWorkerTaskEncoder(
+                    expected_num_workers=worker_config.num_workers
+                ),
             ),
             prefetch_factor=2,
             worker_type=ForkDataLoaderWorker,
@@ -236,6 +260,9 @@ class TestDataloader(unittest.TestCase):
                 shuffle_buffer_size=None,
                 max_samples_per_sequence=None,
                 repeat=False,
+                task_encoder=VerifyWorkerTaskEncoder(
+                    expected_num_workers=worker_config_r0.num_workers
+                ),
             ),
             prefetch_factor=2,
             worker_type=ForkDataLoaderWorker,
@@ -263,6 +290,9 @@ class TestDataloader(unittest.TestCase):
                 shuffle_buffer_size=None,
                 max_samples_per_sequence=None,
                 repeat=False,
+                task_encoder=VerifyWorkerTaskEncoder(
+                    expected_num_workers=worker_config_r1.num_workers
+                ),
             ),
             prefetch_factor=2,
             worker_type=ForkDataLoaderWorker,
@@ -300,6 +330,7 @@ class TestDataloader(unittest.TestCase):
         train_loader_r1.shutdown()
 
     def test_dataloader_thread(self):
+        assert False, "Not done yet"
         torch.manual_seed(42)
         worker_config = WorkerConfig(
             rank=0,
@@ -317,6 +348,9 @@ class TestDataloader(unittest.TestCase):
                 shuffle_buffer_size=None,
                 max_samples_per_sequence=None,
                 repeat=False,
+                task_encoder=VerifyWorkerTaskEncoder(
+                    expected_num_workers=worker_config.num_workers
+                ),
             ),
             prefetch_factor=2,
             worker_type=ThreadDataLoaderWorker,
@@ -349,6 +383,9 @@ class TestDataloader(unittest.TestCase):
                 shuffle_buffer_size=None,
                 max_samples_per_sequence=None,
                 repeat=False,
+                task_encoder=VerifyWorkerTaskEncoder(
+                    expected_num_workers=worker_config.num_workers
+                ),
             ),
             prefetch_factor=2,
             worker_type=ThreadDataLoaderWorker,

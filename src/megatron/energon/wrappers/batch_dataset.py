@@ -37,7 +37,7 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
     drop_last: bool
     error_handler: Callable[[Exception, list[T_batch_sample], Sequence[SourceInfo]], None]
     _sample_index: SampleIndex
-    _generator_sample_keys: Optional[Any]
+    _generator_sample_keys: Optional[list[Any]]
     _generator_offset: Optional[int]
 
     _savable_fields = ("_sample_index", "_generator_sample_keys", "_generator_offset")

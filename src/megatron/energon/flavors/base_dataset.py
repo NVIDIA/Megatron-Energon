@@ -260,7 +260,7 @@ class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC)
     How dataset state saving works:
 
     1. The dataset state needs to be saved in all forked worker processes which contain a copy of
-       the main dataset instance (see :class:`megatron.energon.SavableDataLoader`). Each worker returns
+       the main dataset instance (see :class:`megatron.energon.DataLoader`). Each worker returns
        only its own state.
     2. The main process merges the states via the :meth:`megatron.energon.SavableDataset.merge_states`
        method in the main process on the main dataset instance (which doesn't hold the worker states,

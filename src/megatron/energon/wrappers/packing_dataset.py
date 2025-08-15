@@ -399,18 +399,14 @@ class PackingDataset(
         self.assert_can_restore()
         if inspect.isgeneratorfunction(self.final_packer):
             id, pack_idx, pack_sub_idx, *pack_restore_keys = restore_key
-            id, pack_idx, pack_sub_idx, *pack_restore_keys = restore_key
             assert id == type(self).__name__
         else:
-            id, pack_idx, *pack_restore_keys = restore_key
             id, pack_idx, *pack_restore_keys = restore_key
             assert id == type(self).__name__
 
         pack = []
         for inner_idx in pack_restore_keys:
             if self.sample_encoder is not None:
-                id, sample_idx, *inner_idx = inner_idx
-                assert id == type(self).__name__
                 id, sample_idx, *inner_idx = inner_idx
                 assert id == type(self).__name__
                 assert isinstance(sample_idx, int)

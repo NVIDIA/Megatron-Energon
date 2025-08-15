@@ -362,8 +362,10 @@ class TestDataset(unittest.TestCase):
             def encode_sample(self, sample: TextSample) -> TextSample:
                 rand_str = (
                     f"_{torch.randint(0, 1000, (1,)).item()}_{random.randint(0, 1000)}"
+                    + f"_{WorkerConfig.active_worker_config.worker_seed()}"
                     + f"_{self.current_batch_index}_{self.current_sample_index}"
                 )
+                print(f"For sample {sample.__restore_key__}: {sample.text}{rand_str}")
 
                 return TextSample(
                     __key__=sample.__key__,
@@ -410,12 +412,14 @@ class TestDataset(unittest.TestCase):
             # Then save state
             state = loader1a.save_state_rank()
 
+            print("iterating loader1a")
             # Load another 20 samples
             data_post = [data.text[0] for idx, data in zip(range(20), loader1a)]
 
             # Restore state
             loader1b.restore_state_rank(state)
 
+            print("iterating loader1b")
             # Load 20 samples again
             data_restored = [data.text[0] for idx, data in zip(range(20), loader1b)]
 

@@ -6,6 +6,7 @@ import sys
 import warnings
 from typing import (
     Any,
+    ClassVar,
     Generator,
     Generic,
     Literal,
@@ -19,10 +20,14 @@ import torch.distributed
 from megatron.energon.cache.base import CachePool
 from megatron.energon.dataloader.future import CallableFuture, Future
 from megatron.energon.dataloader.pin_memory import NoPinMemory, PinMemory, PinMemoryThread
-from megatron.energon.dataloader.workers.base_worker import DataLoaderWorker
+from megatron.energon.dataloader.workers.base_worker import (
+    DataLoaderNoWorker,
+    DataLoaderWorker,
+    WorkerState,
+)
 from megatron.energon.dataloader.workers.fork_worker import ForkDataLoaderWorker
+from megatron.energon.edataclass import edataclass
 from megatron.energon.flavors.base_dataset import SavableDataset, add_sample_restore_key
-from megatron.energon.state import FlexState
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset, get_sample_restore_key
 from megatron.energon.wrappers.batch_dataset import BatchDataset
@@ -30,6 +35,20 @@ from megatron.energon.wrappers.gc_dataset import GC_DEFAULT_EVERY_N_ITER, GcData
 from megatron.energon.wrappers.watchdog_dataset import WatchdogDataset
 
 TSample = TypeVar("TSample", covariant=True)
+
+DEBUG_LEVEL = 1
+
+
+@edataclass
+class RankState:
+    """
+    State of a rank.
+    """
+
+    prefetched_samples_keys: list[Any]
+    worker_states: list[WorkerState | None]
+    next_worker_id: int
+    micro_batch_size: int | None
 
 
 class WorkerType(Protocol[TSample]):
@@ -51,11 +70,14 @@ class DataLoader(Generic[TSample]):
     to avoid leaking workers (fixes a bug).
     """
 
+    _next_id: ClassVar[int] = 0
+    _id: int
+
     _workers: list[DataLoaderWorker[TSample]] | None = None
     _exhausted_workers: list[bool]
     _next_worker_id: int = 0
 
-    _restore_state: FlexState | None = None
+    _restore_state: RankState | None = None
 
     _dataset: SavableDataset
     _worker_config: WorkerConfig
@@ -109,8 +131,11 @@ class DataLoader(Generic[TSample]):
                 If "automatic", the memory is pinned automatically if cuda is available.
                 If a `PinMemory` instance, the instance may only be used for one `DataLoader`.
         """
+        self._id = DataLoader._next_id
+        DataLoader._next_id += 1
+
         if dataset.worker_config.num_workers == 0 and worker_type == ForkDataLoaderWorker:
-            worker_type = DataLoaderWorker
+            worker_type = DataLoaderNoWorker
 
         if watchdog_timeout_seconds is not None:
             dataset = WatchdogDataset(
@@ -168,7 +193,7 @@ class DataLoader(Generic[TSample]):
         if self._restore_state is None:
             worker_states = [None] * self._worker_config.safe_num_workers
         else:
-            worker_states = self._restore_state["worker_states"]
+            worker_states = self._restore_state.worker_states
 
         assert len(worker_states) == self._worker_config.safe_num_workers, (
             "Number of initial states must match number of workers"
@@ -185,11 +210,11 @@ class DataLoader(Generic[TSample]):
                     )
                     for sample_key in prefetched_samples_keys
                 ]
-                for prefetched_samples_keys in self._restore_state["prefetched_samples_keys"]
+                for prefetched_samples_keys in self._restore_state.prefetched_samples_keys
             ]
-            self._next_worker_id = self._restore_state["next_worker_id"]
+            self._next_worker_id = self._restore_state.next_worker_id
             self._exhausted_workers = [
-                False if worker_state is None else worker_state["exhausted"]
+                False if worker_state is None else worker_state.exhausted
                 for worker_state in worker_states
             ]
             # State was restored, clear
@@ -243,6 +268,8 @@ class DataLoader(Generic[TSample]):
             for worker in self._workers:
                 worker.new_iter()
             self._exhausted_workers = [False] * self._worker_config.safe_num_workers
+            # Ensure deterministic interleaving across epochs by starting from worker 0
+            self._next_worker_id = 0
 
         # For all workers, enqueue prefetching samples.
         for worker_idx, (worker, exhausted) in enumerate(
@@ -261,19 +288,23 @@ class DataLoader(Generic[TSample]):
         # - Pop the first sample future from the prefetching samples.
         # - Get the sample from the sample future (may wait for the sample to be prefetched).
         # - Yield the sample.
-        print(f"{self._exhausted_workers=}\n", end="")
+        if DEBUG_LEVEL >= 1:
+            print(f"{self._exhausted_workers=}\n", end="")
         while not all(self._exhausted_workers):
             # Get the next worker to prefetch samples from.
             worker_idx = self._next_worker_id
             worker = self._workers[worker_idx]
-            print(f"{worker_idx=} {worker=}\n", end="")
+            if DEBUG_LEVEL >= 2:
+                print(f"{worker_idx=} {worker=}\n", end="")
             self._next_worker_id = (worker_idx + 1) % self._worker_config.safe_num_workers
             if self._exhausted_workers[worker_idx]:
-                print(f"{worker_idx=} exhausted, continue with next worker\n", end="")
+                if DEBUG_LEVEL >= 1:
+                    print(f"{worker_idx=} exhausted, continue with next worker\n", end="")
                 continue
             # Pop the first sample future from the prefetching samples.
             sample_future = self._prefetching_samples[worker_idx].pop(0)
-            print(f"{sample_future=}\n", end="")
+            if DEBUG_LEVEL >= 2:
+                print(f"{sample_future=}\n", end="")
             # Prefetch samples from the worker.
             while len(self._prefetching_samples[worker_idx]) < self._prefetch_factor:
                 # Add a new sample future to the prefetching samples if the worker has not prefetched enough samples.
@@ -284,13 +315,15 @@ class DataLoader(Generic[TSample]):
                 # Get the sample from the sample future (may wait for the sample to be ready).
                 sample = sample_future.get()
             except StopIteration:
-                print(f"{worker_idx=} exhausted, remove from prefetching samples\n", end="")
+                if DEBUG_LEVEL >= 1:
+                    print(f"{worker_idx=} exhausted, remove from prefetching samples\n", end="")
                 # If the sample future raises StopIteration, remove the worker from the list.
                 self._prefetching_samples[worker_idx] = []
                 self._exhausted_workers[worker_idx] = True
                 continue
             else:
-                print(f"{worker_idx=} got sample, yield\n", end="")
+                if DEBUG_LEVEL >= 2:
+                    print(f"{worker_idx=} got sample, yield\n", end="")
                 # Yield the sample.
                 yield sample
 
@@ -298,10 +331,19 @@ class DataLoader(Generic[TSample]):
         # Restart the epoch iterator if was not created yet. Otherwise, the existing epoch iterator will be continued.
         # That happens e.g. when iteration was interrupted.
         if self._current_epoch_iter is None:
+            if DEBUG_LEVEL >= 1:
+                print("DL: Starting epoch iterator")
             self._current_epoch_iter = self._epoch_iter()
+        else:
+            if DEBUG_LEVEL >= 1:
+                print("DL: Continuing epoch iterator")
         assert self._current_epoch_iter is not None
-        yield from self._current_epoch_iter
+        # Important: Do not use yield from here, as it will delegate .close to the inner generator.
+        for sample in self._current_epoch_iter:
+            yield sample
         # Reset the epoch iterator, it was exhausted.
+        if DEBUG_LEVEL >= 1:
+            print("DL: Closing epoch iterator")
         self._current_epoch_iter.close()
         self._current_epoch_iter = None
 
@@ -319,29 +361,33 @@ class DataLoader(Generic[TSample]):
         else:
             return None
 
-    def save_state_rank(self) -> FlexState:
-        # TODO: The redist tool must be able to change the batch size.
-        # That means that the redist tool shall split a saved restore key for the "BatchDataset".
-        # It should also change the saved micro batch size to match that.
-        # TODO @pfischer: Add changing the batch size to the docs.
+    def save_state_rank(self) -> RankState:
+        if self._restore_state is not None:
+            return self._restore_state
         prefetched_samples_keys = [
             [get_sample_restore_key(sample_fut.get()) for sample_fut in prefetching_sample]
             for prefetching_sample in self._prefetching_samples
         ]
+        worker_states: list[WorkerState | None]
         if self._workers is None:
             worker_states = [None] * self._worker_config.safe_num_workers
         else:
             worker_states = [worker.save_state() for worker in self._workers]
 
-        return FlexState(
-            __class__=type(self).__name__,
+        # Make sure that the exhausted_workers match the individual worker states
+        assert all(
+            worker_state is None or worker_state.exhausted == exhausted_worker
+            for worker_state, exhausted_worker in zip(worker_states, self._exhausted_workers)
+        ), "Exhausted workers mismatch"
+
+        return RankState(
             prefetched_samples_keys=prefetched_samples_keys,
             worker_states=worker_states,
             next_worker_id=self._next_worker_id,
             micro_batch_size=self._get_batch_size(),
         )
 
-    def save_state_global(self, global_dst_rank: int) -> Sequence[FlexState | None] | None:
+    def save_state_global(self, global_dst_rank: int) -> Sequence[RankState | None] | None:
         """
         Saves the state of the dataset globally, collecting the state from all ranks using torch
         distributed. Allows for restoring the state later using `restore_state_global`, given the
@@ -365,7 +411,7 @@ class DataLoader(Generic[TSample]):
 
         # Gather the merged states
         if self._worker_config.world_size > 1:
-            output: Sequence[FlexState | None] | None
+            output: Sequence[RankState | None] | None
             if self._worker_config.global_rank() == global_dst_rank:
                 output = [None] * self._worker_config.world_size
             else:
@@ -394,7 +440,7 @@ class DataLoader(Generic[TSample]):
             # Not distributed -> return the merged state
             return [merged_state]
 
-    def restore_state_rank(self, state: FlexState | None) -> None:
+    def restore_state_rank(self, state: RankState | None) -> None:
         """
         Restore the state of the DataLoader on the current rank.
         The state is actually restored when the processes are started, in the iterator.
@@ -408,15 +454,14 @@ class DataLoader(Generic[TSample]):
             # Assume initial state.
             return
 
-        assert isinstance(state, FlexState)
-        assert state["__class__"] == type(self).__name__, "DataLoader type mismatch"
-        assert state["micro_batch_size"] == self._get_batch_size(), "Micro batch size mismatch"
+        assert isinstance(state, RankState)
+        assert state.micro_batch_size == self._get_batch_size(), "Micro batch size mismatch"
 
         self._restore_state = state
 
     def restore_state_global(
         self,
-        state: Sequence[FlexState | None] | None,
+        state: Sequence[RankState | None] | None,
         *,
         src_rank: int | None = None,
     ) -> None:
@@ -514,7 +559,7 @@ class DataLoader(Generic[TSample]):
         finally:
             self._worker_config.worker_deactivate()
 
-    def with_restored_state_rank(self, state: FlexState | None) -> "DataLoader[TSample]":
+    def with_restored_state_rank(self, state: RankState | None) -> "DataLoader[TSample]":
         """
         Use this data loader and restore the state. Useful for chaining commands. See `save_state_rank` for more details.
         """
@@ -522,7 +567,7 @@ class DataLoader(Generic[TSample]):
         return self
 
     def with_restored_state_global(
-        self, state: Sequence[FlexState | None] | None, src_rank: int | None = None
+        self, state: Sequence[RankState | None] | None, src_rank: int | None = None
     ) -> "DataLoader[TSample]":
         """
         Use this data loader and restore the state. Useful for chaining commands. See `save_state_global` for more details.
@@ -539,4 +584,4 @@ class DataLoader(Generic[TSample]):
         return self._dataset.config()
 
     def __str__(self) -> str:
-        return f"DataLoader(prefetch_factor={self._prefetch_factor}, worker_type={self._worker_type.__name__})"
+        return f"DataLoader(_id={self._id}, prefetch_factor={self._prefetch_factor}, worker_type={self._worker_type.__name__})"

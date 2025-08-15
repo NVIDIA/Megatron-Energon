@@ -103,7 +103,6 @@ class LimitDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
             )
 
         # Reset the inner dataset
-        self.dataset.reset_state()
         self.current_offset = 0
         if self.reset_after_epoch:
             self.dataset.reset_state()

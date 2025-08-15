@@ -15,6 +15,8 @@ from megatron.energon.dataloader.asynchronous.base import (
     WorkerResult,
 )
 
+DEBUG_LEVEL = 1
+
 
 class ForkAsynchronous(Asynchronous):
     """Mixin for asynchronous workers that use processes."""
@@ -76,19 +78,23 @@ class ForkAsynchronous(Asynchronous):
         try:
             super()._worker_run(cmd_queue, result_queue)
         finally:
-            print(f"[{self._name}] shutting down\n", end="")
+            if DEBUG_LEVEL >= 1:
+                print(f"[{self._name}] shutting down\n", end="")
             worker_exit_evt.set()
-            print(
-                f"[{self._name}] shutting down, wait for parent_check_thread\n",
-                end="",
-            )
+            if DEBUG_LEVEL >= 1:
+                print(
+                    f"[{self._name}] shutting down, wait for parent_check_thread\n",
+                    end="",
+                )
             parent_check_thread.join()
-            print(f"[{self._name}] shutting down, close queues\n", end="")
+            if DEBUG_LEVEL >= 1:
+                print(f"[{self._name}] shutting down, close queues\n", end="")
             result_queue.close()
             result_queue.join_thread()
             cmd_queue.close()
             cmd_queue.cancel_join_thread()
-            print(f"[{self._name}] shutting down, done\n", end="")
+            if DEBUG_LEVEL >= 1:
+                print(f"[{self._name}] shutting down, done\n", end="")
 
     def _in_worker(self) -> bool:
         return torch.multiprocessing.current_process() == self._process
