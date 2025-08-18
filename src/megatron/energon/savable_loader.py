@@ -662,8 +662,8 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
     result_queues: List[torch.multiprocessing.Queue]
 
     #: Instance of the current data iterator. There shall be only one active iterator, such that the
-    # dataset is not iterated multiple times in parallel. The state will proceed.
-    _persistent_iterator: Optional[Iterator[T]] = None
+    # dataset is not iterated multiple times in parallel. The state will continue between epochs.
+    _epoch_iterator: Optional[Iterator[T]] = None
     #: Whether the dataloader has running workers.
     _has_workers: bool = False
     #: The index of the current worker. -1 if not started yet.
@@ -817,76 +817,77 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
         # We override this, because otherwise we'll see warnings
         return self.dataset.len_rank()
 
-    def __iter__(self):
-        def _inner_generator(iterator):
-            iter_idx = 0
-            id = self.next_id()
+    def _epoch_iter(self):
+        """Iterator for one epoch, i.e. until the inner dataset raises StopIteration."""
+        iter_idx = 0
+        id = self.next_id()
+        if self.worker_config.should_log(level=1):
+            self.worker_config.worker_log(
+                {
+                    "t": "SavableDataLoader.iter",
+                    "r": self.worker_config.rank,
+                    "w": None,
+                    "id": self.id,
+                    "iter_id": id,
+                }
+            )
+        try:
+            for worker_id, sample_idx, sample in super().__iter__():
+                self._worker_sample_counters[worker_id] = sample_idx
+                # If the next sample will be from the first worker, we can safely resume
+                self._next_worker_id = (worker_id + 1) % max(self.num_workers, 1)
+                # self._debugf.write(
+                #     f"[w={worker_id}, s={sample_idx}] {self._sample_str(sample)}\n"
+                # )
+                # self._debugf.flush()
+                if self.worker_config.should_log(level=1):
+                    keys = default_get_keys(sample)
+                    self.worker_config.worker_log(
+                        {
+                            **{
+                                "t": "SavableDataLoader.yield",
+                                "r": self.worker_config.rank,
+                                "w": None,
+                                "id": self.id,
+                                "iter_id": id,
+                                "worker_id": worker_id,
+                                "worker_idx": sample_idx,
+                                "idx": self._sample_idx,
+                                "iter_idx": iter_idx,
+                                "global_idx": self._global_sample_idx,
+                            },
+                            **({} if keys is None else {"keys": keys}),
+                        }
+                    )
+                self._sample_idx += 1
+                self._global_sample_idx += 1
+                iter_idx += 1
+                yield sample
+            self._epoch_iterator = None
+            self._next_worker_id = 0
+        finally:
             if self.worker_config.should_log(level=1):
                 self.worker_config.worker_log(
                     {
-                        "t": "SavableDataLoader.iter",
+                        "t": "SavableDataLoader.StopIteration",
                         "r": self.worker_config.rank,
                         "w": None,
                         "id": self.id,
-                        "iter_id": id,
+                        "iter_id": self.id,
                     }
                 )
-            try:
-                for worker_id, sample_idx, sample in iterator:
-                    self._worker_sample_counters[worker_id] = sample_idx
-                    # If the next sample will be from the first worker, we can safely resume
-                    self._next_worker_id = (worker_id + 1) % max(self.num_workers, 1)
-                    # self._debugf.write(
-                    #     f"[w={worker_id}, s={sample_idx}] {self._sample_str(sample)}\n"
-                    # )
-                    # self._debugf.flush()
-                    if self.worker_config.should_log(level=1):
-                        keys = default_get_keys(sample)
-                        self.worker_config.worker_log(
-                            {
-                                **{
-                                    "t": "SavableDataLoader.yield",
-                                    "r": self.worker_config.rank,
-                                    "w": None,
-                                    "id": self.id,
-                                    "iter_id": id,
-                                    "worker_id": worker_id,
-                                    "worker_idx": sample_idx,
-                                    "idx": self._sample_idx,
-                                    "iter_idx": iter_idx,
-                                    "global_idx": self._global_sample_idx,
-                                },
-                                **({} if keys is None else {"keys": keys}),
-                            }
-                        )
-                    self._sample_idx += 1
-                    self._global_sample_idx += 1
-                    iter_idx += 1
-                    yield sample
-                self._persistent_iterator = None
-                self._next_worker_id = 0
-            finally:
-                if self.worker_config.should_log(level=1):
-                    self.worker_config.worker_log(
-                        {
-                            "t": "SavableDataLoader.StopIteration",
-                            "r": self.worker_config.rank,
-                            "w": None,
-                            "id": self.id,
-                            "iter_id": self.id,
-                        }
-                    )
 
+    def __iter__(self):
         if self.num_workers > 0:
             # Always keep same iterator alive, as long as it yields data
-            if self._persistent_iterator is None:
-                self._persistent_iterator = _inner_generator(super().__iter__())
+            if self._epoch_iterator is None:
+                self._epoch_iterator = self._epoch_iter()
                 self._sample_idx = 0
                 self._has_workers = True
                 # print("New Iterator", self._persistent_iterator)
-            return self._persistent_iterator
+            return self._epoch_iterator
         else:
-            return _inner_generator(super().__iter__())
+            return self._epoch_iter()
 
     def _worker_command(self, *cmd_args) -> List[Any]:
         """Executes a command in all workers and returns the results."""
@@ -1128,7 +1129,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
             src_rank: The rank from which the state is broadcasted (within the data parallel group, if using DP groups).
         """
 
-        assert self._persistent_iterator is None, "Cannot restore state while workers are running"
+        assert self._epoch_iterator is None, "Cannot restore state while workers are running"
 
         # Only restore multi-rank if state is actually a list and we are in a distributed setup.
         # Otherwise treat as single rank state.
