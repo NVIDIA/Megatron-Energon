@@ -16,8 +16,8 @@ Each element can be either
 
 ## Basic example
 
-The snippet below keeps the first 80 % of *COYO* for training while evaluating on the remaining
-20 %. Note how the `subset` key is placed directly next to the corresponding `path`.
+The snippet below keeps the first 80 % of *COYO* `train` split (as defined in the `split.yaml`) for training while
+evaluating on the remaining 20 % of the `train` split. Note how the `subset` key is placed directly next to the corresponding `path`.
 
 ```yaml
 __module__: megatron.energon
@@ -47,9 +47,14 @@ not be combined with another absolute range farther up the hierarchy.
 
 ## Absolute ranges
 
-Absolute indices are handy when exact sample counts are required. The following configuration takes
-the first **1000** samples from *COCO* and mixes them with the full *COYO* dataset using
-weight-based blending:
+Absolute indices are handy when exact sample counts are required.
+
+## Advanced example
+
+The following configuration combines the absolute ranges with the nested rules. The inner subset takes
+the first **1000** samples from *COCO* train split and mixes them with the full *COYO* train split using
+weight-based blending. The outer nesting then reduces the inner range to the first 50%, thus only
+taking the first **500** samples, mixed with the first **50%** of the dataset effectively.
 
 ```yaml
 __module__: megatron.energon

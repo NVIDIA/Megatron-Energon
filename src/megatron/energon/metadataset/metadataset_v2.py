@@ -68,7 +68,9 @@ class AuxFilesystemReference:
 
 
 class PercentageOrAbsoluteConverter(Converter[float | int]):
-    """Converter for percentage values or absolute values."""
+    """Converter for percentage values or absolute values.
+    Integers will be returned as-is. Percentage numbers like `75%` will be converted to float ratios like `0.75`.
+    """
 
     def from_json(self, json_obj: Any, path: str, stage: tuple[int, ...]) -> float | int:
         if isinstance(json_obj, int):
@@ -86,8 +88,8 @@ class PercentageOrAbsoluteConverter(Converter[float | int]):
     def to_json(self, obj: float | int) -> str | int:
         if isinstance(obj, int):
             return obj
-        assert 0 <= obj <= 100, "Percentage must be between 0 and 100"
-        return f"{obj:.2f}%"
+        assert 0 <= obj <= 1, "Percentage must be between 0 and 100"
+        return f"{obj * 100:.2f}%"
 
 
 @edataclass
@@ -95,10 +97,13 @@ class Subset:
     """
     A subset of a dataset.
     The range is a tuple of two values, where the first value is the start of the subset and the second value is the end of the subset.
-    The range can be either a percentage or an absolute sample index value.
+    The range can be either a ratio in percentage or an absolute sample index value.
     The absolute range can only be used for leaf datasets.
     """
 
+    # Note: We use a Converter here. The Converter is evaluated in the typed_converter.py when loading the config from json/yaml.
+    # The converter will convert "75%" to 0.75 (relative value) and "250" to 250 (absolute value).
+    # Doing it this way, simplifies further processing of the config, because we do not have to consider str.
     range: tuple[
         Annotated[float | int, PercentageOrAbsoluteConverter()],
         Annotated[float | int, PercentageOrAbsoluteConverter()],
@@ -108,15 +113,15 @@ class Subset:
 
     def __post_init__(self) -> None:
         if isinstance(self.range[0], int):
-            if isinstance(self.range[1], int):
-                self.absolute_range = (self.range[0], self.range[1])
-                self.range = (0.0, 1.0)
-            else:
-                self.absolute_range = (self.range[0], None)
-                self.range = (0.0, self.range[1])
-        elif isinstance(self.range[1], int):
-            self.absolute_range = (0, self.range[1])
-            self.range = (self.range[0], 1.0)
+            assert isinstance(self.range[1], int) or self.range[1] is None, (
+                "Range must either be a percentage or an absolute range"
+            )
+            self.absolute_range = (self.range[0], self.range[1])
+            self.range = (0.0, 1.0)
+        else:
+            assert isinstance(self.range[1], float) or self.range[1] is None, (
+                "Range must either be a percentage or an absolute range"
+            )
 
     def merge(self, parent_subset: DatasetSubset | None) -> DatasetSubset:
         assert parent_subset is None or parent_subset.absolute_range is None, (

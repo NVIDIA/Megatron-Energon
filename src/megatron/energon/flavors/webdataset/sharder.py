@@ -336,9 +336,11 @@ class Sharder:
         Returns:
             The shards for the current rank and all workers
         """
-        start_samples, end_samples = cls._compute_subset(
-            sum(shard.count for shard in shards), subset
-        )
+        end_samples = sum(shard.count for shard in shards)
+        if subset is not None:
+            start_samples, end_samples = subset.compute_subset(end_samples)
+        else:
+            start_samples = 0
 
         local_worker_sample_split_offsets = cls.split_samples_to_workers(
             start_samples,

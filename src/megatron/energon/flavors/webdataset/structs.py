@@ -61,13 +61,52 @@ class FilteredSample(TypedDict):
 @edataclass
 class DatasetSubset:
     """A subset of a dataset.
-    The range is a tuple of two values, where the first value is the start of the subset and the second value is the end of the subset.
-    The range can be either a percentage or an absolute sample index value.
-    The absolute range can only be used for leaf datasets.
+    A range is a tuple of two values, where the first value is the start of the subset and the second value is the end of the subset.
+
+    The sharder uses the (absolute/relative) ranges to compute the subsets:
+     * `absolute_range` is applied first on the (e.g. train/val/test) subset
+     * then `range` is applied on the subset that is left
+
+    This is the struct used internally for computing the range. The config is loaded via the metadataset_v2.
     """
 
     range: tuple[float, float] | None = None
     absolute_range: tuple[int, int | None] | None = None
+
+    def compute_subset(
+        self,
+        total_samples: int,
+    ) -> tuple[int, int]:
+        """
+        Computes the absolute subset of samples from the total number of samples.
+        The absolute range is applied first, then the relative range is applied on the subset that is left.
+        """
+        start_samples = 0
+        end_samples = total_samples
+
+        if self.absolute_range is not None:
+            start_samples, end_samples = self.absolute_range
+            if end_samples is None:
+                end_samples = total_samples
+            assert end_samples <= total_samples, (
+                f"Subset samples {self.absolute_range} {end_samples=} > {total_samples=}"
+            )
+            assert start_samples <= end_samples, (
+                f"Subset samples {self.absolute_range} {start_samples=} > {end_samples=}"
+            )
+            assert start_samples >= 0, f"Subset samples {self.absolute_range} {start_samples=} < 0"
+        if self.range is not None:
+            previous_total = end_samples - start_samples
+            end_samples = start_samples + int(previous_total * self.range[1])
+            start_samples += int(previous_total * self.range[0])
+            assert end_samples <= total_samples, (
+                f"Subset ratio {self.range} {end_samples=} is larger than total samples {total_samples}"
+            )
+            assert start_samples <= end_samples, (
+                f"Subset ratio {self.range} {start_samples=} > {end_samples=}"
+            )
+            assert start_samples >= 0, f"Subset ratio {self.range} {start_samples=} < 0"
+        return start_samples, end_samples
 
     def config(self) -> dict:
         return {
