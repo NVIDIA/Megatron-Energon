@@ -26,7 +26,11 @@ from megatron.energon.flavors.webdataset.itar import (
     ITarSamplePointer,
 )
 from megatron.energon.flavors.webdataset.metadata import get_info_shard_files
-from megatron.energon.flavors.webdataset.structs import FilteredSample, ShardInfo
+from megatron.energon.flavors.webdataset.structs import (
+    FilteredSample,
+    ShardInfo,
+    WebdatasetRestoreKey,
+)
 from megatron.energon.source_info import SourceInfo
 
 T_index = TypeVar("T_index", covariant=False)
@@ -188,7 +192,7 @@ class ITarReader(ABC, Generic[T_index]):
         return FilteredSample(
             __key__=f"{shard_name}/{sample_base_name}",
             __shard__=self.tar_filenames[sample_pointer.tar_file_id],
-            __restore_key__=("Webdataset", restore_index),
+            __restore_key__=WebdatasetRestoreKey(index=restore_index),
             __sources__=(
                 SourceInfo(
                     dataset_path=self.base_path,

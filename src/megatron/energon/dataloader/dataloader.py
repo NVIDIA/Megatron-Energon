@@ -23,11 +23,12 @@ from megatron.energon.dataloader.pin_memory import NoPinMemory, PinMemory, PinMe
 from megatron.energon.dataloader.workers.base_worker import (
     DataLoaderNoWorker,
     DataLoaderWorker,
+    WorkerSampleRestoreKey,
     WorkerState,
 )
 from megatron.energon.dataloader.workers.fork_worker import ForkDataLoaderWorker
 from megatron.energon.edataclass import edataclass
-from megatron.energon.flavors.base_dataset import SavableDataset, add_sample_restore_key
+from megatron.energon.flavors.base_dataset import RestoreKey, SavableDataset, set_sample_restore_key
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset, get_sample_restore_key
 from megatron.energon.wrappers.batch_dataset import BatchDataset
@@ -45,9 +46,14 @@ class RankState:
     State of a rank.
     """
 
-    prefetched_samples_keys: list[Any]
+    #: This is a list (per worker) of lists of (batch) sample keys, which have been (asynchronously) prefetched from workers
+    # but not been fetched yet by iterating.
+    prefetched_samples_keys: list[list[RestoreKey | None]]
+    #: This is a list of worker states, which have been saved from the workers (or `None` for the initial state).
     worker_states: list[WorkerState | None]
+    #: The next worker ID to prefetch from (i.e. append to the prefetched samples).
     next_worker_id: int
+    #: The micro batch size of the dataset, or `None` if not known. Needed for redistributing the state.
     micro_batch_size: int | None
 
 
@@ -533,7 +539,7 @@ class DataLoader(Generic[TSample]):
 
         self.restore_state_rank(rank_state)
 
-    def restore_sample(self, restore_key: tuple) -> TSample:
+    def restore_sample(self, restore_key: RestoreKey) -> TSample:
         """
         Restore a sample from a restore key.
 
@@ -543,18 +549,15 @@ class DataLoader(Generic[TSample]):
         Returns:
             The restored sample.
         """
-        id, global_worker_id, sample_idx = restore_key[:3]
-        assert id == "DataLoaderWorker", f"id {id} != DataLoaderWorker"
-        restore_key = restore_key[3:]
+        assert isinstance(restore_key, WorkerSampleRestoreKey)
         self._worker_config.worker_activate(
-            sample_idx, override_global_rank=global_worker_id, cache_pool=self._cache_pool
+            restore_key.sample_idx,
+            override_global_rank=restore_key.worker_id,
+            cache_pool=self._cache_pool,
         )
         try:
-            return add_sample_restore_key(
-                self._dataset.restore_sample(restore_key),
-                global_worker_id,
-                sample_idx,
-                src=DataLoaderWorker.__name__,
+            return set_sample_restore_key(
+                self._dataset.restore_sample(restore_key.inner), restore_key
             )
         finally:
             self._worker_config.worker_deactivate()

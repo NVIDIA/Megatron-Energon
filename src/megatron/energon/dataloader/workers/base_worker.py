@@ -1,16 +1,24 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
+from dataclasses import dataclass
 from typing import Generic, TypeVar
 
 from megatron.energon.cache.base import CachePool
 from megatron.energon.dataloader.future import DoneFuture, ExceptionFuture, Future
 from megatron.energon.edataclass import edataclass
-from megatron.energon.flavors.base_dataset import SavableDataset, add_sample_restore_key
+from megatron.energon.flavors.base_dataset import SavableDataset
 from megatron.energon.rng import SystemRng, SystemRngState
 from megatron.energon.state import FlexState
 from megatron.energon.worker import WorkerConfig
+from megatron.energon.wrappers.base import WrappedRestoreKey, wrap_sample_restore_key
 
 TSample = TypeVar("TSample", covariant=True)
+
+
+@dataclass(kw_only=True, slots=True, frozen=True)
+class WorkerSampleRestoreKey(WrappedRestoreKey):
+    worker_id: int
+    sample_idx: int
 
 
 @edataclass
@@ -170,8 +178,11 @@ class DataLoaderWorker(Generic[TSample]):
         try:
             next_sample = next(self._dataset_iter)
             self._sample_index += 1
-            next_sample = add_sample_restore_key(
-                next_sample, self._global_worker_id, sample_idx, src=DataLoaderWorker.__name__
+            next_sample = wrap_sample_restore_key(
+                next_sample,
+                WorkerSampleRestoreKey,
+                worker_id=self._global_worker_id,
+                sample_idx=sample_idx,
             )
         except StopIteration as e:
             self._exhausted = True

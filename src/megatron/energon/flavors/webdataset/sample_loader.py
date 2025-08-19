@@ -1,14 +1,14 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from typing import Any, Dict, Generator, Iterator, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, Generator, Iterator, List, Optional, Sequence, Tuple
 
 import torch
 
 from megatron.energon.edataclass import edataclass
-from megatron.energon.flavors.base_dataset import FlexState, SavableDataset
+from megatron.energon.flavors.base_dataset import FlexState, RestoreKey, SavableDataset
 from megatron.energon.flavors.webdataset.itar_reader import ITarReader
-from megatron.energon.flavors.webdataset.structs import FilteredSample
+from megatron.energon.flavors.webdataset.structs import FilteredSample, WebdatasetRestoreKey
 from megatron.energon.rng import WorkerRng
 from megatron.energon.worker import WorkerConfig
 
@@ -18,7 +18,7 @@ class RawSampleData:
     """Represents the iteration state of a single slice slice to the index."""
 
     #: Index of the sample. This is also the restore key
-    __restore_key__: Tuple[str, int]
+    __restore_key__: WebdatasetRestoreKey
     #: The sample data
     data: Tuple[Optional[FilteredSample], ...]
 
@@ -140,7 +140,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
 
     def _get_sample(self, index: int) -> RawSampleData:
         return RawSampleData(
-            __restore_key__=("Webdataset", index),
+            __restore_key__=WebdatasetRestoreKey(index=index),
             data=tuple(reader[index] for reader in self.join_readers),
         )
 
@@ -369,7 +369,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
                             "t": "WebdatasetSampleLoaderDataset._slices_iter.yield",
                             "r": self.worker_config.rank,
                             "w": self.worker_config.rank_worker_id(),
-                            "index": sample.__restore_key__[1],
+                            "index": sample.__restore_key__.index,
                             "key": sample.data[0]["__key__"],
                             "shard": sample.data[0]["__shard__"],
                             "count": self._sample_count,
@@ -443,13 +443,13 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
     def assert_can_restore(self) -> None:
         pass
 
-    def restore_sample(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> RawSampleData:
-        # Key is: ("Webdataset", index)
+    def restore_sample(self, restore_key: RestoreKey) -> RawSampleData:
         # The key is joined in the dataset's typed joining (i.e. load_sample of JoinedWebdatasetFactory).
-        id, index = restore_key
-        assert id == "Webdataset"
-        assert isinstance(index, int)
-        return self._get_sample(index)
+        assert isinstance(restore_key, WebdatasetRestoreKey)
+        assert isinstance(restore_key.index, int), (
+            "WebdatasetRestoreKey.index must be an integer, cannot restore by sample key"
+        )
+        return self._get_sample(restore_key.index)
 
     def config(self) -> Dict[str, Any]:
         return {

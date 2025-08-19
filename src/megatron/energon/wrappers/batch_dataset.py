@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import inspect
+from dataclasses import dataclass
 from typing import (
     Any,
     Callable,
@@ -12,7 +13,6 @@ from typing import (
     List,
     Optional,
     Sequence,
-    Tuple,
     TypeVar,
     Union,
 )
@@ -22,11 +22,27 @@ from megatron.energon.flavors.base_dataset import SavableDataset, set_sample_res
 from megatron.energon.source_info import SourceInfo
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers._log_exception import log_exception
-from megatron.energon.wrappers.base import BaseWrapperDataset, SampleIndex, get_sample_restore_key
+from megatron.energon.wrappers.base import (
+    BaseWrapperDataset,
+    MultiWrappedRestoreKey,
+    RestoreKey,
+    SampleIndex,
+    get_sample_restore_key,
+)
 from megatron.energon.wrappers.skip import SkipSample
 
 T_batch = TypeVar("T_batch", covariant=True)
 T_batch_sample = TypeVar("T_batch_sample", covariant=True)
+
+
+@dataclass(kw_only=True, slots=True, frozen=True)
+class BatchRestoreKey(MultiWrappedRestoreKey):
+    sample_idx: int
+
+
+@dataclass(kw_only=True, slots=True, frozen=True)
+class BatchGenRestoreKey(BatchRestoreKey):
+    gen_idx: int | None = None
 
 
 class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_sample, T_batch]):
@@ -97,7 +113,7 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
 
     def __iter__(self) -> Iterator[T_batch]:
         batch: List[T_batch_sample] = []
-        sample_restore_keys = []
+        sample_restore_keys: list[RestoreKey | None] = []
 
         last_batch_failures = 0
 
@@ -121,10 +137,11 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
                     self._generator_offset = batch_sub_idx + 1
                     yield set_sample_restore_key(
                         inner_batch_sample,
-                        sample_idx,
-                        batch_sub_idx,
-                        *sample_restore_keys,
-                        src=self,
+                        BatchGenRestoreKey(
+                            sample_idx=sample_idx,
+                            gen_idx=batch_sub_idx,
+                            inner=tuple(sample_restore_keys),
+                        ),
                     )
             self._generator_sample_keys = None
             self._generator_offset = None
@@ -150,16 +167,20 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
                         self._generator_offset = batch_sub_idx + 1
                         yield set_sample_restore_key(
                             inner_batch_sample,
-                            sample_idx,
-                            batch_sub_idx,
-                            *sample_restore_keys,
-                            src=self,
+                            BatchGenRestoreKey(
+                                sample_idx=sample_idx,
+                                gen_idx=batch_sub_idx,
+                                inner=tuple(sample_restore_keys),
+                            ),
                         )
                     self._generator_sample_keys = None
                     self._generator_offset = None
                 else:
                     last_batch_failures = 0
-                    set_sample_restore_key(batch_sample, sample_idx, *sample_restore_keys, src=self)
+                    set_sample_restore_key(
+                        batch_sample,
+                        BatchRestoreKey(sample_idx=sample_idx, inner=tuple(sample_restore_keys)),
+                    )
                     yield batch_sample
                 sample_restore_keys.clear()
             except GeneratorExit:
@@ -202,40 +223,35 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
         )
         super().assert_can_restore()
 
-    def restore_sample(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> T_batch:
+    def restore_sample(self, restore_key: RestoreKey) -> T_batch:
         # We need to store multiple indices to restore a batch.
         self.assert_can_restore()
+        assert isinstance(restore_key, BatchRestoreKey)
         if inspect.isgeneratorfunction(self.batcher):
-            id, sample_idx, batch_sub_idx, *samples_restore_keys = restore_key
-            assert id == type(self).__name__
-        else:
-            id, sample_idx, *samples_restore_keys = restore_key
-            assert id == type(self).__name__
-        batch = [self.dataset.restore_sample(inner_idx) for inner_idx in samples_restore_keys]
-        with SampleIndex(self.worker_config, src=self).ctx(sample_idx):
+            assert isinstance(restore_key, BatchGenRestoreKey)
+        batch = [self.dataset.restore_sample(inner_idx) for inner_idx in restore_key.inner]
+        with SampleIndex(self.worker_config, src=self).ctx(restore_key.sample_idx):
             batch_sample = self.batcher(batch)
         if isinstance(batch_sample, Generator):
             assert inspect.isgeneratorfunction(self.batcher), (
                 f"Generator in {self.batcher} but not marked as such."
             )
+            assert isinstance(restore_key, BatchGenRestoreKey)
             for cur_batch_sub_idx, (sample_idx, inner_batch_sample) in enumerate(
-                SampleIndex(self.worker_config, src=self).iter_ctx(batch_sample, sample_idx)
+                SampleIndex(self.worker_config, src=self).iter_ctx(
+                    batch_sample, restore_key.sample_idx
+                )
             ):
-                if cur_batch_sub_idx == batch_sub_idx:
+                if cur_batch_sub_idx == restore_key.gen_idx:
                     return set_sample_restore_key(
                         inner_batch_sample,
-                        sample_idx,
-                        batch_sub_idx,
-                        *samples_restore_keys,
-                        src=self,
+                        restore_key,
                     )
-            assert False, f"Batch sub-index {batch_sub_idx} not found in batch"
+            assert False, f"Batch sub-index {restore_key.gen_idx} not found in batch"
         else:
             return set_sample_restore_key(
                 batch_sample,
-                sample_idx,
-                *samples_restore_keys,
-                src=self,
+                restore_key,
             )
 
     def config(self) -> Dict[str, Any]:

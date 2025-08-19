@@ -10,13 +10,12 @@ from typing import (
     List,
     Optional,
     Sequence,
-    Tuple,
     TypeVar,
     Union,
 )
 
 from megatron.energon.edataclass import edataclass
-from megatron.energon.flavors.base_dataset import SavableDataset
+from megatron.energon.flavors.base_dataset import RestoreKey, SavableDataset
 from megatron.energon.savable import Savable
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import get_sample_restore_key
@@ -28,14 +27,14 @@ T_sample = TypeVar("T_sample")
 class SavableSampleBufferState:
     """State of a SavableSampleBuffer."""
 
-    restore_keys: List[Tuple[Union[str, int, tuple], ...]]
+    restore_keys: list[RestoreKey | None]
 
 
 class SavableSampleBuffer(Savable, Generic[T_sample]):
     """A buffer of samples, savable. State is shared, create a state-local instance."""
 
-    _buffer: List[T_sample]
-    _restore_keys: List[Tuple[Union[str, int, tuple], ...]]
+    _buffer: list[T_sample]
+    _restore_keys: list[RestoreKey | None]
 
     _restore_pending: bool = False
 
@@ -73,12 +72,12 @@ class SavableSampleBuffer(Savable, Generic[T_sample]):
         self._restore_keys.pop(index)
         return self._buffer.pop(index)
 
-    def flush(self) -> Tuple[List[T_sample], Tuple[Any, ...]]:
+    def flush(self) -> tuple[list[T_sample], tuple[RestoreKey | None, ...]]:
         buffer = list(self._buffer)
-        restore_key = tuple(self._restore_keys)
+        restore_keys = tuple(self._restore_keys)
         self._buffer.clear()
         self._restore_keys.clear()
-        return buffer, restore_key
+        return buffer, restore_keys
 
     @property
     def buffer(self) -> List[T_sample]:
@@ -122,12 +121,12 @@ class SavableSampleBuffer(Savable, Generic[T_sample]):
         self._restore_keys = state.restore_keys.copy()
         self._restore_pending = True
 
-    def restore_key(self) -> Tuple[Union[str, int], ...]:
+    def restore_key(self) -> tuple[RestoreKey | None, ...]:
         return tuple(self._restore_keys)
 
     def restore_samples(
-        self, index: Tuple[Union[str, int, tuple], ...]
-    ) -> Tuple[Tuple[Union[str, int, tuple], ...], List[T_sample]]:
+        self, index: tuple[RestoreKey | None, ...]
+    ) -> tuple[tuple[RestoreKey | None, ...], list[T_sample]]:
         buffer = []
         restore_keys = []
         for sub_index in index:

@@ -38,7 +38,7 @@ from megatron.energon.flavors import (
     SampleDecoder,
     SavableDataset,
 )
-from megatron.energon.flavors.base_dataset import ExtendableDataclassMixin
+from megatron.energon.flavors.base_dataset import ExtendableDataclassMixin, RestoreKey
 from megatron.energon.metadataset.loader_interface import DatasetBlendMode, LoadedDataset
 from megatron.energon.rng import SystemRng, UserRng
 from megatron.energon.savable import Savable
@@ -325,7 +325,7 @@ class Batch(PinMemoryMixin, ExtendableDataclassMixin):
     __key__: list[str]
     #: Key for restoring the sample. This is used to restore the sample from a checkpoint. It
     # should be a (nested) tuple of strings and integers, which can be used to index the dataset.
-    __restore_key__: Tuple[Union[str, int, tuple], ...]
+    __restore_key__: Tuple[RestoreKey | None, ...]
 
     #: A dataset may define a subflavors to distinguish between samples of the same sample type.
     __subflavors__: Optional[list[Optional[Dict[str, Any]]]] = None

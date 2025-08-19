@@ -6,13 +6,11 @@ from typing import (
     Dict,
     Generic,
     Iterator,
-    Tuple,
     TypeVar,
-    Union,
 )
 
 import megatron.energon
-from megatron.energon.flavors.base_dataset import SavableDataset
+from megatron.energon.flavors.base_dataset import RestoreKey, SavableDataset
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset
 
@@ -53,9 +51,10 @@ class TaskEncoderStateDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_
         if not self._task_encoder_was_reset:
             self._task_encoder_was_reset = True
             self._task_encoder.reset_state()
-        yield from self.dataset
+        for sample in self.dataset:
+            yield sample
 
-    def restore_sample(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> T_sample:
+    def restore_sample(self, restore_key: RestoreKey) -> T_sample:
         inner_sample = self.dataset.restore_sample(restore_key)
         inner_sample = self._task_encoder.restore_sample(inner_sample)
         return inner_sample
@@ -78,4 +77,4 @@ class TaskEncoderStateDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_
         }
 
     def __str__(self):
-        return f"MapDataset(map_fn={self.map_fn}, dataset={self.dataset})"
+        return f"TaskEncoderStateDataset(map_fn={self.map_fn}, dataset={self.dataset})"

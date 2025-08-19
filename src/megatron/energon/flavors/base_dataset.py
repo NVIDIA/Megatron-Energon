@@ -27,6 +27,7 @@ import torch
 from torch.utils.data import IterableDataset
 from typing_extensions import Self
 
+import megatron.energon
 from megatron.energon.cache import FileStore
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
@@ -130,7 +131,8 @@ class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
     __key__: str
     #: Key for restoring the sample. This is used to restore the sample from a checkpoint. It
     # should be a (nested) tuple of strings and integers, which can be used to index the dataset.
-    __restore_key__: Tuple[Union[str, int, tuple], ...]
+    # May be None in some cases, but it may then not be restorable.
+    __restore_key__: "RestoreKey | None"
 
     #: A dataset may define a subflavors to distinguish between samples of the same sample type.
     __subflavors__: Optional[Dict[str, Any]] = None
@@ -396,16 +398,18 @@ class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC)
         """Asserts that the dataset can restore a sample from a key."""
         assert self.can_restore_sample(), "This dataset cannot restore samples."
 
-    def restore_sample(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> T_sample:
+    def restore_sample(self, restore_key: "RestoreKey") -> T_sample:
         """
-        Generic key type, because it might be either an integer (for a core dataset), or something
-        more complex (e.g. for blended datasets).
+        Restores a sample from a restore key.
 
-        Default raises an exception (assumed non-deterministic if not implemented, does not
-        guarantee determinism).
+        Args:
+            restore_key: The restore key to restore the sample from.
+
+        Returns:
+            The restored sample.
         """
         raise NotImplementedError(
-            "This dataset does not support indexing, because it is not safely deterministic."
+            "This dataset does not support restoring, because it is not safely deterministic."
         )
 
     if THREAD_SAFE:
@@ -461,43 +465,65 @@ class BaseCoreDatasetFactory(Generic[T_sample], ABC):
         ...
 
 
-def add_sample_restore_key(
-    sample: T_sample, *key: Union[int, str], src: Any, fail_otherwise: bool = False
-) -> T_sample:
-    """Adds a key to a sample. The sample must be a valid `Sample` or dict containing
-    __restore_key__, which is a tuple of keys that can be used to restore the inner sample.
-    This restore key is prepended with the `key`."""
-    if not isinstance(src, str):
-        src = type(src).__name__
-    if isinstance(sample, Sample) or hasattr(sample, "__restore_key__"):
-        try:
-            sample.__restore_key__ = (src, *key, *sample.__restore_key__)
-        except KeyError:
-            pass
-    elif isinstance(sample, dict) and "__restore_key__" in sample:
-        sample["__restore_key__"] = (src, *key, *sample["__restore_key__"])
-    elif fail_otherwise:
-        raise RuntimeError(
-            "Did not yield a sample with a restore key, but is marked stateless/deterministic."
+@dataclasses.dataclass(kw_only=True, slots=True, frozen=True)
+class RestoreKey(ABC):
+    """Base class for restore keys."""
+
+    def _tupleify(self, value: Any) -> Any:
+        if isinstance(value, (int, str, float, bool)):
+            return value
+        elif isinstance(value, RestoreKey):
+            return value.as_tuple()
+        elif isinstance(value, (list, tuple)):
+            return tuple(self._tupleify(v) for v in value)
+        else:
+            return value
+
+    def as_tuple(self) -> tuple[Any, ...]:
+        return (
+            self.__class__.__name__,
+            *(
+                getattr(self, field.name).json()
+                if isinstance(getattr(self, field.name), RestoreKey)
+                else getattr(self, field.name)
+                for field in dataclasses.fields(self)
+            ),
         )
-    return sample
+
+    @staticmethod
+    def _untupleify(value: Any) -> Any:
+        if isinstance(value, (int, str, float, bool)):
+            return value
+        elif isinstance(value, RestoreKey):
+            return value.from_tuple(value)
+        elif isinstance(value, (list, tuple)):
+            if isinstance(value[0], str) and hasattr(megatron.energon, value[0]):
+                return getattr(megatron.energon, value[0]).from_tuple(value[1:])
+            else:
+                return tuple(RestoreKey._untupleify(v) for v in value)
+
+    @staticmethod
+    def from_tuple(json: tuple[Any, ...]) -> "RestoreKey":
+        cls = getattr(megatron.energon, json[0])
+        kwargs = {}
+        for field in dataclasses.fields(cls):
+            kwargs[field.name] = RestoreKey._untupleify(json[1:])
+        return cls(**kwargs)
 
 
 def set_sample_restore_key(
-    sample: T_sample, *key: Union[int, str], src: Any, fail_otherwise: bool = False
+    sample: T_sample, restore_key: RestoreKey, fail_otherwise: bool = False
 ) -> T_sample:
     """Sets the restore key for a sample. The sample must be a valid `Sample` or dict containing
     __restore_key__, which is a tuple of keys that can be used to restore the inner sample.
     This restore key is prepended with the `key`."""
-    if not isinstance(src, str):
-        src = type(src).__name__
     if isinstance(sample, Sample) or hasattr(sample, "__restore_key__"):
         try:
-            sample.__restore_key__ = (src, *key)
+            sample.__restore_key__ = restore_key
         except KeyError:
             pass
     elif isinstance(sample, dict) and "__restore_key__" in sample:
-        sample["__restore_key__"] = (src, *key)
+        sample["__restore_key__"] = restore_key
     elif fail_otherwise:
         raise RuntimeError(
             "Did not yield a sample with a restore key, but is marked stateless/deterministic."

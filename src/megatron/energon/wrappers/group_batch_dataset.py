@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import inspect
+from dataclasses import dataclass
 from typing import (
     Any,
     Callable,
@@ -22,6 +23,7 @@ from megatron.energon.edataclass import edataclass
 from megatron.energon.errors import SYSTEM_EXCEPTIONS, FatalSampleError
 from megatron.energon.flavors.base_dataset import (
     FlexState,
+    RestoreKey,
     SavableDataset,
     set_sample_restore_key,
 )
@@ -29,7 +31,11 @@ from megatron.energon.savable import Savable
 from megatron.energon.source_info import SourceInfo
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers._log_exception import log_exception
-from megatron.energon.wrappers.base import BaseWrapperDataset, SampleIndex
+from megatron.energon.wrappers.base import (
+    BaseWrapperDataset,
+    MultiWrappedRestoreKey,
+    SampleIndex,
+)
 from megatron.energon.wrappers.buffer import SavableSampleBuffer
 from megatron.energon.wrappers.skip import SkipSample
 
@@ -52,6 +58,11 @@ class Bucket(Savable, Generic[T_batch_sample]):
     def restore_state(self, state: FlexState):
         self.batch_size = state["batch_size"]
         self.samples.restore_state(state["samples"])
+
+
+@dataclass(kw_only=True, slots=True, frozen=True)
+class GroupBatchRestoreKey(MultiWrappedRestoreKey):
+    sample_idx: int
 
 
 class GroupBatchDataset(
@@ -163,7 +174,10 @@ class GroupBatchDataset(
                         f"Batcher {self.batcher} returned a generator, which is not supported for grouped batching yet."
                     )
                 last_batch_failures = 0
-                set_sample_restore_key(batch_sample, sample_idx, *sample_restore_keys, src=self)
+                set_sample_restore_key(
+                    batch_sample,
+                    GroupBatchRestoreKey(sample_idx=sample_idx, inner=sample_restore_keys),
+                )
                 yield batch_sample
             except SkipSample:
                 pass
@@ -246,14 +260,13 @@ class GroupBatchDataset(
         )
         super().assert_can_restore()
 
-    def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_batch:
+    def restore_sample(self, index: RestoreKey) -> T_batch:
         self.assert_can_restore()
-        id, sample_idx, *sample_restore_keys = index
-        assert id == type(self).__name__
-        batch = [self.dataset.restore_sample(inner_idx) for inner_idx in sample_restore_keys]
-        with SampleIndex(self.worker_config, src=self).ctx(sample_idx):
+        assert isinstance(index, GroupBatchRestoreKey)
+        batch = [self.dataset.restore_sample(inner_idx) for inner_idx in index.inner]
+        with SampleIndex(self.worker_config, src=self).ctx(index.sample_idx):
             batch_sample = self.batcher(batch)
-        set_sample_restore_key(batch_sample, sample_idx, *sample_restore_keys, src=self)
+        set_sample_restore_key(batch_sample, index)
         return batch_sample
 
     def config(self) -> Dict[str, Any]:

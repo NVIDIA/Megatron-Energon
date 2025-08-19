@@ -1380,7 +1380,7 @@ class TestDataset(unittest.TestCase):
             ) -> EncodedCaptioningSample:
                 return EncodedCaptioningSample(
                     __key__=",".join([sample.__key__ for sample in samples]),
-                    __restore_key__=(),
+                    __restore_key__=None,
                     image=torch.stack([sample.image for sample in samples]),
                     caption=torch.cat([sample.caption for sample in samples]),
                 )
@@ -1515,7 +1515,7 @@ class TestDataset(unittest.TestCase):
             ) -> EncodedCaptioningSample:
                 return EncodedCaptioningSample(
                     __key__=",".join([sample.__key__ for sample in samples]),
-                    __restore_key__=(),
+                    __restore_key__=None,
                     image=torch.stack([sample.image for sample in samples]),
                     caption=torch.cat([sample.caption for sample in samples]),
                 )

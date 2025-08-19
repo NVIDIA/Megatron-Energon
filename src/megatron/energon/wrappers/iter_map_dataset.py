@@ -1,6 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+from dataclasses import dataclass
 from typing import (
     Any,
     Callable,
@@ -9,7 +10,6 @@ from typing import (
     Generic,
     Iterator,
     Optional,
-    Tuple,
     TypeVar,
     Union,
 )
@@ -17,14 +17,25 @@ from typing import (
 from torch.utils.data import IterableDataset
 
 from megatron.energon.errors import SYSTEM_EXCEPTIONS, FatalSampleError
-from megatron.energon.flavors.base_dataset import SavableDataset, set_sample_restore_key
+from megatron.energon.flavors.base_dataset import RestoreKey, SavableDataset, set_sample_restore_key
 from megatron.energon.source_info import SourceInfo
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers._log_exception import log_exception
-from megatron.energon.wrappers.base import BaseWrapperDataset, SampleIndex, get_sample_restore_key
+from megatron.energon.wrappers.base import (
+    BaseWrapperDataset,
+    MultiWrappedRestoreKey,
+    SampleIndex,
+    get_sample_restore_key,
+)
 
 T_sample = TypeVar("T_sample")
 T_sample_out = TypeVar("T_sample_out")
+
+
+@dataclass(kw_only=True, slots=True, frozen=True)
+class IterMapRestoreKey(MultiWrappedRestoreKey):
+    sample_idx: int
+    iter_idx: int
 
 
 class IterMapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T_sample_out]):
@@ -97,7 +108,7 @@ class IterMapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sampl
         # This is the sample index within the currently yielded sample
         iter_idx = 0
         sample_idx = 0
-        sample_restore_keys = []
+        sample_restore_keys: list[RestoreKey | None] = []
 
         def reset_idx_iter() -> Generator[T_sample, None, None]:
             # Resets the inner sample index
@@ -116,10 +127,11 @@ class IterMapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sampl
                 for sample_idx, sample in self._sample_index.iter_ctx(self.iter_map_fn(ds_iter)):
                     yield set_sample_restore_key(
                         sample,
-                        sample_idx,
-                        iter_idx,
-                        *sample_restore_keys,
-                        src=self,
+                        IterMapRestoreKey(
+                            sample_idx=sample_idx,
+                            iter_idx=iter_idx,
+                            inner=tuple(sample_restore_keys),
+                        ),
                     )
                     sample_restore_keys.clear()
                     iter_idx += 1
@@ -139,31 +151,26 @@ class IterMapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sampl
         )
         super().assert_can_restore()
 
-    def restore_sample(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> T_sample:
+    def restore_sample(self, restore_key: RestoreKey) -> T_sample:
         self.assert_can_restore()
-        id, sample_idx, iter_idx, *sample_restore_keys = restore_key
-        assert id == type(self).__name__
-        assert isinstance(iter_idx, int)
+        assert isinstance(restore_key, IterMapRestoreKey)
         inner_iter = iter(
             self.iter_map_fn(
-                (self.dataset.restore_sample(inner_index) for inner_index in sample_restore_keys)
+                (self.dataset.restore_sample(inner_index) for inner_index in restore_key.inner)
             )
         )
         try:
             sample_index = SampleIndex(self.worker_config, src=self)
             # Skip inner yielded samples to get the correct sample
-            for skip_idx in range(iter_idx):
-                with sample_index.ctx(sample_idx - iter_idx + skip_idx):
+            for skip_idx in range(restore_key.iter_idx):
+                with sample_index.ctx(restore_key.sample_idx - restore_key.iter_idx + skip_idx):
                     next(inner_iter)
             # This is the sample to restore
-            with sample_index.ctx(sample_idx):
+            with sample_index.ctx(restore_key.sample_idx):
                 sample = next(inner_iter)
             return set_sample_restore_key(
                 sample,
-                sample_idx,
-                iter_idx,
-                *sample_restore_keys,
-                src=self,
+                restore_key,
             )
         except StopIteration:
             raise RuntimeError(

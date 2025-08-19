@@ -934,7 +934,7 @@ class TestDataset(unittest.TestCase):
         batches_per_rank = []
 
         for rank_config in scenario["configs"]:
-            loader = get_savable_loader(
+            with get_savable_loader(
                 get_train_dataset(
                     self.dataset_path,
                     split_part="train",
@@ -944,27 +944,26 @@ class TestDataset(unittest.TestCase):
                     shuffle_buffer_size=42,
                     max_samples_per_sequence=2,
                 )
-            )
+            ) as loader:
+                # Throw away some samples to advance the loader state
+                num_pre_samples = 20
+                for _ in zip(range(num_pre_samples), loader):
+                    pass
 
-            # Throw away some samples to advance the loader state
-            num_pre_samples = 20
-            for _ in zip(range(num_pre_samples), loader):
-                pass
+                # Save the state to a file
+                checkpoint_file = self.checkpoint_dir / f"state_rank{rank_config.rank}.pt"
+                state = loader.save_state_rank()
+                torch.save(state, str(checkpoint_file))
+                checkpoint_files.append(checkpoint_file)
 
-            # Save the state to a file
-            checkpoint_file = self.checkpoint_dir / f"state_rank{rank_config.rank}.pt"
-            state = loader.save_state_rank()
-            torch.save(state, str(checkpoint_file))
-            checkpoint_files.append(checkpoint_file)
-
-            # Now capture the next micro-batches
-            micro_batches = [
-                data.text
-                for idx, data in zip(
-                    range(55 * 8 // (world_size * scenario["micro_batch_size"])), loader
-                )
-            ]
-            batches_per_rank.append(micro_batches)
+                # Now capture the next micro-batches
+                micro_batches = [
+                    data.text
+                    for idx, data in zip(
+                        range(55 * 8 // (world_size * scenario["micro_batch_size"])), loader
+                    )
+                ]
+                batches_per_rank.append(micro_batches)
 
         # Compose global batches
         global_batches_cur_rank = []
@@ -985,6 +984,7 @@ class TestDataset(unittest.TestCase):
         # === Stage 2: Now check that the global batches are the same after redistribution
 
         for scenario in scenarios[1:]:
+            print(f"\n\nRunning scenario {scenario}")
             # Redistribute the saved state
             runner = CliRunner()
             result = runner.invoke(
@@ -992,11 +992,15 @@ class TestDataset(unittest.TestCase):
                 [
                     "--new-world-size",
                     str(len(scenario["configs"])),
+                    "--new-micro-batch-size",
+                    str(scenario["micro_batch_size"]),
                     *[str(cpt) for cpt in checkpoint_files],
                     str(self.redist_dir),
                 ],
             )
             print(result.output)
+            if result.exception is not None:
+                raise result.exception
             assert result.exception is None, result.exception
             assert result.exit_code == 0, "Redistribution failed"
 
@@ -1013,7 +1017,11 @@ class TestDataset(unittest.TestCase):
             batches_per_rank = []
 
             for rank_config in scenario["configs"]:
-                loader = get_savable_loader(
+                state = torch.load(
+                    str(self.redist_dir / f"state_rank{rank_config.rank}.pt"), weights_only=False
+                )
+
+                with get_savable_loader(
                     get_train_dataset(
                         self.dataset_path,
                         split_part="train",
@@ -1023,20 +1031,14 @@ class TestDataset(unittest.TestCase):
                         shuffle_buffer_size=42,
                         max_samples_per_sequence=2,
                     )
-                )
-
-                state = torch.load(
-                    str(self.redist_dir / f"state_rank{rank_config.rank}.pt"), weights_only=False
-                )
-                loader.restore_state_rank(state)
-
-                micro_batches = [
-                    data.text
-                    for idx, data in zip(
-                        range(55 * 8 // (world_size * scenario["micro_batch_size"])), loader
-                    )
-                ]
-                batches_per_rank.append(micro_batches)
+                ).with_restored_state_rank(state) as loader:
+                    micro_batches = [
+                        data.text
+                        for idx, data in zip(
+                            range(55 * 8 // (world_size * scenario["micro_batch_size"])), loader
+                        )
+                    ]
+                    batches_per_rank.append(micro_batches)
 
             # Compose global batches
             global_batches_cur_rank = []
@@ -1064,8 +1066,10 @@ class TestDataset(unittest.TestCase):
             for global_batches in global_batches_per_scenario
         ), "Number of global batches per scenario does not match."
 
-        for global_batches in global_batches_per_scenario:
-            print("= Global batches per scenario")
+        for idx, (global_batches, scenario) in enumerate(
+            zip(global_batches_per_scenario, scenarios)
+        ):
+            print(f"= Global batches per scenario {idx} {scenario}")
             for global_batch in global_batches:
                 print("  Global batch: ", global_batch)
 
