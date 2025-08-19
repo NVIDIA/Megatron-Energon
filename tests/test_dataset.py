@@ -3,7 +3,6 @@
 
 """This module defines tests for the dataset."""
 
-import dataclasses
 import gc
 import io
 import json
@@ -688,7 +687,7 @@ class TestDataset(unittest.TestCase):
 
             def encode_sample(self, sample):
                 sample = super().encode_sample(sample)
-                return self.target_data_class(**dataclasses.asdict(sample), weight=self.weight)
+                return self.target_data_class.extend(sample, weight=self.weight)
 
         torch.manual_seed(42)
 
@@ -763,7 +762,7 @@ class TestDataset(unittest.TestCase):
                 self.source = source
 
             def encode_batch(self, batch):
-                return TestBatch(**dataclasses.asdict(batch), source=self.source)
+                return TestBatch.extend(batch, source=self.source)
 
         loader = get_loader(
             MixBatchDataset(
@@ -820,7 +819,7 @@ class TestDataset(unittest.TestCase):
                 self.batch_cls = batch_cls
 
             def encode_batch(self, batch):
-                return self.batch_cls(**dataclasses.asdict(batch), source=self.source)
+                return self.batch_cls.extend(batch, source=self.source)
 
         loader = get_loader(
             MixBatchDataset(
@@ -1580,7 +1579,7 @@ class TestDataset(unittest.TestCase):
 
             @stateless
             def encode_batch(self, batch: CaptioningSample) -> CaptioningEncodedBatch:
-                return CaptioningEncodedBatch(**dataclasses.asdict(batch))
+                return CaptioningEncodedBatch.extend(batch)
 
         worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0)
         loader = get_savable_loader(

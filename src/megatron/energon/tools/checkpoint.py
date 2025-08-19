@@ -245,7 +245,10 @@ def split_batch_restore_key(
         ]
     elif isinstance(restore_key, WrappedRestoreKey):
         inner_restore_keys = split_batch_restore_key(restore_key.inner, batch_split_factor)
-        inner_kwargs = dataclasses.asdict(restore_key)
+        inner_kwargs = {
+            field.name: getattr(restore_key, field.name)
+            for field in dataclasses.fields(restore_key)
+        }
         inner_kwargs.pop("inner")
         return [
             type(restore_key)(**inner_kwargs, inner=inner_restore_key)
