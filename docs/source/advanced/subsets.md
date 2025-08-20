@@ -53,8 +53,8 @@ Absolute indices are handy when exact sample counts are required.
 
 The following configuration combines the absolute ranges with the nested rules. The inner subset takes
 the first **1000** samples from *COCO* train split and mixes them with the full *COYO* train split using
-weight-based blending. The outer nesting then reduces the inner range to the first 50%, thus only
-taking the first **500** samples, mixed with the first **50%** of the dataset effectively.
+weight-based blending. The outer nesting then reduces the inner ranges to the first 50%, thus only taking
+the first **500** samples of *COCO*, mixed with the first **50%** of the *COYO* dataset effectively.
 
 ```yaml
 __module__: megatron.energon

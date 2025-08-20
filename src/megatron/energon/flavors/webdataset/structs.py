@@ -64,8 +64,8 @@ class DatasetSubset:
     A range is a tuple of two values, where the first value is the start of the subset and the second value is the end of the subset.
 
     The sharder uses the (absolute/relative) ranges to compute the subsets:
-     * `absolute_range` is applied first on the (e.g. train/val/test) subset
-     * then `range` is applied on the subset that is left
+     * `absolute_range` (unit is samples) is applied first on the (e.g. train/val/test) subset
+     * then `range` (unit is ratio) is applied on the subset that is left
 
     This is the struct used internally for computing the range. The config is loaded via the metadataset_v2.
     """
