@@ -6,6 +6,7 @@ from typing import Generic, TypeVar
 from megatron.energon.dataloader.asynchronous import ForkAsynchronous
 from megatron.energon.dataloader.workers.async_worker import (
     DataLoaderAsynchronousWorker,
+    torch_set_worker_info,
 )
 from megatron.energon.wrappers.gc_dataset import gc_init_worker
 
@@ -25,9 +26,8 @@ class ForkDataLoaderWorker(
         result_queue: multiprocessing.Queue,
     ) -> None:
         gc_init_worker(self._rank_worker_id)
-        import torch.utils.data._utils
 
-        torch.utils.data._utils.worker._worker_info = torch.utils.data._utils.worker.WorkerInfo(
+        torch_set_worker_info(
             id=self._rank_worker_id,
             num_workers=self.worker_config.num_workers,
             seed=self._seed,

@@ -34,6 +34,65 @@ from megatron.energon.flavors.webdataset.structs import (
 from megatron.energon.source_info import SourceInfo
 
 T_index = TypeVar("T_index", covariant=False)
+T_key = TypeVar("T_key")
+T_value = TypeVar("T_value")
+
+
+class MultiKeyCache(Generic[T_key, T_value]):
+    """A cache that can store multiple values for the same key."""
+
+    _size: int
+    _cache: dict[T_key, list[T_value]]
+    _lru_keys: list[T_key]
+
+    def __init__(self) -> None:
+        self._size = 0
+        self._cache = {}
+        self._lru_keys = []
+
+    @overload
+    def pop(self, key: None = None) -> T_value: ...
+
+    @overload
+    def pop(self, key: T_key) -> T_value | None: ...
+
+    def pop(self, key: T_key | None = None) -> T_value | None:
+        """Pop the value for the given key from the cache.
+
+        If no key is provided, pop the oldest key from the cache.
+
+        Args:
+            key: The key to pop from the cache. If None, pop the oldest key from the cache.
+
+        Returns:
+            The value popped from the cache.
+        """
+        if key is None:
+            key = self._lru_keys.pop(0)
+        elif key not in self._cache:
+            return None
+        else:
+            self._lru_keys.pop(len(self._lru_keys) - 1 - self._lru_keys[::-1].index(key))
+
+        l = self._cache[key]
+        value = l.pop(0)
+        if len(l) == 0:
+            del self._cache[key]
+        self._size -= 1
+        return value
+
+    def add(self, key: T_key, value: T_value) -> None:
+        """Add a value to the cache."""
+        if key not in self._cache:
+            self._cache[key] = [value]
+        else:
+            self._cache[key].insert(0, value)
+
+        self._lru_keys.append(key)
+        self._size += 1
+
+    def __len__(self) -> int:
+        return self._size
 
 
 class ITarReader(ABC, Generic[T_index]):
@@ -54,7 +113,8 @@ class ITarReader(ABC, Generic[T_index]):
     tar_filenames: List[str]
     tar_filepaths: List[EPath]
     part_filter: Optional[Callable[[str], bool]]
-    itar_files_cache: Dict[int, ITarFile]
+    cache_lock: threading.Lock
+    itar_files_cache: MultiKeyCache[int, ITarFile]
     sample_filter: Optional[Callable[[str], bool]]
 
     def __init__(
@@ -74,7 +134,8 @@ class ITarReader(ABC, Generic[T_index]):
         self.tar_filenames = tar_filenames
         self.tar_filepaths = tar_filepaths
         self.part_filter = part_filter
-        self.itar_files_cache = {}
+        self.cache_lock = threading.Lock()
+        self.itar_files_cache = MultiKeyCache()
         self.itar_cache_size = itar_cache_size
         self.sample_filter = sample_filter
 
@@ -98,24 +159,24 @@ class ITarReader(ABC, Generic[T_index]):
     def _get_itarfile_cached(self, tar_file_id: int) -> ITarFile:
         """
         Get the ITarFile object for the given tar file id.
-        If the file is not already open, open it. If we exceed
-        the global cache limit, close the least recently used file.
+        If the file is not already open, open it.
         """
-        if tar_file_id not in self.itar_files_cache:
-            file_object = self.tar_filepaths[tar_file_id].open(mode="rb")
-            tar_file = ITarFile.open(fileobj=file_object, mode="r:")
-            self.itar_files_cache[tar_file_id] = tar_file
+        with self.cache_lock:
+            reader = self.itar_files_cache.pop(tar_file_id)
+            if reader is None:
+                file_object = self.tar_filepaths[tar_file_id].open(mode="rb")
+                reader = ITarFile.open(fileobj=file_object, mode="r:")
+        return reader
 
-        # If we hit the limit of open files, close the least recently used file
-        while len(self.itar_files_cache) > self.itar_cache_size:
-            # Get the oldest file
-            lru_key = next(iter(self.itar_files_cache))
-
-            self.itar_files_cache[lru_key].fileobj.close()
-            self.itar_files_cache[lru_key].close()
-            del self.itar_files_cache[lru_key]
-
-        return self.itar_files_cache[tar_file_id]
+    def _update_itarfile_cache(self, tar_file_id: int, reader: ITarFile) -> None:
+        """
+        Update the ITarFile object for the given tar file id.
+        """
+        with self.cache_lock:
+            while len(self.itar_files_cache) >= self.itar_cache_size:
+                # Evict the oldest file
+                self.itar_files_cache.pop().close()
+            self.itar_files_cache.add(tar_file_id, reader)
 
     def _get_item_by_sample_pointer(
         self,
@@ -136,7 +197,6 @@ class ITarReader(ABC, Generic[T_index]):
         """
 
         # Open the tar file (cached)
-        tar_file = self._get_itarfile_cached(sample_pointer.tar_file_id)
         shard_name = self.tar_filenames[sample_pointer.tar_file_id]
         sample_base_name = None
         sample_name = None
@@ -144,50 +204,58 @@ class ITarReader(ABC, Generic[T_index]):
         file_names: list[str] = []
 
         # Position the tar file at the correct offset
-        tar_file.offset = sample_pointer.byte_offset
+        tar_file = self._get_itarfile_cached(sample_pointer.tar_file_id)
+        try:
+            tar_file.offset = sample_pointer.byte_offset
 
-        while tar_file.offset < sample_pointer.byte_offset + sample_pointer.byte_size:
-            tarinfo = tar_file.next()
-            if tarinfo is None:
-                raise ValueError(
-                    f"Unexpected end of tar file: {self.tar_filenames[sample_pointer.tar_file_id]}"
-                )
-            fname = tarinfo.name
-            if not tarinfo.isfile() or fname is None:
-                continue
-            if skip_meta_re.match(fname):
-                continue
+            while tar_file.offset < sample_pointer.byte_offset + sample_pointer.byte_size:
+                tarinfo = tar_file.next()
+                if tarinfo is None:
+                    if tar_file.offset == sample_pointer.byte_offset + sample_pointer.byte_size:
+                        break
+                    else:
+                        raise ValueError(
+                            f"Unexpected end of tar file: {self.tar_filenames[sample_pointer.tar_file_id]}"
+                        )
+                fname = tarinfo.name
+                if not tarinfo.isfile() or fname is None:
+                    continue
+                if skip_meta_re.match(fname):
+                    continue
 
-            # Extract the base_name and extension
-            m = split_name_re.match(fname)
-            if not m:
-                continue
-            cur_base_name, cur_ext = m.groups()
+                # Extract the base_name and extension
+                m = split_name_re.match(fname)
+                if not m:
+                    continue
+                cur_base_name, cur_ext = m.groups()
 
+                if sample_base_name is None:
+                    sample_base_name = cur_base_name
+                    sample_name = f"{shard_name}/{cur_base_name}"
+                    if self.sample_filter is not None and not self.sample_filter(sample_name):
+                        return None
+                else:
+                    if sample_base_name != cur_base_name:
+                        raise ValueError(
+                            f"Inconsistent sample base name: {sample_base_name} vs {cur_base_name}"
+                        )
+
+                if entry_match_fn is not None:
+                    # If entry_match_fn is provided, use it to determine if we should take this entry
+                    take_entry = entry_match_fn(fname)
+                else:
+                    # If no entry_match_fn is provided, use the part_filter to determine if we should take this entry
+                    take_entry = self.part_filter is None or self.part_filter(cur_ext)
+
+                if take_entry:
+                    member_bytes = tar_file.extractfile(tarinfo).read()
+                    group_parts[cur_ext] = member_bytes
+                    file_names.append(fname)
             if sample_base_name is None:
-                sample_base_name = cur_base_name
-                sample_name = f"{shard_name}/{cur_base_name}"
-                if self.sample_filter is not None and not self.sample_filter(sample_name):
-                    return None
-            else:
-                if sample_base_name != cur_base_name:
-                    raise ValueError(
-                        f"Inconsistent sample base name: {sample_base_name} vs {cur_base_name}"
-                    )
-
-            if entry_match_fn is not None:
-                # If entry_match_fn is provided, use it to determine if we should take this entry
-                take_entry = entry_match_fn(fname)
-            else:
-                # If no entry_match_fn is provided, use the part_filter to determine if we should take this entry
-                take_entry = self.part_filter is None or self.part_filter(cur_ext)
-
-            if take_entry:
-                member_bytes = tar_file.extractfile(tarinfo).read()
-                group_parts[cur_ext] = member_bytes
-                file_names.append(fname)
-        if sample_base_name is None:
-            raise ValueError(f"No valid files found in sample {sample_pointer}")
+                raise ValueError(f"No valid files found in sample {sample_pointer}")
+        finally:
+            # Return the reader to the cache
+            self._update_itarfile_cache(sample_pointer.tar_file_id, tar_file)
 
         return FilteredSample(
             __key__=f"{shard_name}/{sample_base_name}",

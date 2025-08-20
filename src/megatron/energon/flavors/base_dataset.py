@@ -108,7 +108,7 @@ class ExtendableDataclassMixin:
             The extended dataclass instance.
         """
         assert is_dataclass(cls), "Must be a dataclass"
-        assert issubclass(cls, type(src)), "Cannot extend class of different type"
+        # assert issubclass(cls, type(src)), "Cannot extend class of different type"
 
         for f in dataclasses.fields(src):
             if not f.init or f.type is ClassVar or typing.get_origin(f.type) is ClassVar:

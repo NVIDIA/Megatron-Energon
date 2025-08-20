@@ -1,6 +1,9 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
+import threading
 from typing import Generic, TypeVar
+
+import torch.utils.data._utils
 
 from megatron.energon.cache.base import CachePool
 from megatron.energon.dataloader.asynchronous import (
@@ -16,6 +19,26 @@ from megatron.energon.rng import SystemRng
 from megatron.energon.worker import WorkerConfig
 
 TSample = TypeVar("TSample", covariant=True)
+
+# Patching the torch worker info.
+
+_thread_local_worker_info = threading.local()
+
+
+def torch_set_worker_info(id: int, num_workers: int, seed: int, dataset: SavableDataset):
+    _thread_local_worker_info._worker_info = torch.utils.data._utils.worker.WorkerInfo(
+        id=id,
+        num_workers=num_workers,
+        seed=seed,
+        dataset=dataset,
+    )
+
+
+def _patch_get_worker_info():
+    return getattr(_thread_local_worker_info, "_worker_info", None)
+
+
+torch.utils.data.get_worker_info = _patch_get_worker_info
 
 
 class DataLoaderAsynchronousWorker(DataLoaderWorker[TSample], Asynchronous, Generic[TSample]):

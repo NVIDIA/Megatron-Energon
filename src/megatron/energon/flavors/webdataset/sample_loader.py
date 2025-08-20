@@ -39,8 +39,9 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
     #: The readers for each joined dataset
     join_readers: Sequence[ITarReader]
 
-    #: The offsets of the slice slices to iterate over for the current worker
-    slice_offsets: Optional[Sequence[int]]
+    #: The offsets of the slice slices to iterate over for each worker
+    # On worker initialization, this is set to _slice_offsets for the current worker.
+    workers_slice_offsets: Sequence[Sequence[int]]
 
     # If = 1, every sample is seen exactly once per epoch. If > 1, samples
     # (or rather slice slices) are shuffled within this number of epochs (i.e. randomly
@@ -52,6 +53,9 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
 
     # Worker's random generator
     _worker_rng: WorkerRng
+
+    #: The offsets of the slice slices to iterate over for the current worker
+    _slice_offsets: Optional[Sequence[int]]
 
     #: The RNG state to be used for regenerating the pending slices
     _pending_slices_rng_state: Optional[FlexState]
@@ -81,6 +85,8 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
         "_epoch_sample_count",
     )
 
+    _state_fields = ("_slice_offsets",)
+
     def __init__(
         self,
         join_readers: Sequence[ITarReader],
@@ -95,7 +101,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
 
         Args:
             join_readers: A sequence of the joined readers (or just a single reader) to iterate over.
-            worker_slice_offsets: The offsets of the slice slices to iterate over, for each worker.
+            workers_sample_slice_offsets: The offsets of the slice slices to iterate over, for each worker.
             worker_config: The worker configuration.
             shuffle_over_epochs: If None, disable shuffling.
                 If = 1, every sample is seen exactly once per epoch.
@@ -110,13 +116,9 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
         super().__init__(worker_config=worker_config)
 
         self.join_readers = join_readers
+        self.workers_slice_offsets = workers_sample_slice_offsets
         self.shuffle_over_epochs = shuffle_over_epochs
         self.parallel_slice_iters = parallel_slice_iters
-
-        # Store the slices for all workers
-        # The slices for the current worker, will have to be extracted from this list later
-        self.workers_slice_offsets = workers_sample_slice_offsets
-        self.slice_offsets = None
 
         assert shuffle_over_epochs is None or shuffle_over_epochs == -1 or shuffle_over_epochs >= 1
         assert self.parallel_slice_iters >= 1
@@ -131,12 +133,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
         self._sample_count = 0
         self._epoch_count = 0
         self._epoch_sample_count = 0
-
-    def ensure_slice_offsets(self) -> None:
-        self.worker_config.assert_worker()
-
-        if self.slice_offsets is None:
-            self.slice_offsets = self.workers_slice_offsets[self.worker_config.rank_worker_id()]
+        self._slice_offsets = self.workers_slice_offsets[self.worker_config.rank_worker_id()]
 
     def _get_sample(self, index: int) -> RawSampleData:
         return RawSampleData(
@@ -146,9 +143,9 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
 
     def _slices_once(self) -> List[int]:
         """Yields the indexes to slice offsets once. Possibly shuffles the list."""
-        assert self.slice_offsets is not None
+        assert self._slice_offsets is not None
 
-        num_slices = len(self.slice_offsets) - 1
+        num_slices = len(self._slice_offsets) - 1
         slices_offset = self._pending_slices_offset
 
         if self.shuffle_over_epochs is None:
@@ -196,17 +193,17 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
         """Iterates the samples in a list of slices, possibly using multiple parallel iterators over
         the slices."""
 
-        assert self.slice_offsets is not None
+        assert self._slice_offsets is not None
 
         active_slice_probs = torch.zeros(self.parallel_slice_iters, dtype=torch.float32)
         active_slices = self._active_slice_state
         pending_slice_indexes = self._pending_slice_indexes
 
         def slice_at(idx: int) -> SliceState:
-            assert self.slice_offsets is not None
+            assert self._slice_offsets is not None
             return SliceState(
                 index=idx,
-                current=self.slice_offsets[idx],
+                current=self._slice_offsets[idx],
             )
 
         # Weight the slices by their size to get a more even distribution of samples
@@ -222,8 +219,8 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
             for idx, slice_state in enumerate(active_slices):
                 if slice_state is not None:
                     active_slice_probs[idx] = (
-                        self.slice_offsets[slice_state.index + 1]
-                        - self.slice_offsets[slice_state.index]
+                        self._slice_offsets[slice_state.index + 1]
+                        - self._slice_offsets[slice_state.index]
                     )
 
             if self.worker_config.should_log(level=1):
@@ -281,8 +278,8 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
                 self._pending_slices_offset += 1
                 slice_state = slice_at(slice_index)
                 active_slice_probs[len(active_slices)] = (
-                    self.slice_offsets[slice_state.index + 1]
-                    - self.slice_offsets[slice_state.index]
+                    self._slice_offsets[slice_state.index + 1]
+                    - self._slice_offsets[slice_state.index]
                 )
                 active_slices.append(slice_state)
             # Fill up the slice iterators with None
@@ -316,7 +313,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
             slice_state.current += 1
             self._sample_count += 1
             self._epoch_sample_count += 1
-            if slice_state.current >= self.slice_offsets[slice_state.index + 1]:
+            if slice_state.current >= self._slice_offsets[slice_state.index + 1]:
                 # Iterator exhausted -> take next / remove from list
                 if len(pending_slice_indexes) > 0 or self.shuffle_over_epochs == -1:
                     if len(pending_slice_indexes) > 0:
@@ -326,12 +323,12 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
                         self._pending_slices_offset += 1
                     else:
                         # Randomly select a new slice directly (with replacement)
-                        num_slices = len(self.slice_offsets) - 1
+                        num_slices = len(self._slice_offsets) - 1
                         next_idx = self._worker_rng.randbelow(num_slices)
                     next_slice_state = slice_at(next_idx)
                     active_slice_probs[slice_idx] = (
-                        self.slice_offsets[next_slice_state.index + 1]
-                        - self.slice_offsets[next_slice_state.index]
+                        self._slice_offsets[next_slice_state.index + 1]
+                        - self._slice_offsets[next_slice_state.index]
                     )
                     active_slices[slice_idx] = next_slice_state
                     # print(
@@ -410,15 +407,13 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
 
     def worker_has_samples(self) -> bool:
         self.worker_config.assert_worker()
-        self.ensure_slice_offsets()
-        assert self.slice_offsets is not None
-        return len(self.slice_offsets) > 1
+        assert self._slice_offsets is not None
+        return len(self._slice_offsets) > 1
 
     def __iter__(self) -> Iterator[RawSampleData]:
         self.worker_config.assert_worker()
 
-        self.ensure_slice_offsets()
-        assert self.slice_offsets is not None
+        assert self._slice_offsets is not None
 
         if self.worker_config.should_log(level=1):
             self.worker_config.worker_log(
@@ -426,13 +421,13 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
                     "t": "WebdatasetSampleLoaderDataset.__iter__",
                     "r": self.worker_config.rank,
                     "w": self.worker_config.rank_worker_id(),
-                    "slice_offsets": self.slice_offsets,
+                    "slice_offsets": self._slice_offsets,
                     "parallel_slice_iters": self.parallel_slice_iters,
                     "shuffle_over_epochs": self.shuffle_over_epochs,
                 }
             )
 
-        if len(self.slice_offsets) <= 1:
+        if len(self._slice_offsets) <= 1:
             return
 
         yield from self._slices_iter()

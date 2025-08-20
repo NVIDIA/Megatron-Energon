@@ -330,7 +330,6 @@ class TestDataloader(unittest.TestCase):
         train_loader_r1.shutdown()
 
     def test_dataloader_thread(self):
-        assert False, "Not done yet"
         torch.manual_seed(42)
         worker_config = WorkerConfig(
             rank=0,

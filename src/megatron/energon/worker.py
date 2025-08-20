@@ -13,7 +13,6 @@ import torch.distributed
 import torch.utils.data
 
 from megatron.energon.cache import CachePool
-from megatron.energon.edataclass import edataclass
 
 __all__ = ("WorkerConfig",)
 
@@ -22,16 +21,50 @@ T = TypeVar("T")
 THREAD_SAFE = True
 
 
-@edataclass
-class ActiveWorkerState(threading.local):
-    #: The current sample index within the current iterating worker
-    sample_index_stack: Optional[List[int]] = None
-    #: The global rank override for the worker. Required for restoring samples.
-    override_global_rank: Optional[int] = None
-    #: The current cache pool for the worker.
-    cache_pool: Optional[CachePool] = None
-    #: The current worker config within the current iterating worker
-    worker_config: "WorkerConfig | None" = None
+class ActiveWorkerState:
+    """
+    Thread local state for the active worker config.
+    """
+
+    _thread_local: threading.local
+
+    @property
+    def sample_index_stack(self) -> Optional[List[int]]:
+        """The current sample index stack for the worker."""
+        return getattr(self._thread_local, "sample_index_stack", None)
+
+    @property
+    def override_global_rank(self) -> Optional[int]:
+        """The global rank override for the worker. Required for restoring samples."""
+        return getattr(self._thread_local, "override_global_rank", None)
+
+    @property
+    def cache_pool(self) -> Optional[CachePool]:
+        """The current cache pool for the worker."""
+        return getattr(self._thread_local, "cache_pool", None)
+
+    @property
+    def worker_config(self) -> "WorkerConfig | None":
+        return getattr(self._thread_local, "worker_config", None)
+
+    @sample_index_stack.setter
+    def sample_index_stack(self, value: List[int]):
+        self._thread_local.sample_index_stack = value
+
+    @override_global_rank.setter
+    def override_global_rank(self, value: Optional[int]):
+        self._thread_local.override_global_rank = value
+
+    @cache_pool.setter
+    def cache_pool(self, value: Optional[CachePool]):
+        self._thread_local.cache_pool = value
+
+    @worker_config.setter
+    def worker_config(self, value: "WorkerConfig | None"):
+        self._thread_local.worker_config = value
+
+    def __init__(self):
+        self._thread_local = threading.local()
 
 
 class classproperty:
@@ -101,6 +134,9 @@ class WorkerConfig:
     ):
         """Activates the worker config for the current worker and sets it as actively iterating.
         Must be called before next() call on the datasets."""
+        assert WorkerConfig._active_state.worker_config is None, (
+            f"Worker config already active for thread={threading.get_ident()}"
+        )
         WorkerConfig._active_state.sample_index_stack = [sample_index]
         WorkerConfig._active_state.worker_config = self
         WorkerConfig._active_state.override_global_rank = override_global_rank
@@ -121,15 +157,15 @@ class WorkerConfig:
     def worker_deactivate(self):
         """Deactivates the worker config for the current worker and deactivates it for iterating.
         Must be called after next() call on the datasets."""
-        if WorkerConfig.active_worker_config is not None:
-            assert WorkerConfig._active_state.sample_index_stack is not None
-            assert len(WorkerConfig._active_state.sample_index_stack) == 1, (
-                f"Sample index stack not empty: {WorkerConfig._active_state.sample_index_stack}"
-            )
-            WorkerConfig._active_state.sample_index_stack = None
-            WorkerConfig._active_state.worker_config = None
-            WorkerConfig._active_state.override_global_rank = None
-            WorkerConfig._active_state.cache_pool = None
+        assert WorkerConfig._active_state.worker_config is self, "Worker config mismatch"
+        assert WorkerConfig._active_state.sample_index_stack is not None
+        assert len(WorkerConfig._active_state.sample_index_stack) == 1, (
+            f"Sample index stack not empty: {WorkerConfig._active_state.sample_index_stack}"
+        )
+        WorkerConfig._active_state.sample_index_stack = None
+        WorkerConfig._active_state.worker_config = None
+        WorkerConfig._active_state.override_global_rank = None
+        WorkerConfig._active_state.cache_pool = None
 
     @property
     def active_worker_sample_index(self) -> int:
