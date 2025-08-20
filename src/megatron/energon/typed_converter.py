@@ -8,20 +8,7 @@ import inspect
 import json
 import re
 import typing
-from abc import abstractmethod
-from typing import (
-    Annotated,
-    Any,
-    Callable,
-    Dict,
-    Generic,
-    Literal,
-    Optional,
-    Tuple,
-    Type,
-    TypeVar,
-    Union,
-)
+from typing import Any, Callable, Dict, Literal, Optional, Tuple, Type, TypeVar, Union
 
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
@@ -52,20 +39,6 @@ class _MissingValue:
 _missing_value = _MissingValue()
 
 TType = TypeVar("TType")
-
-
-class Converter(Generic[TType]):
-    """Base class for custom value converters."""
-
-    @abstractmethod
-    def from_json(self, json_obj: Any, path: str, stage: Tuple[int, ...]) -> TType:
-        """Convert a json object to a typed object or raise JsonValueError."""
-        ...
-
-    @abstractmethod
-    def to_json(self, obj: TType) -> Any:
-        """Convert a typed object to a json object or raise JsonValueError."""
-        ...
 
 
 def _check_instance_type(cls, inst_type: Type) -> bool:
@@ -254,11 +227,6 @@ class JsonParser:
             The input data as `inst_type`.
         """
         type_name = getattr(inst_type, "__name__", repr(inst_type))
-        if typing.get_origin(inst_type) is Annotated:
-            converter = typing.get_args(inst_type)[1]
-            inst_type = typing.get_args(inst_type)[0]
-            if isinstance(converter, Converter):
-                return converter.from_json(raw_data, _path, _stage)
         if raw_data is _missing_value:
             raise JsonValueError(
                 f"Missing value at {_path}",
@@ -1120,18 +1088,11 @@ def to_json_object(obj: Any) -> Any:
         }
     elif dataclasses.is_dataclass(obj):
         # dataclass
-        res = {}
-        for field in dataclasses.fields(obj):
-            if field.init:
-                if typing.get_origin(field.type) is Annotated:
-                    converter = typing.get_args(field.type)[1]
-                    if isinstance(converter, Converter):
-                        res[field.name] = converter.to_json(getattr(obj, field.name))
-                    else:
-                        res[field.name] = to_json_object(getattr(obj, field.name))
-                else:
-                    res[field.name] = to_json_object(getattr(obj, field.name))
-        return res
+        return {
+            field.name: to_json_object(getattr(obj, field.name))
+            for field in dataclasses.fields(obj)
+            if field.init
+        }
     elif isinstance(obj, (list, tuple)):
         return [to_json_object(val) for val in obj]
     elif isinstance(obj, dict):

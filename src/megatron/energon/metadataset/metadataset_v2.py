@@ -1,10 +1,9 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-import dataclasses
 import re
 from dataclasses import dataclass
-from typing import Annotated, Any, Callable, Dict, List, Literal, Optional, Sequence, Type, Union
+from typing import Any, Callable, Dict, List, Literal, Optional, Sequence, Type, Union
 
 from megatron.energon.cache import FileStore
 from megatron.energon.cache.file_store import (
@@ -26,7 +25,6 @@ from megatron.energon.metadataset.loader_interface import (
     LoadedDatasetList,
 )
 from megatron.energon.metadataset.metadataset import Metadataset
-from megatron.energon.typed_converter import Converter, JsonValueError
 from megatron.energon.worker import WorkerConfig
 
 # Regex for any URL-like string (any protocol)
@@ -67,31 +65,6 @@ class AuxFilesystemReference:
         return SystemFileStore(self.fs_path)
 
 
-class PercentageOrAbsoluteConverter(Converter[float | int]):
-    """Converter for percentage values or absolute values.
-    Integers will be returned as-is. Percentage numbers like `75%` will be converted to float ratios like `0.75`.
-    """
-
-    def from_json(self, json_obj: Any, path: str, stage: tuple[int, ...]) -> float | int:
-        if isinstance(json_obj, int):
-            return json_obj
-        try:
-            assert isinstance(json_obj, str), "Percentage must be a string"
-            assert json_obj.endswith("%"), "Percentage must be a string"
-            assert 0 <= float(json_obj.removesuffix("%")) <= 100, "Percentage must be a string"
-            return float(json_obj.removesuffix("%")) / 100.0
-        except (ValueError, AssertionError):
-            raise JsonValueError(
-                f"Invalid percentage value: {json_obj}", float, json_obj, path, stage
-            )
-
-    def to_json(self, obj: float | int) -> str | int:
-        if isinstance(obj, int):
-            return obj
-        assert 0 <= obj <= 1, "Percentage must be between 0 and 100"
-        return f"{obj * 100:.2f}%"
-
-
 @edataclass
 class Subset:
     """
@@ -101,46 +74,55 @@ class Subset:
     The absolute range can only be used for leaf datasets.
     """
 
-    # Note: We use a Converter here. The Converter is evaluated in the typed_converter.py when loading the config from json/yaml.
-    # The converter will convert "75%" to 0.75 (relative value) and "250" to 250 (absolute value).
-    # Doing it this way, simplifies further processing of the config, because we do not have to consider str.
-    range: tuple[
-        Annotated[float | int, PercentageOrAbsoluteConverter()],
-        Annotated[float | int, PercentageOrAbsoluteConverter()],
-    ]
-    # Only internally, extracted from the range.
-    absolute_range: tuple[int, int | None] | None = dataclasses.field(default=None, init=False)
+    range: tuple[str | int, str | int]
 
-    def __post_init__(self) -> None:
-        if isinstance(self.range[0], int):
-            assert isinstance(self.range[1], int) or self.range[1] is None, (
-                "Range must either be a percentage or an absolute range"
+    def as_dataset_subset(self) -> DatasetSubset:
+        start, end = self.range
+
+        def _conv(value: str | int) -> float | int | None:
+            if isinstance(value, int):
+                return value
+            else:
+                assert isinstance(value, str), "Range must be a string if it's not an integer"
+                if value.strip() == "end":
+                    return None
+                assert value.endswith("%"), "Range must be a percentage"
+                percentage = float(value.removesuffix("%"))
+                assert 0 <= percentage <= 100, "Percentage must be between 0 and 100"
+                return percentage / 100.0
+
+        start = _conv(start)
+        end = _conv(end)
+
+        if isinstance(start, int):
+            assert isinstance(end, int) or end is None, (
+                "End must be an integer if start is an integer"
             )
-            self.absolute_range = (self.range[0], self.range[1])
-            self.range = (0.0, 1.0)
+            return DatasetSubset(absolute_range=(start, end), range=(0, 1))
         else:
-            assert isinstance(self.range[1], float) or self.range[1] is None, (
-                "Range must either be a percentage or an absolute range"
-            )
+            assert isinstance(end, float) or end is None, "End must be a float if start is a float"
+            assert 0 <= start <= 1, "Start must be between 0 and 1"
+            assert 0 <= end <= 1, "End must be between 0 and 1"
+            assert start <= end, "Start must be less than end"
+            return DatasetSubset(range=(start, end), absolute_range=None)
 
     def merge(self, parent_subset: DatasetSubset | None) -> DatasetSubset:
         assert parent_subset is None or parent_subset.absolute_range is None, (
             f"Cannot merge absolute subset ranges. Absolute ranges are only allowed for a leaf dataset. {self.absolute_range=} {self.range=}"
         )
+        my_subset = self.as_dataset_subset()
         if parent_subset is None or parent_subset.range is None:
-            return DatasetSubset(
-                range=(self.range[0], self.range[1]),
-                absolute_range=self.absolute_range,
-            )
+            return my_subset
+
         # Assuming inner ratio: [0.25, 0.75] and outer ratio: [0, 0.5]
         # Then the total ratio is supposed to be: [0.25 + 0*0.5, 0.25 + 0.5 * 0.5] = [0.25, 0.5]
-        total = self.range[1] - self.range[0]
+        total = my_subset.range[1] - my_subset.range[0]
         return DatasetSubset(
             range=(
-                self.range[0] + parent_subset.range[0] * total,
-                self.range[0] + parent_subset.range[1] * total,
+                my_subset.range[0] + parent_subset.range[0] * total,
+                my_subset.range[0] + parent_subset.range[1] * total,
             ),
-            absolute_range=self.absolute_range,
+            absolute_range=my_subset.absolute_range,
         )
 
 
