@@ -70,7 +70,7 @@ class Subset:
     """
     A subset of a dataset.
     The range is a tuple of two values, where the first value is the start of the subset and the second value is the end of the subset (end not included).
-    The range values can be either a percentage (like "32%") or an absolute sample index value (integer).
+    The range values can be either a percentage (like "32%") or an absolute sample index value (integers).
     """
 
     range: tuple[str | int, str | int]
@@ -99,6 +99,7 @@ class Subset:
             )
             return DatasetSubset(absolute_range=(start, end), range=(0, 1))
         else:
+            assert isinstance(start, float), "Range start must be a float if it's not an integer"
             assert isinstance(end, float) or end is None, "End must be a float if start is a float"
             assert 0 <= start <= 1, "Start must be between 0 and 1"
             assert 0 <= end <= 1, "End must be between 0 and 1"

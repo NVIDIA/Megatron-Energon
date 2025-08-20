@@ -1208,6 +1208,108 @@ class TestDataset(unittest.TestCase):
 
         mock_watchdog_trigger.assert_called()
 
+    def test_dataset_absolute_nested_subset_fail(self):
+        worker_config = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=0,
+            seed_offset=42,
+        )
+        ratio_mds_path = self.dataset_path / "metadataset_ratio.yaml"
+        with open(ratio_mds_path, "w") as f:
+            f.write(
+                "\n".join(
+                    [
+                        "__module__: megatron.energon",
+                        "__class__: MetadatasetV2",
+                        "splits:",
+                        "  train:",
+                        # Absolute range on outer level should fail
+                        "    subset: {range: [50, 55]}",
+                        "    blend_epochized:",
+                        "      - path: ds1",
+                        "        subflavors:",
+                        "          source: ds1",
+                        "          number: 43",
+                        "      - repetitions: 2",
+                        "        path: ds2",
+                        "        subflavors:",
+                        "          source: ds2",
+                        "          number: 42",
+                    ]
+                )
+            )
+
+        try:
+            get_loader(
+                get_train_dataset(
+                    ratio_mds_path,
+                    worker_config=worker_config,
+                    batch_size=1,
+                    shuffle_buffer_size=None,
+                    shuffle_over_epochs_multiplier=None,
+                    parallel_shard_iters=1,
+                    max_samples_per_sequence=None,
+                    repeat=False,
+                )
+            )
+            assert False, "Should have failed"
+        except Exception as e:
+            assert "only allowed for a leaf dataset" in str(e), str(e)
+            return
+
+    def test_dataset_with_subset_end_keyword(self):
+        worker_config = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=0,
+            seed_offset=42,
+        )
+        ratio_mds_path = self.dataset_path / "metadataset_ratio.yaml"
+        with open(ratio_mds_path, "w") as f:
+            f.write(
+                "\n".join(
+                    [
+                        "__module__: megatron.energon",
+                        "__class__: MetadatasetV2",
+                        "splits:",
+                        "  train:",
+                        # Absolute range: [50, end]
+                        # I.e. sample range: [50, 55]
+                        "    subset: {range: [50, end]}",
+                        "    blend_epochized:",
+                        "      - path: ds1",
+                        "        subflavors:",
+                        "          source: ds1",
+                        "          number: 43",
+                        "      - repetitions: 2",
+                        "        path: ds2",
+                        "        subflavors:",
+                        "          source: ds2",
+                        "          number: 42",
+                    ]
+                )
+            )
+
+        loader = get_loader(
+            get_train_dataset(
+                ratio_mds_path,
+                worker_config=worker_config,
+                batch_size=1,
+                shuffle_buffer_size=None,
+                shuffle_over_epochs_multiplier=None,
+                parallel_shard_iters=1,
+                max_samples_per_sequence=None,
+                repeat=False,
+            )
+        )
+
+        data = list(enumerate(loader))
+
+        from pprint import pprint
+
+        pprint(data)
+
     def test_dataset_with_subset_ratio(self):
         worker_config = WorkerConfig(
             rank=0,

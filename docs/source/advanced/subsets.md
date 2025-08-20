@@ -25,11 +25,11 @@ __class__: MetadatasetV2
 splits:
   train:
     path: ./coyo
-    subset: {range: ["0%", "80%"]}
+    subset: {range: [0%, 80%]}
   val:
     path: ./coyo
     split: train
-    subset: {range: ["80%", "100%"]}
+    subset: {range: [80%, 100%]}
 ```
 
 ## Nested subsets and merging rules
@@ -49,7 +49,7 @@ not be combined with another absolute range farther up the hierarchy.
 
 Absolute indices are handy when exact sample counts are required.
 
-## Advanced example
+## Advanced examples
 
 The following configuration combines the absolute ranges with the nested rules. The inner subset takes
 the first **1000** samples from *COCO* train split and mixes them with the full *COYO* train split using
@@ -72,6 +72,17 @@ splits:
           range: [0, 1000]
       - weight: 1.0
         path: ./coyo
+```
+
+Absolute ranges can also be specified to run up to the end of the dataset using the `end` keyword:
+
+```yaml
+__module__: megatron.energon
+__class__: MetadatasetV2
+splits:
+  train:
+    path: ./coyo
+    subset: {range: [1422, end]}
 ```
 
 ## Python usage
