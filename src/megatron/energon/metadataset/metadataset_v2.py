@@ -70,8 +70,7 @@ class Subset:
     """
     A subset of a dataset.
     The range is a tuple of two values, where the first value is the start of the subset and the second value is the end of the subset (end not included).
-    The range values can be either a ratio in [0, 1] or an absolute sample index value.
-    The absolute range can only be used for leaf datasets.
+    The range values can be either a percentage (like "32%") or an absolute sample index value (integer).
     """
 
     range: tuple[str | int, str | int]
