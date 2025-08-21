@@ -75,6 +75,7 @@ caption: Internals
 maxdepth: 2
 ---
 internals/contrib_guidelines
+internals/concepts
 internals/code_structure
 ```
 
