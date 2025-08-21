@@ -482,12 +482,7 @@ class RestoreKey(ABC):
     def as_tuple(self) -> tuple[Any, ...]:
         return (
             self.__class__.__name__,
-            *(
-                getattr(self, field.name).json()
-                if isinstance(getattr(self, field.name), RestoreKey)
-                else getattr(self, field.name)
-                for field in dataclasses.fields(self)
-            ),
+            *(self._tupleify(getattr(self, field.name)) for field in dataclasses.fields(self)),
         )
 
     @staticmethod
