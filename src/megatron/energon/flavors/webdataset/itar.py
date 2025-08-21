@@ -29,11 +29,28 @@ class ITarSamplePointer:
     byte_size: int
 
 
+@edataclass
+class ITarRawSamplePartPointer:
+    """
+    Points to a part of a sample inside some tar file on disk.
+    The tar_file_id refers to the tar_filenames in the reader.
+    The raw_byte_offset and raw_byte_size refer to the sample's part's raw data in the tar file.
+    """
+
+    # The index of the tar file, to be matched with the tar_filenames in the reader.
+    tar_file_id: int
+    # The byte offset of the file's data in the tar file.
+    raw_byte_offset: int
+    # The size of the file's data in the tar file.
+    raw_byte_size: int
+
+
 class TarIndexReader:
     def __init__(self, tar_path: Union[EPath, str]):
         tar_path = EPath(tar_path)
-        self.itar = (tar_path.with_suffix(ITAR_SUFFIX)).open("rb")
-        self._length = len(self)
+        index_path = tar_path.with_suffix(ITAR_SUFFIX)
+        self._length = index_path.size() // 8
+        self.itar = index_path.open("rb")
 
     def __getitem__(self, index: int) -> int:
         if index >= self._length or index < 0:
@@ -54,8 +71,7 @@ class TarIndexReader:
             yield struct.unpack("Q", raw)[0]
 
     def __len__(self) -> int:
-        self.itar.seek(0, 2)
-        return self.itar.tell() // 8
+        return self._length
 
     def close(self):
         self.itar.close()

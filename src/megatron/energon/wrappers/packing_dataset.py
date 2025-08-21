@@ -12,6 +12,7 @@ from typing import (
     Iterator,
     List,
     Optional,
+    Sequence,
     TypeVar,
     Union,
 )
@@ -35,7 +36,7 @@ T_batch_sample = TypeVar("T_batch_sample")
 
 
 class PackingDataset(
-    BaseWrapperDataset[T_sample, T_encoded_sample, T_batch_sample],
+    BaseWrapperDataset[T_sample, T_batch_sample],
     Generic[T_sample, T_encoded_sample, T_batch_sample],
 ):
     """This dataset wrapper transforms samples of a dataset into chunks/packs of samples, which are
@@ -48,7 +49,7 @@ class PackingDataset(
     final_packer: Callable[[List[T_encoded_sample]], T_batch_sample]
     final_packer_stateless: bool
     packer_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]]
-    error_handler: Callable[[Exception, List[T_sample], list[SourceInfo]], None]
+    error_handler: Callable[[Exception, List[T_sample], Sequence[SourceInfo]], None]
 
     #: The buffer for collecting the samples that shall be packed.
     _reading_buffer: SavableSampleBuffer
@@ -61,7 +62,7 @@ class PackingDataset(
     #: The samples are stored sequentially in the pre_packing_buffer because
     #: SavableSampleBuffer doesn't support nesting. But to keep the groups
     #: separate, we need to store the lengths of the groups here.
-    _pre_packing_lengths: List[List[int]]
+    _pre_packing_lengths: List[int]
 
     #: Sample index for the pre_packer
     _pre_packing_sample_index: SampleIndex
@@ -71,6 +72,11 @@ class PackingDataset(
 
     #: Sample index for the final_packer
     _final_packing_sample_index: SampleIndex
+
+    # Local state: Tracking last failures for each component, to raise a fatal error after a certain number of failures.
+    _last_pre_pack_failures: int = 0
+    _last_final_pack_failures: int = 0
+    _last_sample_encoder_failures: int = 0
 
     _savable_fields = (
         "_reading_buffer",
@@ -89,15 +95,15 @@ class PackingDataset(
         final_packer: Callable[[List[T_encoded_sample]], T_batch_sample],
         *,
         final_packer_stateless: bool = False,
-        sample_encoder: Optional[Callable[[List[T_sample]], T_encoded_sample]] = None,
+        sample_encoder: Optional[Callable[[T_sample], T_encoded_sample]] = None,
         sample_encoder_stateless: bool = False,
         packer_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]] = None,
         error_handler: Callable[
-            [Exception, List[T_sample], list[SourceInfo]], None
+            [Exception, List[T_sample], Sequence[SourceInfo]], None
         ] = log_exception,
-        pre_packer_failure_tolerance: Optional[int] = 100,
-        final_packer_failure_tolerance: Optional[int] = 100,
-        sample_encoder_failure_tolerance: Optional[int] = 100,
+        pre_packer_failure_tolerance: int = 100,
+        final_packer_failure_tolerance: int = 100,
+        sample_encoder_failure_tolerance: int = 100,
         worker_config: WorkerConfig,
     ):
         """Construct a PackingDataset which is used for sequence packing.
@@ -121,9 +127,9 @@ class PackingDataset(
                 configuration. Defaults to None.
             error_handler: Function which handles exceptions raised by the batcher. The default
                 implementation logs the exception.
-            pre_packer_failure_tolerance: Maximum number of pre-packer failures before raising an error.
-            final_packer_failure_tolerance: Maximum number of final-packer failures before raising an error.
-            sample_encoder_failure_tolerance: Maximum number of sample-encoder failures before raising an error.
+            pre_packer_failure_tolerance: Maximum number of pre-packer failures before raising an error. Set to 0 to disable.
+            final_packer_failure_tolerance: Maximum number of final-packer failures before raising an error. Set to 0 to disable.
+            sample_encoder_failure_tolerance: Maximum number of sample-encoder failures before raising an error. Set to 0 to disable.
             worker_config: Configuration for the workers.
         """
         super().__init__(dataset, worker_config=worker_config)
@@ -155,11 +161,10 @@ class PackingDataset(
         self._final_packing_sample_index = SampleIndex(self.worker_config, src=self)
         self._sample_encoder_sample_index = SampleIndex(self.worker_config, src=self)
 
-    def __len__(self):
-        """The real length is unknown, since it depends on the packing function.
-        We approximate it by the length of the source dataset."""
-
-        return len(self.dataset)
+    def len_worker(self, worker_idx: int | None = None) -> int:
+        # The real length is unknown, since it depends on the packing function.
+        # We approximate it by the length of the source dataset.
+        return self.dataset.len_worker(worker_idx)
 
     def _fill_reading_buffer(self, source_iter: Iterator, log_progress: bool = False) -> bool:
         """
@@ -182,7 +187,10 @@ class PackingDataset(
             pbar = None
 
         with pbar_ctx:
-            while len(self._reading_buffer) + len(self._pre_packing_buffer) < self.buffer_size:
+            while (
+                self._reading_buffer.len_worker() + self._pre_packing_buffer.len_worker()
+                < self.buffer_size
+            ):
                 try:
                     sample = next(source_iter)
                     self._reading_buffer.append(sample)
@@ -197,10 +205,6 @@ class PackingDataset(
         # The source dataset
         src_iter = iter(self.dataset)
 
-        last_pre_pack_failures = 0
-        last_final_pack_failures = 0
-        last_sample_encoder_failures = 0
-
         self._pre_packing_buffer.worker_start()
         self._reading_buffer.worker_start()
 
@@ -208,7 +212,6 @@ class PackingDataset(
 
         def encode_pack_samples(pack: List[T_sample]) -> List[T_encoded_sample]:
             """Encode the samples in the pack using the sample encoder."""
-            nonlocal last_sample_encoder_failures
 
             # Apply the sample encoder to the pack
             if self.sample_encoder is None:
@@ -226,32 +229,33 @@ class PackingDataset(
                             src=self,
                         )
                     )
+                    self._last_sample_encoder_failures = 0
                 except SkipSample:
                     pass
                 except SYSTEM_EXCEPTIONS:
                     raise FatalSampleError.from_sample(pack)
                 except Exception as e:
                     self.error_handler(e, [sample])
-                    last_sample_encoder_failures += 1
+                    self._last_sample_encoder_failures += 1
                     if (
-                        self.sample_encoder_failure_tolerance is not None
-                        and last_sample_encoder_failures >= self.sample_encoder_failure_tolerance
+                        self.sample_encoder_failure_tolerance > 0
+                        and self._last_sample_encoder_failures
+                        >= self.sample_encoder_failure_tolerance
                     ):
                         raise FatalSampleError.from_sample(
                             pack,
-                            f"Sample encoder {self.sample_encoder} failed {last_sample_encoder_failures} times. Likely your code or dataset are broken.",
+                            f"Sample encoder {self.sample_encoder} failed {self._last_sample_encoder_failures} times. Likely your code or dataset are broken.",
                         )
             return encoded_pack
 
         def next_pre_pack():
             """Take the samples from the reading buffer and select groups of samples to be packed
             together."""
-            nonlocal last_pre_pack_failures
 
-            assert len(self._pre_packing_buffer) == 0
-            if len(self._reading_buffer) > 0:
+            assert self._pre_packing_buffer.len_worker() == 0
+            if self._reading_buffer.len_worker() > 0:
                 # Take all samples from the reading buffer and pre_pack them
-                samples = list(self._reading_buffer)
+                samples = self._reading_buffer.buffer.copy()
                 # Clear buffer and pre_packing_lengths
                 self._reading_buffer.clear()
                 pre_packing_lengths.clear()
@@ -259,6 +263,7 @@ class PackingDataset(
                 try:
                     with self._pre_packing_sample_index.ctx():
                         pre_packs = self.pre_packer(samples)
+                    self._last_pre_pack_failures = 0
                 except SkipSample:
                     pre_packs = []
                 except SYSTEM_EXCEPTIONS:
@@ -266,14 +271,14 @@ class PackingDataset(
                 except Exception as e:
                     self.error_handler(e, samples)
                     pre_packs = []
-                    last_pre_pack_failures += 1
+                    self._last_pre_pack_failures += 1
                     if (
-                        self.pre_packer_failure_tolerance is not None
-                        and last_pre_pack_failures >= self.pre_packer_failure_tolerance
+                        self.pre_packer_failure_tolerance > 0
+                        and self._last_pre_pack_failures >= self.pre_packer_failure_tolerance
                     ):
                         raise FatalSampleError.from_sample(
                             samples,
-                            f"Pre packer {self.pre_packer} failed {last_pre_pack_failures} times. Likely your code or dataset are broken.",
+                            f"Pre packer {self.pre_packer} failed {self._last_pre_pack_failures} times. Likely your code or dataset are broken.",
                         )
 
                 # Put the pre-packed samples into the pre_packing_buffer
@@ -287,9 +292,8 @@ class PackingDataset(
 
         def next_final_pack() -> Generator[T_batch_sample, None, None]:
             """Yield the next packs from the buffer. The final packer is called on the fly."""
-            nonlocal last_final_pack_failures
 
-            pack = list(self._pre_packing_buffer[: pre_packing_lengths[0]])
+            pack = self._pre_packing_buffer.buffer[: pre_packing_lengths[0]].copy()
             if len(pack) == 0:
                 return
             pack = encode_pack_samples(pack)
@@ -307,6 +311,7 @@ class PackingDataset(
                     for pack_sub_idx, (pack_idx, inner_batch_sample) in enumerate(
                         self._final_packing_sample_index.iter_ctx(final_packed_sample, pack_idx)
                     ):
+                        self._last_final_pack_failures = 0
                         yield set_sample_restore_key(
                             inner_batch_sample,
                             pack_idx,
@@ -315,6 +320,7 @@ class PackingDataset(
                             src=self,
                         )
                 else:
+                    self._last_final_pack_failures = 0
                     yield set_sample_restore_key(
                         final_packed_sample,
                         pack_idx,
@@ -327,20 +333,23 @@ class PackingDataset(
                 raise FatalSampleError.from_sample(pack)
             except Exception as e:
                 self.error_handler(e, pack)
-                last_final_pack_failures += 1
+                self._last_final_pack_failures += 1
                 if (
-                    self.final_packer_failure_tolerance is not None
-                    and last_final_pack_failures >= self.final_packer_failure_tolerance
+                    self.final_packer_failure_tolerance > 0
+                    and self._last_final_pack_failures >= self.final_packer_failure_tolerance
                 ):
                     raise FatalSampleError.from_sample(
                         pack,
-                        f"Final packer {self.final_packer} failed {last_final_pack_failures} times. Likely your code or dataset are broken.",
+                        f"Final packer {self.final_packer} failed {self._last_final_pack_failures} times. Likely your code or dataset are broken.",
                     )
 
         # Main loop:
         pre_pack_round = 0
         while True:
-            if pre_pack_round > self.pre_packer_failure_tolerance:
+            if (
+                self.pre_packer_failure_tolerance > 0
+                and pre_pack_round > self.pre_packer_failure_tolerance
+            ):
                 raise RuntimeError(
                     f"Pre packer {self.pre_packer} did not yield any packs after {pre_pack_round} rounds. Likely your code or dataset are broken."
                 )
@@ -352,8 +361,8 @@ class PackingDataset(
 
             # Create new pre packs if necessary
             if len(pre_packing_lengths) == 0:
-                assert len(self._pre_packing_buffer) == 0
-                assert len(self._reading_buffer) == self.buffer_size
+                assert self._pre_packing_buffer.len_worker() == 0
+                assert self._reading_buffer.len_worker() == self.buffer_size
                 next_pre_pack()
                 if len(pre_packing_lengths) == 0:
                     # Retry packing, nothing was returned.
@@ -371,7 +380,7 @@ class PackingDataset(
 
         # If there are still samples in the partial reading buffer, pre-pack them and yield the
         # resulting (partial) packs
-        if len(self._reading_buffer) > 0:
+        if self._reading_buffer.len_worker() > 0:
             next_pre_pack()
 
         # Yield the remaining packs, flushing the collecting buffer

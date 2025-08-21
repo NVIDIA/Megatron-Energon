@@ -1,7 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from typing import Any, Dict, Iterator, List, Tuple, TypeVar
+from typing import Any, Dict, Iterator, List, Sequence, Tuple, TypeVar
 
 import torch
 
@@ -19,7 +19,9 @@ class BlendDataset(BaseWrapperDataset[T_sample, T_sample]):
     The datasets may be infinite. This dataset is always infinite.
     """
 
+    datasets: List[SavableDataset[T_sample]]
     weights: Tuple[float, ...]
+    dataset_weights: Sequence[Tuple[SavableDataset[T_sample], float]]
     exhausted: List[bool]
     _worker_rng: WorkerRng
 
@@ -50,9 +52,9 @@ class BlendDataset(BaseWrapperDataset[T_sample, T_sample]):
         self._worker_rng = WorkerRng(self.worker_config)
         self.exhausted = [False] * len(self.weights)
 
-    def __len__(self) -> int:
+    def len_worker(self, worker_idx: int | None = None) -> int:
         # Give the number of samples in inner datasets, disregarding the weight
-        return sum(len(dataset) for dataset, weight in self.dataset_weights)
+        return sum(dataset.len_worker(worker_idx) for dataset in self.datasets)
 
     def __iter__(self) -> Iterator[T_sample]:
         assert self.worker_has_samples(), "Cannot blend all empty datasets"
@@ -71,6 +73,7 @@ class BlendDataset(BaseWrapperDataset[T_sample, T_sample]):
             else:
                 dataset_iters.append(None)
                 weights.append(0)
+                self.exhausted[idx] = True
 
         weights = torch.tensor(weights, dtype=torch.float32)
         if weights.sum() == 0:

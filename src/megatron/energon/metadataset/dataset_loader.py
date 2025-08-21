@@ -7,6 +7,7 @@ from megatron.energon.dataset_config import get_dataset_from_config
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import BaseCoreDatasetFactory
+from megatron.energon.flavors.webdataset.structs import DatasetSubset
 from megatron.energon.metadataset.loader_interface import (
     DatasetBlendMode,
     DatasetLoaderInterface,
@@ -24,8 +25,8 @@ class DatasetLoader(DatasetLoaderInterface):
     split_part: Optional[str] = None
     subflavors: Optional[Dict[str, Any]] = None
     shuffle_over_epochs_multiplier: Optional[int] = 1
-    dataset_config: str = "dataset.yaml"
-    split_config: str = "split.yaml"
+    dataset_config: Optional[str] = None
+    split_config: Optional[str] = None
 
     def post_initialize(self, mds_path: Optional[EPath] = None):
         pass
@@ -40,6 +41,7 @@ class DatasetLoader(DatasetLoaderInterface):
         shuffle_over_epochs: Optional[int] = 1,
         split_config: Optional[str] = None,
         dataset_config: Optional[str] = None,
+        subset: Optional[DatasetSubset] = None,
         **kwargs,
     ) -> BaseCoreDatasetFactory:
         """
@@ -50,6 +52,7 @@ class DatasetLoader(DatasetLoaderInterface):
             shuffle_buffer_size: Size of the sample shuffle buffer (before task encoding).
             subflavors: Subflavors to use, might be overridden by inner datasets.
             shuffle_over_epochs: Shuffle the dataset over this many epochs.
+            subset: If specified, the inner dataset(s) will be subsetted.
             **kwargs: Additional arguments to the dataset constructor.
 
         Returns:
@@ -74,6 +77,7 @@ class DatasetLoader(DatasetLoaderInterface):
             dataset_config=dataset_config,
             split_config=split_config,
             shuffle_over_epochs=shuffle_over_epochs,
+            subset=subset,
             **kwargs,
         )
 
@@ -85,6 +89,7 @@ class DatasetLoader(DatasetLoaderInterface):
         worker_config: WorkerConfig,
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: Optional[int] = 1,
+        subset: Optional[DatasetSubset] = None,
         **kwargs,
     ) -> LoadedDatasetList:
         return LoadedDatasetList(
@@ -97,6 +102,7 @@ class DatasetLoader(DatasetLoaderInterface):
                         worker_config=worker_config,
                         subflavors=subflavors,
                         shuffle_over_epochs=shuffle_over_epochs_multiplier,
+                        subset=subset,
                         **kwargs,
                     ),
                     weight=None,

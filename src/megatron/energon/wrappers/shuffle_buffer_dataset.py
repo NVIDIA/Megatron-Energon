@@ -37,23 +37,23 @@ class ShuffleBufferDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sam
         self._worker_rng = WorkerRng(self.worker_config)
         self._active_buffer = SavableSampleBuffer(self.dataset, worker_config=self.worker_config)
 
-    def __len__(self) -> int:
-        return len(self.dataset)
+    def len_worker(self, worker_idx: int | None = None) -> int:
+        return self.dataset.len_worker(worker_idx)
 
     def __iter__(self) -> Iterator[T_sample]:
         self._active_buffer.worker_start()
         it = iter(self._active_buffer.append_iter())
         while True:
-            if len(self._active_buffer) >= self.size:
-                pop_idx = self._worker_rng.randbelow(len(self._active_buffer))
+            if self._active_buffer.len_worker() >= self.size:
+                pop_idx = self._worker_rng.randbelow(self._active_buffer.len_worker())
                 yield self._active_buffer.pop(pop_idx)
             else:
                 try:
                     next(it)
                 except StopIteration:
                     break
-        while len(self._active_buffer) > 0:
-            pop_idx = self._worker_rng.randbelow(len(self._active_buffer))
+        while self._active_buffer.len_worker() > 0:
+            pop_idx = self._worker_rng.randbelow(self._active_buffer.len_worker())
             yield self._active_buffer.pop(pop_idx)
 
     def restore_sample(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> T_sample:

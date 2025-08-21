@@ -73,10 +73,13 @@ def assert_nested_equal(a: Any, b: Any, path: str = "") -> None:
     and other basic types) are equal. If they are not equal, prints the path of the first mismatch
     and raises an AssertionError.
 
-    :param a: First nested structure to compare.
-    :param b: Second nested structure to compare.
-    :param path: Internal parameter used to pass the current traversal path (do not set this manually).
-    :raises AssertionError: If a mismatch is found.
+    Args:
+        a: First nested structure to compare.
+        b: Second nested structure to compare.
+        path: Internal parameter used to pass the current traversal path (do not set this manually).
+
+    Raises:
+        AssertionError: If a mismatch is found.
     """
     # Check if types differ
     if type(a) is not type(b):
@@ -94,8 +97,12 @@ def assert_nested_equal(a: Any, b: Any, path: str = "") -> None:
             missing_in_b = a_keys - b_keys
             mismatch_details = (
                 f"Key mismatch at {path or '<root>'}:\n"
-                f"Missing in first object: {missing_in_a}\n"
-                f"Missing in second object: {missing_in_b}"
+                + "Missing in first object: "
+                + ", ".join(f"[{k}]={b[k]!r}" for k in missing_in_a)
+                + "\n"
+                + "Missing in second object: "
+                + ", ".join(f"[{k}]={a[k]!r}" for k in missing_in_b)
+                + "\n"
             )
             print(mismatch_details)
             raise AssertionError(mismatch_details)
@@ -830,6 +837,7 @@ class TestDataset(unittest.TestCase):
                                                 "shuffle_over_epochs": 6,
                                                 "parallel_shard_iters": 2,
                                                 "max_samples_per_sequence": None,
+                                                "subset": None,
                                                 "subflavors": {
                                                     "source": "metadataset.yaml",
                                                     "dataset.yaml": True,
@@ -923,6 +931,7 @@ class TestDataset(unittest.TestCase):
                                                 "shuffle_over_epochs": 2,
                                                 "parallel_shard_iters": 2,
                                                 "max_samples_per_sequence": None,
+                                                "subset": None,
                                                 "subflavors": {
                                                     "source": "metadataset.yaml",
                                                     "dataset.yaml": True,

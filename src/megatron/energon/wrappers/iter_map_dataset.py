@@ -88,8 +88,8 @@ class IterMapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sampl
     def reset_state_own(self) -> None:
         self._sample_index = SampleIndex(self.worker_config, src=self)
 
-    def __len__(self):
-        return self.len_map_fn(len(self.dataset))
+    def len_worker(self, worker_idx: int | None = None) -> int:
+        return self.len_map_fn(self.dataset.len_worker(worker_idx))
 
     def __iter__(self) -> Iterator[T_sample_out]:
         last_sample_wrapper = _LastSampleWrapper(self.dataset)

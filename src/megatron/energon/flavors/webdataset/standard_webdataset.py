@@ -53,6 +53,7 @@ class StandardWebdatasetFactory(DefaultDecoderWebdatasetFactory[T_sample], Gener
             parallel_shard_iters: Number of parallel opened shards per worker, shuffling between.
             max_samples_per_sequence: Maximum number of samples per sequence (=how many samples
                     will be sequentially iterated).
+            subset: If specified, the dataset will be subsetted.
             split_config: Config file to use for shard split definitions.
             handler: Exception handler. Args: (exception, key).
         """

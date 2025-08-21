@@ -6,7 +6,7 @@ from typing import Generator, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
-from megatron.energon.flavors.webdataset.structs import ShardInfo
+from megatron.energon.flavors.webdataset.structs import DatasetSubset, ShardInfo
 from megatron.energon.worker import WorkerConfig
 
 
@@ -61,9 +61,7 @@ class Sharder:
         for start_offset, end_offset in zip(offsets, offsets[1:]):
             # Find shard idx for end
             end_index = start_index
-            while True:
-                if end_offset <= shard_cumsums[end_index + 1]:
-                    break
+            while end_index + 1 < len(shard_cumsums) and end_offset > shard_cumsums[end_index + 1]:
                 end_index += 1
             if start_index == end_index:
                 yield (
@@ -192,7 +190,8 @@ class Sharder:
     @classmethod
     def split_samples_to_workers(
         cls,
-        total_samples: int,
+        start_samples: int,
+        end_samples: int,
         worker_config: WorkerConfig,
         *,
         rotation_offset: int = 0,
@@ -201,6 +200,7 @@ class Sharder:
         # Note that the global number of workers intentionally stays the same if you
         # divide the number of ranks by N, and multiply the number of workers per rank by N.
         # This allows to reproduce the same global batches with a different number of ranks.
+        total_samples = end_samples - start_samples
 
         num_workers = max(1, worker_config.num_workers)
 
@@ -249,8 +249,8 @@ class Sharder:
         num_samples_per_global_worker = new_num_samples_per_global_worker
 
         # 3. Compute the global worker sample start and end indices
-        global_worker_sample_split_offsets = [0]
-        cur_offset = 0
+        global_worker_sample_split_offsets = [start_samples]
+        cur_offset = start_samples
         for global_worker_idx in range(global_workers):
             cur_offset += num_samples_per_global_worker[global_worker_idx]
             global_worker_sample_split_offsets.append(cur_offset)
@@ -274,6 +274,42 @@ class Sharder:
             int(offsets[-1]),
         )
 
+    @staticmethod
+    def _compute_subset(
+        total_samples: int,
+        subset: Optional[DatasetSubset] = None,
+    ) -> tuple[int, int]:
+        start_samples = 0
+        end_samples = total_samples
+
+        if subset is None:
+            return start_samples, end_samples
+        if subset.absolute_range is not None:
+            start_samples, end_samples = subset.absolute_range
+            if end_samples is None:
+                end_samples = total_samples
+            assert end_samples <= total_samples, (
+                f"Subset samples {subset.absolute_range} {end_samples=} > {total_samples=}"
+            )
+            assert start_samples <= end_samples, (
+                f"Subset samples {subset.absolute_range} {start_samples=} > {end_samples=}"
+            )
+            assert start_samples >= 0, (
+                f"Subset samples {subset.absolute_range} {start_samples=} < 0"
+            )
+        if subset.range is not None:
+            previous_total = end_samples - start_samples
+            end_samples = start_samples + int(previous_total * subset.range[1])
+            start_samples += int(previous_total * subset.range[0])
+            assert end_samples <= total_samples, (
+                f"Subset ratio {subset.range} {end_samples=} is larger than total samples {total_samples}"
+            )
+            assert start_samples <= end_samples, (
+                f"Subset ratio {subset.range} {start_samples=} > {end_samples=}"
+            )
+            assert start_samples >= 0, f"Subset ratio {subset.range} {start_samples=} < 0"
+        return start_samples, end_samples
+
     @classmethod
     def shard_workers(
         cls,
@@ -281,6 +317,7 @@ class Sharder:
         worker_config: WorkerConfig,
         *,
         max_samples_per_sequence: Optional[int],
+        subset: Optional[DatasetSubset] = None,
         rotation_offset: int = 0,
     ) -> Sequence[Sequence[int]]:
         """
@@ -291,14 +328,23 @@ class Sharder:
         Args:
             shards: The shards to split
             worker_config: The config for the current rank and workers
+            max_samples_per_sequence: Maximum number of samples per sequence (=how many samples
+                  will be sequential).
+            subset: If specified, the dataset will be subsetted to the given ratio.
+            rotation_offset: The offset to use for the worker rotation.
 
         Returns:
             The shards for the current rank and all workers
         """
-        total_samples = sum(shard.count for shard in shards)
+        end_samples = sum(shard.count for shard in shards)
+        if subset is not None:
+            start_samples, end_samples = subset.compute_subset(end_samples)
+        else:
+            start_samples = 0
 
         local_worker_sample_split_offsets = cls.split_samples_to_workers(
-            total_samples,
+            start_samples,
+            end_samples,
             worker_config,
             rotation_offset=rotation_offset,
         )
@@ -322,6 +368,7 @@ class Sharder:
         worker_config: WorkerConfig,
         *,
         max_samples_per_sequence: Optional[int],
+        subset: Optional[DatasetSubset] = None,
         rotation_offset: int = 0,
     ) -> Sequence[Sequence[int]]:
         """
@@ -332,12 +379,19 @@ class Sharder:
         Args:
             total_samples: The total number of samples
             worker_config: The config for the current rank and workers
+            max_samples_per_sequence: Maximum number of samples per sequence (=how many samples
+                  will be sequential).
+            subset: If specified, the dataset will be subsetted to the given ratio.
+            rotation_offset: The offset to use for the worker rotation.
 
         Returns:
             The shards for the current rank and all workers
         """
+        start_samples, end_samples = cls._compute_subset(total_samples, subset)
+
         local_worker_sample_split_offsets = cls.split_samples_to_workers(
-            total_samples,
+            start_samples,
+            end_samples,
             worker_config,
             rotation_offset=rotation_offset,
         )

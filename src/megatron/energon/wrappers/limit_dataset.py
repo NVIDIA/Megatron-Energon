@@ -43,8 +43,20 @@ class LimitDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
     def reset_state_own(self) -> None:
         self.current_offset = 0
 
-    def __len__(self) -> int:
-        return min(self.length, len(self.dataset))
+    def len_worker(self, worker_idx: int | None = None) -> int:
+        if worker_idx is None:
+            self.worker_config.assert_worker()
+            worker_idx = self.worker_config.rank_worker_id()
+        if self.worker_config.num_workers <= 1:
+            return self.length
+        else:
+            local_limit = self.length // self.worker_config.num_workers
+            if worker_idx < self.length % self.worker_config.num_workers:
+                local_limit += 1
+            return local_limit
+
+    def len_rank(self) -> int:
+        return min(self.length, self.dataset.len_rank())
 
     def __iter__(self) -> Iterator[T_sample]:
         worker_id = self.worker_config.rank_worker_id()

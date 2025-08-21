@@ -27,7 +27,7 @@ Below, you can see the available sub-commands under `energon`.
 (energon-prepare)=
 ## energon prepare
 
-An interactive tool to generate metadata for your existing webdataset.
+An interactive tool to generate metadata for your existing webdataset (or [jsonl dataset](create-jsonl-dataset)).
 This will help make the dataset compliant with our [format](data-on-disk).
 
 The tool will ask you for a train/val/test split and how to assign the webdataset fields to the
