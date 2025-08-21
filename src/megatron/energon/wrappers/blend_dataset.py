@@ -1,7 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from typing import Any, Dict, Iterator, List, Tuple, TypeVar
+from typing import Any, Dict, Iterator, List, Sequence, Tuple, TypeVar
 
 import torch
 
@@ -19,7 +19,9 @@ class BlendDataset(BaseWrapperDataset[T_sample, T_sample]):
     The datasets may be infinite. This dataset is always infinite.
     """
 
+    datasets: List[SavableDataset[T_sample]]
     weights: Tuple[float, ...]
+    dataset_weights: Sequence[Tuple[SavableDataset[T_sample], float]]
     exhausted: List[bool]
     _worker_rng: WorkerRng
 
@@ -52,7 +54,7 @@ class BlendDataset(BaseWrapperDataset[T_sample, T_sample]):
 
     def len_worker(self, worker_idx: int | None = None) -> int:
         # Give the number of samples in inner datasets, disregarding the weight
-        return sum(dataset.len_worker(worker_idx) for dataset, weight in self.dataset_weights)
+        return sum(dataset.len_worker(worker_idx) for dataset in self.datasets)
 
     def __iter__(self) -> Iterator[T_sample]:
         assert self.worker_has_samples(), "Cannot blend all empty datasets"

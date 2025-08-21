@@ -12,6 +12,7 @@ from typing import (
     Iterator,
     List,
     Optional,
+    Sequence,
     TypeVar,
     Union,
 )
@@ -48,7 +49,7 @@ class PackingDataset(
     final_packer: Callable[[List[T_encoded_sample]], T_batch_sample]
     final_packer_stateless: bool
     packer_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]]
-    error_handler: Callable[[Exception, List[T_sample], list[SourceInfo]], None]
+    error_handler: Callable[[Exception, List[T_sample], Sequence[SourceInfo]], None]
 
     #: The buffer for collecting the samples that shall be packed.
     _reading_buffer: SavableSampleBuffer
@@ -61,7 +62,7 @@ class PackingDataset(
     #: The samples are stored sequentially in the pre_packing_buffer because
     #: SavableSampleBuffer doesn't support nesting. But to keep the groups
     #: separate, we need to store the lengths of the groups here.
-    _pre_packing_lengths: List[List[int]]
+    _pre_packing_lengths: List[int]
 
     #: Sample index for the pre_packer
     _pre_packing_sample_index: SampleIndex
@@ -98,7 +99,7 @@ class PackingDataset(
         sample_encoder_stateless: bool = False,
         packer_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]] = None,
         error_handler: Callable[
-            [Exception, List[T_sample], list[SourceInfo]], None
+            [Exception, List[T_sample], Sequence[SourceInfo]], None
         ] = log_exception,
         pre_packer_failure_tolerance: int = 100,
         final_packer_failure_tolerance: int = 100,

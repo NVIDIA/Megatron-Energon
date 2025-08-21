@@ -10,6 +10,7 @@ from typing import (
     Generic,
     Iterator,
     Optional,
+    Sequence,
     Tuple,
     TypeVar,
     Union,
@@ -31,7 +32,7 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
     """This dataset wrapper applies a custom function to transform each sample."""
 
     map_fn: Callable[[T_sample], Union[T_sample_out, Generator[T_sample_out, None, None]]]
-    error_handler: Callable[[Exception, T_sample, list[SourceInfo]], None]
+    error_handler: Callable[[Exception, T_sample, Sequence[SourceInfo]], None]
     stateless_map_fn: bool
     map_fn_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]]
     _sample_index: SampleIndex
@@ -50,7 +51,7 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
         dataset: SavableDataset[T_sample],
         map_fn: Callable[[T_sample], Union[T_sample_out, Generator[T_sample_out, None, None]]],
         *,
-        error_handler: Callable[[Exception, T_sample, list[SourceInfo]], None] = log_exception,
+        error_handler: Callable[[Exception, T_sample, Sequence[SourceInfo]], None] = log_exception,
         stateless_map_fn: bool = False,
         map_fn_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]] = None,
         failure_tolerance: int = 100,
