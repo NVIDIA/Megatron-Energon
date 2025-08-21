@@ -68,14 +68,25 @@ class AuxFilesystemReference:
 @edataclass
 class Subset:
     """
-    A subset of a dataset.
+    A subset range to be applied to a dataset. The range is always consecutive.
+
     The range is a tuple of two values, where the first value is the start of the subset and the second value is the end of the subset (end not included).
-    The range values can be either a percentage (like "32%") or an absolute sample index value (integers).
+    The range can either be an absolute range with sample indices, or a ratio of the dataset size.
+    Relative range example: [25%, 75%]. This would limit the subset to the middle 50% of the dataset.
+    Absolute range example: [100, 200]. This would limit the subset to the 100 samples with indices 100-199.
+    For absolute ranges, the end can be set to "end" to indicate the end of the dataset, for example [100, end].
+
+    Since subsets can be specified at multiple levels of a hierarchy, for example in a blend,
+    their effects can be merged to a single subset.
+    Note however, that absolute ranges are only allowed for leaf datasets, while relative ranges
+    can be applied at any level.
     """
 
     range: tuple[str | int, str | int]
 
     def as_dataset_subset(self) -> DatasetSubset:
+        """Convert the subset with string values to a DatasetSubset object with `range` and `absolute_range`."""
+
         start, end = self.range
 
         def _conv(value: str | int) -> float | int | None:
@@ -107,6 +118,22 @@ class Subset:
             return DatasetSubset(range=(start, end), absolute_range=None)
 
     def merge(self, parent_subset: DatasetSubset | None) -> DatasetSubset:
+        """Merge this subset with a parent subset.
+
+        If the parent subset is None, return the subset.
+        If the parent subset is an absolute range, fail, because that's not allowed.
+        If the parent subset is a ratio, merge it with the subset.
+
+        Merging a child absolute range with a parent relative range:
+        In this case, both are kept in the DatasetSubset object and applies in "absolute first" order later.
+
+        Merging a child relative range with a parent relative range:
+        In this case, the relative parent range is applied to the child's relative range.
+        The absolute range is not affected.
+
+        For details on how this is applied, see `DatasetSubset.compute_subset`.
+        """
+
         assert parent_subset is None or parent_subset.absolute_range is None, (
             f"Cannot merge absolute subset ranges. Absolute ranges are only allowed for a leaf dataset. {self.absolute_range=} {self.range=}"
         )
