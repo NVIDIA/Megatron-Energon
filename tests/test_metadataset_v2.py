@@ -1255,7 +1255,9 @@ class TestDataset(unittest.TestCase):
             )
             assert False, "Should have failed"
         except Exception as e:
-            assert "only allowed for a leaf dataset" in str(e) or "only use absolute subset ranges for a leaf dataset" in str(e), str(e)
+            assert "only allowed for a leaf dataset" in str(
+                e
+            ) or "only use absolute subset ranges for a leaf dataset" in str(e), str(e)
             return
 
     def test_dataset_with_subset_end_keyword(self):
