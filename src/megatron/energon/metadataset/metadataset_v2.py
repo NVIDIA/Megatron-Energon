@@ -159,6 +159,9 @@ class SubsetRatioMixin:
 
     def _get_subset(self, parent_subset: Optional[DatasetSubset]) -> Optional[DatasetSubset]:
         if parent_subset is not None:
+            assert parent_subset.absolute_range is None, (
+                f"Can only use absolute subset ranges for a leaf dataset (Range {parent_subset.absolute_range=})"
+            )
             if self.subset is not None:
                 return self.subset.merge(parent_subset)
             else:

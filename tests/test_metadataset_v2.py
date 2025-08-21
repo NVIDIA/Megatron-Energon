@@ -1255,7 +1255,7 @@ class TestDataset(unittest.TestCase):
             )
             assert False, "Should have failed"
         except Exception as e:
-            assert "only allowed for a leaf dataset" in str(e), str(e)
+            assert "only allowed for a leaf dataset" in str(e) or "only use absolute subset ranges for a leaf dataset" in str(e), str(e)
             return
 
     def test_dataset_with_subset_end_keyword(self):
@@ -1275,18 +1275,12 @@ class TestDataset(unittest.TestCase):
                         "splits:",
                         "  train:",
                         # Absolute range: [50, end]
-                        # I.e. sample range: [50, 55]
+                        # I.e. corresponds to sample range: [50, 55] (end is not included, so up to 54)
                         "    subset: {range: [50, end]}",
-                        "    blend_epochized:",
-                        "      - path: ds1",
-                        "        subflavors:",
-                        "          source: ds1",
-                        "          number: 43",
-                        "      - repetitions: 2",
-                        "        path: ds2",
-                        "        subflavors:",
-                        "          source: ds2",
-                        "          number: 42",
+                        "    path: ds1",
+                        "    subflavors:",
+                        "      source: ds1",
+                        "      number: 43",
                     ]
                 )
             )
@@ -1304,11 +1298,9 @@ class TestDataset(unittest.TestCase):
             )
         )
 
-        data = list(enumerate(loader))
+        all_numbers = [int(s.text[0]) for s in loader]
 
-        from pprint import pprint
-
-        pprint(data)
+        assert all_numbers == [50, 51, 52, 53, 54], "Subset range [50, end] should be [50, 55]"
 
     def test_dataset_with_subset_ratio(self):
         worker_config = WorkerConfig(
