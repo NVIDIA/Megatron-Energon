@@ -138,6 +138,9 @@ html_theme_options = {
 html_static_path = ["_static"]
 html_css_files = ["css/custom.css"]
 
+# Favicon configuration
+html_favicon = "_static/favicon.ico"
+
 # Custom sidebar templates, must be a dictionary that maps document names
 # to template names.
 #

@@ -1,0 +1,8 @@
+{# Extend the base theme layout #}
+{% extends "!layout.html" %}
+
+{# Add custom favicon links to the head section #}
+{% block extrahead %}
+    {{ super() }}
+    {% include "favicon.html" %}
+{% endblock %}
