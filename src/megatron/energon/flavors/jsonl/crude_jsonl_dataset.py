@@ -22,7 +22,12 @@ from megatron.energon.flavors.webdataset.sample_loader import (
     WebdatasetSampleLoaderDataset,
 )
 from megatron.energon.flavors.webdataset.sharder import Sharder
-from megatron.energon.flavors.webdataset.structs import FilteredSample, ShardInfo, reraise_exception
+from megatron.energon.flavors.webdataset.structs import (
+    DatasetSubset,
+    FilteredSample,
+    ShardInfo,
+    reraise_exception,
+)
 from megatron.energon.source_info import SourceInfo
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.map_dataset import MapDataset
@@ -59,6 +64,7 @@ class CrudeJsonlDatasetFactory(
         shuffle_over_epochs: Optional[int] = 1,
         parallel_shard_iters: Optional[int] = None,
         max_samples_per_sequence: Optional[int] = None,
+        subset: Optional[DatasetSubset] = None,
         part_filter: Optional[Callable[[str], bool]] = None,
         handler: Callable[
             [Exception, Optional[str], Optional[list[SourceInfo]]], None
@@ -81,6 +87,7 @@ class CrudeJsonlDatasetFactory(
             parallel_shard_iters: Number of parallel opened shards per worker, shuffling between.
             max_samples_per_sequence: Maximum number of samples per sequence (=how many samples
                     will be sequentially iterated).
+            subset: If specified, the dataset will be subsetted.
             part_filter: (internal) Function for filtering tar files by dict keys
             handler: Exception handler. Args: (exception, key).
         """
@@ -92,6 +99,7 @@ class CrudeJsonlDatasetFactory(
         self.shuffle_over_epochs = shuffle_over_epochs
         self.parallel_shard_iters = parallel_shard_iters
         self.max_samples_per_sequence = max_samples_per_sequence
+        self.subset = subset
         self.part_filter = part_filter
         self.handler = legacy_handler(handler)
         if part_filter is None or part_filter("json"):
@@ -130,6 +138,7 @@ class CrudeJsonlDatasetFactory(
             worker_config=self.worker_config,
             max_samples_per_sequence=self.max_samples_per_sequence,
             rotation_offset=worker_rotation_offset,
+            subset=self.subset,
         )
         _print_shard_slices(self.worker_config, virtual_shards, workers_sample_slice_offsets)
 
@@ -177,6 +186,7 @@ class CrudeJsonlDatasetFactory(
             shuffle_over_epochs=self.shuffle_over_epochs,
             parallel_shard_iters=self.parallel_shard_iters,
             max_samples_per_sequence=self.max_samples_per_sequence,
+            subset=self.subset.config() if self.subset is not None else None,
         )
 
     def __str__(self):
