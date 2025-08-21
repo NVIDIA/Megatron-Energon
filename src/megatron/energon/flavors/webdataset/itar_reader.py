@@ -23,6 +23,7 @@ from megatron.energon.flavors.webdataset.indexing import JoinIndexReader, Sqlite
 from megatron.energon.flavors.webdataset.itar import (
     CachedItarOffsetReader,
     ITarFile,
+    ITarRawSamplePartPointer,
     ITarSamplePointer,
 )
 from megatron.energon.flavors.webdataset.metadata import get_info_shard_files
@@ -107,6 +108,7 @@ class ITarReader(ABC, Generic[T_index]):
         tar_filepaths: The corresponding list of full paths to the tar files.
         part_filter: An optional filter function to select parts of the samples.
         itar_cache_size: The number of tar readers to keep open at the same time.
+        sample_filter: An optional filter function to select samples by their key.
     """
 
     base_path: EPath
@@ -151,6 +153,12 @@ class ITarReader(ABC, Generic[T_index]):
         """
         raise NotImplementedError
 
+    def close(self):
+        for tar_file in self.itar_files_cache.values():
+            tar_file.fileobj.close()
+            tar_file.close()
+        self.itar_files_cache.clear()
+
     @abstractmethod
     def _get_itar_sample_pointer(self, idx: T_index) -> ITarSamplePointer:
         """Get the ITarSample object for the given index."""
@@ -178,12 +186,44 @@ class ITarReader(ABC, Generic[T_index]):
                 self.itar_files_cache.pop().close()
             self.itar_files_cache.add(tar_file_id, reader)
 
+    def _get_part_by_raw_sample_pointer(
+        self,
+        raw_sample_pointer: ITarRawSamplePartPointer,
+        entry_name: str,
+    ) -> tuple[bytes, SourceInfo]:
+        """
+        Get a sample part and the source info from the dataset.
+
+        Args:
+            raw_sample_pointer: The raw data sample pointer to get the sample from.
+
+        Returns:
+            The raw data bytes.
+        """
+
+        # Open the tar file (cached)
+        tar_file = self._get_itarfile_cached(raw_sample_pointer.tar_file_id)
+        shard_name = self.tar_filenames[raw_sample_pointer.tar_file_id]
+
+        # Get the raw data from the tar file
+        rest = tar_file.fileobj.tell()
+        tar_file.fileobj.seek(raw_sample_pointer.raw_byte_offset)
+        raw_data = tar_file.fileobj.read(raw_sample_pointer.raw_byte_size)
+        tar_file.fileobj.seek(rest)
+
+        return raw_data, SourceInfo(
+            dataset_path=self.base_path,
+            index=entry_name,
+            shard_name=shard_name,
+            file_names=(entry_name,),
+        )
+
     def _get_item_by_sample_pointer(
         self,
         sample_pointer: ITarSamplePointer,
-        restore_index: Union[str, int],
+        restore_index: str | int,
         entry_match_fn: Optional[Callable[[str], bool]] = None,
-    ) -> Union["ITarReader", FilteredSample, None]:
+    ) -> FilteredSample | None:
         """
         Get a sample from the dataset or slice it.
 
@@ -272,27 +312,12 @@ class ITarReader(ABC, Generic[T_index]):
             **group_parts,
         )
 
-    @overload
-    def __getitem__(self, key: T_index) -> Optional[FilteredSample]: ...
-
-    @overload
-    def __getitem__(self, key: slice) -> "ITarReader": ...
-
-    def __getitem__(self, key: Union[slice, T_index]) -> Union["ITarReader", FilteredSample, None]:
+    def __getitem__(self, idx: T_index) -> FilteredSample | None:
         """
         Get a sample from the dataset or slice it.
         """
-
-        if isinstance(key, slice):
-            # Return a new reader with a sliced samples tensor
-            raise NotImplementedError("Slicing is not yet implemented")
-        elif isinstance(key, int):
-            idx = key
-        else:
-            raise TypeError("Invalid argument type for __getitem__")
-
+        assert isinstance(idx, int), f"Invalid argument type for __getitem__: {type(idx)}"
         sample_pointer = self._get_itar_sample_pointer(idx)
-
         return self._get_item_by_sample_pointer(sample_pointer, idx)
 
 
@@ -503,6 +528,7 @@ class SqliteITarEntryReader(ITarReader[str]):
     """
 
     sqlite_reader: SqliteIndexReader
+    db_has_sample_parts: int
 
     def __init__(
         self,
@@ -523,6 +549,8 @@ class SqliteITarEntryReader(ITarReader[str]):
         sqlite_path = base_path / MAIN_FOLDER_NAME / "index.sqlite"
         self.sqlite_reader = SqliteIndexReader(sqlite_path)
 
+        self.db_has_sample_parts = self.sqlite_reader.db_has_sample_parts()
+
         self.key_is_full_entryname = key_is_full_entryname
 
         super().__init__(
@@ -542,9 +570,19 @@ class SqliteITarEntryReader(ITarReader[str]):
         return self.sqlite_reader.get_sample_pointer_by_key(sample_key)
 
     def list_all_samples(self) -> Generator[Tuple[str, int, int], None, None]:
+        """List all samples in the jsonl file.
+
+        Returns:
+            A generator of tuples of (sample_key, size, tar_file_id)
+        """
         return self.sqlite_reader.list_all_samples()
 
     def list_all_sample_parts(self) -> Generator[Tuple[str, int, int], None, None]:
+        """List all sample parts in the jsonl file.
+
+        Returns:
+            A generator of tuples of (sample_key + "." + part_name, size, tar_file_id)
+        """
         return self.sqlite_reader.list_all_sample_parts()
 
     def list_sample_parts(
@@ -607,6 +645,14 @@ class SqliteITarEntryReader(ITarReader[str]):
 
             sample_key, sample_ext = m.groups()
             entry_match_fn = lambda fname: key == fname
+
+            if self.db_has_sample_parts:
+                # Directly fetch the sample part (byte offset and size) from the database
+                raw_sample_pointer = self.sqlite_reader.get_sample_part(sample_key, sample_ext)
+                raw_data, source_info = self._get_part_by_raw_sample_pointer(
+                    raw_sample_pointer, key
+                )
+                return raw_data, source_info
         else:
             sample_key = key
             sample_ext = None

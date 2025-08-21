@@ -34,7 +34,7 @@ from megatron.energon.flavors.webdataset.sample_loader import (
     WebdatasetSampleLoaderDataset,
 )
 from megatron.energon.flavors.webdataset.sharder import Sharder
-from megatron.energon.flavors.webdataset.structs import ShardInfo, reraise_exception
+from megatron.energon.flavors.webdataset.structs import DatasetSubset, ShardInfo, reraise_exception
 from megatron.energon.source_info import SourceInfo
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.map_dataset import MapDataset
@@ -54,6 +54,8 @@ class JoinedWebdatasetFactory(
     shuffle_over_epochs: Optional[int] = 1
     parallel_shard_iters: Optional[int]
     max_samples_per_sequence: Optional[int]
+    subset: Optional[DatasetSubset]
+
     join_index: EPath
     handler: Callable[[Exception, Optional[str], Optional[list[SourceInfo]]], None]
 
@@ -73,6 +75,7 @@ class JoinedWebdatasetFactory(
         shuffle_over_epochs: Optional[int] = 1,
         parallel_shard_iters: Optional[int] = None,
         max_samples_per_sequence: Optional[int] = None,
+        subset: Optional[DatasetSubset] = None,
         join_index: EPath,
         joiner: Union[Type[T_sample], Callable[..., T_sample]],
         handler: Callable[
@@ -99,6 +102,7 @@ class JoinedWebdatasetFactory(
             parallel_shard_iters: Number of parallel opened shards per worker, shuffling between.
             max_samples_per_sequence: Maximum number of samples per sequence (=how many samples
                     will be sequentially iterated).
+            subset: If specified, the inner dataset(s) will be subsetted.
             join_index: Path to the join index file. Only required for join_method="left".
             joiner: Type of the joined samples or a method for joining the samples.
             handler: Exception handler. Args: (exception, key).
@@ -130,6 +134,7 @@ class JoinedWebdatasetFactory(
         self.shuffle_over_epochs = shuffle_over_epochs
         self.parallel_shard_iters = parallel_shard_iters
         self.max_samples_per_sequence = max_samples_per_sequence
+        self.subset = subset
         self.handler = legacy_handler(handler)
 
     def __len__(self) -> int:
@@ -161,6 +166,7 @@ class JoinedWebdatasetFactory(
             worker_config=self.worker_config,
             max_samples_per_sequence=self.max_samples_per_sequence,
             rotation_offset=worker_rotation_offset,
+            subset=self.subset,
         )
 
         for worker_idx, sample_slice_offsets in enumerate(workers_sample_slice_offsets):
@@ -238,6 +244,7 @@ class JoinedWebdatasetFactory(
             shuffle_over_epochs=self.shuffle_over_epochs,
             parallel_shard_iters=self.parallel_shard_iters,
             max_samples_per_sequence=self.max_samples_per_sequence,
+            subset=self.subset.config() if self.subset is not None else None,
         )
 
     def __str__(self):

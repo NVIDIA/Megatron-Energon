@@ -7,7 +7,7 @@ from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.webdataset.default_generic_webdataset import (
     DefaultGenericWebdatasetFactory,
 )
-from megatron.energon.flavors.webdataset.sample_decoder import SampleDecoder
+from megatron.energon.flavors.webdataset.sample_decoder import DEFAULT_DECODER, SampleDecoder
 from megatron.energon.flavors.webdataset.structs import FilteredSample
 
 T_sample = TypeVar("T_sample", covariant=True)
@@ -26,7 +26,7 @@ class DefaultDecoderWebdatasetFactory(DefaultGenericWebdatasetFactory[T_sample],
         self,
         path: EPath,
         *,
-        decoder: Optional[SampleDecoder] = SampleDecoder(),
+        decoder: Optional[SampleDecoder] = DEFAULT_DECODER,
         **kwargs,
     ):
         """

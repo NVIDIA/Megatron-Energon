@@ -263,14 +263,19 @@ class TestEPath(unittest.TestCase):
     def test_msc_s3(self):
         # Test S3 with MSC
         with setup_s3_emulator(profile_name="s3test_msc"):
-            p = EPath("msc://s3test_msc/test/file.txt")
+            p = EPath("msc://s3test_msc/test/dir/file.txt")
             assert not p.is_file()
             p.write_text("dummy")
             assert p.is_file()
             assert p.size() > 0
             assert p.read_text() == "dummy"
+            # TODO: Fix when fixed in MSC.
+            # assert EPath("msc://s3test_msc/test").is_dir()
+            assert EPath("msc://s3test_msc/test/dir").is_dir()
             p.unlink()
             assert not p.is_file()
+            # assert not EPath("msc://s3test_msc/test").is_dir()
+            assert not EPath("msc://s3test_msc/test/dir").is_dir()
 
 
 def _multiproc_test_func(p: EPath, test_function: bool):

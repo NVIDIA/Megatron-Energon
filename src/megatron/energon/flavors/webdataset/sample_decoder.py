@@ -137,3 +137,6 @@ class SampleDecoder(FileStoreDecoder):
 
     def config(self) -> dict:
         return self._config
+
+
+DEFAULT_DECODER = SampleDecoder()

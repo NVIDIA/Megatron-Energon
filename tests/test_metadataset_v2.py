@@ -1180,6 +1180,271 @@ class TestDataset(unittest.TestCase):
 
         mock_watchdog_trigger.assert_called()
 
+    def test_dataset_absolute_nested_subset_fail(self):
+        worker_config = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=0,
+            seed_offset=42,
+        )
+        ratio_mds_path = self.dataset_path / "metadataset_ratio.yaml"
+        with open(ratio_mds_path, "w") as f:
+            f.write(
+                "\n".join(
+                    [
+                        "__module__: megatron.energon",
+                        "__class__: MetadatasetV2",
+                        "splits:",
+                        "  train:",
+                        # Absolute range on outer level should fail
+                        "    subset: {range: [50, 55]}",
+                        "    blend_epochized:",
+                        "      - path: ds1",
+                        "        subflavors:",
+                        "          source: ds1",
+                        "          number: 43",
+                        "      - repetitions: 2",
+                        "        path: ds2",
+                        "        subflavors:",
+                        "          source: ds2",
+                        "          number: 42",
+                    ]
+                )
+            )
+
+        try:
+            get_loader(
+                get_train_dataset(
+                    ratio_mds_path,
+                    worker_config=worker_config,
+                    batch_size=1,
+                    shuffle_buffer_size=None,
+                    shuffle_over_epochs_multiplier=None,
+                    parallel_shard_iters=1,
+                    max_samples_per_sequence=None,
+                    repeat=False,
+                )
+            )
+            assert False, "Should have failed"
+        except Exception as e:
+            assert "only allowed for a leaf dataset" in str(
+                e
+            ) or "only use absolute subset ranges for a leaf dataset" in str(e), str(e)
+            return
+
+    def test_dataset_with_subset_end_keyword(self):
+        worker_config = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=0,
+            seed_offset=42,
+        )
+        ratio_mds_path = self.dataset_path / "metadataset_ratio.yaml"
+        with open(ratio_mds_path, "w") as f:
+            f.write(
+                "\n".join(
+                    [
+                        "__module__: megatron.energon",
+                        "__class__: MetadatasetV2",
+                        "splits:",
+                        "  train:",
+                        # Absolute range: [50, end]
+                        # I.e. corresponds to sample range: [50, 55] (end is not included, so up to 54)
+                        "    subset: {range: [50, end]}",
+                        "    path: ds1",
+                        "    subflavors:",
+                        "      source: ds1",
+                        "      number: 43",
+                    ]
+                )
+            )
+
+        loader = get_loader(
+            get_train_dataset(
+                ratio_mds_path,
+                worker_config=worker_config,
+                batch_size=1,
+                shuffle_buffer_size=None,
+                shuffle_over_epochs_multiplier=None,
+                parallel_shard_iters=1,
+                max_samples_per_sequence=None,
+                repeat=False,
+            )
+        )
+
+        all_numbers = [int(s.text[0]) for s in loader]
+
+        assert all_numbers == [50, 51, 52, 53, 54], "Subset range [50, end] should be [50, 55]"
+
+    def test_dataset_with_subset_ratio(self):
+        worker_config = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=0,
+            seed_offset=42,
+        )
+        ratio_mds_path = self.dataset_path / "metadataset_ratio.yaml"
+        with open(ratio_mds_path, "w") as f:
+            f.write(
+                "\n".join(
+                    [
+                        "__module__: megatron.energon",
+                        "__class__: MetadatasetV2",
+                        "splits:",
+                        "  train:",
+                        # 20% of the dataset will be from ds1, 80% from ds2
+                        # I.e. sample range: [0.2*55, 0.8*55] = [11, 44]
+                        "    subset: {range: [20%, 80%]}",
+                        "    blend_epochized:",
+                        "      - path: ds1",
+                        "        subflavors:",
+                        "          source: ds1",
+                        "          number: 43",
+                        "      - repetitions: 2",
+                        "        path: ds2",
+                        "        subflavors:",
+                        "          source: ds2",
+                        "          number: 42",
+                    ]
+                )
+            )
+
+        loader = get_loader(
+            get_train_dataset(
+                ratio_mds_path,
+                worker_config=worker_config,
+                batch_size=1,
+                shuffle_buffer_size=None,
+                shuffle_over_epochs_multiplier=None,
+                parallel_shard_iters=1,
+                max_samples_per_sequence=None,
+                repeat=False,
+            )
+        )
+
+        data = list(enumerate(loader))
+        assert len(data) == 33 + 33 * 2, len(data)
+
+        sample_counts = Counter([int(s[1].text[0]) for s in data])
+        assert all(sample_counts[sample] == 0 for sample in range(11)), sample_counts
+        assert all(sample_counts[sample] == 1 for sample in range(11, 44)), sample_counts
+        assert all(sample_counts[sample] == 0 for sample in range(44, 55)), sample_counts
+        assert all(sample_counts[sample] == 0 for sample in range(100, 111)), sample_counts
+        assert all(sample_counts[sample] == 2 for sample in range(111, 144)), sample_counts
+        assert all(sample_counts[sample] == 0 for sample in range(144, 155)), sample_counts
+        assert sample_counts.total() == 33 + 33 * 2, sample_counts.total()
+
+        # Combine with subset_samples
+
+        ratio2_mds_path = self.dataset_path / "metadataset_ratio2.yaml"
+        with open(ratio2_mds_path, "w") as f:
+            f.write(
+                "\n".join(
+                    [
+                        "__module__: megatron.energon",
+                        "__class__: MetadatasetV2",
+                        "splits:",
+                        "  train:",
+                        # take [10, 30] from ds1, [20, 40] from ds2 and then only [20%, 80%]
+                        # I.e. sample range: [14, 26], 2 * [124, 136]
+                        "    subset: {range: [20%, 80%]}",
+                        "    blend_epochized:",
+                        "      - path: ds1",
+                        "        subset: {range: [10, 30]}",
+                        "        subflavors:",
+                        "          source: ds1",
+                        "          number: 43",
+                        "      - repetitions: 2",
+                        "        subset: {range: [20, 40]}",
+                        "        path: ds2",
+                        "        subflavors:",
+                        "          source: ds2",
+                        "          number: 42",
+                    ]
+                )
+            )
+
+        loader = get_loader(
+            get_train_dataset(
+                ratio2_mds_path,
+                worker_config=worker_config,
+                batch_size=1,
+                shuffle_buffer_size=None,
+                shuffle_over_epochs_multiplier=None,
+                parallel_shard_iters=1,
+                max_samples_per_sequence=None,
+                repeat=False,
+            )
+        )
+
+        data = list(enumerate(loader))
+        assert len(data) == 12 + 12 * 2, len(data)
+
+        sample_counts = Counter([int(s[1].text[0]) for s in data])
+        assert all(sample_counts[sample] == 0 for sample in range(14)), sample_counts
+        assert all(sample_counts[sample] == 1 for sample in range(14, 26)), sample_counts
+        assert all(sample_counts[sample] == 0 for sample in range(26, 55)), sample_counts
+        assert all(sample_counts[sample] == 0 for sample in range(100, 124)), sample_counts
+        assert all(sample_counts[sample] == 2 for sample in range(124, 136)), sample_counts
+        assert all(sample_counts[sample] == 0 for sample in range(136, 155)), sample_counts
+        assert sample_counts.total() == 12 + 12 * 2, sample_counts.total()
+
+        # Combine with subset_ratio and subset_samples and nested metadataset
+        nested_mds_path = self.dataset_path / "metadataset_nested_subset.yaml"
+        with open(nested_mds_path, "w") as f:
+            f.write(
+                "\n".join(
+                    [
+                        "__module__: megatron.energon",
+                        "__class__: MetadatasetV2",
+                        "splits:",
+                        "  train:",
+                        "    subset: {range: [0%, 50%]}",
+                        "    blend_epochized:",
+                        "      - path: ds3",
+                        # take [30, 50] from ds3, then first 50%, resulting in samples [230, 240]
+                        "        subset: {range: [30, 50]}",
+                        "        subflavors:",
+                        "          source: ds3",
+                        "          number: 45",
+                        "      - repetitions: 2",
+                        # Inner sample range: [14, 26], 2 * [124, 136], total=12*3=36
+                        # Applying subset ratio 25%-75%: [17, 23], 2*[127, 133], total=3*6=18
+                        # Applying outer 50%: [17, 20], 2*[127, 130], total=3*3=9
+                        # Applying repetition: 2*[17, 20], 4*[127, 130], total=2*9=18
+                        "        subset: {range: [25%, 75%]}",
+                        "        path: metadataset_ratio2.yaml",
+                    ]
+                )
+            )
+
+        loader = get_loader(
+            get_train_dataset(
+                nested_mds_path,
+                worker_config=worker_config,
+                batch_size=1,
+                shuffle_buffer_size=None,
+                shuffle_over_epochs_multiplier=None,
+                parallel_shard_iters=1,
+                max_samples_per_sequence=None,
+                repeat=False,
+            )
+        )
+
+        data = list(enumerate(loader))
+        assert len(data) == 10 + 9 * 2, len(data)
+        sample_counts = Counter([int(s[1].text[0]) for s in data])
+        assert all(sample_counts[sample] == 0 for sample in range(17)), sample_counts
+        assert all(sample_counts[sample] == 2 for sample in range(17, 20)), sample_counts
+        assert all(sample_counts[sample] == 0 for sample in range(20, 55)), sample_counts
+        assert all(sample_counts[sample] == 0 for sample in range(100, 127)), sample_counts
+        assert all(sample_counts[sample] == 4 for sample in range(127, 130)), sample_counts
+        assert all(sample_counts[sample] == 0 for sample in range(130, 155)), sample_counts
+        assert all(sample_counts[sample] == 0 for sample in range(200, 230)), sample_counts
+        assert all(sample_counts[sample] == 1 for sample in range(230, 240)), sample_counts
+        assert all(sample_counts[sample] == 0 for sample in range(240, 255)), sample_counts
+        assert sample_counts.total() == 10 + 9 * 2, sample_counts.total()
+
     def test_s3(self):
         # Create a joined dataset configuration
         mixed_mds_path = self.dataset_path / "metadataset_mixed.yaml"
