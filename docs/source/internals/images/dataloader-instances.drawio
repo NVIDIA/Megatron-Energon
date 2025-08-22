@@ -1,0 +1,269 @@
+<mxfile host="65bd71144e">
+    <diagram id="SopBPCQogSaJyMia_625" name="Page-1">
+        <mxGraphModel dx="2182" dy="1473" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1000" pageHeight="4000" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="114" value="DataLoader" style="swimlane;fontStyle=1;align=center;verticalAlign=middle;childLayout=stackLayout;horizontal=1;startSize=29;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;html=1;whiteSpace=wrap;" parent="1" vertex="1">
+                    <mxGeometry x="-280" y="350" width="280" height="279" as="geometry"/>
+                </mxCell>
+                <mxCell id="116" value="_workers: list[Worker]" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;" parent="114" vertex="1">
+                    <mxGeometry y="29" width="280" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="130" value="_current_epoch_iter: Iterator[TSample]" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;" parent="114" vertex="1">
+                    <mxGeometry y="54" width="280" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="131" value="_prefetching_samples: list[list[Future[TSample]]" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;" parent="114" vertex="1">
+                    <mxGeometry y="79" width="280" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="155" value="&amp;nbsp;&amp;nbsp;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;" parent="114" vertex="1">
+                    <mxGeometry y="104" width="280" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="156" value="def _epoch_iter(): Iterator[TSample]" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;" parent="114" vertex="1">
+                    <mxGeometry y="129" width="280" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="186" value="def __iter__(): Iterator[TSample]" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;" parent="114" vertex="1">
+                    <mxGeometry y="154" width="280" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="182" value="def save_state_rank(): RankState" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;" parent="114" vertex="1">
+                    <mxGeometry y="179" width="280" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="183" value="def restore_state_rank(state: RankState)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;" parent="114" vertex="1">
+                    <mxGeometry y="204" width="280" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="184" value="def start() / __enter__()" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;" parent="114" vertex="1">
+                    <mxGeometry y="229" width="280" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="185" value="def shutdown() / __exit__(...)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;" parent="114" vertex="1">
+                    <mxGeometry y="254" width="280" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="201" style="edgeStyle=orthogonalEdgeStyle;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;exitX=0;exitY=0.232;exitDx=0;exitDy=0;exitPerimeter=0;" parent="114" source="156" target="131" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <mxPoint x="290" y="152" as="sourcePoint"/>
+                        <mxPoint x="490" y="118" as="targetPoint"/>
+                        <Array as="points">
+                            <mxPoint x="-40" y="135"/>
+                            <mxPoint x="-40" y="92"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="203" style="edgeStyle=orthogonalEdgeStyle;html=1;exitX=0;exitY=0.5;exitDx=0;exitDy=0;dashed=1;entryX=0.001;entryY=0.677;entryDx=0;entryDy=0;entryPerimeter=0;" parent="114" source="186" target="156" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <mxPoint x="-40" y="250.95000000000005" as="sourcePoint"/>
+                        <mxPoint y="140" as="targetPoint"/>
+                        <Array as="points">
+                            <mxPoint x="-30" y="167"/>
+                            <mxPoint x="-30" y="146"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="124" value="&lt;span style=&quot;color: rgb(0, 0, 0);&quot;&gt;AsynchronousWorker&lt;/span&gt;" style="swimlane;fontStyle=1;align=center;verticalAlign=middle;childLayout=stackLayout;horizontal=1;startSize=29;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;html=1;whiteSpace=wrap;" parent="1" vertex="1">
+                    <mxGeometry x="720" y="170" width="310" height="229" as="geometry"/>
+                </mxCell>
+                <mxCell id="125" value="dataset: SavableDataset[TSample]" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;" parent="124" vertex="1">
+                    <mxGeometry y="29" width="310" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="153" value="&amp;nbsp;&amp;nbsp;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;" parent="124" vertex="1">
+                    <mxGeometry y="54" width="310" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="132" value="def start()" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;" parent="124" vertex="1">
+                    <mxGeometry y="79" width="310" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="133" value="def dataset_init(state: WorkerState | None)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;" parent="124" vertex="1">
+                    <mxGeometry y="104" width="310" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="134" value="def new_iter()" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;" parent="124" vertex="1">
+                    <mxGeometry y="129" width="310" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="135" value="def prefetch_next(): Future[TSample]" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;" parent="124" vertex="1">
+                    <mxGeometry y="154" width="310" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="136" value="def save_state(): WorkerState" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;" parent="124" vertex="1">
+                    <mxGeometry y="179" width="310" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="137" value="def shutdown()" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;" parent="124" vertex="1">
+                    <mxGeometry y="204" width="310" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="126" style="edgeStyle=none;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=-0.001;entryY=0.067;entryDx=0;entryDy=0;entryPerimeter=0;" parent="1" source="116" target="124" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="120" y="187"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="138" value="AsynchronousWorker&lt;span style=&quot;color: rgb(0, 0, 0);&quot;&gt;&amp;nbsp;(in fork or same)&lt;/span&gt;" style="swimlane;fontStyle=1;align=center;verticalAlign=middle;childLayout=stackLayout;horizontal=1;startSize=29;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;html=1;whiteSpace=wrap;dashed=1;" parent="1" vertex="1">
+                    <mxGeometry x="1170" y="180" width="310" height="204" as="geometry"/>
+                </mxCell>
+                <mxCell id="139" value="dataset: SavableDataset[TSample]" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;" parent="138" vertex="1">
+                    <mxGeometry y="29" width="310" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="140" value="_dataset_iter: Iterator[TSample]" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;" parent="138" vertex="1">
+                    <mxGeometry y="54" width="310" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="154" value="&amp;nbsp;&amp;nbsp;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;" parent="138" vertex="1">
+                    <mxGeometry y="79" width="310" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="142" value="def dataset_init(state: WorkerState | None)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;" parent="138" vertex="1">
+                    <mxGeometry y="104" width="310" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="143" value="def new_iter()" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;" parent="138" vertex="1">
+                    <mxGeometry y="129" width="310" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="144" value="def prefetch_next(): Future[TSample]" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;" parent="138" vertex="1">
+                    <mxGeometry y="154" width="310" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="145" value="def save_state(): WorkerState" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;" parent="138" vertex="1">
+                    <mxGeometry y="179" width="310" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="147" value="" style="line;strokeWidth=1;direction=south;html=1;dashed=1;dashPattern=20 20;" parent="1" vertex="1">
+                    <mxGeometry x="1100" y="70" width="10" height="400" as="geometry"/>
+                </mxCell>
+                <mxCell id="149" value="Worker Process / Thread" style="text;align=left;" parent="1" vertex="1">
+                    <mxGeometry x="1110" y="110" width="60" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="150" value="" style="html=1;verticalAlign=bottom;labelBackgroundColor=none;endArrow=open;endFill=0;dashed=1;" parent="1" source="124" target="138" edge="1">
+                    <mxGeometry width="160" relative="1" as="geometry">
+                        <mxPoint x="1050" y="280" as="sourcePoint"/>
+                        <mxPoint x="1210" y="280" as="targetPoint"/>
+                        <Array as="points">
+                            <mxPoint x="1100" y="240"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="151" value="RPC call via queue" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" parent="150" vertex="1" connectable="0">
+                    <mxGeometry x="-0.3359" relative="1" as="geometry">
+                        <mxPoint x="30" y="1" as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="152" value="Result via queue" style="html=1;verticalAlign=bottom;endArrow=open;dashed=1;endSize=8;curved=0;rounded=0;" parent="1" source="138" target="124" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <mxPoint x="1150" y="340" as="sourcePoint"/>
+                        <mxPoint x="1070" y="340" as="targetPoint"/>
+                        <Array as="points">
+                            <mxPoint x="1100" y="320"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="157" value="&lt;span style=&quot;color: rgb(0, 0, 0);&quot;&gt;AsynchronousWorker&lt;/span&gt;" style="swimlane;fontStyle=1;align=center;verticalAlign=middle;childLayout=stackLayout;horizontal=1;startSize=29;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;html=1;whiteSpace=wrap;" parent="1" vertex="1">
+                    <mxGeometry x="720" y="590" width="310" height="229" as="geometry"/>
+                </mxCell>
+                <mxCell id="158" value="dataset: SavableDataset[TSample]" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;" parent="157" vertex="1">
+                    <mxGeometry y="29" width="310" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="160" value="&amp;nbsp;&amp;nbsp;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;" parent="157" vertex="1">
+                    <mxGeometry y="54" width="310" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="161" value="def start()" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;" parent="157" vertex="1">
+                    <mxGeometry y="79" width="310" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="162" value="def dataset_init(state: WorkerState | None)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;" parent="157" vertex="1">
+                    <mxGeometry y="104" width="310" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="163" value="def new_iter()" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;" parent="157" vertex="1">
+                    <mxGeometry y="129" width="310" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="164" value="def prefetch_next(): Future[TSample]" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;" parent="157" vertex="1">
+                    <mxGeometry y="154" width="310" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="165" value="def save_state(): WorkerState" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;" parent="157" vertex="1">
+                    <mxGeometry y="179" width="310" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="166" value="def shutdown()" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;" parent="157" vertex="1">
+                    <mxGeometry y="204" width="310" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="167" value="" style="line;strokeWidth=1;direction=south;html=1;dashed=1;dashPattern=20 20;" parent="1" vertex="1">
+                    <mxGeometry x="1100" y="490" width="10" height="400" as="geometry"/>
+                </mxCell>
+                <mxCell id="168" value="&lt;span style=&quot;color: rgb(0, 0, 0);&quot;&gt;AsynchronousWorker&lt;/span&gt;&lt;span style=&quot;color: rgb(0, 0, 0);&quot;&gt;&amp;nbsp;&lt;/span&gt;(in fork or same)" style="swimlane;fontStyle=1;align=center;verticalAlign=middle;childLayout=stackLayout;horizontal=1;startSize=29;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;html=1;whiteSpace=wrap;dashed=1;" parent="1" vertex="1">
+                    <mxGeometry x="1170" y="600" width="310" height="204" as="geometry"/>
+                </mxCell>
+                <mxCell id="169" value="dataset: SavableDataset[TSample]" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;" parent="168" vertex="1">
+                    <mxGeometry y="29" width="310" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="170" value="_dataset_iter: Iterator[TSample]" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;" parent="168" vertex="1">
+                    <mxGeometry y="54" width="310" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="171" value="&amp;nbsp;&amp;nbsp;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;" parent="168" vertex="1">
+                    <mxGeometry y="79" width="310" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="172" value="def dataset_init(state: WorkerState | None)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;" parent="168" vertex="1">
+                    <mxGeometry y="104" width="310" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="173" value="def new_iter()" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;" parent="168" vertex="1">
+                    <mxGeometry y="129" width="310" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="174" value="def prefetch_next(): Future[TSample]" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;" parent="168" vertex="1">
+                    <mxGeometry y="154" width="310" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="175" value="def save_state(): WorkerState" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;" parent="168" vertex="1">
+                    <mxGeometry y="179" width="310" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="176" value="" style="html=1;verticalAlign=bottom;labelBackgroundColor=none;endArrow=open;endFill=0;dashed=1;" parent="1" source="157" target="168" edge="1">
+                    <mxGeometry width="160" relative="1" as="geometry">
+                        <mxPoint x="1050" y="700" as="sourcePoint"/>
+                        <mxPoint x="1210" y="700" as="targetPoint"/>
+                        <Array as="points">
+                            <mxPoint x="1100" y="660"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="177" value="RPC call via queue" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" parent="176" vertex="1" connectable="0">
+                    <mxGeometry x="-0.3359" relative="1" as="geometry">
+                        <mxPoint x="30" y="1" as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="178" value="Result via queue" style="html=1;verticalAlign=bottom;endArrow=open;dashed=1;endSize=8;curved=0;rounded=0;" parent="1" source="168" target="157" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <mxPoint x="1150" y="760" as="sourcePoint"/>
+                        <mxPoint x="1070" y="760" as="targetPoint"/>
+                        <Array as="points">
+                            <mxPoint x="1100" y="740"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="179" value="Worker Process / Thread" style="text;align=left;" parent="1" vertex="1">
+                    <mxGeometry x="1110" y="520" width="60" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="181" style="edgeStyle=none;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0.001;entryY=0.061;entryDx=0;entryDy=0;entryPerimeter=0;" parent="1" source="116" target="157" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <mxPoint x="510" y="322" as="sourcePoint"/>
+                        <mxPoint x="728" y="199" as="targetPoint"/>
+                        <Array as="points">
+                            <mxPoint x="120" y="604"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="187" value="PinMemoryThread" style="swimlane;fontStyle=1;align=center;verticalAlign=middle;childLayout=stackLayout;horizontal=1;startSize=29;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;html=1;whiteSpace=wrap;" parent="1" vertex="1">
+                    <mxGeometry x="200" y="416" width="320" height="104" as="geometry"/>
+                </mxCell>
+                <mxCell id="192" value="def __call__(sample: Future[TSample]): Future[TSample]" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;" parent="187" vertex="1">
+                    <mxGeometry y="29" width="320" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="196" value="def start() / __enter__()" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;" parent="187" vertex="1">
+                    <mxGeometry y="54" width="320" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="197" value="def shutdown() / __exit__(...)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;" parent="187" vertex="1">
+                    <mxGeometry y="79" width="320" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="198" style="edgeStyle=none;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;dashed=1;" parent="1" source="156" target="192" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <mxPoint x="290" y="412" as="sourcePoint"/>
+                        <mxPoint x="728" y="197" as="targetPoint"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="199" style="edgeStyle=none;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;dashed=1;endArrow=open;endFill=0;" parent="1" source="192" target="135" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <mxPoint x="290" y="462" as="sourcePoint"/>
+                        <mxPoint x="350" y="142" as="targetPoint"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="200" style="edgeStyle=none;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;dashed=1;endArrow=open;endFill=0;" parent="1" source="192" target="164" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <mxPoint x="680" y="462" as="sourcePoint"/>
+                        <mxPoint x="730" y="347" as="targetPoint"/>
+                    </mxGeometry>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+</mxfile>

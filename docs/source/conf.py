@@ -53,6 +53,7 @@ extensions = [
     "sphinx.ext.napoleon",
     "myst_parser",  # markdown(*.md) parser
     "sphinx_click",
+    "sphinxcontrib.drawio",  # draw.io diagram support
 ]
 
 # Autodoc
@@ -73,6 +74,11 @@ autodoc_typehints_format = "short"
 from sphinx.ext.autodoc.mock import MockFinder
 
 sys.meta_path.insert(0, MockFinder(autodoc_mock_imports))
+
+# Draw.io configuration
+drawio_default_transparency = True
+drawio_no_validation = True
+drawio_headless = 'auto'  # Enable headless mode for CI environments
 
 # Napoleon
 napoleon_google_docstring = True

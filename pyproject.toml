@@ -45,6 +45,7 @@ dev = [
   "soundfile",
   "sphinx-rtd-theme",
   "sphinx-click",
+  "sphinxcontrib-drawio",
 ]
 transforms = [
   "torchvision",  # Needed for megatron.energon.transforms

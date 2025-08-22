@@ -1101,6 +1101,7 @@ dev = [
     { name = "sphinx", version = "8.2.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "sphinx-click" },
     { name = "sphinx-rtd-theme" },
+    { name = "sphinxcontrib-drawio" },
     { name = "sphinxcontrib-napoleon" },
 ]
 google-cloud-storage = [
@@ -1148,6 +1149,7 @@ requires-dist = [
     { name = "sphinx", marker = "extra == 'dev'" },
     { name = "sphinx-click", marker = "extra == 'dev'" },
     { name = "sphinx-rtd-theme", marker = "extra == 'dev'" },
+    { name = "sphinxcontrib-drawio", marker = "extra == 'dev'" },
     { name = "sphinxcontrib-napoleon", marker = "extra == 'dev'" },
     { name = "torch" },
     { name = "torchvision", marker = "extra == 'transforms'" },
@@ -2427,6 +2429,19 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/f6/d2/5beee64d3e4e747f316bae86b55943f51e82bb86ecd325883ef65741e7da/sphinxcontrib_devhelp-2.0.0.tar.gz", hash = "sha256:411f5d96d445d1d73bb5d52133377b4248ec79db5c793ce7dbe59e074b4dd1ad", size = 12967 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/35/7a/987e583882f985fe4d7323774889ec58049171828b58c2217e7f79cdf44e/sphinxcontrib_devhelp-2.0.0-py3-none-any.whl", hash = "sha256:aefb8b83854e4b0998877524d1029fd3e6879210422ee3780459e28a1f03a8a2", size = 82530 },
+]
+
+[[package]]
+name = "sphinxcontrib-drawio"
+version = "0.0.17"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "sphinx", version = "8.1.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "sphinx", version = "8.2.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ea/9b/45a4e9f7d5b3f3e8e3fa792f99b20d2f6d337c4b84f9e55044aecf0e60c8/sphinxcontrib-drawio-0.0.17.tar.gz", hash = "sha256:1a3f82efd1ab4b41d1ee8dd27c296bae0944a10faca3568c462dc6b9a77748f5", size = 25645 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/34/d4/81b8c94f216ef2fb68475b2f5a2836495e5da4d4ce011b3e41e663b89d1f/sphinxcontrib_drawio-0.0.17-py3-none-any.whl", hash = "sha256:c42e3fee5398da52836e8ee5c61c2f19bce947abb2d17b857057fb32137c1096", size = 10727 },
 ]
 
 [[package]]
