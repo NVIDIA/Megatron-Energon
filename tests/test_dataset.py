@@ -1687,11 +1687,13 @@ class TestDataset(unittest.TestCase):
         with (debug_log_path / "0.jsonl").open() as rf:
             for line in rf:
                 line_data = json.loads(line)
-                if line_data["t"] == "SavableDataLoader.yield":
-                    print(line_data)
+                print(line_data)
+                if line_data["t"] == "DataLoader.epoch_iter.yield":
                     for i in range(len(collected_keys_order)):
-                        if collected_keys_order[i][line_data["idx"]] is None:
-                            collected_keys_order[i][line_data["idx"]] = line_data["keys"]
+                        if collected_keys_order[i][line_data["epoch_sample_idx"]] is None:
+                            collected_keys_order[i][line_data["epoch_sample_idx"]] = line_data[
+                                "keys"
+                            ]
                             break
                     else:
                         assert False, "Too many entries for key"

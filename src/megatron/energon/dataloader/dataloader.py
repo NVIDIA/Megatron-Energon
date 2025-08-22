@@ -33,6 +33,7 @@ from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset, get_sample_restore_key
 from megatron.energon.wrappers.batch_dataset import BatchDataset
 from megatron.energon.wrappers.gc_dataset import GC_DEFAULT_EVERY_N_ITER, GcDataset
+from megatron.energon.wrappers.log_sample_dataset import default_get_keys
 from megatron.energon.wrappers.watchdog_dataset import WatchdogDataset
 
 TSample = TypeVar("TSample", covariant=True)
@@ -78,6 +79,7 @@ class DataLoader(Generic[TSample]):
 
     _next_id: ClassVar[int] = 0
     _id: int
+    _next_epoch_id: int = 0
 
     _workers: list[DataLoaderWorker[TSample]] | None = None
     _exhausted_workers: list[bool]
@@ -95,6 +97,8 @@ class DataLoader(Generic[TSample]):
     _current_epoch_iter: Generator[TSample, None, None] | None = None
 
     _spawning_process: int
+
+    _global_sample_idx: int = 0
 
     def __init__(
         self,
@@ -187,7 +191,18 @@ class DataLoader(Generic[TSample]):
 
         self._spawning_process = os.getpid()
 
-    def _start(self) -> None:
+        if self._worker_config.should_log(level=1):
+            self._worker_config.worker_log(
+                {
+                    "t": "DataLoader.__init__",
+                    "r": self._worker_config.rank,
+                    "w": None,
+                    "id": self._id,
+                    "config": dataset.config(),
+                }
+            )
+
+    def start(self) -> None:
         """Start the workers and restore the state if available."""
         self._workers = [
             self._worker_type(self._dataset, self._worker_config, local_worker_id, self._cache_pool)
@@ -256,7 +271,7 @@ class DataLoader(Generic[TSample]):
     def __enter__(self) -> "DataLoader[TSample]":
         # Already start if using the context manager. This ensures the lifecycle is fixed.
         # Otherwise, will start when iterating.
-        self._start()
+        self.start()
         return self
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:
@@ -265,8 +280,22 @@ class DataLoader(Generic[TSample]):
     def _epoch_iter(self) -> Generator[TSample, None, None]:
         """Iterate over the dataset for one epoch (i.e. all workers StopIteration).
         One epoch may also be infinite (if looping the dataset)."""
+        epoch_id = self._next_epoch_id
+        self._next_epoch_id += 1
+
+        if self._worker_config.should_log(level=1):
+            self._worker_config.worker_log(
+                {
+                    "t": "DataLoader.epoch_iter",
+                    "r": self._worker_config.rank,
+                    "w": None,
+                    "id": self._id,
+                    "epoch_id": epoch_id,
+                }
+            )
+
         if self._workers is None:
-            self._start()
+            self.start()
             assert self._workers is not None, "DataLoader not started"
 
         if all(self._exhausted_workers):
@@ -296,6 +325,7 @@ class DataLoader(Generic[TSample]):
         # - Yield the sample.
         if DEBUG_LEVEL >= 1:
             print(f"{self._exhausted_workers=}\n", end="")
+        epoch_sample_idx = 0
         while not all(self._exhausted_workers):
             # Get the next worker to prefetch samples from.
             worker_idx = self._next_worker_id
@@ -326,10 +356,48 @@ class DataLoader(Generic[TSample]):
                 # If the sample future raises StopIteration, remove the worker from the list.
                 self._prefetching_samples[worker_idx] = []
                 self._exhausted_workers[worker_idx] = True
+                if self._worker_config.should_log(level=1):
+                    self._worker_config.worker_log(
+                        {
+                            "t": "DataLoader.epoch_iter.StopIteration",
+                            "r": self._worker_config.rank,
+                            "w": None,
+                            "id": self._id,
+                            "epoch_id": epoch_id,
+                        }
+                    )
                 continue
             else:
                 if DEBUG_LEVEL >= 2:
                     print(f"{worker_idx=} got sample, yield\n", end="")
+                if self._worker_config.should_log(level=1):
+                    keys = default_get_keys(sample)
+                    restore_key = get_sample_restore_key(sample)
+                    self._worker_config.worker_log(
+                        {
+                            **{
+                                "t": "DataLoader.epoch_iter.yield",
+                                "r": self._worker_config.rank,
+                                "w": None,
+                                "id": self._id,
+                                "epoch_id": epoch_id,
+                                "worker_id": worker_idx,
+                                "worker_sample_idx": restore_key.sample_idx
+                                if isinstance(restore_key, WorkerSampleRestoreKey)
+                                else None,
+                                "epoch_sample_idx": epoch_sample_idx,
+                                "global_sample_idx": self._global_sample_idx,
+                            },
+                            **({} if keys is None else {"keys": keys}),
+                            **(
+                                {}
+                                if restore_key is None
+                                else {"restore_key": restore_key.as_tuple()}
+                            ),
+                        }
+                    )
+                epoch_sample_idx += 1
+                self._global_sample_idx += 1
                 # Yield the sample.
                 yield sample
 
