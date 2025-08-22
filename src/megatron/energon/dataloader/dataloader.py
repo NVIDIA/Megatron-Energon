@@ -202,7 +202,7 @@ class DataLoader(Generic[TSample]):
                 }
             )
 
-    def _start(self) -> None:
+    def start(self) -> None:
         """Start the workers and restore the state if available."""
         self._workers = [
             self._worker_type(self._dataset, self._worker_config, local_worker_id, self._cache_pool)
@@ -271,7 +271,7 @@ class DataLoader(Generic[TSample]):
     def __enter__(self) -> "DataLoader[TSample]":
         # Already start if using the context manager. This ensures the lifecycle is fixed.
         # Otherwise, will start when iterating.
-        self._start()
+        self.start()
         return self
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:
@@ -295,7 +295,7 @@ class DataLoader(Generic[TSample]):
             )
 
         if self._workers is None:
-            self._start()
+            self.start()
             assert self._workers is not None, "DataLoader not started"
 
         if all(self._exhausted_workers):

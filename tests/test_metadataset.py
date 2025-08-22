@@ -1370,7 +1370,7 @@ class TestDataset(unittest.TestCase):
         assert same_state == state_initial
 
         # This will propagate the state to the workers.
-        second_loader._start()
+        second_loader.start()
         # Save the state again, to check that it is the same as the just restored state
         same_state = second_loader.save_state_rank()
         print("same_state:", same_state)
