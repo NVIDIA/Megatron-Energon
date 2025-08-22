@@ -8,6 +8,7 @@ import random
 import string
 import tempfile
 import threading
+import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, Literal, Optional, Tuple, TypeVar
@@ -64,6 +65,37 @@ class FileCacheLazy(Lazy[T]):
             with self.pool._lock:
                 # Data was never fetched, still decrement refcount to delete the cache entry
                 self.pool._decrement_refcount_and_cleanup((self.ds.get_path(), self.fname))
+
+
+@edataclass
+class CacheFileLazy(Lazy[T]):
+    """
+    Represents a reference to a cached object without deduplication.
+    """
+
+    cache_path: Path
+
+    _data: Optional[T] = None
+
+    def get(self, sample: Any = None) -> T:
+        """
+        Get the lazy data now and adds no source info to the sample.
+        """
+        if self._data is None:
+            with open(self.cache_path, "rb") as f:
+                self._data = pickle.load(f)
+        return self._data
+
+    def __hash__(self) -> int:
+        return hash((self.fname, self.cache_path))
+
+    def __eq__(self, other: Any) -> bool:
+        if not isinstance(other, CacheFileLazy):
+            return False
+        return self.fname == other.fname and self.cache_path == other.cache_path
+
+    def __repr__(self) -> str:
+        return f"CacheFileLazy(fname={self.fname!r}, cache_path={self.cache_path!r})"
 
 
 @edataclass
@@ -325,6 +357,16 @@ class FileStoreCachePool(CachePool, ForkMixin):
                 )
 
         return FileCacheLazy(ds=ds, fname=fname, pool=self, entry=entry)
+
+    def to_cache(self, data: T, name: str) -> FileCacheLazy:
+        """
+        Move the data to the cache and return a lazy to fetch it later.
+        """
+        raw_data = pickle.dumps(data)
+        cache_fname = str(uuid.uuid4())
+        cache_path = self.cache_dir / cache_fname
+        self._write_to_cache(cache_path, raw_data)
+        return CacheFileLazy(ds=None, fname=name, pool=self, cache_path=cache_path)
 
     def close(self) -> None:
         """

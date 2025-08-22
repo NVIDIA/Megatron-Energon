@@ -3,7 +3,7 @@
 
 from typing import Any, Optional, TypeVar
 
-from megatron.energon.cache.base import CachePool, FileStore, Lazy
+from megatron.energon.cache.base import CachePool, FileStore, Lazy, MockLazy
 from megatron.energon.edataclass import edataclass
 from megatron.energon.source_info import SourceInfo, add_source_info
 
@@ -46,6 +46,9 @@ class NoCachePool(CachePool):
 
     def get_lazy(self, ds: FileStore, fname: str) -> DirectLazy:
         return DirectLazy(ds=ds, fname=fname, pool=self)
+
+    def to_cache(self, data: T, name: str) -> DirectLazy:
+        return MockLazy(fname=name, get_fn=lambda _: data)
 
     def close(self) -> None:
         pass
