@@ -207,27 +207,34 @@ Then we tell the cooker decorator that we need access to the cache pool and use 
 
 ```python
 from megatron.energon import cooker, FileStore, CachePool
+from megatron.energon.av import AVDecoder
 
 # ...
 
 @edataclass
-class LazyTextSample(Sample):
+class TextVideoSample(Sample):
     text: str
-    secondary_text: Lazy[str]
+    video: Lazy[AVDecoder]
+
+
+@edataclass
+class PackedTextVideoSample(Sample):
+    text: str
+    video: torch.Tensor
 
 
 @cooker(need_cache=True)
-def cook_text(sample: dict, foo_bar_source: FileStore, cache: CachePool) -> LazyTextSample:
+def cook_video(sample: dict, video_source: FileStore, cache: CachePool) -> TextVideoSample:
     # Previous non-cached version:
-    # additional_text = foo_bar_source.get(sample['add_txt_fname'])
+    # video = video_source.get(sample['video_path'])
 
     # Cached version:
-    additional_text = cache.get_lazy(foo_bar_source, sample['add_txt_fname'])
+    video = cache.get_lazy(foo_bar_source, sample['video_path'])
 
-    return TextSample(
+    return TextVideoSample(
         **basic_sample_keys(sample),
-        text=f"{sample['txt'].decode()} + {additional_text.decode()}",
-        secondary_text=additional_text,  # Pass the lazy object on
+        text=sample['txt'].decode(),
+        video=video,  # Pass the lazy object on
     )
 ```
 
@@ -235,12 +242,34 @@ Later down the data processing pipeline, we can retrieve the data, for example h
 
 ```python
 @stateless
-def pack_selected_samples(self, samples: List[LazyTextSample]) -> TextSample:
+def pack_selected_samples(self, samples: List[TextVideoSample]) -> PackedTextVideoSample:
     # Get the real object now:
-    secondary_txt = samples[0].secondary_txt.get(samples[0])
+    video_data: AVDecoder = samples[0].video.get(samples[0])
     
-    return TextSample.derive_from(
+    return TextVideoSample.derive_from(
         samples[0],
-        text=samples[0].txt + "|" + secondary_txt,
+        text=samples[0].txt,
+        video=video_data.get_video_clips([(0, 1), (19, 20)])[0],
+    )
+```
+
+There is a second option, e.g. if you want to combine a monolithic dataset with packing and caching: Use `cache.to_cache()` to move already loaded data to the cache:
+
+```python
+@cooker(need_cache=True)
+def cook_video_monolithic(sample: dict, cache: CachePool) -> TextVideoSample:
+    # Previous non-cached version:
+    # video: AVDecoder = sample['mp4']
+
+    # Move the video to the cache, retrieve it later when it is needed again.
+    video: Lazy[AVDecoder] = cache.to_cache(
+        sample['mp4'],
+        sample['__key__'] + ".mp4",  # Just a name for debugging
+    )
+
+    return TextVideoSample(
+        **basic_sample_keys(sample),
+        text=sample['txt'].decode(),
+        video=video,  # Pass the lazy object on
     )
 ```
