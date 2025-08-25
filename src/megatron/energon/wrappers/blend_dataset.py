@@ -1,16 +1,27 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+from dataclasses import dataclass
 from typing import Any, Dict, Iterator, List, Sequence, Tuple, TypeVar
 
 import torch
 
-from megatron.energon.flavors.base_dataset import SavableDataset, add_sample_restore_key
+from megatron.energon.flavors.base_dataset import SavableDataset
 from megatron.energon.rng import WorkerRng
 from megatron.energon.worker import WorkerConfig
-from megatron.energon.wrappers.base import BaseWrapperDataset
+from megatron.energon.wrappers.base import (
+    BaseWrapperDataset,
+    RestoreKey,
+    WrappedRestoreKey,
+    wrap_sample_restore_key,
+)
 
 T_sample = TypeVar("T_sample")
+
+
+@dataclass(kw_only=True, slots=True, frozen=True)
+class BlendRestoreKey(WrappedRestoreKey):
+    dataset_idx: int
 
 
 class BlendDataset(BaseWrapperDataset[T_sample, T_sample]):
@@ -46,7 +57,6 @@ class BlendDataset(BaseWrapperDataset[T_sample, T_sample]):
         super().__init__(self.datasets, worker_config=worker_config)
 
         self.dataset_weights = dataset_weights
-        self.reset_state_own()
 
     def reset_state_own(self) -> None:
         self._worker_rng = WorkerRng(self.worker_config)
@@ -105,9 +115,13 @@ class BlendDataset(BaseWrapperDataset[T_sample, T_sample]):
                 if all(dataset_iter is None for dataset_iter in dataset_iters):
                     break
             else:
-                yield add_sample_restore_key(sample, ds_idx, src=self)
+                yield wrap_sample_restore_key(sample, BlendRestoreKey, dataset_idx=ds_idx)
 
         self.exhausted = [False] * len(self.dataset_weights)
+
+    def restore_sample(self, restore_key: RestoreKey) -> T_sample:
+        assert isinstance(restore_key, BlendRestoreKey)
+        return self.datasets[restore_key.dataset_idx].restore_sample(restore_key.inner)
 
     def config(self) -> Dict[str, Any]:
         return {

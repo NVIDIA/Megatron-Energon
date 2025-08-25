@@ -67,7 +67,9 @@ class Watchdog:
         # Condition variable to manage state changes
         self._cv = threading.Condition()
         # Background thread (daemon) that monitors timeouts
-        self._worker_thread = threading.Thread(target=self._worker, daemon=True)
+        self._worker_thread = threading.Thread(
+            name=f"watchdog-{id(self)}", target=self._worker, daemon=True
+        )
         self._worker_thread.start()
 
     def _get_next_timeout(self) -> float:
