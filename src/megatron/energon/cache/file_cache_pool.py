@@ -73,7 +73,7 @@ class CacheFileLazy(Lazy[T]):
     Represents a reference to a cached object without deduplication.
     """
 
-    cache_path: Path
+    cache_path: Path | None
 
     _data: Optional[T] = None
 
@@ -84,7 +84,14 @@ class CacheFileLazy(Lazy[T]):
         if self._data is None:
             with open(self.cache_path, "rb") as f:
                 self._data = pickle.load(f)
+            self.cache_path.unlink()
+            self.cache_path = None
         return self._data
+
+    def __del__(self):
+        if self.cache_path is not None:
+            self.cache_path.unlink()
+            self.cache_path = None
 
     def __hash__(self) -> int:
         return hash((self.fname, self.cache_path))
@@ -358,7 +365,7 @@ class FileStoreCachePool(CachePool, ForkMixin):
 
         return FileCacheLazy(ds=ds, fname=fname, pool=self, entry=entry)
 
-    def to_cache(self, data: T, name: str) -> FileCacheLazy:
+    def to_cache(self, data: T, name: str) -> CacheFileLazy[T]:
         """
         Move the data to the cache and return a lazy to fetch it later.
         """
