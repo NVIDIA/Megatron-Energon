@@ -4,13 +4,13 @@
 import dataclasses
 import functools
 import inspect
+import threading
 from abc import ABC
 from dataclasses import is_dataclass
 from types import MethodType
 from typing import (
     Any,
     Callable,
-    ClassVar,
     Dict,
     Generator,
     Generic,
@@ -41,7 +41,6 @@ from megatron.energon.flavors import (
 from megatron.energon.flavors.base_dataset import ExtendableDataclassMixin, RestoreKey
 from megatron.energon.metadataset.loader_interface import DatasetBlendMode, LoadedDataset
 from megatron.energon.rng import SystemRng, UserRng
-from megatron.energon.savable import Savable
 from megatron.energon.source_info import SourceInfo
 from megatron.energon.task_encoder.cooking import Cooker
 from megatron.energon.worker import WorkerConfig
@@ -409,7 +408,7 @@ class Batch(PinMemoryMixin, ExtendableDataclassMixin):
         return cls(**init_args)
 
 
-class TaskEncoder(Savable, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]):
+class TaskEncoder(Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]):
     """
     Base class for task encoders.
 
@@ -435,11 +434,12 @@ class TaskEncoder(Savable, Generic[T_sample, T_encoded_sample, T_raw_batch, T_ba
     #: The decoder to use for decoding samples. Set manually as needed to override options.
     decoder: Optional[SampleDecoder] = SampleDecoder()
 
-    # Defines which fields are saved and restored when saving and restoring the state of the task encoder.
-    _state_fields: ClassVar[Tuple[str, ...]] = ("rng",)
+    #: Thread-local state. Used for properties, that are worker-local.
+    _worker_local: threading.local
 
-    # State fields, they are initialized when the dataloader is started.
-    rng: UserRng
+    def __init__(self):
+        # Create a thread-local state for the workers.
+        self._worker_local = threading.local()
 
     @stateless
     def cook_crude_sample(
@@ -1086,6 +1086,18 @@ class TaskEncoder(Savable, Generic[T_sample, T_encoded_sample, T_raw_batch, T_ba
             "Cache pool must be set by the loader."
         )
         return WorkerConfig.active_worker_config._active_state.cache_pool
+
+    # State fields, they are initialized when the dataloader is started.
+    @property
+    def rng(self) -> UserRng:
+        """The random generator that should be used within user methods (like `encode_sample`) for reproducibility (and
+        thus for savability).
+        """
+        if not hasattr(self._worker_local, "rng"):
+            # Initialize when needed.
+            self._worker_local.rng = UserRng(WorkerConfig.active_worker_config.worker_seed())
+
+        return self._worker_local.rng
 
 
 class DefaultTaskEncoder(
