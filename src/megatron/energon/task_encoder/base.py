@@ -1046,7 +1046,7 @@ class TaskEncoder(Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]):
     def reset_state(self) -> None:
         """Internally reset the state of the task encoder. This is called when the dataloader is started."""
         assert WorkerConfig.active_worker_config is not None, "Must be called within worker"
-        self.rng = UserRng(WorkerConfig.active_worker_config.worker_seed())
+        self._worker_local.rng = UserRng(WorkerConfig.active_worker_config.worker_seed())
 
     # Burrow the save_state and restore_state methods from the SavableDataset class.
     save_state = SavableDataset.save_state
