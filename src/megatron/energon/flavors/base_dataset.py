@@ -252,9 +252,6 @@ class State(ABC, ExtendableDataclassMixin):
     """
 
 
-THREAD_SAFE = True
-
-
 class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC):
     """A dataset that can be saved and restored (i.e. the random state, internal buffers, etc.).
     I.e. it can be resumed from a checkpoint.
@@ -281,8 +278,7 @@ class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC)
 
     def __init__(self, worker_config: WorkerConfig):
         self.worker_config = worker_config
-        if THREAD_SAFE:
-            self._thread_state = threading.local()
+        self._thread_state = threading.local()
 
     @abstractmethod
     def len_worker(self, worker_idx: int | None = None) -> int:
@@ -412,32 +408,30 @@ class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC)
             "This dataset does not support restoring, because it is not safely deterministic."
         )
 
-    if THREAD_SAFE:
-
-        def __getattribute__(self, name: str) -> Any:
-            if name in ("_savable_fields", "_state_fields", "_thread_state", "worker_config"):
+    def __getattribute__(self, name: str) -> Any:
+        if name in ("_savable_fields", "_state_fields", "_thread_state", "worker_config"):
+            return object.__getattribute__(self, name)
+        elif name in self._savable_fields or name in self._state_fields:
+            try:
+                return getattr(self._thread_state, name)
+            except AttributeError:
                 return object.__getattribute__(self, name)
-            elif name in self._savable_fields or name in self._state_fields:
-                try:
-                    return getattr(self._thread_state, name)
-                except AttributeError:
-                    return object.__getattribute__(self, name)
-            else:
-                return object.__getattribute__(self, name)
+        else:
+            return object.__getattribute__(self, name)
 
-        def __delattr__(self, name: str) -> None:
-            if name in self._savable_fields or name in self._state_fields:
-                delattr(self._thread_state, name)
-            else:
-                object.__delattr__(self, name)
+    def __delattr__(self, name: str) -> None:
+        if name in self._savable_fields or name in self._state_fields:
+            delattr(self._thread_state, name)
+        else:
+            object.__delattr__(self, name)
 
-        def __setattr__(self, name: str, value: Any) -> None:
-            if name in ("_savable_fields", "_state_fields", "_thread_state", "worker_config"):
-                object.__setattr__(self, name, value)
-            elif name in self._savable_fields or name in self._state_fields:
-                setattr(self._thread_state, name, value)
-            else:
-                object.__setattr__(self, name, value)
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name in ("_savable_fields", "_state_fields", "_thread_state", "worker_config"):
+            object.__setattr__(self, name, value)
+        elif name in self._savable_fields or name in self._state_fields:
+            setattr(self._thread_state, name, value)
+        else:
+            object.__setattr__(self, name, value)
 
 
 class BaseCoreDatasetFactory(Generic[T_sample], ABC):

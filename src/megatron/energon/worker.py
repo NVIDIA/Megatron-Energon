@@ -18,8 +18,6 @@ __all__ = ("WorkerConfig",)
 
 T = TypeVar("T")
 
-THREAD_SAFE = True
-
 
 class ActiveWorkerState:
     """
