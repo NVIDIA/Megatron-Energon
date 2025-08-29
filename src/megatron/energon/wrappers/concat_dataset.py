@@ -1,13 +1,23 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+from dataclasses import dataclass
 from typing import Any, Dict, Generic, Iterator, TypeVar
 
-from megatron.energon.flavors.base_dataset import SavableDataset, add_sample_restore_key
+from megatron.energon.flavors.base_dataset import RestoreKey, SavableDataset
 from megatron.energon.worker import WorkerConfig
-from megatron.energon.wrappers.base import BaseWrapperDataset
+from megatron.energon.wrappers.base import (
+    BaseWrapperDataset,
+    WrappedRestoreKey,
+    wrap_sample_restore_key,
+)
 
 T_sample = TypeVar("T_sample")
+
+
+@dataclass(kw_only=True, slots=True, frozen=True)
+class ConcatRestoreKey(WrappedRestoreKey):
+    dataset_idx: int
 
 
 class ConcatDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
@@ -35,11 +45,15 @@ class ConcatDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
     def __iter__(self) -> Iterator[T_sample]:
         for ds_idx, dataset in enumerate(self.datasets):
             for sample in dataset:
-                yield add_sample_restore_key(
+                yield wrap_sample_restore_key(
                     sample,
-                    ds_idx,
-                    src=self,
+                    ConcatRestoreKey,
+                    dataset_idx=ds_idx,
                 )
+
+    def restore_sample(self, restore_key: RestoreKey) -> T_sample:
+        assert isinstance(restore_key, ConcatRestoreKey)
+        return self.datasets[restore_key.dataset_idx].restore_sample(restore_key.inner)
 
     def config(self) -> Dict[str, Any]:
         return {
