@@ -27,6 +27,11 @@ check: dev-sync
 test: dev-sync
     uv run -m unittest discover -v -s tests
 
+coverage: dev-sync
+    uv run -m coverage run -m unittest discover -v -s tests
+    uv run -m coverage html
+    echo "Coverage report generated at ./htmlcov/index.html"
+
 # Build the docs
 docs: dev-sync
     uv run sphinx-build -b html docs/source docs/build

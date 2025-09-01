@@ -38,6 +38,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  "coverage",
   "ruff",
   "sphinxcontrib-napoleon",
   "sphinx",
@@ -108,3 +109,14 @@ exclude = [
   "docs",
 ]
 
+[tool.coverage.run]
+branch = true
+parallel = true
+concurrency = ["multiprocessing"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+
+[tool.coverage.html]
+show_contexts = true
