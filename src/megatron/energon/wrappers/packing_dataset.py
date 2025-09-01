@@ -110,7 +110,7 @@ class PackingDataset(
         "_final_packing_sample_index",
     )
 
-    _state_fields = (
+    _worker_local_fields = (
         "_last_pre_pack_failures",
         "_last_final_pack_failures",
         "_last_sample_encoder_failures",

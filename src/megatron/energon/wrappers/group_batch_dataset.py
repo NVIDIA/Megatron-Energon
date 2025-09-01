@@ -158,7 +158,7 @@ class GroupBatchDataset(
     _last_batch_failures: int = 0
 
     _savable_fields = ("_group_key_sample_index", "_batch_sample_index", "_buckets")
-    _state_fields = ("_last_batch_failures",)
+    _worker_local_fields = ("_last_batch_failures",)
 
     def __init__(
         self,

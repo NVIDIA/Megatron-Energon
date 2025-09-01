@@ -85,7 +85,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
         "_epoch_sample_count",
     )
 
-    _state_fields = ("_slice_offsets",)
+    _worker_local_fields = ("_slice_offsets",)
 
     def __init__(
         self,

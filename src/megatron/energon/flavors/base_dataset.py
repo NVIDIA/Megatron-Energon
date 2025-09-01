@@ -274,7 +274,7 @@ class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC)
     _savable_fields: ClassVar[Tuple[str, ...]] = ()
 
     #: List of names of the fields that are not saved, but are still part of the state (i.e. not shared between workers).
-    _state_fields: ClassVar[Tuple[str, ...]] = ()
+    _worker_local_fields: ClassVar[Tuple[str, ...]] = ()
 
     def __init__(self, worker_config: WorkerConfig):
         self.worker_config = worker_config
@@ -409,9 +409,9 @@ class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC)
         )
 
     def __getattribute__(self, name: str) -> Any:
-        if name in ("_savable_fields", "_state_fields", "_thread_state", "worker_config"):
+        if name in ("_savable_fields", "_worker_local_fields", "_thread_state", "worker_config"):
             return object.__getattribute__(self, name)
-        elif name in self._savable_fields or name in self._state_fields:
+        elif name in self._savable_fields or name in self._worker_local_fields:
             try:
                 return getattr(self._thread_state, name)
             except AttributeError:
@@ -420,15 +420,15 @@ class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC)
             return object.__getattribute__(self, name)
 
     def __delattr__(self, name: str) -> None:
-        if name in self._savable_fields or name in self._state_fields:
+        if name in self._savable_fields or name in self._worker_local_fields:
             delattr(self._thread_state, name)
         else:
             object.__delattr__(self, name)
 
     def __setattr__(self, name: str, value: Any) -> None:
-        if name in ("_savable_fields", "_state_fields", "_thread_state", "worker_config"):
+        if name in ("_savable_fields", "_worker_local_fields", "_thread_state", "worker_config"):
             object.__setattr__(self, name, value)
-        elif name in self._savable_fields or name in self._state_fields:
+        elif name in self._savable_fields or name in self._worker_local_fields:
             setattr(self._thread_state, name, value)
         else:
             object.__setattr__(self, name, value)

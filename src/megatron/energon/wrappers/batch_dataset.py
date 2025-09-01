@@ -58,7 +58,7 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
     _last_batch_failures: int = 0
 
     _savable_fields = ("_sample_index", "_generator_sample_keys", "_generator_offset")
-    _state_fields = ("_last_batch_failures",)
+    _worker_local_fields = ("_last_batch_failures",)
 
     def __init__(
         self,

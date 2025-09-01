@@ -62,7 +62,7 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
         "_generator_offset",
     )
 
-    _state_fields = ("_last_map_failures",)
+    _worker_local_fields = ("_last_map_failures",)
 
     def __init__(
         self,
