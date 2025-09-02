@@ -39,7 +39,10 @@ def get_savable_loader(
     Args:
         dataset: The dataset to create a loader for.
         worker_config: Deprecated. Please pass this to the dataset instead.
-        worker_type: The type of worker to use.
+        worker_type: The type of worker to use. Options:
+          "fork": forked workers (default),
+          "thread": threaded workers (should be used with free-threaded python),
+          "main": iterate data in the main process without parallelization.
         gc_freeze_at_start: If True, the garbage collector is frozen at the start of the loader.
         gc_collect_every_n_steps: The number of steps after which the garbage collector is called.
         prefetch_factor: The factor by which to prefetch the dataset.
@@ -47,7 +50,7 @@ def get_savable_loader(
         watchdog_timeout_seconds: The timeout in seconds. If None, the watchdog is disabled.
         watchdog_initial_timeout_seconds: The initial timeout in seconds. If None, the timeout is the same as watchdog_timeout_seconds.
         fail_on_timeout: If True, stops the whole process upon timeout, after printing a stack trace.
-        pin_memory: If True, the dataset is pinned to memory.
+        pin_memory: If True, the data iterated by the dataset is pinned to memory, such that it can be quickly used by CUDA.
 
     Returns:
         The instantiated :class:`megatron.energon.DataLoader`, yielding batches from the dataset.
