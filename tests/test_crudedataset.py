@@ -363,28 +363,27 @@ class TestDataset(unittest.TestCase):
             max_samples_per_sequence=None,
             handler=reraise_exception,
         )
-        loader = get_savable_loader(
+        with get_savable_loader(
             train_dataset,
-        )
+        ) as loader:
+            print(len(train_dataset))
+            # assert len(train_dataset) == 11
 
-        print(len(train_dataset))
-        # assert len(train_dataset) == 11
+            for idx, data in enumerate(loader):
+                if idx >= len(train_dataset):
+                    break
 
-        for idx, data in enumerate(loader):
-            if idx >= len(train_dataset):
-                break
+                assert isinstance(data, TextBatch)
 
-            assert isinstance(data, TextBatch)
+                print("Batch", idx)
+                for txt, key in zip(data.txts, data.__key__):
+                    key_int = int(key.split("/")[-1])
+                    if key_int < 100:
+                        assert txt == f"<{key_int}>"
+                    else:
+                        assert txt == f"<{key_int}|{key_int}>"
 
-            print("Batch", idx)
-            for txt, key in zip(data.txts, data.__key__):
-                key_int = int(key.split("/")[-1])
-                if key_int < 100:
-                    assert txt == f"<{key_int}>"
-                else:
-                    assert txt == f"<{key_int}|{key_int}>"
-
-                print(key, txt)
+                    print(key, txt)
 
     def test_loader(self):
         torch.manual_seed(42)
@@ -394,7 +393,7 @@ class TestDataset(unittest.TestCase):
             num_workers=2,
         )
 
-        loader = get_savable_loader(
+        with get_savable_loader(
             get_train_dataset(
                 self.mds_path,
                 batch_size=2,
@@ -404,17 +403,17 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
                 packing_buffer_size=2,
             ),
-        )
-        samples = [s.__key__ for idx, s in zip(range(100), loader)]
+        ) as loader:
+            samples = [s.__key__ for idx, s in zip(range(100), loader)]
 
-        print(samples)
+            print(samples)
 
-        state = loader.save_state_rank()
+            state = loader.save_state_rank()
 
-        samples_after = [s.__key__ for idx, s in zip(range(100, 200), loader)]
-        print(samples_after)
+            samples_after = [s.__key__ for idx, s in zip(range(100, 200), loader)]
+            print(samples_after)
 
-        loader = get_savable_loader(
+        with get_savable_loader(
             get_train_dataset(
                 self.mds_path,
                 batch_size=2,
@@ -424,14 +423,11 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
                 packing_buffer_size=2,
             ),
-        )
+        ).with_restored_state_rank(state) as loader:
+            samples_restored = [s.__key__ for idx, s in zip(range(100, 200), loader)]
+            print(samples_restored)
 
-        loader.restore_state_rank(state)
-
-        samples_restored = [s.__key__ for idx, s in zip(range(100, 200), loader)]
-        print(samples_restored)
-
-        assert all([a == b for a, b in zip(samples_after, samples_restored)])
+            assert all([a == b for a, b in zip(samples_after, samples_restored)])
 
     def test_aux_random_access(self):
         torch.manual_seed(42)
@@ -443,7 +439,7 @@ class TestDataset(unittest.TestCase):
 
         print("Initializing dataset")
 
-        loader = get_savable_loader(
+        with get_savable_loader(
             get_train_dataset(
                 self.aux_mds_path,
                 batch_size=2,
@@ -453,24 +449,23 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
                 packing_buffer_size=2,
             ),
-        )
+        ) as loader:
+            print("Iterating from dataset")
+            samples = [s.txts for idx, s in zip(range(100), loader)]
+            for idx, txts in enumerate(samples):
+                for txt in txts:
+                    m = re.fullmatch(r"<([0-9]*)\|aux\|([0-9]*)>", txt)
+                    assert m, f"Invalid aux text: {txt}"
+                    assert int(m.group(2)) == int(m.group(1)) + 100
 
-        print("Iterating from dataset")
-        samples = [s.txts for idx, s in zip(range(100), loader)]
-        for idx, txts in enumerate(samples):
-            for txt in txts:
-                m = re.fullmatch(r"<([0-9]*)\|aux\|([0-9]*)>", txt)
-                assert m, f"Invalid aux text: {txt}"
-                assert int(m.group(2)) == int(m.group(1)) + 100
+            print(samples)
 
-        print(samples)
+            state = loader.save_state_rank()
 
-        state = loader.save_state_rank()
+            samples_after = [s.__key__ for idx, s in zip(range(100, 200), loader)]
+            print(samples_after)
 
-        samples_after = [s.__key__ for idx, s in zip(range(100, 200), loader)]
-        print(samples_after)
-
-        loader = get_savable_loader(
+        with get_savable_loader(
             get_train_dataset(
                 self.aux_mds_path,
                 batch_size=2,
@@ -480,14 +475,11 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
                 packing_buffer_size=2,
             ),
-        )
+        ).with_restored_state_rank(state) as loader:
+            samples_restored = [s.__key__ for idx, s in zip(range(100, 200), loader)]
+            print(samples_restored)
 
-        loader.restore_state_rank(state)
-
-        samples_restored = [s.__key__ for idx, s in zip(range(100, 200), loader)]
-        print(samples_restored)
-
-        assert all([a == b for a, b in zip(samples_after, samples_restored)])
+            assert all([a == b for a, b in zip(samples_after, samples_restored)])
 
     def test_aux_random_access_with_cache(self):
         torch.manual_seed(42)
@@ -499,7 +491,7 @@ class TestDataset(unittest.TestCase):
 
         print("Initializing dataset")
 
-        loader = get_savable_loader(
+        with get_savable_loader(
             get_train_dataset(
                 self.aux_mds_path,
                 batch_size=2,
@@ -513,25 +505,24 @@ class TestDataset(unittest.TestCase):
                 parent_cache_dir=self.dataset_path / "cache",
                 num_workers=1,
             ),
-        )
+        ) as loader:
+            print("Iterating from dataset")
+            samples = [s.txts for idx, s in zip(range(100), loader)]
+            for idx, txts in enumerate(samples):
+                for txt in txts:
+                    m = re.fullmatch(r"<([0-9]*)\|aux\|([0-9]*)>\|([0-9]*)", txt)
+                    assert m, f"Invalid aux text: {txt}"
+                    assert int(m.group(2)) == int(m.group(1)) + 100
+                    assert int(m.group(3)) == (int(m.group(1)) + 1) % 55
 
-        print("Iterating from dataset")
-        samples = [s.txts for idx, s in zip(range(100), loader)]
-        for idx, txts in enumerate(samples):
-            for txt in txts:
-                m = re.fullmatch(r"<([0-9]*)\|aux\|([0-9]*)>\|([0-9]*)", txt)
-                assert m, f"Invalid aux text: {txt}"
-                assert int(m.group(2)) == int(m.group(1)) + 100
-                assert int(m.group(3)) == (int(m.group(1)) + 1) % 55
+            print(samples)
 
-        print(samples)
+            state = loader.save_state_rank()
 
-        state = loader.save_state_rank()
+            samples_after = [s.__key__ for idx, s in zip(range(100, 200), loader)]
+            print(samples_after)
 
-        samples_after = [s.__key__ for idx, s in zip(range(100, 200), loader)]
-        print(samples_after)
-
-        loader = get_savable_loader(
+        with get_savable_loader(
             get_train_dataset(
                 self.aux_mds_path,
                 batch_size=2,
@@ -545,14 +536,11 @@ class TestDataset(unittest.TestCase):
                 parent_cache_dir=self.dataset_path / "cache",
                 num_workers=1,
             ),
-        )
+        ).with_restored_state_rank(state) as loader:
+            samples_restored = [s.__key__ for idx, s in zip(range(100, 200), loader)]
+            print(samples_restored)
 
-        loader.restore_state_rank(state)
-
-        samples_restored = [s.__key__ for idx, s in zip(range(100, 200), loader)]
-        print(samples_restored)
-
-        assert all([a == b for a, b in zip(samples_after, samples_restored)])
+            assert all([a == b for a, b in zip(samples_after, samples_restored)])
 
     def test_aux_random_access_with_cache_and_postencode(self):
         torch.manual_seed(42)
@@ -564,7 +552,7 @@ class TestDataset(unittest.TestCase):
 
         print("Initializing dataset")
 
-        loader = get_savable_loader(
+        with get_savable_loader(
             get_train_dataset(
                 self.aux_mds_path,
                 batch_size=2,
@@ -578,25 +566,24 @@ class TestDataset(unittest.TestCase):
                 parent_cache_dir=self.dataset_path / "cache",
                 num_workers=1,
             ),
-        )
+        ) as loader:
+            print("Iterating from dataset")
+            samples = [s.txts for idx, s in zip(range(100), loader)]
+            for idx, txts in enumerate(samples):
+                for txt in txts:
+                    m = re.fullmatch(r"<([0-9]*)\|aux\|([0-9]*)>\|([0-9]*)", txt)
+                    assert m, f"Invalid aux text: {txt}"
+                    assert int(m.group(2)) == int(m.group(1)) + 100
+                    assert int(m.group(3)) == (int(m.group(1)) + 1) % 55
 
-        print("Iterating from dataset")
-        samples = [s.txts for idx, s in zip(range(100), loader)]
-        for idx, txts in enumerate(samples):
-            for txt in txts:
-                m = re.fullmatch(r"<([0-9]*)\|aux\|([0-9]*)>\|([0-9]*)", txt)
-                assert m, f"Invalid aux text: {txt}"
-                assert int(m.group(2)) == int(m.group(1)) + 100
-                assert int(m.group(3)) == (int(m.group(1)) + 1) % 55
+            print(samples)
 
-        print(samples)
+            state = loader.save_state_rank()
 
-        state = loader.save_state_rank()
+            samples_after = [s.__key__ for idx, s in zip(range(100, 200), loader)]
+            print(samples_after)
 
-        samples_after = [s.__key__ for idx, s in zip(range(100, 200), loader)]
-        print(samples_after)
-
-        loader = get_savable_loader(
+        with get_savable_loader(
             get_train_dataset(
                 self.aux_mds_path,
                 batch_size=2,
@@ -610,60 +597,57 @@ class TestDataset(unittest.TestCase):
                 parent_cache_dir=self.dataset_path / "cache",
                 num_workers=1,
             ),
-        )
+        ).with_restored_state_rank(state) as loader:
+            samples_restored = [s.__key__ for idx, s in zip(range(100, 200), loader)]
+            print(samples_restored)
 
-        loader.restore_state_rank(state)
+            assert all([a == b for a, b in zip(samples_after, samples_restored)])
 
-        samples_restored = [s.__key__ for idx, s in zip(range(100, 200), loader)]
-        print(samples_restored)
-
-        assert all([a == b for a, b in zip(samples_after, samples_restored)])
-
-        # Verify that the sources are correct
-        sample_src_check = [s.__sources__ for idx, s in zip(range(1), loader)][0]
-        print(sample_src_check)
-        # NOTE: Auxiliary sources have string as index, not int
-        assert sample_src_check == (
-            # Primary source for the sample, reading all source files
-            SourceInfo(
-                dataset_path=EPath(self.dataset_path / "ds1"),
-                index=2,
-                shard_name="parts/data-0.tar",
-                file_names=("000002.pkl", "000002.txt"),
-            ),
-            # Auxiliary source for the sample, reading from ds2
-            SourceInfo(
-                dataset_path=EPath(self.dataset_path / "ds2"),
-                index="000102.txt",
-                shard_name="parts/data-0.tar",
-                file_names=("000102.txt",),
-            ),
-            # Auxiliary source for the sample, reading from ds1, but next sample
-            SourceInfo(
-                dataset_path=EPath(self.dataset_path / "ds1"),
-                index="000003.txt",
-                shard_name="parts/data-0.tar",
-                file_names=("000003.txt",),
-            ),
-            SourceInfo(
-                dataset_path=EPath(self.dataset_path / "ds1"),
-                index=21,
-                shard_name="parts/data-2.tar",
-                file_names=("000021.pkl", "000021.txt"),
-            ),
-            SourceInfo(
-                dataset_path=EPath(self.dataset_path / "ds2"),
-                index="000121.txt",
-                shard_name="parts/data-2.tar",
-                file_names=("000121.txt",),
-            ),
-            SourceInfo(
-                dataset_path=EPath(self.dataset_path / "ds1"),
-                index="000022.txt",
-                shard_name="parts/data-2.tar",
-                file_names=("000022.txt",),
-            ),
-        )
+            # Verify that the sources are correct
+            sample_src_check = [s.__sources__ for idx, s in zip(range(1), loader)][0]
+            print(sample_src_check)
+            # NOTE: Auxiliary sources have string as index, not int
+            assert sample_src_check == (
+                # Primary source for the sample, reading all source files
+                SourceInfo(
+                    dataset_path=EPath(self.dataset_path / "ds1"),
+                    index=2,
+                    shard_name="parts/data-0.tar",
+                    file_names=("000002.pkl", "000002.txt"),
+                ),
+                # Auxiliary source for the sample, reading from ds2
+                SourceInfo(
+                    dataset_path=EPath(self.dataset_path / "ds2"),
+                    index="000102.txt",
+                    shard_name="parts/data-0.tar",
+                    file_names=("000102.txt",),
+                ),
+                # Auxiliary source for the sample, reading from ds1, but next sample
+                SourceInfo(
+                    dataset_path=EPath(self.dataset_path / "ds1"),
+                    index="000003.txt",
+                    shard_name="parts/data-0.tar",
+                    file_names=("000003.txt",),
+                ),
+                SourceInfo(
+                    dataset_path=EPath(self.dataset_path / "ds1"),
+                    index=21,
+                    shard_name="parts/data-2.tar",
+                    file_names=("000021.pkl", "000021.txt"),
+                ),
+                SourceInfo(
+                    dataset_path=EPath(self.dataset_path / "ds2"),
+                    index="000121.txt",
+                    shard_name="parts/data-2.tar",
+                    file_names=("000121.txt",),
+                ),
+                SourceInfo(
+                    dataset_path=EPath(self.dataset_path / "ds1"),
+                    index="000022.txt",
+                    shard_name="parts/data-2.tar",
+                    file_names=("000022.txt",),
+                ),
+            )
 
     def test_aux_filesystem_reference(self):
         torch.manual_seed(42)
@@ -673,7 +657,7 @@ class TestDataset(unittest.TestCase):
             num_workers=0,
         )
 
-        loader = get_savable_loader(
+        with get_savable_loader(
             get_train_dataset(
                 self.aux_mds_path,
                 batch_size=1,
@@ -682,11 +666,10 @@ class TestDataset(unittest.TestCase):
                 shuffle_buffer_size=None,
                 max_samples_per_sequence=None,
             ),
-        )
+        ) as loader:
+            sample = next(iter(loader))
 
-        sample = next(iter(loader))
-
-        assert sample.txts[0].endswith("|aux|__module__: megatron.ener>")
+            assert sample.txts[0].endswith("|aux|__module__: megatron.ener>")
 
     def test_nomds(self):
         torch.manual_seed(42)
@@ -696,7 +679,7 @@ class TestDataset(unittest.TestCase):
             num_workers=2,
         )
 
-        loader = get_savable_loader(
+        with get_savable_loader(
             get_train_dataset(
                 self.dataset_path / "ds1",
                 batch_size=2,
@@ -705,11 +688,11 @@ class TestDataset(unittest.TestCase):
                 shuffle_buffer_size=None,
                 max_samples_per_sequence=None,
             ),
-        )
-        samples = [s.__key__ for idx, s in zip(range(100), loader)]
+        ) as loader:
+            samples = [s.__key__ for idx, s in zip(range(100), loader)]
 
-        print(samples)
-        assert len(samples) == 100
+            print(samples)
+            assert len(samples) == 100
 
 
 if __name__ == "__main__":

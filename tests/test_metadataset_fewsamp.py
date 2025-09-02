@@ -179,21 +179,20 @@ class TestDataset(unittest.TestCase):
         assert len(blend_ds.dataset_weights[1][0].dataset.dataset.workers_slice_offsets[0]) == 1
         assert len(blend_ds.dataset_weights[1][0].dataset.dataset) == 0
 
-        train_loader = get_savable_loader(
+        with get_savable_loader(
             train_dataset,
-        )
+        ) as train_loader:
+            # Load 3 samples
+            list(zip(train_loader, range(3)))
 
-        # Load 3 samples
-        list(zip(train_loader, range(3)))
+            # Save state mid epoch
+            state1 = train_loader.save_state_rank()
 
-        # Save state mid epoch
-        state1 = train_loader.save_state_rank()
-
-        # Load 5 samples
-        data1b = list(zip(train_loader, range(5)))
+            # Load 5 samples
+            data1b = list(zip(train_loader, range(5)))
 
         # Restore state
-        train_loader = get_savable_loader(
+        with get_savable_loader(
             get_train_dataset(
                 self.mds_path,
                 worker_config=worker_config,
@@ -201,21 +200,20 @@ class TestDataset(unittest.TestCase):
                 shuffle_buffer_size=100,
                 max_samples_per_sequence=None,
             ),
-        )
-        train_loader.restore_state_rank(state1)
-        # Load 5 samples
-        data2_restore = list(zip(train_loader, range(5)))
+        ).with_restored_state_rank(state1) as train_loader:
+            # Load 5 samples
+            data2_restore = list(zip(train_loader, range(5)))
 
-        # Check that the restored state is the same
-        order1b = [(s[0].__key__[0], int(s[0].text[0])) for s in data1b]
-        order2 = [(s[0].__key__[0], int(s[0].text[0])) for s in data2_restore]
+            # Check that the restored state is the same
+            order1b = [(s[0].__key__[0], int(s[0].text[0])) for s in data1b]
+            order2 = [(s[0].__key__[0], int(s[0].text[0])) for s in data2_restore]
 
-        print("order1b")
-        print(order1b)
-        print("order2")
-        print(order2)
+            print("order1b")
+            print(order1b)
+            print("order2")
+            print(order2)
 
-        assert order1b == order2, "The restored state does not match the original state."
+            assert order1b == order2, "The restored state does not match the original state."
 
     def test_too_few_samples(self):
         # Will only give a single sample, as there are 117 samples in total, and 100 ranks
@@ -223,7 +221,7 @@ class TestDataset(unittest.TestCase):
         lens = []
         for i_rank in range(ws):
             worker_config = WorkerConfig(rank=i_rank, world_size=ws, num_workers=0)
-            loader = get_savable_loader(
+            with get_savable_loader(
                 get_train_dataset(
                     self.mds_path,
                     batch_size=1,
@@ -231,17 +229,17 @@ class TestDataset(unittest.TestCase):
                     shuffle_buffer_size=None,
                     max_samples_per_sequence=None,
                 ),
-            )
-            lens.append(len(loader))
+            ) as loader:
+                lens.append(len(loader))
 
-            txts = []
+                txts = []
 
-            for i, sample in zip(range(10), loader):
-                txts.extend(sample.text)
+                for i, sample in zip(range(10), loader):
+                    txts.extend(sample.text)
 
-            assert len(set(txts)) == len(loader), (
-                f"Rank {i_rank} should have exactly {len(loader)} sample, but got {txts}"
-            )
+                assert len(set(txts)) == len(loader), (
+                    f"Rank {i_rank} should have exactly {len(loader)} sample, but got {txts}"
+                )
 
         assert lens == [
             2 if i in [0, 3, 6, 12, 18, 25, 31, 37, 43, 50, 56, 62, 68, 75, 81, 87, 93] else 1

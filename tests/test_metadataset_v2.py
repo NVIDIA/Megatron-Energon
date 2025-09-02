@@ -247,15 +247,14 @@ class TestDataset(unittest.TestCase):
         print(len(train_dataset))
         assert len(train_dataset) == 11
 
-        train_loader1 = get_loader(train_dataset)
-
-        train_order1 = [
-            text for idx, data in zip(range(55 * 10), train_loader1) for text in data.text
-        ]
-        print(train_order1[:10])
-        print(Counter(train_order1))
-        assert len(Counter(train_order1)) == 110
-        assert all(48 <= v <= 52 for v in Counter(train_order1).values())
+        with get_loader(train_dataset) as train_loader1:
+            train_order1 = [
+                text for idx, data in zip(range(55 * 10), train_loader1) for text in data.text
+            ]
+            print(train_order1[:10])
+            print(Counter(train_order1))
+            assert len(Counter(train_order1)) == 110
+            assert all(48 <= v <= 52 for v in Counter(train_order1).values())
 
     def test_nested_metadataset(self):
         torch.manual_seed(42)
@@ -360,40 +359,39 @@ class TestDataset(unittest.TestCase):
         print(len(train_dataset))
         assert len(train_dataset) == 55
 
-        train_loader = get_savable_loader(
+        with get_savable_loader(
             train_dataset,
-        )
+        ) as train_loader:
+            data = list(zip(range(2 * 55), train_loader))
+            txt1_order = [data.text1[0] for idx, data in data]
+            txt2_order = [data.text2[0] for idx, data in data]
+            key_order = [data.__key__[0] for idx, data in data]
+            # ds1 has 55 samples, key range 0:55, txt range 0:55
+            # ds3 has 28 samples, key range 0:55, txt range 200:255
+            # Joining results in: 0:55
+            print("txt1:", txt1_order)
+            # Joining results in: 200:255
+            print("txt2:", txt2_order)
+            # Joining results in: 0:55
+            print("key:", key_order)
+            # Check matching
+            assert all(int(txt1) + 200 == int(txt2) for txt1, txt2 in zip(txt1_order, txt2_order))
+            # Check frequency
+            assert set(txt1_order) == set(str(i) for i in range(0, 55))
+            assert set(txt2_order) == set(str(i) for i in range(200, 255))
+            # Every item must occurr 2 times (2*55).
+            assert Counter(txt1_order).most_common(1)[0][1] == 2
 
-        data = list(zip(range(2 * 55), train_loader))
-        txt1_order = [data.text1[0] for idx, data in data]
-        txt2_order = [data.text2[0] for idx, data in data]
-        key_order = [data.__key__[0] for idx, data in data]
-        # ds1 has 55 samples, key range 0:55, txt range 0:55
-        # ds3 has 28 samples, key range 0:55, txt range 200:255
-        # Joining results in: 0:55
-        print("txt1:", txt1_order)
-        # Joining results in: 200:255
-        print("txt2:", txt2_order)
-        # Joining results in: 0:55
-        print("key:", key_order)
-        # Check matching
-        assert all(int(txt1) + 200 == int(txt2) for txt1, txt2 in zip(txt1_order, txt2_order))
-        # Check frequency
-        assert set(txt1_order) == set(str(i) for i in range(0, 55))
-        assert set(txt2_order) == set(str(i) for i in range(200, 255))
-        # Every item must occurr 2 times (2*55).
-        assert Counter(txt1_order).most_common(1)[0][1] == 2
+            state = train_loader.save_state_rank()
 
-        state = train_loader.save_state_rank()
-
-        # Iterate 60 more items
-        data = list(zip(range(60), train_loader))
-        txt1_order = [data.text1 for idx, data in data]
-        txt2_order = [data.text2 for idx, data in data]
-        key_order = [data.__key__ for idx, data in data]
+            # Iterate 60 more items
+            data = list(zip(range(60), train_loader))
+            txt1_order = [data.text1 for idx, data in data]
+            txt2_order = [data.text2 for idx, data in data]
+            key_order = [data.__key__ for idx, data in data]
 
         # Restore state
-        train_loader = get_savable_loader(
+        with get_savable_loader(
             get_train_dataset(
                 joined_mds_path,
                 worker_config=worker_config,
@@ -401,20 +399,17 @@ class TestDataset(unittest.TestCase):
                 shuffle_buffer_size=None,
                 max_samples_per_sequence=None,
             ),
-        )
+        ).with_restored_state_rank(state) as train_loader:
+            # Iterate 360 more items
+            data = list(zip(range(60), train_loader))
+            txt1_order_rest = [data.text1 for idx, data in data]
+            txt2_order_rest = [data.text2 for idx, data in data]
+            key_order_rest = [data.__key__ for idx, data in data]
 
-        train_loader.restore_state_rank(state)
-
-        # Iterate 360 more items
-        data = list(zip(range(60), train_loader))
-        txt1_order_rest = [data.text1 for idx, data in data]
-        txt2_order_rest = [data.text2 for idx, data in data]
-        key_order_rest = [data.__key__ for idx, data in data]
-
-        # Verify matching
-        assert txt1_order == txt1_order_rest
-        assert txt2_order == txt2_order_rest
-        assert key_order == key_order_rest
+            # Verify matching
+            assert txt1_order == txt1_order_rest
+            assert txt2_order == txt2_order_rest
+            assert key_order == key_order_rest
 
     def test_joined_metadataset_joiner(self):
         torch.manual_seed(42)
@@ -467,31 +462,30 @@ class TestDataset(unittest.TestCase):
         print(len(train_dataset))
         assert len(train_dataset) == 55
 
-        train_loader = get_savable_loader(
+        with get_savable_loader(
             train_dataset,
-        )
-
-        data = list(zip(range(2 * 55), train_loader))
-        txt1_order = [data.text1[0] for idx, data in data]
-        txt2_order = [data.text2[0] for idx, data in data]
-        key_order = [data.__key__[0] for idx, data in data]
-        # ds1 has 55 samples, key range 0:55, txt range 0:55
-        # ds3 has 28 samples, key range 0:55, txt range 200:255
-        # Joining results in: 0:55, with prefix "j"
-        print("txt1:", txt1_order)
-        # Joining results in: 200:255, with prefix "j"
-        print("txt2:", txt2_order)
-        # Joining results in: 0:55
-        print("key:", key_order)
-        # Check matching
-        assert all(
-            int(txt1[1:]) + 200 == int(txt2[1:]) for txt1, txt2 in zip(txt1_order, txt2_order)
-        )
-        # Check frequency
-        assert set(txt1_order) == set(f"j{i}" for i in range(0, 55))
-        assert set(txt2_order) == set(f"j{i}" for i in range(200, 255))
-        # Every item must occurr 2 times (2*55).
-        assert Counter(txt1_order).most_common(1)[0][1] == 2
+        ) as train_loader:
+            data = list(zip(range(2 * 55), train_loader))
+            txt1_order = [data.text1[0] for idx, data in data]
+            txt2_order = [data.text2[0] for idx, data in data]
+            key_order = [data.__key__[0] for idx, data in data]
+            # ds1 has 55 samples, key range 0:55, txt range 0:55
+            # ds3 has 28 samples, key range 0:55, txt range 200:255
+            # Joining results in: 0:55, with prefix "j"
+            print("txt1:", txt1_order)
+            # Joining results in: 200:255, with prefix "j"
+            print("txt2:", txt2_order)
+            # Joining results in: 0:55
+            print("key:", key_order)
+            # Check matching
+            assert all(
+                int(txt1[1:]) + 200 == int(txt2[1:]) for txt1, txt2 in zip(txt1_order, txt2_order)
+            )
+            # Check frequency
+            assert set(txt1_order) == set(f"j{i}" for i in range(0, 55))
+            assert set(txt2_order) == set(f"j{i}" for i in range(200, 255))
+            # Every item must occurr 2 times (2*55).
+            assert Counter(txt1_order).most_common(1)[0][1] == 2
 
     def test_left_join(self):
         torch.manual_seed(42)
@@ -545,29 +539,28 @@ class TestDataset(unittest.TestCase):
         print(len(train_dataset))
         assert len(train_dataset) == 55, len(train_dataset)
 
-        train_loader = get_savable_loader(
+        with get_savable_loader(
             train_dataset,
-        )
-
-        data = list(zip(range(2 * 55), train_loader))
-        txt1_order = [data.text1[0] for idx, data in data]
-        txt2_order = [data.text2[0] for idx, data in data]
-        key_order = [data.__key__[0] for idx, data in data]
-        # ds1 has 55 samples, key range 0:55, txt range 0:55
-        # ds3 has 28 samples, key range 0:55, txt range 200:255
-        # Joining results in: 0:55, with prefix "j"
-        print("txt1:", txt1_order)
-        # Joining results in: 200:255, with prefix "j"
-        print("txt2:", txt2_order)
-        # Joining results in: 0:55
-        print("key:", key_order)
-        # Check matching
-        assert all(int(txt1[1:]) == int(txt2[2:]) for txt1, txt2 in zip(txt1_order, txt2_order))
-        # Check frequency
-        assert set(txt1_order) == set(f"j{i}" for i in range(55))
-        assert set(txt2_order) == set(f"jB{i}" for i in range(55))
-        # Every item must occurr 2 times (2*55).
-        assert Counter(txt1_order).most_common(1)[0][1] == 2
+        ) as train_loader:
+            data = list(zip(range(2 * 55), train_loader))
+            txt1_order = [data.text1[0] for idx, data in data]
+            txt2_order = [data.text2[0] for idx, data in data]
+            key_order = [data.__key__[0] for idx, data in data]
+            # ds1 has 55 samples, key range 0:55, txt range 0:55
+            # ds3 has 28 samples, key range 0:55, txt range 200:255
+            # Joining results in: 0:55, with prefix "j"
+            print("txt1:", txt1_order)
+            # Joining results in: 200:255, with prefix "j"
+            print("txt2:", txt2_order)
+            # Joining results in: 0:55
+            print("key:", key_order)
+            # Check matching
+            assert all(int(txt1[1:]) == int(txt2[2:]) for txt1, txt2 in zip(txt1_order, txt2_order))
+            # Check frequency
+            assert set(txt1_order) == set(f"j{i}" for i in range(55))
+            assert set(txt2_order) == set(f"jB{i}" for i in range(55))
+            # Every item must occurr 2 times (2*55).
+            assert Counter(txt1_order).most_common(1)[0][1] == 2
 
         # Test that changing the file works as expected
         with open(joined_mds_path, "w") as f:
@@ -702,28 +695,27 @@ class TestDataset(unittest.TestCase):
         print(len(train_dataset))
         assert len(train_dataset) == 55 - 16, len(train_dataset)
 
-        train_loader = get_savable_loader(
+        with get_savable_loader(
             train_dataset,
-        )
-
-        data = list(zip(range(2 * 55), train_loader))
-        txt1_order = [data.text1[0] for idx, data in data]
-        txt2_order = [data.text2[0] for idx, data in data]
-        key_order = [data.__key__[0] for idx, data in data]
-        # ds1 has 55 samples, key range 0:55, txt range 0:55
-        # ds3 has 28 samples, key range 0:55, txt range 200:255
-        # Joining results in: 0:55, with prefix "j"
-        print("txt1:", txt1_order)
-        # Joining results in: 200:255, with prefix "j"
-        print("txt2:", txt2_order)
-        # Joining results in: 0:55
-        print("key:", key_order)
-        # Check matching
-        assert all(int(txt1[1:]) == int(txt2[2:]) for txt1, txt2 in zip(txt1_order, txt2_order))
-        # Check frequency
-        set_filtered_nums = set(range(5, 10)) | set(range(20, 29)) | set(range(30, 55))
-        assert set(txt1_order) == set(f"j{i}" for i in set_filtered_nums)
-        assert set(txt2_order) == set(f"jB{i}" for i in set_filtered_nums)
+        ) as train_loader:
+            data = list(zip(range(2 * 55), train_loader))
+            txt1_order = [data.text1[0] for idx, data in data]
+            txt2_order = [data.text2[0] for idx, data in data]
+            key_order = [data.__key__[0] for idx, data in data]
+            # ds1 has 55 samples, key range 0:55, txt range 0:55
+            # ds3 has 28 samples, key range 0:55, txt range 200:255
+            # Joining results in: 0:55, with prefix "j"
+            print("txt1:", txt1_order)
+            # Joining results in: 200:255, with prefix "j"
+            print("txt2:", txt2_order)
+            # Joining results in: 0:55
+            print("key:", key_order)
+            # Check matching
+            assert all(int(txt1[1:]) == int(txt2[2:]) for txt1, txt2 in zip(txt1_order, txt2_order))
+            # Check frequency
+            set_filtered_nums = set(range(5, 10)) | set(range(20, 29)) | set(range(30, 55))
+            assert set(txt1_order) == set(f"j{i}" for i in set_filtered_nums)
+            assert set(txt2_order) == set(f"jB{i}" for i in set_filtered_nums)
 
     def test_joined_metadataset_prepare_mock(self):
         torch.manual_seed(42)
@@ -816,59 +808,61 @@ class TestDataset(unittest.TestCase):
         print(len(train_dataset))
         assert len(train_dataset) == 5 * 55, len(train_dataset)
 
-        train_loader = get_savable_loader(
+        with get_savable_loader(
             train_dataset,
-        )
+        ) as train_loader:
+            data = list(enumerate(train_loader))
+            txt_order = [data.text[0] for idx, data in data]
+            key_order = [
+                data.__subflavors__[0]["source"] + "/" + data.__key__[0] for idx, data in data
+            ]
+            print("txt1:", txt_order)
+            print("key:", key_order)
+            assert len(txt_order) == 5 * 55, Counter(txt_order)
+            ds1_keys = [key for key in key_order if key.startswith("ds1/")]
+            ds2_keys = [key for key in key_order if key.startswith("ds2/")]
+            txt_cnt = Counter(txt_order)
+            ds1_key_cnt = Counter(ds1_keys)
+            ds2_key_cnt = Counter(ds2_keys)
+            assert len(ds1_keys) == 2 * 55, (len(ds1_keys), ds1_key_cnt)
+            assert len(ds2_keys) == 3 * 55, (len(ds2_keys), ds2_key_cnt)
+            assert all(ds1_key_cnt[key] == 2 for key in ds1_keys)
+            assert all(ds2_key_cnt[key] == 3 for key in ds2_keys)
+            assert all(txt_cnt[key] in (2, 3) for key in txt_order)
 
-        data = list(enumerate(train_loader))
-        txt_order = [data.text[0] for idx, data in data]
-        key_order = [data.__subflavors__[0]["source"] + "/" + data.__key__[0] for idx, data in data]
-        print("txt1:", txt_order)
-        print("key:", key_order)
-        assert len(txt_order) == 5 * 55, Counter(txt_order)
-        ds1_keys = [key for key in key_order if key.startswith("ds1/")]
-        ds2_keys = [key for key in key_order if key.startswith("ds2/")]
-        txt_cnt = Counter(txt_order)
-        ds1_key_cnt = Counter(ds1_keys)
-        ds2_key_cnt = Counter(ds2_keys)
-        assert len(ds1_keys) == 2 * 55, (len(ds1_keys), ds1_key_cnt)
-        assert len(ds2_keys) == 3 * 55, (len(ds2_keys), ds2_key_cnt)
-        assert all(ds1_key_cnt[key] == 2 for key in ds1_keys)
-        assert all(ds2_key_cnt[key] == 3 for key in ds2_keys)
-        assert all(txt_cnt[key] in (2, 3) for key in txt_order)
+            # Next epoch
+            data = list(enumerate(train_loader))
+            print([data.text[0] for idx, data in data])
+            assert len(data) == 5 * 55, len(data)
 
-        # Next epoch
-        data = list(enumerate(train_loader))
-        print([data.text[0] for idx, data in data])
-        assert len(data) == 5 * 55, len(data)
+            # Next epoch
+            data1 = list(zip(range(3 * 55), train_loader))
+            assert len(data1) == 3 * 55, len(data1)
+            # Save state mid epoch
+            state1 = train_loader.save_state_rank()
+            print(state1)
 
-        # Next epoch
-        data1 = list(zip(range(3 * 55), train_loader))
-        assert len(data1) == 3 * 55, len(data1)
-        # Save state mid epoch
-        state1 = train_loader.save_state_rank()
-        print(state1)
-
-        data2 = list(enumerate(train_loader))
-        assert len(data2) == 2 * 55
-        txt_order = [data.text[0] for idx, data in data1 + data2]
-        key_order = [
-            data.__subflavors__[0]["source"] + "/" + data.__key__[0] for idx, data in data1 + data2
-        ]
-        assert len(txt_order) == 5 * 55, Counter(txt_order)
-        ds1_keys = [key for key in key_order if key.startswith("ds1/")]
-        ds2_keys = [key for key in key_order if key.startswith("ds2/")]
-        txt_cnt = Counter(txt_order)
-        ds1_key_cnt = Counter(ds1_keys)
-        ds2_key_cnt = Counter(ds2_keys)
-        assert len(ds1_keys) == 2 * 55, (len(ds1_keys), ds1_key_cnt)
-        assert len(ds2_keys) == 3 * 55, (len(ds2_keys), ds2_key_cnt)
-        assert all(ds1_key_cnt[key] == 2 for key in ds1_keys)
-        assert all(ds2_key_cnt[key] == 3 for key in ds2_keys)
-        assert all(txt_cnt[key] in (2, 3) for key in txt_order)
+            data2 = list(enumerate(train_loader))
+            assert len(data2) == 2 * 55
+            txt_order = [data.text[0] for idx, data in data1 + data2]
+            key_order = [
+                data.__subflavors__[0]["source"] + "/" + data.__key__[0]
+                for idx, data in data1 + data2
+            ]
+            assert len(txt_order) == 5 * 55, Counter(txt_order)
+            ds1_keys = [key for key in key_order if key.startswith("ds1/")]
+            ds2_keys = [key for key in key_order if key.startswith("ds2/")]
+            txt_cnt = Counter(txt_order)
+            ds1_key_cnt = Counter(ds1_keys)
+            ds2_key_cnt = Counter(ds2_keys)
+            assert len(ds1_keys) == 2 * 55, (len(ds1_keys), ds1_key_cnt)
+            assert len(ds2_keys) == 3 * 55, (len(ds2_keys), ds2_key_cnt)
+            assert all(ds1_key_cnt[key] == 2 for key in ds1_keys)
+            assert all(ds2_key_cnt[key] == 3 for key in ds2_keys)
+            assert all(txt_cnt[key] in (2, 3) for key in txt_order)
 
         # Restore state
-        train_loader = get_savable_loader(
+        with get_savable_loader(
             get_train_dataset(
                 fixed_epochs_mds_path,
                 worker_config=worker_config,
@@ -877,28 +871,27 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
                 repeat=False,
             ),
-        )
-        train_loader.restore_state_rank(state1)
-        data2_restore = list(enumerate(train_loader))
-        assert len(data2_restore) == 2 * 55
-        txt_order_rst = [data.text[0] for idx, data in data1 + data2_restore]
-        key_order_rst = [
-            data.__subflavors__[0]["source"] + "/" + data.__key__[0]
-            for idx, data in data1 + data2_restore
-        ]
-        assert len(txt_order_rst) == 5 * 55, Counter(txt_order_rst)
-        assert txt_order_rst == txt_order
-        assert key_order_rst == key_order
-        ds1_keys_rst = [key for key in key_order_rst if key.startswith("ds1/")]
-        ds2_keys_rst = [key for key in key_order_rst if key.startswith("ds2/")]
-        txt_cnt_rst = Counter(txt_order_rst)
-        ds1_key_cnt_rst = Counter(ds1_keys_rst)
-        ds2_key_cnt_rst = Counter(ds2_keys_rst)
-        assert len(ds1_keys_rst) == 2 * 55, (len(ds1_keys_rst), ds1_key_cnt_rst)
-        assert len(ds2_keys_rst) == 3 * 55, (len(ds2_keys_rst), ds2_key_cnt_rst)
-        assert all(ds1_key_cnt_rst[key] == 2 for key in ds1_keys_rst)
-        assert all(ds2_key_cnt_rst[key] == 3 for key in ds2_keys_rst)
-        assert all(txt_cnt_rst[key] in (2, 3) for key in txt_order_rst)
+        ).with_restored_state_rank(state1) as train_loader:
+            data2_restore = list(enumerate(train_loader))
+            assert len(data2_restore) == 2 * 55
+            txt_order_rst = [data.text[0] for idx, data in data1 + data2_restore]
+            key_order_rst = [
+                data.__subflavors__[0]["source"] + "/" + data.__key__[0]
+                for idx, data in data1 + data2_restore
+            ]
+            assert len(txt_order_rst) == 5 * 55, Counter(txt_order_rst)
+            assert txt_order_rst == txt_order
+            assert key_order_rst == key_order
+            ds1_keys_rst = [key for key in key_order_rst if key.startswith("ds1/")]
+            ds2_keys_rst = [key for key in key_order_rst if key.startswith("ds2/")]
+            txt_cnt_rst = Counter(txt_order_rst)
+            ds1_key_cnt_rst = Counter(ds1_keys_rst)
+            ds2_key_cnt_rst = Counter(ds2_keys_rst)
+            assert len(ds1_keys_rst) == 2 * 55, (len(ds1_keys_rst), ds1_key_cnt_rst)
+            assert len(ds2_keys_rst) == 3 * 55, (len(ds2_keys_rst), ds2_key_cnt_rst)
+            assert all(ds1_key_cnt_rst[key] == 2 for key in ds1_keys_rst)
+            assert all(ds2_key_cnt_rst[key] == 3 for key in ds2_keys_rst)
+            assert all(txt_cnt_rst[key] in (2, 3) for key in txt_order_rst)
 
     def test_metadataset_fixed_fractional_epochs(self):
         torch.manual_seed(42)
@@ -948,34 +941,33 @@ class TestDataset(unittest.TestCase):
             repeat=False,
         )
 
-        train_loader = get_savable_loader(
+        with get_savable_loader(
             train_dataset,
-        )
+        ) as train_loader:
+            assert len(train_loader) == 38 + 55 + 27, len(train_loader)
 
-        assert len(train_loader) == 38 + 55 + 27, len(train_loader)
+            data = list(enumerate(train_loader))
 
-        data = list(enumerate(train_loader))
+            # Check the overall number of samples
+            # Should be 0.7*len(ds1) + 1.5*len(ds2) = 0.7*55 + 1.5*55 = 38 + 55 + 27 (floor rounding)
+            assert len(data) == 38 + 55 + 27, len(data)
 
-        # Check the overall number of samples
-        # Should be 0.7*len(ds1) + 1.5*len(ds2) = 0.7*55 + 1.5*55 = 38 + 55 + 27 (floor rounding)
-        assert len(data) == 38 + 55 + 27, len(data)
+            sample_counts = Counter([int(s[1].text[0]) for s in data])
 
-        sample_counts = Counter([int(s[1].text[0]) for s in data])
+            # The first 70% of samples from ds1 (0 to incl. 37) should be repeated only once
+            assert all(sample_counts[sample] == 1 for sample in range(38))
 
-        # The first 70% of samples from ds1 (0 to incl. 37) should be repeated only once
-        assert all(sample_counts[sample] == 1 for sample in range(38))
+            # Since ds2 is repeated 1.5 times, the first 50% of samples from ds2 (100 to incl. 126) should be repeated twice
+            assert all(sample_counts[sample] == 2 for sample in range(100, 127))
 
-        # Since ds2 is repeated 1.5 times, the first 50% of samples from ds2 (100 to incl. 126) should be repeated twice
-        assert all(sample_counts[sample] == 2 for sample in range(100, 127))
-
-        # The remaining samples from ds2 (127 to incl. 154) should be repeated only once
-        assert all(sample_counts[sample] == 1 for sample in range(127, 155))
+            # The remaining samples from ds2 (127 to incl. 154) should be repeated only once
+            assert all(sample_counts[sample] == 1 for sample in range(127, 155))
 
         # ===== Part 2: Save and restore state =====
 
         # Now let's check if the state is stored and restored correctly
 
-        train_loader = get_savable_loader(
+        with get_savable_loader(
             get_train_dataset(
                 fixed_epochs_mds_path,
                 worker_config=worker_config,
@@ -986,12 +978,11 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
                 repeat=False,
             ),
-        )
+        ) as train_loader:
+            data1 = list(zip(range(95), train_loader))
+            state1 = train_loader.save_state_rank()
 
-        data1 = list(zip(range(95), train_loader))
-        state1 = train_loader.save_state_rank()
-
-        train_loader = get_savable_loader(
+        with get_savable_loader(
             get_train_dataset(
                 fixed_epochs_mds_path,
                 worker_config=worker_config,
@@ -1002,29 +993,28 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
                 repeat=False,
             ),
-        )
-        train_loader.restore_state_rank(state1)
-        data2_restore = list(enumerate(train_loader))
+        ).with_restored_state_rank(state1) as train_loader:
+            data2_restore = list(enumerate(train_loader))
 
-        total_samples_save_restore = len(data1) + len(data2_restore)
+            total_samples_save_restore = len(data1) + len(data2_restore)
 
-        assert total_samples_save_restore == len(data), (
-            "Total number of samples do not match when using save/restore"
-        )
+            assert total_samples_save_restore == len(data), (
+                "Total number of samples do not match when using save/restore"
+            )
 
-        sample_counts_save_restore = Counter(
-            [int(s[1].text[0]) for d in [data1, data2_restore] for s in d]
-        )
+            sample_counts_save_restore = Counter(
+                [int(s[1].text[0]) for d in [data1, data2_restore] for s in d]
+            )
 
-        assert sample_counts_save_restore == sample_counts, (
-            "Sample counts do not match when using save/restore"
-        )
+            assert sample_counts_save_restore == sample_counts, (
+                "Sample counts do not match when using save/restore"
+            )
 
         # ===== Part 3: Check if the state is restored correctly when saving right at the end of a dataset =====
 
         torch.manual_seed(42)
 
-        train_loader = get_savable_loader(
+        with get_savable_loader(
             get_train_dataset(
                 fixed_epochs_mds_path,
                 worker_config=worker_config,
@@ -1035,21 +1025,20 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
                 repeat=False,
             ),
-        )
+        ) as train_loader:
+            ds1_counter = 0
+            data1 = []
+            for idx, sample in enumerate(train_loader):
+                data1.append((idx, sample))
+                if sample.__subflavors__[0]["source"] == "ds1":
+                    ds1_counter += 1
+                    if ds1_counter == 38:
+                        # Stop right after the last sample from ds1
+                        break
 
-        ds1_counter = 0
-        data1 = []
-        for idx, sample in enumerate(train_loader):
-            data1.append((idx, sample))
-            if sample.__subflavors__[0]["source"] == "ds1":
-                ds1_counter += 1
-                if ds1_counter == 38:
-                    # Stop right after the last sample from ds1
-                    break
+            state1 = train_loader.save_state_rank()
 
-        state1 = train_loader.save_state_rank()
-
-        train_loader = get_savable_loader(
+        with get_savable_loader(
             get_train_dataset(
                 fixed_epochs_mds_path,
                 worker_config=worker_config,
@@ -1060,27 +1049,26 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
                 repeat=False,
             ),
-        )
-        train_loader.restore_state_rank(state1)
-        data2_restore = list(enumerate(train_loader))
+        ).with_restored_state_rank(state1) as train_loader:
+            data2_restore = list(enumerate(train_loader))
 
-        total_samples_save_restore = len(data1) + len(data2_restore)
+            total_samples_save_restore = len(data1) + len(data2_restore)
 
-        assert total_samples_save_restore == len(data), (
-            "Total number of samples do not match when using save/restore"
-        )
+            assert total_samples_save_restore == len(data), (
+                "Total number of samples do not match when using save/restore"
+            )
 
-        sample_counts_save_restore = Counter(
-            [int(s[1].text[0]) for d in [data1, data2_restore] for s in d]
-        )
+            sample_counts_save_restore = Counter(
+                [int(s[1].text[0]) for d in [data1, data2_restore] for s in d]
+            )
 
-        assert sample_counts_save_restore == sample_counts, (
-            "Sample counts do not match when using save/restore"
-        )
+            assert sample_counts_save_restore == sample_counts, (
+                "Sample counts do not match when using save/restore"
+            )
 
         # Try in repeat mode
         # Train mode dataset
-        train_loader = get_savable_loader(
+        with get_savable_loader(
             get_train_dataset(
                 fixed_epochs_mds_path,
                 worker_config=worker_config,
@@ -1090,14 +1078,13 @@ class TestDataset(unittest.TestCase):
                 parallel_shard_iters=1,
                 max_samples_per_sequence=None,
             ),
-        )
+        ) as train_loader:
+            data = list(zip(range(200), train_loader))
+            assert len(train_loader) == 38 + 55 + 27, len(train_loader)
 
-        data = list(zip(range(200), train_loader))
-        assert len(train_loader) == 38 + 55 + 27, len(train_loader)
-
-        # Check the overall number of samples
-        # Should be 0.7*len(ds1) + 1.5*len(ds2) = 38 + 55 + 27 (floor rounding)
-        assert len(data) == 200, len(data)
+            # Check the overall number of samples
+            # Should be 0.7*len(ds1) + 1.5*len(ds2) = 38 + 55 + 27 (floor rounding)
+            assert len(data) == 200, len(data)
 
         # ===== Part 4: Test count for multiple workers =====
 
@@ -1109,7 +1096,7 @@ class TestDataset(unittest.TestCase):
         )
 
         # Train mode dataset
-        train_loader = get_savable_loader(
+        with get_savable_loader(
             get_train_dataset(
                 fixed_epochs_mds_path,
                 worker_config=worker_config,
@@ -1120,17 +1107,16 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
                 repeat=False,
             ),
-        )
+        ) as train_loader:
+            # TODO: This should be exactly 60. There is a corresponding TODO in the repeat_dataset.py
+            assert len(train_loader) == 58, len(train_loader)
 
-        # TODO: This should be exactly 60. There is a corresponding TODO in the repeat_dataset.py
-        assert len(train_loader) == 58, len(train_loader)
+            data = list(enumerate(train_loader))
 
-        data = list(enumerate(train_loader))
-
-        # Check the overall number of samples
-        # Should be 0.7*len(ds1)55 + 1.5*len(ds2)55 = 38 + 55 + 27 (floor rounding)
-        # TODO: This should be exactly 60. There is a corresponding TODO in the repeat_dataset.py
-        assert len(data) == 58, len(data)
+            # Check the overall number of samples
+            # Should be 0.7*len(ds1)55 + 1.5*len(ds2)55 = 38 + 55 + 27 (floor rounding)
+            # TODO: This should be exactly 60. There is a corresponding TODO in the repeat_dataset.py
+            assert len(data) == 58, len(data)
 
     @patch.object(WatchdogDataset, "_watchdog_trigger")
     def test_watchdog_dataset(self, mock_watchdog_trigger):
@@ -1167,16 +1153,15 @@ class TestDataset(unittest.TestCase):
             task_encoder=TestTaskEncoder(),
         )
 
-        train_loader = get_loader(
+        with get_loader(
             train_dataset,
             watchdog_timeout_seconds=3,
             fail_on_timeout=False,
-        )
-
-        for idx, data in enumerate(train_loader):
-            print(idx, data.text[0])
-            if idx > 255:
-                break
+        ) as train_loader:
+            for idx, data in enumerate(train_loader):
+                print(idx, data.text[0])
+                if idx > 255:
+                    break
 
         mock_watchdog_trigger.assert_called()
 
@@ -1213,7 +1198,7 @@ class TestDataset(unittest.TestCase):
             )
 
         try:
-            get_loader(
+            with get_loader(
                 get_train_dataset(
                     ratio_mds_path,
                     worker_config=worker_config,
@@ -1224,8 +1209,8 @@ class TestDataset(unittest.TestCase):
                     max_samples_per_sequence=None,
                     repeat=False,
                 )
-            )
-            assert False, "Should have failed"
+            ):
+                assert False, "Should have failed"
         except Exception as e:
             assert "only allowed for a leaf dataset" in str(
                 e
@@ -1259,7 +1244,7 @@ class TestDataset(unittest.TestCase):
                 )
             )
 
-        loader = get_loader(
+        with get_loader(
             get_train_dataset(
                 ratio_mds_path,
                 worker_config=worker_config,
@@ -1270,11 +1255,10 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
                 repeat=False,
             )
-        )
+        ) as loader:
+            all_numbers = [int(s.text[0]) for s in loader]
 
-        all_numbers = [int(s.text[0]) for s in loader]
-
-        assert all_numbers == [50, 51, 52, 53, 54], "Subset range [50, end] should be [50, 55]"
+            assert all_numbers == [50, 51, 52, 53, 54], "Subset range [50, end] should be [50, 55]"
 
     def test_dataset_with_subset_ratio(self):
         worker_config = WorkerConfig(
@@ -1309,7 +1293,7 @@ class TestDataset(unittest.TestCase):
                 )
             )
 
-        loader = get_loader(
+        with get_loader(
             get_train_dataset(
                 ratio_mds_path,
                 worker_config=worker_config,
@@ -1320,19 +1304,18 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
                 repeat=False,
             )
-        )
+        ) as loader:
+            data = list(enumerate(loader))
+            assert len(data) == 33 + 33 * 2, len(data)
 
-        data = list(enumerate(loader))
-        assert len(data) == 33 + 33 * 2, len(data)
-
-        sample_counts = Counter([int(s[1].text[0]) for s in data])
-        assert all(sample_counts[sample] == 0 for sample in range(11)), sample_counts
-        assert all(sample_counts[sample] == 1 for sample in range(11, 44)), sample_counts
-        assert all(sample_counts[sample] == 0 for sample in range(44, 55)), sample_counts
-        assert all(sample_counts[sample] == 0 for sample in range(100, 111)), sample_counts
-        assert all(sample_counts[sample] == 2 for sample in range(111, 144)), sample_counts
-        assert all(sample_counts[sample] == 0 for sample in range(144, 155)), sample_counts
-        assert sample_counts.total() == 33 + 33 * 2, sample_counts.total()
+            sample_counts = Counter([int(s[1].text[0]) for s in data])
+            assert all(sample_counts[sample] == 0 for sample in range(11)), sample_counts
+            assert all(sample_counts[sample] == 1 for sample in range(11, 44)), sample_counts
+            assert all(sample_counts[sample] == 0 for sample in range(44, 55)), sample_counts
+            assert all(sample_counts[sample] == 0 for sample in range(100, 111)), sample_counts
+            assert all(sample_counts[sample] == 2 for sample in range(111, 144)), sample_counts
+            assert all(sample_counts[sample] == 0 for sample in range(144, 155)), sample_counts
+            assert sample_counts.total() == 33 + 33 * 2, sample_counts.total()
 
         # Combine with subset_samples
 
@@ -1364,7 +1347,7 @@ class TestDataset(unittest.TestCase):
                 )
             )
 
-        loader = get_loader(
+        with get_loader(
             get_train_dataset(
                 ratio2_mds_path,
                 worker_config=worker_config,
@@ -1375,19 +1358,18 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
                 repeat=False,
             )
-        )
+        ) as loader:
+            data = list(enumerate(loader))
+            assert len(data) == 12 + 12 * 2, len(data)
 
-        data = list(enumerate(loader))
-        assert len(data) == 12 + 12 * 2, len(data)
-
-        sample_counts = Counter([int(s[1].text[0]) for s in data])
-        assert all(sample_counts[sample] == 0 for sample in range(14)), sample_counts
-        assert all(sample_counts[sample] == 1 for sample in range(14, 26)), sample_counts
-        assert all(sample_counts[sample] == 0 for sample in range(26, 55)), sample_counts
-        assert all(sample_counts[sample] == 0 for sample in range(100, 124)), sample_counts
-        assert all(sample_counts[sample] == 2 for sample in range(124, 136)), sample_counts
-        assert all(sample_counts[sample] == 0 for sample in range(136, 155)), sample_counts
-        assert sample_counts.total() == 12 + 12 * 2, sample_counts.total()
+            sample_counts = Counter([int(s[1].text[0]) for s in data])
+            assert all(sample_counts[sample] == 0 for sample in range(14)), sample_counts
+            assert all(sample_counts[sample] == 1 for sample in range(14, 26)), sample_counts
+            assert all(sample_counts[sample] == 0 for sample in range(26, 55)), sample_counts
+            assert all(sample_counts[sample] == 0 for sample in range(100, 124)), sample_counts
+            assert all(sample_counts[sample] == 2 for sample in range(124, 136)), sample_counts
+            assert all(sample_counts[sample] == 0 for sample in range(136, 155)), sample_counts
+            assert sample_counts.total() == 12 + 12 * 2, sample_counts.total()
 
         # Combine with subset_ratio and subset_samples and nested metadataset
         nested_mds_path = self.dataset_path / "metadataset_nested_subset.yaml"
@@ -1418,7 +1400,7 @@ class TestDataset(unittest.TestCase):
                 )
             )
 
-        loader = get_loader(
+        with get_loader(
             get_train_dataset(
                 nested_mds_path,
                 worker_config=worker_config,
@@ -1429,21 +1411,20 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
                 repeat=False,
             )
-        )
-
-        data = list(enumerate(loader))
-        assert len(data) == 10 + 9 * 2, len(data)
-        sample_counts = Counter([int(s[1].text[0]) for s in data])
-        assert all(sample_counts[sample] == 0 for sample in range(17)), sample_counts
-        assert all(sample_counts[sample] == 2 for sample in range(17, 20)), sample_counts
-        assert all(sample_counts[sample] == 0 for sample in range(20, 55)), sample_counts
-        assert all(sample_counts[sample] == 0 for sample in range(100, 127)), sample_counts
-        assert all(sample_counts[sample] == 4 for sample in range(127, 130)), sample_counts
-        assert all(sample_counts[sample] == 0 for sample in range(130, 155)), sample_counts
-        assert all(sample_counts[sample] == 0 for sample in range(200, 230)), sample_counts
-        assert all(sample_counts[sample] == 1 for sample in range(230, 240)), sample_counts
-        assert all(sample_counts[sample] == 0 for sample in range(240, 255)), sample_counts
-        assert sample_counts.total() == 10 + 9 * 2, sample_counts.total()
+        ) as loader:
+            data = list(enumerate(loader))
+            assert len(data) == 10 + 9 * 2, len(data)
+            sample_counts = Counter([int(s[1].text[0]) for s in data])
+            assert all(sample_counts[sample] == 0 for sample in range(17)), sample_counts
+            assert all(sample_counts[sample] == 2 for sample in range(17, 20)), sample_counts
+            assert all(sample_counts[sample] == 0 for sample in range(20, 55)), sample_counts
+            assert all(sample_counts[sample] == 0 for sample in range(100, 127)), sample_counts
+            assert all(sample_counts[sample] == 4 for sample in range(127, 130)), sample_counts
+            assert all(sample_counts[sample] == 0 for sample in range(130, 155)), sample_counts
+            assert all(sample_counts[sample] == 0 for sample in range(200, 230)), sample_counts
+            assert all(sample_counts[sample] == 1 for sample in range(230, 240)), sample_counts
+            assert all(sample_counts[sample] == 0 for sample in range(240, 255)), sample_counts
+            assert sample_counts.total() == 10 + 9 * 2, sample_counts.total()
 
     def test_s3(self):
         # Create a joined dataset configuration
@@ -1466,7 +1447,7 @@ class TestDataset(unittest.TestCase):
             # EPath(self.dataset_path).copy(EPath("msc://s3/test/dataset"))
             emu.add_file(self.dataset_path, "test/dataset")
 
-            train_dataset = get_loader(
+            with get_loader(
                 get_train_dataset(
                     mixed_mds_path,
                     worker_config=WorkerConfig(
@@ -1479,10 +1460,9 @@ class TestDataset(unittest.TestCase):
                     max_samples_per_sequence=None,
                     virtual_epoch_length=10,
                 )
-            )
-
-            data = list(enumerate(train_dataset))
-            assert len(data) == 10, len(data)
+            ) as train_dataset:
+                data = list(enumerate(train_dataset))
+                assert len(data) == 10, len(data)
 
 
 if __name__ == "__main__":

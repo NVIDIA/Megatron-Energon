@@ -302,25 +302,24 @@ class TestDataset(unittest.TestCase):
         print(len(train_dataset))
         assert len(train_dataset) == 11
 
-        train_loader1 = get_loader(train_dataset)
+        with get_loader(train_dataset) as train_loader1:
+            train_order1 = [
+                text for idx, data in zip(range(55 * 10), train_loader1) for text in data.text
+            ]
+            print(train_order1[:10])
+            print(Counter(train_order1))
+            assert len(Counter(train_order1)) == 110
+            assert all(48 <= v <= 52 for v in Counter(train_order1).values())
 
-        train_order1 = [
-            text for idx, data in zip(range(55 * 10), train_loader1) for text in data.text
-        ]
-        print(train_order1[:10])
-        print(Counter(train_order1))
-        assert len(Counter(train_order1)) == 110
-        assert all(48 <= v <= 52 for v in Counter(train_order1).values())
-
-        train_subflavors = [
-            subflavor["__subflavor__"]
-            for idx, data in zip(range(55), train_loader1)
-            for subflavor in data.__subflavors__
-        ]
-        print("train_subflavors[:10]", train_subflavors[:10])
-        print("Counter(train_subflavors)", Counter(train_subflavors))
-        assert len(Counter(train_subflavors)) == 2
-        assert all(250 <= v <= 300 for v in Counter(train_subflavors).values())
+            train_subflavors = [
+                subflavor["__subflavor__"]
+                for idx, data in zip(range(55), train_loader1)
+                for subflavor in data.__subflavors__
+            ]
+            print("train_subflavors[:10]", train_subflavors[:10])
+            print("Counter(train_subflavors)", Counter(train_subflavors))
+            assert len(Counter(train_subflavors)) == 2
+            assert all(250 <= v <= 300 for v in Counter(train_subflavors).values())
 
         # Train mode dataset
         train_dataset = get_train_dataset(
@@ -333,27 +332,25 @@ class TestDataset(unittest.TestCase):
         print(len(train_dataset))
         assert len(train_dataset) == 11
 
-        train_loader1 = get_loader(train_dataset)
-
-        train_order1 = [
-            text for idx, data in zip(range(55 * 10), train_loader1) for text in data.text
-        ]
-        print(train_order1[:10])
-        print(Counter(train_order1))
-        assert len(Counter(train_order1)) == 110
-        assert all(48 <= v <= 52 for v in Counter(train_order1).values())
+        with get_loader(train_dataset) as train_loader1:
+            train_order1 = [
+                text for idx, data in zip(range(55 * 10), train_loader1) for text in data.text
+            ]
+            print(train_order1[:10])
+            print(Counter(train_order1))
+            assert len(Counter(train_order1)) == 110
+            assert all(48 <= v <= 52 for v in Counter(train_order1).values())
 
         # Val mode dataset
         val_dataset = get_val_dataset(self.mds_path, worker_config=worker_config, batch_size=10)
         print(len(val_dataset))
         assert len(val_dataset) == 11
 
-        val_loader1 = get_loader(val_dataset)
-
-        val_order1 = [text for data in val_loader1 for text in data.text]
-        assert len(val_order1) == 110
-        print(Counter(val_order1))
-        assert all(v == 1 for v in Counter(val_order1).values())
+        with get_loader(val_dataset) as val_loader1:
+            val_order1 = [text for data in val_loader1 for text in data.text]
+            assert len(val_order1) == 110
+            print(Counter(val_order1))
+            assert all(v == 1 for v in Counter(val_order1).values())
 
     def test_nested_metadataset(self):
         torch.manual_seed(42)
@@ -417,76 +414,75 @@ class TestDataset(unittest.TestCase):
         print(len(train_dataset))
         assert len(train_dataset) == 22
 
-        train_loader1 = get_loader(train_dataset)
-
-        train_order1 = [
-            text for idx, data in zip(range(55 * 10), train_loader1) for text in data.text
-        ]
-        print(train_order1[:10])
-        print(Counter(train_order1))
-        assert len(Counter(train_order1)) == 110
-        assert all(48 <= v <= 53 for v in Counter(train_order1).values())
-
-        train_subflavors = [
-            subflavor.get("__subflavor__")
-            for idx, data in zip(range(55), train_loader1)
-            for subflavor in data.__subflavors__
-        ]
-        cnt = Counter(train_subflavors)
-        print(train_subflavors[:10])
-        print(cnt)
-        avg = 55 * 10 / 5
-        assert len(Counter(train_subflavors)) == 2
-        assert avg * 4 - 40 < cnt["train"] < avg * 4 + 40
-        assert avg - 10 < cnt[None] < avg + 10
-
-        train_subflavorss = [
-            tuple(subflavor.items())
-            for idx, data in zip(range(55), train_loader1)
-            for subflavor in data.__subflavors__
-        ]
-        cnt = Counter(train_subflavorss)
-        print(train_subflavorss[:10])
-        print(cnt)
-        assert len(Counter(train_subflavorss)) == 3
-        assert (
-            avg * 2 - 20
-            < cnt[
-                (
-                    ("source", "nested_metadataset.yaml"),
-                    ("dataset.yaml", True),
-                    ("number", 43),
-                    ("__subflavor__", "train"),
-                    ("mds", "nested_train"),
-                )
+        with get_loader(train_dataset) as train_loader1:
+            train_order1 = [
+                text for idx, data in zip(range(55 * 10), train_loader1) for text in data.text
             ]
-            < avg * 2 + 20
-        )
-        assert (
-            avg * 2 - 20
-            < cnt[
-                (
-                    ("source", "nested_metadataset.yaml"),
-                    ("dataset.yaml", True),
-                    ("number", 44),
-                    ("__subflavor__", "train"),
-                    ("mds", "nested_train"),
-                )
+            print(train_order1[:10])
+            print(Counter(train_order1))
+            assert len(Counter(train_order1)) == 110
+            assert all(48 <= v <= 53 for v in Counter(train_order1).values())
+
+            train_subflavors = [
+                subflavor.get("__subflavor__")
+                for idx, data in zip(range(55), train_loader1)
+                for subflavor in data.__subflavors__
             ]
-            < avg * 2 + 20
-        )
-        assert (
-            avg * 1 - 20
-            < cnt[
-                (
-                    ("source", "nested_metadataset.yaml"),
-                    ("dataset.yaml", True),
-                    ("number", 42),
-                    ("mds", "nested_val"),
-                )
+            cnt = Counter(train_subflavors)
+            print(train_subflavors[:10])
+            print(cnt)
+            avg = 55 * 10 / 5
+            assert len(Counter(train_subflavors)) == 2
+            assert avg * 4 - 40 < cnt["train"] < avg * 4 + 40
+            assert avg - 10 < cnt[None] < avg + 10
+
+            train_subflavorss = [
+                tuple(subflavor.items())
+                for idx, data in zip(range(55), train_loader1)
+                for subflavor in data.__subflavors__
             ]
-            < avg * 1 + 20
-        )
+            cnt = Counter(train_subflavorss)
+            print(train_subflavorss[:10])
+            print(cnt)
+            assert len(Counter(train_subflavorss)) == 3
+            assert (
+                avg * 2 - 20
+                < cnt[
+                    (
+                        ("source", "nested_metadataset.yaml"),
+                        ("dataset.yaml", True),
+                        ("number", 43),
+                        ("__subflavor__", "train"),
+                        ("mds", "nested_train"),
+                    )
+                ]
+                < avg * 2 + 20
+            )
+            assert (
+                avg * 2 - 20
+                < cnt[
+                    (
+                        ("source", "nested_metadataset.yaml"),
+                        ("dataset.yaml", True),
+                        ("number", 44),
+                        ("__subflavor__", "train"),
+                        ("mds", "nested_train"),
+                    )
+                ]
+                < avg * 2 + 20
+            )
+            assert (
+                avg * 1 - 20
+                < cnt[
+                    (
+                        ("source", "nested_metadataset.yaml"),
+                        ("dataset.yaml", True),
+                        ("number", 42),
+                        ("mds", "nested_val"),
+                    )
+                ]
+                < avg * 1 + 20
+            )
 
         # Train mode dataset
         train_dataset = get_train_dataset(
@@ -499,27 +495,25 @@ class TestDataset(unittest.TestCase):
         print(len(train_dataset))
         assert len(train_dataset) == 11
 
-        train_loader1 = get_loader(train_dataset)
-
-        train_order1 = [
-            text for idx, data in zip(range(55 * 10), train_loader1) for text in data.text
-        ]
-        print(train_order1[:10])
-        print(Counter(train_order1))
-        assert len(Counter(train_order1)) == 110
-        assert all(48 <= v <= 52 for v in Counter(train_order1).values())
+        with get_loader(train_dataset) as train_loader1:
+            train_order1 = [
+                text for idx, data in zip(range(55 * 10), train_loader1) for text in data.text
+            ]
+            print(train_order1[:10])
+            print(Counter(train_order1))
+            assert len(Counter(train_order1)) == 110
+            assert all(48 <= v <= 52 for v in Counter(train_order1).values())
 
         # Val mode dataset
         val_dataset = get_val_dataset(self.mds_path, worker_config=worker_config, batch_size=10)
         print(len(val_dataset))
         assert len(val_dataset) == 11
 
-        val_loader1 = get_loader(val_dataset)
-
-        val_order1 = [text for data in val_loader1 for text in data.text]
-        assert len(val_order1) == 110
-        print(Counter(val_order1))
-        assert all(v == 1 for v in Counter(val_order1).values())
+        with get_loader(val_dataset) as val_loader1:
+            val_order1 = [text for data in val_loader1 for text in data.text]
+            assert len(val_order1) == 110
+            print(Counter(val_order1))
+            assert all(v == 1 for v in Counter(val_order1).values())
 
     def test_worker_sample_balance(self):
         torch.manual_seed(42)
@@ -669,91 +663,84 @@ class TestDataset(unittest.TestCase):
             )
 
         # Train mode dataset
-        loader = new_loader()
-        state_0 = loader.save_state_rank()
-        order_0 = [data.text for idx, data in zip(range(10), loader)]
-        state_1 = loader.save_state_rank()
-        # print("save state done")
-        order_1 = [data.text for idx, data in zip(range(20), loader)]
+        with new_loader() as loader:
+            state_0 = loader.save_state_rank()
+            order_0 = [data.text for idx, data in zip(range(10), loader)]
+            state_1 = loader.save_state_rank()
+            # print("save state done")
+            order_1 = [data.text for idx, data in zip(range(20), loader)]
 
-        state_2 = loader.save_state_rank()
-        # print("save state done")
-        # Iterated 30 samples, afterwards 50 samples. Checkpoint should be around that
-        order_2 = [data.text for idx, data in zip(range(20), loader)]
+            state_2 = loader.save_state_rank()
+            # print("save state done")
+            # Iterated 30 samples, afterwards 50 samples. Checkpoint should be around that
+            order_2 = [data.text for idx, data in zip(range(20), loader)]
 
-        state_3 = loader.save_state_rank()
-        # print("save state done")
-        # Iterated 50 samples, afterwards 53 samples. Checkpoint should be around that
-        order_3 = [data.text for idx, data in zip(range(3), loader)]
+            state_3 = loader.save_state_rank()
+            # print("save state done")
+            # Iterated 50 samples, afterwards 53 samples. Checkpoint should be around that
+            order_3 = [data.text for idx, data in zip(range(3), loader)]
 
-        state_4 = loader.save_state_rank()
-        # print("save state done")
-        # Dataset size is 55, want to save one sample before end of epoch
-        # Iterated 53 samples, afterwards 54 samples. Checkpoint should be around that
-        order_4 = [data.text for idx, data in zip(range(1), loader)]
+            state_4 = loader.save_state_rank()
+            # print("save state done")
+            # Dataset size is 55, want to save one sample before end of epoch
+            # Iterated 53 samples, afterwards 54 samples. Checkpoint should be around that
+            order_4 = [data.text for idx, data in zip(range(1), loader)]
 
-        state_5 = loader.save_state_rank()
-        # print("save state done")
-        # Dataset size is 55, want to save one sample before end of epoch
-        # Iterated 54 samples, afterwards 55 samples. Checkpoint should be around that
-        order_5 = [data.text for idx, data in zip(range(1), loader)]
+            state_5 = loader.save_state_rank()
+            # print("save state done")
+            # Dataset size is 55, want to save one sample before end of epoch
+            # Iterated 54 samples, afterwards 55 samples. Checkpoint should be around that
+            order_5 = [data.text for idx, data in zip(range(1), loader)]
 
-        state_6 = loader.save_state_rank()
-        # print("save state done")
-        # Dataset size is 55, want to save one sample before end of epoch
-        # Iterated 55 samples, afterwards 75 samples. Checkpoint should be around that
-        order_6 = [data.text for idx, data in zip(range(70), loader)]
+            state_6 = loader.save_state_rank()
+            # print("save state done")
+            # Dataset size is 55, want to save one sample before end of epoch
+            # Iterated 55 samples, afterwards 75 samples. Checkpoint should be around that
+            order_6 = [data.text for idx, data in zip(range(70), loader)]
 
-        loader = new_loader()
-        print("state_1:", _norng_state(state_1))
-        loader.restore_state_rank(state_1)
-        order_1_rest = [data.text for idx, data in zip(range(len(order_1)), loader)]
-        assert order_1 == order_1_rest
+        with new_loader().with_restored_state_rank(state_1) as loader:
+            print("state_1:", _norng_state(state_1))
+            order_1_rest = [data.text for idx, data in zip(range(len(order_1)), loader)]
+            assert order_1 == order_1_rest
 
-        loader = new_loader()
-        loader.restore_state_rank(state_0)
-        order_0_rest = [data.text for idx, data in zip(range(len(order_0)), loader)]
-        assert order_0 == order_0_rest
+        with new_loader().with_restored_state_rank(state_0) as loader:
+            order_0_rest = [data.text for idx, data in zip(range(len(order_0)), loader)]
+            assert order_0 == order_0_rest
 
-        loader = new_loader()
-        print("state_2:", _norng_state(state_2))
-        loader.restore_state_rank(state_2)
-        order_2_rest = [data.text for idx, data in zip(range(len(order_2)), loader)]
-        print("order_2:", order_2)
-        print("order_2_rest:", order_2_rest)
-        assert order_2 == order_2_rest
+        with new_loader().with_restored_state_rank(state_2) as loader:
+            print("state_2:", _norng_state(state_2))
+            order_2_rest = [data.text for idx, data in zip(range(len(order_2)), loader)]
+            print("order_2:", order_2)
+            print("order_2_rest:", order_2_rest)
+            assert order_2 == order_2_rest
 
-        loader = new_loader()
-        print("state_3:", _norng_state(state_3))
-        loader.restore_state_rank(state_3)
-        order_3_rest = [data.text for idx, data in zip(range(len(order_3)), loader)]
-        print("order_3:", order_3)
-        print("order_3_rest:", order_3_rest)
-        assert order_3 == order_3_rest
+        with new_loader().with_restored_state_rank(state_3) as loader:
+            print("state_3:", _norng_state(state_3))
+            order_3_rest = [data.text for idx, data in zip(range(len(order_3)), loader)]
+            print("order_3:", order_3)
+            print("order_3_rest:", order_3_rest)
+            assert order_3 == order_3_rest
 
-        loader = new_loader()
-        print("state_4:", _norng_state(state_4))
-        loader.restore_state_rank(state_4)
-        order_4_rest = [data.text for idx, data in zip(range(len(order_4)), loader)]
-        print("order_4:", order_4)
-        print("order_4_rest:", order_4_rest)
-        assert order_4 == order_4_rest
+        with new_loader().with_restored_state_rank(state_4) as loader:
+            print("state_4:", _norng_state(state_4))
+            order_4_rest = [data.text for idx, data in zip(range(len(order_4)), loader)]
+            print("order_4:", order_4)
+            print("order_4_rest:", order_4_rest)
+            assert order_4 == order_4_rest
 
-        loader = new_loader()
-        print("state_5:", _norng_state(state_5))
-        loader.restore_state_rank(state_5)
-        order_5_rest = [data.text for idx, data in zip(range(len(order_5)), loader)]
-        print("order_5:", order_5)
-        print("order_5_rest:", order_5_rest)
-        assert order_5 == order_5_rest
+        with new_loader().with_restored_state_rank(state_5) as loader:
+            print("state_5:", _norng_state(state_5))
+            order_5_rest = [data.text for idx, data in zip(range(len(order_5)), loader)]
+            print("order_5:", order_5)
+            print("order_5_rest:", order_5_rest)
+            assert order_5 == order_5_rest
 
-        loader = new_loader()
-        print("state_6:", _norng_state(state_6))
-        loader.restore_state_rank(state_6)
-        order_6_rest = [data.text for idx, data in zip(range(len(order_6)), loader)]
-        print("order_6:", order_6)
-        print("order_6_rest:", order_6_rest)
-        assert order_6 == order_6_rest
+        with new_loader().with_restored_state_rank(state_6) as loader:
+            print("state_6:", _norng_state(state_6))
+            order_6_rest = [data.text for idx, data in zip(range(len(order_6)), loader)]
+            print("order_6:", order_6)
+            print("order_6_rest:", order_6_rest)
+            assert order_6 == order_6_rest
 
         wrk_cfg = worker_config.config()
         assert wrk_cfg == {
@@ -992,106 +979,99 @@ class TestDataset(unittest.TestCase):
             )
 
         # Train mode dataset
-        loader = new_loader()
-        state_0 = loader.save_state_rank()
-        order_0 = [data.text for idx, data in zip(range(10), loader)]
-        time.sleep(0.5)
-        state_1 = loader.save_state_rank()
-        # print("save state done")
-        order_1 = [data.text for idx, data in zip(range(20), loader)]
+        with new_loader() as loader:
+            state_0 = loader.save_state_rank()
+            order_0 = [data.text for idx, data in zip(range(10), loader)]
+            time.sleep(0.5)
+            state_1 = loader.save_state_rank()
+            # print("save state done")
+            order_1 = [data.text for idx, data in zip(range(20), loader)]
 
-        # Ensure a checkpoint is created on next()
-        time.sleep(1.5)
+            # Ensure a checkpoint is created on next()
+            time.sleep(1.5)
 
-        state_2 = loader.save_state_rank()
-        # print("save state done")
-        # Iterated 30 samples, afterwards 50 samples. Checkpoint should be around that
-        order_2 = [data.text for idx, data in zip(range(20), loader)]
+            state_2 = loader.save_state_rank()
+            # print("save state done")
+            # Iterated 30 samples, afterwards 50 samples. Checkpoint should be around that
+            order_2 = [data.text for idx, data in zip(range(20), loader)]
 
-        state_3 = loader.save_state_rank()
-        # print("save state done")
-        # Iterated 50 samples, afterwards 53 samples. Checkpoint should be around that
-        order_3 = [data.text for idx, data in zip(range(3), loader)]
+            state_3 = loader.save_state_rank()
+            # print("save state done")
+            # Iterated 50 samples, afterwards 53 samples. Checkpoint should be around that
+            order_3 = [data.text for idx, data in zip(range(3), loader)]
 
-        # Ensure a checkpoint is created on next()
-        time.sleep(1.5)
+            # Ensure a checkpoint is created on next()
+            time.sleep(1.5)
 
-        state_4 = loader.save_state_rank()
-        # print("save state done")
-        # Dataset size is 55, want to save one sample before end of epoch
-        # Iterated 1 samples, afterwards 54 samples. Checkpoint should be around that
-        order_4 = [data.text for idx, data in zip(range(1), loader)]
+            state_4 = loader.save_state_rank()
+            # print("save state done")
+            # Dataset size is 55, want to save one sample before end of epoch
+            # Iterated 1 samples, afterwards 54 samples. Checkpoint should be around that
+            order_4 = [data.text for idx, data in zip(range(1), loader)]
 
-        # Ensure a checkpoint is created on next()
-        time.sleep(1.5)
+            # Ensure a checkpoint is created on next()
+            time.sleep(1.5)
 
-        state_5 = loader.save_state_rank()
-        # print("save state done")
-        # Dataset size is 55, want to save one sample before end of epoch
-        # Iterated 1 samples, afterwards 55 samples. Checkpoint should be around that
-        order_5 = [data.text for idx, data in zip(range(1), loader)]
+            state_5 = loader.save_state_rank()
+            # print("save state done")
+            # Dataset size is 55, want to save one sample before end of epoch
+            # Iterated 1 samples, afterwards 55 samples. Checkpoint should be around that
+            order_5 = [data.text for idx, data in zip(range(1), loader)]
 
-        # Ensure a checkpoint is created on next()
-        time.sleep(1.5)
+            # Ensure a checkpoint is created on next()
+            time.sleep(1.5)
 
-        state_6 = loader.save_state_rank()
-        # print("save state done")
-        # Dataset size is 55, want to save one sample before end of epoch
-        # Iterated 1 samples, afterwards 55 samples. Checkpoint should be around that
-        order_6 = [data.text for idx, data in zip(range(10), loader)]
+            state_6 = loader.save_state_rank()
+            # print("save state done")
+            # Dataset size is 55, want to save one sample before end of epoch
+            # Iterated 1 samples, afterwards 55 samples. Checkpoint should be around that
+            order_6 = [data.text for idx, data in zip(range(10), loader)]
 
-        loader = new_loader()
-        print("state_1:", _norng_state(state_1))
-        loader.restore_state_rank(state_1)
-        order_1_rest = [data.text for idx, data in zip(range(len(order_1)), loader)]
-        print("order_1:", order_1)
-        print("order_1_rest:", order_1_rest)
-        assert order_1 == order_1_rest
+        with new_loader().with_restored_state_rank(state_1) as loader:
+            print("state_1:", _norng_state(state_1))
+            order_1_rest = [data.text for idx, data in zip(range(len(order_1)), loader)]
+            print("order_1:", order_1)
+            print("order_1_rest:", order_1_rest)
+            assert order_1 == order_1_rest
 
-        loader = new_loader()
-        loader.restore_state_rank(state_0)
-        order_0_rest = [data.text for idx, data in zip(range(len(order_0)), loader)]
-        assert order_0 == order_0_rest
+        with new_loader().with_restored_state_rank(state_0) as loader:
+            order_0_rest = [data.text for idx, data in zip(range(len(order_0)), loader)]
+            assert order_0 == order_0_rest
 
-        loader = new_loader()
-        print("state_2:", _norng_state(state_2))
-        loader.restore_state_rank(state_2)
-        order_2_rest = [data.text for idx, data in zip(range(len(order_2)), loader)]
-        print("order_2:", order_2)
-        print("order_2_rest:", order_2_rest)
-        assert order_2 == order_2_rest
+        with new_loader().with_restored_state_rank(state_2) as loader:
+            print("state_2:", _norng_state(state_2))
+            order_2_rest = [data.text for idx, data in zip(range(len(order_2)), loader)]
+            print("order_2:", order_2)
+            print("order_2_rest:", order_2_rest)
+            assert order_2 == order_2_rest
 
-        loader = new_loader()
-        print("state_3:", _norng_state(state_3))
-        loader.restore_state_rank(state_3)
-        order_3_rest = [data.text for idx, data in zip(range(len(order_3)), loader)]
-        print("order_3:", order_3)
-        print("order_3_rest:", order_3_rest)
-        assert order_3 == order_3_rest
+        with new_loader().with_restored_state_rank(state_3) as loader:
+            print("state_3:", _norng_state(state_3))
+            order_3_rest = [data.text for idx, data in zip(range(len(order_3)), loader)]
+            print("order_3:", order_3)
+            print("order_3_rest:", order_3_rest)
+            assert order_3 == order_3_rest
 
-        loader = new_loader()
-        print("state_4:", _norng_state(state_4))
-        loader.restore_state_rank(state_4)
-        order_4_rest = [data.text for idx, data in zip(range(len(order_4)), loader)]
-        print("order_4:", order_4)
-        print("order_4_rest:", order_4_rest)
-        assert order_4 == order_4_rest
+        with new_loader().with_restored_state_rank(state_4) as loader:
+            print("state_4:", _norng_state(state_4))
+            order_4_rest = [data.text for idx, data in zip(range(len(order_4)), loader)]
+            print("order_4:", order_4)
+            print("order_4_rest:", order_4_rest)
+            assert order_4 == order_4_rest
 
-        loader = new_loader()
-        print("state_5:", _norng_state(state_5))
-        loader.restore_state_rank(state_5)
-        order_5_rest = [data.text for idx, data in zip(range(len(order_5)), loader)]
-        print("order_5:", order_5)
-        print("order_5_rest:", order_5_rest)
-        assert order_5 == order_5_rest
+        with new_loader().with_restored_state_rank(state_5) as loader:
+            print("state_5:", _norng_state(state_5))
+            order_5_rest = [data.text for idx, data in zip(range(len(order_5)), loader)]
+            print("order_5:", order_5)
+            print("order_5_rest:", order_5_rest)
+            assert order_5 == order_5_rest
 
-        loader = new_loader()
-        print("state_6:", _norng_state(state_6))
-        loader.restore_state_rank(state_6)
-        order_6_rest = [data.text for idx, data in zip(range(len(order_6)), loader)]
-        print("order_6:", order_6)
-        print("order_6_rest:", order_6_rest)
-        assert order_6 == order_6_rest
+        with new_loader().with_restored_state_rank(state_6) as loader:
+            print("state_6:", _norng_state(state_6))
+            order_6_rest = [data.text for idx, data in zip(range(len(order_6)), loader)]
+            print("order_6:", order_6)
+            print("order_6_rest:", order_6_rest)
+            assert order_6 == order_6_rest
 
     def test_save_restore_state_train_epochize_workers(self):
         torch.manual_seed(42)
@@ -1108,7 +1088,7 @@ class TestDataset(unittest.TestCase):
 
         # Train mode dataset
         torch.manual_seed(42)
-        loader = get_savable_loader(
+        with get_savable_loader(
             get_train_dataset(
                 self.mds_path,
                 worker_config=worker_config,
@@ -1118,16 +1098,16 @@ class TestDataset(unittest.TestCase):
                 shuffle_buffer_size=sbs,
                 max_samples_per_sequence=sbs,
             ),
-        )
-        state_0 = loader.save_state_rank()
-        order_1 = [data.text[0] for data in loader]
-        state_1 = loader.save_state_rank()
-        order_2 = [data.text[0] for data in loader]
-        state_2 = loader.save_state_rank()
-        order_3 = [data.text[0] for idx, data in zip(range(17), loader)]
+        ) as loader:
+            state_0 = loader.save_state_rank()
+            order_1 = [data.text[0] for data in loader]
+            state_1 = loader.save_state_rank()
+            order_2 = [data.text[0] for data in loader]
+            state_2 = loader.save_state_rank()
+            order_3 = [data.text[0] for idx, data in zip(range(17), loader)]
 
         torch.manual_seed(42)
-        loader = get_savable_loader(
+        with get_savable_loader(
             get_train_dataset(
                 self.mds_path,
                 worker_config=worker_config,
@@ -1137,16 +1117,15 @@ class TestDataset(unittest.TestCase):
                 shuffle_buffer_size=sbs,
                 max_samples_per_sequence=sbs,
             ),
-        )
-        print("state_0:", _norng_state(state_0))
-        loader.restore_state_rank(state_0)
-        order_5 = [data.text[0] for data in loader]
-        print("order_1:", order_1)
-        print("order_5:", order_5)
-        assert order_1 == order_5
+        ).with_restored_state_rank(state_0) as loader:
+            print("state_0:", _norng_state(state_0))
+            order_5 = [data.text[0] for data in loader]
+            print("order_1:", order_1)
+            print("order_5:", order_5)
+            assert order_1 == order_5
 
         torch.manual_seed(42)
-        loader = get_savable_loader(
+        with get_savable_loader(
             get_train_dataset(
                 self.mds_path,
                 worker_config=worker_config,
@@ -1156,16 +1135,15 @@ class TestDataset(unittest.TestCase):
                 shuffle_buffer_size=sbs,
                 max_samples_per_sequence=sbs,
             ),
-        )
-        print("state_1:", _norng_state(state_1))
-        loader.restore_state_rank(state_1)
-        order_6 = [data.text[0] for data in loader]
-        print("order_2:", order_2)
-        print("order_6:", order_6)
-        assert order_2 == order_6
+        ).with_restored_state_rank(state_1) as loader:
+            print("state_1:", _norng_state(state_1))
+            order_6 = [data.text[0] for data in loader]
+            print("order_2:", order_2)
+            print("order_6:", order_6)
+            assert order_2 == order_6
 
         torch.manual_seed(42)
-        loader = get_savable_loader(
+        with get_savable_loader(
             get_train_dataset(
                 self.mds_path,
                 worker_config=worker_config,
@@ -1175,13 +1153,12 @@ class TestDataset(unittest.TestCase):
                 shuffle_buffer_size=sbs,
                 max_samples_per_sequence=sbs,
             ),
-        )
-        print("state_2:", _norng_state(state_2))
-        loader.restore_state_rank(state_2)
-        order_7 = [data.text[0] for idx, data in zip(range(17), loader)]
-        print("order_3:", order_3)
-        print("order_7:", order_7)
-        assert order_3 == order_7
+        ).with_restored_state_rank(state_2) as loader:
+            print("state_2:", _norng_state(state_2))
+            order_7 = [data.text[0] for idx, data in zip(range(17), loader)]
+            print("order_3:", order_3)
+            print("order_7:", order_7)
+            assert order_3 == order_7
 
     def test_save_restore_state_val(self):
         torch.manual_seed(42)
@@ -1194,28 +1171,26 @@ class TestDataset(unittest.TestCase):
         )
 
         # Train mode dataset
-        loader = get_savable_loader(
+        with get_savable_loader(
             get_val_dataset(self.mds_path, worker_config=worker_config, batch_size=10),
-        )
-        state_0 = loader.save_state_rank()
-        order_1 = [data.text for idx, data in zip(range(55 * 20), loader)]
-        state_1 = loader.save_state_rank()
-        # print("save state done")
-        order_2 = [data.text for idx, data in zip(range(55 * 20), loader)]
+        ) as loader:
+            state_0 = loader.save_state_rank()
+            order_1 = [data.text for idx, data in zip(range(55 * 20), loader)]
+            state_1 = loader.save_state_rank()
+            # print("save state done")
+            order_2 = [data.text for idx, data in zip(range(55 * 20), loader)]
 
-        loader = get_savable_loader(
+        with get_savable_loader(
             get_val_dataset(self.mds_path, worker_config=worker_config, batch_size=10),
-        )
-        loader.restore_state_rank(state_1)
-        order_3 = [data.text for idx, data in zip(range(55 * 20), loader)]
-        assert order_2 == order_3
+        ).with_restored_state_rank(state_1) as loader:
+            order_3 = [data.text for idx, data in zip(range(55 * 20), loader)]
+            assert order_2 == order_3
 
-        loader = get_savable_loader(
+        with get_savable_loader(
             get_val_dataset(self.mds_path, worker_config=worker_config, batch_size=10),
-        )
-        loader.restore_state_rank(state_0)
-        order_4 = [data.text for idx, data in zip(range(55 * 20), loader)]
-        assert order_1 == order_4
+        ).with_restored_state_rank(state_0) as loader:
+            order_4 = [data.text for idx, data in zip(range(55 * 20), loader)]
+            assert order_1 == order_4
 
     def test_blending_randomness(self):
         import random
@@ -1247,12 +1222,11 @@ class TestDataset(unittest.TestCase):
                     shuffle_buffer_size=None,
                     max_samples_per_sequence=None,
                 )
-                loader = get_loader(ds)
-
-                subflavors = [
-                    data.__subflavors__[0].get("__subflavor__")
-                    for idx, data in zip(range(25), loader)
-                ]
+                with get_loader(ds) as loader:
+                    subflavors = [
+                        data.__subflavors__[0].get("__subflavor__")
+                        for idx, data in zip(range(25), loader)
+                    ]
 
                 all_ranks_subflavors.append(subflavors)
 
@@ -1264,10 +1238,6 @@ class TestDataset(unittest.TestCase):
                     assert all_ranks_subflavors[i] != all_ranks_subflavors[j], (
                         f"Rank {i} and rank {j} got the same subflavors."
                     )
-
-            # Delete all locals, otherwise loaders might be kept alive
-            locals().clear()
-            gc.collect()
 
     def test_slice_iter_shuffle_over_epochs(self):
         torch.manual_seed(42)
@@ -1293,8 +1263,8 @@ class TestDataset(unittest.TestCase):
             )
 
         # Train mode dataset
-        loader = new_loader()
-        _ = [data.text for idx, data in zip(range(1000), loader)]
+        with new_loader() as loader:
+            _ = [data.text for idx, data in zip(range(1000), loader)]
 
     def test_save_restore_next(self):
         torch.manual_seed(42)
@@ -1305,7 +1275,7 @@ class TestDataset(unittest.TestCase):
             num_workers=6,
         )
 
-        initial_loader = get_savable_loader(
+        with get_savable_loader(
             get_train_dataset(
                 self.nested_mds_path,
                 worker_config=wc,
@@ -1313,45 +1283,43 @@ class TestDataset(unittest.TestCase):
                 shuffle_buffer_size=None,
                 max_samples_per_sequence=None,
             ),
-        )
-        skip_initial = 9
+        ) as initial_loader:
+            skip_initial = 9
 
-        previous_cp = initial_loader.save_state_rank()
-        print("initial_samples:")
-        for i, sample in zip(range(skip_initial), initial_loader):
-            print(f"sample[@{i}]: {sample.text}")
-            print("previous_cp:", previous_cp)
-            rst_loader = get_savable_loader(
-                get_train_dataset(
-                    self.nested_mds_path,
-                    worker_config=wc,
-                    batch_size=1,
-                    shuffle_buffer_size=None,
-                    max_samples_per_sequence=None,
-                ),
-            )
-            rst_loader.restore_state_rank(previous_cp)
-            for i, rst_sample in zip(range(1), rst_loader):
-                print(f"rst_sample[@{i}]: {rst_sample.text}")
-            assert sample.text == rst_sample.text, f"{sample} != {rst_sample}"
-            assert sample.__key__ == rst_sample.__key__, f"{sample} != {rst_sample}"
-            assert sample.__restore_key__ == rst_sample.__restore_key__, f"{sample} != {rst_sample}"
             previous_cp = initial_loader.save_state_rank()
+            print("initial_samples:")
+            for i, sample in zip(range(skip_initial), initial_loader):
+                print(f"sample[@{i}]: {sample.text}")
+                print("previous_cp:", previous_cp)
+                with get_savable_loader(
+                    get_train_dataset(
+                        self.nested_mds_path,
+                        worker_config=wc,
+                        batch_size=1,
+                        shuffle_buffer_size=None,
+                        max_samples_per_sequence=None,
+                    ),
+                ).with_restored_state_rank(previous_cp) as rst_loader:
+                    for i, rst_sample in zip(range(1), rst_loader):
+                        print(f"rst_sample[@{i}]: {rst_sample.text}")
+                    assert sample.text == rst_sample.text, f"{sample} != {rst_sample}"
+                    assert sample.__key__ == rst_sample.__key__, f"{sample} != {rst_sample}"
+                    assert sample.__restore_key__ == rst_sample.__restore_key__, (
+                        f"{sample} != {rst_sample}"
+                    )
+                    previous_cp = initial_loader.save_state_rank()
 
-        # Iterate 10 samples, the save state and store the next 10 samples for reference.
-        state_initial = initial_loader.save_state_rank()
-        print("state_initial:", str(state_initial))
-        initial_samples = [sample for _, sample in zip(range(20), initial_loader)]
-        print(
-            "initial_samples:"
-            + "".join(
-                f"\n [@{idx}] {sample.text}"
-                for idx, sample in enumerate(initial_samples, start=skip_initial)
+            # Iterate 10 samples, the save state and store the next 10 samples for reference.
+            state_initial = initial_loader.save_state_rank()
+            print("state_initial:", str(state_initial))
+            initial_samples = [sample for _, sample in zip(range(20), initial_loader)]
+            print(
+                "initial_samples:"
+                + "".join(
+                    f"\n [@{idx}] {sample.text}"
+                    for idx, sample in enumerate(initial_samples, start=skip_initial)
+                )
             )
-        )
-
-        del initial_loader
-        gc.collect()
 
         second_loader = get_savable_loader(
             get_train_dataset(
@@ -1363,90 +1331,95 @@ class TestDataset(unittest.TestCase):
             ),
         )
         second_loader.restore_state_rank(state_initial)
-
-        # Save the state again, to check that it is the same as the just restored state
-        same_state = second_loader.save_state_rank()
-        print("same_state:", same_state)
-        assert same_state == state_initial
-
-        # This will propagate the state to the workers.
-        second_loader.start()
         # Save the state again, to check that it is the same as the just restored state
         same_state = second_loader.save_state_rank()
         print("same_state:", same_state)
         assert_nested_equal(same_state, state_initial)
+        assert same_state is state_initial
 
-        for offset in range(10):
-            try:
-                # Save state and restore in next loader
-                state_offset = second_loader.save_state_rank()
-                # Get 1 sample from the current loader
-                samples = [sample for _, sample in zip(range(1), second_loader)]
-                assert len(samples) == 1
-                sample = samples[0]
+        # This will propagate the state to the workers.
+        second_loader.start()
+        try:
+            # Save the state again, to check that it is the same as the just restored state
+            same_state = second_loader.save_state_rank()
+            print("same_state:", same_state)
+            assert_nested_equal(same_state, state_initial)
 
-                # Check that the sample is the same as the initial loader's reference sample
-                print(f"sample[@{offset + skip_initial}]: {sample.text}")
+            for offset in range(10):
                 try:
-                    assert sample.text == initial_samples[offset].text, (
-                        f"{sample} != {initial_samples[offset]}"
-                    )
-                    assert sample.__key__ == initial_samples[offset].__key__, (
-                        f"{sample} != {initial_samples[offset]}"
-                    )
-                    assert sample.__restore_key__ == initial_samples[offset].__restore_key__, (
-                        f"{sample} != {initial_samples[offset]}"
-                    )
-                except Exception as e:
-                    print(
-                        "samples:"
-                        + f"\n [@{offset + skip_initial}] {sample.text}"
-                        + "".join(
-                            f"\n [@{idx}] {sample.text}"
-                            for idx, sample in zip(
-                                range(skip_initial + offset + 1, skip_initial + offset + 6),
-                                second_loader,
+                    # Save state and restore in next loader
+                    state_offset = second_loader.save_state_rank()
+                    # Get 1 sample from the current loader
+                    samples = [sample for _, sample in zip(range(1), second_loader)]
+                    assert len(samples) == 1
+                    sample = samples[0]
+
+                    # Check that the sample is the same as the initial loader's reference sample
+                    print(f"sample[@{offset + skip_initial}]: {sample.text}")
+                    try:
+                        assert sample.text == initial_samples[offset].text, (
+                            f"{sample} != {initial_samples[offset]}"
+                        )
+                        assert sample.__key__ == initial_samples[offset].__key__, (
+                            f"{sample} != {initial_samples[offset]}"
+                        )
+                        assert sample.__restore_key__ == initial_samples[offset].__restore_key__, (
+                            f"{sample} != {initial_samples[offset]}"
+                        )
+                    except Exception as e:
+                        print(
+                            "samples:"
+                            + f"\n [@{offset + skip_initial}] {sample.text}"
+                            + "".join(
+                                f"\n [@{idx}] {sample.text}"
+                                for idx, sample in zip(
+                                    range(skip_initial + offset + 1, skip_initial + offset + 6),
+                                    second_loader,
+                                )
                             )
                         )
-                    )
-                    raise ValueError(f"Failed to iterate @{offset + skip_initial} samples") from e
+                        raise ValueError(
+                            f"Failed to iterate @{offset + skip_initial} samples"
+                        ) from e
 
-                # Restore state in a new loader
-                ref_loader = get_savable_loader(
-                    get_train_dataset(
-                        self.nested_mds_path,
-                        worker_config=wc,
-                        batch_size=1,
-                        shuffle_buffer_size=None,
-                        max_samples_per_sequence=None,
-                    ),
-                )
-                ref_loader.restore_state_rank(state_offset)
-
-                # Get 1 sample from the restored loader
-                next_loader_samples = [sample for _, sample in zip(range(6), ref_loader)]
-                assert len(next_loader_samples) == 6
-                next_loader_sample = next_loader_samples[0]
-                print(
-                    "next_loader_samples:"
-                    + f"\n [@{offset + skip_initial}] {sample.text}"
-                    + "".join(
-                        f"\n [@{idx}] {sample}"
-                        for idx, sample in zip(
-                            range(skip_initial + offset, skip_initial + offset + 6),
-                            next_loader_samples,
+                    # Restore state in a new loader
+                    with get_savable_loader(
+                        get_train_dataset(
+                            self.nested_mds_path,
+                            worker_config=wc,
+                            batch_size=1,
+                            shuffle_buffer_size=None,
+                            max_samples_per_sequence=None,
+                        ),
+                    ).with_restored_state_rank(state_offset) as ref_loader:
+                        # Get 1 sample from the restored loader
+                        next_loader_samples = [sample for _, sample in zip(range(6), ref_loader)]
+                        assert len(next_loader_samples) == 6
+                        next_loader_sample = next_loader_samples[0]
+                        print(
+                            "next_loader_samples:"
+                            + f"\n [@{offset + skip_initial}] {sample.text}"
+                            + "".join(
+                                f"\n [@{idx}] {sample}"
+                                for idx, sample in zip(
+                                    range(skip_initial + offset, skip_initial + offset + 6),
+                                    next_loader_samples,
+                                )
+                            )
                         )
-                    )
-                )
-                assert next_loader_sample.text == sample.text, f"{next_loader_sample} != {sample}"
-                assert next_loader_sample.__key__ == sample.__key__, (
-                    f"{next_loader_sample} != {sample}"
-                )
-                assert next_loader_sample.__restore_key__ == sample.__restore_key__, (
-                    f"{next_loader_sample} != {sample}"
-                )
-            except Exception as e:
-                raise ValueError(f"Failed to iterate @{skip_initial}+{offset} samples") from e
+                        assert next_loader_sample.text == sample.text, (
+                            f"{next_loader_sample} != {sample}"
+                        )
+                        assert next_loader_sample.__key__ == sample.__key__, (
+                            f"{next_loader_sample} != {sample}"
+                        )
+                        assert next_loader_sample.__restore_key__ == sample.__restore_key__, (
+                            f"{next_loader_sample} != {sample}"
+                        )
+                except Exception as e:
+                    raise ValueError(f"Failed to iterate @{skip_initial}+{offset} samples") from e
+        finally:
+            second_loader.shutdown()
 
 
 if __name__ == "__main__":

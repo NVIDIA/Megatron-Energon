@@ -166,26 +166,25 @@ class TestDataset(unittest.TestCase):
             training=False,
             sample_type=TextSample,
         )
-        dl = get_loader(ds.build())
-
-        all_keys = [sample.__key__ for sample in dl]
-        assert all_keys == [
-            "parts/data-4.tar/000011",  # Shard 4 first
-            "parts/data-4.tar/000012",
-            "parts/data-4.tar/000013",
-            "parts/data-4.tar/000014",
-            "parts/data-4.tar/000015",
-            "parts/data-4.tar/000016",
-            "parts/data-4.tar/000017",
-            "parts/data-4.tar/000018",
-            "parts/data-4.tar/000019",
-            "parts/data-4.tar/000020",
-            "parts/data-0.tar/000000",  # Shard 0
-            "parts/data-0.tar/000001",
-            "parts/data-2.tar/000004",  # Shard 2
-            "parts/data-2.tar/000005",
-            "parts/data-2.tar/000006",
-        ]
+        with get_loader(ds.build()) as dl:
+            all_keys = [sample.__key__ for sample in dl]
+            assert all_keys == [
+                "parts/data-4.tar/000011",  # Shard 4 first
+                "parts/data-4.tar/000012",
+                "parts/data-4.tar/000013",
+                "parts/data-4.tar/000014",
+                "parts/data-4.tar/000015",
+                "parts/data-4.tar/000016",
+                "parts/data-4.tar/000017",
+                "parts/data-4.tar/000018",
+                "parts/data-4.tar/000019",
+                "parts/data-4.tar/000020",
+                "parts/data-0.tar/000000",  # Shard 0
+                "parts/data-0.tar/000001",
+                "parts/data-2.tar/000004",  # Shard 2
+                "parts/data-2.tar/000005",
+                "parts/data-2.tar/000006",
+            ]
 
     def test_text_dataset(self):
         worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0)
@@ -201,15 +200,15 @@ class TestDataset(unittest.TestCase):
         # Check len operator
         assert len(ds) == 55
         # Check if iterating returns the same
-        iter1 = list(get_loader(ds))
-        iter2 = list(get_loader(ds))
+        with get_loader(ds) as l1:
+            iter1 = list(l1)
+        with get_loader(ds) as l2:
+            iter2 = list(l2)
         assert len(iter1) == 55
         assert len(iter2) == 55
         assert all(elem1.__key__ == elem2.__key__ for elem1, elem2 in zip(iter1, iter2))
-        assert all(f"{idx}" == x.text for idx, x in enumerate(get_loader(ds)))
-
-        del ds
-        gc.collect()
+        with get_loader(ds) as l3:
+            assert all(f"{idx}" == x.text for idx, x in enumerate(l3))
 
     def test_epoch(self):
         torch.manual_seed(42)
@@ -224,11 +223,11 @@ class TestDataset(unittest.TestCase):
             sample_type=TextSample,
             worker_config=worker_config,
         )
-        loader5 = get_loader(ds3.build())
-        order9 = [data.text for idx, data in zip(range(55), loader5)]
-        print(order9)
-        print(Counter(order9))
-        assert all(v == 1 for v in Counter(order9).values())
+        with get_loader(ds3.build()) as loader5:
+            order9 = [data.text for idx, data in zip(range(55), loader5)]
+            print(order9)
+            print(Counter(order9))
+            assert all(v == 1 for v in Counter(order9).values())
 
     def test_determinism(self):
         worker_config2 = WorkerConfig(rank=0, world_size=1, num_workers=2)
@@ -275,33 +274,27 @@ class TestDataset(unittest.TestCase):
         )
 
         # Fork the dataset twice
-        loader1 = get_loader(ds1)
-        loader2 = get_loader(ds1)
+        with get_loader(ds1) as loader1, get_loader(ds2) as loader2:
+            order4 = [data.text[0] for idx, data in zip(range(55 * 20), loader1)]
+            order5 = [data.text[0] for idx, data in zip(range(55 * 20), loader1)]
+            order6 = [data.text[0] for idx, data in zip(range(55 * 20), loader2)]
+            print(order4)
+            print(Counter(order4))
+            # +-1 is possible due to the random shuffling (actually +-2 is possible)
+            assert all(17 <= v <= 22 for v in Counter(order4).values())
 
-        order4 = [data.text[0] for idx, data in zip(range(55 * 20), loader1)]
-        order5 = [data.text[0] for idx, data in zip(range(55 * 20), loader1)]
-        order6 = [data.text[0] for idx, data in zip(range(55 * 20), loader2)]
-        print(order4)
-        print(Counter(order4))
-        # +-1 is possible due to the random shuffling (actually +-2 is possible)
-        assert all(17 <= v <= 22 for v in Counter(order4).values())
+            assert order4 != order5
+            assert order4 == order6
 
-        assert order4 != order5
-        assert order4 == order6
+        with get_loader(ds1b) as loader3:
+            order7 = [data.text[0] for idx, data in zip(range(55 * 20), loader3)]
+            assert order6 != order7
 
-        loader3 = get_loader(ds1b)
-        order7 = [data.text[0] for idx, data in zip(range(55 * 20), loader3)]
-        assert order6 != order7
-
-        loader4 = get_loader(ds3)
-        order8 = [data.text[0] for idx, data in zip(range(55 * 100), loader4)]
-        assert order6 != order8[: len(order6)]
-        print(Counter(order8))
-        assert all(90 <= v <= 110 for v in Counter(order8).values())
-
-        # Delete all locals, otherwise loaders might be kept alive
-        locals().clear()
-        gc.collect()
+        with get_loader(ds3) as loader4:
+            order8 = [data.text[0] for idx, data in zip(range(55 * 100), loader4)]
+            assert order6 != order8[: len(order6)]
+            print(Counter(order8))
+            assert all(90 <= v <= 110 for v in Counter(order8).values())
 
     def test_determinism_taskencoder(self):
         class TestTaskEncoder(DefaultTaskEncoder):
@@ -344,17 +337,12 @@ class TestDataset(unittest.TestCase):
             )
 
             # Fork the dataset twice
-            loader1a = get_loader(ds1a)
-            loader1b = get_loader(ds1b)
+            with get_loader(ds1a) as loader1a, get_loader(ds1b) as loader1b:
+                order1a = [data.text[0] for idx, data in zip(range(55 * 20), loader1a)]
+                order1b = [data.text[0] for idx, data in zip(range(55 * 20), loader1b)]
 
-            order1a = [data.text[0] for idx, data in zip(range(55 * 20), loader1a)]
-            order1b = [data.text[0] for idx, data in zip(range(55 * 20), loader1b)]
-
-            assert order1a == order1b
-
-        # Delete all locals, otherwise loaders might be kept alive
-        locals().clear()
-        gc.collect()
+                assert order1a == order1b
+                assert order1a == order1b
 
     def test_determinism_taskencoder_save_restore(self):
         class TestTaskEncoder(DefaultTaskEncoder):
@@ -403,34 +391,27 @@ class TestDataset(unittest.TestCase):
             )
 
             # Fork the dataset twice
-            loader1a = get_savable_loader(ds1a)
-            loader1b = get_savable_loader(ds1b)
+            with get_savable_loader(ds1a) as loader1a:
+                # Load 7 samples
+                _data_pre = [data.text[0] for idx, data in zip(range(7), loader1a)]
 
-            # Load 7 samples
-            data_pre = [data.text[0] for idx, data in zip(range(7), loader1a)]
+                # Then save state
+                state = loader1a.save_state_rank()
 
-            # Then save state
-            state = loader1a.save_state_rank()
+                print("iterating loader1a")
+                # Load another 20 samples
+                data_post = [data.text[0] for idx, data in zip(range(20), loader1a)]
 
-            print("iterating loader1a")
-            # Load another 20 samples
-            data_post = [data.text[0] for idx, data in zip(range(20), loader1a)]
+                # Restore state
+                with get_savable_loader(ds1b).with_restored_state_rank(state) as loader1b:
+                    print("iterating loader1b")
+                    # Load 20 samples again
+                    data_restored = [data.text[0] for idx, data in zip(range(20), loader1b)]
 
-            # Restore state
-            loader1b.restore_state_rank(state)
+                    print("Data post:", data_post)
+                    print("Data restored:", data_restored)
 
-            print("iterating loader1b")
-            # Load 20 samples again
-            data_restored = [data.text[0] for idx, data in zip(range(20), loader1b)]
-
-            print("Data post:", data_post)
-            print("Data restored:", data_restored)
-
-            assert data_post == data_restored
-
-        # Delete all locals, otherwise loaders might be kept alive
-        locals().clear()
-        gc.collect()
+                    assert data_post == data_restored
 
     def test_restore_state(self):
         worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0)
@@ -446,7 +427,7 @@ class TestDataset(unittest.TestCase):
         # This seed is used by the dataset to shuffle the data
         torch.manual_seed(42)
 
-        loader = get_savable_loader(
+        with get_savable_loader(
             get_train_dataset(
                 self.dataset_path,
                 split_part="train",
@@ -457,24 +438,23 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=2,
                 parallel_shard_iters=psi,
             )
-        )
+        ) as loader:
+            # print("save state")
+            state_0 = loader.save_state_global(global_dst_rank=0)
+            # print("save state done")
+            order_1 = [data.text[0] for idx, data in zip(range(count1), loader)]
+            assert len(order_1) == count1
+            # print("save state")
+            state_1 = loader.save_state_global(global_dst_rank=0)
+            # print("save state done")
+            order_2 = [data.text[0] for idx, data in zip(range(count2), loader)]
+            assert len(order_2) == count2
 
-        # print("save state")
-        state_0 = loader.save_state_global(global_dst_rank=0)
-        # print("save state done")
-        order_1 = [data.text[0] for idx, data in zip(range(count1), loader)]
-        assert len(order_1) == count1
-        # print("save state")
-        state_1 = loader.save_state_global(global_dst_rank=0)
-        # print("save state done")
-        order_2 = [data.text[0] for idx, data in zip(range(count2), loader)]
-        assert len(order_2) == count2
-
-        print("state0", state_0)
-        print("state1", state_1)
+            print("state0", state_0)
+            print("state1", state_1)
 
         torch.manual_seed(213)
-        loader = get_savable_loader(
+        with get_savable_loader(
             get_train_dataset(
                 self.dataset_path,
                 split_part="train",
@@ -485,39 +465,35 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=2,
                 parallel_shard_iters=psi,
             )
-        )
-        loader.restore_state_global(state_0, src_rank=None)
-        order_45 = [data.text[0] for idx, data in zip(range(count1 + count2), loader)]
-        order_4 = order_45[:count1]
-        order_5 = order_45[count1:]
-        # print("order1", order_1)
-        # print("order2", order_2)
-        # print("order4", order_4)
-        assert order_1 == order_4
-        # print("order5", order_5)
-        assert order_2 == order_5
+        ).with_restored_state_global(state_0, src_rank=None) as loader:
+            order_45 = [data.text[0] for idx, data in zip(range(count1 + count2), loader)]
+            order_4 = order_45[:count1]
+            order_5 = order_45[count1:]
+            # print("order1", order_1)
+            # print("order2", order_2)
+            # print("order4", order_4)
+            assert order_1 == order_4
+            # print("order5", order_5)
+            assert order_2 == order_5
 
-        torch.manual_seed(145)
-        loader = get_savable_loader(
-            get_train_dataset(
-                self.dataset_path,
-                split_part="train",
-                sample_type=TextSample,
-                worker_config=worker_config,
-                batch_size=1,
-                shuffle_buffer_size=sbs,
-                max_samples_per_sequence=2,
-                parallel_shard_iters=psi,
-            )
-        )
-        # print("restore state")
-        loader.restore_state_global(state_1, src_rank=None)
-        # print("restore state done")
-        order_3 = [data.text[0] for idx, data in zip(range(count2), loader)]
-        # print("order1", order_1)
-        # print("order2", order_2[:100])
-        # print("order3", order_3[:100])
-        assert order_2 == order_3
+            torch.manual_seed(145)
+            with get_savable_loader(
+                get_train_dataset(
+                    self.dataset_path,
+                    split_part="train",
+                    sample_type=TextSample,
+                    worker_config=worker_config,
+                    batch_size=1,
+                    shuffle_buffer_size=sbs,
+                    max_samples_per_sequence=2,
+                    parallel_shard_iters=psi,
+                )
+            ).with_restored_state_global(state_1, src_rank=None) as loader:
+                order_3 = [data.text[0] for idx, data in zip(range(count2), loader)]
+                # print("order1", order_1)
+                # print("order2", order_2[:100])
+                # print("order3", order_3[:100])
+                assert order_2 == order_3
 
     def test_restore_state_dist(self):
         from multiprocessing import Manager, Process
@@ -537,7 +513,7 @@ class TestDataset(unittest.TestCase):
             # This seed is used by the dataset to shuffle the data
             torch.manual_seed(42)
 
-            loader = get_savable_loader(
+            with get_savable_loader(
                 get_train_dataset(
                     self.dataset_path,
                     split_part="train",
@@ -548,24 +524,23 @@ class TestDataset(unittest.TestCase):
                     max_samples_per_sequence=2,
                     parallel_shard_iters=psi,
                 )
-            )
+            ) as loader:
+                state_0 = loader.save_state_global(global_dst_rank=0)
+                order_1 = [data.text[0] for idx, data in zip(range(count1), loader)]
+                assert len(order_1) == count1
 
-            state_0 = loader.save_state_global(global_dst_rank=0)
-            order_1 = [data.text[0] for idx, data in zip(range(count1), loader)]
-            assert len(order_1) == count1
+                # print(f"Rank {rank}: order_1", order_1)
 
-            # print(f"Rank {rank}: order_1", order_1)
+                state_1 = loader.save_state_global(global_dst_rank=0)
+                order_2 = [data.text[0] for idx, data in zip(range(count2), loader)]
+                assert len(order_2) == count2
 
-            state_1 = loader.save_state_global(global_dst_rank=0)
-            order_2 = [data.text[0] for idx, data in zip(range(count2), loader)]
-            assert len(order_2) == count2
+                shared_dict[(rank, "order_1")] = order_1
+                shared_dict[(rank, "order_2")] = order_2
 
-            shared_dict[(rank, "order_1")] = order_1
-            shared_dict[(rank, "order_2")] = order_2
-
-            if rank == 0:
-                shared_dict["state_0"] = state_0
-                shared_dict["state_1"] = state_1
+                if rank == 0:
+                    shared_dict["state_0"] = state_0
+                    shared_dict["state_1"] = state_1
 
         def phase2(rank: int, world_size: int, shared_dict: dict):
             order_1 = shared_dict[(rank, "order_1")]
@@ -581,7 +556,7 @@ class TestDataset(unittest.TestCase):
             worker_config = WorkerConfig(rank=rank, world_size=world_size, num_workers=0)
 
             torch.manual_seed(213)
-            loader = get_savable_loader(
+            with get_savable_loader(
                 get_train_dataset(
                     self.dataset_path,
                     split_part="train",
@@ -592,20 +567,18 @@ class TestDataset(unittest.TestCase):
                     max_samples_per_sequence=2,
                     parallel_shard_iters=psi,
                 )
-            )
-            loader.restore_state_global(state_0, src_rank=0)
+            ).with_restored_state_global(state_0, src_rank=0) as loader:
+                order_45 = [data.text[0] for idx, data in zip(range(count1 + count2), loader)]
+                order_4 = order_45[:count1]
+                order_5 = order_45[count1:]
 
-            order_45 = [data.text[0] for idx, data in zip(range(count1 + count2), loader)]
-            order_4 = order_45[:count1]
-            order_5 = order_45[count1:]
+                # print(f"Rank {rank}: order_4", order_4)
 
-            # print(f"Rank {rank}: order_4", order_4)
-
-            assert order_1 == order_4
-            assert order_2 == order_5
+                assert order_1 == order_4
+                assert order_2 == order_5
 
             torch.manual_seed(213)
-            loader = get_savable_loader(
+            with get_savable_loader(
                 get_train_dataset(
                     self.dataset_path,
                     split_part="train",
@@ -616,10 +589,9 @@ class TestDataset(unittest.TestCase):
                     max_samples_per_sequence=2,
                     parallel_shard_iters=psi,
                 )
-            )
-            loader.restore_state_global(state_1, src_rank=0)
-            order_3 = [data.text[0] for idx, data in zip(range(count2), loader)]
-            assert order_2 == order_3
+            ).with_restored_state_global(state_1, src_rank=0) as loader:
+                order_3 = [data.text[0] for idx, data in zip(range(count2), loader)]
+                assert order_2 == order_3
 
         def init_process(rank, world_size, shared_dict, fn, backend="gloo"):
             """Initializes the distributed environment."""
@@ -676,47 +648,27 @@ class TestDataset(unittest.TestCase):
             max_samples_per_sequence=2,
             parallel_shard_iters=psi,
         )
-        loader = get_savable_loader(ds)
+        with get_savable_loader(ds) as loader:
+            # print("save state")
+            state_0 = loader.save_state_rank()
+            it1 = iter(loader)
+            # print("save state done")
+            order_1 = [data.text[0] for idx, data in zip(range(n1), it1)]
+            # print("save state")
+            # time.sleep(0.5)
+            state_1 = loader.save_state_rank()
+            # print("save state done")
+            order_2 = [data.text[0] for idx, data in zip(range(n2), it1)]
+            state_2 = loader.save_state_rank()
+            order_3 = [data.text[0] for idx, data in zip(range(n3), it1)]
 
-        # print("save state")
-        state_0 = loader.save_state_rank()
-        it1 = iter(loader)
-        # print("save state done")
-        order_1 = [data.text[0] for idx, data in zip(range(n1), it1)]
-        # print("save state")
-        # time.sleep(0.5)
-        state_1 = loader.save_state_rank()
-        # print("save state done")
-        order_2 = [data.text[0] for idx, data in zip(range(n2), it1)]
-        state_2 = loader.save_state_rank()
-        order_3 = [data.text[0] for idx, data in zip(range(n3), it1)]
+            print("order_1", order_1)
+            print("order_2", order_2)
+            print("order_3", order_3)
 
-        print("order_1", order_1)
-        print("order_2", order_2)
-        print("order_3", order_3)
-
-        # print("state0", state_0)
-        print("state1", state_1)
-        print("state2", state_2)
-
-        # Restoring the state of a new dataset should also yield the same
-        torch.manual_seed(42)
-        ds = get_train_dataset(
-            self.dataset_path,
-            split_part="train",
-            sample_type=TextSample,
-            worker_config=worker_config,
-            batch_size=1,
-            shuffle_buffer_size=sbs,
-            max_samples_per_sequence=2,
-            parallel_shard_iters=psi,
-        )
-        loader = get_savable_loader(ds)
-        loader.restore_state_rank(state_0)
-        order_6 = [data.text[0] for idx, data in zip(range(n1), loader)]
-        print("order1", order_1)
-        print("order6", order_6)
-        assert order_6 == order_1
+            # print("state0", state_0)
+            print("state1", state_1)
+            print("state2", state_2)
 
         # Restoring the state of a new dataset should also yield the same
         torch.manual_seed(42)
@@ -730,12 +682,29 @@ class TestDataset(unittest.TestCase):
             max_samples_per_sequence=2,
             parallel_shard_iters=psi,
         )
-        loader = get_savable_loader(ds)
-        loader.restore_state_rank(state_1)
-        order_7 = [data.text[0] for idx, data in zip(range(n2), loader)]
-        print("order2", order_2[:100])
-        print("order7", order_7[:100])
-        assert order_7 == order_2
+        with get_savable_loader(ds).with_restored_state_rank(state_0) as loader:
+            order_6 = [data.text[0] for idx, data in zip(range(n1), loader)]
+            print("order1", order_1)
+            print("order6", order_6)
+            assert order_6 == order_1
+
+        # Restoring the state of a new dataset should also yield the same
+        torch.manual_seed(42)
+        ds = get_train_dataset(
+            self.dataset_path,
+            split_part="train",
+            sample_type=TextSample,
+            worker_config=worker_config,
+            batch_size=1,
+            shuffle_buffer_size=sbs,
+            max_samples_per_sequence=2,
+            parallel_shard_iters=psi,
+        )
+        with get_savable_loader(ds).with_restored_state_rank(state_1) as loader:
+            order_7 = [data.text[0] for idx, data in zip(range(n2), loader)]
+            print("order2", order_2[:100])
+            print("order7", order_7[:100])
+            assert order_7 == order_2
 
         # Restoring the state of a new dataset should also yield the same
         torch.manual_seed(42)
@@ -749,12 +718,11 @@ class TestDataset(unittest.TestCase):
             shuffle_buffer_size=sbs,
             parallel_shard_iters=psi,
         )
-        loader = get_savable_loader(ds)
-        loader.restore_state_rank(state_2)
-        order_8 = [data.text[0] for idx, data in zip(range(n3), loader)]
-        print("order3", order_3)
-        print("order8", order_8)
-        assert order_8 == order_3
+        with get_savable_loader(ds).with_restored_state_rank(state_2) as loader:
+            order_8 = [data.text[0] for idx, data in zip(range(n3), loader)]
+            print("order3", order_3)
+            print("order8", order_8)
+            assert order_8 == order_3
 
     def test_invariance_global_samples(self):
         # We'd like to ensure that the user can keep the same global batches
@@ -827,15 +795,14 @@ class TestDataset(unittest.TestCase):
                     shuffle_buffer_size=42,
                     max_samples_per_sequence=2,
                 )
-                loader = get_loader(ds)
-
-                micro_batches = [
-                    data.text
-                    for idx, data in zip(
-                        range(55 * 8 // (world_size * scenario["micro_batch_size"])), loader
-                    )
-                ]
-                batches_per_rank.append(micro_batches)
+                with get_loader(ds) as loader:
+                    micro_batches = [
+                        data.text
+                        for idx, data in zip(
+                            range(55 * 8 // (world_size * scenario["micro_batch_size"])), loader
+                        )
+                    ]
+                    batches_per_rank.append(micro_batches)
 
             # Compose global batches
             global_batches_cur_rank = []
@@ -872,10 +839,6 @@ class TestDataset(unittest.TestCase):
                 assert global_batches[i] == global_batches_per_scenario[0][i], (
                     f"Global batch {i} of scenario {scenerio_idx} does not match."
                 )
-
-        # Delete all locals, otherwise loaders might be kept alive
-        locals().clear()
-        gc.collect()
 
     def test_redist(self):
         scenarios = [
@@ -1079,10 +1042,6 @@ class TestDataset(unittest.TestCase):
                 assert global_batches[i] == global_batches_per_scenario[0][i], (
                     f"Global batch {i} of scenario {scenerio_idx} does not match."
                 )
-
-        # Delete all locals, otherwise loaders might be kept alive
-        locals().clear()
-        gc.collect()
 
 
 if __name__ == "__main__":
