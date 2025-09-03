@@ -38,9 +38,10 @@ from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME, skip_me
 from megatron.energon.flavors.webdataset.indexing import SqliteIndexWriter
 from megatron.energon.flavors.webdataset.itar import TarIndexWriter
 from megatron.energon.flavors.webdataset.structs import ShardInfo, WebdatasetInfo, WebdatasetSplits
+from megatron.energon.logging import get_logger
 from megatron.energon.typed_converter import to_json_object
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 T = TypeVar("T", covariant=True)
 

@@ -1,7 +1,6 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-import logging
 from abc import ABC, abstractmethod
 from typing import Any, Callable, Dict, Generic, List, Optional, Sequence, TypeVar
 
@@ -34,8 +33,6 @@ from megatron.energon.wrappers.map_dataset import MapDataset
 
 T_sample = TypeVar("T_sample", covariant=True)
 T = TypeVar("T", covariant=True)
-
-logger = logging.getLogger(__name__)
 
 
 class BaseWebdatasetFactory(

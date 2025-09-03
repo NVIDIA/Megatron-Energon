@@ -1,7 +1,6 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-import logging
 from pathlib import Path
 from typing import (
     Any,
@@ -13,8 +12,6 @@ from typing import (
 
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.jsonl.ijsonl import IJsonlFile, IJsonlIndexWriter
-
-logger = logging.getLogger(__name__)
 
 T = TypeVar("T", covariant=True)
 

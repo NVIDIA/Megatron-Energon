@@ -29,6 +29,7 @@ from megatron.energon.dataloader.workers.base_worker import (
 from megatron.energon.dataloader.workers.fork_worker import ForkDataLoaderWorker
 from megatron.energon.edataclass import edataclass
 from megatron.energon.flavors.base_dataset import RestoreKey, SavableDataset, set_sample_restore_key
+from megatron.energon.logging import get_logger
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset, get_sample_restore_key
 from megatron.energon.wrappers.batch_dataset import BatchDataset
@@ -36,9 +37,9 @@ from megatron.energon.wrappers.gc_dataset import GC_DEFAULT_EVERY_N_ITER, GcData
 from megatron.energon.wrappers.log_sample_dataset import default_get_keys
 from megatron.energon.wrappers.watchdog_dataset import WatchdogDataset
 
-TSample = TypeVar("TSample", covariant=True)
+logger = get_logger(__name__)
 
-DEBUG_LEVEL = 1
+TSample = TypeVar("TSample", covariant=True)
 
 
 @edataclass
@@ -255,11 +256,6 @@ class DataLoader(Generic[TSample]):
                     "Explicitly call DataLoader.shutdown() to avoid leaking workers or run as context manager.",
                     ResourceWarning,
                 )
-                print(
-                    "WARNING: Explicitly call DataLoader.shutdown() to avoid leaking workers or run as context manager.\n",
-                    end="",
-                    file=sys.stderr,
-                )
             for worker in self._workers:
                 worker.shutdown(in_del=in_del)
             self._workers = None
@@ -323,24 +319,20 @@ class DataLoader(Generic[TSample]):
         # - Pop the first sample future from the prefetching samples.
         # - Get the sample from the sample future (may wait for the sample to be prefetched).
         # - Yield the sample.
-        if DEBUG_LEVEL >= 1:
-            print(f"{self._exhausted_workers=}\n", end="")
+        logger.debug(f"{self._exhausted_workers=}")
         epoch_sample_idx = 0
         while not all(self._exhausted_workers):
             # Get the next worker to prefetch samples from.
             worker_idx = self._next_worker_id
             worker = self._workers[worker_idx]
-            if DEBUG_LEVEL >= 2:
-                print(f"{worker_idx=} {worker=}\n", end="")
+            logger.trace(f"{worker_idx=} {worker=}")
             self._next_worker_id = (worker_idx + 1) % self._worker_config.safe_num_workers
             if self._exhausted_workers[worker_idx]:
-                if DEBUG_LEVEL >= 1:
-                    print(f"{worker_idx=} exhausted, continue with next worker\n", end="")
+                logger.debug(f"{worker_idx=} exhausted, continue with next worker")
                 continue
             # Pop the first sample future from the prefetching samples.
             sample_future = self._prefetching_samples[worker_idx].pop(0)
-            if DEBUG_LEVEL >= 2:
-                print(f"{sample_future=}\n", end="")
+            logger.trace(f"{sample_future=}")
             # Prefetch samples from the worker.
             while len(self._prefetching_samples[worker_idx]) < self._prefetch_factor:
                 # Add a new sample future to the prefetching samples if the worker has not prefetched enough samples.
@@ -351,8 +343,7 @@ class DataLoader(Generic[TSample]):
                 # Get the sample from the sample future (may wait for the sample to be ready).
                 sample = sample_future.get()
             except StopIteration:
-                if DEBUG_LEVEL >= 1:
-                    print(f"{worker_idx=} exhausted, remove from prefetching samples\n", end="")
+                logger.debug(f"{worker_idx=} exhausted, remove from prefetching samples")
                 # If the sample future raises StopIteration, remove the worker from the list.
                 self._prefetching_samples[worker_idx] = []
                 self._exhausted_workers[worker_idx] = True
@@ -368,8 +359,7 @@ class DataLoader(Generic[TSample]):
                     )
                 continue
             else:
-                if DEBUG_LEVEL >= 2:
-                    print(f"{worker_idx=} got sample, yield\n", end="")
+                logger.trace(f"{worker_idx=} got sample, yield")
                 if self._worker_config.should_log(level=1):
                     keys = default_get_keys(sample)
                     restore_key = get_sample_restore_key(sample)
@@ -405,19 +395,16 @@ class DataLoader(Generic[TSample]):
         # Restart the epoch iterator if was not created yet. Otherwise, the existing epoch iterator will be continued.
         # That happens e.g. when iteration was interrupted.
         if self._current_epoch_iter is None:
-            if DEBUG_LEVEL >= 1:
-                print("DL: Starting epoch iterator")
+            logger.debug("DL: Starting epoch iterator")
             self._current_epoch_iter = self._epoch_iter()
         else:
-            if DEBUG_LEVEL >= 1:
-                print("DL: Continuing epoch iterator")
+            logger.debug("DL: Continuing epoch iterator")
         assert self._current_epoch_iter is not None
         # Important: Do not use yield from here, as it will delegate .close to the inner generator.
         for sample in self._current_epoch_iter:
             yield sample
         # Reset the epoch iterator, it was exhausted.
-        if DEBUG_LEVEL >= 1:
-            print("DL: Closing epoch iterator")
+        logger.debug("DL: Closing epoch iterator")
         self._current_epoch_iter.close()
         self._current_epoch_iter = None
 

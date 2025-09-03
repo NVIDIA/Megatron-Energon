@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import json
-import logging
 from typing import Any, Callable, Dict, Optional
 
 from megatron.energon.cache import FileStore
@@ -31,8 +30,6 @@ from megatron.energon.flavors.webdataset.structs import (
 from megatron.energon.source_info import SourceInfo
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.map_dataset import MapDataset
-
-logger = logging.getLogger(__name__)
 
 
 class CrudeJsonlDatasetFactory(
