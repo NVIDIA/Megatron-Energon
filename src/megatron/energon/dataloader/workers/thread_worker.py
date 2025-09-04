@@ -28,4 +28,7 @@ class ThreadDataLoaderWorker(
             seed=self._seed,
             dataset=self.dataset,
         )
-        return super()._worker_run(cmd_queue, result_queue)
+        try:
+            return super()._worker_run(cmd_queue, result_queue)
+        finally:
+            self.dataset.worker_close()

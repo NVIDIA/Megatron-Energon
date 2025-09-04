@@ -32,11 +32,6 @@ class ActiveWorkerState:
         return getattr(self._thread_local, "sample_index_stack", None)
 
     @property
-    def override_global_rank(self) -> Optional[int]:
-        """The global rank override for the worker. Required for restoring samples."""
-        return getattr(self._thread_local, "override_global_rank", None)
-
-    @property
     def cache_pool(self) -> Optional[CachePool]:
         """The current cache pool for the worker."""
         return getattr(self._thread_local, "cache_pool", None)
@@ -48,10 +43,6 @@ class ActiveWorkerState:
     @sample_index_stack.setter
     def sample_index_stack(self, value: List[int]):
         self._thread_local.sample_index_stack = value
-
-    @override_global_rank.setter
-    def override_global_rank(self, value: Optional[int]):
-        self._thread_local.override_global_rank = value
 
     @cache_pool.setter
     def cache_pool(self, value: Optional[CachePool]):
@@ -127,7 +118,6 @@ class WorkerConfig:
     def worker_activate(
         self,
         sample_index: int,
-        override_global_rank: Optional[int] = None,
         cache_pool: "Optional[CachePool]" = None,
     ):
         """Activates the worker config for the current worker and sets it as actively iterating.
@@ -137,7 +127,6 @@ class WorkerConfig:
         )
         WorkerConfig._active_state.sample_index_stack = [sample_index]
         WorkerConfig._active_state.worker_config = self
-        WorkerConfig._active_state.override_global_rank = override_global_rank
         WorkerConfig._active_state.cache_pool = cache_pool
 
     def worker_push_sample_index(self, sample_index: int):
@@ -162,7 +151,6 @@ class WorkerConfig:
         )
         WorkerConfig._active_state.sample_index_stack = None
         WorkerConfig._active_state.worker_config = None
-        WorkerConfig._active_state.override_global_rank = None
         WorkerConfig._active_state.cache_pool = None
 
     @property
@@ -186,6 +174,11 @@ class WorkerConfig:
             WorkerConfig._active_state.sample_index_stack[0] * max(self.num_workers, 1)
             + self.rank_worker_id()
         )
+
+    @staticmethod
+    def active_worker_cache_pool() -> Optional[CachePool]:
+        """Returns the current cache pool for the actively iterating worker."""
+        return WorkerConfig._active_state.cache_pool
 
     @property
     def safe_num_workers(self) -> int:
@@ -233,22 +226,6 @@ class WorkerConfig:
             data_parallel_group=data_parallel_group,
         )
 
-    def rank_worker_id(self) -> int:
-        """Returns the self worker id within the current rank."""
-        if WorkerConfig._active_state.override_global_rank:
-            assert self.worker_id_offset == 0
-            return WorkerConfig._active_state.override_global_rank % self.num_workers
-        worker_info = torch.utils.data.get_worker_info()
-        if worker_info is None:
-            return self.worker_id_offset
-        assert worker_info.num_workers == self.num_workers
-        # Apply the worker_id_offset as a left rotation of the logical worker ids.
-        # This ensures that after restoring a checkpoint the first physical
-        # worker (id=0) corresponds to the logical worker that should emit the
-        # next sample. For example, if `worker_id_offset` is 1, logical worker
-        # 1 becomes the first to emit a sample, shifting the ordering forward.
-        return (worker_info.id + self.worker_id_offset) % max(worker_info.num_workers, 1)
-
     def assert_worker(self):
         """Checks if the current process is a worker (if configured so), and that the workers are
         properly configured."""
@@ -262,20 +239,49 @@ class WorkerConfig:
                 f"match the configured number of workers ({self.num_workers})"
             )
 
+    def rank_worker_id(self, override_global_worker_id: Optional[int] = None) -> int:
+        """Returns the self worker id within the current rank.
+        Optionally computes the worker id from a global worker id.
+
+        Args:
+            override_global_worker_id: The global worker id to compute the rank worker id from.
+                None means the current worker, which is the default. If not set, must be called
+                within the worker.
+        """
+        if override_global_worker_id is not None:
+            assert (
+                self.rank * self.safe_num_workers
+                <= override_global_worker_id
+                < (self.rank + 1) * self.safe_num_workers
+            ), f"Invalid global worker id: {override_global_worker_id}"
+            return override_global_worker_id - self.rank * self.safe_num_workers
+        worker_info = torch.utils.data.get_worker_info()
+        if worker_info is None:
+            return self.worker_id_offset
+        assert worker_info.num_workers == self.num_workers
+        # Apply the worker_id_offset as a left rotation of the logical worker ids.
+        # This ensures that after restoring a checkpoint the first physical
+        # worker (id=0) corresponds to the logical worker that should emit the
+        # next sample. For example, if `worker_id_offset` is 1, logical worker
+        # 1 becomes the first to emit a sample, shifting the ordering forward.
+        return (worker_info.id + self.worker_id_offset) % max(worker_info.num_workers, 1)
+
     def global_worker_id(self, override_local_worker_id: Optional[int] = None) -> int:
         """Returns the global worker index by multiplying the rank with the number of workers.
         Alternatively, you can override the local worker id.
 
         Args:
-            override_local_worker_id (int, optional): The local worker id to override. None means
-                the current worker, which is the default.
+            override_local_worker_id: The local worker id to override. None means
+                the current worker, which is the default. If not set, must be called
+                within the worker.
         """
         if override_local_worker_id is not None:
-            return self.rank * self.num_workers + override_local_worker_id
-        if WorkerConfig._active_state.override_global_rank is not None:
-            return WorkerConfig._active_state.override_global_rank
+            assert 0 <= override_local_worker_id < self.safe_num_workers, (
+                f"Invalid local worker id: {override_local_worker_id}"
+            )
+            return self.rank * self.safe_num_workers + override_local_worker_id
         self.assert_worker()
-        return self.rank * self.num_workers + self.rank_worker_id()
+        return self.rank * self.safe_num_workers + self.rank_worker_id()
 
     def worker_seed(self, override_local_worker_id: Optional[int] = None) -> int:
         """Returns the seed for the current worker (or a specified worker).

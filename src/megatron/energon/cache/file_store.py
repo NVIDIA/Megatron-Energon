@@ -28,6 +28,15 @@ class DecodeFileStore(FileStore[Any]):
         self.inner_reader = inner_reader
         self.decoder = decoder
 
+    def worker_init(self) -> None:
+        self.inner_reader.worker_init()
+
+    def worker_close(self) -> None:
+        self.inner_reader.worker_close()
+
+    def close(self) -> None:
+        self.inner_reader.close()
+
     def __getitem__(self, fname: str) -> tuple[Any, SourceInfo]:
         data, source_info = self.inner_reader[fname]
         return self.decoder.decode(fname, data), source_info
@@ -68,6 +77,15 @@ class SystemFileStore(FileStore[bytes]):
             shard_name=None,
             file_names=(key,),
         )
+
+    def worker_init(self) -> None:
+        pass
+
+    def worker_close(self) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
 
     def get_path(self) -> str:
         """Returns the path to the dataset."""

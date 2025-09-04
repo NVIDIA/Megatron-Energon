@@ -112,9 +112,13 @@ class CachedIJsonlOffsetReader:
         cache_size: The number of entries to keep in the cache. By default, we keep 32.
     """
 
+    ijsonl_index_reader_cache: Dict[int, CacheEntry]
+    cache_size: int
+    jsonl_file: EPath
+
     def __init__(self, jsonl_file: Union[str, EPath], cache_size: int = 32):
         # Maps current_offset -> CacheEntry
-        self.ijsonl_index_reader_cache: Dict[int, CacheEntry] = {}
+        self.ijsonl_index_reader_cache = {}
         self.cache_size = cache_size
         self.jsonl_file = EPath(jsonl_file)
 
@@ -219,11 +223,6 @@ class CachedIJsonlOffsetReader:
 
         return result_byte_offset, length
 
-    def __len__(self) -> int:
-        if len(self.ijsonl_index_reader_cache) == 0:
-            return IJsonlIndexReader.count_samples(self.jsonl_file)
-        return len(next(iter(self.ijsonl_index_reader_cache.values())).ijsonl_index_reader) - 1
-
     def get_total_size(self) -> int:
         if len(self.ijsonl_index_reader_cache) == 0:
             self.ijsonl_index_reader_cache[0] = CacheEntry(
@@ -259,6 +258,10 @@ class IJsonlFile:
     """
 
     def __init__(self, fileobj: BinaryIO):
+        """
+        Args:
+            fileobj: The file object to read from. Takes ownership of the file object.
+        """
         self.fileobj = fileobj
 
     def seek(self, offset: int):

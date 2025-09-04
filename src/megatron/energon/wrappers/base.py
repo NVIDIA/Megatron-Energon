@@ -111,6 +111,16 @@ class BaseWrapperDataset(SavableDataset[T_sample_out], Generic[T_sample_in, T_sa
         assert len(self.datasets) == 1, "Must be implemented by subclass"
         return self.dataset.restore_sample(restore_key)
 
+    def worker_close(self) -> None:
+        for ds in self.datasets:
+            ds.worker_close()
+        super().worker_close()
+
+    def close(self) -> None:
+        for ds in self.datasets:
+            ds.close()
+        super().close()
+
 
 class SampleIndex(Savable):
     """A simple class to hold the sample index for one worker."""

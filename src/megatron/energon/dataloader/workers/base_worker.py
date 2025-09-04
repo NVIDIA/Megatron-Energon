@@ -6,7 +6,7 @@ from typing import Generic, TypeVar
 from megatron.energon.cache.base import CachePool
 from megatron.energon.dataloader.future import DoneFuture, ExceptionFuture, Future
 from megatron.energon.edataclass import edataclass
-from megatron.energon.flavors.base_dataset import SavableDataset
+from megatron.energon.flavors.base_dataset import SavableDataset, set_sample_restore_key
 from megatron.energon.rng import SystemRng, SystemRngState
 from megatron.energon.state import FlexState
 from megatron.energon.worker import WorkerConfig
@@ -96,7 +96,8 @@ class DataLoaderWorker(Generic[TSample]):
         Args:
             in_del: If True, the worker is being deleted.
         """
-        pass
+        self.dataset.worker_close()
+        self.dataset.close()
 
     def running(self) -> bool:
         """
@@ -190,6 +191,29 @@ class DataLoaderWorker(Generic[TSample]):
         finally:
             self.worker_config.worker_deactivate()
         return DoneFuture(next_sample)
+
+    def restore_sample(self, restore_key: WorkerSampleRestoreKey) -> Future[TSample]:
+        """
+        Restore a sample from a restore key in the worker.
+
+        Args:
+            restore_key: The restore key of the sample to restore.
+
+        Returns:
+            A future that will be resolved to the restored sample.
+        """
+        assert isinstance(restore_key, WorkerSampleRestoreKey)
+        assert self._global_worker_id == restore_key.worker_id, "Global worker ID mismatch"
+        self.worker_config.worker_activate(
+            restore_key.sample_idx,
+            cache_pool=self._cache_pool,
+        )
+        try:
+            return DoneFuture(
+                set_sample_restore_key(self.dataset.restore_sample(restore_key.inner), restore_key)
+            )
+        finally:
+            self.worker_config.worker_deactivate()
 
     def save_state(self) -> WorkerState:
         """

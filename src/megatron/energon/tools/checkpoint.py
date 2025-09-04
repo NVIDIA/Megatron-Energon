@@ -218,7 +218,7 @@ class RankStateIterable:
         """Iterates the WorkerStates of multiple ranks in a round-robin fashion."""
         for rank_state in self.rank_states:
             for worker_state, prefetched_samples_keys in zip(
-                rank_state.worker_states, rank_state.prefetched_samples_keys
+                rank_state.worker_states, rank_state.prefetched_restore_keys
             ):
                 yield worker_state, prefetched_samples_keys
 
@@ -370,7 +370,7 @@ def command_redist(
             worker_states=[worker_state for worker_state, prefetched_sample_keys in new_rank_state],
             next_worker_id=0,  # Reset the next worker ID
             micro_batch_size=new_micro_batch_size,
-            prefetched_samples_keys=[
+            prefetched_restore_keys=[
                 split_batch_restore_keys(prefetched_sample_keys, batch_split_factor)
                 for worker_state, prefetched_sample_keys in new_rank_state
             ],

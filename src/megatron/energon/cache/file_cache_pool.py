@@ -326,6 +326,12 @@ class FileStoreCachePool(CachePool, ForkMixin):
 
         return FileCacheLazy(ds=ds, fname=fname, pool=self, entry=entry)
 
+    def worker_init(self) -> None:
+        pass
+
+    def worker_close(self) -> None:
+        pass
+
     def close(self) -> None:
         """
         Shutdown the pool, wait for tasks, and clear our structures.

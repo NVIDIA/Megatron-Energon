@@ -34,4 +34,8 @@ class ForkDataLoaderWorker(
             dataset=self.dataset,
         )
 
-        super()._worker_run(cmd_queue, result_queue)
+        try:
+            super()._worker_run(cmd_queue, result_queue)
+        finally:
+            self.dataset.worker_close()
+            self.dataset.close()

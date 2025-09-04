@@ -56,6 +56,7 @@ from megatron.energon.wrappers import (
     PackingDataset,
     ShuffleBufferDataset,
 )
+from megatron.energon.wrappers.file_store_init_wrapper import FileStoreInitWrapper
 from megatron.energon.wrappers.repeat_dataset import RepeatDataset
 
 T = TypeVar("T")
@@ -774,16 +775,26 @@ class TaskEncoder(Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]):
             aux = {k: DecodeFileStore(v, decoder=self.decoder) for k, v in aux.items()}
 
         # Cache the primary auxiliary dataset for this dataset, i.e. construct it once when needed
-        primary_aux = None
+        primary_aux: Optional[FileStore] = None
+
+        all_aux_datasets = list(aux.values()) if aux is not None else []
 
         def _get_primary_aux():
+            # Note: This is happening on-the-fly in the worker when this dataset is actually used
+            # I.e. we don't know ahead that a cooker with primary=True is going to be used for this dataset
+            # (it may be a cooker with primary=False). Thus this happens on-the-fly in the worker when
+            # this dataset is actually used by a cooker with primary=True.
             nonlocal primary_aux
             if primary_aux is None:
                 try:
                     if aux is not None:
                         primary_aux = aux.get("primary")
                     if primary_aux is None:
+                        # In the worker. Initialize now!
                         primary_aux = get_primary_aux()
+                        primary_aux.worker_init()
+                        # We modify this list on-the-fly. It should then still deinitialize when the worker closes.
+                        all_aux_datasets.append(primary_aux)
                     assert primary_aux is not None, "Primary auxiliary dataset must always exist"
                     if self.decoder is not None:
                         primary_aux = DecodeFileStore(primary_aux, decoder=self.decoder)
@@ -799,22 +810,28 @@ class TaskEncoder(Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]):
         else:
             cook_fn = functools.partial(self.cook_crude_sample, get_primary_aux=_get_primary_aux)
 
-        return MapDataset(
-            dataset,
-            cook_fn,
-            worker_config=worker_config,
-            stateless_map_fn=True,
-            map_fn_config=dict(
-                cookers=[
-                    dict(
-                        cook=SavableDataset._function_config(cooker.cook),
-                        has_subflavors=cooker.has_subflavors,
-                    )
-                    for cooker in self.cookers
-                ],
-                subflavors=subflavors,
+        return FileStoreInitWrapper(
+            MapDataset(
+                dataset,
+                cook_fn,
+                worker_config=worker_config,
+                stateless_map_fn=True,
+                map_fn_config=dict(
+                    cookers=[
+                        dict(
+                            cook=SavableDataset._function_config(cooker.cook),
+                            has_subflavors=cooker.has_subflavors,
+                        )
+                        for cooker in self.cookers
+                    ],
+                    subflavors=subflavors,
+                ),
+                failure_tolerance=get_failure_tolerance(
+                    cook_fn, self.__default_failure_tolerance__
+                ),
             ),
-            failure_tolerance=get_failure_tolerance(cook_fn, self.__default_failure_tolerance__),
+            auxiliary_datasets=all_aux_datasets,
+            worker_config=worker_config,
         )
 
     def _load_dataset(
@@ -1073,10 +1090,9 @@ class TaskEncoder(Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]):
         assert WorkerConfig.active_worker_config is not None, (
             "The cache can only be fetched within the worker, and to be usable, you must use the get_(savable_)loader methods provided from the package."
         )
-        assert WorkerConfig.active_worker_config._active_state.cache_pool is not None, (
-            "Cache pool must be set by the loader."
-        )
-        return WorkerConfig.active_worker_config._active_state.cache_pool
+        cache_pool = WorkerConfig.active_worker_cache_pool()
+        assert cache_pool is not None, "Cache pool must be set by the loader."
+        return cache_pool
 
     # State fields, they are initialized when the dataloader is started.
     @property

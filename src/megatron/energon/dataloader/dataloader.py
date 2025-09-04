@@ -1,6 +1,5 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
-import functools
 import os
 import sys
 import warnings
@@ -18,7 +17,7 @@ from typing import (
 import torch.distributed
 
 from megatron.energon.cache.base import CachePool
-from megatron.energon.dataloader.future import CallableFuture, Future
+from megatron.energon.dataloader.future import Future
 from megatron.energon.dataloader.pin_memory import NoPinMemory, PinMemory, PinMemoryThread
 from megatron.energon.dataloader.workers.base_worker import (
     DataLoaderNoWorker,
@@ -28,7 +27,7 @@ from megatron.energon.dataloader.workers.base_worker import (
 )
 from megatron.energon.dataloader.workers.fork_worker import ForkDataLoaderWorker
 from megatron.energon.edataclass import edataclass
-from megatron.energon.flavors.base_dataset import RestoreKey, SavableDataset, set_sample_restore_key
+from megatron.energon.flavors.base_dataset import RestoreKey, SavableDataset
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset, get_sample_restore_key
 from megatron.energon.wrappers.batch_dataset import BatchDataset
@@ -49,7 +48,7 @@ class RankState:
 
     #: This is a list (per worker) of lists of (batch) sample keys, which have been (asynchronously) prefetched from workers
     # but not been fetched yet by iterating.
-    prefetched_samples_keys: list[list[RestoreKey | None]]
+    prefetched_restore_keys: list[list[RestoreKey | None]]
     #: This is a list of worker states, which have been saved from the workers (or `None` for the initial state).
     worker_states: list[WorkerState | None]
     #: The next worker ID to prefetch from (i.e. append to the prefetched samples).
@@ -121,7 +120,7 @@ class DataLoader(Generic[TSample]):
         Create the dataloader supporting saving and restoring the state.
 
         Args:
-            dataset: The dataset to load.
+            dataset: The dataset to load. The loader takes ownership of the dataset, i.e. it cannot be shared and will be closed on shutdown.
             prefetch_factor: The number of samples to prefetch from each worker.
             worker_type: The type of worker to use.
             cache_pool: If set, the cache pool to use for the dataset.
@@ -143,6 +142,12 @@ class DataLoader(Generic[TSample]):
         """
         self._id = DataLoader._next_id
         DataLoader._next_id += 1
+
+        if getattr(dataset, "__dataloader_id", None) is not None:
+            raise ValueError(
+                f"Dataset {dataset} is already associated with dataloader {getattr(dataset, '__dataloader_id')}. Initialize one dataset per dataloader."
+            )
+        setattr(dataset, "__dataloader_id", self._id)
 
         if dataset.worker_config.num_workers == 0 and worker_type == ForkDataLoaderWorker:
             worker_type = DataLoaderNoWorker
@@ -226,12 +231,10 @@ class DataLoader(Generic[TSample]):
         if self._restore_state is not None:
             self._prefetching_samples = [
                 [
-                    self._pin_memory(
-                        CallableFuture(functools.partial(self.restore_sample, sample_key))
-                    )
-                    for sample_key in prefetched_samples_keys
+                    self._pin_memory(self._restore_sample(restore_key))
+                    for restore_key in prefetched_restore_keys
                 ]
-                for prefetched_samples_keys in self._restore_state.prefetched_samples_keys
+                for prefetched_restore_keys in self._restore_state.prefetched_restore_keys
             ]
             self._next_worker_id = self._restore_state.next_worker_id
             self._exhausted_workers = [
@@ -263,6 +266,7 @@ class DataLoader(Generic[TSample]):
             for worker in self._workers:
                 worker.shutdown(in_del=in_del)
             self._workers = None
+        self._dataset.close()
         self._pin_memory.shutdown(in_del=in_del)
 
     def __del__(self) -> None:
@@ -438,7 +442,7 @@ class DataLoader(Generic[TSample]):
     def save_state_rank(self) -> RankState:
         if self._restore_state is not None:
             return self._restore_state
-        prefetched_samples_keys = [
+        prefetched_restore_keys = [
             [get_sample_restore_key(sample_fut.get()) for sample_fut in prefetching_sample]
             for prefetching_sample in self._prefetching_samples
         ]
@@ -455,7 +459,7 @@ class DataLoader(Generic[TSample]):
         ), "Exhausted workers mismatch"
 
         return RankState(
-            prefetched_samples_keys=prefetched_samples_keys,
+            prefetched_restore_keys=prefetched_restore_keys,
             worker_states=worker_states,
             next_worker_id=self._next_worker_id,
             micro_batch_size=self._get_batch_size(),
@@ -607,6 +611,23 @@ class DataLoader(Generic[TSample]):
 
         self.restore_state_rank(rank_state)
 
+    def _restore_sample(self, restore_key: RestoreKey) -> Future[TSample]:
+        """
+        Restore a sample from a restore key.
+
+        Args:
+            restore_key: The restore key to restore the sample from.
+
+        Returns:
+            A future that will be resolved to the restored sample.
+        """
+        assert isinstance(restore_key, WorkerSampleRestoreKey)
+        assert self._workers is not None, "Workers must be started before restoring a sample"
+        rank_worker_id = self._worker_config.rank_worker_id(
+            override_global_worker_id=restore_key.worker_id
+        )
+        return self._workers[rank_worker_id].restore_sample(restore_key)
+
     def restore_sample(self, restore_key: RestoreKey) -> TSample:
         """
         Restore a sample from a restore key.
@@ -617,18 +638,7 @@ class DataLoader(Generic[TSample]):
         Returns:
             The restored sample.
         """
-        assert isinstance(restore_key, WorkerSampleRestoreKey)
-        self._worker_config.worker_activate(
-            restore_key.sample_idx,
-            override_global_rank=restore_key.worker_id,
-            cache_pool=self._cache_pool,
-        )
-        try:
-            return set_sample_restore_key(
-                self._dataset.restore_sample(restore_key.inner), restore_key
-            )
-        finally:
-            self._worker_config.worker_deactivate()
+        return self._restore_sample(restore_key).get()
 
     def with_restored_state_rank(self, state: RankState | None) -> "DataLoader[TSample]":
         """

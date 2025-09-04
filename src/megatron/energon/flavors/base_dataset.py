@@ -362,6 +362,12 @@ class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC)
         """
         pass
 
+    def worker_close(self) -> None:
+        """
+        Closes all worker-local resources.
+        """
+        pass
+
     @abstractmethod
     def worker_has_samples(self) -> bool:
         """Returns True if the worker's split has samples. This is used to determine if this dataset
@@ -407,6 +413,10 @@ class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC)
         raise NotImplementedError(
             "This dataset does not support restoring, because it is not safely deterministic."
         )
+
+    def close(self) -> None:
+        """Closes all shared resources."""
+        pass
 
     def __getattribute__(self, name: str) -> Any:
         if name in ("_savable_fields", "_worker_local_fields", "_thread_state", "worker_config"):

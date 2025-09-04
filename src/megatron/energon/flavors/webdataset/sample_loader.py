@@ -7,7 +7,7 @@ import torch
 
 from megatron.energon.edataclass import edataclass
 from megatron.energon.flavors.base_dataset import FlexState, RestoreKey, SavableDataset
-from megatron.energon.flavors.webdataset.itar_reader import ITarReader
+from megatron.energon.flavors.webdataset.itar_reader import RawSampleReaderInterface
 from megatron.energon.flavors.webdataset.structs import FilteredSample, WebdatasetRestoreKey
 from megatron.energon.rng import WorkerRng
 from megatron.energon.worker import WorkerConfig
@@ -37,7 +37,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
     """Internal class for loading samples from webdataset slices"""
 
     #: The readers for each joined dataset
-    join_readers: Sequence[ITarReader]
+    join_readers: Sequence[RawSampleReaderInterface[int]]
 
     #: The offsets of the slice slices to iterate over for each worker
     # On worker initialization, this is set to _slice_offsets for the current worker.
@@ -89,7 +89,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
 
     def __init__(
         self,
-        join_readers: Sequence[ITarReader],
+        join_readers: Sequence[RawSampleReaderInterface[int]],
         workers_sample_slice_offsets: Sequence[Sequence[int]],
         *,
         worker_config: WorkerConfig,
@@ -134,6 +134,8 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
         self._epoch_count = 0
         self._epoch_sample_count = 0
         self._slice_offsets = self.workers_slice_offsets[self.worker_config.rank_worker_id()]
+        for reader in self.join_readers:
+            reader.worker_init()
 
     def _get_sample(self, index: int) -> RawSampleData:
         return RawSampleData(
@@ -445,6 +447,16 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
             "WebdatasetRestoreKey.index must be an integer, cannot restore by sample key"
         )
         return self._get_sample(restore_key.index)
+
+    def worker_close(self) -> None:
+        for reader in self.join_readers:
+            reader.worker_close()
+        super().worker_close()
+
+    def close(self) -> None:
+        for reader in self.join_readers:
+            reader.close()
+        super().close()
 
     def config(self) -> Dict[str, Any]:
         return {
