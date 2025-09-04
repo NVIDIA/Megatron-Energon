@@ -5,15 +5,18 @@ import traceback
 from abc import abstractmethod
 from typing import Any, Callable, ParamSpec, Protocol, TypeVar
 
+import structlog
+
 from megatron.energon.dataloader.future import CancelledError, Future
 from megatron.energon.edataclass import edataclass
+from megatron.energon.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 P = ParamSpec("P")
 T = TypeVar("T")
 R = TypeVar("R", covariant=True)
-
-
-DEBUG_LEVEL = 0
 
 
 class QueueProtocol(Protocol[T]):
@@ -58,6 +61,7 @@ class FutureImpl(Future[Any]):
     def __init__(self, worker: "Asynchronous", future_id: int):
         self._worker = worker
         self._future_id = future_id
+        self.logger = logger.bind(self=self, worker_name=worker._name, future_id=future_id)
 
     def get(self) -> Any:
         if not hasattr(self, "_result") and not hasattr(self, "_exception"):
@@ -68,11 +72,7 @@ class FutureImpl(Future[Any]):
 
     def cancel(self) -> bool:
         if hasattr(self, "_result") or hasattr(self, "_exception"):
-            if DEBUG_LEVEL >= 1:
-                print(
-                    f"[{self._worker._name}, fut={self._future_id}] already has result or exception\n",
-                    end="",
-                )
+            self.logger.debug("cancel: already has result or exception")
             return False
         self._exception = CancelledError.with_current_traceback()
         self._worker._cancel_future(self._future_id)
@@ -101,12 +101,15 @@ class Asynchronous:
     _name: str
     _result_lock: threading.Lock
 
+    logger: structlog.BoundLogger
+
     def _asynchronous_init(self, name: str) -> None:
         self._cmd_queue, self._result_queue = self._queues()
         self._next_future_id = 0
         self._pending_futures = {}
         self._name = name
         self._result_lock = threading.Lock()
+        self.logger = logger.bind(self=self, name=name)
 
     @abstractmethod
     def _queues(self) -> tuple[QueueProtocol[WorkerCommand], QueueProtocol[WorkerResult]]: ...
@@ -119,15 +122,14 @@ class Asynchronous:
         Args:
             future: The future to wait for.
         """
-        if DEBUG_LEVEL >= 1:
-            print(f"[{self._name}, fut={future._future_id}] waiting for result\n", end="")
+
+        self.logger.debug("waiting for result", future=future)
         with self._result_lock:
             if future.done():
                 # If calling get() from multiple threads, the future may be done now, because
                 # the other thread already set the result.
                 return
-            if DEBUG_LEVEL >= 2:
-                print(f"[{self._name}, fut={future._future_id}] got future\n", end="")
+            self.logger.trace("got future", future=future)
             while True:
                 res = self._result_queue.get()
                 fut = self._pending_futures.pop(res.future_id)
@@ -136,23 +138,15 @@ class Asynchronous:
                 else:
                     fut._set_result(res.result)
                 if res.future_id == future._future_id:
-                    if DEBUG_LEVEL >= 2:
-                        print(
-                            f"[{self._name}, fut={future._future_id}] got result, return\n", end=""
-                        )
+                    self.logger.trace("got result, return", future=future)
                     return
                 else:
-                    if DEBUG_LEVEL >= 2:
-                        print(
-                            f"[{self._name}, fut={future._future_id}] got result for {res.future_id=}, continue\n",
-                            end="",
-                        )
+                    self.logger.trace(f"got result for {res.future_id=}, continue", future=future)
                     continue
 
     def _cancel_future(self, future_id: int) -> None:
         """Cancel a future."""
-        if DEBUG_LEVEL >= 1:
-            print(f"[{self._name}, fut={future_id}] cancelling future\n", end="")
+        self.logger.debug("cancelling future", future_id=future_id)
         # In case the main process is waiting for thie future to complete, add the result
         self._result_queue.put(
             WorkerResult(future_id=future_id, exception=CancelledError.with_current_traceback())
@@ -181,16 +175,11 @@ class Asynchronous:
         self._next_future_id += 1
 
         self._pending_futures[future_id] = future = FutureImpl(self, future_id)
-        if DEBUG_LEVEL >= 2:
-            print(
-                f"[{self._name}] worker_call {fn.__name__=} {future_id=}\n",
-                end="",
-            )
+        self.logger.trace("worker_call", fn=fn.__name__, future_id=future_id)
         self._cmd_queue.put(
             WorkerCommand(cmd=fn.__name__, args=args, kwargs=kwargs, future_id=future_id)
         )
-        if DEBUG_LEVEL >= 2:
-            print(f"[{self._name}] cmd_queue: {self._cmd_queue.qsize()=}\n", end="")
+        self.logger.trace("cmd_queue", cmd_queue_size=self._cmd_queue.qsize())
         return future
 
     def _worker_run(
@@ -210,46 +199,26 @@ class Asynchronous:
         assert self._in_worker(), "_worker_run must be called in the worker"
         try:
             while True:
-                if DEBUG_LEVEL >= 2:
-                    print(
-                        f"[{self._name}] waiting for command {cmd_queue.qsize()=}\n",
-                        end="",
-                    )
+                self.logger.trace("waiting for command", cmd_queue_size=cmd_queue.qsize())
                 cmd = cmd_queue.get()
-                if DEBUG_LEVEL >= 2:
-                    print(
-                        f"[{self._name}, fut={cmd.future_id}] got command {cmd.cmd=}\n",
-                        end="",
-                    )
+                self.logger.trace("got command", cmd=cmd)
                 try:
                     fn = getattr(self, cmd.cmd)
                     result = fn(*cmd.args, **cmd.kwargs)
                 except Exception as e:
-                    if DEBUG_LEVEL >= 2:
-                        print(f"[{self._name}, fut={cmd.future_id}] send exception {e!r}\n", end="")
+                    self.logger.trace("send exception", fut=cmd.future_id, exception=e)
                     result_queue.put(WorkerResult(future_id=cmd.future_id, exception=e))
-                    if DEBUG_LEVEL >= 2:
-                        print(f"[{self._name}] result_queue: {result_queue.qsize()=}\n", end="")
+                    self.logger.trace("result_queue", result_queue_size=result_queue.qsize())
                 else:
-                    if DEBUG_LEVEL >= 2:
-                        print(f"[{self._name}, fut={cmd.future_id}] send result\n", end="")
+                    self.logger.trace("send result", fut=cmd.future_id)
                     result_queue.put(WorkerResult(future_id=cmd.future_id, result=result))
-                    if DEBUG_LEVEL >= 2:
-                        print(f"[{self._name}] result_queue: {result_queue.qsize()=}\n", end="")
+                    self.logger.trace("result_queue", result_queue_size=result_queue.qsize())
                     del result
                 # cmd_queue.task_done()
                 if cmd.cmd == self._wrk_shutdown_worker.__name__:
-                    if DEBUG_LEVEL >= 1:
-                        print(
-                            f"[{self._name}, fut={cmd.future_id}] got shutdown command, exit\n",
-                            end="",
-                        )
+                    self.logger.debug("got shutdown command, exit", fut=cmd.future_id)
                     break
-                if DEBUG_LEVEL >= 2:
-                    print(
-                        f"[{self._name}, fut={cmd.future_id}] processed, waiting for next command\n",
-                        end="",
-                    )
+                self.logger.trace("processed, waiting for next command", fut=cmd.future_id)
         except:
             traceback.print_exc()
             raise
@@ -274,8 +243,7 @@ class Asynchronous:
         # This is not actually a recursive call, because the worker loop will exit before calling this method.
         self._worker_call(self._wrk_shutdown_worker).get()
         self._cancel_futures()
-        if DEBUG_LEVEL >= 1:
-            print(f"[{self._name}] shutdown\n", end="")
+        self.logger.debug("shutdown")
 
     @abstractmethod
     def start(self) -> None: ...

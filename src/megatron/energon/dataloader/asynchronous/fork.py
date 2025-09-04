@@ -6,6 +6,7 @@ import sys
 import threading
 import warnings
 
+import structlog
 import torch.multiprocessing
 
 from megatron.energon.dataloader.asynchronous.base import (
@@ -14,8 +15,9 @@ from megatron.energon.dataloader.asynchronous.base import (
     WorkerCommand,
     WorkerResult,
 )
+from megatron.energon.logging import get_logger
 
-DEBUG_LEVEL = 1
+logger = get_logger(__name__)
 
 
 class ForkAsynchronous(Asynchronous):
@@ -41,11 +43,11 @@ class ForkAsynchronous(Asynchronous):
         parent_proc = torch.multiprocessing.parent_process()
         parent_pid = os.getppid()
         if parent_proc is None:
-            print(f"[{self._name}] No parent process, exiting", file=sys.stderr)
+            self.logger.error("No parent process, exiting")
             os._exit(-1)
         while not evt_exit.wait(1):
             if parent_proc.exitcode is not None or os.getppid() != parent_pid:
-                print(f"[{self._name}] Parent process died, exiting", file=sys.stderr)
+                self.logger.error("Parent process died, exiting")
                 os._exit(-1)
 
     def _worker_run(
@@ -78,23 +80,17 @@ class ForkAsynchronous(Asynchronous):
         try:
             super()._worker_run(cmd_queue, result_queue)
         finally:
-            if DEBUG_LEVEL >= 1:
-                print(f"[{self._name}] shutting down\n", end="")
+            logger.set
+            self.logger.info("shutting down")
             worker_exit_evt.set()
-            if DEBUG_LEVEL >= 1:
-                print(
-                    f"[{self._name}] shutting down, wait for parent_check_thread\n",
-                    end="",
-                )
+            self.logger.info("shutting down, wait for parent_check_thread")
             parent_check_thread.join()
-            if DEBUG_LEVEL >= 1:
-                print(f"[{self._name}] shutting down, close queues\n", end="")
+            self.logger.info("shutting down, close queues")
             result_queue.close()
             result_queue.join_thread()
             cmd_queue.close()
             cmd_queue.cancel_join_thread()
-            if DEBUG_LEVEL >= 1:
-                print(f"[{self._name}] shutting down, done\n", end="")
+            self.logger.info("shutting down, done")
 
     def _in_worker(self) -> bool:
         return torch.multiprocessing.current_process() == self._process
@@ -127,11 +123,6 @@ class ForkAsynchronous(Asynchronous):
                 warnings.warn(
                     "Explicitly call DataLoader.shutdown() to avoid leaking processes. Terminating worker process.",
                     ResourceWarning,
-                )
-                print(
-                    "WARNING: Explicitly call DataLoader.shutdown() to avoid leaking processes. Terminating worker process.\n",
-                    end="",
-                    file=sys.stderr,
                 )
                 self._cmd_queue.close()
                 self._cmd_queue.cancel_join_thread()
