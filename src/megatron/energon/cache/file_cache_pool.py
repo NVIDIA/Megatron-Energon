@@ -73,8 +73,10 @@ class CacheFileLazy(Lazy[T]):
     Represents a reference to a cached object without deduplication.
     """
 
+    # The path to the file that contains the cached pickled object.
     cache_path: Path | None
 
+    # If get() was called, this will be the data (uncached).
     _data: Optional[T] = None
 
     def get(self, sample: Any = None) -> T:
@@ -90,7 +92,7 @@ class CacheFileLazy(Lazy[T]):
 
     def __del__(self):
         if self.cache_path is not None:
-            self.cache_path.unlink()
+            self.cache_path.unlink(missing_ok=True)
             self.cache_path = None
 
     def __hash__(self) -> int:
