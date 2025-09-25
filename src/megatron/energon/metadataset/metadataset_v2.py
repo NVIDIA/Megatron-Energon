@@ -42,8 +42,10 @@ class AuxDatasetReference:
         assert not self.path.is_file(), (
             "Auxiliary datasets must not be metadataset, but direct dataset references"
         )
+        assert self.path.is_folder(), "Auxiliary dataset does not exist: " + str(self.path)
         assert (self.path / MAIN_FOLDER_NAME / "index.sqlite").is_file(), (
-            "Auxiliary datasets must be prepared Energon dataset"
+            "Auxiliary datasets must be prepared Energon dataset. This one is not: "
+            + str(self.path)
         )
 
     def get_file_store(self) -> FileStore:
