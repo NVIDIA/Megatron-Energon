@@ -58,7 +58,7 @@ Keep in mind that others may also want to use your dataset for a different proje
 These are the typical steps to get your data ready:
 
 1. Create a normal [WebDataset](https://github.com/webdataset/webdataset) from your data (including all the media content)
-2. Run our preparation tool [`energon prepare`](energon-prepare) create additional metadata needed by energon. See [](data-on-disk).
+2. Run our preparation tool [`energon prepare`](energon-prepare) to create the additional metadata needed by energon. See [](data-on-disk).
 
 (polylithic-dataset)=
 ## Steps to Create a Polylithic Dataset
