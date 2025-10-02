@@ -1,6 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+import os
 import re
 import shutil
 from pathlib import Path as PathlibPath
@@ -24,7 +25,9 @@ class EPath:
     for more information.
     """
 
-    # The path without the protocol. Can also be in S3 for example
+    __slots__ = ("internal_path", "profile", "fs")
+
+    # The path without the protocol/profile. Can also be in S3 for example
     internal_path: PurePosixPath
     # The profile used to access the file system
     profile: str
@@ -45,11 +48,29 @@ class EPath:
                 profile = "default"
             else:
                 protocol, profile, path = self._split_protocol(initial_path)
-                if protocol is None or protocol == "file":
+                if protocol is None:
+                    # Just a local absolute/relative path
+                    assert profile is None
+                    profile = "default"
+                    path = str(PathlibPath(path).absolute())
+                elif protocol == "file":
+                    # A file:// path, e.g. file:///home/user/file.txt (absolute) or file://file.txt (relative)
+                    assert profile is not None
+                    path = profile + "/" + path
                     profile = "default"
                     path = str(PathlibPath(path).absolute())
                 elif protocol == "rclone":
                     warn_deprecated("rclone:// protocol is deprecated. Use msc:// instead.")
+                elif protocol == "dss":
+                    # Profile corresponds to the dataset name and version
+                    assert profile is not None
+                    assert NVDATASET_CACHE_DIR is not None, (
+                        "Environment variable NVDATASET_CACHE_DIR is not set"
+                    )
+                    self.fs = NVDATASET_CACHE_DIR.fs
+                    self.profile = "dss"
+                    self.internal_path = self._resolve(f"/{profile}/{path}")
+                    return
                 else:
                     assert protocol == "msc", f"Unknown protocol: {protocol}"
             if not path.startswith("/"):
@@ -70,7 +91,13 @@ class EPath:
     def __setstate__(self, state: dict) -> None:
         self.internal_path = state["internal_path"]
         self.profile = state["profile"]
-        self.fs, _ = msc.resolve_storage_client(f"msc://{self.profile}")
+        if self.profile == "dss":
+            assert NVDATASET_CACHE_DIR is not None, (
+                "Environment variable NVDATASET_CACHE_DIR is not set"
+            )
+            self.fs = NVDATASET_CACHE_DIR.fs
+        else:
+            self.fs, _ = msc.resolve_storage_client(f"msc://{self.profile}")
 
     @staticmethod
     def _resolve(path: Union[str, PurePosixPath]) -> PurePosixPath:
@@ -104,8 +131,17 @@ class EPath:
 
     @property
     def _internal_str_path(self) -> str:
-        """Return the path as used inside the file system, without the protocol and fs part."""
-        return str(self.internal_path)
+        """Return the path as used inside the file system, without the protocol and fs part.
+        This is for usage with `self.fs` functions."""
+        if self.profile == "dss":
+            assert NVDATASET_CACHE_DIR is not None, (
+                "Environment variable NVDATASET_CACHE_DIR is not set"
+            )
+            # Applying a trick for efficiency:
+            # The internal path is relative to the NVDATASET_CACHE_DIR (i.e. strip the leading /, then concat with /)
+            return NVDATASET_CACHE_DIR._internal_str_path + str(self.internal_path)
+        else:
+            return str(self.internal_path)
 
     @overload
     def open(self, mode: Literal["r", "w"] = "r", block_size: Optional[int] = None) -> TextIO: ...
@@ -220,6 +256,14 @@ class EPath:
 
         return str(self.internal_path.relative_to(other.internal_path))
 
+    @property
+    def display_name(self) -> str:
+        if self.profile == "dss":
+            # Use the ds name for DSS paths
+            return self.internal_path.parents[-2].name
+        # Use the name for other paths
+        return self.name
+
     def __truediv__(self, other: Union[str, "EPath"]) -> "EPath":
         if isinstance(other, EPath):
             # Always absolute
@@ -251,3 +295,9 @@ class EPath:
             and self.internal_path == other.internal_path
             and self.profile == other.profile
         )
+
+
+if "NVDATASET_CACHE_DIR" in os.environ:
+    NVDATASET_CACHE_DIR = EPath(os.environ["NVDATASET_CACHE_DIR"])
+else:
+    NVDATASET_CACHE_DIR = None
