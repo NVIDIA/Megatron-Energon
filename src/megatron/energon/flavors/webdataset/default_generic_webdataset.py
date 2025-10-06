@@ -91,7 +91,7 @@ class DefaultGenericWebdatasetFactory(BaseWebdatasetFactory[T_sample], Generic[T
             part_filter = lambda part: part in parts
         inner_sample_loader = self._sample_loader
         self._sample_loader = lambda sample: {
-            "__key__": sample["__key__"],
+            "__key__": self.name + "/" + sample["__key__"],
             **inner_sample_loader(sample),
             "__restore_key__": sample["__restore_key__"],
             "__subflavors__": self.subflavors,

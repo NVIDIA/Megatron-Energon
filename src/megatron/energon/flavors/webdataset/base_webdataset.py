@@ -51,7 +51,6 @@ class BaseWebdatasetFactory(
     """
 
     path: EPath
-    paths: list[EPath]
 
     shards: List[ShardInfo]
     sample_excludes: set[str]
@@ -117,6 +116,7 @@ class BaseWebdatasetFactory(
         )
         self.path = path
         self.paths = [path]
+        self.name = path.display_name
         self.shards = wds_meta.shards
         self.sample_excludes = wds_meta.sample_excludes
         self.split_part_files = wds_meta.split_part_files

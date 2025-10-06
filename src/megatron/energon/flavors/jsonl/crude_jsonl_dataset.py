@@ -94,6 +94,7 @@ class CrudeJsonlDatasetFactory(
         assert self.__sample_type__ is not None, f"Class {type(self)} must define __sample_type__"
         self.path = path
         self.paths = [path]
+        self.name = path.display_name
         self.training = training
         self.worker_config = worker_config
         self.shuffle_over_epochs = shuffle_over_epochs
@@ -169,7 +170,9 @@ class CrudeJsonlDatasetFactory(
         return JsonlFileStore(self.path)
 
     def _load_sample(self, sample: FilteredSample) -> CrudeSample:
-        return CrudeSample(sample)
+        s = CrudeSample(sample)
+        s["__key__"] = self.name + "/" + s["__key__"]
+        return s
 
     def _load_sample_raw(self, raw_sample: RawSampleData) -> CrudeSample:
         # Just a wrapper for the inner tuple. Tuple should be of length 1.

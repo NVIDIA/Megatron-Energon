@@ -126,6 +126,9 @@ class JoinedWebdatasetFactory(
             self._sample_joiner = joiner
             self.inner_dataset_keys = None
 
+        self.paths = [dataset.path for dataset in inner_datasets]
+        self.name = inner_datasets[0].name
+
         self.join_index = join_index
         self.inner_datasets = inner_datasets
         self.shards = list(zip(*(dataset.shards for dataset in self.inner_datasets)))
@@ -206,10 +209,6 @@ class JoinedWebdatasetFactory(
 
     def as_file_store(self) -> FileStore:
         raise NotImplementedError("Not supported on joined datasets")
-
-    @property
-    def paths(self) -> List[EPath]:
-        return [dataset.path for dataset in self.inner_datasets]
 
     def _process_samples(self, dataset: SavableDataset[RawSampleData]) -> SavableDataset[T_sample]:
         """Internally loads the sample."""

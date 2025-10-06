@@ -453,7 +453,7 @@ class TestDataset(unittest.TestCase):
 
         keys = [entry.__key__ for entry in get_loader(ds.build())]
         assert keys == [
-            f"parts/data-1.tar/{i:06d}" for i in list(range(30, 35)) + list(range(40, 50))
+            f"{ds.name}/parts/data-1.tar/{i:06d}" for i in list(range(30, 35)) + list(range(40, 50))
         ], keys
 
     def test_loader(self):
@@ -516,8 +516,8 @@ class TestDataset(unittest.TestCase):
         assert len(loader2) == 5
         # The order in the split is shuffled this way
         assert list(key for batch in loader2 for key in batch.__key__) == [
-            f"parts/data-1.tar/{i:06d}" for i in range(30, 50)
-        ] + [f"parts/data-0.tar/{i:06d}" for i in range(30)]
+            f"{self.dataset_path.name}/parts/data-1.tar/{i:06d}" for i in range(30, 50)
+        ] + [f"{self.dataset_path.name}/parts/data-0.tar/{i:06d}" for i in range(30)]
 
     def test_default_dataset(self):
         torch.manual_seed(42)
@@ -1752,7 +1752,10 @@ class TestDataset(unittest.TestCase):
             catch_exceptions=False,
         )
         # First sample!
-        assert "__key__ (<class 'str'>): 'parts/data-1.tar/000030'" in result.stdout
+        assert (
+            f"__key__ (<class 'str'>): '{self.dataset_path.name}/parts/data-1.tar/000030'"
+            in result.stdout
+        )
         assert result.exit_code == 0, "Preview failed, see output"
 
     def test_info_captioning_dataset(self):
