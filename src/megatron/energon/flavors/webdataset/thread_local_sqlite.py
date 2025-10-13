@@ -91,19 +91,21 @@ class ThreadLocalSqlite(ThreadLocalStorage):
     """A class that allows to store data in a thread-local storage."""
 
     database: str
+    is_uri: bool
 
     __thread_local__ = ("connection", "cursor")
 
     connection: sqlite3.Connection
     cursor: sqlite3.Cursor
 
-    def __init__(self, database: str):
+    def __init__(self, database: str, is_uri: bool = False):
         super().__init__()
         self.database = database
+        self.is_uri = is_uri
 
     def __thread_init__(self):
         """Initialize the connection and cursor."""
-        self.connection = sqlite3.connect(self.database)
+        self.connection = sqlite3.connect(self.database, uri=self.is_uri)
         self.cursor = self.connection.cursor()
         self.connection.execute("PRAGMA busy_timeout = 5000;")
 
