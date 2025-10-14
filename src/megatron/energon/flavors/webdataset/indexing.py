@@ -265,7 +265,9 @@ class SqliteIndexReader:
             f"SQLite path must be absolute local file system path: {self.sqlite_path}"
         )
 
-        self.db = ThreadLocalSqlite(path)
+        path = f"file:{path}?mode=ro&immutable=1"
+
+        self.db = ThreadLocalSqlite(path, is_uri=True)
 
     def db_has_sample_parts(self) -> bool:
         """Check if the database has a sample_parts table.
