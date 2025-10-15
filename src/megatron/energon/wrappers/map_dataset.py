@@ -203,12 +203,14 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
                 for idx, (sample_idx, res_sample) in enumerate(
                     self._sample_index.iter_ctx(mapped_sample, sample_idx)
                 ):
+                    self._last_map_failures = 0
                     if idx == local_idx:
                         return add_sample_restore_key(res_sample, sample_idx, local_idx, src=self)
                 assert False, (
                     "Generator did not yield enough samples, but is marked stateless/deterministic."
                 )
             else:
+                self._last_map_failures = 0
                 return add_sample_restore_key(mapped_sample, sample_idx, src=self)
         except GeneratorExit:
             raise FatalSampleError.from_sample(
