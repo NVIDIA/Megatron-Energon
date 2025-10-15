@@ -192,22 +192,43 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
             assert id == type(self).__name__
             restore_key = restore_key[2:]
         inner_sample = self.dataset.restore_sample(restore_key)
-        with self._sample_index.ctx(sample_idx):
-            mapped_sample = self.map_fn(inner_sample)
-        if isinstance(mapped_sample, Generator):
-            assert inspect.isgeneratorfunction(self.map_fn), (
-                f"Generator in {self.map_fn} but not marked as such."
+
+        try:
+            with self._sample_index.ctx(sample_idx):
+                mapped_sample = self.map_fn(inner_sample)
+            if isinstance(mapped_sample, Generator):
+                assert inspect.isgeneratorfunction(self.map_fn), (
+                    f"Generator in {self.map_fn} but not marked as such."
+                )
+                for idx, (sample_idx, res_sample) in enumerate(
+                    self._sample_index.iter_ctx(mapped_sample, sample_idx)
+                ):
+                    if idx == local_idx:
+                        return add_sample_restore_key(res_sample, sample_idx, local_idx, src=self)
+                assert False, (
+                    "Generator did not yield enough samples, but is marked stateless/deterministic."
+                )
+            else:
+                return add_sample_restore_key(mapped_sample, sample_idx, src=self)
+        except GeneratorExit:
+            raise FatalSampleError.from_sample(
+                inner_sample,
+                f"MapDataset {self.map_fn} generator exited while trying to restore a sample.",
             )
-            for idx, (sample_idx, res_sample) in enumerate(
-                self._sample_index.iter_ctx(mapped_sample, sample_idx)
-            ):
-                if idx == local_idx:
-                    return add_sample_restore_key(res_sample, sample_idx, local_idx, src=self)
-            assert False, (
-                "Generator did not yield enough samples, but is marked stateless/deterministic."
+        except SkipSample:
+            raise FatalSampleError.from_sample(
+                inner_sample, f"MapDataset {self.map_fn} skipped while trying to restore a sample."
             )
-        else:
-            return add_sample_restore_key(mapped_sample, sample_idx, src=self)
+        except SYSTEM_EXCEPTIONS:
+            raise FatalSampleError.from_sample(inner_sample)
+        except Exception as e:
+            self.error_handler(e, inner_sample)
+            self._last_map_failures += 1
+            if self.failure_tolerance > 0 and self._last_map_failures >= self.failure_tolerance:
+                raise FatalSampleError.from_sample(
+                    inner_sample,
+                    f"MapDataset {self.map_fn} failed {self._last_map_failures} times in a row. Likely your code or dataset are broken.",
+                )
 
     def config(self) -> Dict[str, Any]:
         return {

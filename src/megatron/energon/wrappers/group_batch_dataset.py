@@ -251,9 +251,24 @@ class GroupBatchDataset(
         id, sample_idx, *sample_restore_keys = index
         assert id == type(self).__name__
         batch = [self.dataset.restore_sample(inner_idx) for inner_idx in sample_restore_keys]
-        with self._batch_sample_index.ctx(sample_idx):
-            batch_sample = self.batcher(batch)
-        set_sample_restore_key(batch_sample, sample_idx, *sample_restore_keys, src=self)
+        try:
+            with self._batch_sample_index.ctx(sample_idx):
+                batch_sample = self.batcher(batch)
+            set_sample_restore_key(batch_sample, sample_idx, *sample_restore_keys, src=self)
+            self._last_batch_failures = 0
+        except SkipSample:
+            pass
+        except SYSTEM_EXCEPTIONS:
+            raise FatalSampleError.from_sample(batch)
+        except Exception as e:
+            self.error_handler(e, batch)
+            self._last_batch_failures += 1
+            if self.failure_tolerance > 0 and self._last_batch_failures >= self.failure_tolerance:
+                raise FatalSampleError.from_sample(
+                    batch,
+                    f"GroupBatchDataset {self.batcher} failed {self._last_batch_failures} times in a row. Likely your code or dataset are broken.",
+                )
+
         return batch_sample
 
     def config(self) -> Dict[str, Any]:
