@@ -428,6 +428,7 @@ class PackingDataset(
                     with self._sample_encoder_sample_index.ctx(sample_idx):
                         sample = self.sample_encoder(sample)
                     assert not isinstance(sample, Generator), "Generator not supported"
+                    self._last_sample_encoder_failures = 0
                     sample = add_sample_restore_key(sample, sample_idx, src=self)
             except SkipSample:
                 raise FatalSampleError.from_sample(
@@ -459,6 +460,7 @@ class PackingDataset(
                 for cur_batch_sub_idx, (pack_idx, inner_batch_sample) in enumerate(
                     self._final_packing_sample_index.iter_ctx(final_pack, pack_idx)
                 ):
+                    self._last_final_pack_failures = 0
                     if cur_batch_sub_idx == pack_sub_idx:
                         return set_sample_restore_key(
                             inner_batch_sample,
@@ -469,6 +471,7 @@ class PackingDataset(
                         )
                 assert False, f"Pack sub-index {pack_sub_idx} not found in pack"
             else:
+                self._last_final_pack_failures = 0
                 return set_sample_restore_key(final_pack, pack_idx, *pack_restore_keys, src=self)
         except GeneratorExit:
             raise FatalSampleError.from_sample(

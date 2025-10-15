@@ -221,6 +221,7 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
                 for cur_batch_sub_idx, (sample_idx, inner_batch_sample) in enumerate(
                     self._sample_index.iter_ctx(batch_sample, sample_idx)
                 ):
+                    self._last_batch_failures = 0
                     if cur_batch_sub_idx == batch_sub_idx:
                         return set_sample_restore_key(
                             inner_batch_sample,
@@ -231,6 +232,7 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
                         )
                 assert False, f"Batch sub-index {batch_sub_idx} not found in batch"
             else:
+                self._last_batch_failures = 0
                 return set_sample_restore_key(
                     batch_sample,
                     sample_idx,
