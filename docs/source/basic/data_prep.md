@@ -63,13 +63,13 @@ These are the typical steps to get your data ready:
 (polylithic-dataset)=
 ## Steps to Create a Polylithic Dataset
 
-1. Create the primary [WebDataset](https://github.com/webdataset/webdataset) from your text-based part of the data (meta information, labels, sizes etc.)
+1. Create the primary [WebDataset](https://github.com/webdataset/webdataset) or JSONL file from your text-based part of the data (meta information, labels, sizes etc.)
     * Include the file names (don't use absolute paths) of the media that belongs to each sample (e.g. as strings inside a json entry)
 2. Create the auxiliary dataset(s). Can be multiple datasets, e.g. one per modality.
     * Either as a folder on disk with all the media files inside
     * Or as another WebDataset that contains just the media files (with the exact same names)
-3. Run our preparation tool `energon prepare` **on both WebDatasets** to convert to an energon-compatible format
-    * Configure both datasets as `CrudeWebdataset`
+3. Run our preparation tool `energon prepare` **on both datasets** (yes also on the JSONL) to convert to an energon-compatible format
+    * Configure both datasets as `CrudeWebdataset` (JSONL always is by default)
 4. Create a [metadataset](../basic/metadataset) that specifies what auxiliary data to load for each primary dataset
     * For more details read about [crude data](crude-data)
 
