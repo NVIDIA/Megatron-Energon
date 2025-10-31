@@ -1,5 +1,6 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
+from collections import defaultdict
 from itertools import accumulate
 from typing import Any, Generator
 
@@ -184,7 +185,7 @@ def parse_mpeg(file: BitsType) -> dict[int, SortedList]:
     sync_samples = {}
     decode_timestamps = {}
     presentation_time_offsets = {}
-    start_offsets = {}
+    start_offsets = defaultdict(int)
     current_track = -1
     for a in parse_atoms(file):
         if a.name == "tkhd":
@@ -222,16 +223,16 @@ def parse_mpeg(file: BitsType) -> dict[int, SortedList]:
             # TODO there can be more than one of these, figure out how to handle it
             a: ELST
             start_offsets[current_track] = -a.edit_list_table[0]["media_time"]
-    keyframes = {}
+    keyframes = defaultdict(SortedList)
     try:
         for track_id in sync_samples.keys():
-            if track_id not in keyframes:
-                keyframes[track_id] = SortedList()
             for keyframe_number in sync_samples[track_id]:
+                if track_id not in presentation_time_offsets:
+                    presentation_time_offsets[track_id] = defaultdict(int)
                 pts = (
                     decode_timestamps[track_id][keyframe_number]
-                    + start_offsets.get(track_id, 0)
-                    + presentation_time_offsets.get(track_id, [])[keyframe_number]
+                    + start_offsets[track_id]
+                    + presentation_time_offsets[track_id][keyframe_number]
                 )
                 keyframes[track_id].add(KeyframeInfo(keyframe_number, pts))
     except (KeyError, IndexError) as e:
