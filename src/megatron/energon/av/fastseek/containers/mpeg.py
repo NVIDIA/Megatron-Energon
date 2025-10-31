@@ -226,13 +226,13 @@ def parse_mpeg(file: BitsType) -> dict[int, SortedList]:
     keyframes = defaultdict(SortedList)
     try:
         for track_id in sync_samples.keys():
+            ptos = presentation_time_offsets.get(track_id)
+            dts = decode_timestamps[track_id]
             for keyframe_number in sync_samples[track_id]:
-                if track_id not in presentation_time_offsets:
-                    presentation_time_offsets[track_id] = defaultdict(int)
                 pts = (
-                    decode_timestamps[track_id][keyframe_number]
+                    dts[keyframe_number]
                     + start_offsets[track_id]
-                    + presentation_time_offsets[track_id][keyframe_number]
+                    + (0 if ptos is None else ptos[keyframe_number])
                 )
                 keyframes[track_id].add(KeyframeInfo(keyframe_number, pts))
     except (KeyError, IndexError) as e:
