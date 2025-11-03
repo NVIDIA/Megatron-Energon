@@ -423,32 +423,78 @@ class PackingDataset(
                 assert id == type(self).__name__
                 assert isinstance(sample_idx, int)
             sample = self.dataset.restore_sample(inner_idx)
-            if self.sample_encoder is not None:
-                with self._sample_encoder_sample_index.ctx(sample_idx):
-                    sample = self.sample_encoder(sample)
-                assert not isinstance(sample, Generator), "Generator not supported"
-                sample = add_sample_restore_key(sample, sample_idx, src=self)
-            pack.append(sample)
-        with self._final_packing_sample_index.ctx(pack_idx):
-            final_pack = self.final_packer(pack)
-        if isinstance(final_pack, Generator):
-            assert inspect.isgeneratorfunction(self.final_packer), (
-                f"Generator in {self.final_packer} but not marked as such."
-            )
-            for cur_batch_sub_idx, (pack_idx, inner_batch_sample) in enumerate(
-                self._final_packing_sample_index.iter_ctx(final_pack, pack_idx)
-            ):
-                if cur_batch_sub_idx == pack_sub_idx:
-                    return set_sample_restore_key(
-                        inner_batch_sample,
-                        pack_idx,
-                        pack_sub_idx,
-                        *pack_restore_keys,
-                        src=self,
+            try:
+                if self.sample_encoder is not None:
+                    with self._sample_encoder_sample_index.ctx(sample_idx):
+                        sample = self.sample_encoder(sample)
+                    assert not isinstance(sample, Generator), "Generator not supported"
+                    self._last_sample_encoder_failures = 0
+                    sample = add_sample_restore_key(sample, sample_idx, src=self)
+            except SkipSample:
+                raise FatalSampleError.from_sample(
+                    sample,
+                    f"PackingDataset sample encoder {self.sample_encoder} skipped while trying to restore a sample.",
+                )
+            except SYSTEM_EXCEPTIONS:
+                raise FatalSampleError.from_sample(sample)
+            except Exception as e:
+                self.error_handler(e, sample)
+                self._last_sample_encoder_failures += 1
+                if (
+                    self.sample_encoder_failure_tolerance > 0
+                    and self._last_sample_encoder_failures >= self.sample_encoder_failure_tolerance
+                ):
+                    raise FatalSampleError.from_sample(
+                        sample,
+                        f"PackingDataset sample encoder {self.sample_encoder} failed {self._last_sample_encoder_failures} times. Likely your code or dataset are broken.",
                     )
-            assert False, f"Pack sub-index {pack_sub_idx} not found in pack"
-        else:
-            return set_sample_restore_key(final_pack, pack_idx, *pack_restore_keys, src=self)
+
+            pack.append(sample)
+        try:
+            with self._final_packing_sample_index.ctx(pack_idx):
+                final_pack = self.final_packer(pack)
+            if isinstance(final_pack, Generator):
+                assert inspect.isgeneratorfunction(self.final_packer), (
+                    f"Generator in {self.final_packer} but not marked as such."
+                )
+                for cur_batch_sub_idx, (pack_idx, inner_batch_sample) in enumerate(
+                    self._final_packing_sample_index.iter_ctx(final_pack, pack_idx)
+                ):
+                    self._last_final_pack_failures = 0
+                    if cur_batch_sub_idx == pack_sub_idx:
+                        return set_sample_restore_key(
+                            inner_batch_sample,
+                            pack_idx,
+                            pack_sub_idx,
+                            *pack_restore_keys,
+                            src=self,
+                        )
+                assert False, f"Pack sub-index {pack_sub_idx} not found in pack"
+            else:
+                self._last_final_pack_failures = 0
+                return set_sample_restore_key(final_pack, pack_idx, *pack_restore_keys, src=self)
+        except GeneratorExit:
+            raise FatalSampleError.from_sample(
+                pack,
+                f"PackingDataset {self.final_packer} generator exited while trying to restore a pack.",
+            )
+        except SkipSample:
+            raise FatalSampleError.from_sample(
+                pack, f"PackingDataset {self.final_packer} skipped while trying to restore a pack."
+            )
+        except SYSTEM_EXCEPTIONS:
+            raise FatalSampleError.from_sample(pack)
+        except Exception as e:
+            self.error_handler(e, pack)
+            self._last_final_pack_failures += 1
+            if (
+                self.final_packer_failure_tolerance > 0
+                and self._last_final_pack_failures >= self.final_packer_failure_tolerance
+            ):
+                raise FatalSampleError.from_sample(
+                    pack,
+                    f"PackingDataset {self.final_packer} failed {self._last_final_pack_failures} times. Likely your code or dataset are broken.",
+                )
 
     def config(self) -> Dict[str, Any]:
         return {

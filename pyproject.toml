@@ -25,7 +25,7 @@ dependencies = [
   "click",
   "dataslots; python_version<'3.10'",
   "mfusepy",
-  "multi-storage-client>=0.31.0",
+  "multi-storage-client>=0.33.0",
   "numpy",
   "pillow>=10.0.1",  # WEBP vulnerability fixed starting from 10.0.1
   "pyyaml",
@@ -49,6 +49,7 @@ dev = [
 transforms = [
   "torchvision",  # Needed for megatron.energon.transforms
 ]
+
 # Storage services for MSC
 s3 = [
   "multi-storage-client[boto3]",
@@ -64,6 +65,9 @@ google-cloud-storage = [
 ]
 oci = [
   "multi-storage-client[oci]",
+]
+huggingface = [
+  "multi-storage-client[huggingface]",
 ]
 
 # Dependencies for video decoding
