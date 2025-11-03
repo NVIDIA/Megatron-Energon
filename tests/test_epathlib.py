@@ -194,12 +194,14 @@ class TestEPath(unittest.TestCase):
 
         # Test move and delete
         p4 = EPath("msc://default/tmp/random_file_0001")
-        p4.unlink()
+        if p4.is_file():
+            p4.unlink()
         with p4.open("w") as fp:
             fp.write("*****")
         assert p4.is_file()
         p5 = EPath("msc://default/tmp/random_file_0002")
-        p5.unlink()
+        if p5.is_file():
+            p5.unlink()
         assert p5.is_file() is False
         p4.move(p5)
         assert p5.is_file()
