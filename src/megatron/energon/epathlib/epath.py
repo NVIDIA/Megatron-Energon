@@ -109,12 +109,18 @@ class EPath:
 
     @overload
     def open(
-        self, mode: Literal["r", "w"] = "r", block_size: Optional[int] = None, prefetch_file: bool = False
+        self,
+        mode: Literal["r", "w"] = "r",
+        block_size: Optional[int] = None,
+        prefetch_file: bool = False,
     ) -> TextIO: ...
 
     @overload
     def open(
-        self, mode: Literal["rb", "wb"], block_size: Optional[int] = None, prefetch_file: bool = False
+        self,
+        mode: Literal["rb", "wb"],
+        block_size: Optional[int] = None,
+        prefetch_file: bool = False,
     ) -> BinaryIO: ...
 
     def open(
