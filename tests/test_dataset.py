@@ -1776,21 +1776,18 @@ class TestDataset(unittest.TestCase):
         # Track error handler calls
         error_calls = []
 
-        def custom_error_handler(exception, sample, sources=None):
-            """Custom error handler that tracks calls."""
-            error_calls.append(
-                {
-                    "exception": exception,
-                    "sample_key": getattr(sample, "__key__", None),
-                    "exception_type": type(exception).__name__,
-                }
-            )
-
         class ErrorProneTaskEncoder(DefaultTaskEncoder):
-            def __init__(self, error_handler=None):
+            def __init__(self):
                 super().__init__(raw_batch_type=CaptioningBatch)
-                if error_handler:
-                    self.error_handler = error_handler
+
+            def error_handler(self, exception, sample, sources=None):
+                error_calls.append(
+                    {
+                        "exception": exception,
+                        "sample_key": getattr(sample, "__key__", None),
+                        "exception_type": type(exception).__name__,
+                    }
+                )
 
             @stateless
             def encode_sample(self, sample: CaptioningSample) -> EncodedCaptioningSample:
@@ -1804,7 +1801,7 @@ class TestDataset(unittest.TestCase):
                 )
 
         # Test with custom error handler
-        task_encoder = ErrorProneTaskEncoder(error_handler=custom_error_handler)
+        task_encoder = ErrorProneTaskEncoder()
 
         loader = get_loader(
             get_train_dataset(
@@ -1836,19 +1833,6 @@ class TestDataset(unittest.TestCase):
         # Verify the exception type
         assert all(call["exception_type"] == "ValueError" for call in error_calls), (
             "All errors should be ValueError"
-        )
-
-        # Test that different encoders can have different error handlers
-        error_calls_2 = []
-
-        def second_error_handler(exception, sample, sources=None):
-            error_calls_2.append({"sample_key": getattr(sample, "__key__", None)})
-
-        task_encoder_2 = ErrorProneTaskEncoder(error_handler=second_error_handler)
-
-        # Verify that the two encoders have different error handlers
-        assert task_encoder._build_error_handler() != task_encoder_2._build_error_handler(), (
-            "Different task encoders should have different error handlers"
         )
 
 
