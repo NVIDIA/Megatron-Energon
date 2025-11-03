@@ -25,11 +25,11 @@ dependencies = [
   "click",
   "dataslots; python_version<'3.10'",
   "mfusepy",
-  "multi-storage-client>=0.18.0",
+  "multi-storage-client>=0.18.0,<0.26.0",
   "numpy",
   "pillow>=10.0.1",  # WEBP vulnerability fixed starting from 10.0.1
   "pyyaml",
-  "rapidyaml==0.9.0",
+  "rapidyaml>=0.10.0",
   "s3fs",
   "torch",
   "tqdm",

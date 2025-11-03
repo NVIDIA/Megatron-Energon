@@ -146,12 +146,11 @@ class IterMapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sampl
         id, sample_idx, iter_idx, *sample_restore_keys = restore_key
         assert id == type(self).__name__
         assert isinstance(iter_idx, int)
-        inner_iter = iter(
-            self.iter_map_fn(
-                (self.dataset.restore_sample(inner_index) for inner_index in sample_restore_keys)
-            )
+        to_be_mapped = (
+            self.dataset.restore_sample(inner_index) for inner_index in sample_restore_keys
         )
         try:
+            inner_iter = iter(self.iter_map_fn(to_be_mapped))
             # Skip inner yielded samples to get the correct sample
             for skip_idx in range(iter_idx):
                 with self._sample_index.ctx(sample_idx - iter_idx + skip_idx):
@@ -170,6 +169,15 @@ class IterMapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sampl
             raise RuntimeError(
                 "Generator did not yield enough samples, but is marked stateless/deterministic."
             )
+        except GeneratorExit:
+            raise FatalSampleError.from_sample(
+                to_be_mapped,
+                f"IterMapDataset {self.iter_map_fn} generator exited while trying to restore a sample.",
+            )
+        except SYSTEM_EXCEPTIONS:
+            raise FatalSampleError.from_sample(to_be_mapped)
+        except Exception as e:
+            self.error_handler(e, to_be_mapped)
         finally:
             # Properly close if it's a generator
             if hasattr(inner_iter, "close"):

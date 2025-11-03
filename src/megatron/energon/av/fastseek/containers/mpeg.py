@@ -184,8 +184,8 @@ def parse_atoms(file: BitsType) -> Generator[Atom, None, None]:
 def parse_mpeg(file: BitsType) -> dict[int, SortedList]:
     sync_samples = {}
     decode_timestamps = {}
-    presentation_time_offsets = defaultdict(lambda: defaultdict(lambda: 0))
-    start_offsets = defaultdict(lambda: 0)
+    presentation_time_offsets = {}
+    start_offsets = defaultdict(int)
     current_track = -1
     for a in parse_atoms(file):
         if a.name == "tkhd":
@@ -223,14 +223,16 @@ def parse_mpeg(file: BitsType) -> dict[int, SortedList]:
             # TODO there can be more than one of these, figure out how to handle it
             a: ELST
             start_offsets[current_track] = -a.edit_list_table[0]["media_time"]
-    keyframes = defaultdict(lambda: SortedList())
+    keyframes = defaultdict(SortedList)
     try:
         for track_id in sync_samples.keys():
+            ptos = presentation_time_offsets.get(track_id)
+            dts = decode_timestamps[track_id]
             for keyframe_number in sync_samples[track_id]:
                 pts = (
-                    decode_timestamps[track_id][keyframe_number]
+                    dts[keyframe_number]
                     + start_offsets[track_id]
-                    + presentation_time_offsets[track_id][keyframe_number]
+                    + (0 if ptos is None else ptos[keyframe_number])
                 )
                 keyframes[track_id].add(KeyframeInfo(keyframe_number, pts))
     except (KeyError, IndexError) as e:

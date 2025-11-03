@@ -210,31 +210,54 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
             id, sample_idx, *samples_restore_keys = restore_key
             assert id == type(self).__name__
         batch = [self.dataset.restore_sample(inner_idx) for inner_idx in samples_restore_keys]
-        with self._sample_index.ctx(sample_idx):
-            batch_sample = self.batcher(batch)
-        if isinstance(batch_sample, Generator):
-            assert inspect.isgeneratorfunction(self.batcher), (
-                f"Generator in {self.batcher} but not marked as such."
+
+        try:
+            with self._sample_index.ctx(sample_idx):
+                batch_sample = self.batcher(batch)
+            if isinstance(batch_sample, Generator):
+                assert inspect.isgeneratorfunction(self.batcher), (
+                    f"Generator in {self.batcher} but not marked as such."
+                )
+                for cur_batch_sub_idx, (sample_idx, inner_batch_sample) in enumerate(
+                    self._sample_index.iter_ctx(batch_sample, sample_idx)
+                ):
+                    self._last_batch_failures = 0
+                    if cur_batch_sub_idx == batch_sub_idx:
+                        return set_sample_restore_key(
+                            inner_batch_sample,
+                            sample_idx,
+                            batch_sub_idx,
+                            *samples_restore_keys,
+                            src=self,
+                        )
+                assert False, f"Batch sub-index {batch_sub_idx} not found in batch"
+            else:
+                self._last_batch_failures = 0
+                return set_sample_restore_key(
+                    batch_sample,
+                    sample_idx,
+                    *samples_restore_keys,
+                    src=self,
+                )
+        except GeneratorExit:
+            raise FatalSampleError.from_sample(
+                batch,
+                f"BatchDataset {self.batcher} generator exitedwhile trying to restore a batch.",
             )
-            for cur_batch_sub_idx, (sample_idx, inner_batch_sample) in enumerate(
-                self._sample_index.iter_ctx(batch_sample, sample_idx)
-            ):
-                if cur_batch_sub_idx == batch_sub_idx:
-                    return set_sample_restore_key(
-                        inner_batch_sample,
-                        sample_idx,
-                        batch_sub_idx,
-                        *samples_restore_keys,
-                        src=self,
-                    )
-            assert False, f"Batch sub-index {batch_sub_idx} not found in batch"
-        else:
-            return set_sample_restore_key(
-                batch_sample,
-                sample_idx,
-                *samples_restore_keys,
-                src=self,
+        except SkipSample:
+            raise FatalSampleError.from_sample(
+                batch, f"BatchDataset {self.batcher} skipped while trying to restore a batch."
             )
+        except SYSTEM_EXCEPTIONS:
+            raise FatalSampleError.from_sample(batch)
+        except Exception as e:
+            self.error_handler(e, batch)
+            self._last_batch_failures += 1
+            if self.failure_tolerance > 0 and self._last_batch_failures >= self.failure_tolerance:
+                raise FatalSampleError.from_sample(
+                    batch,
+                    f"BatchDataset {self.batcher} failed {self._last_batch_failures} times in a row. Likely your code or dataset are broken.",
+                )
 
     def config(self) -> Dict[str, Any]:
         return {

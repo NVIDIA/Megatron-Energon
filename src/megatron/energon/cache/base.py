@@ -126,6 +126,14 @@ class CachePool(ABC):
         ...
 
     @abstractmethod
+    def to_cache(self, data: T, name: str) -> Lazy[T]:
+        """
+        Move the data to the cache and return a lazy to fetch it later.
+        The name is used for debugging the data in the cache.
+        """
+        ...
+
+    @abstractmethod
     def close(self) -> None:
         """
         Close the cache pool.
