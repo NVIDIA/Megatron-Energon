@@ -108,22 +108,29 @@ class EPath:
         return str(self.internal_path)
 
     @overload
-    def open(self, mode: Literal["r", "w"] = "r", block_size: Optional[int] = None) -> TextIO: ...
+    def open(
+        self, mode: Literal["r", "w"] = "r", block_size: Optional[int] = None, prefetch_file: bool = False
+    ) -> TextIO: ...
 
     @overload
-    def open(self, mode: Literal["rb", "wb"], block_size: Optional[int] = None) -> BinaryIO: ...
+    def open(
+        self, mode: Literal["rb", "wb"], block_size: Optional[int] = None, prefetch_file: bool = False
+    ) -> BinaryIO: ...
 
     def open(
-        self, mode: Literal["r", "rb", "w", "wb"] = "r", block_size: Optional[int] = None
+        self,
+        mode: Literal["r", "rb", "w", "wb"] = "r",
+        block_size: Optional[int] = None,
+        prefetch_file: bool = False,
     ) -> Union[TextIO, BinaryIO]:
-        return self.fs.open(self._internal_str_path, mode)
+        return self.fs.open(self._internal_str_path, mode, prefetch_file=prefetch_file)
 
     def read_text(self) -> str:
-        with self.open() as f:
+        with self.open(prefetch_file=True) as f:
             return f.read()
 
     def read_bytes(self) -> bytes:
-        with self.open("rb") as f:
+        with self.open("rb", prefetch_file=True) as f:
             return f.read()
 
     def write_text(self, text: str) -> None:
