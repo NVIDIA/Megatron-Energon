@@ -1212,7 +1212,6 @@ requires-dist = [
     { name = "bitstring", marker = "extra == 'av-decode'", specifier = ">=4.2.3" },
     { name = "braceexpand" },
     { name = "click" },
-    { name = "dataslots", marker = "python_full_version < '3.10'" },
     { name = "ebmlite", marker = "extra == 'av-decode'", specifier = ">=3.3.1" },
     { name = "filetype", marker = "extra == 'av-decode'", specifier = ">=1.2.0" },
     { name = "filetype", marker = "extra == 'guess-content'", specifier = ">=1.0.0" },
