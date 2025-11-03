@@ -1769,6 +1769,88 @@ class TestDataset(unittest.TestCase):
         assert "train" in result.stdout
         assert result.exit_code == 0, "Preview failed, see output"
 
+    def test_custom_error_handler(self):
+        """Test that custom error handlers work correctly in TaskEncoder."""
+        torch.manual_seed(42)
+
+        # Track error handler calls
+        error_calls = []
+
+        def custom_error_handler(exception, sample, sources=None):
+            """Custom error handler that tracks calls."""
+            error_calls.append(
+                {
+                    "exception": exception,
+                    "sample_key": getattr(sample, "__key__", None),
+                    "exception_type": type(exception).__name__,
+                }
+            )
+
+        class ErrorProneTaskEncoder(DefaultTaskEncoder):
+            def __init__(self, error_handler=None):
+                super().__init__(raw_batch_type=CaptioningBatch)
+                if error_handler:
+                    self.error_handler = error_handler
+
+            @stateless
+            def encode_sample(self, sample: CaptioningSample) -> EncodedCaptioningSample:
+                # Intentionally raise an error for specific samples to test error handling
+                if "000035" in sample.__key__:
+                    raise ValueError(f"Intentional error for {sample.__key__}")
+                return EncodedCaptioningSample.derive_from(
+                    sample,
+                    image=sample.image,
+                    caption=torch.frombuffer(bytearray(sample.caption.encode()), dtype=torch.uint8),
+                )
+
+        # Test with custom error handler
+        task_encoder = ErrorProneTaskEncoder(error_handler=custom_error_handler)
+
+        loader = get_loader(
+            get_train_dataset(
+                self.dataset_path,
+                batch_size=5,
+                worker_config=no_worker_config,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                virtual_epoch_length=50,
+                task_encoder=task_encoder,
+            )
+        )
+
+        # Iterate through the loader - errors should be handled by custom handler
+        batches = []
+        for i, batch in enumerate(loader):
+            batches.append(batch)
+            if i >= 9:  # Get 10 batches (50 samples total)
+                break
+
+        # Verify that the error handler was called
+        assert len(error_calls) > 0, "Error handler should have been called"
+
+        # Verify that the error was for the right sample
+        assert any("000035" in call["sample_key"] for call in error_calls), (
+            f"Error should have been for sample 000035, got: {error_calls}"
+        )
+
+        # Verify the exception type
+        assert all(call["exception_type"] == "ValueError" for call in error_calls), (
+            "All errors should be ValueError"
+        )
+
+        # Test that different encoders can have different error handlers
+        error_calls_2 = []
+
+        def second_error_handler(exception, sample, sources=None):
+            error_calls_2.append({"sample_key": getattr(sample, "__key__", None)})
+
+        task_encoder_2 = ErrorProneTaskEncoder(error_handler=second_error_handler)
+
+        # Verify that the two encoders have different error handlers
+        assert task_encoder._build_error_handler() != task_encoder_2._build_error_handler(), (
+            "Different task encoders should have different error handlers"
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

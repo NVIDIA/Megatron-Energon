@@ -51,6 +51,14 @@ def _split_deprecated_decoder_kwargs(kwargs: dict, task_encoder: TaskEncoder) ->
     if "video_decode_audio" in kwargs:
         decoder_kwargs["video_decode_audio"] = kwargs.pop("video_decode_audio")
 
+    if kwargs.get("handler", None) is not None:
+        warn_deprecated(
+            "The error_handler kwarg is deprecated and will be removed in a future version. Instead, only use the error_handler directly in your task encoder."
+        )
+    if getattr(task_encoder, "error_handler", None) is not None:
+        # Use the error handler from the task encoder for the sample loader
+        kwargs["handler"] = task_encoder.error_handler
+
     if not auto_decode:
         task_encoder.decoder = None
     elif len(decoder_kwargs) > 0:
