@@ -4,7 +4,7 @@
 from typing import Optional, TypeVar
 
 from megatron.energon.cache import CachePool
-from megatron.energon.errors import warn_deprecated
+from megatron.energon.deprecation import warn_deprecated
 from megatron.energon.flavors import SavableDataset
 from megatron.energon.savable_loader import BasicDataLoader, SavableDataLoader
 from megatron.energon.worker import WorkerConfig

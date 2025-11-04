@@ -9,7 +9,7 @@ from typing import BinaryIO, Generator, Literal, Optional, TextIO, Tuple, Union,
 
 import multistorageclient as msc
 
-from megatron.energon.errors import warn_deprecated
+from megatron.energon.deprecation import warn_deprecated
 
 
 class EPath:

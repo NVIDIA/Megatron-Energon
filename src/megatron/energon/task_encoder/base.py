@@ -55,7 +55,6 @@ from megatron.energon.wrappers import (
     PackingDataset,
     ShuffleBufferDataset,
 )
-from megatron.energon.wrappers._log_exception import log_exception
 from megatron.energon.wrappers.repeat_dataset import RepeatDataset
 
 T = TypeVar("T")
@@ -251,11 +250,9 @@ def get_stateless(fn: Callable) -> bool:
     return getattr(fn, "__stateless__", False)
 
 
-def get_failure_tolerance(
-    fn: Callable, default_failure_tolerance: Optional[int] = None
-) -> Optional[int]:
+def get_failure_tolerance(fn: Callable, default_failure_tolerance: Optional[int] = None) -> int:
     """Get the failure tolerance of a function."""
-    return getattr(fn, "__failure_tolerance__", default_failure_tolerance)
+    return getattr(fn, "__failure_tolerance__", default_failure_tolerance) or 0
 
 
 @edataclass
@@ -465,9 +462,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         return sample
 
     @stateless
-    def postencode_sample(
-        self, sample: T_sample
-    ) -> Union[T_encoded_sample, Generator[T_encoded_sample, None, None]]:
+    def postencode_sample(self, sample: T_sample) -> T_encoded_sample:
         """Post-encode a single sample. May raise :exc:`megatron.energon.SkipSample` to skip a sample.
         Alternatively, this can be a generator that yields (or ignores) new samples.
         Use in conjunction with packing and caching.
@@ -580,12 +575,6 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         """
         raise NotImplementedError("Packing only effective when overridden.")
 
-    def error_handler(
-        self, exception: Exception, sample: Any, sources: Optional[Sequence[SourceInfo]] = None
-    ):
-        """Handle an exception during data processing."""
-        log_exception(exception, sample, sources)
-
     def build_batch(
         self,
         dataset: SavableDataset[T_encoded_sample],
@@ -623,14 +612,13 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 if post_encode_fn is None
                 else get_stateless(post_encode_fn),
                 worker_config=worker_config,
-                error_handler=self.error_handler,
                 pre_packer_failure_tolerance=get_failure_tolerance(
                     self.select_samples_to_pack, self.__default_failure_tolerance__
                 ),
                 final_packer_failure_tolerance=get_failure_tolerance(
                     self.pack_selected_samples, self.__default_failure_tolerance__
                 ),
-                sample_encoder_failure_tolerance=None
+                sample_encoder_failure_tolerance=0
                 if post_encode_fn is None
                 else get_failure_tolerance(post_encode_fn, self.__default_failure_tolerance__),
             )
@@ -639,7 +627,6 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 dataset,
                 self.postencode_sample,
                 worker_config=worker_config,
-                error_handler=self.error_handler,
                 stateless_map_fn=get_stateless(self.postencode_sample),
                 failure_tolerance=get_failure_tolerance(
                     self.postencode_sample, self.__default_failure_tolerance__
@@ -654,7 +641,6 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 batcher=self.batch,
                 drop_last=batch_drop_last,
                 worker_config=worker_config,
-                error_handler=self.error_handler,
                 failure_tolerance=get_failure_tolerance(
                     self.batch, self.__default_failure_tolerance__
                 ),
@@ -665,7 +651,6 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                     dataset,
                     self.encode_batch,
                     worker_config=worker_config,
-                    error_handler=self.error_handler,
                     stateless_map_fn=get_stateless(self.encode_batch),
                     failure_tolerance=get_failure_tolerance(
                         self.encode_batch, self.__default_failure_tolerance__
@@ -682,7 +667,6 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                     batcher_stateless=get_stateless(self.batch),
                     drop_last=batch_drop_last,
                     worker_config=worker_config,
-                    error_handler=self.error_handler,
                     failure_tolerance=get_failure_tolerance(
                         self.batch, self.__default_failure_tolerance__
                     ),
@@ -693,7 +677,6 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                         dataset,
                         self.encode_batch,
                         worker_config=worker_config,
-                        error_handler=self.error_handler,
                         stateless_map_fn=get_stateless(self.encode_batch),
                         failure_tolerance=get_failure_tolerance(
                             self.encode_batch, self.__default_failure_tolerance__
@@ -748,7 +731,6 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             dataset,
             cook_fn,
             worker_config=worker_config,
-            error_handler=self.error_handler,
             stateless_map_fn=True,
             map_fn_config=dict(
                 cookers=[
@@ -800,7 +782,6 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 dataset,
                 pre_encode_fn,
                 worker_config=worker_config,
-                error_handler=self.error_handler,
                 stateless_map_fn=get_stateless(pre_encode_fn),
                 failure_tolerance=get_failure_tolerance(
                     pre_encode_fn, self.__default_failure_tolerance__

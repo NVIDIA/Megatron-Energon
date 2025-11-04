@@ -30,8 +30,8 @@ import torch.multiprocessing
 from torch.utils.data import DataLoader, IterableDataset
 
 from megatron.energon.cache import CachePool
+from megatron.energon.deprecation import deprecated
 from megatron.energon.edataclass import edataclass
-from megatron.energon.errors import deprecated
 from megatron.energon.flavors.base_dataset import (
     FlexState,
     SavableDataset,
