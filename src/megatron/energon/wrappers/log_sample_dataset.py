@@ -4,7 +4,7 @@
 from typing import Any, Callable, Dict, Generic, Iterator, Literal, TypeVar
 
 from megatron.energon.flavors.base_dataset import SavableDataset
-from megatron.energon.sample_utils import default_get_keys
+from megatron.energon.sample_utils import default_get_batch_keys
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset
 
@@ -25,7 +25,7 @@ class LogSampleDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]
         dataset: SavableDataset[T_sample],
         mode: Literal["train", "val"],
         worker_config: WorkerConfig,
-        get_keys_fn: Callable[[T_sample], list[str] | None] = default_get_keys,
+        get_keys_fn: Callable[[T_sample], list[str] | None] = default_get_batch_keys,
     ):
         """Construct the log sample dataset, which logs every yielded sample to the debug logs.
 

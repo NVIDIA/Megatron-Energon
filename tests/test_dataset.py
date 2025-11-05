@@ -1866,17 +1866,12 @@ class TestDataset(unittest.TestCase):
             )
         )
 
-        try:
-            # Iterate through the loader - errors should be handled by custom handler
+        with self.assertRaises(ShouldRaiseException):
             batches = []
             for i, batch in enumerate(loader):
                 batches.append(batch)
                 if i >= 9:  # Get 10 batches (50 samples total)
                     break
-        except ShouldRaiseException:
-            pass
-        else:
-            assert False, "Should have raised ShouldRaiseException"
 
 
 if __name__ == "__main__":

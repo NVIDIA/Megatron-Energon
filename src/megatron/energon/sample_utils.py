@@ -11,7 +11,7 @@ import numpy as np
 import torch
 
 
-def default_get_keys(batch: Any) -> list[str] | None:
+def default_get_batch_keys(batch: Any) -> list[str] | None:
     """Extract sample keys from a batch using common heuristics.
 
     This function attempts to extract keys from samples by checking for common
@@ -172,7 +172,7 @@ def format_sample_detailed(sample: Any, indent: str = "") -> str:
             sample = f"{sample[:1000]}... (and {len(sample) - 1000} more characters)"
         if "\n" in sample:
             # represent as """ string if it contains newlines:
-            return f'"""{sample.replace("\n", "\n   " + indent)}"""'
+            return '"""' + sample.replace("\n", "\n   " + indent) + '"""'
         return repr(sample)
     elif isinstance(sample, (int, float, bool, type(None))):
         return repr(sample)
@@ -189,12 +189,51 @@ def format_sample_detailed(sample: Any, indent: str = "") -> str:
         try:
             min_val = sample.min().item()
             max_val = sample.max().item()
-            return f"Tensor(shape={sample.shape}, dtype={sample.dtype}, device={sample.device}, min={min_val}, max={max_val})"
+            values_repr = ""
+            # flatten tensor, get first and last 3 values if possible
+            numel = sample.numel()
+            flat = sample.flatten()
+            n_show = 3
+            if numel == 0:
+                values_repr = "values=[]"
+            elif numel <= n_show * 2:
+                shown = ", ".join(repr(v.item()) for v in flat)
+                values_repr = f"values=[{shown}]"
+            else:
+                first_vals = ", ".join(repr(v.item()) for v in flat[:n_show])
+                last_vals = ", ".join(repr(v.item()) for v in flat[-n_show:])
+                values_repr = f"values=[{first_vals}, ..., {last_vals}]"
+            return (
+                f"Tensor(shape={sample.shape}, dtype={sample.dtype}, device={sample.device}, "
+                f"min={min_val}, max={max_val}, {values_repr})"
+            )
         except (RuntimeError, ValueError):
             # Handle empty tensors or non-numeric dtypes
             return f"Tensor(shape={sample.shape}, dtype={sample.dtype}, device={sample.device})"
     elif isinstance(sample, np.ndarray):
-        return f"np.ndarray(shape={sample.shape}, dtype={sample.dtype})"
+        try:
+            min_val = sample.min()
+            max_val = sample.max()
+            values_repr = ""
+            flat = sample.ravel()
+            n_show = 3
+            numel = flat.size
+            if numel == 0:
+                values_repr = "values=[]"
+            elif numel <= n_show * 2:
+                shown = ", ".join(repr(x) for x in flat)
+                values_repr = f"values=[{shown}]"
+            else:
+                first_vals = ", ".join(repr(x) for x in flat[:n_show])
+                last_vals = ", ".join(repr(x) for x in flat[-n_show:])
+                values_repr = f"values=[{first_vals}, ..., {last_vals}]"
+            return (
+                f"np.ndarray(shape={sample.shape}, dtype={sample.dtype}, "
+                f"min={min_val}, max={max_val}, {values_repr})"
+            )
+        except (ValueError, TypeError):
+            # Handle empty arrays or non-numeric dtypes
+            return f"np.ndarray(shape={sample.shape}, dtype={sample.dtype})"
     elif dataclasses.is_dataclass(sample):
         result = [f"{indent}{type(sample).__name__}("]
         for field in dataclasses.fields(sample):

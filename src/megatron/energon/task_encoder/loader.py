@@ -32,10 +32,18 @@ def _split_kwargs(kwargs: dict) -> dict:
     return loader_kwargs
 
 
-def _split_deprecated_decoder_kwargs(
+def _split_deprecated_dataset_kwargs(
     kwargs: dict, task_encoder: TaskEncoder, worker_config: WorkerConfig
 ) -> None:
     """
+    This function takes deprecated kwargs to the get_train_dataset and get_val_dataset functions and splits them into the new decoder kwargs and the worker_config error handler.
+
+    Args:
+        kwargs: The kwargs to consider (will modify this in place).
+        task_encoder: The task encoder to apply the kwargs to.
+        worker_config: The worker configuration to apply the kwargs to.
+
+    List of deprecated kwargs:
     auto_decode: bool = True,
     image_decode: ImageDecoder = "torchrgb",
     ignore_decoder_errors: bool = False,
@@ -55,7 +63,7 @@ def _split_deprecated_decoder_kwargs(
     if "video_decode_audio" in kwargs:
         decoder_kwargs["video_decode_audio"] = kwargs.pop("video_decode_audio")
 
-    if kwargs.get("handler", None) is not None:
+    if "handler" in kwargs:
         warn_deprecated(
             "The handler kwarg is deprecated and will be removed in a future version. Instead, use the error handler in the worker_config. Overwriting the worker_config handler now."
         )
@@ -155,7 +163,7 @@ def get_train_dataset(
     """
 
     loader = load_dataset(path, **_split_kwargs(kwargs))
-    _split_deprecated_decoder_kwargs(kwargs, task_encoder, worker_config)
+    _split_deprecated_dataset_kwargs(kwargs, task_encoder, worker_config)
 
     datasets = loader.get_datasets(
         training=True,
@@ -215,7 +223,7 @@ def get_val_dataset(
     Returns:
         The loaded dataset.
     """
-    _split_deprecated_decoder_kwargs(kwargs, task_encoder, worker_config)
+    _split_deprecated_dataset_kwargs(kwargs, task_encoder, worker_config)
     loader = load_dataset(path, **_split_kwargs(kwargs))
     datasets = loader.get_datasets(
         training=False,
@@ -270,7 +278,7 @@ def get_val_datasets(
     Returns:
         The loaded val datasets, with the source datasets.
     """
-    _split_deprecated_decoder_kwargs(kwargs, task_encoder, worker_config)
+    _split_deprecated_dataset_kwargs(kwargs, task_encoder, worker_config)
     loader = load_dataset(path, **_split_kwargs(kwargs))
     datasets = loader.get_datasets(
         training=False,

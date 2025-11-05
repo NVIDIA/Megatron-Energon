@@ -61,7 +61,7 @@ class ErrorContext:
             tolerance=100,
         )
 
-        with error_ctx.handle_errors(sample, get_source_info):
+        with error_ctx.handle_errors(sample):
             result = process_sample(sample)
     """
 
@@ -69,7 +69,7 @@ class ErrorContext:
     tolerance: int
     handler: Callable[[Exception, Any, list["SourceInfo"] | None], None]
 
-    _consecutive_failures: int
+    _consecutive_failures: int = 0
 
     def __init__(
         self,
@@ -89,7 +89,6 @@ class ErrorContext:
         self.name = name
         self.tolerance = tolerance
         self.handler = handler
-        self._consecutive_failures = 0
 
     def reset(self) -> None:
         """Reset the consecutive failures counter."""
@@ -159,22 +158,22 @@ def handle_restore_errors(
     """
     try:
         yield
-    except SkipSample:
+    except SkipSample as e:
         # Unexpected skip sample
         try:
-            raise ValueError(f"Unexpected skip sample {sample} during restoration.")
+            raise ValueError(f"Unexpected skip sample {sample} during restoration.") from e
         except Exception as e:
             error_handler(e, sample, get_source_info(sample))
-    except GeneratorExit:
+    except GeneratorExit as e:
         # Unexpected skip sample
         try:
             raise ValueError(
                 f"Unexpected generator early stopping for sample {sample} during restoration."
-            )
+            ) from e
         except Exception as e:
             error_handler(e, sample, get_source_info(sample))
-    except SYSTEM_EXCEPTIONS:
-        raise FatalSampleError.from_sample(sample)
+    except SYSTEM_EXCEPTIONS as e:
+        raise FatalSampleError.from_sample(sample) from e
     except Exception as e:
         error_handler(e, sample, get_source_info(sample))
 

@@ -43,7 +43,7 @@ from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset
 from megatron.energon.wrappers.batch_dataset import BatchDataset
 from megatron.energon.wrappers.gc_dataset import GC_DEFAULT_EVERY_N_ITER, GcDataset, gc_init_worker
-from megatron.energon.wrappers.log_sample_dataset import default_get_keys
+from megatron.energon.wrappers.log_sample_dataset import default_get_batch_keys
 from megatron.energon.wrappers.watchdog_dataset import WatchdogDataset
 
 T = TypeVar("T")
@@ -841,7 +841,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
                 # )
                 # self._debugf.flush()
                 if self.worker_config.should_log(level=1):
-                    keys = default_get_keys(sample)
+                    keys = default_get_batch_keys(sample)
                     self.worker_config.worker_log(
                         {
                             **{
@@ -1323,7 +1323,7 @@ class BasicDataLoader(DataLoader[T], Generic[T]):
                 for worker_id, sample_idx, sample in iterator:
                     # If the next sample will be from the first worker, we can safely resume
                     if self.worker_config.should_log(level=1):
-                        keys = default_get_keys(sample)
+                        keys = default_get_batch_keys(sample)
                         self.worker_config.worker_log(
                             {
                                 **{
