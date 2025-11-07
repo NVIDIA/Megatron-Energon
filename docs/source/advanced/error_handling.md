@@ -4,7 +4,8 @@ SPDX-License-Identifier: BSD-3-Clause -->
 # Error Handling
 
 Energon provides configurable error handling to gracefully manage exceptions during data loading and processing.
-By default, errors are logged and the sample is skipped, allowing training to continue.
+By default, errors in task encoder code are logged and the sample is skipped, allowing training to continue.
+Some system exceptions (clearly programming errors) always cause immediate failure.
 
 By default, if more than 100 samples in a row raise an error, processing will also fail. This is configurable for the
 {py:class}`~megatron.energon.task_encoder.base.TaskEncoder` user-functions by setting the `@stateless(failure_tolerance=100)` parameter.
@@ -30,6 +31,12 @@ Default is {py:func}`log_exception <megatron.energon.log_exception>` which logs 
 
 **`restore_error_handler`:** Handles exceptions during checkpoint restoration.
 Default is {py:func}`reraise_exception <megatron.energon.reraise_exception>` which fails fast to ensure checkpoint integrity.
+
+## System Exceptions
+
+Programming errors and critical system issues always cause immediate failure and are never handled by error handlers:
+`SystemError`, `SyntaxError`, `ImportError`, `StopIteration`, `StopAsyncIteration`, `MemoryError`, `RecursionError`, `ReferenceError`, `NameError`, `UnboundLocalError`, and {py:exc}`FatalSampleError <megatron.energon.FatalSampleError>`.
+{py:exc}`FatalSampleError <megatron.energon.FatalSampleError>` is raised automatically when consecutive failure tolerance is exceeded or when a system exception occurs during sample processing.
 
 ## Built-in Error Handlers
 
@@ -123,9 +130,9 @@ Set `failure_tolerance=0` to disable tolerance checking for a specific function.
 Tolerance limits count *consecutive* failures. A single successful sample resets the counter.
 ```
 
-## Skip Samples Explicitly
+## Skip or Fail Explicitly
 
-Raise {py:exc}`SkipSample <megatron.energon.SkipSample>` to explicitly skip a sample without logging an error. E.g. for skipping specific errors:
+Raise {py:exc}`SkipSample <megatron.energon.SkipSample>` to explicitly skip a sample without logging an error:
 
 ```python
 from megatron.energon import SkipSample
@@ -135,5 +142,18 @@ def process_sample(sample):
         ...
     except MySpecificError:
         raise SkipSample()
+    return sample
+```
+
+Raise {py:exc}`FatalSampleError <megatron.energon.FatalSampleError>` to cause immediate failure, bypassing the error handler:
+
+```python
+from megatron.energon import FatalSampleError
+
+def process_sample(sample):
+    try:
+        ...
+    except MyFatalError as e:
+        raise FatalSampleError.from_sample(sample, "Critical corruption detected") from e
     return sample
 ```
