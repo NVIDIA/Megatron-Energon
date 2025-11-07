@@ -757,7 +757,6 @@ class TestDataset(unittest.TestCase):
                     "batcher": "megatron.energon.task_encoder.base.DefaultTaskEncoder.batch",
                     "batcher_stateless": True,
                     "drop_last": False,
-                    "error_handler": "megatron.energon.wrappers._log_exception.log_exception",
                     "worker_config": wrk_cfg,
                     "dataset": {
                         "type": "MapDataset",

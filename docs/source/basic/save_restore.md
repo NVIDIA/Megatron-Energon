@@ -140,6 +140,14 @@ state = torch.load('dataloader_state.pth')
 loader.restore_state_global(state, src_rank=None)
 ```
 
+## Error Handling During Restore
+
+By default, energon uses a strict error handler during checkpoint restoration to ensure data integrity.
+If sample restoration fails, the exception is immediately raised.
+
+You can customize this behavior via the `restore_error_handler` parameter in {py:class}`WorkerConfig <megatron.energon.WorkerConfig>`.
+See [](../advanced/error_handling) for details.
+
 ## Summary
 
 In each of these scenarios, ensure that the logic for saving and restoring the state is appropriately synchronized across ranks to maintain consistency.

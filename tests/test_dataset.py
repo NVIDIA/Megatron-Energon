@@ -93,6 +93,10 @@ class CaptioningBatch(Batch):
     caption: torch.Tensor
 
 
+class ShouldRaiseException(Exception):
+    pass
+
+
 class TestDataset(unittest.TestCase):
     # Set up the test fixture
     def setUp(self):
@@ -1768,6 +1772,106 @@ class TestDataset(unittest.TestCase):
         assert str(self.dataset_path) in result.stdout
         assert "train" in result.stdout
         assert result.exit_code == 0, "Preview failed, see output"
+
+    def test_custom_error_handler(self):
+        """Test that custom error handlers work correctly in TaskEncoder."""
+        torch.manual_seed(42)
+
+        # Track error handler calls
+        error_calls = []
+
+        class ErrorProneTaskEncoder(DefaultTaskEncoder):
+            def __init__(self):
+                super().__init__(raw_batch_type=CaptioningBatch)
+
+            @stateless
+            def encode_sample(self, sample: CaptioningSample) -> EncodedCaptioningSample:
+                # Intentionally raise an error for specific samples to test error handling
+                if "000035" in sample.__key__:
+                    raise ValueError(f"Intentional error for {sample.__key__}")
+                return EncodedCaptioningSample.derive_from(
+                    sample,
+                    image=sample.image,
+                    caption=torch.frombuffer(bytearray(sample.caption.encode()), dtype=torch.uint8),
+                )
+
+        # Test with custom error handler
+
+        worker_config = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=0,
+            global_error_handler=lambda e, s, sources: error_calls.append(
+                {
+                    "exception": e,
+                    "sample_key": getattr(s, "__key__", None),
+                    "exception_type": type(e).__name__,
+                }
+            ),
+        )
+
+        loader = get_loader(
+            get_train_dataset(
+                self.dataset_path,
+                batch_size=5,
+                worker_config=worker_config,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                virtual_epoch_length=50,
+                task_encoder=ErrorProneTaskEncoder(),
+            )
+        )
+
+        # Iterate through the loader - errors should be handled by custom handler
+        batches = []
+        for i, batch in enumerate(loader):
+            batches.append(batch)
+            if i >= 9:  # Get 10 batches (50 samples total)
+                break
+
+        # Verify that the error handler was called
+        assert len(error_calls) > 0, "Error handler should have been called"
+
+        # Verify that the error was for the right sample
+        assert any("000035" in call["sample_key"] for call in error_calls), (
+            f"Error should have been for sample 000035, got: {error_calls}"
+        )
+
+        # Verify the exception type
+        assert all(call["exception_type"] == "ValueError" for call in error_calls), (
+            "All errors should be ValueError"
+        )
+
+        print("Step 2: Reraise")
+
+        def reraise(e, s, sources):
+            raise ShouldRaiseException() from e
+
+        worker_config_r1 = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=1,
+            global_error_handler=reraise,
+        )
+
+        loader = get_loader(
+            get_train_dataset(
+                self.dataset_path,
+                batch_size=5,
+                worker_config=worker_config_r1,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                virtual_epoch_length=50,
+                task_encoder=ErrorProneTaskEncoder(),
+            )
+        )
+
+        with self.assertRaises(ShouldRaiseException):
+            batches = []
+            for i, batch in enumerate(loader):
+                batches.append(batch)
+                if i >= 9:  # Get 10 batches (50 samples total)
+                    break
 
 
 if __name__ == "__main__":

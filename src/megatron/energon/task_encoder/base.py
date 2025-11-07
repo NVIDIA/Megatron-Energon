@@ -250,11 +250,9 @@ def get_stateless(fn: Callable) -> bool:
     return getattr(fn, "__stateless__", False)
 
 
-def get_failure_tolerance(
-    fn: Callable, default_failure_tolerance: Optional[int] = None
-) -> Optional[int]:
+def get_failure_tolerance(fn: Callable, default_failure_tolerance: Optional[int] = None) -> int:
     """Get the failure tolerance of a function."""
-    return getattr(fn, "__failure_tolerance__", default_failure_tolerance)
+    return getattr(fn, "__failure_tolerance__", default_failure_tolerance) or 0
 
 
 @edataclass
@@ -464,9 +462,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         return sample
 
     @stateless
-    def postencode_sample(
-        self, sample: T_sample
-    ) -> Union[T_encoded_sample, Generator[T_encoded_sample, None, None]]:
+    def postencode_sample(self, sample: T_sample) -> T_encoded_sample:
         """Post-encode a single sample. May raise :exc:`megatron.energon.SkipSample` to skip a sample.
         Alternatively, this can be a generator that yields (or ignores) new samples.
         Use in conjunction with packing and caching.
@@ -622,7 +618,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 final_packer_failure_tolerance=get_failure_tolerance(
                     self.pack_selected_samples, self.__default_failure_tolerance__
                 ),
-                sample_encoder_failure_tolerance=None
+                sample_encoder_failure_tolerance=0
                 if post_encode_fn is None
                 else get_failure_tolerance(post_encode_fn, self.__default_failure_tolerance__),
             )

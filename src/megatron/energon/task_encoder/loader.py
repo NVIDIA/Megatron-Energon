@@ -4,8 +4,9 @@
 from pathlib import Path
 from typing import Any, List, Literal, Optional, Tuple, TypeVar, Union
 
+from megatron.energon.deprecation import warn_deprecated
 from megatron.energon.epathlib import EPath
-from megatron.energon.errors import warn_deprecated
+from megatron.energon.errors import log_exception
 from megatron.energon.flavors import BaseCoreDatasetFactory, SavableDataset
 from megatron.energon.flavors.webdataset.sample_decoder import SampleDecoder
 from megatron.energon.metadataset import load_dataset
@@ -31,13 +32,24 @@ def _split_kwargs(kwargs: dict) -> dict:
     return loader_kwargs
 
 
-def _split_deprecated_decoder_kwargs(kwargs: dict, task_encoder: TaskEncoder) -> None:
+def _split_deprecated_dataset_kwargs(
+    kwargs: dict, task_encoder: TaskEncoder, worker_config: WorkerConfig
+) -> None:
     """
+    This function takes deprecated kwargs to the get_train_dataset and get_val_dataset functions and splits them into the new decoder kwargs and the worker_config error handler.
+
+    Args:
+        kwargs: The kwargs to consider (will modify this in place).
+        task_encoder: The task encoder to apply the kwargs to.
+        worker_config: The worker configuration to apply the kwargs to.
+
+    List of deprecated kwargs:
     auto_decode: bool = True,
     image_decode: ImageDecoder = "torchrgb",
     ignore_decoder_errors: bool = False,
     av_decode: AVDecoder = "AVDecoder",
     video_decode_audio: bool = False,
+    handler: Callable[[Exception, Any, list[SourceInfo] | None], None] = None,
     """
     auto_decode = True
 
@@ -50,6 +62,20 @@ def _split_deprecated_decoder_kwargs(kwargs: dict, task_encoder: TaskEncoder) ->
         decoder_kwargs["av_decode"] = kwargs.pop("av_decode")
     if "video_decode_audio" in kwargs:
         decoder_kwargs["video_decode_audio"] = kwargs.pop("video_decode_audio")
+
+    if "handler" in kwargs:
+        warn_deprecated(
+            "The handler kwarg is deprecated and will be removed in a future version. Instead, use the error handler in the worker_config. Overwriting the worker_config handler now."
+        )
+        set_handler = kwargs.pop("handler")
+        if (
+            worker_config.global_error_handler != log_exception
+            and worker_config.global_error_handler != set_handler
+        ):
+            raise ValueError(
+                "Do not set the handler argument. Handler already set in the worker_config."
+            )
+        worker_config.global_error_handler = set_handler
 
     if not auto_decode:
         task_encoder.decoder = None
@@ -137,7 +163,7 @@ def get_train_dataset(
     """
 
     loader = load_dataset(path, **_split_kwargs(kwargs))
-    _split_deprecated_decoder_kwargs(kwargs, task_encoder)
+    _split_deprecated_dataset_kwargs(kwargs, task_encoder, worker_config)
 
     datasets = loader.get_datasets(
         training=True,
@@ -197,7 +223,7 @@ def get_val_dataset(
     Returns:
         The loaded dataset.
     """
-    _split_deprecated_decoder_kwargs(kwargs, task_encoder)
+    _split_deprecated_dataset_kwargs(kwargs, task_encoder, worker_config)
     loader = load_dataset(path, **_split_kwargs(kwargs))
     datasets = loader.get_datasets(
         training=False,
@@ -252,7 +278,7 @@ def get_val_datasets(
     Returns:
         The loaded val datasets, with the source datasets.
     """
-    _split_deprecated_decoder_kwargs(kwargs, task_encoder)
+    _split_deprecated_dataset_kwargs(kwargs, task_encoder, worker_config)
     loader = load_dataset(path, **_split_kwargs(kwargs))
     datasets = loader.get_datasets(
         training=False,

@@ -6,12 +6,14 @@ import json
 import multiprocessing
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, ClassVar, Dict, List, Optional, TextIO, TypeVar
+from typing import Any, Callable, ClassVar, Dict, List, Optional, TextIO, TypeVar
 
 import torch.distributed
 import torch.utils.data
 
 from megatron.energon.cache import CachePool
+from megatron.energon.errors import log_exception, reraise_exception
+from megatron.energon.source_info import SourceInfo
 
 __all__ = ("WorkerConfig",)
 
@@ -61,6 +63,14 @@ class WorkerConfig:
     _worker_debug_file: Optional[TextIO] = None
     #: worker_id of the opened worker debug file
     _worker_debug_file_worker_id: Optional[int] = None
+    #: The global error handler to use for the worker during normal iteration.
+    global_error_handler: Callable[
+        [Exception, Any | list[Any], Optional[list[SourceInfo]]], None
+    ] = log_exception
+    #: The error handler to use when restoring samples. Defaults to reraising the exception.
+    restore_error_handler: Callable[
+        [Exception, Any | list[Any], Optional[list[SourceInfo]]], None
+    ] = reraise_exception
 
     #: The current sample index within the current iterating worker
     _sample_index_stack: ClassVar[Optional[List[int]]] = None
