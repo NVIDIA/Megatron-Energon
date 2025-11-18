@@ -6,7 +6,6 @@ from typing import Any, List, Literal, Optional, Tuple, TypeVar, Union
 
 from megatron.energon.deprecation import warn_deprecated
 from megatron.energon.epathlib import EPath
-from megatron.energon.errors import log_exception
 from megatron.energon.flavors import BaseCoreDatasetFactory, SavableDataset
 from megatron.energon.flavors.webdataset.sample_decoder import SampleDecoder
 from megatron.energon.metadataset import load_dataset
@@ -65,17 +64,10 @@ def _split_deprecated_dataset_kwargs(
 
     if "handler" in kwargs:
         warn_deprecated(
-            "The handler kwarg is deprecated and will be removed in a future version. Instead, use the error handler in the worker_config. Overwriting the worker_config handler now."
+            "The handler kwarg is deprecated and will be removed in a future version. Instead, use the error handler in the worker_config."
+            "Ignoring the handler argument and using the worker_config handler."
         )
-        set_handler = kwargs.pop("handler")
-        if (
-            worker_config.global_error_handler != log_exception
-            and worker_config.global_error_handler != set_handler
-        ):
-            raise ValueError(
-                "Do not set the handler argument. Handler already set in the worker_config."
-            )
-        worker_config.global_error_handler = set_handler
+        kwargs.pop("handler")
 
     if not auto_decode:
         task_encoder.decoder = None

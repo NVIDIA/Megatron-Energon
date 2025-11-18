@@ -32,10 +32,10 @@ from megatron.energon.cache import FileStore, FileStoreCachePool, Lazy
 from megatron.energon.cache.base import CachePool
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib.epath import EPath
+from megatron.energon.errors import reraise_exception
 from megatron.energon.flavors.base_dataset import Sample
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 from megatron.energon.flavors.webdataset.sample_decoder import SampleDecoder
-from megatron.energon.flavors.webdataset.structs import reraise_exception
 from megatron.energon.source_info import SourceInfo
 from megatron.energon.task_encoder.cooking import cooker
 
@@ -347,6 +347,7 @@ class TestDataset(unittest.TestCase):
             rank=0,
             world_size=1,
             num_workers=0,
+            global_error_handler=reraise_exception,
         )
 
         # Train mode dataset
@@ -358,7 +359,6 @@ class TestDataset(unittest.TestCase):
             task_encoder=CookingTaskEncoder(),
             shuffle_buffer_size=None,
             max_samples_per_sequence=None,
-            handler=reraise_exception,
         )
         loader = get_savable_loader(
             train_dataset,
