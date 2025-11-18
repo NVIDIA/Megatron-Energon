@@ -47,7 +47,7 @@ class DecodeFileStore(FileStoreWrapper[Any]):
     def __str__(self):
         return f"DecodeFileStore(inner={self._inner}, decoder={self.decoder})"
 
-    def get_media_metadata(self, key: str) -> Optional[MediaMetadataBase]:
+    def get_media_metadata(self, key: str) -> MediaMetadataBase:
         return self._inner.get_media_metadata(key)
 
 
@@ -90,7 +90,7 @@ class SystemFileStore(FileStore[bytes]):
     def __str__(self):
         return f"SystemFileStore(base_dir={self.base_dir})"
 
-    def get_media_metadata(self, key: str) -> Optional[MediaMetadataBase]:
+    def get_media_metadata(self, key: str) -> MediaMetadataBase:
         if self.base_dir is None:
             raise RuntimeError("Media metadata requires a base directory for SystemFileStore")
 
@@ -102,11 +102,11 @@ class SystemFileStore(FileStore[bytes]):
         if row is None:
             file_path = self.base_dir / key
             if file_path.is_file():
-                raise RuntimeError(
+                raise KeyError(
                     f"Media metadata missing for {key}. "
-                    "Run `energon prepare --media-metadata` to generate it."
+                    "Run `energon prepare --media-metadata` to regenerate it."
                 )
-            return None
+            raise KeyError(f"File {file_path} not found")
         metadata_type, metadata_json = row
         return deserialize_media_metadata(metadata_type, metadata_json)
 
@@ -154,7 +154,7 @@ class WebdatasetFileStore(SqliteITarEntryReader, FileStore[bytes]):
     def get_path(self) -> str:
         return str(self.base_path)
 
-    def get_media_metadata(self, key: str) -> Optional[MediaMetadataBase]:
+    def get_media_metadata(self, key: str) -> MediaMetadataBase:
         if self._media_metadata_available is None:
             try:
                 has_metadata = self.sqlite_reader.db_has_media_metadata()
@@ -179,7 +179,7 @@ class WebdatasetFileStore(SqliteITarEntryReader, FileStore[bytes]):
             ) from exc
 
         if row is None:
-            return None
+            raise KeyError(f"Sample {key!r} not found")
 
         metadata_type, metadata_json = row
         return deserialize_media_metadata(metadata_type, metadata_json)
