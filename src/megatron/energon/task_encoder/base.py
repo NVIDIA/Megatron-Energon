@@ -28,6 +28,7 @@ import torch
 from typing_extensions import ParamSpec
 
 from megatron.energon.cache import CachePool, DecodeFileStore, FileStore
+from megatron.energon.cache.base import PrimaryFileStore
 from megatron.energon.edataclass import edataclass
 from megatron.energon.flavors import (
     CrudeSample,
@@ -372,47 +373,6 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
     #: The decoder to use for decoding samples. Set manually as needed to override options.
     decoder: Optional[SampleDecoder] = SampleDecoder()
 
-    @stateless
-    def cook_crude_sample(
-        self,
-        sample: Union[T_sample, CrudeSample],
-        get_primary_aux: Callable[[], FileStore],
-        **aux: FileStore,
-    ) -> T_sample:
-        """
-        Cooks a crude sample.
-
-        Args:
-            sample: The sample to cook.
-            get_primary_aux: A function that returns the (cached) primary auxiliary dataset.
-            **aux: The auxiliary side dishes to use for cooking.
-
-        Returns: The cooked sample.
-        """
-        if isinstance(sample, CrudeSample):
-            for cooker in self.cookers:
-                if cooker.is_match(sample):
-                    assert get_stateless(cooker.cook), "Cooker must be stateless"
-                    if not cooker.need_primary and not cooker.need_cache:
-                        kwargs = aux
-                    else:
-                        kwargs: dict = {}
-                        if cooker.need_primary:
-                            kwargs["primary"] = get_primary_aux()
-                        kwargs.update(aux)
-                        if cooker.need_cache:
-                            kwargs["cache"] = self.cache
-                    return cooker.cook(sample, **kwargs)
-
-            raise NotImplementedError(
-                "You are using crude samples but not providing a way to cook them: "
-                f"Sample key={sample['__key__']}, subflavors={sample['__subflavors__']}, "
-                f"self.cookers={self.cookers}"
-            )
-        else:
-            assert isinstance(sample, Sample), "Sample must be a complete Sample or a CrudeSample"
-            return sample
-
     def _is_overridden(
         self, bound_method: Callable[..., Any], bases: Optional[Sequence[Type[Any]]] = None
     ) -> bool:
@@ -439,6 +399,33 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         if bases is None:
             bases = (TaskEncoder,)
         return not any(getattr(base, func.__name__) is func for base in bases)
+
+    @stateless
+    def cook_crude_sample(
+        self,
+        sample: CrudeSample,
+        cooker: Cooker[CrudeSample],
+        aux: dict[str, FileStore],
+    ) -> T_sample:
+        """
+        Cooks a crude sample.
+
+        Args:
+            sample: The sample to cook.
+            cooker: The cooker to use.
+            aux: Aux datasets to use.
+
+        Returns: The cooked sample.
+        """
+
+        assert get_stateless(cooker.cook), "Cooker must be stateless"
+        if cooker.need_primary or cooker.need_cache:
+            aux = {**aux}
+        if cooker.need_cache:
+            aux["cache"] = self.cache
+        if cooker.need_primary:
+            aux["primary"] = PrimaryFileStore(aux["primary"], current_key=sample["__key__"])
+        return cooker.cook(sample, **aux)
 
     @stateless
     def encode_sample(
@@ -701,46 +688,36 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         if aux is not None and self.decoder is not None:
             aux = {k: DecodeFileStore(v, decoder=self.decoder) for k, v in aux.items()}
 
-        # Cache the primary auxiliary dataset for this dataset, i.e. construct it once when needed
-        primary_aux = None
-
-        def _get_primary_aux():
-            nonlocal primary_aux
-            if primary_aux is None:
-                try:
-                    if aux is not None:
-                        primary_aux = aux.get("primary")
-                    if primary_aux is None:
-                        primary_aux = get_primary_aux()
-                    assert primary_aux is not None, "Primary auxiliary dataset must always exist"
-                    if self.decoder is not None:
-                        primary_aux = DecodeFileStore(primary_aux, decoder=self.decoder)
-                except Exception as e:
-                    # Make the exception throw through for the sample being loaded
-                    raise SystemError("Error getting primary auxiliary dataset") from e
-            return primary_aux
-
-        if aux is not None:
-            cook_fn = functools.partial(
-                self.cook_crude_sample, get_primary_aux=_get_primary_aux, **aux
-            )
+        for cooker in self.cookers:
+            if cooker.is_match(subflavors):
+                break
         else:
-            cook_fn = functools.partial(self.cook_crude_sample, get_primary_aux=_get_primary_aux)
+            raise ValueError(f"No cooker found for subflavors: {subflavors}")
+
+        if cooker.need_primary and "primary" not in aux:
+            try:
+                primary_aux = get_primary_aux()
+                assert primary_aux is not None, "Primary auxiliary dataset must always exist"
+                if self.decoder is not None:
+                    primary_aux = DecodeFileStore(primary_aux, decoder=self.decoder)
+                aux["primary"] = primary_aux
+            except Exception as e:
+                # Make the exception throw through for the sample being loaded
+                raise SystemError("Error getting primary auxiliary dataset") from e
+
+        cook_fn = functools.partial(self.cook_crude_sample, cooker=cooker, aux=aux)
 
         return MapDataset(
             dataset,
             cook_fn,
             worker_config=worker_config,
-            stateless_map_fn=True,
+            stateless_map_fn=get_stateless(cook_fn),
             map_fn_config=dict(
-                cookers=[
-                    dict(
-                        cook=SavableDataset._function_config(cooker.cook),
-                        has_subflavors=cooker.has_subflavors,
-                    )
-                    for cooker in self.cookers
-                ],
-                subflavors=subflavors,
+                cooker=dict(
+                    cook=SavableDataset._function_config(cooker.cook),
+                    has_subflavors=cooker.has_subflavors,
+                    aux={k: {"_path": str(v.get_path())} for k, v in aux.items()},
+                ),
             ),
             failure_tolerance=get_failure_tolerance(cook_fn, self.__default_failure_tolerance__),
         )

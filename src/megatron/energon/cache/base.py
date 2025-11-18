@@ -167,3 +167,32 @@ class FileStoreDecoder(ABC):
             The decoded field's data.
         """
         ...
+
+
+class PrimaryFileStore(FileStore[T]):
+    """Same as the FileStore, but additionally uses the current sample's key as a prefix for the key,
+    if the key passed to `__getitem__`, `.get` or `.get_media_metadata` starts with a '.'."""
+
+    _inner: FileStore[T]
+
+    def __init__(self, inner: FileStore[T], current_key: str):
+        self._inner = inner
+        self._current_key = current_key
+
+    def __getitem__(self, key: str) -> tuple[T, SourceInfo]:
+        if key.startswith("."):
+            key = f"{self._current_key}{key}"
+        return self._inner[key]
+
+    def get(self, key: str, sample: Any = None) -> Any:
+        if key.startswith("."):
+            key = f"{self._current_key}{key}"
+        return self._inner.get(key, sample)
+
+    def get_path(self) -> str:
+        return self._inner.get_path()
+
+    def get_media_metadata(self, key: str) -> Optional[MediaMetadataBase]:
+        if key.startswith("."):
+            key = f"{self._current_key}{key}"
+        return self._inner.get_media_metadata(key)
