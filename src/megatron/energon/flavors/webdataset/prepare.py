@@ -95,7 +95,7 @@ class IndexShardInfo(IndexAggregatable):
 
 class SqliteIndexWriterAggregator(
     BaseAggregator[
-        Tuple[ShardInfo, Set[str]], Tuple[List[ShardInfo], Set[str], bool, List[Tuple[str, int]]]
+        IndexAggregatable, Tuple[List[ShardInfo], Set[str], bool, List[Tuple[str, int]]]
     ]
 ):
     sqlite_path: EPath

@@ -74,8 +74,8 @@ class SystemFileStore(FileStore[bytes]):
 
         return data, SourceInfo(
             dataset_path=self.base_dir,
-            index=None,
-            shard_name=None,
+            index=key,
+            shard_name=str(self.base_dir),
             file_names=(key,),
         )
 

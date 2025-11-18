@@ -12,9 +12,11 @@ from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.webdataset.aggregator_pool import AggregatorPool
 from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
 from megatron.energon.flavors.webdataset.prepare import (
+    IndexAggregatable,
     IndexMediaMetadata,
     SqliteIndexWriterAggregator,
 )
+from megatron.energon.flavors.webdataset.structs import ShardInfo
 from megatron.energon.media.extractor import (
     MediaFilterConfig,
     MediaFilterStrategy,
@@ -80,8 +82,8 @@ def prepare_filesystem_dataset(
 
     pool = AggregatorPool[
         Path,
-        IndexMediaMetadata,
-        tuple,
+        IndexAggregatable,
+        tuple[list[ShardInfo], set[str], bool, list[tuple[str, int]]],
     ](
         num_workers=min(workers, len(files)) or 1,
         user_produce_data=partial(
