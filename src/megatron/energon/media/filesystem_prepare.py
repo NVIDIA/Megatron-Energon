@@ -10,7 +10,7 @@ from typing import Callable, Iterator
 
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.webdataset.aggregator_pool import AggregatorPool
-from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset.config import INDEX_SQLITE_FILENAME, MAIN_FOLDER_NAME
 from megatron.energon.flavors.webdataset.prepare import (
     IndexAggregatable,
     IndexMediaMetadata,
@@ -54,7 +54,7 @@ def prepare_filesystem_dataset(
 
     files = _collect_media_files(root=root, media_filter=media_filter, progress=progress)
 
-    sqlite_path = EPath(meta_dir / "index.sqlite")
+    sqlite_path = EPath(meta_dir / INDEX_SQLITE_FILENAME)
 
     agg_progress_fn: Callable[[Iterator[int], int], Iterator[int]] | None = None
     if progress:

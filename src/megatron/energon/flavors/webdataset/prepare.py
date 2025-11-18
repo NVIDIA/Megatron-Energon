@@ -35,7 +35,15 @@ from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
 from megatron.energon.eyaml import load_yaml
 from megatron.energon.flavors.webdataset.aggregator_pool import AggregatorPool, BaseAggregator
-from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME, skip_meta_re, split_name_re
+from megatron.energon.flavors.webdataset.config import (
+    INDEX_SQLITE_FILENAME,
+    INDEX_UUID_FILENAME,
+    INFO_JSON_FILENAME,
+    INFO_YAML_FILENAME,
+    MAIN_FOLDER_NAME,
+    skip_meta_re,
+    split_name_re,
+)
 from megatron.energon.flavors.webdataset.indexing import (
     DuplicateSampleKeyError,
     SqliteIndexWriter,
@@ -526,7 +534,7 @@ class WebdatasetPreparator:
                 print("No duplicate keys found, continuing.")
 
         aggregator = SqliteIndexWriterAggregator(
-            parent_path / MAIN_FOLDER_NAME / "index.sqlite",
+            parent_path / MAIN_FOLDER_NAME / INDEX_SQLITE_FILENAME,
             total_tasks=len(paths),
             progress_fn=progress_fn,
             enable_media_metadata=media_filter is not None,
@@ -562,18 +570,18 @@ class WebdatasetPreparator:
                 "put each file in a subfolder with the shard name like `shard_0/filename.ext`."
             )
 
-            if (parent_path / MAIN_FOLDER_NAME / "index.sqlite").is_file():
-                (parent_path / MAIN_FOLDER_NAME / "index.sqlite").unlink()
+            if (parent_path / MAIN_FOLDER_NAME / INDEX_SQLITE_FILENAME).is_file():
+                (parent_path / MAIN_FOLDER_NAME / INDEX_SQLITE_FILENAME).unlink()
 
             sys.exit(1)
 
         if had_update:
             logger.info("Regenerating dataset UUID...")
-            with (parent_path / MAIN_FOLDER_NAME / "index.uuid").open("w") as f:
+            with (parent_path / MAIN_FOLDER_NAME / INDEX_UUID_FILENAME).open("w") as f:
                 f.write(str(uuid.uuid4()))
 
-        json_info_config = parent_path / MAIN_FOLDER_NAME / ".info.json"
-        yaml_info_config = parent_path / MAIN_FOLDER_NAME / ".info.yaml"
+        json_info_config = parent_path / MAIN_FOLDER_NAME / INFO_JSON_FILENAME
+        yaml_info_config = parent_path / MAIN_FOLDER_NAME / INFO_YAML_FILENAME
 
         if tar_index_only:
             if yaml_info_config.is_file() and not json_info_config.is_file():
@@ -689,7 +697,7 @@ class WebdatasetPreparator:
                 raise ValueError(f"Shard '{path}' not present in dataset metadata")
 
         aggregator = SqliteIndexWriterAggregator(
-            parent_path / MAIN_FOLDER_NAME / "index.sqlite",
+            parent_path / MAIN_FOLDER_NAME / INDEX_SQLITE_FILENAME,
             total_tasks=len(expanded_paths),
             progress_fn=progress_fn,
             enable_sample_tables=False,

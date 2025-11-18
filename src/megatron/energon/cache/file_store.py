@@ -7,7 +7,7 @@ from typing import Any, Optional, Union
 from megatron.energon.cache.base import FileStore, FileStoreDecoder
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.jsonl.ijsonl_reader import IJsonlReader
-from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset.config import INDEX_SQLITE_FILENAME, MAIN_FOLDER_NAME
 from megatron.energon.flavors.webdataset.itar_reader import SqliteITarEntryReader
 from megatron.energon.flavors.webdataset.thread_local_sqlite import ThreadLocalSqlite
 from megatron.energon.local_copy import ensure_local_copy
@@ -109,7 +109,7 @@ class SystemFileStore(FileStore[bytes]):
     def _ensure_media_metadata_reader(self) -> ThreadLocalSqlite:
         assert self.base_dir is not None
         if self._media_metadata_reader is None:
-            sqlite_path = self.base_dir / MAIN_FOLDER_NAME / "index.sqlite"
+            sqlite_path = self.base_dir / MAIN_FOLDER_NAME / INDEX_SQLITE_FILENAME
 
             if not sqlite_path.is_file():
                 raise RuntimeError(

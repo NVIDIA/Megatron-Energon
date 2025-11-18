@@ -23,7 +23,11 @@ from megatron.energon.flavors import (
     JoinedWebdatasetFactory,
     Sample,
 )
-from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset.config import (
+    INDEX_SQLITE_FILENAME,
+    INDEX_UUID_FILENAME,
+    MAIN_FOLDER_NAME,
+)
 from megatron.energon.flavors.webdataset.indexing import JoinIndexWriter
 from megatron.energon.flavors.webdataset.metadata import WebdatasetMeta
 from megatron.energon.flavors.webdataset.structs import DatasetSubset
@@ -372,7 +376,7 @@ class JoinDatasetLoader(DatasetLoaderInterface):
         for dataset in datasets:
             print(f" - {dataset}")
 
-            uuid_path = EPath(dataset.dataset.path) / MAIN_FOLDER_NAME / "index.uuid"
+            uuid_path = EPath(dataset.dataset.path) / MAIN_FOLDER_NAME / INDEX_UUID_FILENAME
             try:
                 uuid = uuid_path.read_text()
             except FileNotFoundError:
@@ -381,7 +385,7 @@ class JoinDatasetLoader(DatasetLoaderInterface):
                     "(with a recent version of energon). If you have already prepared the "
                     "dataset, it should be sufficient to run prepare with --tar-index-only."
                 )
-            db_path = EPath(dataset.dataset.path) / MAIN_FOLDER_NAME / "index.sqlite"
+            db_path = EPath(dataset.dataset.path) / MAIN_FOLDER_NAME / INDEX_SQLITE_FILENAME
 
             # Precedence for split_part is:
             # 1. Join dataset split part (overrides individual dataset split parts)
