@@ -75,14 +75,15 @@ class SqliteIndexWriter:
         self.db.execute("PRAGMA busy_timeout = 5000;")  # wait up to 5000ms when locked
 
         if self.enable_sample_tables:
-            if self.reset_tables:
-                self.db.execute("DROP INDEX IF EXISTS idx_samples_sample_key")
-                self.db.execute("DROP INDEX IF EXISTS idx_samples_by_tar_and_idx")
-                self.db.execute("DROP TABLE IF EXISTS samples")
+            assert self.reset_tables, "Reset tables is required when enabling sample tables"
 
-                self.db.execute("DROP INDEX IF EXISTS idx_sample_parts_seq")
-                self.db.execute("DROP INDEX IF EXISTS idx_sample_parts_full")
-                self.db.execute("DROP TABLE IF EXISTS sample_parts")
+            self.db.execute("DROP INDEX IF EXISTS idx_samples_sample_key")
+            self.db.execute("DROP INDEX IF EXISTS idx_samples_by_tar_and_idx")
+            self.db.execute("DROP TABLE IF EXISTS samples")
+
+            self.db.execute("DROP INDEX IF EXISTS idx_sample_parts_seq")
+            self.db.execute("DROP INDEX IF EXISTS idx_sample_parts_full")
+            self.db.execute("DROP TABLE IF EXISTS sample_parts")
 
             self.db.execute(
                 """
@@ -125,9 +126,9 @@ class SqliteIndexWriter:
                 CREATE TABLE IF NOT EXISTS media_filters (
                     filter_id INTEGER PRIMARY KEY AUTOINCREMENT,
                     strategy TEXT NOT NULL,
-                    pattern TEXT,
+                    patterns TEXT,
                     created_at_utc TEXT DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(strategy, pattern)
+                    UNIQUE(strategy, patterns)
                 )
                 """
             )
@@ -206,11 +207,11 @@ class SqliteIndexWriter:
             (entry_key, metadata_type, metadata_json),
         )
 
-    def append_media_filter(self, *, strategy: str, pattern: str | None) -> None:
+    def append_media_filter(self, *, strategy: str, patterns: str | None) -> None:
         assert self.db is not None, "Database is closed"
         self.db.execute(
-            "INSERT OR IGNORE INTO media_filters (strategy, pattern) VALUES (?, ?)",
-            (strategy, pattern),
+            "INSERT OR IGNORE INTO media_filters (strategy, patterns) VALUES (?, ?)",
+            (strategy, patterns),
         )
 
     def close(self):

@@ -17,12 +17,7 @@ from megatron.energon.flavors.webdataset.prepare import (
     SqliteIndexWriterAggregator,
 )
 from megatron.energon.flavors.webdataset.structs import ShardInfo
-from megatron.energon.media.extractor import (
-    MediaFilterConfig,
-    MediaFilterStrategy,
-    extract_metadata,
-    should_consider_media,
-)
+from megatron.energon.media.extractor import MediaFilterConfig
 from megatron.energon.media.metadata import serialize_media_metadata
 
 
@@ -107,7 +102,7 @@ def _collect_media_files(
 ) -> list[Path]:
     """Return a sorted list of files to process based on the media filter."""
 
-    consider_all = media_filter.strategy == MediaFilterStrategy.TYPE
+    consider_all = media_filter.should_consider_all()
     files: list[Path] = []
 
     progress_bar = None
@@ -129,7 +124,7 @@ def _collect_media_files(
             if progress_bar is not None:
                 progress_bar.update()
 
-            if not consider_all and not should_consider_media(filename, media_filter):
+            if not consider_all and not media_filter.should_consider_media(filename):
                 continue
 
             candidate = current_dir / filename
@@ -153,7 +148,7 @@ def _process_filesystem_entry(
     media_filter: MediaFilterConfig,
 ) -> Iterator[IndexMediaMetadata]:
     file_path = Path(file_path)
-    extracted_metadata = extract_metadata(file_path, media_filter)
+    extracted_metadata = media_filter.extract_metadata(file_path)
     if extracted_metadata is None:
         return
 

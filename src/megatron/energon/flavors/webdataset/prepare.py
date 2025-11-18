@@ -47,11 +47,7 @@ from megatron.energon.flavors.webdataset.tar_patcher import (
     DatasetScanResult,
     TarPatcher,
 )
-from megatron.energon.media.extractor import (
-    MediaFilterConfig,
-    extract_metadata,
-    should_consider_media,
-)
+from megatron.energon.media.extractor import MediaFilterConfig
 from megatron.energon.media.metadata import serialize_media_metadata
 from megatron.energon.typed_converter import to_json_object
 
@@ -102,9 +98,7 @@ class IndexShardInfo(IndexAggregatable):
 
 
 class SqliteIndexWriterAggregator(
-    BaseAggregator[
-        IndexAggregatable, Tuple[List[ShardInfo], Set[str], bool, List[Tuple[str, int]]]
-    ]
+    BaseAggregator[IndexAggregatable, Tuple[List[ShardInfo], Set[str], bool, List[Tuple[str, int]]]]
 ):
     sqlite_path: EPath
     total_tasks: int
@@ -196,7 +190,7 @@ class SqliteIndexWriterAggregator(
         if self.enable_media_metadata and self.media_filter is not None:
             self.writer.append_media_filter(
                 strategy=self.media_filter.strategy.value,
-                pattern=self.media_filter.pattern,
+                patterns=",".join(self.media_filter.patterns),
             )
         self.writer.close()
 
@@ -321,14 +315,13 @@ class WebdatasetPreparator:
                         )
 
                         if media_filter is not None:
-                            if not should_consider_media(entry_key, media_filter):
+                            if not media_filter.should_consider_media(entry_key):
                                 continue
                             file_member = tar.extractfile(member)
                             if file_member is not None:
                                 data = file_member.read()
-                                extracted_metadata = extract_metadata(
+                                extracted_metadata = media_filter.extract_metadata(
                                     data,
-                                    media_filter,
                                     filename=entry_key,
                                 )
                                 if extracted_metadata is not None:
@@ -377,16 +370,15 @@ class WebdatasetPreparator:
                     ) in WebdatasetPreparator._iter_tar_sample_members(tar):
                         entry_key = f"{base_name}.{part_name}"
 
-                        if not should_consider_media(entry_key, media_filter):
+                        if not media_filter.should_consider_media(entry_key):
                             continue
 
                         file_member = tar.extractfile(member)
                         if file_member is None:
                             continue
 
-                        extracted_metadata = extract_metadata(
+                        extracted_metadata = media_filter.extract_metadata(
                             file_member,
-                            media_filter,
                             filename=entry_key,
                         )
                         if extracted_metadata is None:
@@ -510,7 +502,9 @@ class WebdatasetPreparator:
 
         if fix_duplicates:
             tar_patcher = TarPatcher(show_progress=True)
-            scan_result: DatasetScanResult = tar_patcher.dataset_scan(paths)
+            scan_result: DatasetScanResult = tar_patcher.dataset_scan(
+                paths, parent_path=parent_path
+            )
 
             if scan_result.has_duplicates:
                 print("The dataset contains duplicate keys.")
@@ -524,7 +518,7 @@ class WebdatasetPreparator:
                     sys.exit(1)
 
                 print("Fixing the dataset now.")
-                tar_patcher.dataset_apply_prefix(paths)
+                tar_patcher.dataset_apply_prefix(paths, parent_path=parent_path)
                 print("Duplicate keys fixed successfully.")
             else:
                 print("No duplicate keys found, continuing.")

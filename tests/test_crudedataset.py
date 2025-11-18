@@ -38,7 +38,7 @@ from megatron.energon.errors import reraise_exception
 from megatron.energon.flavors.base_dataset import Sample
 from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
 from megatron.energon.flavors.webdataset.sample_decoder import SampleDecoder
-from megatron.energon.media.extractor import MediaFilterConfig
+from megatron.energon.media.extractor import MediaFilterConfig, MediaFilterStrategy
 from megatron.energon.media.filesystem_prepare import prepare_filesystem_dataset
 from megatron.energon.media.metadata import AVMetadata, ImageMetadata
 from megatron.energon.source_info import SourceInfo
@@ -404,7 +404,7 @@ class TestDataset(unittest.TestCase):
             split_parts_ratio=[("train", 1.0)],
             shuffle_seed=None,
             workers=1,
-            media_filter=MediaFilterConfig.parse(None),
+            media_filter=None,
         )
 
         with open(path / MAIN_FOLDER_NAME / "dataset.yaml", "w") as f:
@@ -445,7 +445,7 @@ class TestDataset(unittest.TestCase):
             split_parts_ratio=[("train", 1.0)],
             shuffle_seed=None,
             workers=1,
-            media_filter=MediaFilterConfig.parse(None),
+            media_filter=MediaFilterConfig(strategy=MediaFilterStrategy.EXTENSION),
         )
 
         with open(path / MAIN_FOLDER_NAME / "dataset.yaml", "w") as f:
@@ -469,7 +469,9 @@ class TestDataset(unittest.TestCase):
         shutil.copyfile("tests/data/sync_test.mp4", path / "video001.mp4")
         shutil.copyfile("tests/data/test_audio.flac", path / "audio001.flac")
 
-        prepare_filesystem_dataset(EPath(path), MediaFilterConfig.parse(None), progress=False)
+        prepare_filesystem_dataset(
+            EPath(path), MediaFilterConfig(strategy=MediaFilterStrategy.EXTENSION), progress=False
+        )
 
     def test_metadataset(self):
         torch.manual_seed(42)

@@ -2,16 +2,20 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import re
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
+from multiprocessing import cpu_count
 from pathlib import Path
 from typing import Any, Dict, List, Sequence, Set
 
 import click
 from tqdm import tqdm
 
+from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.webdataset.config import split_name_re
 
 BLOCK_SIZE = 512
+NUM_WORKERS = 16
 
 
 class TarPatcherError(Exception):
@@ -189,18 +193,23 @@ PAX_PATH_KEYS = {
 }
 
 
-_STEM_RE = re.compile(r"([^/\\]+?)(?:\.[^./\\]+)*$")
-
-
 class TarPatcher:
     """Utility for scanning and renaming tar archive entries in place."""
 
     def __init__(self, *, show_progress: bool = True) -> None:
         self._show_progress = show_progress
 
-    def dataset_scan(self, tar_files: Sequence[str]) -> DatasetScanResult:
-        """Scan multiple tar files, checking compatibility and duplicate sample keys.
-        Each tar_file string must be a relative or absolute path to a tar file."""
+    def dataset_scan(self, tar_files: Sequence[str], parent_path: EPath) -> DatasetScanResult:
+        """Scan multiple tar files, checking compatibility for in-place renaming and for duplicate sample keys.
+        Each tar_file string must be a relative or absolute path to a tar file.
+
+        Args:
+            tar_files: List of relative or absolute paths to the tar files to scan.
+            parent_path: Parent path of the tar files, used if tar_files are relative paths.
+
+        Returns:
+            DatasetScanResult: Result of the scan.
+        """
 
         issues: List[str] = []
         scan_results: Dict[str, TarScanResult] = {}
@@ -209,32 +218,50 @@ class TarPatcher:
         duplicates: Dict[str, Set[str]] = {}
 
         compatible = True
+        have_duplicates = False
 
-        # This is used to track if we have duplicate shard filenames (e.g. in subfolders)
-        prefixes = set()
+        tasks: list[tuple[str, str]] = []
+        for rel_tar_file in tar_files:
+            tar_file_path = parent_path / rel_tar_file
+            rel_file_path = tar_file_path.relative_to(parent_path)
+            tar_file = str(tar_file_path)
+            prefix = f"{rel_file_path}/"
+            tasks.append((tar_file, prefix))
 
-        for tar_file in tar_files:
-            # Extract the base name of the tar file (without extension)
-            m = _STEM_RE.search(tar_file)
-            assert m is not None, f"Invalid tar file path: {tar_file}"
-            prefix = f"{m.group(1)}/"
+        if not tasks:
+            return DatasetScanResult(
+                compatible=True,
+                duplicates={},
+                issues=[],
+                scan_results={},
+            )
 
-            if prefix in prefixes:
-                raise ValueError(f"Duplicate shard filename: {tar_file} with base name {prefix}")
+        max_workers = min(len(tasks), NUM_WORKERS)
 
-            prefixes.add(prefix)
+        with tqdm(
+            total=len(tasks),
+            desc="Scanning dataset",
+            unit="shards",
+            disable=not self._show_progress,
+        ) as dataset_pbar:
+            with ProcessPoolExecutor(max_workers=max_workers) as executor:
+                for tar_file, result in executor.map(
+                    _scan_tar_worker, tasks, chunksize=(len(tasks) // max_workers) or 1
+                ):
+                    scan_results[tar_file] = result
+                    if not result.compatible:
+                        compatible = False
+                        issues.extend(f"{tar_file}: {issue}" for issue in result.issues)
+                    for sample_key in result.sample_keys:
+                        duplicates.setdefault(sample_key, set()).add(tar_file)
+                        if len(duplicates[sample_key]) > 1:
+                            have_duplicates = True
 
-            result = self.scan(tar_file, prefix)
-            scan_results[tar_file] = result
+                    if have_duplicates and not compatible:
+                        # Let's stop early if we have duplicates and the dataset is not compatible for fixing
+                        break
 
-            if not result.compatible:
-                compatible = False
-                issues.extend(f"{tar_file}: {issue}" for issue in result.issues)
-
-            for sample_key in result.sample_keys:
-                # We don't care about duplicate keys within the same shard,
-                # but we want to track which shards contain the duplicate key.
-                duplicates.setdefault(sample_key, set()).add(tar_file)
+                    dataset_pbar.update()
 
         duplicate_map = {key: sorted(paths) for key, paths in duplicates.items() if len(paths) > 1}
 
@@ -248,27 +275,46 @@ class TarPatcher:
     def dataset_apply_prefix(
         self,
         tar_files: Sequence[str],
+        parent_path: EPath,
     ) -> None:
         """Apply shard-specific prefixes to a set of tar files."""
 
-        for tar_file in tar_files:
-            m = _STEM_RE.search(tar_file)
-            assert m is not None, f"Invalid tar file path: {tar_file}"
-            prefix = f"{m.group(1)}/"
+        tasks: list[tuple[str, str]] = []
+        for rel_tar_file in tar_files:
+            tar_file_path = parent_path / rel_tar_file
+            rel_file_path = tar_file_path.relative_to(parent_path)
 
-            self.apply_prefix(
-                tar_file,
-                prefix,
-            )
+            tar_file = str(tar_file_path)
+            prefix = f"{rel_file_path}/"
+            tasks.append((tar_file, prefix))
 
-    def scan(self, tar_path: Path | str, prefix: str) -> TarScanResult:
+        if not tasks:
+            return
+
+        max_workers = min(len(tasks), NUM_WORKERS)
+
+        with tqdm(
+            total=len(tasks),
+            desc="Applying prefixes",
+            unit="shards",
+            disable=not self._show_progress,
+        ) as dataset_pbar:
+            with ProcessPoolExecutor(max_workers=max_workers) as executor:
+                for _ in executor.map(
+                    _apply_prefix_worker, tasks, chunksize=(len(tasks) // max_workers) or 1
+                ):
+                    dataset_pbar.update()
+
+    def scan(self, tar_path: Path | str, prefix: str, progress: bool = True) -> TarScanResult:
         """Scan *tar_path* and evaluate compatibility for prefixing entries."""
 
         path = Path(tar_path)
         size = path.stat().st_size
         result = TarScanResult()
 
-        with path.open("rb") as handle, self._progress(size, "Scanning") as pbar:
+        progress_context = self._progress(size, "Scanning", disable=not progress)
+
+        with path.open("rb") as handle, progress_context as pbar:
             while True:
                 header = handle.read(BLOCK_SIZE)
                 if not header:
@@ -321,13 +367,16 @@ class TarPatcher:
         self,
         tar_path: Path | str,
         prefix: str,
+        progress: bool = True,
     ) -> None:
         """Apply *prefix* to entries in *tar_path* in place."""
 
         path = Path(tar_path)
         size = path.stat().st_size
 
-        with path.open("r+b") as handle, self._progress(size, "Patching") as pbar:
+        progress_context = self._progress(size, "Patching", disable=not progress)
+
+        with path.open("r+b") as handle, progress_context as pbar:
             while True:
                 position = handle.tell()
                 header = handle.read(BLOCK_SIZE)
@@ -407,15 +456,29 @@ class TarPatcher:
             handle.seek(data_blocks * BLOCK_SIZE, 1)
             pbar.update(data_blocks * BLOCK_SIZE)
 
-    def _progress(self, total: int, desc: str) -> tqdm:
+    def _progress(self, total: int, desc: str, disable: bool = False) -> tqdm:
         return tqdm(
             total=total,
             unit="B",
             unit_scale=True,
             desc=desc,
             leave=False,
-            disable=not self._show_progress,
+            disable=disable,
         )
+
+
+def _scan_tar_worker(task: tuple[str, str]) -> tuple[str, TarScanResult]:
+    tar_file, prefix = task
+    patcher = TarPatcher(show_progress=False)
+    result = patcher.scan(tar_file, prefix, progress=False)
+    return tar_file, result
+
+
+def _apply_prefix_worker(task: tuple[str, str]) -> str:
+    tar_file, prefix = task
+    patcher = TarPatcher(show_progress=False)
+    patcher.apply_prefix(tar_file, prefix, progress=False)
+    return tar_file
 
 
 @click.command()

@@ -26,9 +26,7 @@ from megatron.energon.flavors.webdataset.metadata import (
     get_dataset_info,
     get_dataset_type,
 )
-from megatron.energon.flavors.webdataset.prepare import WebdatasetPreparator
 from megatron.energon.media.extractor import MediaFilterConfig
-from megatron.energon.media.filesystem_prepare import prepare_filesystem_dataset
 from megatron.energon.metadataset.loader import prepare_metadataset
 
 
@@ -136,10 +134,19 @@ def printify_json(data: Any) -> Any:
     is_flag=True,
 )
 @click.option(
-    "--media-filter",
+    "--media-by-glob",
     type=str,
-    default=None,
-    help="Media detection strategy: EXT (extension, default), TYPE (by filetype), or a glob pattern such as '*.jpg'.",
+    help="Media detection by using one or more glob patterns such as '*.jpg'. Separate multiple patterns by commas.",
+)
+@click.option(
+    "--media-by-header/--no-media-by-header",
+    default=False,
+    help="Media detection by binary file header.",
+)
+@click.option(
+    "--media-by-extension/--no-media-by-extension",
+    default=False,
+    help="Media detection by standard file extensions.",
 )
 @click.option(
     "--fix-duplicates",
@@ -155,7 +162,9 @@ def command(
     tar_index_only: bool,
     shuffle_tars: bool,
     media_metadata: bool,
-    media_filter: Optional[str],
+    media_by_glob: str | None,
+    media_by_header: bool,
+    media_by_extension: bool,
     fix_duplicates: bool,
 ):
     """Prepare WebDataset for use with energon.
@@ -165,13 +174,17 @@ def command(
     details.
     """
 
-    if media_filter is not None and not media_metadata:
-        raise click.UsageError("--media-filter requires --media-metadata")
+    if (media_by_glob is not None or media_by_header or media_by_extension) and not media_metadata:
+        raise click.UsageError("Media filters require --media-metadata")
 
     if media_metadata and tar_index_only:
         raise click.UsageError("--media-metadata cannot be combined with --tar-index-only")
 
-    media_filter_config = MediaFilterConfig.parse(media_filter) if media_metadata else None
+    media_filter_config = (
+        MediaFilterConfig.parse(media_by_glob, media_by_header, media_by_extension)
+        if media_metadata
+        else None
+    )
 
     ds_type = get_dataset_type(path)
     if ds_type == EnergonDatasetType.METADATASET:
@@ -438,91 +451,6 @@ def command(
         click.echo("You will have to add a dataset.yaml manually.")
 
     click.echo("Done")
-
-
-@click.command(name="prepare-media")
-@click.argument(
-    "path",
-    type=click.Path(path_type=EPath),
-)
-@click.option(
-    "--progress/--no-progress",
-    default=True,
-)
-@click.option(
-    "--num-workers",
-    type=int,
-    default=16,
-    help="Number of workers to use to scan files",
-)
-@click.option(
-    "--media-metadata/--no-media-metadata",
-    default=True,
-    help="Compute and store media metadata during preparation.",
-)
-@click.option(
-    "--media-filter",
-    type=str,
-    default=None,
-    help="Media detection strategy: EXT (extension, default), TYPE (by filetype), or a glob pattern such as '*.jpg'.",
-)
-def prepare_media_command(
-    path: EPath,
-    progress: bool,
-    num_workers: int,
-    media_metadata: bool,
-    media_filter: Optional[str],
-):
-    """Prepare a filesystem dataset by collecting media metadata."""
-
-    if not media_metadata:
-        click.echo("Skipping media metadata generation (--no-media-metadata). Nothing to do.")
-        return
-
-    media_filter_config = MediaFilterConfig.parse(media_filter)
-
-    ds_type = get_dataset_type(path)
-    if ds_type == EnergonDatasetType.WEBDATASET:
-        click.echo("Preparing webdataset and computing media metadata...")
-
-        if progress:
-
-            def progress_fn(els, length=None):
-                with click.progressbar(
-                    els,
-                    label="Processing shards",
-                    show_pos=True,
-                    length=length,
-                ) as bar:
-                    yield from bar
-
-        else:
-
-            def progress_fn(els, length=None):
-                return els
-
-        count = WebdatasetPreparator.add_media_metadata(
-            path,
-            media_filter=media_filter_config,
-            workers=num_workers,
-            progress_fn=progress_fn,
-        )
-
-        click.echo(f"Done. Stored metadata for {count} files.")
-        return
-    elif ds_type not in (EnergonDatasetType.FILESYSTEM, EnergonDatasetType.INVALID):
-        raise click.ClickException(
-            f"'prepare-media' only supports filesystem datasets, but this path is a '{ds_type}' dataset"
-        )
-
-    click.echo("Preparing filesystem dataset and computing media metadata...")
-    stored = prepare_filesystem_dataset(
-        path,
-        media_filter_config,
-        progress=progress,
-        workers=num_workers,
-    )
-    click.echo(f"Done. Stored metadata for {stored} files.")
 
 
 if __name__ == "__main__":
