@@ -20,7 +20,7 @@ from megatron.energon.media.metadata import ImageMetadata, MediaMetadataBase, Me
 logger = logging.getLogger(__name__)
 
 
-SourceData = Union[bytes, Path]
+SourceData = Union[bytes, Path, io.IOBase]
 
 
 class MediaFilterStrategy(str, Enum):
@@ -100,25 +100,29 @@ def should_consider_media(name: str, config: MediaFilterConfig) -> bool:
 
 
 def extract_metadata(
-    path_or_bytes: SourceData,
+    source: SourceData,
     config: MediaFilterConfig,
     filename: str | None = None,
-) -> tuple[MediaMetadataType, MediaMetadataBase] | None:
-    if isinstance(path_or_bytes, (bytes, bytearray)):
-        assert filename is not None, "Filename is required when extracting metadata from bytes"
+) -> MediaMetadataBase | None:
+    if isinstance(source, (bytes, bytearray, io.IOBase)):
+        assert filename is not None, (
+            "Filename is required when extracting metadata from bytes or IOBase"
+        )
     else:
         assert filename is None, "Filename is not allowed when extracting metadata from path"
-        filename = path_or_bytes.name
+        filename = source.name
 
-    media_type = _detect_media_type(filename, config, path_or_bytes)
+    media_type = _detect_media_type(filename, config, source)
+
+    print(f"Detecting media type for {filename} with config {config}: {media_type}")
 
     if media_type is None:
         return None
 
-    metadata = _build_metadata(media_type, path_or_bytes)
+    metadata = _build_metadata(media_type, source)
     if metadata is None:
         return None
-    return media_type, metadata
+    return metadata
 
 
 def _detect_media_type(
@@ -201,6 +205,8 @@ def _build_av_metadata(source: SourceData) -> MediaMetadataBase | None:
     try:
         if isinstance(source, (bytes, bytearray)):
             return AVDecoder(io.BytesIO(source)).get_metadata()
+        elif isinstance(source, io.IOBase):
+            return AVDecoder(source).get_metadata()
         else:
             with source.open("rb") as stream:
                 return AVDecoder(stream).get_metadata()

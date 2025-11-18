@@ -26,6 +26,7 @@ from megatron.energon.flavors.webdataset.metadata import (
     get_dataset_info,
     get_dataset_type,
 )
+from megatron.energon.flavors.webdataset.prepare import WebdatasetPreparator
 from megatron.energon.media.extractor import MediaFilterConfig
 from megatron.energon.media.filesystem_prepare import prepare_filesystem_dataset
 from megatron.energon.metadataset.loader import prepare_metadataset
@@ -484,13 +485,41 @@ def prepare_media_command(
         click.echo("Skipping media metadata generation (--no-media-metadata). Nothing to do.")
         return
 
+    media_filter_config = MediaFilterConfig.parse(media_filter)
+
     ds_type = get_dataset_type(path)
-    if ds_type not in (EnergonDatasetType.FILESYSTEM, EnergonDatasetType.INVALID):
+    if ds_type == EnergonDatasetType.WEBDATASET:
+        click.echo("Preparing webdataset and computing media metadata...")
+
+        if progress:
+
+            def progress_fn(els, length=None):
+                with click.progressbar(
+                    els,
+                    label="Processing shards",
+                    show_pos=True,
+                    length=length,
+                ) as bar:
+                    yield from bar
+
+        else:
+
+            def progress_fn(els, length=None):
+                return els
+
+        count = WebdatasetPreparator.add_media_metadata(
+            path,
+            media_filter=media_filter_config,
+            workers=num_workers,
+            progress_fn=progress_fn,
+        )
+
+        click.echo(f"Done. Stored metadata for {count} files.")
+        return
+    elif ds_type not in (EnergonDatasetType.FILESYSTEM, EnergonDatasetType.INVALID):
         raise click.ClickException(
             f"'prepare-media' only supports filesystem datasets, but this path is a '{ds_type}' dataset"
         )
-
-    media_filter_config = MediaFilterConfig.parse(media_filter)
 
     click.echo("Preparing filesystem dataset and computing media metadata...")
     stored = prepare_filesystem_dataset(

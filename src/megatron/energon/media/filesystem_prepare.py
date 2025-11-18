@@ -151,12 +151,11 @@ def _process_filesystem_entry(
     media_filter: MediaFilterConfig,
 ) -> Iterator[IndexMediaMetadata]:
     file_path = Path(file_path)
-    metadata_tuple = extract_metadata(file_path, media_filter)
-    if metadata_tuple is None:
+    extracted_metadata = extract_metadata(file_path, media_filter)
+    if extracted_metadata is None:
         return
 
-    metadata_type, metadata_obj = metadata_tuple
-    stored_type, metadata_json = serialize_media_metadata(metadata_obj)
+    stored_type, metadata_json = serialize_media_metadata(extracted_metadata)
     entry_key = file_path.relative_to(root).as_posix()
 
     yield IndexMediaMetadata(

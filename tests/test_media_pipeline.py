@@ -67,12 +67,11 @@ class MediaPipelineTests(unittest.TestCase):
         config = MediaFilterConfig.parse(None)
         image_bytes = self._create_in_memory_image()
 
-        result = extract_metadata(image_bytes, config, filename="sample.png")
-        self.assertIsNotNone(result)
-        metadata_type, metadata = result
-        self.assertEqual(metadata_type, MediaMetadataType.IMAGE)
-        self.assertEqual(metadata.width, 16)
-        self.assertEqual(metadata.height, 8)
+        extracted_metadata = extract_metadata(image_bytes, config, filename="sample.png")
+        self.assertIsNotNone(extracted_metadata)
+        self.assertEqual(extracted_metadata.metadata_type, MediaMetadataType.IMAGE)
+        self.assertEqual(extracted_metadata.width, 16)
+        self.assertEqual(extracted_metadata.height, 8)
 
     def test_extract_metadata_pattern_strategy(self) -> None:
         config = MediaFilterConfig.parse("*.png")
@@ -85,10 +84,9 @@ class MediaPipelineTests(unittest.TestCase):
         config = MediaFilterConfig.parse(MediaFilterStrategy.TYPE.value)
         image_bytes = self._create_in_memory_image()
 
-        result = extract_metadata(image_bytes, config, filename="ignored.bin")
-        self.assertIsNotNone(result)
-        metadata_type, _ = result
-        self.assertEqual(metadata_type, MediaMetadataType.IMAGE)
+        extracted_metadata = extract_metadata(image_bytes, config, filename="ignored.bin")
+        self.assertIsNotNone(extracted_metadata)
+        self.assertEqual(extracted_metadata.metadata_type, MediaMetadataType.IMAGE)
 
     def test_prepare_filesystem_dataset_and_retrieve_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

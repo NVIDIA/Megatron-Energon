@@ -158,7 +158,6 @@ def join_multiple_indices(
 
     # For safety, enable a read-only or big timeouts
     conn.execute("PRAGMA busy_timeout = 5000;")
-    conn.execute("PRAGMA journal_mode = WAL;")
 
     # 2. Attach each secondary DB under a unique alias, e.g. db1, db2, ...
     secondary_aliases = []

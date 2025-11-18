@@ -66,7 +66,6 @@ class SqliteIndexWriter:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(path)
         self.db.execute("PRAGMA busy_timeout = 5000;")  # wait up to 5000ms when locked
-        self.db.execute("PRAGMA journal_mode = WAL;")
 
         if self.enable_sample_tables:
             if self.reset_tables:
