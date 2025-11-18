@@ -51,10 +51,6 @@ from megatron.energon.flavors.webdataset.indexing import (
 from megatron.energon.flavors.webdataset.itar import TarIndexWriter
 from megatron.energon.flavors.webdataset.metadata import get_dataset_info
 from megatron.energon.flavors.webdataset.structs import ShardInfo, WebdatasetInfo, WebdatasetSplits
-from megatron.energon.flavors.webdataset.tar_patcher import (
-    DatasetScanResult,
-    TarPatcher,
-)
 from megatron.energon.media.extractor import MediaFilterConfig
 from megatron.energon.media.metadata import serialize_media_metadata
 from megatron.energon.typed_converter import to_json_object
@@ -509,8 +505,13 @@ class WebdatasetPreparator:
         (parent_path / MAIN_FOLDER_NAME).mkdir(exist_ok=True)
 
         if fix_duplicates:
+            try:
+                from megatron.energon.flavors.webdataset.tar_patcher import TarPatcher
+            except ImportError:
+                print("Install energon with [tar_patcher] extra to fix duplicate keys.")
+                raise
             tar_patcher = TarPatcher(show_progress=True)
-            scan_result: DatasetScanResult = tar_patcher.dataset_scan(
+            scan_result = tar_patcher.dataset_scan(
                 paths, parent_path=parent_path, num_workers=workers
             )
 
@@ -520,9 +521,6 @@ class WebdatasetPreparator:
                     print(
                         "But the tar files are not compatible with the in-place rename, aborting."
                     )
-                    print("Issues found:")
-                    for issue in scan_result.issues:
-                        print(f"- {issue}")
                     sys.exit(1)
 
                 print("Fixing the dataset now.")
