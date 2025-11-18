@@ -198,7 +198,9 @@ class TarPatcher:
     def __init__(self, *, show_progress: bool = True) -> None:
         self._show_progress = show_progress
 
-    def dataset_scan(self, tar_files: Sequence[str], parent_path: EPath) -> DatasetScanResult:
+    def dataset_scan(
+        self, tar_files: Sequence[str], parent_path: EPath, num_workers: int = NUM_WORKERS
+    ) -> DatasetScanResult:
         """Scan multiple tar files, checking compatibility for in-place renaming and for duplicate sample keys.
         Each tar_file string must be a relative or absolute path to a tar file.
 
@@ -235,7 +237,7 @@ class TarPatcher:
                 scan_results={},
             )
 
-        max_workers = min(len(tasks), NUM_WORKERS)
+        max_workers = min(len(tasks), num_workers)
 
         with tqdm(
             total=len(tasks),
@@ -275,6 +277,7 @@ class TarPatcher:
         self,
         tar_files: Sequence[str],
         parent_path: EPath,
+        num_workers: int = NUM_WORKERS,
     ) -> None:
         """Apply shard-specific prefixes to a set of tar files."""
 
@@ -290,7 +293,7 @@ class TarPatcher:
         if not tasks:
             return
 
-        max_workers = min(len(tasks), NUM_WORKERS)
+        max_workers = min(len(tasks), num_workers)
 
         with tqdm(
             total=len(tasks),
@@ -522,7 +525,7 @@ def main(tar_file: Path, prefix: str, dry_run: bool):
 
     click.echo("Applying prefix in-place...")
     try:
-        patcher.apply_prefix(tar_path, prefix, scan_result=scan_result)
+        patcher.apply_prefix(tar_path, prefix)
     except TarPatcherError as exc:
         raise click.ClickException(str(exc)) from exc
     click.echo("Done. All eligible member names have been updated.")

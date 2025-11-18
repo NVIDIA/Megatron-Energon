@@ -503,7 +503,7 @@ class WebdatasetPreparator:
         if fix_duplicates:
             tar_patcher = TarPatcher(show_progress=True)
             scan_result: DatasetScanResult = tar_patcher.dataset_scan(
-                paths, parent_path=parent_path
+                paths, parent_path=parent_path, num_workers=workers
             )
 
             if scan_result.has_duplicates:
@@ -518,7 +518,9 @@ class WebdatasetPreparator:
                     sys.exit(1)
 
                 print("Fixing the dataset now.")
-                tar_patcher.dataset_apply_prefix(paths, parent_path=parent_path)
+                tar_patcher.dataset_apply_prefix(
+                    paths, parent_path=parent_path, num_workers=workers
+                )
                 print("Duplicate keys fixed successfully.")
             else:
                 print("No duplicate keys found, continuing.")

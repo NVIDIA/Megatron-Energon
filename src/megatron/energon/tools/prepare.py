@@ -139,13 +139,13 @@ def printify_json(data: Any) -> Any:
     help="Media detection by using one or more glob patterns such as '*.jpg'. Separate multiple patterns by commas.",
 )
 @click.option(
-    "--media-by-header/--no-media-by-header",
-    default=False,
+    "--media-by-header",
+    is_flag=True,
     help="Media detection by binary file header.",
 )
 @click.option(
-    "--media-by-extension/--no-media-by-extension",
-    default=False,
+    "--media-by-extension",
+    is_flag=True,
     help="Media detection by standard file extensions.",
 )
 @click.option(

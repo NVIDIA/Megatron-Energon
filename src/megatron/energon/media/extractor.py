@@ -135,6 +135,7 @@ _IMAGE_EXTENSIONS: set[str] = {
 
 _AV_EXTENSIONS: set[str] = {
     "aac",
+    "avi",
     "flac",
     "m4a",
     "m4v",
