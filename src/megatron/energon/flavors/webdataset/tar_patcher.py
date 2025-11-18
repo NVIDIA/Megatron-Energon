@@ -1,10 +1,11 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+import concurrent.futures
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Sequence, Set
+from typing import BinaryIO, Dict, List, Sequence, Set
 
 import click
 from tqdm import tqdm
@@ -48,7 +49,7 @@ def is_zero_block(block: bytes) -> bool:
     return all(b == 0 for b in block)
 
 
-def parse_size(size_bytes: bytes) -> int:
+def parse_size(size_bytes: bytes | bytearray) -> int:
     """
     Parse the tar size field (supports standard octal and base-256).
     """
@@ -120,7 +121,7 @@ def format_chksum(val: int) -> bytes:
     return f"{val:06o}\0 ".encode("ascii")
 
 
-def extract_full_path(hdr: bytes) -> tuple[str, bool]:
+def extract_full_path(hdr: bytes | bytearray) -> tuple[str, bool]:
     """
     Extract the logical path from a header.
     Returns (full_path, is_ustar_style).
@@ -137,7 +138,7 @@ def extract_full_path(hdr: bytes) -> tuple[str, bool]:
         return name, False
 
 
-def pax_parse(data: bytes):
+def pax_parse(data: bytes | bytearray) -> list[tuple[str, str]]:
     """
     Parse PAX extended header into list of (key, value).
     Format lines: "%d key=value\n".
@@ -243,9 +244,9 @@ class TarPatcher:
             disable=not self._show_progress,
         ) as dataset_pbar:
             with ProcessPoolExecutor(max_workers=max_workers) as executor:
-                for tar_file, result in executor.map(
-                    _scan_tar_worker, tasks, chunksize=(len(tasks) // max_workers) or 1
-                ):
+                jobs = [executor.submit(_scan_tar_worker, *task) for task in tasks]
+                for future in concurrent.futures.as_completed(jobs):
+                    tar_file, result = future.result()
                     scan_results[tar_file] = result
                     if not result.compatible:
                         compatible = False
@@ -298,9 +299,9 @@ class TarPatcher:
             disable=not self._show_progress,
         ) as dataset_pbar:
             with ProcessPoolExecutor(max_workers=max_workers) as executor:
-                for _ in executor.map(
-                    _apply_prefix_worker, tasks, chunksize=(len(tasks) // max_workers) or 1
-                ):
+                jobs = [executor.submit(_apply_prefix_worker, *task) for task in tasks]
+                for future in concurrent.futures.as_completed(jobs):
+                    future.result()
                     dataset_pbar.update()
 
     def scan(self, tar_path: Path | str, prefix: str, progress: bool = True) -> TarScanResult:
@@ -406,7 +407,7 @@ class TarPatcher:
 
                 if is_ustar:
                     new_prefix_b, new_name_b = split_ustar_path(new_path)
-                    if new_prefix_b is None:
+                    if new_prefix_b is None or new_name_b is None:
                         raise TarPatcherError(
                             f"Internal error: ustar fields don't fit for {new_path!r}."
                         )
@@ -430,7 +431,7 @@ class TarPatcher:
 
     def _evaluate_pax_header(
         self,
-        handle: Any,
+        handle: BinaryIO,
         size_val: int,
         pbar: tqdm,
         result: TarScanResult,
@@ -448,7 +449,7 @@ class TarPatcher:
                     f"PAX header contains unsupported key {key!r}; in-place rename is unsafe."
                 )
 
-    def _skip_payload(self, handle: Any, size_val: int, pbar: tqdm) -> None:
+    def _skip_payload(self, handle: BinaryIO, size_val: int, pbar: tqdm) -> None:
         data_blocks = (size_val + BLOCK_SIZE - 1) // BLOCK_SIZE
         if data_blocks:
             handle.seek(data_blocks * BLOCK_SIZE, 1)
@@ -465,15 +466,13 @@ class TarPatcher:
         )
 
 
-def _scan_tar_worker(task: tuple[str, str]) -> tuple[str, TarScanResult]:
-    tar_file, prefix = task
+def _scan_tar_worker(tar_file: str, prefix: str) -> tuple[str, TarScanResult]:
     patcher = TarPatcher(show_progress=False)
     result = patcher.scan(tar_file, prefix, progress=False)
     return tar_file, result
 
 
-def _apply_prefix_worker(task: tuple[str, str]) -> str:
-    tar_file, prefix = task
+def _apply_prefix_worker(tar_file: str, prefix: str) -> str:
     patcher = TarPatcher(show_progress=False)
     patcher.apply_prefix(tar_file, prefix, progress=False)
     return tar_file

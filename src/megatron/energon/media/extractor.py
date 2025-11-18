@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from fnmatch import fnmatch
 from pathlib import Path
-from typing import Union
+from typing import BinaryIO, Union
 
 import filetype
 from PIL import Image, UnidentifiedImageError
@@ -20,7 +20,7 @@ from megatron.energon.media.metadata import ImageMetadata, MediaMetadataBase, Me
 logger = logging.getLogger(__name__)
 
 
-SourceData = Union[bytes, Path, io.IOBase]
+SourceData = Union[bytes, Path, BinaryIO]
 
 
 class MediaFilterStrategy(str, Enum):
@@ -59,6 +59,7 @@ class MediaFilterConfig:
             return cls(strategy=MediaFilterStrategy.HEADER)
         if extension:
             return cls(strategy=MediaFilterStrategy.EXTENSION)
+        assert False, "Internal error: Should not be reached"
 
     def should_consider_all(self) -> bool:
         """Check whether all files need to be considered for metadata extraction.
