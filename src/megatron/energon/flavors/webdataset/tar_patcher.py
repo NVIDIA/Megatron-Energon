@@ -5,13 +5,21 @@ import concurrent.futures
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import BinaryIO, Dict, List, Sequence, Set
-
+import re
+from typing import BinaryIO, Callable, Dict, List, Sequence, Set
+import numpy as np
 import click
 from tqdm import tqdm
 
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.webdataset.config import split_name_re
+
+# Try to import numba for JIT compilation of hot paths
+try:
+    from numba import njit, jit  # type: ignore[import-not-found]
+    import numba as nb
+    HAS_NUMBA = True
+except ImportError:
+    raise ImportError("numba is required for this module")
 
 BLOCK_SIZE = 512
 NUM_WORKERS = 16
@@ -25,8 +33,8 @@ class TarPatcherError(Exception):
 class TarScanResult:
     """Result of scanning a tar archive."""
 
-    filenames: list[str] = field(default_factory=list)
-    sample_keys: Set[str] = field(default_factory=set)
+    filenames: list[bytes] = field(default_factory=list)
+    sample_keys: Set[bytes] = field(default_factory=set)
     compatible: bool = True
     issues: list[str] = field(default_factory=list)
 
@@ -45,30 +53,45 @@ class DatasetScanResult:
         return bool(self.duplicates)
 
 
-def is_zero_block(block: bytes) -> bool:
-    return all(b == 0 for b in block)
+@njit(cache=True, fastmath=True, inline="always")
+def _nb_is_zero_block(block: bytearray | bytes) -> bool:
+    """Numba-optimized: Check if a block is all zeros."""
+    for i in range(len(block)):
+        if block[i] != 0:
+            return False
+    return True
 
 
-def parse_size(size_bytes: bytes | bytearray) -> int:
-    """
-    Parse the tar size field (supports standard octal and base-256).
-    """
-    if not size_bytes:
-        return 0
-
+@njit(cache=True, inline="always")
+def _nb_parse_size(size: np.ndarray) -> int:
     # Base-256 (binary) encoding (POSIX)
-    if size_bytes[0] & 0x80:
-        return int.from_bytes(size_bytes, byteorder="big", signed=True)
+    # # [124:136]
+    if size[0] & 0x80:
+        # Numba doesn't support int.from_bytes, so implement base-256 parsing manually
+        # Big endian encoding
+        n = nb.int64(size[0] & 0x3F)
+        for i in range(1, size.size):
+            n = (n << 8) | nb.int64(size[i])
+        # If the sign bit is set, compute the negative value per tar spec
+        if size[0] & 0x40:
+            print("negative binary size")
+            return 0
+        return n
+    
+    # Parse ascii integer
+    n = nb.int64(0)
+    for i in range(size.size):
+        byte = size[i]
+        if byte == 0 or byte == 32:
+            continue
+        if byte < 48 or byte > 57:
+            return 0
+        n = (n * 8) + nb.int64(byte - 48)
+    return n
 
-    # Octal ascii
-    s = size_bytes.rstrip(b"\0 ").decode("ascii", "replace").strip() or "0"
-    try:
-        return int(s, 8)
-    except ValueError as e:
-        raise ValueError(f"Invalid size field {size_bytes!r}: {e}") from e
 
-
-def split_ustar_path(path: str):
+@njit(cache=True, inline="always")
+def split_ustar_path(path: np.ndarray) -> tuple[np.ndarray, np.ndarray | None]:
     """
     Split path into (prefix, name) suitable for ustar:
     - name:  up to 100 bytes
@@ -76,120 +99,303 @@ def split_ustar_path(path: str):
     - both UTF-8 encoded
     Return (prefix_bytes, name_bytes) or (None, None) if it doesn't fit.
     """
-    encoded = path.encode("utf-8")
-
-    if len(encoded) <= 100:
-        return b"", encoded
+    if len(path) <= 100:
+        return np.empty(0, dtype=np.uint8), path
 
     # Try to split at a '/' so prefix <=155 bytes and name <=100 bytes.
     cut = -1
     for i, ch in enumerate(path):
         if ch == "/":
-            if len(path[:i].encode("utf-8")) <= 155:
+            if i <= 155:
                 cut = i
 
     if cut == -1:
-        return None, None
+        return np.empty(0, dtype=np.uint8), np.empty(0, dtype=np.uint8)
 
-    prefix_str = path[:cut]
+    prefix_str = path[0:cut]
     name_str = path[cut + 1 :]
 
-    prefix_b = prefix_str.encode("utf-8")
-    name_b = name_str.encode("utf-8")
+    prefix_b = prefix_str
+    name_b = name_str
 
-    if len(prefix_b) > 155 or len(name_b) > 100:
-        return None, None
+    if prefix_b.size > 155 or name_b.size > 100:
+        return np.empty(0, dtype=np.uint8), np.empty(0, dtype=np.uint8)
 
     return prefix_b, name_b
 
 
-def compute_checksum(header: bytearray) -> int:
+@njit(cache=True, fastmath=True, inline="always")
+def _nb_compute_checksum(header: np.ndarray) -> int:
     """
-    Compute tar header checksum:
-    - Treat chksum field (148-155) as spaces (0x20) during calculation.
+    Numba-optimized: Compute tar header checksum.
+    Treat chksum field (148-155) as spaces (0x20) during calculation.
     """
-    tmp = bytearray(header)
+    total = nb.int64(0)
+    for i in range(148):
+        total += header[i]
     for i in range(148, 156):
-        tmp[i] = 32  # ' '
-    return sum(tmp)
+        total += 32
+    for i in range(156, len(header)):
+        total += header[i]
+    return total
 
 
-def format_chksum(val: int) -> bytes:
-    """
-    Format checksum as 6 octal digits, NUL, space (total 8 bytes).
-    """
-    return f"{val:06o}\0 ".encode("ascii")
+@njit(cache=True, inline="always")
+def _nb_format_chksum(val: int, dst: np.ndarray) -> None:
+    dst[0] = (nb.uint8(val >> 15) & 0o7) | 0x30
+    dst[1] = (nb.uint8(val >> 12) & 0o7) | 0x30
+    dst[2] = (nb.uint8(val >> 9) & 0o7) | 0x30
+    dst[3] = (nb.uint8(val >> 6) & 0o7) | 0x30
+    dst[4] = (nb.uint8(val >> 3) & 0o7) | 0x30
+    dst[5] = (nb.uint8(val) & 0o7) | 0x30
+    dst[6] = 0
+    dst[7] = 32
 
 
-def extract_full_path(hdr: bytes | bytearray) -> tuple[str, bool]:
-    """
-    Extract the logical path from a header.
-    Returns (full_path, is_ustar_style).
-    """
-    name = hdr[0:100].rstrip(b"\0").decode("utf-8", "replace")
-    magic = hdr[257:263]
-    if magic in (b"ustar\0", b"ustar  "):
-        prefix_field = hdr[345:500].rstrip(b"\0").decode("utf-8", "replace")
-        if prefix_field:
-            return f"{prefix_field}/{name}" if name else prefix_field, True
+@njit(
+    cache=True,
+    inline="always",
+)
+def _nb_extract_full_path(hdr: np.ndarray) -> tuple[np.ndarray, bool]:
+    for i in range(100):
+        if hdr[i] == 0:
+            name = hdr[0:i]
+            break
+    else:
+        name = hdr[0:100]
+    # if magic == b"ustar\0" or magic == b"ustar ":
+    if hdr[257] == 117 and hdr[258] == 115 and hdr[259] == 116 and hdr[260] == 97 and hdr[261] == 114 and (hdr[262] == 0 or hdr[262] == 32):
+        for i in range(345, 500):
+            if hdr[i] == 0:
+                prefix_field = hdr[345:i]
+                break
+        else:
+            prefix_field = hdr[345:500]
+        if prefix_field.size > 0 and name.size > 0:
+            out = np.empty(prefix_field.size + 1 + name.size, dtype=np.uint8)
+            out[:prefix_field.size] = prefix_field
+            out[prefix_field.size] = 47
+            out[prefix_field.size+1:] = name
+            return out, True
+        elif prefix_field.size > 0:
+            return prefix_field, True
         else:
             return name, True
     else:
         return name, False
 
 
-def pax_parse(data: bytes | bytearray) -> list[tuple[str, str]]:
+@njit(cache=True)
+def pax_parse(data: bytes) -> list[tuple[bytes, bytes]]:
     """
     Parse PAX extended header into list of (key, value).
     Format lines: "%d key=value\n".
     """
     out = []
-    i = 0
+    i = nb.int64(0)
     n = len(data)
     while i < n:
         # parse length
         j = i
-        while j < n and data[j : j + 1] != b" ":
+        while j < n and data[j] != 32:
             j += 1
         if j == n:
             break
-        try:
-            rec_len = int(data[i:j].decode("ascii", "replace"))
-        except ValueError:
-            break
+        rec_len = nb.int64(0)
+        for k in range(i, j):
+            if data[k] < 48 or data[k] > 57:
+                rec_len = 512
+                break
+            rec_len = (rec_len * 10) + (data[k] - 48)
 
         if i + rec_len > n:
             break
 
-        rec = data[i : i + rec_len]
-        sp = rec.find(b" ")
-        if sp == -1 or not rec.endswith(b"\n"):
+        sp = -1
+        end = i + rec_len
+        if data[end - 1] != 10:
+            break
+        end -= 1
+        for k in range(i, end):
+            if data[k] == 32:
+                sp = k
+                break
+        else:
             break
 
-        kv = rec[sp + 1 : -1]  # drop trailing '\n'
-        eq = kv.find(b"=")
-        if eq == -1:
-            key = kv.decode("utf-8", "replace")
-            val = ""
-        else:
-            key = kv[:eq].decode("utf-8", "replace")
-            val = kv[eq + 1 :].decode("utf-8", "replace")
-        out.append((key, val))
+        for i in range(sp + 1, end):
+            # ord(b"=") = 61
+            if data[i] == 61:
+                key = data[sp + 1 : i]
+                val = data[i + 1 : end]
+                out.append((key, val))
+                break
 
         i += rec_len
     return out
 
 
+@njit(cache=True)
+def update_header(hdr: np.ndarray, prefix: np.ndarray) -> tuple[bool, int]:
+    """Update the header with a new path, prefixing the path with prefix.
+
+    Args:
+        hdr: The header to update.
+        prefix: The prefix to add to the path.
+
+    Returns:
+        True if the header was updated successfully, False otherwise.
+        And the number of blocks to skip.
+
+    """
+    size_val = _nb_parse_size(hdr[124:136])
+
+    typeflag = hdr[156]
+    # ord(b"L") = 76, ord(b"K") = 75
+    if typeflag == 76 or typeflag == 75:
+        raise TarPatcherError(
+            "Unexpected GNU longname/longlink encountered during patch."
+        )
+
+    # ord(b"x") = 120, ord(b"g") = 103
+    if typeflag == 120 or typeflag == 103:
+        return False, size_val
+
+    orig_path, is_ustar = _nb_extract_full_path(hdr)
+    #new_path = prefix + (name_prefix + b'/' if len(name_prefix) > 0 and len(name) > 0 else b'') + name
+    # ord(b"/") = 47
+    new_path = np.empty(prefix.size + orig_path.size, dtype=np.uint8)
+    new_path[:prefix.size] = prefix
+    new_path[prefix.size:] = orig_path
+
+    if is_ustar:
+        new_prefix_b, new_name_b = split_ustar_path(new_path)
+        if new_name_b.size == 0:
+            raise TarPatcherError(
+                "Internal error: ustar fields don't fit for " + repr(new_path) + "."
+            )
+        hdr[:new_name_b.size] = new_name_b
+        for i in range(new_name_b.size, 100):
+            hdr[i] = 0
+        hdr[345:345 + new_prefix_b.size] = new_prefix_b
+        for i in range(345 + new_prefix_b.size, 500):
+            hdr[i] = 0
+    else:
+        new_name_b = new_path
+        if new_name_b.size > 100:
+            raise TarPatcherError(
+                "Internal error: legacy name too long for " + repr(new_path) + "."
+            )
+        hdr[0:new_name_b.size] = new_name_b
+        for i in range(new_name_b.size, 100):
+            hdr[i] = 0
+
+    checksum = _nb_compute_checksum(hdr)
+    _nb_format_chksum(checksum, hdr[148:156])
+
+    return True, size_val
+
+
+
+@njit
+def _nb_evaluate_pax_header(
+    raw_data: np.ndarray,
+    position: nb.int64,
+    size_val: int,
+) -> None:
+    blocks = (size_val + BLOCK_SIZE - 1) // BLOCK_SIZE * BLOCK_SIZE
+    data = raw_data[position:position + blocks]
+    if data.size < blocks:
+        raise TarPatcherError("Truncated PAX extended header data.")
+    records = pax_parse(data[:size_val])
+    for key, _ in records:
+        for pax_key in PAX_PATH_KEYS:
+            if key.size == pax_key.size and np.all(key == pax_key):
+                raise TarPatcherError(
+                    "PAX header contains unsupported key; in-place rename is unsafe."
+                )
+
+
+@njit(cache=True)
+def _nb_scan_file(raw_data: np.ndarray, prefix_bytes: np.ndarray) -> tuple[bool, str]:
+    position = nb.int64(0)
+    total = raw_data.size
+    while True:
+        header = raw_data[position:position + BLOCK_SIZE].copy()
+        if position + BLOCK_SIZE > total:
+            raise TarPatcherError("Unexpected EOF while reading header.")
+            
+        if _nb_is_zero_block(header):
+            break
+        
+        size_val = _nb_parse_size(header[124:136])
+
+        typeflag = header[156]
+        # ord(b"L") = 76, ord(b"K") = 75
+        if typeflag == 76 or typeflag == 75:
+            raise TarPatcherError(
+                "Unexpected GNU longname/longlink encountered during patch."
+            )
+
+        # ord("L") = 76, ord("K") = 75
+        if typeflag in (76, 75):
+            raise TarPatcherError("Found GNU longname/longlink entry; in-place rename is unsupported.")
+
+        # ord("x") = 120, ord("g") = 103
+        if typeflag in (120, 103):
+            _nb_evaluate_pax_header(raw_data, position, size_val)
+        else:
+            full_path, is_ustar = _nb_extract_full_path(header)
+
+            new_path = np.empty(prefix_bytes.size + full_path.size, dtype=np.uint8)
+            new_path[:prefix_bytes.size] = prefix_bytes
+            new_path[prefix_bytes.size:] = full_path
+            if is_ustar:
+                new_prefix_b, new_name_b = split_ustar_path(new_path)
+                if new_name_b.size == 0:
+                    raise TarPatcherError("New name too long for ustar fields.")
+            else:
+                if new_path.size > 100:
+                    raise TarPatcherError("New name too long for legacy header.")
+        
+        position += BLOCK_SIZE
+        position += (size_val + BLOCK_SIZE - 1) // BLOCK_SIZE * BLOCK_SIZE
+
+
+@jit(cache=True)
+def _nb_process_file(raw_data: np.ndarray, prefix_bytes: np.ndarray) -> None:
+    position = nb.int64(0)
+    total = raw_data.size
+    while True:
+        header = raw_data[position:position + BLOCK_SIZE].copy()
+        if position + BLOCK_SIZE > total:
+            raise TarPatcherError("Unexpected EOF while reading header.")
+
+        if _nb_is_zero_block(header):
+            break
+
+        was_updated, size_val = update_header(header, prefix_bytes)
+
+        if was_updated:
+            raw_data[position:position + BLOCK_SIZE] = header
+
+        position += BLOCK_SIZE
+        position += (size_val + BLOCK_SIZE - 1) // BLOCK_SIZE * BLOCK_SIZE
+
+
 # Keys that, if present in PAX, mean path info is controlled by PAX,
 # so in-place rename of classic headers is NOT safe.
-PAX_PATH_KEYS = {
-    "path",
-    "linkpath",
-    "gnu.path",
-    "gnu.linkpath",
-    "SCHILY.path",
-    "SCHILY.linkpath",
-}
+PAX_PATH_KEYS = (
+    np.frombuffer(b"path", dtype=np.uint8),
+    np.frombuffer(b"linkpath", dtype=np.uint8),
+    np.frombuffer(b"gnu.path", dtype=np.uint8),
+    np.frombuffer(b"gnu.linkpath", dtype=np.uint8),
+    np.frombuffer(b"SCHILY.path", dtype=np.uint8),
+    np.frombuffer(b"SCHILY.linkpath", dtype=np.uint8),
+)
+
+
+split_name_re_bytes = re.compile(rb"^((?:.*/|)[^.]+)[.]([^/]*)$")
 
 
 class TarPatcher:
@@ -198,9 +404,7 @@ class TarPatcher:
     def __init__(self, *, show_progress: bool = True) -> None:
         self._show_progress = show_progress
 
-    def dataset_scan(
-        self, tar_files: Sequence[str], parent_path: EPath, num_workers: int = NUM_WORKERS
-    ) -> DatasetScanResult:
+    def dataset_scan(self, tar_files: Sequence[str], parent_path: EPath) -> DatasetScanResult:
         """Scan multiple tar files, checking compatibility for in-place renaming and for duplicate sample keys.
         Each tar_file string must be a relative or absolute path to a tar file.
 
@@ -237,7 +441,7 @@ class TarPatcher:
                 scan_results={},
             )
 
-        max_workers = min(len(tasks), num_workers)
+        max_workers = min(len(tasks), NUM_WORKERS)
 
         with tqdm(
             total=len(tasks),
@@ -277,7 +481,6 @@ class TarPatcher:
         self,
         tar_files: Sequence[str],
         parent_path: EPath,
-        num_workers: int = NUM_WORKERS,
     ) -> None:
         """Apply shard-specific prefixes to a set of tar files."""
 
@@ -293,7 +496,7 @@ class TarPatcher:
         if not tasks:
             return
 
-        max_workers = min(len(tasks), num_workers)
+        max_workers = min(len(tasks), NUM_WORKERS)
 
         with tqdm(
             total=len(tasks),
@@ -307,130 +510,25 @@ class TarPatcher:
                     future.result()
                     dataset_pbar.update()
 
-    def scan(self, tar_path: Path | str, prefix: str, progress: bool = True) -> TarScanResult:
+    def scan(self, tar_path: Path | str, prefix: str) -> None:
         """Scan *tar_path* and evaluate compatibility for prefixing entries."""
 
-        path = Path(tar_path)
-        size = path.stat().st_size
-        result = TarScanResult()
+        prefix_bytes = np.frombuffer(prefix.encode("utf-8"), dtype=np.uint8)
 
-        progress_context = self._progress(size, "Scanning", disable=not progress)
+        raw_data = np.memmap(tar_path, dtype=np.uint8, mode="readwrite")
 
-        with path.open("rb") as handle, progress_context as pbar:
-            while True:
-                header = handle.read(BLOCK_SIZE)
-                if not header:
-                    raise TarPatcherError("Unexpected EOF while reading header.")
-                if len(header) < BLOCK_SIZE:
-                    raise TarPatcherError("Truncated tar header.")
-
-                pbar.update(BLOCK_SIZE)
-
-                if is_zero_block(header):
-                    break
-
-                typeflag = header[156:157]
-                size_val = parse_size(header[124:136])
-
-                if typeflag in (b"L", b"K"):
-                    result.compatible = False
-                    result.issues.append(
-                        "Found GNU longname/longlink entry; in-place rename is unsupported."
-                    )
-                    self._skip_payload(handle, size_val, pbar)
-                    continue
-
-                if typeflag in (b"x", b"g"):
-                    self._evaluate_pax_header(handle, size_val, pbar, result)
-                    continue
-
-                full_path, is_ustar = extract_full_path(header)
-                result.filenames.append(full_path)
-                name_match = split_name_re.match(full_path)
-                if name_match is not None:
-                    result.sample_keys.add(name_match.group(1))
-
-                new_path = prefix + full_path
-                if is_ustar:
-                    new_prefix_b, new_name_b = split_ustar_path(new_path)
-                    if new_prefix_b is None:
-                        result.compatible = False
-                        result.issues.append(f"New name too long for ustar fields: {new_path!r}.")
-                else:
-                    if len(new_path.encode("utf-8")) > 100:
-                        result.compatible = False
-                        result.issues.append(f"New name too long for legacy header: {new_path!r}.")
-
-                self._skip_payload(handle, size_val, pbar)
-
-        return result
+        _nb_scan_file(raw_data, prefix_bytes)
 
     def apply_prefix(
         self,
         tar_path: Path | str,
         prefix: str,
-        progress: bool = True,
     ) -> None:
         """Apply *prefix* to entries in *tar_path* in place."""
-
-        path = Path(tar_path)
-        size = path.stat().st_size
-
-        progress_context = self._progress(size, "Patching", disable=not progress)
-
-        with path.open("r+b") as handle, progress_context as pbar:
-            while True:
-                position = handle.tell()
-                header = handle.read(BLOCK_SIZE)
-                if not header:
-                    raise TarPatcherError("Unexpected EOF while reading header.")
-                if len(header) < BLOCK_SIZE:
-                    raise TarPatcherError("Truncated tar header encountered during patch.")
-
-                pbar.update(BLOCK_SIZE)
-
-                if is_zero_block(header):
-                    break
-
-                hdr = bytearray(header)
-                typeflag = hdr[156:157]
-                size_val = parse_size(hdr[124:136])
-
-                if typeflag in (b"L", b"K"):
-                    raise TarPatcherError(
-                        "Unexpected GNU longname/longlink encountered during patch."
-                    )
-
-                if typeflag in (b"x", b"g"):
-                    self._skip_payload(handle, size_val, pbar)
-                    continue
-
-                full_path, is_ustar = extract_full_path(hdr)
-                new_path = prefix + full_path
-
-                if is_ustar:
-                    new_prefix_b, new_name_b = split_ustar_path(new_path)
-                    if new_prefix_b is None or new_name_b is None:
-                        raise TarPatcherError(
-                            f"Internal error: ustar fields don't fit for {new_path!r}."
-                        )
-                    hdr[0:100] = new_name_b.ljust(100, b"\0")
-                    hdr[345:500] = new_prefix_b.ljust(155, b"\0")
-                else:
-                    new_name_b = new_path.encode("utf-8")
-                    if len(new_name_b) > 100:
-                        raise TarPatcherError(
-                            f"Internal error: legacy name too long for {new_path!r}."
-                        )
-                    hdr[0:100] = new_name_b.ljust(100, b"\0")
-
-                checksum = compute_checksum(hdr)
-                hdr[148:156] = format_chksum(checksum)
-
-                handle.seek(position)
-                handle.write(hdr)
-
-                self._skip_payload(handle, size_val, pbar)
+        prefix_bytes = np.frombuffer(prefix.encode("utf-8"), dtype=np.uint8)
+        raw_data = np.memmap(tar_path, dtype=np.uint8, mode="readwrite")
+        _nb_process_file(raw_data, prefix_bytes)
+        raw_data.flush()
 
     def _evaluate_pax_header(
         self,
@@ -446,7 +544,7 @@ class TarPatcher:
         pbar.update(blocks * BLOCK_SIZE)
         records = pax_parse(data[:size_val])
         for key, _ in records:
-            if key in PAX_PATH_KEYS:
+            if any(key.size == pax_key.size and np.all(key == pax_key) for pax_key in PAX_PATH_KEYS):
                 result.compatible = False
                 result.issues.append(
                     f"PAX header contains unsupported key {key!r}; in-place rename is unsafe."
@@ -505,18 +603,19 @@ def main(tar_file: Path, prefix: str, dry_run: bool):
       * Any GNU longname/longlink (L/K).
       * Any resulting name that doesn't fit fixed-size header fields.
     """
+    import time
     tar_path = Path(tar_file)
     patcher = TarPatcher()
 
     click.echo(f"Scanning {tar_path} for in-place rename feasibility...")
-    try:
-        scan_result = patcher.scan(tar_path, prefix)
-    except TarPatcherError as exc:
-        raise click.ClickException(str(exc)) from exc
-
-    if not scan_result.compatible:
-        issues = "; ".join(scan_result.issues) or "Tar archive not compatible with in-place rename."
-        raise click.ClickException(f"In-place rename not supported: {issues}")
+    for i in range(10):
+        try:
+            start = time.time()
+            patcher.scan(tar_path, prefix)
+            end = time.time()
+            print(f"Scan time: {end - start} seconds")
+        except TarPatcherError as exc:
+            raise click.ClickException(str(exc)) from exc
 
     click.echo("OK: in-place modification is possible under current rules.")
 
@@ -525,7 +624,10 @@ def main(tar_file: Path, prefix: str, dry_run: bool):
 
     click.echo("Applying prefix in-place...")
     try:
+        start = time.time()
         patcher.apply_prefix(tar_path, prefix)
+        end = time.time()
+        print(f"Apply time: {end - start} seconds")
     except TarPatcherError as exc:
         raise click.ClickException(str(exc)) from exc
     click.echo("Done. All eligible member names have been updated.")
