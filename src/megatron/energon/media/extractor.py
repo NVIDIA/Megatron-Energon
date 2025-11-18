@@ -121,7 +121,10 @@ class MediaFilterConfig:
 _IMAGE_EXTENSIONS: set[str] = {
     "bmp",
     "gif",
-    "heic",
+    "ico",
+    "j2k",
+    "jp2",
+    "jpx",
     "jpeg",
     "jpg",
     "png",
