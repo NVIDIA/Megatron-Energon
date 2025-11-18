@@ -26,7 +26,7 @@ from megatron.energon import (
     get_train_dataset,
 )
 from megatron.energon.dataset_config import get_dataset_from_config
-from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
 from megatron.energon.loader import get_savable_loader
 from megatron.energon.task_encoder.base import stateless
 from megatron.energon.tools.checkpoint import command_redist

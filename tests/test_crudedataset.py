@@ -36,7 +36,7 @@ from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib.epath import EPath
 from megatron.energon.errors import reraise_exception
 from megatron.energon.flavors.base_dataset import Sample
-from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
 from megatron.energon.flavors.webdataset.sample_decoder import SampleDecoder
 from megatron.energon.media.extractor import MediaFilterConfig, MediaFilterStrategy
 from megatron.energon.media.filesystem_prepare import prepare_filesystem_dataset

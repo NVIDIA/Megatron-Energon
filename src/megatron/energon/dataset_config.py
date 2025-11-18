@@ -12,7 +12,7 @@ from megatron.energon.flavors import (
     DefaultCrudeJsonlDatasetFactory,
     StandardWebdatasetFactory,
 )
-from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
 from megatron.energon.flavors.webdataset.metadata import EnergonDatasetType, get_dataset_type
 from megatron.energon.typed_converter import JsonParser
 from megatron.energon.worker import WorkerConfig
