@@ -119,7 +119,7 @@ class SqliteIndexWriter:
                     filter_id INTEGER PRIMARY KEY AUTOINCREMENT,
                     strategy TEXT NOT NULL,
                     pattern TEXT,
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    created_at_utc TEXT DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(strategy, pattern)
                 )
                 """

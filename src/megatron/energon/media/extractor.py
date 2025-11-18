@@ -114,8 +114,6 @@ def extract_metadata(
 
     media_type = _detect_media_type(filename, config, source)
 
-    print(f"Detecting media type for {filename} with config {config}: {media_type}")
-
     if media_type is None:
         return None
 
