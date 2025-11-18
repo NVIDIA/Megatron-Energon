@@ -82,7 +82,7 @@ def _nb_parse_size(size: np.ndarray) -> int:
             n = (n << 8) | nb.int64(size[i])
         # If the sign bit is set, compute the negative value per tar spec
         if size[0] & 0x40:
-            print("negative binary size")
+            # print("negative binary size")
             return 0
         return n
 
@@ -606,7 +606,7 @@ class TarPatcher:
             from collections import Counter
 
             print(
-                f"Duplicate sample keys within a single tar file: {len(sample_keys_list)} keys, {len(sample_keys_set)} unique keys"
+                f"Duplicate sample keys within a single tar file {tar_path}: {len(sample_keys_list)} keys, {len(sample_keys_set)} unique keys"
             )
             print(
                 f"Most common sample keys: {Counter(key.tobytes() for key in sample_keys_list).most_common(10)}"
