@@ -685,7 +685,10 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
 
         assert self.cookers, "No cookers registered, but got crude dataset."
 
-        if aux is not None and self.decoder is not None:
+        if aux is None:
+            aux = {}
+
+        if self.decoder is not None:
             aux = {k: DecodeFileStore(v, decoder=self.decoder) for k, v in aux.items()}
 
         for cooker in self.cookers:

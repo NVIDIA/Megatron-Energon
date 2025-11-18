@@ -4,7 +4,7 @@
 import sqlite3
 from typing import Any, Optional, Union
 
-from megatron.energon.cache.base import FileStore, FileStoreDecoder
+from megatron.energon.cache.base import FileStore, FileStoreDecoder, FileStoreWrapper
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.jsonl.ijsonl_reader import IJsonlReader
 from megatron.energon.flavors.webdataset.config import INDEX_SQLITE_FILENAME, MAIN_FOLDER_NAME
@@ -15,36 +15,40 @@ from megatron.energon.media.metadata import MediaMetadataBase, deserialize_media
 from megatron.energon.source_info import SourceInfo
 
 
-class DecodeFileStore(FileStore[Any]):
+class DecodeFileStore(FileStoreWrapper[Any]):
     """Used to wrap a FileStore and decode the data on access."""
 
     def __init__(
         self,
-        inner_reader: FileStore[bytes],
+        inner: FileStore[bytes],
         *,
         decoder: FileStoreDecoder,
     ):
         """
         Args:
-            inner_reader: The FileStore to wrap.
+            inner: The FileStore to wrap.
             decoder: The decoder to apply to every item read from the FileStore.
         """
 
-        self.inner_reader = inner_reader
+        super().__init__(inner)
         self.decoder = decoder
 
     def __getitem__(self, fname: str) -> tuple[Any, SourceInfo]:
-        data, source_info = self.inner_reader[fname]
+        data, source_info = self._inner[fname]
         return self.decoder.decode(fname, data), source_info
 
+    def _decode_raw(self, data: bytes, **kwargs) -> Any:
+        fname = kwargs["fname"]
+        return self.decoder.decode(fname, self._inner._decode_raw(data, **kwargs))
+
     def get_path(self) -> str:
-        return self.inner_reader.get_path()
+        return self._inner.get_path()
 
     def __str__(self):
-        return f"DecodeFileStore(inner_reader={self.inner_reader}, decoder={self.decoder})"
+        return f"DecodeFileStore(inner={self._inner}, decoder={self.decoder})"
 
     def get_media_metadata(self, key: str) -> Optional[MediaMetadataBase]:
-        return self.inner_reader.get_media_metadata(key)
+        return self._inner.get_media_metadata(key)
 
 
 class SystemFileStore(FileStore[bytes]):

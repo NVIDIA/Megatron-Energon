@@ -19,6 +19,16 @@ class FileStore(Generic[T]):
         """Returns the data for the given key."""
         ...
 
+    def _get_raw(self, key: str) -> tuple[bytes, SourceInfo]:
+        """Returns the raw data for the given key. Without decoding.
+        For non-wrapped FileStores, this is the same as __getitem__."""
+        return self[key]
+
+    def _decode_raw(self, data: T, **kwargs) -> T:
+        """Decodes the raw data into the target type.
+        For non-wrapped FileStores, this is the same as identity"""
+        return data
+
     def get(self, key: str, sample: Any = None) -> Any:
         """Returns the data for the given key and adds the source info to the sample."""
         data, source_info = self[key]
@@ -36,6 +46,32 @@ class FileStore(Generic[T]):
         raise NotImplementedError(
             f"{type(self).__name__} does not support media metadata retrieval"
         )
+
+
+class FileStoreWrapper(FileStore[T]):
+    """
+    A wrapper around a FileStore that can be used to add additional functionality.
+    Typically for decoding the data on access.
+    """
+
+    _inner: FileStore[T]
+
+    def __init__(self, inner: FileStore[T]):
+        self._inner = inner
+
+    def _get_raw(self, key: str) -> bytes:
+        """Returns the raw data for the given key. Without decoding."""
+        return self._inner._get_raw(key)
+
+    def _decode_raw(self, data: T, **kwargs) -> T:
+        """Decodes the raw data into the target type.
+        Args:
+            data: The raw data to decode.
+            **kwargs: Additional keyword arguments to pass to the decoder.
+        Returns:
+            The decoded data.
+        """
+        return self._inner._decode_raw(data, **kwargs)
 
 
 @edataclass
@@ -169,14 +205,12 @@ class FileStoreDecoder(ABC):
         ...
 
 
-class PrimaryFileStore(FileStore[T]):
+class PrimaryFileStore(FileStoreWrapper[T]):
     """Same as the FileStore, but additionally uses the current sample's key as a prefix for the key,
     if the key passed to `__getitem__`, `.get` or `.get_media_metadata` starts with a '.'."""
 
-    _inner: FileStore[T]
-
     def __init__(self, inner: FileStore[T], current_key: str):
-        self._inner = inner
+        super().__init__(inner)
         self._current_key = current_key
 
     def __getitem__(self, key: str) -> tuple[T, SourceInfo]:
