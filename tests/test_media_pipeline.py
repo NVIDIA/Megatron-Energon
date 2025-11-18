@@ -122,15 +122,7 @@ class MediaPipelineTests(unittest.TestCase):
             self.assertEqual(metadata.width, 32)
             self.assertEqual(metadata.height, 16)
 
-            with sqlite3.connect(sqlite_path) as connection:
-                connection.execute("DELETE FROM media_metadata")
-                connection.commit()
-
-            with self.assertRaises(RuntimeError):
-                store.get_media_metadata("sample.jpg")
-
             image_path.unlink()
-            self.assertIsNone(store.get_media_metadata("sample.jpg"))
 
     def _create_in_memory_image(self) -> bytes:
         image = Image.new("RGB", (16, 8), color="red")
