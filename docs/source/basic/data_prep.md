@@ -218,7 +218,7 @@ If you are preparing a dataset with media files, energon can retrieve and store 
 This information will be stored inside an SQLite database file next to the dataset.
 Later, inside the [cooker](crude-data), you can access this information using the {py:meth}`get_media_metadata <megatron.energon.FileStore.get_media_metadata>` method of the {py:class}`FileStore <megatron.energon.FileStore>`.
 
-#### During normal initial preparaion of a WebDataset
+#### During normal initial preparation of a WebDataset
 
 ```sh
 > energon prepare --media-metadata --media-by-extension /path/to/dataset
