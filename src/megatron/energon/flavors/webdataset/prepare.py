@@ -105,8 +105,11 @@ class SqliteIndexWriterAggregator(
     shards: List[ShardInfo]
     found_parts: Set[str]
     prog_iter: Iterator
-    media_metadata_enabled: bool
+    enable_sample_tables: bool
+    enable_media_metadata: bool
     media_filter: Optional[MediaFilterConfig]
+    reset_tables: bool
+    media_metadata_written: int
 
     def __init__(
         self,
@@ -114,8 +117,10 @@ class SqliteIndexWriterAggregator(
         total_tasks: int,
         progress_fn: Optional[Callable[[Iterator[Any], int], Iterator[T]]] = None,
         *,
-        media_metadata_enabled: bool = False,
+        enable_sample_tables: bool = True,
+        enable_media_metadata: bool = False,
         media_filter: Optional[MediaFilterConfig] = None,
+        reset_tables: bool = True,
     ):
         self.sqlite_path = sqlite_path
         self.total_tasks = total_tasks
@@ -123,8 +128,11 @@ class SqliteIndexWriterAggregator(
         self.had_update = False
         self.shards = []
         self.found_parts = set()
-        self.media_metadata_enabled = media_metadata_enabled
+        self.enable_sample_tables = enable_sample_tables
+        self.enable_media_metadata = enable_media_metadata
         self.media_filter = media_filter
+        self.reset_tables = reset_tables
+        self.media_metadata_written = 0
 
         if progress_fn is not None:
             self.prog_iter = progress_fn(iter(range(self.total_tasks)), self.total_tasks)
@@ -133,7 +141,10 @@ class SqliteIndexWriterAggregator(
 
     def on_start(self, aggregator_pool: AggregatorPool) -> None:
         self.writer = SqliteIndexWriter(
-            self.sqlite_path, enable_media_metadata=self.media_metadata_enabled
+            self.sqlite_path,
+            enable_sample_tables=self.enable_sample_tables,
+            enable_media_metadata=self.enable_media_metadata,
+            reset_tables=self.reset_tables,
         )
 
     def on_item(
@@ -154,6 +165,7 @@ class SqliteIndexWriterAggregator(
                 metadata_json=item.metadata_json,
             )
             self.had_update = True
+            self.media_metadata_written += 1
         elif isinstance(item, IndexShardInfo):
             # This is a (shard_info, parts) tuple
             next(self.prog_iter)
@@ -166,7 +178,7 @@ class SqliteIndexWriterAggregator(
 
     def on_finish(self, aggregator_pool: AggregatorPool) -> None:
         assert self.writer is not None, "Writer is not initialized."
-        if self.media_metadata_enabled and self.media_filter is not None:
+        if self.enable_media_metadata and self.media_filter is not None:
             self.writer.append_media_filter(
                 strategy=self.media_filter.strategy.value,
                 pattern=self.media_filter.pattern,
@@ -404,7 +416,7 @@ class WebdatasetPreparator:
             parent_path / MAIN_FOLDER_NAME / "index.sqlite",
             total_tasks=len(paths),
             progress_fn=progress_fn,
-            media_metadata_enabled=media_filter is not None,
+            enable_media_metadata=media_filter is not None,
             media_filter=media_filter,
         )
 

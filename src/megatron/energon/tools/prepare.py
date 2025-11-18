@@ -185,17 +185,9 @@ def command(
         print(f"Done. Found {count} samples.")
         return
     elif ds_type == EnergonDatasetType.FILESYSTEM:
-        if not media_metadata:
-            click.echo(
-                "Filesystem datasets only support generating media metadata. Run with --media-metadata."
-            )
-            return
-
-        assert media_filter_config is not None
-        click.echo("Preparing filesystem dataset and computing media metadata...")
-        stored = prepare_filesystem_dataset(path, media_filter_config, progress=progress)
-        click.echo(f"Done. Stored metadata for {stored} files.")
-        return
+        raise click.ClickException(
+            "Filesystem datasets must be prepared using 'energon prepare-media'."
+        )
 
     assert path.is_dir(), f"Path {path} is not a known dataset type"
 
@@ -451,6 +443,63 @@ def command(
         click.echo("You will have to add a dataset.yaml manually.")
 
     click.echo("Done")
+
+
+@click.command(name="prepare-media")
+@click.argument(
+    "path",
+    type=click.Path(path_type=EPath),
+)
+@click.option(
+    "--progress/--no-progress",
+    default=True,
+)
+@click.option(
+    "--num-workers",
+    type=int,
+    default=16,
+    help="Number of workers to use to scan files",
+)
+@click.option(
+    "--media-metadata/--no-media-metadata",
+    default=True,
+    help="Compute and store media metadata during preparation.",
+)
+@click.option(
+    "--media-filter",
+    type=str,
+    default=None,
+    help="Media detection strategy: EXT (extension, default), TYPE (by filetype), or a glob pattern such as '*.jpg'.",
+)
+def prepare_media_command(
+    path: EPath,
+    progress: bool,
+    num_workers: int,
+    media_metadata: bool,
+    media_filter: Optional[str],
+):
+    """Prepare a filesystem dataset by collecting media metadata."""
+
+    if not media_metadata:
+        click.echo("Skipping media metadata generation (--no-media-metadata). Nothing to do.")
+        return
+
+    ds_type = get_dataset_type(path)
+    if ds_type not in (EnergonDatasetType.FILESYSTEM, EnergonDatasetType.INVALID):
+        raise click.ClickException(
+            f"'prepare-media' only supports filesystem datasets, but this path is a '{ds_type}' dataset"
+        )
+
+    media_filter_config = MediaFilterConfig.parse(media_filter)
+
+    click.echo("Preparing filesystem dataset and computing media metadata...")
+    stored = prepare_filesystem_dataset(
+        path,
+        media_filter_config,
+        progress=progress,
+        workers=num_workers,
+    )
+    click.echo(f"Done. Stored metadata for {stored} files.")
 
 
 if __name__ == "__main__":

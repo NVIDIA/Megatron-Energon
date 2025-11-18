@@ -18,9 +18,18 @@ class SqliteIndexWriter:
     sqlite_path: EPath
     db: Optional[sqlite3.Connection]
     duplicates: List[Tuple[str, int]]
-    media_metadata_enabled: bool
+    enable_sample_tables: bool
+    enable_media_metadata: bool
+    reset_tables: bool
 
-    def __init__(self, sqlite_path: EPath, *, enable_media_metadata: bool = False):
+    def __init__(
+        self,
+        sqlite_path: EPath,
+        *,
+        enable_sample_tables: bool = True,
+        enable_media_metadata: bool = False,
+        reset_tables: bool = True,
+    ):
         """
         Initializes an SQLite database and sets up the samples table:
           - samples(tar_file_id INTEGER,
@@ -43,7 +52,9 @@ class SqliteIndexWriter:
 
         # Final path and temporary path
         self.sqlite_path = sqlite_path
-        self.media_metadata_enabled = enable_media_metadata
+        self.enable_sample_tables = enable_sample_tables
+        self.enable_media_metadata = enable_media_metadata
+        self.reset_tables = reset_tables
 
         # Initialize SQLite connection
         path = str(self.sqlite_path)
@@ -57,61 +68,63 @@ class SqliteIndexWriter:
         self.db.execute("PRAGMA busy_timeout = 5000;")  # wait up to 5000ms when locked
         self.db.execute("PRAGMA journal_mode = WAL;")
 
-        # Create the sample table
-        self.db.execute("DROP INDEX IF EXISTS idx_samples_sample_key")
-        self.db.execute("DROP INDEX IF EXISTS idx_samples_by_tar_and_idx")
-        self.db.execute("DROP TABLE IF EXISTS samples")
-        self.db.execute(
-            """
-            CREATE TABLE samples (
-                tar_file_id INTEGER,
-                sample_key TEXT,
-                sample_index INTEGER,
-                byte_offset INTEGER,
-                byte_size INTEGER
-            )
-        """
-        )
+        if self.enable_sample_tables:
+            if self.reset_tables:
+                self.db.execute("DROP INDEX IF EXISTS idx_samples_sample_key")
+                self.db.execute("DROP INDEX IF EXISTS idx_samples_by_tar_and_idx")
+                self.db.execute("DROP TABLE IF EXISTS samples")
 
-        # Create the sample parts table
-        self.db.execute("DROP INDEX IF EXISTS idx_sample_parts_seq")
-        self.db.execute("DROP INDEX IF EXISTS idx_sample_parts_full")
-        self.db.execute("DROP TABLE IF EXISTS sample_parts")
-        self.db.execute(
-            """
-            CREATE TABLE sample_parts (
-                tar_file_id INTEGER,
-                sample_index INTEGER,
-                part_name TEXT,
-                content_byte_offset INTEGER,
-                content_byte_size INTEGER
-            )
-        """
-        )
+                self.db.execute("DROP INDEX IF EXISTS idx_sample_parts_seq")
+                self.db.execute("DROP INDEX IF EXISTS idx_sample_parts_full")
+                self.db.execute("DROP TABLE IF EXISTS sample_parts")
 
-        if self.media_metadata_enabled:
-            self.db.execute("DROP TABLE IF EXISTS media_metadata")
             self.db.execute(
                 """
-                CREATE TABLE media_metadata (
+                CREATE TABLE IF NOT EXISTS samples (
+                    tar_file_id INTEGER,
+                    sample_key TEXT,
+                    sample_index INTEGER,
+                    byte_offset INTEGER,
+                    byte_size INTEGER
+                )
+                """
+            )
+            self.db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS sample_parts (
+                    tar_file_id INTEGER,
+                    sample_index INTEGER,
+                    part_name TEXT,
+                    content_byte_offset INTEGER,
+                    content_byte_size INTEGER
+                )
+                """
+            )
+
+        if self.enable_media_metadata:
+            if self.reset_tables:
+                self.db.execute("DROP TABLE IF EXISTS media_metadata")
+                self.db.execute("DROP TABLE IF EXISTS media_filters")
+            self.db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS media_metadata (
                     entry_key TEXT PRIMARY KEY,
                     metadata_type TEXT NOT NULL,
                     metadata_json TEXT NOT NULL
                 )
                 """
             )
-
-        self.db.execute("DROP TABLE IF EXISTS media_filters")
-        self.db.execute(
-            """
-            CREATE TABLE media_filters (
-                filter_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                strategy TEXT NOT NULL,
-                pattern TEXT,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            self.db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS media_filters (
+                    filter_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    strategy TEXT NOT NULL,
+                    pattern TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(strategy, pattern)
+                )
+                """
             )
-            """
-        )
 
         self.duplicates = []
 
@@ -174,8 +187,7 @@ class SqliteIndexWriter:
     ) -> None:
         """Insert or update a media metadata record."""
 
-        if not self.media_metadata_enabled:
-            return
+        assert self.enable_media_metadata, "Adding media metadata, although not enabled"
 
         assert self.db is not None, "Database is closed"
 
@@ -190,7 +202,7 @@ class SqliteIndexWriter:
     def append_media_filter(self, *, strategy: str, pattern: str | None) -> None:
         assert self.db is not None, "Database is closed"
         self.db.execute(
-            "INSERT INTO media_filters (strategy, pattern) VALUES (?, ?)",
+            "INSERT OR IGNORE INTO media_filters (strategy, pattern) VALUES (?, ?)",
             (strategy, pattern),
         )
 

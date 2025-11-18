@@ -10,7 +10,10 @@ from megatron.energon.tools.checkpoint import command as checkpoint_command
 from megatron.energon.tools.info import command as info_command
 from megatron.energon.tools.lint import command as lint_command
 from megatron.energon.tools.mount import command as mount_command
-from megatron.energon.tools.prepare import command as prepare_command
+from megatron.energon.tools.prepare import (
+    command as prepare_command,
+    prepare_media_command,
+)
 from megatron.energon.tools.preview import command as preview_command
 
 
@@ -56,6 +59,7 @@ main.add_command(lint_command)
 main.add_command(info_command)
 main.add_command(mount_command)
 main.add_command(prepare_command)
+main.add_command(prepare_media_command)
 main.add_command(preview_command)
 
 if __name__ == "__main__":
