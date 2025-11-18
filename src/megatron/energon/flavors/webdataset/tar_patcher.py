@@ -1,10 +1,8 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-import re
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
-from multiprocessing import cpu_count
 from pathlib import Path
 from typing import Any, Dict, List, Sequence, Set
 
