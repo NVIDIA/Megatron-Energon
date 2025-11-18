@@ -152,6 +152,8 @@ def get_dataset_type(path: EPath) -> EnergonDatasetType:
     Returns:
         The type of the dataset.
     """
+    metadata_db = path / MAIN_FOLDER_NAME / "index.sqlite"
+
     if path.is_file():
         if path.name.endswith(".jsonl"):
             return EnergonDatasetType.JSONL
@@ -159,12 +161,11 @@ def get_dataset_type(path: EPath) -> EnergonDatasetType:
             return EnergonDatasetType.METADATASET
         else:
             return EnergonDatasetType.INVALID
-    elif path.is_dir():
-        if check_dataset_info_present(path):
-            return EnergonDatasetType.WEBDATASET
-        metadata_db = path / MAIN_FOLDER_NAME / "index.sqlite"
-        if metadata_db.is_file():
-            return EnergonDatasetType.FILESYSTEM
-        return EnergonDatasetType.INVALID
+    elif check_dataset_info_present(path):
+        return EnergonDatasetType.WEBDATASET
+    elif metadata_db.is_file():
+        # There is an sqlite, but no .info.json or .info.yaml,
+        # so it's a filesystem dataset
+        return EnergonDatasetType.FILESYSTEM
     else:
         return EnergonDatasetType.INVALID

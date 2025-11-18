@@ -10,6 +10,7 @@ from megatron.energon.flavors.jsonl.ijsonl_reader import IJsonlReader
 from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
 from megatron.energon.flavors.webdataset.itar_reader import SqliteITarEntryReader
 from megatron.energon.flavors.webdataset.thread_local_sqlite import ThreadLocalSqlite
+from megatron.energon.local_copy import ensure_local_copy
 from megatron.energon.media.metadata import MediaMetadataBase, deserialize_media_metadata
 from megatron.energon.source_info import SourceInfo
 
@@ -90,16 +91,15 @@ class SystemFileStore(FileStore[bytes]):
             raise RuntimeError("Media metadata requires a base directory for SystemFileStore")
 
         reader = self._ensure_media_metadata_reader()
-        entry_key = key
         row = reader.select_one(
             "SELECT metadata_type, metadata_json FROM media_metadata WHERE entry_key = ?",
-            (entry_key,),
+            (key,),
         )
         if row is None:
-            file_path = self.base_dir / entry_key
+            file_path = self.base_dir / key
             if file_path.is_file():
                 raise RuntimeError(
-                    f"Media metadata missing for {entry_key}. "
+                    f"Media metadata missing for {key}. "
                     "Run `energon prepare --media-metadata` to generate it."
                 )
             return None
@@ -110,12 +110,15 @@ class SystemFileStore(FileStore[bytes]):
         assert self.base_dir is not None
         if self._media_metadata_reader is None:
             sqlite_path = self.base_dir / MAIN_FOLDER_NAME / "index.sqlite"
+
             if not sqlite_path.is_file():
                 raise RuntimeError(
                     f"Media metadata database missing at {sqlite_path}. "
                     "Run `energon prepare --media-metadata` for this dataset."
                 )
-            db_uri = f"file:{sqlite_path}?mode=ro&immutable=1"
+
+            local_sqlite_path = ensure_local_copy(sqlite_path)
+            db_uri = f"file:{str(local_sqlite_path)}?mode=ro&immutable=1"
             self._media_metadata_reader = ThreadLocalSqlite(db_uri, is_uri=True)
 
         if not self._media_metadata_checked:
