@@ -26,6 +26,8 @@ from megatron.energon.flavors.webdataset.metadata import (
     get_dataset_info,
     get_dataset_type,
 )
+from megatron.energon.media.extractor import MediaFilterConfig
+from megatron.energon.media.filesystem_prepare import prepare_filesystem_dataset
 from megatron.energon.metadataset.loader import prepare_metadataset
 
 
@@ -127,6 +129,17 @@ def printify_json(data: Any) -> Any:
     help="If set, the tar files will be shuffled before splitting.",
     is_flag=True,
 )
+@click.option(
+    "--media-metadata",
+    help="Compute and store media metadata during preparation.",
+    is_flag=True,
+)
+@click.option(
+    "--media-filter",
+    type=str,
+    default=None,
+    help="Media detection strategy: EXT (extension, default), TYPE (by filetype), or a glob pattern such as '*.jpg'.",
+)
 def command(
     path: EPath,
     progress: bool,
@@ -135,6 +148,8 @@ def command(
     num_workers: int,
     tar_index_only: bool,
     shuffle_tars: bool,
+    media_metadata: bool,
+    media_filter: Optional[str],
 ):
     """Prepare WebDataset for use with energon.
 
@@ -143,15 +158,43 @@ def command(
     details.
     """
 
+    if media_filter is not None and not media_metadata:
+        raise click.UsageError("--media-filter requires --media-metadata")
+
+    if media_metadata and tar_index_only:
+        raise click.UsageError("--media-metadata cannot be combined with --tar-index-only")
+
+    media_filter_config = MediaFilterConfig.parse(media_filter) if media_metadata else None
+
     ds_type = get_dataset_type(path)
     if ds_type == EnergonDatasetType.METADATASET:
+        if media_metadata:
+            raise click.ClickException(
+                "Metadatasets cannot store media metadata. Remove --media-metadata to continue."
+            )
         print("Preparing metadataset...")
         prepare_metadataset(path)
         return
     elif ds_type == EnergonDatasetType.JSONL:
+        if media_metadata:
+            raise click.ClickException(
+                "JSONL datasets do not support media metadata. Remove --media-metadata to continue."
+            )
         print("Preparing jsonl dataset...")
         count = CrudeJsonlDatasetFactory.prepare_dataset(path)
         print(f"Done. Found {count} samples.")
+        return
+    elif ds_type == EnergonDatasetType.FILESYSTEM:
+        if not media_metadata:
+            click.echo(
+                "Filesystem datasets only support generating media metadata. Run with --media-metadata."
+            )
+            return
+
+        assert media_filter_config is not None
+        click.echo("Preparing filesystem dataset and computing media metadata...")
+        stored = prepare_filesystem_dataset(path, media_filter_config, progress=progress)
+        click.echo(f"Done. Stored metadata for {stored} files.")
         return
 
     assert path.is_dir(), f"Path {path} is not a known dataset type"
@@ -231,6 +274,7 @@ def command(
         tar_index_only=tar_index_only,
         shuffle_seed=42 if shuffle_tars else None,
         workers=num_workers,
+        media_filter=media_filter_config,
     )
 
     if duplicates:

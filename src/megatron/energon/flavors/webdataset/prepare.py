@@ -38,6 +38,12 @@ from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME, skip_me
 from megatron.energon.flavors.webdataset.indexing import SqliteIndexWriter
 from megatron.energon.flavors.webdataset.itar import TarIndexWriter
 from megatron.energon.flavors.webdataset.structs import ShardInfo, WebdatasetInfo, WebdatasetSplits
+from megatron.energon.media.extractor import (
+    MediaFilterConfig,
+    extract_metadata,
+    should_consider_media,
+)
+from megatron.energon.media.metadata import serialize_media_metadata
 from megatron.energon.typed_converter import to_json_object
 
 logger = logging.getLogger(__name__)
@@ -74,6 +80,13 @@ class IndexSamplePart(IndexAggregatable):
 
 
 @edataclass
+class IndexMediaMetadata(IndexAggregatable):
+    entry_key: str
+    metadata_type: str
+    metadata_json: str
+
+
+@edataclass
 class IndexShardInfo(IndexAggregatable):
     shard_info: ShardInfo
     parts: Set[str]
@@ -92,12 +105,17 @@ class SqliteIndexWriterAggregator(
     shards: List[ShardInfo]
     found_parts: Set[str]
     prog_iter: Iterator
+    media_metadata_enabled: bool
+    media_filter: Optional[MediaFilterConfig]
 
     def __init__(
         self,
         sqlite_path: EPath,
         total_tasks: int,
         progress_fn: Optional[Callable[[Iterator[Any], int], Iterator[T]]] = None,
+        *,
+        media_metadata_enabled: bool = False,
+        media_filter: Optional[MediaFilterConfig] = None,
     ):
         self.sqlite_path = sqlite_path
         self.total_tasks = total_tasks
@@ -105,6 +123,8 @@ class SqliteIndexWriterAggregator(
         self.had_update = False
         self.shards = []
         self.found_parts = set()
+        self.media_metadata_enabled = media_metadata_enabled
+        self.media_filter = media_filter
 
         if progress_fn is not None:
             self.prog_iter = progress_fn(iter(range(self.total_tasks)), self.total_tasks)
@@ -112,7 +132,9 @@ class SqliteIndexWriterAggregator(
             self.prog_iter = iter(range(self.total_tasks))
 
     def on_start(self, aggregator_pool: AggregatorPool) -> None:
-        self.writer = SqliteIndexWriter(self.sqlite_path)
+        self.writer = SqliteIndexWriter(
+            self.sqlite_path, enable_media_metadata=self.media_metadata_enabled
+        )
 
     def on_item(
         self,
@@ -125,6 +147,13 @@ class SqliteIndexWriterAggregator(
             self.had_update = True
         elif isinstance(item, IndexSamplePart):
             self.writer.append_part(**asdict(item))
+        elif isinstance(item, IndexMediaMetadata):
+            self.writer.append_media_metadata(
+                entry_key=item.entry_key,
+                metadata_type=item.metadata_type,
+                metadata_json=item.metadata_json,
+            )
+            self.had_update = True
         elif isinstance(item, IndexShardInfo):
             # This is a (shard_info, parts) tuple
             next(self.prog_iter)
@@ -137,6 +166,11 @@ class SqliteIndexWriterAggregator(
 
     def on_finish(self, aggregator_pool: AggregatorPool) -> None:
         assert self.writer is not None, "Writer is not initialized."
+        if self.media_metadata_enabled and self.media_filter is not None:
+            self.writer.append_media_filter(
+                strategy=self.media_filter.strategy.value,
+                pattern=self.media_filter.pattern,
+            )
         self.writer.close()
 
     def get_final_result_data(
@@ -153,6 +187,7 @@ class WebdatasetPreparator:
         shard_to_idx: Dict[str, int],
         parent_path: EPath,
         max_parts: int,
+        media_filter: Optional[MediaFilterConfig] = None,
     ) -> Generator[IndexAggregatable, None, None]:
         """Process a single tar file, i.e. read the tarinfos, generate the tar index and return
         stats.
@@ -206,8 +241,9 @@ class WebdatasetPreparator:
                             continue
 
                         base_name = name_match.group(1)
+                        part_name = name_match.group(2)
                         if len(parts) < max_parts:
-                            parts.add(name_match.group(2))
+                            parts.add(part_name)
 
                         if last_base_name != base_name:
                             iw.append(member.offset)
@@ -227,14 +263,41 @@ class WebdatasetPreparator:
                             last_base_name = base_name
                             count += 1
 
+                        entry_key = f"{base_name}.{part_name}"
+
                         # Yield this part of the sample to the aggregator
                         yield IndexSamplePart(
                             tar_file_id=shard_to_idx[path],
                             sample_index=count - 1,
-                            part_name=name_match.group(2),
+                            part_name=part_name,
                             content_byte_offset=member.offset_data,
                             content_byte_size=member.size,
                         )
+
+                        if media_filter is not None:
+                            if not should_consider_media(entry_key, media_filter):
+                                continue
+                            file_member = tar.extractfile(member)
+                            if file_member is not None:
+                                data = file_member.read()
+                                extracted = extract_metadata(
+                                    data,
+                                    media_filter,
+                                    filename=entry_key,
+                                )
+                                if extracted is not None:
+                                    metadata_type, metadata_obj = extracted
+                                    stored_type, metadata_json = serialize_media_metadata(
+                                        metadata_obj
+                                    )
+                                    assert stored_type == metadata_type, (
+                                        "Metadata type mismatch after serialization"
+                                    )
+                                    yield IndexMediaMetadata(
+                                        entry_key=entry_key,
+                                        metadata_type=metadata_type.value,
+                                        metadata_json=metadata_json,
+                                    )
 
                     shard_info.count = count
                     iw.append(tar.offset)
@@ -307,6 +370,7 @@ class WebdatasetPreparator:
         progress_fn: Callable[[Iterator[Any], int], Iterator[T]] = (lambda x, y: x),
         workers: int = 32,
         tar_index_only: bool = False,
+        media_filter: Optional[MediaFilterConfig] = None,
     ) -> Tuple[Set[str], List[Tuple[str, int]]]:
         """
         Preprocess the shards and write the split config. Preprocessing is done in parallel.
@@ -340,6 +404,8 @@ class WebdatasetPreparator:
             parent_path / MAIN_FOLDER_NAME / "index.sqlite",
             total_tasks=len(paths),
             progress_fn=progress_fn,
+            media_metadata_enabled=media_filter is not None,
+            media_filter=media_filter,
         )
 
         process_tar = functools.partial(
@@ -347,6 +413,7 @@ class WebdatasetPreparator:
             shard_to_idx=shard_to_idx,
             parent_path=parent_path,
             max_parts=50,
+            media_filter=media_filter,
         )
 
         pool = AggregatorPool(

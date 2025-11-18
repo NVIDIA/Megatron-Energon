@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Generic, TypeVar
+from typing import Any, Callable, Generic, Optional, TypeVar
 
 from megatron.energon.edataclass import edataclass
+from megatron.energon.media.metadata import MediaMetadataBase
 from megatron.energon.source_info import SourceInfo, add_source_info
 
 T = TypeVar("T")
@@ -28,6 +29,13 @@ class FileStore(Generic[T]):
     def get_path(self) -> str:
         """Returns the path to the dataset."""
         ...
+
+    def get_media_metadata(self, key: str) -> Optional[MediaMetadataBase]:
+        """Return the media metadata for the given key if available."""
+
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support media metadata retrieval"
+        )
 
 
 @edataclass

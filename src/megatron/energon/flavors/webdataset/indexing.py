@@ -18,8 +18,9 @@ class SqliteIndexWriter:
     sqlite_path: EPath
     db: Optional[sqlite3.Connection]
     duplicates: List[Tuple[str, int]]
+    media_metadata_enabled: bool
 
-    def __init__(self, sqlite_path: EPath):
+    def __init__(self, sqlite_path: EPath, *, enable_media_metadata: bool = False):
         """
         Initializes an SQLite database and sets up the samples table:
           - samples(tar_file_id INTEGER,
@@ -42,6 +43,7 @@ class SqliteIndexWriter:
 
         # Final path and temporary path
         self.sqlite_path = sqlite_path
+        self.media_metadata_enabled = enable_media_metadata
 
         # Initialize SQLite connection
         path = str(self.sqlite_path)
@@ -85,6 +87,30 @@ class SqliteIndexWriter:
                 content_byte_size INTEGER
             )
         """
+        )
+
+        if self.media_metadata_enabled:
+            self.db.execute("DROP TABLE IF EXISTS media_metadata")
+            self.db.execute(
+                """
+                CREATE TABLE media_metadata (
+                    entry_key TEXT PRIMARY KEY,
+                    metadata_type TEXT NOT NULL,
+                    metadata_json TEXT NOT NULL
+                )
+                """
+            )
+
+        self.db.execute("DROP TABLE IF EXISTS media_filters")
+        self.db.execute(
+            """
+            CREATE TABLE media_filters (
+                filter_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                strategy TEXT NOT NULL,
+                pattern TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+            """
         )
 
         self.duplicates = []
@@ -138,6 +164,34 @@ class SqliteIndexWriter:
             VALUES (?, ?, ?, ?, ?)
             """,
             (tar_file_id, sample_index, part_name, content_byte_offset, content_byte_size),
+        )
+
+    def append_media_metadata(
+        self,
+        entry_key: str,
+        metadata_type: str,
+        metadata_json: str,
+    ) -> None:
+        """Insert or update a media metadata record."""
+
+        if not self.media_metadata_enabled:
+            return
+
+        assert self.db is not None, "Database is closed"
+
+        self.db.execute(
+            """
+            INSERT OR REPLACE INTO media_metadata (entry_key, metadata_type, metadata_json)
+            VALUES (?, ?, ?)
+            """,
+            (entry_key, metadata_type, metadata_json),
+        )
+
+    def append_media_filter(self, *, strategy: str, pattern: str | None) -> None:
+        assert self.db is not None, "Database is closed"
+        self.db.execute(
+            "INSERT INTO media_filters (strategy, pattern) VALUES (?, ?)",
+            (strategy, pattern),
         )
 
     def close(self):
@@ -283,6 +337,17 @@ class SqliteIndexReader:
         self.db.thread_close()
         return db_exists is not None
 
+    def db_has_media_metadata(self) -> bool:
+        """Check if the database has a media_metadata table."""
+
+        assert self.db is not None, "Database is closed"
+
+        db_exists = self.db.select_one(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='media_metadata'"
+        )
+        self.db.thread_close()
+        return db_exists is not None
+
     def list_all_samples(self) -> Generator[Tuple[str, int, int], None, None]:
         """List all sample keys in the database.
 
@@ -413,6 +478,17 @@ class SqliteIndexReader:
             byte_offset=sample[3],
             byte_size=sample[4],
         )
+
+    def get_media_metadata(self, entry_key: str) -> Tuple[str, str] | None:
+        """Fetch the media metadata record for an entry, if available."""
+
+        assert self.db is not None, "Database is closed"
+
+        row = self.db.select_one(
+            "SELECT metadata_type, metadata_json FROM media_metadata WHERE entry_key = ?",
+            (entry_key,),
+        )
+        return (row[0], row[1]) if row is not None else None
 
     def close(self):
         """Close the database connection."""

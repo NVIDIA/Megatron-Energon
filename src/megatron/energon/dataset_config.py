@@ -127,6 +127,8 @@ def get_dataset_from_config(
             ),
             default_type=StandardWebdatasetFactory,
         )
+    elif ds_type == EnergonDatasetType.FILESYSTEM:
+        raise ValueError("Filesystem datasets are only supported as auxiliary datasets. ")
     else:
         raise ValueError(
             f"Path {path} does not contain a {MAIN_FOLDER_NAME}/.info.yaml or .info.json file nor is it a jsonl file. "

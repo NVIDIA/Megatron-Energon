@@ -24,6 +24,7 @@ class EnergonDatasetType(Enum):
     METADATASET = "metadataset"
     WEBDATASET = "webdataset"
     JSONL = "jsonl"
+    FILESYSTEM = "filesystem"
     INVALID = "invalid"
 
 
@@ -158,7 +159,12 @@ def get_dataset_type(path: EPath) -> EnergonDatasetType:
             return EnergonDatasetType.METADATASET
         else:
             return EnergonDatasetType.INVALID
-    elif check_dataset_info_present(path):
-        return EnergonDatasetType.WEBDATASET
+    elif path.is_dir():
+        if check_dataset_info_present(path):
+            return EnergonDatasetType.WEBDATASET
+        metadata_db = path / MAIN_FOLDER_NAME / "index.sqlite"
+        if metadata_db.is_file():
+            return EnergonDatasetType.FILESYSTEM
+        return EnergonDatasetType.INVALID
     else:
         return EnergonDatasetType.INVALID

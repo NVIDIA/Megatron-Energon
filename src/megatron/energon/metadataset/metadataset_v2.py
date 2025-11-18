@@ -225,6 +225,10 @@ class DatasetReference(SubsetRatioMixin, DatasetLoaderInterface):
 
                     new_aux[k].post_initialize(mds_path)
                 self.aux = new_aux
+        elif ds_type == EnergonDatasetType.FILESYSTEM:
+            raise ValueError(
+                "Filesystem datasets are not supported within metadatasets except as auxiliary datasets."
+            )
         else:
             raise FileNotFoundError(self.path)
 

@@ -40,6 +40,8 @@ def load_dataset(
         ds = DatasetLoader(path=path, **kwargs)
         ds.post_initialize()
         return ds
+    elif ds_type == EnergonDatasetType.FILESYSTEM:
+        raise ValueError("Filesystem datasets can only be used as auxiliary datasets.")
     else:
         raise ValueError(f"Invalid dataset at {path}")
 
