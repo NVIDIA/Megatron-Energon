@@ -714,7 +714,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             dataset,
             cook_fn,
             worker_config=worker_config,
-            stateless_map_fn=get_stateless(cook_fn),
+            stateless_map_fn=get_stateless(self.cook_crude_sample),
             map_fn_config=dict(
                 cooker=dict(
                     cook=SavableDataset._function_config(cooker.cook),
