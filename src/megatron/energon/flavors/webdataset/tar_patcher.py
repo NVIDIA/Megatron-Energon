@@ -2,11 +2,12 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import concurrent.futures
+import multiprocessing as mp
 import re
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import BinaryIO, Callable, Dict, List, Sequence, Set
+from typing import BinaryIO, Dict, List, Sequence, Set
 
 import click
 import numpy as np
@@ -14,14 +15,22 @@ from tqdm import tqdm
 
 from megatron.energon.epathlib import EPath
 
+# mp.set_start_method("fork")
+
 # Try to import numba for JIT compilation of hot paths
 try:
     import numba as nb
-    from numba import jit, njit  # type: ignore[import-not-found]
+    from numba import njit  # type: ignore[import-not-found]
 
     HAS_NUMBA = True
 except ImportError:
     raise ImportError("numba is required for this module")
+
+U8C = nb.types.Array(nb.types.uint8, 1, "C", readonly=False)
+U8C_RO = nb.types.Array(nb.types.uint8, 1, "C", readonly=True)
+INT64 = nb.types.int64
+B1 = nb.types.boolean
+VOID = nb.types.void
 
 BLOCK_SIZE = 512
 NUM_WORKERS = 16
@@ -35,10 +44,8 @@ class TarPatcherError(Exception):
 class TarScanResult:
     """Result of scanning a tar archive."""
 
-    filenames: list[bytes] = field(default_factory=list)
     sample_keys: Set[bytes] = field(default_factory=set)
     compatible: bool = True
-    issues: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -47,7 +54,6 @@ class DatasetScanResult:
 
     compatible: bool
     duplicates: Dict[str, List[str]]
-    issues: List[str]
     scan_results: Dict[str, TarScanResult]
 
     @property
@@ -55,7 +61,7 @@ class DatasetScanResult:
         return bool(self.duplicates)
 
 
-@njit(cache=True, fastmath=True, inline="always")
+@njit(B1(U8C_RO), cache=True, fastmath=True, inline="always")
 def _nb_is_zero_block(block: bytearray | bytes) -> bool:
     """Numba-optimized: Check if a block is all zeros."""
     for i in range(len(block)):
@@ -64,7 +70,7 @@ def _nb_is_zero_block(block: bytearray | bytes) -> bool:
     return True
 
 
-@njit(cache=True, inline="always")
+@njit(INT64(U8C_RO), cache=True, inline="always")
 def _nb_parse_size(size: np.ndarray) -> int:
     # Base-256 (binary) encoding (POSIX)
     # # [124:136]
@@ -92,7 +98,7 @@ def _nb_parse_size(size: np.ndarray) -> int:
     return n
 
 
-@njit(cache=True, inline="always")
+@njit(nb.types.Tuple((U8C_RO, U8C_RO))(U8C_RO), cache=True, inline="always")
 def split_ustar_path(path: np.ndarray) -> tuple[np.ndarray, np.ndarray | None]:
     """
     Split path into (prefix, name) suitable for ustar:
@@ -126,7 +132,7 @@ def split_ustar_path(path: np.ndarray) -> tuple[np.ndarray, np.ndarray | None]:
     return prefix_b, name_b
 
 
-@njit(cache=True, fastmath=True, inline="always")
+@njit(INT64(U8C_RO), cache=True, fastmath=True, inline="always")
 def _nb_compute_checksum(header: np.ndarray) -> int:
     """
     Numba-optimized: Compute tar header checksum.
@@ -142,7 +148,7 @@ def _nb_compute_checksum(header: np.ndarray) -> int:
     return total
 
 
-@njit(cache=True, inline="always")
+@njit(VOID(INT64, U8C), cache=True, inline="always")
 def _nb_format_chksum(val: int, dst: np.ndarray) -> None:
     dst[0] = (nb.uint8(val >> 15) & 0o7) | 0x30
     dst[1] = (nb.uint8(val >> 12) & 0o7) | 0x30
@@ -154,10 +160,7 @@ def _nb_format_chksum(val: int, dst: np.ndarray) -> None:
     dst[7] = 32
 
 
-@njit(
-    cache=True,
-    inline="always",
-)
+@njit(nb.types.Tuple((U8C_RO, B1))(U8C_RO), cache=True, inline="always")
 def _nb_extract_full_path(hdr: np.ndarray) -> tuple[np.ndarray, bool]:
     for i in range(100):
         if hdr[i] == 0:
@@ -195,7 +198,7 @@ def _nb_extract_full_path(hdr: np.ndarray) -> tuple[np.ndarray, bool]:
 
 
 @njit(cache=True)
-def pax_parse(data: bytes) -> list[tuple[bytes, bytes]]:
+def pax_parse(data: np.ndarray) -> list[tuple[np.ndarray, np.ndarray]]:
     """
     Parse PAX extended header into list of (key, value).
     Format lines: "%d key=value\n".
@@ -244,7 +247,7 @@ def pax_parse(data: bytes) -> list[tuple[bytes, bytes]]:
     return out
 
 
-@njit(cache=True)
+@njit(nb.types.Tuple((nb.types.boolean, INT64))(U8C, U8C_RO), cache=True)
 def update_header(hdr: np.ndarray, prefix: np.ndarray) -> tuple[bool, int]:
     """Update the header with a new path, prefixing the path with prefix.
 
@@ -303,12 +306,20 @@ def update_header(hdr: np.ndarray, prefix: np.ndarray) -> tuple[bool, int]:
     return True, size_val
 
 
-@njit
+@njit(nb.types.boolean(U8C_RO, INT64, INT64))
 def _nb_evaluate_pax_header(
     raw_data: np.ndarray,
     position: nb.int64,
     size_val: int,
 ) -> None:
+    PAX_PATH_KEYS = (
+        np.frombuffer(b"path", dtype=np.uint8),
+        np.frombuffer(b"linkpath", dtype=np.uint8),
+        np.frombuffer(b"gnu.path", dtype=np.uint8),
+        np.frombuffer(b"gnu.linkpath", dtype=np.uint8),
+        np.frombuffer(b"SCHILY.path", dtype=np.uint8),
+        np.frombuffer(b"SCHILY.linkpath", dtype=np.uint8),
+    )
     blocks = (size_val + BLOCK_SIZE - 1) // BLOCK_SIZE * BLOCK_SIZE
     data = raw_data[position : position + blocks]
     if data.size < blocks:
@@ -317,15 +328,17 @@ def _nb_evaluate_pax_header(
     for key, _ in records:
         for pax_key in PAX_PATH_KEYS:
             if key.size == pax_key.size and np.all(key == pax_key):
-                raise TarPatcherError(
-                    "PAX header contains unsupported key; in-place rename is unsafe."
-                )
+                return False
+    return True
 
 
-@njit(cache=True)
-def _nb_scan_file(raw_data: np.ndarray, prefix_bytes: np.ndarray) -> tuple[bool, str]:
+@njit(nb.types.Tuple((nb.types.boolean, nb.types.ListType(U8C_RO)))(U8C_RO, U8C_RO), cache=True)
+def _nb_scan_file(raw_data: np.ndarray, prefix_bytes: np.ndarray) -> tuple[bool, list[np.ndarray]]:
     position = nb.int64(0)
     total = raw_data.size
+    compatible = True
+    sample_key_list = nb.typed.List.empty_list(U8C_RO)
+
     while True:
         header = raw_data[position : position + BLOCK_SIZE].copy()
         if position + BLOCK_SIZE > total:
@@ -339,36 +352,66 @@ def _nb_scan_file(raw_data: np.ndarray, prefix_bytes: np.ndarray) -> tuple[bool,
         typeflag = header[156]
         # ord(b"L") = 76, ord(b"K") = 75
         if typeflag == 76 or typeflag == 75:
-            raise TarPatcherError("Unexpected GNU longname/longlink encountered during patch.")
-
-        # ord("L") = 76, ord("K") = 75
-        if typeflag in (76, 75):
+            # "Unexpected GNU longname/longlink encountered during patch."
+            compatible = False
+            # TODO: Still parse the filename to get the sample key
             raise TarPatcherError(
                 "Found GNU longname/longlink entry; in-place rename is unsupported."
             )
 
         # ord("x") = 120, ord("g") = 103
         if typeflag in (120, 103):
-            _nb_evaluate_pax_header(raw_data, position, size_val)
+            if not _nb_evaluate_pax_header(raw_data, position, size_val):
+                # "PAX header contains unsupported key; in-place rename is unsafe."
+                compatible = False
         else:
             full_path, is_ustar = _nb_extract_full_path(header)
 
             new_path = np.empty(prefix_bytes.size + full_path.size, dtype=np.uint8)
             new_path[: prefix_bytes.size] = prefix_bytes
             new_path[prefix_bytes.size :] = full_path
+
+            # Apply the regex for splitting the sample key from the extension.
+            # Find last slash to find filename
+            for i in range(new_path.size - 1, -1, -1):
+                # ord('/') = 47
+                if new_path[i] == 47:
+                    last_path_idx = i
+                    break
+            else:
+                last_path_idx = 0
+            # Find extension (i.e. first dot after last slash)
+            for i in range(last_path_idx + 1, new_path.size):
+                # ord('.') = 46
+                if new_path[i] == 46:
+                    extension_idx = i
+                    break
+            else:
+                extension_idx = new_path.size
+            sample_key = new_path[:extension_idx]
+
+            if sample_key.size == 0:
+                compatible = False
+            else:
+                sample_key_list.append(sample_key)
+
             if is_ustar:
                 new_prefix_b, new_name_b = split_ustar_path(new_path)
                 if new_name_b.size == 0:
-                    raise TarPatcherError("New name too long for ustar fields.")
+                    # "Internal error: ustar fields don't fit."
+                    compatible = False
             else:
                 if new_path.size > 100:
-                    raise TarPatcherError("New name too long for legacy header.")
+                    # "New name too long for legacy header."
+                    compatible = False
 
         position += BLOCK_SIZE
         position += (size_val + BLOCK_SIZE - 1) // BLOCK_SIZE * BLOCK_SIZE
 
+    return compatible, sample_key_list
 
-@jit(cache=True)
+
+@njit(VOID(U8C, U8C_RO), cache=True)
 def _nb_process_file(raw_data: np.ndarray, prefix_bytes: np.ndarray) -> None:
     position = nb.int64(0)
     total = raw_data.size
@@ -424,7 +467,6 @@ class TarPatcher:
             DatasetScanResult: Result of the scan.
         """
 
-        issues: List[str] = []
         scan_results: Dict[str, TarScanResult] = {}
 
         # Maps from sample key to list of tar files containing it
@@ -445,7 +487,6 @@ class TarPatcher:
             return DatasetScanResult(
                 compatible=True,
                 duplicates={},
-                issues=[],
                 scan_results={},
             )
 
@@ -464,7 +505,6 @@ class TarPatcher:
                     scan_results[tar_file] = result
                     if not result.compatible:
                         compatible = False
-                        issues.extend(f"{tar_file}: {issue}" for issue in result.issues)
                     for sample_key in result.sample_keys:
                         duplicates.setdefault(sample_key, set()).add(tar_file)
                         if len(duplicates[sample_key]) > 1:
@@ -481,7 +521,6 @@ class TarPatcher:
         return DatasetScanResult(
             compatible=compatible,
             duplicates=duplicate_map,
-            issues=issues,
             scan_results=scan_results,
         )
 
@@ -519,14 +558,24 @@ class TarPatcher:
                     future.result()
                     dataset_pbar.update()
 
-    def scan(self, tar_path: Path | str, prefix: str) -> None:
+    def scan(self, tar_path: Path | str, prefix: str) -> TarScanResult:
         """Scan *tar_path* and evaluate compatibility for prefixing entries."""
 
         prefix_bytes = np.frombuffer(prefix.encode("utf-8"), dtype=np.uint8)
 
-        raw_data = np.memmap(tar_path, dtype=np.uint8, mode="readwrite")
+        raw_data = np.memmap(tar_path, dtype=np.uint8, mode="r")
 
-        _nb_scan_file(raw_data, prefix_bytes)
+        compatible, sample_keys_list = _nb_scan_file(raw_data, prefix_bytes)
+
+        # Convert numpy arrays to bytes for the set
+        sample_keys_set = {sample_key.tobytes() for sample_key in sample_keys_list}
+        if len(sample_keys_set) != len(sample_keys_list):
+            compatible = False
+
+        return TarScanResult(
+            sample_keys=sample_keys_set,
+            compatible=compatible,
+        )
 
     def apply_prefix(
         self,
@@ -586,7 +635,7 @@ def _scan_tar_worker(tar_file: str, prefix: str) -> tuple[str, TarScanResult]:
 
 def _apply_prefix_worker(tar_file: str, prefix: str) -> str:
     patcher = TarPatcher(show_progress=False)
-    patcher.apply_prefix(tar_file, prefix, progress=False)
+    patcher.apply_prefix(tar_file, prefix)
     return tar_file
 
 
@@ -620,14 +669,24 @@ def main(tar_file: Path, prefix: str, dry_run: bool):
     patcher = TarPatcher()
 
     click.echo(f"Scanning {tar_path} for in-place rename feasibility...")
+    orig_start_method = mp.get_start_method()
+    # mp.set_start_method("fork", force=True)
     for i in range(10):
         try:
+            print(f"Scanning {i}...")
             start = time.time()
-            patcher.scan(tar_path, prefix)
+            # res = patcher.scan(tar_path, prefix)
+            res = patcher.dataset_scan(("shard-0.tar", "audio_0.tar"), Path("."))
             end = time.time()
+            # print(len(res.sample_keys), "keys")
+            print(
+                f"compatible: {res.compatible}, {len(res.duplicates)} duplicates: {[key for _, key in zip(range(10), res.duplicates.keys())]}"
+            )
             print(f"Scan time: {end - start} seconds")
         except TarPatcherError as exc:
             raise click.ClickException(str(exc)) from exc
+
+    mp.set_start_method(orig_start_method, force=True)
 
     click.echo("OK: in-place modification is possible under current rules.")
 
