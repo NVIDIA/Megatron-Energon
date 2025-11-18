@@ -141,6 +141,11 @@ def printify_json(data: Any) -> Any:
     default=None,
     help="Media detection strategy: EXT (extension, default), TYPE (by filetype), or a glob pattern such as '*.jpg'.",
 )
+@click.option(
+    "--fix-duplicates",
+    help="Fix duplicate keys in the dataset.",
+    is_flag=True,
+)
 def command(
     path: EPath,
     progress: bool,
@@ -151,6 +156,7 @@ def command(
     shuffle_tars: bool,
     media_metadata: bool,
     media_filter: Optional[str],
+    fix_duplicates: bool,
 ):
     """Prepare WebDataset for use with energon.
 
@@ -258,7 +264,7 @@ def command(
         def progress_fn(els, length=None):
             return els
 
-    found_types, duplicates = BaseWebdatasetFactory.prepare_dataset(
+    found_types = BaseWebdatasetFactory.prepare_dataset(
         path,
         all_tars,
         split_parts_ratio=split_parts_ratio,
@@ -268,24 +274,12 @@ def command(
         shuffle_seed=42 if shuffle_tars else None,
         workers=num_workers,
         media_filter=media_filter_config,
+        fix_duplicates=fix_duplicates,
     )
-
-    if duplicates:
-        print(f"Examples of duplicates found: {duplicates}")
-        print()
-        print(
-            "The dataset has duplicate keys. Best practice is to use unique keys. "
-            "You won't be able to use this dataset for joining "
-            "later on."
-        )
 
     found_types = list(found_types)
     if tar_index_only:
         return
-
-    if duplicates:
-        if not click.confirm("Do you want to continue?"):
-            return
 
     # Print json of first two samples
     for sample_idx, data in enumerate(

@@ -14,10 +14,17 @@ from megatron.energon.flavors.webdataset.thread_local_sqlite import ThreadLocalS
 from megatron.energon.local_copy import ensure_local_copy
 
 
+class DuplicateSampleKeyError(RuntimeError):
+    """Raised when attempting to insert a duplicate sample key into the index."""
+
+    def __init__(self, sample_key: str) -> None:
+        super().__init__(f"Duplicate sample key encountered while indexing: {sample_key!r}")
+        self.sample_key = sample_key
+
+
 class SqliteIndexWriter:
     sqlite_path: EPath
     db: Optional[sqlite3.Connection]
-    duplicates: List[Tuple[str, int]]
     enable_sample_tables: bool
     enable_media_metadata: bool
     reset_tables: bool
@@ -80,9 +87,9 @@ class SqliteIndexWriter:
             self.db.execute(
                 """
                 CREATE TABLE IF NOT EXISTS samples (
-                    tar_file_id INTEGER,
-                    sample_key TEXT,
-                    sample_index INTEGER,
+                    tar_file_id INTEGER NOT NULL,
+                    sample_key TEXT NOT NULL UNIQUE,
+                    sample_index INTEGER NOT NULL,
                     byte_offset INTEGER,
                     byte_size INTEGER
                 )
@@ -125,8 +132,6 @@ class SqliteIndexWriter:
                 """
             )
 
-        self.duplicates = []
-
     def append_sample(
         self,
         tar_file_id: int8,
@@ -149,13 +154,16 @@ class SqliteIndexWriter:
         assert self.db is not None, "Database is closed"
 
         # Insert a row in the samples table
-        self.db.execute(
-            """
-            INSERT INTO samples (tar_file_id, sample_key, sample_index, byte_offset, byte_size)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (tar_file_id, sample_key, sample_index, byte_offset, byte_size),
-        )
+        try:
+            self.db.execute(
+                """
+                INSERT INTO samples (tar_file_id, sample_key, sample_index, byte_offset, byte_size)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (tar_file_id, sample_key, sample_index, byte_offset, byte_size),
+            )
+        except sqlite3.IntegrityError as exc:  # pragma: no cover - defensive programming
+            raise DuplicateSampleKeyError(sample_key) from exc
 
     def append_part(
         self,
@@ -216,7 +224,7 @@ class SqliteIndexWriter:
             # Create the index after adding all the samples for better speed
             # Index on sample_key for fast lookups
             self.db.execute(
-                "CREATE INDEX IF NOT EXISTS idx_samples_sample_key ON samples(sample_key)"
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_samples_sample_key ON samples(sample_key)"
             )
 
             # Create index on the samples table.  Help the planner if it chooses `samples` as the probe side of the join
@@ -233,14 +241,6 @@ class SqliteIndexWriter:
             self.db.execute(
                 "CREATE INDEX IF NOT EXISTS idx_sample_parts_full ON sample_parts(tar_file_id, sample_index, part_name, content_byte_offset, content_byte_size)"
             )
-
-            # Check if sample_key are all unique
-            # self.db.execute("CREATE TEMP TABLE temp AS SELECT sample_key, COUNT(*) AS c FROM samples GROUP BY sample_key HAVING c > 1")
-            duplicates = self.db.execute(
-                "SELECT sample_key, COUNT(*) AS c FROM samples GROUP BY sample_key HAVING c > 1 LIMIT 5"
-            ).fetchall()
-            if len(duplicates) > 0:
-                self.duplicates = duplicates
 
         if self.db is not None:
             self.db.commit()

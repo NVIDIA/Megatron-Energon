@@ -6,6 +6,7 @@ import json
 import logging
 import random
 import re
+import sys
 import tarfile
 import uuid
 from dataclasses import asdict
@@ -35,10 +36,17 @@ from megatron.energon.epathlib import EPath
 from megatron.energon.eyaml import load_yaml
 from megatron.energon.flavors.webdataset.aggregator_pool import AggregatorPool, BaseAggregator
 from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME, skip_meta_re, split_name_re
-from megatron.energon.flavors.webdataset.indexing import SqliteIndexWriter
+from megatron.energon.flavors.webdataset.indexing import (
+    DuplicateSampleKeyError,
+    SqliteIndexWriter,
+)
 from megatron.energon.flavors.webdataset.itar import TarIndexWriter
 from megatron.energon.flavors.webdataset.metadata import get_dataset_info
 from megatron.energon.flavors.webdataset.structs import ShardInfo, WebdatasetInfo, WebdatasetSplits
+from megatron.energon.flavors.webdataset.tar_patcher import (
+    DatasetScanResult,
+    TarPatcher,
+)
 from megatron.energon.media.extractor import (
     MediaFilterConfig,
     extract_metadata,
@@ -194,9 +202,9 @@ class SqliteIndexWriterAggregator(
 
     def get_final_result_data(
         self,
-    ) -> Tuple[List[ShardInfo], Set[str], bool, List[Tuple[str, int]]]:
+    ) -> Tuple[List[ShardInfo], Set[str], bool]:
         assert self.writer is not None, "Writer is not initialized."
-        return self.shards, self.found_parts, self.had_update, self.writer.duplicates
+        return self.shards, self.found_parts, self.had_update
 
     def _advance_progress(self) -> None:
         try:
@@ -468,6 +476,7 @@ class WebdatasetPreparator:
         workers: int = 32,
         tar_index_only: bool = False,
         media_filter: Optional[MediaFilterConfig] = None,
+        fix_duplicates: bool = False,
     ) -> Tuple[Set[str], List[Tuple[str, int]]]:
         """
         Preprocess the shards and write the split config. Preprocessing is done in parallel.
@@ -484,6 +493,8 @@ class WebdatasetPreparator:
             progress_fn: Callback for progress bar
             workers: Number of parallel workers for reading each shard
             tar_index_only: Only create tar-index, then exit
+            media_filter: Media filter configuration
+            fix_duplicates: If True, fix duplicate keys in the dataset by renaming the files in the shards.
 
         Returns:
             The set of all parts found in the shards. But at most 50.
@@ -496,6 +507,27 @@ class WebdatasetPreparator:
         shard_to_idx = {path: idx for idx, path in enumerate(paths)}
 
         (parent_path / MAIN_FOLDER_NAME).mkdir(exist_ok=True)
+
+        if fix_duplicates:
+            tar_patcher = TarPatcher(show_progress=True)
+            scan_result: DatasetScanResult = tar_patcher.dataset_scan(paths)
+
+            if scan_result.has_duplicates:
+                print("The dataset contains duplicate keys.")
+                if not scan_result.compatible:
+                    print(
+                        "But the tar files are not compatible with the in-place rename, aborting."
+                    )
+                    print("Issues found:")
+                    for issue in scan_result.issues:
+                        print(f"- {issue}")
+                    sys.exit(1)
+
+                print("Fixing the dataset now.")
+                tar_patcher.dataset_apply_prefix(paths)
+                print("Duplicate keys fixed successfully.")
+            else:
+                print("No duplicate keys found, continuing.")
 
         aggregator = SqliteIndexWriterAggregator(
             parent_path / MAIN_FOLDER_NAME / "index.sqlite",
@@ -522,7 +554,22 @@ class WebdatasetPreparator:
         for path in paths:
             pool.submit_task(path)
 
-        shards, found_parts, had_update, duplicates = pool.process()
+        try:
+            shards, found_parts, had_update = pool.process()
+        except DuplicateSampleKeyError as error:
+            print("The data contains duplicate keys (e.g. same filename in different shards).")
+            print(f'Example duplicate key: "{error.sample_key}"')
+            print()
+            print(
+                "Energon does not support duplicate keys anymore, but we offer a tool to fix your dataset. "
+                "Run `energon prepare` with `--fix-duplicates` to fix your dataset. Inside each tar, it will "
+                "put each file in a subfolder with the shard name like `shard_0/filename.ext`."
+            )
+
+            if (parent_path / MAIN_FOLDER_NAME / "index.sqlite").is_file():
+                (parent_path / MAIN_FOLDER_NAME / "index.sqlite").unlink()
+
+            sys.exit(1)
 
         if had_update:
             logger.info("Regenerating dataset UUID...")
@@ -538,7 +585,7 @@ class WebdatasetPreparator:
                 with json_info_config.open("w") as f:
                     json.dump(load_yaml(yaml_info_config.read_bytes()), f, indent=2)
 
-            return found_parts, duplicates
+            return found_parts
 
         assert len(shards) == len(shard_to_idx), (
             f"Lengths of shards and shard_to_idx do not match: {len(shards)} != {len(shard_to_idx)}"
@@ -617,7 +664,7 @@ class WebdatasetPreparator:
             else:
                 raise ValueError(f"Invalid split config extension: {split_config}")
 
-        return found_parts, duplicates
+        return found_parts
 
     @classmethod
     def add_media_metadata(
