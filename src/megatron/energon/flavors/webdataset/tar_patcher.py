@@ -339,6 +339,8 @@ def _nb_scan_file(raw_data: np.ndarray, prefix_bytes: np.ndarray) -> tuple[bool,
     compatible = True
     sample_key_list = nb.typed.List.empty_list(U8C_RO)
 
+    rd_buf = np.empty(65536, dtype=np.uint8)
+
     while True:
         header = raw_data[position : position + BLOCK_SIZE].copy()
         if position + BLOCK_SIZE > total:
@@ -405,8 +407,13 @@ def _nb_scan_file(raw_data: np.ndarray, prefix_bytes: np.ndarray) -> tuple[bool,
                     # "New name too long for legacy header."
                     compatible = False
 
-        position += BLOCK_SIZE
-        position += (size_val + BLOCK_SIZE - 1) // BLOCK_SIZE * BLOCK_SIZE
+        # Dummy read
+        inc = BLOCK_SIZE + (size_val + BLOCK_SIZE - 1) // BLOCK_SIZE * BLOCK_SIZE
+        last_block_size = inc % 65536
+        for i in range(position, position + inc - last_block_size, 65536):
+            rd_buf[:] = raw_data[i : i + 65536]
+        rd_buf[:last_block_size] = raw_data[position + inc - last_block_size : position + inc]
+        position += inc
 
     return compatible, sample_key_list
 
@@ -415,6 +422,8 @@ def _nb_scan_file(raw_data: np.ndarray, prefix_bytes: np.ndarray) -> tuple[bool,
 def _nb_process_file(raw_data: np.ndarray, prefix_bytes: np.ndarray) -> None:
     position = nb.int64(0)
     total = raw_data.size
+    # rd_buf = np.empty(65536, dtype=np.uint8)
+
     while True:
         header = raw_data[position : position + BLOCK_SIZE].copy()
         if position + BLOCK_SIZE > total:
@@ -428,8 +437,12 @@ def _nb_process_file(raw_data: np.ndarray, prefix_bytes: np.ndarray) -> None:
         if was_updated:
             raw_data[position : position + BLOCK_SIZE] = header
 
-        position += BLOCK_SIZE
-        position += (size_val + BLOCK_SIZE - 1) // BLOCK_SIZE * BLOCK_SIZE
+        inc = BLOCK_SIZE + (size_val + BLOCK_SIZE - 1) // BLOCK_SIZE * BLOCK_SIZE
+        # last_block_size = inc % 65536
+        # for i in range(position, position + inc - last_block_size, 65536):
+        #     rd_buf[:] = raw_data[i:i+65536]
+        # rd_buf[:last_block_size] = raw_data[position + inc - last_block_size:position + inc]
+        position += inc
 
 
 # Keys that, if present in PAX, mean path info is controlled by PAX,
@@ -563,7 +576,7 @@ class TarPatcher:
 
         prefix_bytes = np.frombuffer(prefix.encode("utf-8"), dtype=np.uint8)
 
-        raw_data = np.memmap(tar_path, dtype=np.uint8, mode="r")
+        raw_data = np.memmap(tar_path, dtype=np.uint8, mode="r+")
 
         compatible, sample_keys_list = _nb_scan_file(raw_data, prefix_bytes)
 
@@ -668,10 +681,22 @@ def main(tar_file: Path, prefix: str, dry_run: bool):
     tar_path = Path(tar_file)
     patcher = TarPatcher()
 
+    # files = ["shard-0.tar", "audio_0.tar"]
+    # for file in files:
+    #     print(f"Reading {file}...")
+    #     start = time.time()
+    #     buf = np.memmap(file, dtype=np.uint8, mode="r")
+    #     for i in range(0, buf.size, 65536):
+    #         buf[i:i+65536].copy()
+    #     # with open(file, "rb") as f:
+    #     #     f.read(65536)
+    #     end = time.time()
+    #     print(f"Read time: {end - start} seconds")
+
     click.echo(f"Scanning {tar_path} for in-place rename feasibility...")
     orig_start_method = mp.get_start_method()
     # mp.set_start_method("fork", force=True)
-    for i in range(10):
+    for i in range(2):
         try:
             print(f"Scanning {i}...")
             start = time.time()
@@ -696,7 +721,8 @@ def main(tar_file: Path, prefix: str, dry_run: bool):
     click.echo("Applying prefix in-place...")
     try:
         start = time.time()
-        patcher.apply_prefix(tar_path, prefix)
+        patcher.dataset_apply_prefix(("shard-0.tar", "audio_0.tar"), Path("."))
+        # patcher.apply_prefix(tar_path, prefix)
         end = time.time()
         print(f"Apply time: {end - start} seconds")
     except TarPatcherError as exc:
