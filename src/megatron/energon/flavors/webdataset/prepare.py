@@ -110,6 +110,7 @@ class SqliteIndexWriterAggregator(
     media_filter: Optional[MediaFilterConfig]
     reset_tables: bool
     media_metadata_written: int
+    progress_on_media: bool
 
     def __init__(
         self,
@@ -121,6 +122,7 @@ class SqliteIndexWriterAggregator(
         enable_media_metadata: bool = False,
         media_filter: Optional[MediaFilterConfig] = None,
         reset_tables: bool = True,
+        progress_on_media: bool = False,
     ):
         self.sqlite_path = sqlite_path
         self.total_tasks = total_tasks
@@ -133,6 +135,7 @@ class SqliteIndexWriterAggregator(
         self.media_filter = media_filter
         self.reset_tables = reset_tables
         self.media_metadata_written = 0
+        self.progress_on_media = progress_on_media
 
         if progress_fn is not None:
             self.prog_iter = progress_fn(iter(range(self.total_tasks)), self.total_tasks)
@@ -166,9 +169,12 @@ class SqliteIndexWriterAggregator(
             )
             self.had_update = True
             self.media_metadata_written += 1
+            if self.progress_on_media:
+                self._advance_progress()
         elif isinstance(item, IndexShardInfo):
             # This is a (shard_info, parts) tuple
-            next(self.prog_iter)
+            if not self.progress_on_media:
+                self._advance_progress()
 
             shard_info, cur_parts = item.shard_info, item.parts
             assert shard_info.count != 0, f"Shard {shard_info.name} has no samples."
@@ -190,6 +196,12 @@ class SqliteIndexWriterAggregator(
     ) -> Tuple[List[ShardInfo], Set[str], bool, List[Tuple[str, int]]]:
         assert self.writer is not None, "Writer is not initialized."
         return self.shards, self.found_parts, self.had_update, self.writer.duplicates
+
+    def _advance_progress(self) -> None:
+        try:
+            next(self.prog_iter)
+        except StopIteration:
+            pass
 
 
 class WebdatasetPreparator:

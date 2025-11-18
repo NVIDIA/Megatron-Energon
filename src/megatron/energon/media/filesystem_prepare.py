@@ -6,7 +6,7 @@ from __future__ import annotations
 import os
 from functools import partial
 from pathlib import Path
-from typing import Iterable, Iterator
+from typing import Callable, Iterator
 
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.webdataset.aggregator_pool import AggregatorPool
@@ -59,14 +59,23 @@ def prepare_filesystem_dataset(
 
     sqlite_path = EPath(meta_dir / "index.sqlite")
 
+    agg_progress_fn: Callable[[Iterator[int], int], Iterator[int]] | None = None
+    if progress:
+        from tqdm.auto import tqdm
+
+        def agg_progress_fn(iterator: Iterator[int], total: int) -> Iterator[int]:
+            with tqdm(iterator, total=total, unit="file", desc="Processing media files") as bar:
+                yield from bar
+
     aggregator = SqliteIndexWriterAggregator(
         sqlite_path,
         total_tasks=len(files),
-        progress_fn=None,
+        progress_fn=agg_progress_fn,
         enable_media_metadata=True,
         media_filter=media_filter,
         reset_tables=False,
         enable_sample_tables=False,
+        progress_on_media=progress,
     )
 
     pool = AggregatorPool[
@@ -83,28 +92,7 @@ def prepare_filesystem_dataset(
         aggregator=aggregator,
     )
 
-    if progress:
-        from tqdm.auto import tqdm
-
-        def progress_fn(
-            iterable: Iterable[Path],
-            length: int | None = None,
-        ) -> Iterator[Path]:
-            yield from tqdm(
-                iterable,
-                total=length,
-                unit="file",
-                desc="Scheduling media files",
-            )
-    else:
-
-        def progress_fn(
-            iterable: Iterable[Path],
-            length: int | None = None,
-        ) -> Iterator[Path]:
-            yield from iterable
-
-    for file_path in progress_fn(files, len(files) or None):
+    for file_path in files:
         pool.submit_task(file_path)
 
     pool.process()
@@ -152,11 +140,12 @@ def _collect_media_files(
     if progress_bar is not None:
         progress_bar.close()
 
+    files.sort()
     return files
 
 
 def _process_filesystem_entry(
-    file_path: str,
+    file_path: Path | str,
     *,
     root: Path,
     media_filter: MediaFilterConfig,
