@@ -12,6 +12,8 @@ from megatron.energon.tools.lint import command as lint_command
 from megatron.energon.tools.mount import command as mount_command
 from megatron.energon.tools.prepare import (
     command as prepare_command,
+)
+from megatron.energon.tools.prepare import (
     prepare_media_command,
 )
 from megatron.energon.tools.preview import command as preview_command
