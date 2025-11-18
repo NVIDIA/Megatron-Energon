@@ -213,32 +213,35 @@ class SqliteIndexWriter:
         """
         assert self.db is not None, "Database is closed"
 
-        # Create the index after adding all the samples for better speed
-        # Index on sample_key for fast lookups
-        self.db.execute("CREATE INDEX IF NOT EXISTS idx_samples_sample_key ON samples(sample_key)")
+        if self.enable_sample_tables:
+            # Create the index after adding all the samples for better speed
+            # Index on sample_key for fast lookups
+            self.db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_samples_sample_key ON samples(sample_key)"
+            )
 
-        # Create index on the samples table.  Help the planner if it chooses `samples` as the probe side of the join
-        self.db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_samples_by_tar_and_idx ON samples(tar_file_id, sample_index)"
-        )
+            # Create index on the samples table.  Help the planner if it chooses `samples` as the probe side of the join
+            self.db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_samples_by_tar_and_idx ON samples(tar_file_id, sample_index)"
+            )
 
-        # Create index on the sample_parts table for fast sequential access
-        self.db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_sample_parts_seq ON sample_parts(tar_file_id, sample_index, content_byte_offset)"
-        )
+            # Create index on the sample_parts table for fast sequential access
+            self.db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_sample_parts_seq ON sample_parts(tar_file_id, sample_index, content_byte_offset)"
+            )
 
-        # Create a full index on the sample_parts table for equality lookups and getting offsets directly from key
-        self.db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_sample_parts_full ON sample_parts(tar_file_id, sample_index, part_name, content_byte_offset, content_byte_size)"
-        )
+            # Create a full index on the sample_parts table for equality lookups and getting offsets directly from key
+            self.db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_sample_parts_full ON sample_parts(tar_file_id, sample_index, part_name, content_byte_offset, content_byte_size)"
+            )
 
-        # Check if sample_key are all unique
-        # self.db.execute("CREATE TEMP TABLE temp AS SELECT sample_key, COUNT(*) AS c FROM samples GROUP BY sample_key HAVING c > 1")
-        duplicates = self.db.execute(
-            "SELECT sample_key, COUNT(*) AS c FROM samples GROUP BY sample_key HAVING c > 1 LIMIT 5"
-        ).fetchall()
-        if len(duplicates) > 0:
-            self.duplicates = duplicates
+            # Check if sample_key are all unique
+            # self.db.execute("CREATE TEMP TABLE temp AS SELECT sample_key, COUNT(*) AS c FROM samples GROUP BY sample_key HAVING c > 1")
+            duplicates = self.db.execute(
+                "SELECT sample_key, COUNT(*) AS c FROM samples GROUP BY sample_key HAVING c > 1 LIMIT 5"
+            ).fetchall()
+            if len(duplicates) > 0:
+                self.duplicates = duplicates
 
         if self.db is not None:
             self.db.commit()
