@@ -19,13 +19,14 @@ from megatron.energon.flavors import (
     CrudeWebdataset,
     Sample,
 )
-from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
 from megatron.energon.flavors.webdataset.metadata import (
     EnergonDatasetType,
     check_dataset_info_present,
     get_dataset_info,
     get_dataset_type,
 )
+from megatron.energon.media.extractor import MediaFilterConfig
 from megatron.energon.metadataset.loader import prepare_metadataset
 
 
@@ -127,6 +128,31 @@ def printify_json(data: Any) -> Any:
     help="If set, the tar files will be shuffled before splitting.",
     is_flag=True,
 )
+@click.option(
+    "--media-metadata",
+    help="Compute and store media metadata during preparation.",
+    is_flag=True,
+)
+@click.option(
+    "--media-by-glob",
+    type=str,
+    help="Media detection by using one or more glob patterns such as '*.jpg'. Separate multiple patterns by commas.",
+)
+@click.option(
+    "--media-by-header",
+    is_flag=True,
+    help="Media detection by binary file header.",
+)
+@click.option(
+    "--media-by-extension",
+    is_flag=True,
+    help="Media detection by standard file extensions.",
+)
+@click.option(
+    "--fix-duplicates",
+    help="Fix duplicate keys in the dataset.",
+    is_flag=True,
+)
 def command(
     path: EPath,
     progress: bool,
@@ -135,6 +161,11 @@ def command(
     num_workers: int,
     tar_index_only: bool,
     shuffle_tars: bool,
+    media_metadata: bool,
+    media_by_glob: str | None,
+    media_by_header: bool,
+    media_by_extension: bool,
+    fix_duplicates: bool,
 ):
     """Prepare WebDataset for use with energon.
 
@@ -143,16 +174,40 @@ def command(
     details.
     """
 
+    if (media_by_glob is not None or media_by_header or media_by_extension) and not media_metadata:
+        raise click.UsageError("Media filters require --media-metadata")
+
+    if media_metadata and tar_index_only:
+        raise click.UsageError("--media-metadata cannot be combined with --tar-index-only")
+
+    media_filter_config = (
+        MediaFilterConfig.parse(media_by_glob, media_by_header, media_by_extension)
+        if media_metadata
+        else None
+    )
+
     ds_type = get_dataset_type(path)
     if ds_type == EnergonDatasetType.METADATASET:
+        if media_metadata:
+            raise click.ClickException(
+                "Metadatasets cannot store media metadata. Remove --media-metadata to continue."
+            )
         print("Preparing metadataset...")
         prepare_metadataset(path)
         return
     elif ds_type == EnergonDatasetType.JSONL:
+        if media_metadata:
+            raise click.ClickException(
+                "JSONL datasets do not support media metadata. Remove --media-metadata to continue."
+            )
         print("Preparing jsonl dataset...")
         count = CrudeJsonlDatasetFactory.prepare_dataset(path)
         print(f"Done. Found {count} samples.")
         return
+    elif ds_type == EnergonDatasetType.FILESYSTEM:
+        raise click.ClickException(
+            "Filesystem datasets must be prepared using 'energon prepare-media'."
+        )
 
     assert path.is_dir(), f"Path {path} is not a known dataset type"
 
@@ -222,7 +277,7 @@ def command(
         def progress_fn(els, length=None):
             return els
 
-    found_types, duplicates = BaseWebdatasetFactory.prepare_dataset(
+    found_types = BaseWebdatasetFactory.prepare_dataset(
         path,
         all_tars,
         split_parts_ratio=split_parts_ratio,
@@ -231,24 +286,13 @@ def command(
         tar_index_only=tar_index_only,
         shuffle_seed=42 if shuffle_tars else None,
         workers=num_workers,
+        media_filter=media_filter_config,
+        fix_duplicates=fix_duplicates,
     )
-
-    if duplicates:
-        print(f"Examples of duplicates found: {duplicates}")
-        print()
-        print(
-            "The dataset has duplicate keys. Best practice is to use unique keys. "
-            "You won't be able to use this dataset for joining "
-            "later on."
-        )
 
     found_types = list(found_types)
     if tar_index_only:
         return
-
-    if duplicates:
-        if not click.confirm("Do you want to continue?"):
-            return
 
     # Print json of first two samples
     for sample_idx, data in enumerate(

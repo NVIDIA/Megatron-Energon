@@ -12,7 +12,7 @@ from megatron.energon.flavors import (
     DefaultCrudeJsonlDatasetFactory,
     StandardWebdatasetFactory,
 )
-from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
 from megatron.energon.flavors.webdataset.metadata import EnergonDatasetType, get_dataset_type
 from megatron.energon.typed_converter import JsonParser
 from megatron.energon.worker import WorkerConfig
@@ -127,6 +127,8 @@ def get_dataset_from_config(
             ),
             default_type=StandardWebdatasetFactory,
         )
+    elif ds_type == EnergonDatasetType.FILESYSTEM:
+        raise ValueError("Filesystem datasets are only supported as auxiliary datasets. ")
     else:
         raise ValueError(
             f"Path {path} does not contain a {MAIN_FOLDER_NAME}/.info.yaml or .info.json file nor is it a jsonl file. "

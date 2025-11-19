@@ -154,7 +154,15 @@ class AggregatorPool(Generic[T_input_data, T_aggregation_data, T_result]):
             self.task_queue.put(None)
 
         # Now wait for aggregator to finish reading the queue
-        result = self._aggregator_run()
+        try:
+            result = self._aggregator_run()
+        except Exception:
+            for p in workers:
+                if p.is_alive():
+                    p.terminate()
+            for p in workers:
+                p.join()
+            raise
 
         # Wait for all workers to finish
         for p in workers:

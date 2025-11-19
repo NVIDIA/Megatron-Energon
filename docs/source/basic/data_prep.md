@@ -16,14 +16,13 @@ Depending on what your data looks like and how you are planning to use it, you w
 
 **Monolithic Dataset vs. Polylithic (primary and auxiliary) Datasets**
 
-You can include the media (images/video/audio) inside the same webdataset along with the text and metadata of each sample.
+You can include the media (images/video/audio) inside the same webdataset along with the text-based data of each sample (such as labels, captions, etc.).
 Or you can keep the media separate (either in another indexed webdataset or as individual files on disk).
 When using JSONL, the media will always be separate, so JSONL datasets are always polylithic unless they are text-only.
 
-If you can, you should go for the monolithic option, because it's faster to load.
-However, there are a few reasons why the other option may be needed:
+The monolithic option is faster to load. However, there are a few reasons why the other option may be preferable:
 
-* You need to keep the original media and you don't want to duplicate it
+* You need to keep the original media files and you don't want to duplicate them in the tar files
 * Your media data is very large (e.g. long videos) and you need to keep your primary dataset small (containing just the text-based data and meta information)
 * You want to re-use the same media with different labels or you want to train on different subsets
 * You want to train with [online packing](../advanced/packing.md) and can't fit all the media of the packing buffer in memory. With polylithic datasets you can use caching to avoid that issue.
@@ -63,13 +62,14 @@ These are the typical steps to get your data ready:
 (polylithic-dataset)=
 ## Steps to Create a Polylithic Dataset
 
-1. Create the primary [WebDataset](https://github.com/webdataset/webdataset) or JSONL file from your text-based part of the data (meta information, labels, sizes etc.)
+1. Create the primary [WebDataset](https://github.com/webdataset/webdataset) or JSONL file from your text-based part of the data (meta information, labels etc.)
     * Include the file names (don't use absolute paths) of the media that belongs to each sample (e.g. as strings inside a json entry)
 2. Create the auxiliary dataset(s). Can be multiple datasets, e.g. one per modality.
     * Either as a folder on disk with all the media files inside
     * Or as another WebDataset that contains just the media files (with the exact same names)
 3. Run our preparation tool `energon prepare` **on both datasets** (yes also on the JSONL) to convert to an energon-compatible format
     * Configure both datasets as `CrudeWebdataset` (JSONL always is by default)
+    * For the auxiliary datasets, we recommend to enable the [media metadata feature](media-metadata) to store additional information about the media (like image size, resolution, video duration etc.)
 4. Create a [metadataset](../basic/metadataset) that specifies what auxiliary data to load for each primary dataset
     * For more details read about [crude data](crude-data)
 
@@ -210,6 +210,51 @@ The command will
 * Ask you about the sample type (optionally crude)
 * Ask you how to decode the data if not using crude data (field map or sample_loader.py)
 * Store all this information in a subfolder `.nv-meta/`, see details [below](data-on-disk).
+
+(media-metadata)=
+### Media Metadata
+
+If you are preparing a dataset with media files, energon can retrieve and store additional information about the media (like image size, resolution, video duration etc.).
+This information will be stored inside an SQLite database file next to the dataset.
+Later, inside the [cooker](crude-data), you can access this information using the {py:meth}`get_media_metadata <megatron.energon.FileStore.get_media_metadata>` method of the {py:class}`FileStore <megatron.energon.FileStore>`.
+
+#### During normal initial preparation of a WebDataset
+
+```sh
+> energon prepare --media-metadata --media-by-extension /path/to/dataset
+```
+
+#### Adding media metadata to an existing dataset
+```sh
+> energon prepare-media --media-by-extension /path/to/dataset
+```
+
+```{admonition} Good to know
+:class: tip
+That also works for filesystem datasets. I.e. you can run `energon prepare-media` on a normal folder with media files and it will create the media metadata database file next to the dataset.
+```
+
+#### Customizing the selection of media files
+
+You can customize the selection of media files by using the `--media-by-glob`, `--media-by-header` and `--media-by-extension` options.
+You must specify exactly one of the options.
+
+To select all media files with the extensions `.jpg`, `.png` and `.webp`, you can use the following command:
+```sh
+> energon prepare --media-metadata --media-by-glob '*.jpg,*.png,*.webp' /path/to/dataset
+```
+
+To select media files by reading their contents/header, you can use the `--media-by-header` option.
+```sh
+> energon prepare --media-metadata --media-by-header /path/to/dataset
+```
+
+To select media files by our default extension list, you can use the `--media-by-extension` option.
+```sh
+> energon prepare --media-metadata --media-by-extension /path/to/dataset
+```
+
+The list can be found in the [extractor.py](https://github.com/NVIDIA/Megatron-Energon/blob/develop/src/megatron/energon/media/extractor.py) file.
 
 ### Splitting the dataset into train/val/test
 

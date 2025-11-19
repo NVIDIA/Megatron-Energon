@@ -88,7 +88,7 @@ class IJsonlReader(ABC):
             return None
 
         return FilteredSample(
-            __key__=f"{self.jsonl_path.name}/{key}",
+            __key__=key,
             __shard__=self.jsonl_path.name,
             __restore_key__=("Webdataset", sample_pointer.index),
             __sources__=(

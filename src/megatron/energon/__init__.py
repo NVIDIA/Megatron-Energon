@@ -20,6 +20,7 @@ from megatron.energon.cache import (
     Lazy,
     MockLazy,
     NoCachePool,
+    PrimaryFileStore,
     SystemFileStore,
 )
 from megatron.energon.edataclass import edataclass
@@ -182,6 +183,7 @@ __all__ = [
     "OCRSample",
     "OCRWebdataset",
     "PackingDataset",
+    "PrimaryFileStore",
     "prepare_metadataset",
     "RepeatDataset",
     "reraise_exception",

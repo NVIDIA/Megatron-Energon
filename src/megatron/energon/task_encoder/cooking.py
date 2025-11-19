@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from typing import Callable, Generic, Optional, TypeVar, Union, overload
 
 from megatron.energon.flavors.base_dataset import Sample
-from megatron.energon.flavors.crude import CrudeSample
 from megatron.energon.source_info import SourceInfo
 
 T_sample = TypeVar("T_sample", bound=Sample, covariant=True)
@@ -94,15 +93,12 @@ class Cooker(Generic[T_sample]):
     def need_cache(self) -> bool:
         return get_cooker_need_cache(self.cook)
 
-    def is_match(self, crude_sample: CrudeSample) -> bool:
+    def is_match(self, subflavors: dict) -> bool:
         if self.has_subflavors is not None:
             # Checks if the dict entries provided as a filter all match
             # the ones in the sample. The sample may have additional entries.
             for k, v in self.has_subflavors.items():
-                if (
-                    k not in crude_sample["__subflavors__"]
-                    or crude_sample["__subflavors__"][k] != v
-                ):
+                if k not in subflavors or subflavors[k] != v:
                     return False
 
         return True

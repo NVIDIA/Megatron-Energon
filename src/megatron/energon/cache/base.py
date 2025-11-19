@@ -5,6 +5,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Callable, Generic, TypeVar
 
 from megatron.energon.edataclass import edataclass
+from megatron.energon.media.metadata import MediaMetadataBase
 from megatron.energon.source_info import SourceInfo, add_source_info
 
 T = TypeVar("T")
@@ -18,6 +19,16 @@ class FileStore(Generic[T]):
         """Returns the data for the given key."""
         ...
 
+    def _get_raw(self, key: str) -> tuple[bytes, SourceInfo]:
+        """Returns the raw data for the given key. Without decoding.
+        For non-wrapped FileStores, this is the same as __getitem__."""
+        return self[key]
+
+    def _decode_raw(self, data: T, **kwargs) -> T:
+        """Decodes the raw data into the target type.
+        For non-wrapped FileStores, this is the same as identity"""
+        return data
+
     def get(self, key: str, sample: Any = None) -> Any:
         """Returns the data for the given key and adds the source info to the sample."""
         data, source_info = self[key]
@@ -28,6 +39,39 @@ class FileStore(Generic[T]):
     def get_path(self) -> str:
         """Returns the path to the dataset."""
         ...
+
+    def get_media_metadata(self, key: str) -> MediaMetadataBase:
+        """Return the media metadata for the given key if available."""
+
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support media metadata retrieval"
+        )
+
+
+class FileStoreWrapper(FileStore[T]):
+    """
+    A wrapper around a FileStore that can be used to add additional functionality.
+    Typically for decoding the data on access.
+    """
+
+    _inner: FileStore[T]
+
+    def __init__(self, inner: FileStore[T]):
+        self._inner = inner
+
+    def _get_raw(self, key: str) -> bytes:
+        """Returns the raw data for the given key. Without decoding."""
+        return self._inner._get_raw(key)
+
+    def _decode_raw(self, data: T, **kwargs) -> T:
+        """Decodes the raw data into the target type.
+        Args:
+            data: The raw data to decode.
+            **kwargs: Additional keyword arguments to pass to the decoder.
+        Returns:
+            The decoded data.
+        """
+        return self._inner._decode_raw(data, **kwargs)
 
 
 @edataclass
@@ -159,3 +203,30 @@ class FileStoreDecoder(ABC):
             The decoded field's data.
         """
         ...
+
+
+class PrimaryFileStore(FileStoreWrapper[T]):
+    """Same as the FileStore, but additionally uses the current sample's key as a prefix for the key,
+    if the key passed to `__getitem__`, `.get` or `.get_media_metadata` starts with a '.'."""
+
+    def __init__(self, inner: FileStore[T], current_key: str):
+        super().__init__(inner)
+        self._current_key = current_key
+
+    def __getitem__(self, key: str) -> tuple[T, SourceInfo]:
+        if key.startswith("."):
+            key = f"{self._current_key}{key}"
+        return self._inner[key]
+
+    def get(self, key: str, sample: Any = None) -> Any:
+        if key.startswith("."):
+            key = f"{self._current_key}{key}"
+        return self._inner.get(key, sample)
+
+    def get_path(self) -> str:
+        return self._inner.get_path()
+
+    def get_media_metadata(self, key: str) -> MediaMetadataBase:
+        if key.startswith("."):
+            key = f"{self._current_key}{key}"
+        return self._inner.get_media_metadata(key)

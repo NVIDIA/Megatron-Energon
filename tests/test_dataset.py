@@ -48,7 +48,7 @@ from megatron.energon import (
 from megatron.energon.dataset_config import get_dataset_from_config
 from megatron.energon.edataclass import edataclass
 from megatron.energon.flavors import BaseWebdatasetFactory
-from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
 from megatron.energon.task_encoder.base import stateless
 from megatron.energon.tools.analyze_debug import command as analyze_debug_command
 from megatron.energon.tools.info import command as info_command
@@ -435,9 +435,7 @@ class TestDataset(unittest.TestCase):
             sample_type=CaptioningSample,
         )
         captions = set(sample["caption"] for sample in self.samples)
-        keys = set(
-            f"<SL>parts/data-{idx // 30:d}.tar/{idx:06d}" for idx in range(len(self.samples))
-        )
+        keys = set(f"<SL>{idx:06d}" for idx in range(len(self.samples)))
         for sample in get_loader(ds.build()):
             assert sample.caption[:4] == "<SL>"
             captions.remove(sample.caption[4:])
@@ -456,9 +454,7 @@ class TestDataset(unittest.TestCase):
         )
 
         keys = [entry.__key__ for entry in get_loader(ds.build())]
-        assert keys == [
-            f"parts/data-1.tar/{i:06d}" for i in list(range(30, 35)) + list(range(40, 50))
-        ], keys
+        assert keys == [f"{i:06d}" for i in list(range(30, 35)) + list(range(40, 50))], keys
 
     def test_loader(self):
         torch.manual_seed(42)
@@ -520,8 +516,8 @@ class TestDataset(unittest.TestCase):
         assert len(loader2) == 5
         # The order in the split is shuffled this way
         assert list(key for batch in loader2 for key in batch.__key__) == [
-            f"parts/data-1.tar/{i:06d}" for i in range(30, 50)
-        ] + [f"parts/data-0.tar/{i:06d}" for i in range(30)]
+            f"{i:06d}" for i in range(30, 50)
+        ] + [f"{i:06d}" for i in range(30)]
 
     def test_default_dataset(self):
         torch.manual_seed(42)
@@ -1571,7 +1567,7 @@ class TestDataset(unittest.TestCase):
         ):
             @stateless
             def encode_sample(self, sample: CaptioningSample) -> CaptioningSample:
-                sample.caption = sample.__key__.split("/")[-2]
+                sample.caption = sample.__sources__[0].shard_name.split("/")[-1]
                 return sample
 
             def batch_group_criterion(self, sample: CaptioningSample) -> Tuple[Hashable, int]:
@@ -1756,7 +1752,7 @@ class TestDataset(unittest.TestCase):
             catch_exceptions=False,
         )
         # First sample!
-        assert "__key__ (<class 'str'>): 'parts/data-1.tar/000030'" in result.stdout
+        assert "__key__ (<class 'str'>): '000030'" in result.stdout
         assert result.exit_code == 0, "Preview failed, see output"
 
     def test_info_captioning_dataset(self):

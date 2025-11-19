@@ -14,12 +14,29 @@ from megatron.energon.flavors.webdataset.thread_local_sqlite import ThreadLocalS
 from megatron.energon.local_copy import ensure_local_copy
 
 
+class DuplicateSampleKeyError(RuntimeError):
+    """Raised when attempting to insert a duplicate sample key into the index."""
+
+    def __init__(self, sample_key: str) -> None:
+        super().__init__(f"Duplicate sample key encountered while indexing: {sample_key!r}")
+        self.sample_key = sample_key
+
+
 class SqliteIndexWriter:
     sqlite_path: EPath
     db: Optional[sqlite3.Connection]
-    duplicates: List[Tuple[str, int]]
+    enable_sample_tables: bool
+    enable_media_metadata: bool
+    reset_tables: bool
 
-    def __init__(self, sqlite_path: EPath):
+    def __init__(
+        self,
+        sqlite_path: EPath,
+        *,
+        enable_sample_tables: bool = True,
+        enable_media_metadata: bool = False,
+        reset_tables: bool = True,
+    ):
         """
         Initializes an SQLite database and sets up the samples table:
           - samples(tar_file_id INTEGER,
@@ -42,6 +59,9 @@ class SqliteIndexWriter:
 
         # Final path and temporary path
         self.sqlite_path = sqlite_path
+        self.enable_sample_tables = enable_sample_tables
+        self.enable_media_metadata = enable_media_metadata
+        self.reset_tables = reset_tables
 
         # Initialize SQLite connection
         path = str(self.sqlite_path)
@@ -53,41 +73,65 @@ class SqliteIndexWriter:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(path)
         self.db.execute("PRAGMA busy_timeout = 5000;")  # wait up to 5000ms when locked
-        self.db.execute("PRAGMA journal_mode = WAL;")
 
-        # Create the sample table
-        self.db.execute("DROP INDEX IF EXISTS idx_samples_sample_key")
-        self.db.execute("DROP INDEX IF EXISTS idx_samples_by_tar_and_idx")
-        self.db.execute("DROP TABLE IF EXISTS samples")
-        self.db.execute(
-            """
-            CREATE TABLE samples (
-                tar_file_id INTEGER,
-                sample_key TEXT,
-                sample_index INTEGER,
-                byte_offset INTEGER,
-                byte_size INTEGER
+        if self.enable_sample_tables:
+            assert self.reset_tables, "Reset tables is required when enabling sample tables"
+
+            self.db.execute("DROP INDEX IF EXISTS idx_samples_sample_key")
+            self.db.execute("DROP INDEX IF EXISTS idx_samples_by_tar_and_idx")
+            self.db.execute("DROP TABLE IF EXISTS samples")
+
+            self.db.execute("DROP INDEX IF EXISTS idx_sample_parts_seq")
+            self.db.execute("DROP INDEX IF EXISTS idx_sample_parts_full")
+            self.db.execute("DROP TABLE IF EXISTS sample_parts")
+
+            self.db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS samples (
+                    tar_file_id INTEGER NOT NULL,
+                    sample_key TEXT NOT NULL UNIQUE,
+                    sample_index INTEGER NOT NULL,
+                    byte_offset INTEGER,
+                    byte_size INTEGER
+                )
+                """
             )
-        """
-        )
-
-        # Create the sample parts table
-        self.db.execute("DROP INDEX IF EXISTS idx_sample_parts_seq")
-        self.db.execute("DROP INDEX IF EXISTS idx_sample_parts_full")
-        self.db.execute("DROP TABLE IF EXISTS sample_parts")
-        self.db.execute(
-            """
-            CREATE TABLE sample_parts (
-                tar_file_id INTEGER,
-                sample_index INTEGER,
-                part_name TEXT,
-                content_byte_offset INTEGER,
-                content_byte_size INTEGER
+            self.db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS sample_parts (
+                    tar_file_id INTEGER,
+                    sample_index INTEGER,
+                    part_name TEXT,
+                    content_byte_offset INTEGER,
+                    content_byte_size INTEGER
+                )
+                """
             )
-        """
-        )
 
-        self.duplicates = []
+        if self.enable_media_metadata:
+            if self.reset_tables:
+                self.db.execute("DROP TABLE IF EXISTS media_metadata")
+                self.db.execute("DROP TABLE IF EXISTS media_filters")
+            self.db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS media_metadata (
+                    entry_key TEXT PRIMARY KEY,
+                    metadata_type TEXT NOT NULL,
+                    metadata_json TEXT NOT NULL
+                )
+                """
+            )
+            self.db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS media_filters (
+                    filter_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    strategy TEXT NOT NULL,
+                    patterns TEXT,
+                    created_at_utc TEXT DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(strategy, patterns)
+                )
+                """
+            )
 
     def append_sample(
         self,
@@ -111,13 +155,16 @@ class SqliteIndexWriter:
         assert self.db is not None, "Database is closed"
 
         # Insert a row in the samples table
-        self.db.execute(
-            """
-            INSERT INTO samples (tar_file_id, sample_key, sample_index, byte_offset, byte_size)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (tar_file_id, sample_key, sample_index, byte_offset, byte_size),
-        )
+        try:
+            self.db.execute(
+                """
+                INSERT INTO samples (tar_file_id, sample_key, sample_index, byte_offset, byte_size)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (tar_file_id, sample_key, sample_index, byte_offset, byte_size),
+            )
+        except sqlite3.IntegrityError as exc:  # pragma: no cover - defensive programming
+            raise DuplicateSampleKeyError(sample_key) from exc
 
     def append_part(
         self,
@@ -140,6 +187,33 @@ class SqliteIndexWriter:
             (tar_file_id, sample_index, part_name, content_byte_offset, content_byte_size),
         )
 
+    def append_media_metadata(
+        self,
+        entry_key: str,
+        metadata_type: str,
+        metadata_json: str,
+    ) -> None:
+        """Insert or update a media metadata record."""
+
+        assert self.enable_media_metadata, "Adding media metadata, although not enabled"
+
+        assert self.db is not None, "Database is closed"
+
+        self.db.execute(
+            """
+            INSERT OR REPLACE INTO media_metadata (entry_key, metadata_type, metadata_json)
+            VALUES (?, ?, ?)
+            """,
+            (entry_key, metadata_type, metadata_json),
+        )
+
+    def append_media_filter(self, *, strategy: str, patterns: str | None) -> None:
+        assert self.db is not None, "Database is closed"
+        self.db.execute(
+            "INSERT OR IGNORE INTO media_filters (strategy, patterns) VALUES (?, ?)",
+            (strategy, patterns),
+        )
+
     def close(self):
         """
         Closes the DB connection. If finalize=True, the temporary database is
@@ -147,32 +221,27 @@ class SqliteIndexWriter:
         """
         assert self.db is not None, "Database is closed"
 
-        # Create the index after adding all the samples for better speed
-        # Index on sample_key for fast lookups
-        self.db.execute("CREATE INDEX IF NOT EXISTS idx_samples_sample_key ON samples(sample_key)")
+        if self.enable_sample_tables:
+            # Create the index after adding all the samples for better speed
+            # Index on sample_key for fast lookups
+            self.db.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_samples_sample_key ON samples(sample_key)"
+            )
 
-        # Create index on the samples table.  Help the planner if it chooses `samples` as the probe side of the join
-        self.db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_samples_by_tar_and_idx ON samples(tar_file_id, sample_index)"
-        )
+            # Create index on the samples table.  Help the planner if it chooses `samples` as the probe side of the join
+            self.db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_samples_by_tar_and_idx ON samples(tar_file_id, sample_index)"
+            )
 
-        # Create index on the sample_parts table for fast sequential access
-        self.db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_sample_parts_seq ON sample_parts(tar_file_id, sample_index, content_byte_offset)"
-        )
+            # Create index on the sample_parts table for fast sequential access
+            self.db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_sample_parts_seq ON sample_parts(tar_file_id, sample_index, content_byte_offset)"
+            )
 
-        # Create a full index on the sample_parts table for equality lookups and getting offsets directly from key
-        self.db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_sample_parts_full ON sample_parts(tar_file_id, sample_index, part_name, content_byte_offset, content_byte_size)"
-        )
-
-        # Check if sample_key are all unique
-        # self.db.execute("CREATE TEMP TABLE temp AS SELECT sample_key, COUNT(*) AS c FROM samples GROUP BY sample_key HAVING c > 1")
-        duplicates = self.db.execute(
-            "SELECT sample_key, COUNT(*) AS c FROM samples GROUP BY sample_key HAVING c > 1 LIMIT 5"
-        ).fetchall()
-        if len(duplicates) > 0:
-            self.duplicates = duplicates
+            # Create a full index on the sample_parts table for equality lookups and getting offsets directly from key
+            self.db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_sample_parts_full ON sample_parts(tar_file_id, sample_index, part_name, content_byte_offset, content_byte_size)"
+            )
 
         if self.db is not None:
             self.db.commit()
@@ -279,6 +348,17 @@ class SqliteIndexReader:
 
         db_exists = self.db.select_one(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='sample_parts'"
+        )
+        self.db.thread_close()
+        return db_exists is not None
+
+    def db_has_media_metadata(self) -> bool:
+        """Check if the database has a media_metadata table."""
+
+        assert self.db is not None, "Database is closed"
+
+        db_exists = self.db.select_one(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='media_metadata'"
         )
         self.db.thread_close()
         return db_exists is not None
@@ -413,6 +493,17 @@ class SqliteIndexReader:
             byte_offset=sample[3],
             byte_size=sample[4],
         )
+
+    def get_media_metadata(self, entry_key: str) -> Tuple[str, str] | None:
+        """Fetch the media metadata record for an entry, if available."""
+
+        assert self.db is not None, "Database is closed"
+
+        row = self.db.select_one(
+            "SELECT metadata_type, metadata_json FROM media_metadata WHERE entry_key = ?",
+            (entry_key,),
+        )
+        return (row[0], row[1]) if row is not None else None
 
     def close(self):
         """Close the database connection."""

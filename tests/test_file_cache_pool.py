@@ -65,8 +65,8 @@ class TestFileStoreCachePool(unittest.TestCase):
         )
 
         mock_decode_file_store = DecodeFileStore(
+            inner=mock_raw_file_store,
             decoder=MockDecoder(),
-            inner_reader=mock_raw_file_store,
         )
         pool = FileStoreCachePool(parent_cache_dir=self.temp_path)
         try:
@@ -530,8 +530,8 @@ class TestFileStoreCachePool(unittest.TestCase):
             }
         )
         mock_decode_file_store = DecodeFileStore(
+            inner=mock_raw_file_store,
             decoder=MockDecoder(),
-            inner_reader=mock_raw_file_store,
         )
         try:
             # Request lazy loading
@@ -563,8 +563,8 @@ class TestFileStoreCachePool(unittest.TestCase):
             }
         )
         mock_decode_file_store = DecodeFileStore(
+            inner=mock_raw_file_store,
             decoder=MockDecoder(),
-            inner_reader=mock_raw_file_store,
         )
         try:
             # Request lazy loading

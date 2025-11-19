@@ -82,6 +82,9 @@ av_decode = [
 guess_content = [
   "filetype>=1.0.0",
 ]
+tar_patcher = [
+  "numba",
+]
 
 [project.urls]
 Homepage = "https://github.com/NVIDIA/Megatron-Energon"
