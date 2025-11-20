@@ -88,8 +88,8 @@ from megatron.energon import FileStore
 @stateless
 @cooker(need_primary=True)
 def cook_media_metadata(sample: dict, primary: FileStore) -> TextSample:
-    """This cooker loads the media from the primary and auxiliary datasets and
-    returns a text sample with the metadata descriptions of each."""
+    """This cooker loads the media metadata for the current sample
+    and returns a text sample with the metadata description."""
 
     # The `.` prefix is used to access the media metadata of the primary dataset,
     # referring to a part of the current sample.
@@ -216,7 +216,9 @@ def cook_media_metadata(sample: dict, foo_bar_source: FileStore) -> TextSample:
 
 ```
 
-The dataclasses for metadata are {py:class}`AVMetadata <megatron.energon.media.AVMetadata>` and {py:class}`ImageMetadata <megatron.energon.media.ImageMetadata>`.
+The path of the media file within the auxiliary dataset, is what needs to be passed to the `get_media_metadata` method, for example `0001.jpg` or `images/0001.jpg` if within a subfoler inside the WebDataset or filesystem dataset.
+
+The return value will be either {py:class}`AVMetadata <megatron.energon.media.AVMetadata>` or {py:class}`ImageMetadata <megatron.energon.media.ImageMetadata>`.
 Click on them to see the fields and their types.
 
 

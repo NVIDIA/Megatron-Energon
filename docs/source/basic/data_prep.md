@@ -239,7 +239,7 @@ That also works for filesystem datasets. I.e. you can run `energon prepare-media
 You can customize the selection of media files by using the `--media-by-glob`, `--media-by-header` and `--media-by-extension` options.
 You must specify exactly one of the options.
 
-To select media files by our default extension list (reocmmended), you can use the `--media-by-extension` option.
+To select media files by our default extension list (recommended), you can use the `--media-by-extension` option.
 ```sh
 > energon prepare --media-metadata --media-by-extension /path/to/dataset
 ```
@@ -664,7 +664,7 @@ directly access the content without parsing the tar header.
 Both tables can be joined over the `tar_file_id` and the `sample_index`. Note that the `tar_file_id` refers to the list
 of tar files in the `.info.json` file.
 
-Newer versions of Energon also add `media_filters` and `media_metadata` tables to the database:
+Since version 8 of Energon, `media_filters` and `media_metadata` tables are added to the database:
 
 The filters table is used to store the media filters that were used to select the media files.
 The media metadata will be stored *for the union* of all the media files that were selected by the filters.
