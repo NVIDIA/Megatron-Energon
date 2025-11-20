@@ -221,12 +221,12 @@ Later, inside the [cooker](crude-data), you can access this information using th
 #### During normal initial preparation of a WebDataset
 
 ```sh
-> energon prepare --media-metadata --media-by-extension /path/to/dataset
+> energon prepare --media-metadata-by-extension /path/to/dataset
 ```
 
 #### Adding media metadata to an existing dataset
 ```sh
-> energon prepare-media --media-by-extension /path/to/dataset
+> energon prepare-media --media-metadata-by-extension /path/to/dataset
 ```
 
 ```{admonition} Good to know
@@ -236,24 +236,24 @@ That also works for filesystem datasets. I.e. you can run `energon prepare-media
 
 #### Customizing the selection of media files
 
-You can customize the selection of media files by using the `--media-by-glob`, `--media-by-header` and `--media-by-extension` options.
+You can customize the selection of media files by using the `--media-metadata-by-glob`, `--media-metadata-by-header` and `--media-metadata-by-extension` options.
 You must specify exactly one of the options.
 
-To select media files by our default extension list (recommended), you can use the `--media-by-extension` option.
+To select media files by our default extension list (recommended), you can use the `--media-metadata-by-extension` option.
 ```sh
-> energon prepare --media-metadata --media-by-extension /path/to/dataset
+> energon prepare --media-metadata-by-extension /path/to/dataset
 ```
 
 The list can be found in the [extractor.py](https://github.com/NVIDIA/Megatron-Energon/blob/develop/src/megatron/energon/media/extractor.py) file.
 
 To select all media files with the extensions `.jpg`, `.png` and `.webp`, you can use the following command:
 ```sh
-> energon prepare --media-metadata --media-by-glob '*.jpg,*.png,*.webp' /path/to/dataset
+> energon prepare --media-metadata-by-glob '*.jpg,*.png,*.webp' /path/to/dataset
 ```
 
-To select media files by reading their contents/header, you can use the `--media-by-header` option.
+To select media files by reading their contents/header, you can use the `--media-metadata-by-header` option.
 ```sh
-> energon prepare --media-metadata --media-by-header /path/to/dataset
+> energon prepare --media-metadata-by-header /path/to/dataset
 ```
 Note that this option may be slower than the other options, as it needs to read the contents of the files.
 
