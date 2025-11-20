@@ -17,7 +17,8 @@ import numpy as np
 import torch
 import torchvision.transforms as transforms
 
-from megatron.energon.av import AVDecoder, AVMetadata, get_clips_uniform, get_single_frames_uniform
+from megatron.energon.av import AVDecoder, get_clips_uniform, get_single_frames_uniform
+from megatron.energon.media import AVMetadata
 
 # Set multiprocessing start method to 'spawn' on macOS to avoid DataLoader cleanup issues
 if sys.platform == "darwin":
