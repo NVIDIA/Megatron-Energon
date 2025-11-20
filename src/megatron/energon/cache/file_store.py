@@ -104,7 +104,7 @@ class SystemFileStore(FileStore[bytes]):
             if file_path.is_file():
                 raise KeyError(
                     f"Media metadata missing for {key}. "
-                    "Run `energon prepare --media-metadata` to regenerate it."
+                    "Run `energon prepare --media-metadata-by-...` to regenerate it."
                 )
             raise KeyError(f"File {file_path} not found")
         metadata_type, metadata_json = row
@@ -118,7 +118,7 @@ class SystemFileStore(FileStore[bytes]):
             if not sqlite_path.is_file():
                 raise RuntimeError(
                     f"Media metadata database missing at {sqlite_path}. "
-                    "Run `energon prepare --media-metadata` for this dataset."
+                    "Run `energon prepare --media-metadata-by-...` for this dataset."
                 )
 
             local_sqlite_path = ensure_local_copy(sqlite_path)
@@ -134,7 +134,7 @@ class SystemFileStore(FileStore[bytes]):
                 self._media_metadata_reader.thread_close()
                 self._media_metadata_reader = None
                 raise RuntimeError(
-                    "Media metadata table missing. Re-run `energon prepare --media-metadata`."
+                    "Media metadata table missing. Re-run `energon prepare --media-metadata-by-...`."
                 )
             self._media_metadata_checked = True
 
@@ -160,13 +160,13 @@ class WebdatasetFileStore(SqliteITarEntryReader, FileStore[bytes]):
                 has_metadata = self.sqlite_reader.db_has_media_metadata()
             except sqlite3.Error as exc:  # pragma: no cover - defensive
                 raise RuntimeError(
-                    "Failed to inspect media metadata table. Re-run `energon prepare --media-metadata`."
+                    "Failed to inspect media metadata table. Re-run `energon prepare --media-metadata-by-...`."
                 ) from exc
 
             if not has_metadata:
                 raise RuntimeError(
                     "Media metadata is not available for this dataset. "
-                    "Run `energon prepare --media-metadata` to generate it."
+                    "Run `energon prepare --media-metadata-by-...` to generate it."
                 )
 
             self._media_metadata_available = True
@@ -175,7 +175,7 @@ class WebdatasetFileStore(SqliteITarEntryReader, FileStore[bytes]):
             row = self.sqlite_reader.get_media_metadata(key)
         except sqlite3.Error as exc:  # pragma: no cover - defensive
             raise RuntimeError(
-                "Failed to load media metadata. Re-run `energon prepare --media-metadata`."
+                "Failed to load media metadata. Re-run `energon prepare --media-metadata-by-...`."
             ) from exc
 
         if row is None:

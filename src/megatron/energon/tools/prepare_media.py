@@ -30,17 +30,17 @@ from megatron.energon.media.filesystem_prepare import prepare_filesystem_dataset
     help="Number of workers to use to scan files",
 )
 @click.option(
-    "--media-by-glob",
+    "--media-metadata-by-glob",
     type=str,
     help="Media detection by using one or more glob patterns such as '*.jpg'. Separate multiple patterns by commas.",
 )
 @click.option(
-    "--media-by-header",
+    "--media-metadata-by-header",
     is_flag=True,
     help="Media detection by binary file header.",
 )
 @click.option(
-    "--media-by-extension",
+    "--media-metadata-by-extension",
     is_flag=True,
     help="Media detection by standard file extensions.",
 )
@@ -48,14 +48,14 @@ def command(
     path: EPath,
     progress: bool,
     num_workers: int,
-    media_by_glob: str | None,
-    media_by_header: bool,
-    media_by_extension: bool,
+    media_metadata_by_glob: str | None,
+    media_metadata_by_header: bool,
+    media_metadata_by_extension: bool,
 ):
     """Prepare a filesystem dataset by collecting media metadata."""
 
     media_filter_config = MediaFilterConfig.parse(
-        media_by_glob, media_by_header, media_by_extension
+        media_metadata_by_glob, media_metadata_by_header, media_metadata_by_extension
     )
 
     ds_type = get_dataset_type(path)

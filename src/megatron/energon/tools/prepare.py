@@ -129,22 +129,17 @@ def printify_json(data: Any) -> Any:
     is_flag=True,
 )
 @click.option(
-    "--media-metadata",
-    help="Compute and store media metadata during preparation.",
-    is_flag=True,
-)
-@click.option(
-    "--media-by-glob",
+    "--media-metadata-by-glob",
     type=str,
     help="Media detection by using one or more glob patterns such as '*.jpg'. Separate multiple patterns by commas.",
 )
 @click.option(
-    "--media-by-header",
+    "--media-metadata-by-header",
     is_flag=True,
     help="Media detection by binary file header.",
 )
 @click.option(
-    "--media-by-extension",
+    "--media-metadata-by-extension",
     is_flag=True,
     help="Media detection by standard file extensions.",
 )
@@ -161,10 +156,9 @@ def command(
     num_workers: int,
     tar_index_only: bool,
     shuffle_tars: bool,
-    media_metadata: bool,
-    media_by_glob: str | None,
-    media_by_header: bool,
-    media_by_extension: bool,
+    media_metadata_by_glob: str | None,
+    media_metadata_by_header: bool,
+    media_metadata_by_extension: bool,
     fix_duplicates: bool,
 ):
     """Prepare WebDataset for use with energon.
@@ -174,31 +168,36 @@ def command(
     details.
     """
 
-    if (media_by_glob is not None or media_by_header or media_by_extension) and not media_metadata:
-        raise click.UsageError("Media filters require --media-metadata")
+    do_media_metadata = bool(
+        media_metadata_by_glob is not None
+        or media_metadata_by_header
+        or media_metadata_by_extension
+    )
 
-    if media_metadata and tar_index_only:
-        raise click.UsageError("--media-metadata cannot be combined with --tar-index-only")
+    if do_media_metadata and tar_index_only:
+        raise click.UsageError("--media-metadata-by-... cannot be combined with --tar-index-only")
 
     media_filter_config = (
-        MediaFilterConfig.parse(media_by_glob, media_by_header, media_by_extension)
-        if media_metadata
+        MediaFilterConfig.parse(
+            media_metadata_by_glob, media_metadata_by_header, media_metadata_by_extension
+        )
+        if do_media_metadata
         else None
     )
 
     ds_type = get_dataset_type(path)
     if ds_type == EnergonDatasetType.METADATASET:
-        if media_metadata:
+        if do_media_metadata:
             raise click.ClickException(
-                "Metadatasets cannot store media metadata. Remove --media-metadata to continue."
+                "Metadatasets cannot store media metadata. Remove --media-metadata-by-... to continue."
             )
         print("Preparing metadataset...")
         prepare_metadataset(path)
         return
     elif ds_type == EnergonDatasetType.JSONL:
-        if media_metadata:
+        if do_media_metadata:
             raise click.ClickException(
-                "JSONL datasets do not support media metadata. Remove --media-metadata to continue."
+                "JSONL datasets do not support media metadata. Remove --media-metadata-by-... to continue."
             )
         print("Preparing jsonl dataset...")
         count = CrudeJsonlDatasetFactory.prepare_dataset(path)
