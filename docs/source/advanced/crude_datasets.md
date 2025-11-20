@@ -74,6 +74,34 @@ All it does, is to forward the key, restore key and flavors from the dict to the
 
 In a real use-case you will want to do a lot more here and we recommend keeping the cook methods in separate files and importing them where you define your TaskEncoder.
 
+### Using Media Metadata in Monolithic Datasets
+If you prepared your dataset with media metadata, you can access it in the cooker using the {py:meth}`get_media_metadata <megatron.energon.FileStore.get_media_metadata>` method of the {py:class}`FileStore <megatron.energon.FileStore>`. This will be faster than decoding the media files to infer the media metadata like video duration or image size.
+Here we are looking at the use case for primary datasets, but for [auxiliary datasets](aux-data), this is even more beneficial.
+
+#### Metadata from the Primary Dataset
+
+```python
+from megatron.energon import FileStore
+
+# ...
+
+@stateless
+@cooker(need_primary=True)
+def cook_media_metadata(sample: dict, primary: FileStore) -> TextSample:
+    """This cooker loads the media from the primary and auxiliary datasets and
+    returns a text sample with the metadata descriptions of each."""
+
+    # The `.` prefix is used to access the media metadata of the primary dataset,
+    # referring to a part of the current sample.
+    primary_media_metadata = primary.get_media_metadata(".wav")
+
+    return TextSample(
+        **basic_sample_keys(sample),
+        text=f"This audio has duration {primary_media_metadata.audio_duration} seconds",
+    )
+```
+
+
 (aux-data)=
 ## Auxiliary Data for Polylithic Datasets
 
@@ -164,6 +192,33 @@ def cook_text(sample: dict, primary: FileStore, foo_bar_source: FileStore) -> Te
 ```
 
 You can then retrieve files by their names from the primary dataset.
+
+
+### Using Media Metadata in Polylithic Datasets
+If you prepared your auxiliary dataset with media metadata, you can access it in the cooker using the {py:meth}`get_media_metadata <megatron.energon.FileStore.get_media_metadata>` method of the {py:class}`FileStore <megatron.energon.FileStore>`.
+This is much faster than reading the media files themselves to infer the media metadata like video duration or image size.
+Especially, if you are working with Lazy objects, you can defer loading the media files entirely until you actually need them.
+For example in {py:meth}`postencode_sample(self, sample: T_sample) -> T_encoded_sample <megatron.energon.TaskEncoder.postencode_sample>`, when using packing.
+
+```python
+from megatron.energon import FileStore
+
+# ...
+
+def cook_media_metadata(sample: dict, foo_bar_source: FileStore) -> TextSample:
+    # Use the image filename from the primary sample to get the media metadata from the auxiliary dataset
+    media_metadata = foo_bar_source.get_media_metadata(sample['image'])
+
+    return TextSample(
+        **basic_sample_keys(sample),
+        text=f"This image has size {media_metadata.width}x{media_metadata.height} and format {media_metadata.format}",
+    )
+
+```
+
+The dataclasses for metadata are {py:class}`AVMetadata <megatron.energon.media.AVMetadata>` and {py:class}`ImageMetadata <megatron.energon.media.ImageMetadata>`.
+Click on them to see the fields and their types.
+
 
 (cache-pools)=
 ## Cache Pools
