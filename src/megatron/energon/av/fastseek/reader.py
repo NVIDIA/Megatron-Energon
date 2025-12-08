@@ -52,6 +52,7 @@ class FastseekReaderByFrames(FastseekReader):
     """A video frame reader that seeks by frame index."""
 
     next_frame_index: int = 0
+    last_frame: av.VideoFrame | None = None
 
     def seek_read(
         self, range_start: int, range_end: int | None
@@ -69,11 +70,19 @@ class FastseekReaderByFrames(FastseekReader):
         self.skipped += next_idx - self.next_frame_index
         self.next_frame_index = next_idx
 
+        frame = self.last_frame
+        if frame is not None and self.next_frame_index == range_start:
+            # Repeat the previous frame. This is allowed.
+            yield frame
+            if range_end is not None and self.next_frame_index > range_end:
+                # Special case: User requested the last frame, not more.
+                return
         for frame in self.frame_iterator:
             self.next_frame_index += 1
             yield frame
             if range_end is not None and self.next_frame_index > range_end:
                 break
+        self.last_frame = frame
 
 
 class FastseekReaderByPts(FastseekReader):
@@ -81,6 +90,7 @@ class FastseekReaderByPts(FastseekReader):
 
     next_frame_pts: int = 0
     next_keyframe_pts: int = 0
+    last_frame: av.VideoFrame | None = None
 
     def seek_read(
         self, range_start: int, range_end: int | None
@@ -94,16 +104,22 @@ class FastseekReaderByPts(FastseekReader):
             # print(f"Seeking to frame {self.next_keyframe_pts} for {range_start} from {self.next_frame_pts}")
             self.input_container.seek(range_start, stream=self.stream)
         skipped = 0
-        frame = None
+        frame = self.last_frame
+        if frame is not None and range_start < (frame.pts + frame.duration):
+            # Repeat the previous frame. This is allowed.
+            yield frame
+            if range_end is not None and (frame.pts + frame.duration) >= range_end:
+                # Special case: User requested the last frame, not more.
+                return
         for frame in self.frame_iterator:
-            if range_start > (frame.pts + frame.duration):
+            if range_start >= (frame.pts + frame.duration):
                 skipped += 1
                 continue
             yield frame
             if range_end is not None and (frame.pts + frame.duration) >= range_end:
                 break
-        if frame is not None:
-            self.next_frame_pts = frame.pts + frame.duration
-            self.next_keyframe_pts = self.seeker.get_next_keyframe_pts(frame.pts + frame.duration)
-            # print(f"Next keyframe for {frame.pts + frame.duration} is {self.pts[max(0, bs-1): bs+2]} at {bs}")
+        self.last_frame = frame
+        self.next_frame_pts = frame.pts + frame.duration
+        self.next_keyframe_pts = self.seeker.get_next_keyframe_pts(frame.pts + frame.duration)
+        # print(f"Next keyframe for {frame.pts + frame.duration} is {self.pts[max(0, bs-1): bs+2]} at {bs}")
         self.skipped += skipped

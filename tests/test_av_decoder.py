@@ -282,6 +282,51 @@ class TestVideoDecode(unittest.TestCase):
                 "Energon decoded video does not match baseline"
             )
 
+    def test_time_precision(self):
+        """Test decoding video frames with time precision."""
+        av_decoder = AVDecoder(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes()))
+        video_data, timestamps = av_decoder.get_video_clips(
+            video_clip_ranges=[
+                (4 + 1 / 30, 4 + 1 / 30),
+                (4 + 1 / 30 + 1 / 60, 4 + 1 / 30 + 1 / 60),
+            ],
+            video_unit="seconds",
+        )
+        assert (timestamps[0][0] == 4 + 1 / 30) and (timestamps[0][1] == 4 + 2 / 30), (
+            f"Timestamp for frame 0 is {timestamps[0][0]} and {timestamps[0][1]}"
+        )
+        assert (timestamps[1][0] == 4 + 1 / 30) and (timestamps[1][1] == 4 + 2 / 30), (
+            f"Timestamp for frame 0 is {timestamps[1][0]} and {timestamps[1][1]}"
+        )
+        from PIL import Image
+
+        Image.fromarray(video_data[0][0, :, 18:55, 18:55].numpy().transpose(1, 2, 0)).save(
+            "circ.png"
+        )
+        assert (video_data[0][0, :, 18:55, 18:55] > 250).all(), (
+            "First extracted frame is not all white in the area (18, 18, 55, 55)"
+        )
+
+        av_decoder = AVDecoder(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes()))
+        video_data, timestamps = av_decoder.get_video_clips(
+            video_clip_ranges=[(4 * 30 + 1, 4 * 30 + 1), (4 * 30 + 1, 4 * 30 + 1)],
+            video_unit="frames",
+        )
+        assert (timestamps[0][0] == 4 + 1 / 30) and (timestamps[0][1] == 4 + 2 / 30), (
+            f"Timestamp for frame 0 is {timestamps[0][0]} and {timestamps[0][1]}"
+        )
+        assert (timestamps[1][0] == 4 + 1 / 30) and (timestamps[1][1] == 4 + 2 / 30), (
+            f"Timestamp for frame 0 is {timestamps[1][0]} and {timestamps[1][1]}"
+        )
+        from PIL import Image
+
+        Image.fromarray(video_data[0][0, :, 18:55, 18:55].numpy().transpose(1, 2, 0)).save(
+            "circ.png"
+        )
+        assert (video_data[0][0, :, 18:55, 18:55] > 250).all(), (
+            "First extracted frame is not all white in the area (18, 18, 55, 55)"
+        )
+
     def test_video_audio_sync(self):
         """Test decoding video frames and audio clips together."""
         av_decoder = AVDecoder(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes()))
@@ -303,7 +348,11 @@ class TestVideoDecode(unittest.TestCase):
         video_clips = av_data.video_clips[2:]
         audio_clips = av_data.audio_clips[2:]
         # Then we check that the first extracted frame is all white in the area (18, 18, 55, 55)
-        # Image.fromarray(video_clips[0][0, :, 18:55, 18:55].numpy().transpose(1,2,0)).save('circ.png')
+        from PIL import Image
+
+        Image.fromarray(video_clips[0][0, :, 18:55, 18:55].numpy().transpose(1, 2, 0)).save(
+            "circ.png"
+        )
         assert (video_clips[0][0, :, 18:55, 18:55] > 250).all(), (
             "First extracted frame is not all white in the area (18, 18, 55, 55)"
         )

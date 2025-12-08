@@ -60,6 +60,7 @@ class AVDecoder:
 
     def _ensure_seeker(self) -> None:
         if self.seeker is None:
+            self.stream.seek(0)
             self.seeker = Fastseek(self.stream)
             self.stream.seek(0)
 
@@ -186,7 +187,7 @@ class AVDecoder:
                     video_clips_frames.append(clip_frames)
                     video_clips_timestamps.append((clip_timestamp_start, clip_timestamp_end))
 
-        print(f"Skipped {seeker.skipped} frames")
+        # print(f"Skipped {seeker.skipped} frames")
         # Stack frames within each clip
         out_video_clips = [
             torch.stack(clip_frames).permute((0, 3, 1, 2)) for clip_frames in video_clips_frames
