@@ -1,13 +1,12 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
-from typing import Literal, Optional
+from bisect import bisect_right
+from typing import Optional
 
 import filetype
 from bitstring.bits import BitsType
-from sortedcontainers import SortedList
 
 from .containers.matroska import parse_matroska
-from .containers.mpeg import parse_mpeg
 from .containers.probe import parse_probe
 from .keyframeinfo import KeyframeInfo
 
@@ -21,32 +20,33 @@ class Fastseek:
     to make informed decisions about the best seeking behavior
 
     Currently supports:
-    - MP4/MOV: frames are indexed by number and frame counting can be used to get the exact frame
-    - Matroska/WebM: frames are indexed by time and inter-frame duration must be accounted for to get to the right frame
+    - Matroska/WebM: frames are indexed by time and inter-frame duration must be accounted for to get to the right frame. Use force_probe=True to use pyav to get frame-accurate keyframes.
+    - All other formats: Use pyav to find keyframes.
 
-    If your container is not listed above, pass "probe=True" to the constructor, this will use ffmpeg to parse the stream
-    without decoding it. Frames will be indexed by number. This is not as fast as using a supported container but is still
+    Frames will be indexed by number. This is not as fast as using a supported container but is still
     significantly faster than sequential decoding.
     """
 
-    keyframes: dict[int, SortedList[KeyframeInfo]]
-    unit: Literal["frames", "pts"]
+    keyframe_pts: dict[int, list[int]]
+    keyframes_by_frames: dict[int, tuple[list[KeyframeInfo], list[int]]]
+    streams: list[int]
+    frames_supported: bool
     mime: str
 
-    def __init__(self, file: BitsType, probe: bool = False) -> None:
+    def __init__(self, file: BitsType, force_probe: bool = False) -> None:
         """Initialize the Fastseek object.
 
         Args:
             file: The video file data as a bitstring BitsType object. This should contain the raw bytes of the video file.
-            probe: If True, use ffmpeg to probe the stream without decoding. This is slower but works with any container format.
+            force_probe: If True, use ffmpeg to probe the stream without decoding. This is slower but works with any container format.
                    If False (default), attempt to parse the container format directly. Only works with MP4/MOV and Matroska/WebM.
 
         Raises:
             ValueError: If the file type cannot be determined or if the container format is not supported (when probe=False).
         """
-        if probe:
-            self.keyframes = parse_probe(file)
-            self.unit = "frames"
+        if force_probe:
+            keyframes = parse_probe(file)
+            self.frames_supported = True
         else:
             ftype = filetype.guess(file)
 
@@ -57,28 +57,34 @@ class Fastseek:
 
             self.mime = ftype.mime
 
-            if ftype.mime in ["video/mp4", "video/quicktime"]:
-                self.keyframes = parse_mpeg(file)
-                self.unit = "frames"
-            elif ftype.mime in ["video/x-matroska", "video/webm"]:
-                self.keyframes = parse_matroska(file)
-                self.unit = "pts"
+            if ftype.mime in ["video/x-matroska", "video/webm"]:
+                keyframes = parse_matroska(file)
+                self.frames_supported = False
             else:
-                raise ValueError(
-                    f"Unsupported container: {ftype.mime} (hint: try passing probe=True to the Fastseek constructor)"
-                )
+                keyframes = parse_probe(file)
+                self.frames_supported = True
 
-            if len(self.keyframes) == 0:
-                raise ValueError(
-                    f"The parser for {ftype.mime} was unable to find any streams (hint: try passing probe=True to the Fastseek constructor)"
-                )
+        if len(keyframes) == 0:
+            raise ValueError(
+                f"The parser for {ftype.mime} was unable to find any streams (hint: try passing probe=True to the Fastseek constructor)"
+            )
 
-            if all(len(kf) == 0 for kf in self.keyframes.values()):
-                raise ValueError(
-                    f"The parser for {ftype.mime} was unable to find any keyframes (hint: try passing probe=True to the Fastseek constructor)"
-                )
+        if all(len(kf) == 0 for kf in keyframes.values()):
+            raise ValueError(
+                f"The parser for {ftype.mime} was unable to find any keyframes (hint: try passing probe=True to the Fastseek constructor)"
+            )
 
-    def should_seek(self, current: int, target: int, stream: int = 0) -> Optional[KeyframeInfo]:
+        self.keyframe_pts = {k: sorted(x.pts for x in v) for k, v in keyframes.items()}
+        if self.frames_supported:
+            self.keyframes_by_frames = {
+                k: (l := sorted(v, key=lambda x: x.index), [x.index for x in l])
+                for k, v in keyframes.items()
+            }
+        self.streams = list(keyframes.keys())
+
+    def should_seek(
+        self, current_frame_index: int, target_frame_index: int, stream: int = 0
+    ) -> Optional[KeyframeInfo]:
         """Determine if seeking to a keyframe is necessary to reach the target frame.
 
         This method helps optimize video seeking by determining whether a seek operation
@@ -87,28 +93,23 @@ class Fastseek:
         the current position would be less efficient).
 
         Args:
-            current: The current frame number or timestamp (depending on container format)
-            target: The desired frame number or timestamp to seek to
+            current_frame_index: The current frame number
+            target_frame_index: The desired frame number to seek to
             stream: The video stream index to use. Defaults to 0.
 
         Returns:
             Information about the nearest keyframe if seeking would be beneficial,
             or None if sequential decoding from current position is more efficient.
-            The KeyframeInfo contains the keyframe's position and timing information.
-
-        Note:
-            The units for current and target depend on the container format:
-            - For MP4/MOV: frame numbers (count-based)
-            - For Matroska/WebM: timestamps (time-based)
         """
-        nearest_iframe: KeyframeInfo = self.nearest_keyframe(target, stream)
+        nearest_iframe: KeyframeInfo = self.nearest_keyframe(target_frame_index, stream)
         return (
             nearest_iframe
-            if (current < nearest_iframe.index <= target) or (target < current)
+            if (current_frame_index < nearest_iframe.index <= target_frame_index)
+            or (target_frame_index < current_frame_index)
             else None
         )
 
-    def nearest_keyframe(self, target: int, stream: int = 0) -> KeyframeInfo:
+    def nearest_keyframe(self, target_frame_index: int, stream: int = 0) -> KeyframeInfo:
         """Find the nearest keyframe that comes before the target frame.
 
         This method performs a binary search to find the keyframe that is closest to,
@@ -116,8 +117,7 @@ class Fastseek:
         optimal starting point for decoding to reach a specific frame.
 
         Args:
-            target: The target frame number or timestamp to find the nearest keyframe for.
-                The unit (frame count or timestamp) depends on the container format.
+            target_frame_index: The target frame number to find the nearest keyframe for.
             stream: The video stream index to use. Defaults to 0.
                 Used when the container has multiple video streams.
 
@@ -131,13 +131,41 @@ class Fastseek:
             workaround and may be updated in the future.
         """
 
-        if stream >= len(self.keyframes):
+        if stream >= len(self.keyframes_by_frames):
             raise ValueError(f"No stream with index {stream}")
 
-        stream_id = list(self.keyframes.keys())[stream]
+        stream_id = self.streams[stream]
+        keyframes, frames = self.keyframes_by_frames[stream_id]
 
-        if len(self.keyframes[stream_id]) == 0:
+        if len(keyframes) == 0:
             raise ValueError(f"No keyframes found for stream {stream}")
 
-        nearest_iframe_to_target_index: int = self.keyframes[stream_id].bisect_left(target) - 1
-        return self.keyframes[stream_id][max(0, nearest_iframe_to_target_index)]
+        # bisect_right returns the rightmost insertion point, so subtracting 1 gives
+        # us the index of the last keyframe with index <= target
+        nearest_iframe_to_target_index: int = bisect_right(frames, target_frame_index) - 1
+        return keyframes[max(0, nearest_iframe_to_target_index)]
+
+    def get_next_keyframe_pts(self, current_frame_pts: int, stream: int = 0) -> int:
+        """Find the PTS of the next keyframe after the current frame.
+
+        Args:
+            current_frame_pts: The PTS of the current frame.
+            stream: The video stream index to use. Defaults to 0.
+                Used when the container has multiple video streams.
+
+        Returns:
+            The PTS of the next keyframe after the current frame.
+        """
+
+        if stream >= len(self.streams):
+            raise ValueError(f"No stream with index {stream}")
+
+        pts = self.keyframe_pts[self.streams[stream]]
+
+        if len(pts) == 0:
+            raise ValueError(f"No keyframes found for stream {stream}")
+
+        pos = bisect_right(pts, current_frame_pts)
+        if pos == len(pts):
+            return float("inf")
+        return pts[pos]

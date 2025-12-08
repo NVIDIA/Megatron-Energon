@@ -18,6 +18,8 @@ import torch
 import torchvision.transforms as transforms
 
 from megatron.energon.av import AVDecoder, get_clips_uniform, get_single_frames_uniform
+from megatron.energon.av.fastseek.fastseek import Fastseek
+from megatron.energon.av.fastseek.keyframeinfo import KeyframeInfo
 from megatron.energon.media import AVMetadata
 
 # Set multiprocessing start method to 'spawn' on macOS to avoid DataLoader cleanup issues
@@ -73,6 +75,59 @@ def tensors_close(tensor1: torch.Tensor, tensor2: torch.Tensor, tolerance: float
     return mae <= tolerance
 
 
+class TestFastseek(unittest.TestCase):
+    """Test fastseek functionality."""
+
+    def test_fastseek_mp4(self):
+        """Test fastseek."""
+        fastseek = Fastseek(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes()))
+        print(fastseek.keyframes_by_frames)
+        assert list(fastseek.keyframes_by_frames.keys()) == [1]
+        assert fastseek.keyframes_by_frames[1][0] == [
+            KeyframeInfo(index=0, pts=0),
+            KeyframeInfo(index=250, pts=128000),
+            KeyframeInfo(index=500, pts=256000),
+            KeyframeInfo(index=750, pts=384000),
+            KeyframeInfo(index=1000, pts=512000),
+            KeyframeInfo(index=1250, pts=640000),
+            KeyframeInfo(index=1500, pts=768000),
+            KeyframeInfo(index=1750, pts=896000),
+        ]
+        assert fastseek.keyframe_pts == {
+            1: [0, 128000, 256000, 384000, 512000, 640000, 768000, 896000]
+        }
+        assert fastseek.frames_supported
+        assert fastseek.mime == "video/mp4"
+
+        assert fastseek.should_seek(0, 0) is None
+        assert fastseek.should_seek(0, 249) is None
+        assert fastseek.should_seek(0, 250) == KeyframeInfo(index=250, pts=128000)
+        assert fastseek.should_seek(0, 251) == KeyframeInfo(index=250, pts=128000)
+        assert fastseek.should_seek(0, 499) == KeyframeInfo(index=250, pts=128000)
+        assert fastseek.should_seek(499, 500) == KeyframeInfo(index=500, pts=256000)
+        assert fastseek.should_seek(250, 499) is None
+        assert fastseek.should_seek(250, 500) == KeyframeInfo(index=500, pts=256000)
+
+        assert fastseek.get_next_keyframe_pts(0) == 128000, (
+            f"Expected 128000, got {fastseek.get_next_keyframe_pts(0)}"
+        )
+        assert fastseek.get_next_keyframe_pts(127999) == 128000
+        assert fastseek.get_next_keyframe_pts(128000) == 256000
+
+    def test_fastseek_mkv(self):
+        """Test fastseek."""
+        fastseek = Fastseek(io.BytesIO(Path("tests/data/sync_test.mkv").read_bytes()))
+        print(fastseek.keyframe_pts)
+        assert list(fastseek.keyframe_pts.keys()) == [1]
+        assert fastseek.keyframe_pts[1] == [0, 8354, 16688, 25021, 33354, 41688, 50021, 58354]
+        assert not fastseek.frames_supported
+        assert fastseek.mime == "video/x-matroska"
+
+        assert fastseek.get_next_keyframe_pts(0) == 8354
+        assert fastseek.get_next_keyframe_pts(8353) == 8354
+        assert fastseek.get_next_keyframe_pts(8354) == 16688
+
+
 class TestVideoDecode(unittest.TestCase):
     """Test video decoding functionality."""
 
@@ -108,6 +163,54 @@ class TestVideoDecode(unittest.TestCase):
         assert (video_tensor == self.complete_video_tensor).all(), (
             "Energon decoded video does not match baseline"
         )
+
+    def test_verify_video_decode(self):
+        """Verify the video decode matches the baseline."""
+        av_decoder = AVDecoder(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes()))
+        all_timestamps = []
+        for frame in range(1891):
+            # print(f"Loading frame {frame}")
+            video_data, timestamps = av_decoder.get_video_clips(
+                video_clip_ranges=[(frame, frame)], video_unit="frames"
+            )
+            assert len(video_data) == 1
+            assert video_data[0].shape == (1, 3, 108, 192), (
+                f"Shape of frame {frame} is {video_data[0].shape}"
+            )
+            assert (video_data[0] == self.complete_video_tensor[frame : frame + 1]).all()
+            # print(f"Timestamp for frame {frame}: {timestamps[0]}")
+            all_timestamps.append(0.5 * (timestamps[0][0] + timestamps[0][1]))
+
+        for frame, timestamp1, timestamp2 in zip(
+            range(1891), all_timestamps, all_timestamps[1:] + [float("inf")]
+        ):
+            # print(f"Loading frame {frame}")
+            video_data, timestamps = av_decoder.get_video_clips(
+                video_clip_ranges=[(timestamp1, timestamp1)], video_unit="seconds"
+            )
+            assert len(video_data) == 1
+            assert video_data[0].shape == (1, 3, 108, 192), (
+                f"Shape of frame {frame} is {video_data[0].shape}"
+            )
+            assert (video_data[0] == self.complete_video_tensor[frame : frame + 1]).all()
+            assert 0.5 * (timestamps[0][0] + timestamps[0][1]) == timestamp1, (
+                f"Timestamp for frame {frame} is {timestamps[0][0]} + {timestamps[0][1]}"
+            )
+
+            video_data, timestamps = av_decoder.get_video_clips(
+                video_clip_ranges=[(timestamp1, timestamp2)], video_unit="seconds"
+            )
+            assert len(video_data) == 1
+            if frame == 1890:
+                assert video_data[0].shape == (1, 3, 108, 192), (
+                    f"Shape of frame {frame} is {video_data[0].shape}"
+                )
+                assert (video_data[0] == self.complete_video_tensor[frame : frame + 1]).all()
+            else:
+                assert video_data[0].shape == (2, 3, 108, 192), (
+                    f"Shape of frame {frame} is {video_data[0].shape}"
+                )
+                assert (video_data[0] == self.complete_video_tensor[frame : frame + 2]).all()
 
     def test_decode_metadata(self):
         """Test decoding metadata."""

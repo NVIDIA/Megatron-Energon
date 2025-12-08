@@ -6,7 +6,6 @@ from typing import Any, Generator
 
 from bitstring import ConstBitStream, Error
 from bitstring.bits import BitsType
-from sortedcontainers import SortedList
 
 from ..keyframeinfo import KeyframeInfo
 
@@ -181,7 +180,7 @@ def parse_atoms(file: BitsType) -> Generator[Atom, None, None]:
         raise ValueError(f"MPEG parsing failed with error {e}")
 
 
-def parse_mpeg(file: BitsType) -> dict[int, SortedList]:
+def parse_mpeg(file: BitsType) -> dict[int, list[KeyframeInfo]]:
     sync_samples = {}
     decode_timestamps = {}
     presentation_time_offsets = {}
@@ -223,7 +222,7 @@ def parse_mpeg(file: BitsType) -> dict[int, SortedList]:
             # TODO there can be more than one of these, figure out how to handle it
             a: ELST
             start_offsets[current_track] = -a.edit_list_table[0]["media_time"]
-    keyframes = defaultdict(SortedList)
+    keyframes = defaultdict(list)
     try:
         for track_id in sync_samples.keys():
             ptos = presentation_time_offsets.get(track_id)
@@ -234,7 +233,7 @@ def parse_mpeg(file: BitsType) -> dict[int, SortedList]:
                     + start_offsets[track_id]
                     + (0 if ptos is None else ptos[keyframe_number])
                 )
-                keyframes[track_id].add(KeyframeInfo(keyframe_number, pts))
+                keyframes[track_id].append(KeyframeInfo(keyframe_number, pts))
     except (KeyError, IndexError) as e:
         raise ValueError(f"MPEG parsing failed with error {e}")
 

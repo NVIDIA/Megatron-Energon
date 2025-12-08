@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 
 
-@dataclass
+@dataclass(slots=True)
 class KeyframeInfo:
     """
     Information about a detected keyframe
@@ -17,15 +17,3 @@ class KeyframeInfo:
 
     index: int
     pts: int
-
-    def __eq__(self, other) -> bool:
-        if isinstance(other, KeyframeInfo):
-            return self.index == other.index
-
-        return self.index == other
-
-    def __lt__(self, other) -> bool:
-        if isinstance(other, KeyframeInfo):
-            return self.index < other.index
-
-        return self.index < other
