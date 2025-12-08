@@ -22,12 +22,16 @@ from megatron.energon.errors import (
 from megatron.energon.flavors.base_dataset import (
     RestoreKey,
     SavableDataset,
-    WrappedRestoreKey,
     set_sample_restore_key,
-    wrap_sample_restore_key,
 )
 from megatron.energon.worker import WorkerConfig
-from megatron.energon.wrappers.base import BaseWrapperDataset, SampleIndex, get_sample_restore_key
+from megatron.energon.wrappers.base import (
+    BaseWrapperDataset,
+    SampleIndex,
+    WrappedRestoreKey,
+    get_sample_restore_key,
+    wrap_sample_restore_key,
+)
 
 T_sample = TypeVar("T_sample")
 T_sample_out = TypeVar("T_sample_out")

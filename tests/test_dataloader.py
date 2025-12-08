@@ -21,7 +21,7 @@ from megatron.energon import (
     get_train_dataset,
 )
 from megatron.energon.dataloader import DataLoader, ForkDataLoaderWorker, ThreadDataLoaderWorker
-from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
 from megatron.energon.task_encoder.base import DefaultTaskEncoder, stateless
 
 
