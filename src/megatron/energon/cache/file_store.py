@@ -33,15 +33,6 @@ class DecodeFileStore(FileStoreWrapper[Any]):
         super().__init__(inner)
         self.decoder = decoder
 
-    def worker_init(self) -> None:
-        self.inner_reader.worker_init()
-
-    def worker_close(self) -> None:
-        self.inner_reader.worker_close()
-
-    def close(self) -> None:
-        self.inner_reader.close()
-
     def __getitem__(self, fname: str) -> tuple[Any, SourceInfo]:
         data, source_info = self._inner[fname]
         return self.decoder.decode(fname, data), source_info

@@ -33,6 +33,15 @@ class MockFileStore(FileStore):
     def get_path(self) -> str:
         return self._path
 
+    def worker_init(self) -> None:
+        pass
+
+    def worker_close(self) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
 
 class MockDecoder(SampleDecoder):
     """Mock decoder for DecodeFileStore"""

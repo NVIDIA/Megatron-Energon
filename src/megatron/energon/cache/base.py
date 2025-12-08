@@ -88,6 +88,15 @@ class FileStoreWrapper(FileStore[T]):
         """
         return self._inner._decode_raw(data, **kwargs)
 
+    def worker_init(self) -> None:
+        self._inner.worker_init()
+
+    def worker_close(self) -> None:
+        self._inner.worker_close()
+
+    def close(self) -> None:
+        self._inner.close()
+
 
 @edataclass
 class Lazy(Generic[T]):
