@@ -13,20 +13,17 @@ from typing import (
     Iterator,
     List,
     Optional,
-    Sequence,
     TypeVar,
     Union,
 )
 
-from megatron.energon.errors import SYSTEM_EXCEPTIONS, FatalSampleError
+from megatron.energon.errors import ErrorContext, handle_restore_errors
 from megatron.energon.flavors.base_dataset import (
     RestoreKey,
     SavableDataset,
     set_sample_restore_key,
 )
-from megatron.energon.source_info import SourceInfo
 from megatron.energon.worker import WorkerConfig
-from megatron.energon.wrappers._log_exception import log_exception
 from megatron.energon.wrappers.base import (
     BaseWrapperDataset,
     MultiWrappedRestoreKey,
@@ -36,7 +33,6 @@ from megatron.energon.wrappers.base import (
     wrap_sample_restore_key,
 )
 from megatron.energon.wrappers.buffer import SavableSampleBuffer
-from megatron.energon.wrappers.skip import SkipSample
 
 T_sample = TypeVar("T_sample")
 T_encoded_sample = TypeVar("T_encoded_sample")
@@ -72,7 +68,6 @@ class PackingDataset(
     final_packer: Callable[[List[T_encoded_sample]], T_batch_sample]
     final_packer_stateless: bool
     packer_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]]
-    error_handler: Callable[[Exception, List[T_sample], Sequence[SourceInfo]], None]
 
     #: The buffer for collecting the samples that shall be packed.
     _reading_buffer: SavableSampleBuffer
@@ -96,10 +91,10 @@ class PackingDataset(
     #: Sample index for the final_packer
     _final_packing_sample_index: SampleIndex
 
-    # Local state: Tracking last failures for each component, to raise a fatal error after a certain number of failures.
-    _last_pre_pack_failures: int = 0
-    _last_final_pack_failures: int = 0
-    _last_sample_encoder_failures: int = 0
+    #: Error handlers for tracking failures
+    _pre_pack_failure_handler: ErrorContext
+    _final_pack_failure_handler: ErrorContext
+    _sample_encoder_failure_handler: ErrorContext | None
 
     _savable_fields = (
         "_reading_buffer",
@@ -127,9 +122,6 @@ class PackingDataset(
         sample_encoder: Optional[Callable[[T_sample], T_encoded_sample]] = None,
         sample_encoder_stateless: bool = False,
         packer_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]] = None,
-        error_handler: Callable[
-            [Exception, List[T_sample], Sequence[SourceInfo]], None
-        ] = log_exception,
         pre_packer_failure_tolerance: int = 100,
         final_packer_failure_tolerance: int = 100,
         sample_encoder_failure_tolerance: int = 100,
@@ -154,8 +146,6 @@ class PackingDataset(
                 stored/restored.
             packer_config: Configuration for the (pre|final)_packer functions. If callable, it should return the
                 configuration. Defaults to None.
-            error_handler: Function which handles exceptions raised by the batcher. The default
-                implementation logs the exception.
             pre_packer_failure_tolerance: Maximum number of pre-packer failures before raising an error. Set to 0 to disable.
             final_packer_failure_tolerance: Maximum number of final-packer failures before raising an error. Set to 0 to disable.
             sample_encoder_failure_tolerance: Maximum number of sample-encoder failures before raising an error. Set to 0 to disable.
@@ -172,11 +162,31 @@ class PackingDataset(
         self.sample_encoder = sample_encoder
         self.sample_encoder_stateless = True if sample_encoder is None else sample_encoder_stateless
         self.packer_config = packer_config
-        self.error_handler = error_handler
 
         self.pre_packer_failure_tolerance = pre_packer_failure_tolerance
         self.final_packer_failure_tolerance = final_packer_failure_tolerance
         self.sample_encoder_failure_tolerance = sample_encoder_failure_tolerance
+
+        self._pre_pack_failure_handler = ErrorContext(
+            name=f"PackingDataset.{self.pre_packer}",
+            handler=worker_config.global_error_handler,
+            tolerance=pre_packer_failure_tolerance,
+        )
+        self._final_pack_failure_handler = ErrorContext(
+            name=f"PackingDataset.{self.final_packer}",
+            handler=worker_config.global_error_handler,
+            tolerance=final_packer_failure_tolerance,
+        )
+        if self.sample_encoder is not None:
+            self._sample_encoder_failure_handler = ErrorContext(
+                name=f"PackingDataset.{self.sample_encoder}",
+                handler=worker_config.global_error_handler,
+                tolerance=sample_encoder_failure_tolerance,
+            )
+        else:
+            self._sample_encoder_failure_handler = None
+
+        self.reset_state_own()
 
     def reset_state_own(self) -> None:
         self._reading_buffer = SavableSampleBuffer(self.dataset, worker_config=self.worker_config)
@@ -245,10 +255,11 @@ class PackingDataset(
                 return pack
             encoded_pack = []
             for sample in pack:
-                try:
+                with self._sample_encoder_failure_handler.handle_errors(sample):
                     with self._sample_encoder_sample_index.ctx() as encode_idx:
                         encoded_sample = self.sample_encoder(sample)
                     assert not isinstance(encoded_sample, Generator), "Generator not supported"
+                    self._sample_encoder_failure_handler.reset()
                     encoded_pack.append(
                         wrap_sample_restore_key(
                             encoded_sample,
@@ -256,23 +267,6 @@ class PackingDataset(
                             sample_idx=encode_idx,
                         )
                     )
-                    self._last_sample_encoder_failures = 0
-                except SkipSample:
-                    pass
-                except SYSTEM_EXCEPTIONS:
-                    raise FatalSampleError.from_sample(pack)
-                except Exception as e:
-                    self.error_handler(e, [sample])
-                    self._last_sample_encoder_failures += 1
-                    if (
-                        self.sample_encoder_failure_tolerance > 0
-                        and self._last_sample_encoder_failures
-                        >= self.sample_encoder_failure_tolerance
-                    ):
-                        raise FatalSampleError.from_sample(
-                            pack,
-                            f"Sample encoder {self.sample_encoder} failed {self._last_sample_encoder_failures} times. Likely your code or dataset are broken.",
-                        )
             return encoded_pack
 
         def next_pre_pack():
@@ -287,26 +281,10 @@ class PackingDataset(
                 self._reading_buffer.clear()
                 pre_packing_lengths.clear()
                 # Now pre pack the samples
-                try:
+                pre_packs = []
+                with self._pre_pack_failure_handler.handle_errors(samples):
                     with self._pre_packing_sample_index.ctx():
                         pre_packs = self.pre_packer(samples)
-                    self._last_pre_pack_failures = 0
-                except SkipSample:
-                    pre_packs = []
-                except SYSTEM_EXCEPTIONS:
-                    raise FatalSampleError.from_sample(samples)
-                except Exception as e:
-                    self.error_handler(e, samples)
-                    pre_packs = []
-                    self._last_pre_pack_failures += 1
-                    if (
-                        self.pre_packer_failure_tolerance > 0
-                        and self._last_pre_pack_failures >= self.pre_packer_failure_tolerance
-                    ):
-                        raise FatalSampleError.from_sample(
-                            samples,
-                            f"Pre packer {self.pre_packer} failed {self._last_pre_pack_failures} times. Likely your code or dataset are broken.",
-                        )
 
                 # Put the pre-packed samples into the pre_packing_buffer
                 # They will be flattened here to avoid nested buffers
@@ -327,7 +305,7 @@ class PackingDataset(
 
             del self._pre_packing_buffer[: pre_packing_lengths[0]]
             del pre_packing_lengths[0]
-            try:
+            with self._final_pack_failure_handler.handle_errors(pack):
                 pack_restore_keys = tuple(get_sample_restore_key(sample) for sample in pack)
                 with self._final_packing_sample_index.ctx() as pack_idx:
                     final_packed_sample = self.final_packer(pack)
@@ -338,7 +316,7 @@ class PackingDataset(
                     for pack_sub_idx, (pack_idx, inner_batch_sample) in enumerate(
                         self._final_packing_sample_index.iter_ctx(final_packed_sample, pack_idx)
                     ):
-                        self._last_final_pack_failures = 0
+                        self._final_pack_failure_handler.reset()
                         yield set_sample_restore_key(
                             inner_batch_sample,
                             PackingGenRestoreKey(
@@ -346,25 +324,10 @@ class PackingDataset(
                             ),
                         )
                 else:
-                    self._last_final_pack_failures = 0
+                    self._final_pack_failure_handler.reset()
                     yield set_sample_restore_key(
                         final_packed_sample,
                         PackingRestoreKey(pack_idx=pack_idx, inner=pack_restore_keys),
-                    )
-            except SkipSample:
-                pass
-            except SYSTEM_EXCEPTIONS:
-                raise FatalSampleError.from_sample(pack)
-            except Exception as e:
-                self.error_handler(e, pack)
-                self._last_final_pack_failures += 1
-                if (
-                    self.final_packer_failure_tolerance > 0
-                    and self._last_final_pack_failures >= self.final_packer_failure_tolerance
-                ):
-                    raise FatalSampleError.from_sample(
-                        pack,
-                        f"Final packer {self.final_packer} failed {self._last_final_pack_failures} times. Likely your code or dataset are broken.",
                     )
 
         # Main loop:
@@ -441,29 +404,33 @@ class PackingDataset(
                 inner_key = inner_key.inner
             sample = self.dataset.restore_sample(inner_key)
             if self.sample_encoder is not None:
-                with SampleIndex(self.worker_config, src=self).ctx(encode_key.sample_idx):
-                    sample = self.sample_encoder(sample)
-                assert not isinstance(sample, Generator), "Generator not supported"
-                sample = set_sample_restore_key(sample, encode_key)
+                with handle_restore_errors(self.worker_config.restore_error_handler, sample):
+                    with SampleIndex(self.worker_config, src=self).ctx(encode_key.sample_idx):
+                        sample = self.sample_encoder(sample)
+                    assert not isinstance(sample, Generator), "Generator not supported"
+                    sample = set_sample_restore_key(sample, encode_key)
             pack.append(sample)
-        with SampleIndex(self.worker_config, src=self).ctx(restore_key.pack_idx):
-            final_pack = self.final_packer(pack)
-        if isinstance(final_pack, Generator):
-            assert inspect.isgeneratorfunction(self.final_packer), (
-                f"Generator in {self.final_packer} but not marked as such."
-            )
-            assert isinstance(restore_key, PackingGenRestoreKey)
-            for pack_sub_idx, (pack_idx, inner_batch_sample) in enumerate(
-                SampleIndex(self.worker_config, src=self).iter_ctx(final_pack, restore_key.pack_idx)
-            ):
-                if pack_sub_idx == restore_key.gen_idx:
-                    return set_sample_restore_key(
-                        inner_batch_sample,
-                        restore_key,
+        with handle_restore_errors(self.worker_config.restore_error_handler, pack):
+            with SampleIndex(self.worker_config, src=self).ctx(restore_key.pack_idx):
+                final_pack = self.final_packer(pack)
+            if isinstance(final_pack, Generator):
+                assert inspect.isgeneratorfunction(self.final_packer), (
+                    f"Generator in {self.final_packer} but not marked as such."
+                )
+                assert isinstance(restore_key, PackingGenRestoreKey)
+                for pack_sub_idx, (pack_idx, inner_batch_sample) in enumerate(
+                    SampleIndex(self.worker_config, src=self).iter_ctx(
+                        final_pack, restore_key.pack_idx
                     )
-            assert False, f"Pack sub-index {pack_sub_idx} not found in pack"
-        else:
-            return set_sample_restore_key(final_pack, restore_key)
+                ):
+                    if pack_sub_idx == restore_key.gen_idx:
+                        return set_sample_restore_key(
+                            inner_batch_sample,
+                            restore_key,
+                        )
+                assert False, f"Pack sub-index {pack_sub_idx} not found in pack"
+            else:
+                return set_sample_restore_key(final_pack, restore_key)
 
     def config(self) -> Dict[str, Any]:
         return {
@@ -481,7 +448,6 @@ class PackingDataset(
                 if self.packer_config
                 else {}
             ),
-            "error_handler": self._function_config(self.error_handler),
             "worker_config": self.worker_config.config(),
             "dataset": self.dataset.config(),
         }

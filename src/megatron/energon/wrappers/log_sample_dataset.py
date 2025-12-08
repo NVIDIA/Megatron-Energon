@@ -1,9 +1,10 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from typing import Any, Callable, Dict, Generic, Iterator, List, Literal, Optional, TypeVar
+from typing import Any, Callable, Dict, Generic, Iterator, Literal, TypeVar
 
 from megatron.energon.flavors.base_dataset import SavableDataset
+from megatron.energon.sample_utils import default_get_batch_keys
 from megatron.energon.state import FlexState
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset
@@ -11,47 +12,10 @@ from megatron.energon.wrappers.base import BaseWrapperDataset
 T_sample = TypeVar("T_sample")
 
 
-def default_get_keys(batch: Any) -> Optional[List[str]]:
-    """Default get_keys, which has some heuristics to find the sample keys."""
-    if isinstance(batch, list):
-        batch = batch[0]
-    if (
-        hasattr(batch, "__key__")
-        and isinstance(batch.__key__, list)
-        and all(isinstance(k, str) for k in batch.__key__)
-    ):
-        return batch.__key__
-    elif (
-        hasattr(batch, "__keys__")
-        and isinstance(batch.__keys__, list)
-        and all(isinstance(k, str) for k in batch.__keys__)
-    ):
-        return batch.__keys__
-    elif (
-        isinstance(batch, dict)
-        and "__key__" in batch
-        and all(isinstance(k, str) for k in batch["__key__"])
-    ):
-        return batch["__key__"]
-    elif (
-        isinstance(batch, dict)
-        and "__keys__" in batch
-        and all(isinstance(k, str) for k in batch["__keys__"])
-    ):
-        return batch["__keys__"]
-    elif (
-        isinstance(batch, dict)
-        and "keys" in batch
-        and all(isinstance(k, str) for k in batch["keys"])
-    ):
-        return batch["keys"]
-    return None
-
-
 class LogSampleDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
     """This dataset logs every yielded sample to the debug logs."""
 
-    get_keys_fn: Callable[[T_sample], Optional[List[str]]]
+    get_keys_fn: Callable[[T_sample], list[str] | None]
     mode: Literal["train", "val"]
     _step: int
 
@@ -62,7 +26,7 @@ class LogSampleDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]
         dataset: SavableDataset[T_sample],
         mode: Literal["train", "val"],
         worker_config: WorkerConfig,
-        get_keys_fn: Callable[[T_sample], Optional[List[str]]] = default_get_keys,
+        get_keys_fn: Callable[[T_sample], list[str] | None] = default_get_batch_keys,
     ):
         """Construct the log sample dataset, which logs every yielded sample to the debug logs.
 

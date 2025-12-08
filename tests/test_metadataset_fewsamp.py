@@ -22,7 +22,7 @@ from megatron.energon import (
     get_savable_loader,
     get_train_dataset,
 )
-from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
 
 # Speed up tests significantly by reducing the torch status check interval for broken worker shutdown
 try:

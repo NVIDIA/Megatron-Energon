@@ -66,8 +66,8 @@ def test_get_method(temp_dir):
     )
 
     mock_decode_file_store = DecodeFileStore(
+        inner=mock_raw_file_store,
         decoder=MockDecoder(),
-        inner_reader=mock_raw_file_store,
     )
     pool = FileStoreCachePool(parent_cache_dir=temp_dir)
     try:
@@ -534,8 +534,8 @@ def test_raw_method(temp_dir):
         }
     )
     mock_decode_file_store = DecodeFileStore(
+        inner=mock_raw_file_store,
         decoder=MockDecoder(),
-        inner_reader=mock_raw_file_store,
     )
     try:
         # Request lazy loading
@@ -568,8 +568,8 @@ def test_pickle_method(temp_dir):
         }
     )
     mock_decode_file_store = DecodeFileStore(
+        inner=mock_raw_file_store,
         decoder=MockDecoder(),
-        inner_reader=mock_raw_file_store,
     )
     try:
         # Request lazy loading
@@ -644,5 +644,40 @@ def test_concurrent_access(temp_dir):
         # All threads should get the correct result
         for r in results:
             assert r == b"test data 1"
+    finally:
+        pool.close()
+
+
+def test_to_cache(temp_dir):
+    """Test that the cache out method works"""
+    pool = FileStoreCachePool(parent_cache_dir=temp_dir)
+    try:
+        # Get the data - should be pickled / unpickled correctly
+        result = pool.to_cache((1, "some_data", 2), "file1")
+
+        cache_path = result.cache_path
+
+        # Check that the cache file exists
+        assert cache_path is not None
+        assert cache_path.is_file()
+        assert pool.cache_dir == cache_path.parent
+
+        # Verify that the data is read correctly, also two times.
+        assert result.get() == (1, "some_data", 2)
+        assert result.get() == (1, "some_data", 2)
+
+        # Verify that the cache file is deleted now that we've read the data.
+        assert result.cache_path is None
+        assert not cache_path.is_file()
+
+        # Verify that the cache file is deleted when the object is deleted before reading the file.
+        result2 = pool.to_cache((1, "some_data", 2), "file2")
+        assert result2.cache_path is not None
+        assert result2.cache_path.is_file()
+        assert result2.cache_path != cache_path
+        cache_path = result2.cache_path
+        del result2
+        gc.collect()
+        assert not cache_path.is_file()
     finally:
         pool.close()

@@ -141,7 +141,7 @@ class IJsonlReader(RawSampleReaderInterface[int | str]):
         self._update_ijsonl_file_cache(sample_pointer.index + 1, ijsonl_file)
 
         return FilteredSample(
-            __key__=f"{self.jsonl_path.name}/{key}",
+            __key__=key,
             __shard__=self.jsonl_path.name,
             __restore_key__=WebdatasetRestoreKey(index=sample_pointer.index),
             __sources__=(

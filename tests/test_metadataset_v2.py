@@ -29,7 +29,7 @@ from megatron.energon import (
 )
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib.epath import EPath
-from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
 from megatron.energon.metadataset.loader import prepare_metadataset
 from megatron.energon.metadataset.loader_interface import DatasetBlendMode
 from megatron.energon.task_encoder.base import DefaultTaskEncoder

@@ -10,7 +10,7 @@ from megatron.energon.dataloader import (
     ForkDataLoaderWorker,
     ThreadDataLoaderWorker,
 )
-from megatron.energon.errors import warn_deprecated
+from megatron.energon.deprecation import warn_deprecated
 from megatron.energon.flavors import SavableDataset
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.gc_dataset import GC_DEFAULT_EVERY_N_ITER

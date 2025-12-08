@@ -11,24 +11,23 @@ from typing import (
     Generic,
     Iterator,
     Optional,
-    Sequence,
     TypeVar,
     Union,
 )
 
-from megatron.energon.errors import SYSTEM_EXCEPTIONS, FatalSampleError
-from megatron.energon.flavors.base_dataset import RestoreKey, SavableDataset, set_sample_restore_key
-from megatron.energon.source_info import SourceInfo
-from megatron.energon.worker import WorkerConfig
-from megatron.energon.wrappers._log_exception import log_exception
-from megatron.energon.wrappers.base import (
-    BaseWrapperDataset,
-    SampleIndex,
+from megatron.energon.errors import (
+    ErrorContext,
+    handle_restore_errors,
+)
+from megatron.energon.flavors.base_dataset import (
+    RestoreKey,
+    SavableDataset,
     WrappedRestoreKey,
-    get_sample_restore_key,
+    set_sample_restore_key,
     wrap_sample_restore_key,
 )
-from megatron.energon.wrappers.skip import SkipSample
+from megatron.energon.worker import WorkerConfig
+from megatron.energon.wrappers.base import BaseWrapperDataset, SampleIndex, get_sample_restore_key
 
 T_sample = TypeVar("T_sample")
 T_sample_out = TypeVar("T_sample_out")
@@ -48,13 +47,12 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
     """This dataset wrapper applies a custom function to transform each sample."""
 
     map_fn: Callable[[T_sample], Union[T_sample_out, Generator[T_sample_out, None, None]]]
-    error_handler: Callable[[Exception, T_sample, Sequence[SourceInfo]], None]
     stateless_map_fn: bool
     map_fn_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]]
     _sample_index: SampleIndex
     _generator_sample_key: RestoreKey | None
     _generator_offset: int | None
-    _last_map_failures: int = 0
+    _map_failure_handler: ErrorContext
 
     _savable_fields = (
         "_sample_index",
@@ -69,7 +67,6 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
         dataset: SavableDataset[T_sample],
         map_fn: Callable[[T_sample], Union[T_sample_out, Generator[T_sample_out, None, None]]],
         *,
-        error_handler: Callable[[Exception, T_sample, Sequence[SourceInfo]], None] = log_exception,
         stateless_map_fn: bool = False,
         map_fn_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]] = None,
         failure_tolerance: int = 100,
@@ -85,7 +82,6 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
             map_fn: The function to apply to each sample. May raise
                 :exc:`megatron.energon.SkipSample` to skip a sample. Alternatively, may return a
                 generator to yield multiple or no samples.
-            error_handler: Handler for errors. Defaults to logging and ignoring the exception.
             stateless_map_fn: If true, the map_fn is deterministic and stateless
                 (thus key for random access can propagate to inner dataset). Defaults to False.
             map_fn_config: Configuration for the map_fn function. If callable, it should return the
@@ -95,10 +91,16 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
         """
         super().__init__(dataset, worker_config=worker_config)
         self.map_fn = map_fn
-        self.error_handler = error_handler
         self.stateless_map_fn = stateless_map_fn
         self.map_fn_config = map_fn_config
         self.failure_tolerance = failure_tolerance
+        self._map_failure_handler = ErrorContext(
+            name=f"MapDataset.{self.map_fn}",
+            tolerance=failure_tolerance,
+            handler=worker_config.global_error_handler,
+        )
+
+        self.reset_state_own()
 
     def reset_state_own(self) -> None:
         self._sample_index = SampleIndex(self.worker_config, src=self)
@@ -135,7 +137,7 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
 
         for sample in self.dataset:
             restore_key = get_sample_restore_key(sample)
-            try:
+            with self._map_failure_handler.handle_errors(sample):
                 with self._sample_index.ctx() as sample_idx:
                     mapped_sample = self.map_fn(sample)
                 if isinstance(mapped_sample, Generator):
@@ -150,7 +152,7 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
                         self._sample_index.iter_ctx(mapped_sample, sample_idx)
                     ):
                         self._generator_offset = idx + 1
-                        self._last_map_failures = 0
+                        self._map_failure_handler.reset()
                         yield wrap_sample_restore_key(
                             inner_sample,
                             MapGenRestoreKey,
@@ -160,28 +162,11 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
                     self._generator_sample_key = None
                     self._generator_offset = None
                 else:
-                    self._last_map_failures = 0
+                    self._map_failure_handler.reset()
                     yield wrap_sample_restore_key(
                         mapped_sample,
                         MapRestoreKey,
                         sample_idx=sample_idx,
-                    )
-            except GeneratorExit:
-                raise
-            except SkipSample:
-                pass
-            except SYSTEM_EXCEPTIONS:
-                raise FatalSampleError.from_sample(sample)
-            except Exception as e:
-                self.error_handler(e, sample)
-                self._last_map_failures += 1
-                print(
-                    f"MapDataset {self.map_fn} failed {self._last_map_failures}/{self.failure_tolerance} times in a row."
-                )
-                if self.failure_tolerance > 0 and self._last_map_failures >= self.failure_tolerance:
-                    raise FatalSampleError.from_sample(
-                        sample,
-                        f"MapDataset {self.map_fn} failed {self._last_map_failures} times in a row. Likely your code or dataset are broken.",
                     )
 
     def can_restore_sample(self) -> bool:
@@ -201,26 +186,29 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
         if inspect.isgeneratorfunction(self.map_fn):
             assert isinstance(restore_key, MapGenRestoreKey)
         inner_sample = self.dataset.restore_sample(restore_key.inner)
-        with SampleIndex(self.worker_config, src=self).ctx(restore_key.sample_idx):
-            mapped_sample = self.map_fn(inner_sample)
-        if isinstance(mapped_sample, Generator):
-            assert inspect.isgeneratorfunction(self.map_fn), (
-                f"Generator in {self.map_fn} but not marked as such."
-            )
-            assert isinstance(restore_key, MapGenRestoreKey)
-            for idx, (sample_idx, res_sample) in enumerate(
-                SampleIndex(self.worker_config, src=self).iter_ctx(
-                    mapped_sample, restore_key.sample_idx
+        with handle_restore_errors(self.worker_config.restore_error_handler, inner_sample):
+            with SampleIndex(self.worker_config, src=self).ctx(restore_key.sample_idx):
+                mapped_sample = self.map_fn(inner_sample)
+            if isinstance(mapped_sample, Generator):
+                assert inspect.isgeneratorfunction(self.map_fn), (
+                    f"Generator in {self.map_fn} but not marked as such."
                 )
-            ):
-                if idx == restore_key.gen_idx:
-                    return set_sample_restore_key(
-                        res_sample,
-                        restore_key,
+                assert isinstance(restore_key, MapGenRestoreKey)
+                for idx, (sample_idx, res_sample) in enumerate(
+                    SampleIndex(self.worker_config, src=self).iter_ctx(
+                        mapped_sample, restore_key.sample_idx
                     )
-            assert False, f"Generator sub-index {restore_key.gen_idx} not yielded by {self.map_fn}"
-        else:
-            return set_sample_restore_key(mapped_sample, restore_key)
+                ):
+                    if idx == restore_key.gen_idx:
+                        return set_sample_restore_key(
+                            res_sample,
+                            restore_key,
+                        )
+                assert False, (
+                    f"Generator sub-index {restore_key.gen_idx} not yielded by {self.map_fn}"
+                )
+            else:
+                return set_sample_restore_key(mapped_sample, restore_key)
 
     def config(self) -> Dict[str, Any]:
         return {

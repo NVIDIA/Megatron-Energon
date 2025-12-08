@@ -13,30 +13,26 @@ from typing import (
     Iterator,
     List,
     Optional,
-    Sequence,
     Tuple,
     TypeVar,
     Union,
 )
 
 from megatron.energon.edataclass import edataclass
-from megatron.energon.errors import SYSTEM_EXCEPTIONS, FatalSampleError
+from megatron.energon.errors import ErrorContext, handle_restore_errors
 from megatron.energon.flavors.base_dataset import (
     RestoreKey,
     SavableDataset,
     set_sample_restore_key,
 )
 from megatron.energon.savable import Savable
-from megatron.energon.source_info import SourceInfo
 from megatron.energon.worker import WorkerConfig
-from megatron.energon.wrappers._log_exception import log_exception
 from megatron.energon.wrappers.base import (
     BaseWrapperDataset,
     MultiWrappedRestoreKey,
     SampleIndex,
 )
 from megatron.energon.wrappers.buffer import SavableSampleBuffer, SavableSampleBufferState
-from megatron.energon.wrappers.skip import SkipSample
 
 T_batch = TypeVar("T_batch", covariant=True)
 T_batch_sample = TypeVar("T_batch_sample", covariant=True)
@@ -151,11 +147,11 @@ class GroupBatchDataset(
     sample_group_key: Callable[[T_batch_sample], Tuple[Hashable, Optional[int]]]
     batcher: Callable[[List[T_batch_sample]], T_batch]
     drop_last: bool
-    error_handler: Callable[[Exception, List[T_batch_sample], list[SourceInfo]], None]
     _group_key_sample_index: SampleIndex
     _batch_sample_index: SampleIndex
     _buckets: Buckets
-    _last_batch_failures: int = 0
+    _batch_failure_handler: ErrorContext
+    _group_key_failure_handler: ErrorContext
 
     _savable_fields = ("_group_key_sample_index", "_batch_sample_index", "_buckets")
     _worker_local_fields = ("_last_batch_failures",)
@@ -170,9 +166,6 @@ class GroupBatchDataset(
         batcher_stateless: bool = False,
         batcher_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]] = None,
         drop_last: bool = False,
-        error_handler: Callable[
-            [Exception, List[T_batch_sample], Sequence[SourceInfo]], None
-        ] = log_exception,
         failure_tolerance: int = 100,
         worker_config: WorkerConfig,
     ):
@@ -185,7 +178,6 @@ class GroupBatchDataset(
             batcher: Function which combines separate samples into a single object. May raise
                 :exc:`megatron.energon.SkipSample` to skip a sample.
             drop_last: If True, the last batch is dropped if it is smaller than the batch size.
-            error_handler: Handler for errors. Defaults to logging and ignoring the exception.
             failure_tolerance: The number of consecutive failures after which the dataset is considered broken. Set to 0 to disable.
             worker_config: Configuration for the workers.
         """
@@ -196,8 +188,17 @@ class GroupBatchDataset(
         self.batcher_stateless = batcher_stateless
         self.batcher_config = batcher_config
         self.drop_last = drop_last
-        self.error_handler = error_handler
         self.failure_tolerance = failure_tolerance
+        self._batch_failure_handler = ErrorContext(
+            name=f"GroupBatchDataset.{self.batcher}",
+            handler=worker_config.global_error_handler,
+            tolerance=failure_tolerance,
+        )
+        self._group_key_failure_handler = ErrorContext(
+            name=f"GroupBatchDataset.{self.sample_group_key}",
+            handler=worker_config.global_error_handler,
+            tolerance=failure_tolerance,
+        )
 
         assert not inspect.isgeneratorfunction(batcher), (
             f"Batcher {batcher} must not be a generator function for grouped batching."
@@ -230,37 +231,22 @@ class GroupBatchDataset(
             #     dbg_bucket.samples.debug_print("    ")
             batch_items, sample_restore_keys = bucket.samples.flush()
             # print(f"[wrk={worker_idx}, s={self._batch_sample_index.current_idx}] flushed: len(batch)={len(batch_items)} len(samples)={len(bucket.samples)}\n", end="")
-            try:
+            with self._batch_failure_handler.handle_errors(batch_items):
                 with self._batch_sample_index.ctx() as sample_idx:
                     batch_sample = self.batcher(batch_items)
                     assert not isinstance(batch_sample, Generator), (
                         f"Batcher {self.batcher} returned a generator, which is not supported for grouped batching yet."
                     )
-                self._last_batch_failures = 0
+                self._batch_failure_handler.reset()
                 set_sample_restore_key(
                     batch_sample,
                     GroupBatchRestoreKey(sample_idx=sample_idx, inner=sample_restore_keys),
                 )
                 yield batch_sample
-            except SkipSample:
-                pass
-            except SYSTEM_EXCEPTIONS:
-                raise FatalSampleError.from_sample(batch_items)
-            except Exception as e:
-                self.error_handler(e, batch_items)
-                self._last_batch_failures += 1
-                if (
-                    self.failure_tolerance > 0
-                    and self._last_batch_failures >= self.failure_tolerance
-                ):
-                    raise FatalSampleError.from_sample(
-                        batch_items,
-                        f"GroupBatchDataset {self.batcher} failed {self._last_batch_failures} times in a row. Likely your code or dataset are broken.",
-                    )
 
         # Add samples to the buckets
         for sample in self.dataset:
-            try:
+            with self._group_key_failure_handler.handle_errors(sample):
                 with self._group_key_sample_index.ctx():
                     bucket_key, batch_size = self.sample_group_key(sample)
                     assert (batch_size is None) != (self.fixed_batch_size is None), (
@@ -269,13 +255,6 @@ class GroupBatchDataset(
                     )
                     if self.fixed_batch_size is not None:
                         batch_size = self.fixed_batch_size
-            except SkipSample:
-                continue
-            except SYSTEM_EXCEPTIONS:
-                raise FatalSampleError.from_sample(sample)
-            except Exception as e:
-                self.error_handler(e, [sample])
-                continue
             bucket = self._buckets.get(bucket_key, batch_size)
             bucket.samples.append(sample)
             if bucket.samples.len_worker() >= bucket.batch_size:
@@ -301,9 +280,12 @@ class GroupBatchDataset(
         self.assert_can_restore()
         assert isinstance(index, GroupBatchRestoreKey)
         batch = [self.dataset.restore_sample(inner_idx) for inner_idx in index.inner]
-        with SampleIndex(self.worker_config, src=self).ctx(index.sample_idx):
-            batch_sample = self.batcher(batch)
-        set_sample_restore_key(batch_sample, index)
+
+        with handle_restore_errors(self.worker_config.restore_error_handler, batch):
+            with SampleIndex(self.worker_config, src=self).ctx(index.sample_idx):
+                batch_sample = self.batcher(batch)
+            set_sample_restore_key(batch_sample, index)
+
         return batch_sample
 
     def config(self) -> Dict[str, Any]:
@@ -324,7 +306,6 @@ class GroupBatchDataset(
             ),
             "batcher_stateless": self.batcher_stateless,
             "drop_last": self.drop_last,
-            "error_handler": self._function_config(self.error_handler),
             "worker_config": self.worker_config.config(),
             "dataset": self.dataset.config(),
         }

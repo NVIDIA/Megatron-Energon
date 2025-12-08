@@ -10,7 +10,12 @@ import braceexpand
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
 from megatron.energon.eyaml import load_yaml, load_yaml_json
-from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset.config import (
+    INDEX_SQLITE_FILENAME,
+    INFO_JSON_FILENAME,
+    INFO_YAML_FILENAME,
+    MAIN_FOLDER_NAME,
+)
 from megatron.energon.flavors.webdataset.empty_dataset_error import EmptyDatasetError
 from megatron.energon.flavors.webdataset.structs import (
     ShardInfo,
@@ -24,6 +29,7 @@ class EnergonDatasetType(Enum):
     METADATASET = "metadataset"
     WEBDATASET = "webdataset"
     JSONL = "jsonl"
+    FILESYSTEM = "filesystem"
     INVALID = "invalid"
 
 
@@ -120,7 +126,7 @@ def get_dataset_info(path: EPath) -> dict:
     return the dataset info as a dict.
     """
 
-    info_config = path / MAIN_FOLDER_NAME / ".info.json"
+    info_config = path / MAIN_FOLDER_NAME / INFO_JSON_FILENAME
     # YAML for backwards compatibility
     yaml_info_config = path / MAIN_FOLDER_NAME / ".info.yaml"
 
@@ -137,8 +143,8 @@ def check_dataset_info_present(path: EPath) -> bool:
     """Given the path to an energon webdataset that contains a .nv-meta folder,
     return True if the dataset info is present, False otherwise.
     """
-    return (path / MAIN_FOLDER_NAME / ".info.json").is_file() or (
-        path / MAIN_FOLDER_NAME / ".info.yaml"
+    return (path / MAIN_FOLDER_NAME / INFO_JSON_FILENAME).is_file() or (
+        path / MAIN_FOLDER_NAME / INFO_YAML_FILENAME
     ).is_file()
 
 
@@ -151,6 +157,8 @@ def get_dataset_type(path: EPath) -> EnergonDatasetType:
     Returns:
         The type of the dataset.
     """
+    metadata_db = path / MAIN_FOLDER_NAME / INDEX_SQLITE_FILENAME
+
     if path.is_file():
         if path.name.endswith(".jsonl"):
             return EnergonDatasetType.JSONL
@@ -160,5 +168,9 @@ def get_dataset_type(path: EPath) -> EnergonDatasetType:
             return EnergonDatasetType.INVALID
     elif check_dataset_info_present(path):
         return EnergonDatasetType.WEBDATASET
+    elif metadata_db.is_file():
+        # There is an sqlite, but no .info.json or .info.yaml,
+        # so it's a filesystem dataset
+        return EnergonDatasetType.FILESYSTEM
     else:
         return EnergonDatasetType.INVALID

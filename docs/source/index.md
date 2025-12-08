@@ -53,9 +53,12 @@ advanced/repro_scaling
 advanced/packing
 advanced/grouping
 advanced/joining_datasets
+advanced/subsets
 advanced/epochized_blending
 advanced/custom_blending
 advanced/parallelism
+advanced/error_handling
+advanced/data_prep_api
 ```
 
 

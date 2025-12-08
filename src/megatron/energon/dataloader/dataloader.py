@@ -32,7 +32,7 @@ from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset, get_sample_restore_key
 from megatron.energon.wrappers.batch_dataset import BatchDataset
 from megatron.energon.wrappers.gc_dataset import GC_DEFAULT_EVERY_N_ITER, GcDataset
-from megatron.energon.wrappers.log_sample_dataset import default_get_keys
+from megatron.energon.wrappers.log_sample_dataset import default_get_batch_keys
 from megatron.energon.wrappers.watchdog_dataset import WatchdogDataset
 
 TSample = TypeVar("TSample", covariant=True)
@@ -375,7 +375,7 @@ class DataLoader(Generic[TSample]):
                 if DEBUG_LEVEL >= 2:
                     print(f"{worker_idx=} got sample, yield\n", end="")
                 if self._worker_config.should_log(level=1):
-                    keys = default_get_keys(sample)
+                    keys = default_get_batch_keys(sample)
                     restore_key = get_sample_restore_key(sample)
                     self._worker_config.worker_log(
                         {

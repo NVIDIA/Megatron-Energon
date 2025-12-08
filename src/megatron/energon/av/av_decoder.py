@@ -11,7 +11,6 @@ import numpy as np
 import torch
 
 from megatron.energon.av.av_init import av_open
-from megatron.energon.edataclass import edataclass
 
 # Try importing optional dependencies
 try:
@@ -27,6 +26,7 @@ except ImportError as e:
     MISSING_DEPENDENCY = str(e)
 
 from megatron.energon.av.av_data import AVData
+from megatron.energon.media import AVMetadata
 
 
 class AVDecoder:
@@ -715,18 +715,3 @@ class AVWebdatasetDecoder:
             )
         else:
             raise ValueError(f"Invalid av_decode value: {self.av_decode}")
-
-
-@edataclass
-class AVMetadata:
-    """Metadata of the media object."""
-
-    video_duration: Optional[float] = None
-    video_num_frames: Optional[int] = None
-    video_fps: Optional[float] = None
-    video_width: Optional[int] = None
-    video_height: Optional[int] = None
-
-    audio_duration: Optional[float] = None
-    audio_channels: Optional[int] = None
-    audio_sample_rate: Optional[int] = None

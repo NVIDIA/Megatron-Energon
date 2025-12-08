@@ -28,7 +28,7 @@ from megatron.energon import (
     stateless,
 )
 from megatron.energon.dataset_config import get_dataset_from_config
-from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
 from megatron.energon.tools.checkpoint import command_redist
 
 # Speed up tests significantly by reducing the torch status check interval for broken worker shutdown
@@ -180,21 +180,21 @@ def test_split_parts(dataset_path):
     with get_loader(ds.build()) as dl:
         all_keys = [sample.__key__ for sample in dl]
         assert all_keys == [
-            "parts/data-4.tar/000011",  # Shard 4 first
-            "parts/data-4.tar/000012",
-            "parts/data-4.tar/000013",
-            "parts/data-4.tar/000014",
-            "parts/data-4.tar/000015",
-            "parts/data-4.tar/000016",
-            "parts/data-4.tar/000017",
-            "parts/data-4.tar/000018",
-            "parts/data-4.tar/000019",
-            "parts/data-4.tar/000020",
-            "parts/data-0.tar/000000",  # Shard 0
-            "parts/data-0.tar/000001",
-            "parts/data-2.tar/000004",  # Shard 2
-            "parts/data-2.tar/000005",
-            "parts/data-2.tar/000006",
+            "000011",  # Shard 4 first
+            "000012",
+            "000013",
+            "000014",
+            "000015",
+            "000016",
+            "000017",
+            "000018",
+            "000019",
+            "000020",
+            "000000",  # Shard 0
+            "000001",
+            "000004",  # Shard 2
+            "000005",
+            "000006",
         ]
 
 

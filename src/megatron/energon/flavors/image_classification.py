@@ -5,9 +5,9 @@ from typing import Optional
 
 import torch
 
+from megatron.energon.deprecation import warn_deprecated
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib.epath import EPath
-from megatron.energon.errors import warn_deprecated
 from megatron.energon.flavors.base_dataset import Sample
 from megatron.energon.flavors.webdataset import DefaultDecoderWebdatasetFactory
 

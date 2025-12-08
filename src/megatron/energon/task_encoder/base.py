@@ -29,6 +29,7 @@ import torch
 from typing_extensions import ParamSpec
 
 from megatron.energon.cache import CachePool, DecodeFileStore, FileStore
+from megatron.energon.cache.base import PrimaryFileStore
 from megatron.energon.edataclass import edataclass
 from megatron.energon.flavors import (
     CrudeSample,
@@ -311,11 +312,9 @@ def get_stateless(fn: Callable) -> bool:
     return getattr(fn, "__stateless__", False)
 
 
-def get_failure_tolerance(
-    fn: Callable, default_failure_tolerance: Optional[int] = None
-) -> Optional[int]:
+def get_failure_tolerance(fn: Callable, default_failure_tolerance: Optional[int] = None) -> int:
     """Get the failure tolerance of a function."""
-    return getattr(fn, "__failure_tolerance__", default_failure_tolerance)
+    return getattr(fn, "__failure_tolerance__", default_failure_tolerance) or 0
 
 
 @edataclass
@@ -442,47 +441,6 @@ class TaskEncoder(Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]):
         # Create a thread-local state for the workers.
         self._worker_local = threading.local()
 
-    @stateless
-    def cook_crude_sample(
-        self,
-        sample: Union[T_sample, CrudeSample],
-        get_primary_aux: Callable[[], FileStore],
-        **aux: FileStore,
-    ) -> T_sample:
-        """
-        Cooks a crude sample.
-
-        Args:
-            sample: The sample to cook.
-            get_primary_aux: A function that returns the (cached) primary auxiliary dataset.
-            **aux: The auxiliary side dishes to use for cooking.
-
-        Returns: The cooked sample.
-        """
-        if isinstance(sample, CrudeSample):
-            for cooker in self.cookers:
-                if cooker.is_match(sample):
-                    assert get_stateless(cooker.cook), "Cooker must be stateless"
-                    if not cooker.need_primary and not cooker.need_cache:
-                        kwargs = aux
-                    else:
-                        kwargs: dict = {}
-                        if cooker.need_primary:
-                            kwargs["primary"] = get_primary_aux()
-                        kwargs.update(aux)
-                        if cooker.need_cache:
-                            kwargs["cache"] = self.cache
-                    return cooker.cook(sample, **kwargs)
-
-            raise NotImplementedError(
-                "You are using crude samples but not providing a way to cook them: "
-                f"Sample key={sample['__key__']}, subflavors={sample['__subflavors__']}, "
-                f"self.cookers={self.cookers}"
-            )
-        else:
-            assert isinstance(sample, Sample), "Sample must be a complete Sample or a CrudeSample"
-            return sample
-
     def _is_overridden(
         self, bound_method: Callable[..., Any], bases: Optional[Sequence[Type[Any]]] = None
     ) -> bool:
@@ -511,6 +469,33 @@ class TaskEncoder(Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]):
         return not any(getattr(base, func.__name__) is func for base in bases)
 
     @stateless
+    def cook_crude_sample(
+        self,
+        sample: CrudeSample,
+        cooker: Cooker[CrudeSample],
+        aux: dict[str, FileStore],
+    ) -> T_sample:
+        """
+        Cooks a crude sample.
+
+        Args:
+            sample: The sample to cook.
+            cooker: The cooker to use.
+            aux: Aux datasets to use.
+
+        Returns: The cooked sample.
+        """
+
+        assert get_stateless(cooker.cook), "Cooker must be stateless"
+        if cooker.need_primary or cooker.need_cache:
+            aux = {**aux}
+        if cooker.need_cache:
+            aux["cache"] = self.cache
+        if cooker.need_primary:
+            aux["primary"] = PrimaryFileStore(aux["primary"], current_key=sample["__key__"])
+        return cooker.cook(sample, **aux)
+
+    @stateless
     def encode_sample(
         self, sample: T_sample
     ) -> Union[T_encoded_sample, Generator[T_encoded_sample, None, None]]:
@@ -532,9 +517,7 @@ class TaskEncoder(Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]):
         return sample
 
     @stateless
-    def postencode_sample(
-        self, sample: T_sample
-    ) -> Union[T_encoded_sample, Generator[T_encoded_sample, None, None]]:
+    def postencode_sample(self, sample: T_sample) -> T_encoded_sample:
         """Post-encode a single sample. May raise :exc:`megatron.energon.SkipSample` to skip a sample.
         Alternatively, this can be a generator that yields (or ignores) new samples.
         Use in conjunction with packing and caching.
@@ -690,7 +673,7 @@ class TaskEncoder(Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]):
                 final_packer_failure_tolerance=get_failure_tolerance(
                     self.pack_selected_samples, self.__default_failure_tolerance__
                 ),
-                sample_encoder_failure_tolerance=None
+                sample_encoder_failure_tolerance=0
                 if post_encode_fn is None
                 else get_failure_tolerance(post_encode_fn, self.__default_failure_tolerance__),
             )
@@ -771,60 +754,47 @@ class TaskEncoder(Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]):
 
         assert self.cookers, "No cookers registered, but got crude dataset."
 
-        if aux is not None and self.decoder is not None:
+        if aux is None:
+            aux = {}
+
+        if self.decoder is not None:
             aux = {k: DecodeFileStore(v, decoder=self.decoder) for k, v in aux.items()}
 
-        # Cache the primary auxiliary dataset for this dataset, i.e. construct it once when needed
-        primary_aux: Optional[FileStore] = None
-
-        all_aux_datasets = list(aux.values()) if aux is not None else []
-
-        def _get_primary_aux():
-            # Note: This is happening on-the-fly in the worker when this dataset is actually used
-            # I.e. we don't know ahead that a cooker with primary=True is going to be used for this dataset
-            # (it may be a cooker with primary=False). Thus this happens on-the-fly in the worker when
-            # this dataset is actually used by a cooker with primary=True.
-            nonlocal primary_aux
-            if primary_aux is None:
-                try:
-                    if aux is not None:
-                        primary_aux = aux.get("primary")
-                    if primary_aux is None:
-                        # In the worker. Initialize now!
-                        primary_aux = get_primary_aux()
-                        primary_aux.worker_init()
-                        # We modify this list on-the-fly. It should then still deinitialize when the worker closes.
-                        all_aux_datasets.append(primary_aux)
-                    assert primary_aux is not None, "Primary auxiliary dataset must always exist"
-                    if self.decoder is not None:
-                        primary_aux = DecodeFileStore(primary_aux, decoder=self.decoder)
-                except Exception as e:
-                    # Make the exception throw through for the sample being loaded
-                    raise SystemError("Error getting primary auxiliary dataset") from e
-            return primary_aux
-
-        if aux is not None:
-            cook_fn = functools.partial(
-                self.cook_crude_sample, get_primary_aux=_get_primary_aux, **aux
-            )
+        for cooker in self.cookers:
+            if cooker.is_match(subflavors):
+                break
         else:
-            cook_fn = functools.partial(self.cook_crude_sample, get_primary_aux=_get_primary_aux)
+            raise ValueError(f"No cooker found for subflavors: {subflavors}")
+
+        all_aux_datasets = list(aux.values())
+
+        if cooker.need_primary and "primary" not in aux:
+            try:
+                primary_aux = get_primary_aux()
+                primary_aux.worker_init()
+                all_aux_datasets.append(primary_aux)
+                assert primary_aux is not None, "Primary auxiliary dataset must always exist"
+                if self.decoder is not None:
+                    primary_aux = DecodeFileStore(primary_aux, decoder=self.decoder)
+                aux["primary"] = primary_aux
+            except Exception as e:
+                # Make the exception throw through for the sample being loaded
+                raise SystemError("Error getting primary auxiliary dataset") from e
+
+        cook_fn = functools.partial(self.cook_crude_sample, cooker=cooker, aux=aux)
 
         return FileStoreInitWrapper(
             MapDataset(
                 dataset,
                 cook_fn,
                 worker_config=worker_config,
-                stateless_map_fn=True,
+                stateless_map_fn=get_stateless(self.cook_crude_sample),
                 map_fn_config=dict(
-                    cookers=[
-                        dict(
-                            cook=SavableDataset._function_config(cooker.cook),
-                            has_subflavors=cooker.has_subflavors,
-                        )
-                        for cooker in self.cookers
-                    ],
-                    subflavors=subflavors,
+                    cooker=dict(
+                        cook=SavableDataset._function_config(cooker.cook),
+                        has_subflavors=cooker.has_subflavors,
+                        aux={k: {"_path": str(v.get_path())} for k, v in aux.items()},
+                    ),
                 ),
                 failure_tolerance=get_failure_tolerance(
                     cook_fn, self.__default_failure_tolerance__
@@ -1112,7 +1082,8 @@ class DefaultTaskEncoder(
     ABC,
     Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch],
 ):
-    """The default task encoder supports automagically mapping to target types.
+    """
+    The default task encoder supports automagically mapping to target types.
     You may override any methods to customize the behavior. By default, `encode_sample` is the
     identity function, `batch` calls `\\_batch` with the type of the first sample, and `encode\\_batch`
     is also the identity function. If you set any of `encoded_sample_type`, `raw_batch_type` or
@@ -1133,12 +1104,14 @@ class DefaultTaskEncoder(
     ):
         """
         Initialize the default task encoder.
+
         Types may be:
-          * A `@dataclass` class: Return that typed dataclass. Field names must match the input
-            fields.
-          * A `NamedTuple` class: Return that typed namedtuple. Field names must match the input
-            fields.
-          * `dict`: Simply return the input as dict with field names as keys.
+
+         - A `@dataclass` class: Return that typed dataclass. Field names must match the input
+           fields.
+         - A `NamedTuple` class: Return that typed namedtuple. Field names must match the input
+           fields.
+         - `dict`: Simply return the input as dict with field names as keys.
 
         Args:
             encoded_sample_type: Type of encoded samples (before batching)

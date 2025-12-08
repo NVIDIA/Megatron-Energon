@@ -4,7 +4,8 @@
 import re
 from typing import Any, List, Union
 
-from megatron.energon.errors import SampleException, compact_str
+from megatron.energon.errors import SampleException
+from megatron.energon.sample_utils import format_sample_compact
 
 _field_split_re = re.compile(r"^(?P<field_name>[^[\]]+)(?P<access>(?:\[([^[\]]+)])*)$")
 
@@ -60,12 +61,14 @@ def _field_access(value: Union[dict, list, str, int, bool, None], field: List[st
             return _field_access(value[int(field[0])], field[1:])
         else:
             raise FieldAccessError(
-                f"Cannot access literal value {compact_str(value)} with {field!r}"
+                f"Cannot access literal value {format_sample_compact(value)} with {field!r}"
             )
     except FieldAccessError:
         raise
     except KeyError:
-        raise FieldAccessError(f"Cannot access {'.'.join(field)!r} in {compact_str(value)}")
+        raise FieldAccessError(
+            f"Cannot access {'.'.join(field)!r} in {format_sample_compact(value)}"
+        )
 
 
 def field_access(value: Union[dict, list, str, int, bool, None], field: List[List[str]]) -> Any:

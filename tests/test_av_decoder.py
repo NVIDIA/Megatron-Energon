@@ -6,6 +6,7 @@
 import io
 import logging
 import os
+import pickle
 import sys
 import time
 from pathlib import Path
@@ -16,7 +17,8 @@ import pytest
 import torch
 import torchvision.transforms as transforms
 
-from megatron.energon.av import AVDecoder, AVMetadata, get_clips_uniform, get_single_frames_uniform
+from megatron.energon.av import AVDecoder, get_clips_uniform, get_single_frames_uniform
+from megatron.energon.media import AVMetadata
 
 # Set multiprocessing start method to 'spawn' on macOS to avoid DataLoader cleanup issues
 if sys.platform == "darwin":
@@ -201,6 +203,38 @@ def test_video_audio_sync(video_test_setup):
         assert tensors_close(audio_clip, audio_clips[0], tolerance=0.01), (
             "All audio clips are not the same"
         )
+
+
+def test_pickle_decoder(video_test_setup):
+    """Test AVDecoder on a video file can be pickled and unpickled."""
+    av_decoder = AVDecoder(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes()))
+
+    # Get metadata from original decoder
+    original_metadata = av_decoder.get_metadata()
+
+    # Pickle the decoder
+    pickled_data = pickle.dumps(av_decoder)
+
+    # Unpickle the decoder
+    unpickled_decoder = pickle.loads(pickled_data)
+
+    # Verify metadata matches
+    unpickled_metadata = unpickled_decoder.get_metadata()
+    assert unpickled_metadata == original_metadata, (
+        f"Unpickled metadata {unpickled_metadata} does not match original {original_metadata}"
+    )
+
+    # Verify we can still decode frames from the unpickled decoder
+    video_tensor = get_single_frames_uniform(
+        av_decoder=unpickled_decoder,
+        num_frames=16,
+        video_out_frame_size=(64, 64),
+    )
+
+    # Check that we got the expected shape
+    assert video_tensor.shape == (16, 3, 64, 64), (
+        f"Expected shape (16, 3, 64, 64), got {video_tensor.shape}"
+    )
 
 
 def load_audio_to_tensor(audio_path: str) -> torch.Tensor:
