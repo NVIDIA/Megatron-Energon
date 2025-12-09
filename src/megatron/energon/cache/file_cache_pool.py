@@ -157,6 +157,8 @@ class FileStoreCachePool(CachePool, ForkMixin):
     # Whether the pool is shutting down
     _shutting_down: bool = False
 
+    _workers_initialized: dict[int, bool] = {}
+
     def __init__(
         self,
         *,
@@ -278,6 +280,9 @@ class FileStoreCachePool(CachePool, ForkMixin):
         with self._lock:
             if self._shutting_down:
                 return False
+        if not self._workers_initialized.get(threading.get_ident(), False):
+            ds.worker_init()
+            self._workers_initialized[threading.get_ident()] = True
 
         # Perform the data read
         if self.method == "raw":

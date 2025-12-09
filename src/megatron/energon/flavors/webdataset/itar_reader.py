@@ -578,7 +578,7 @@ class SqliteITarEntryReader(ITarReader[str]):
         self.thread_local._sqlite_reader = SqliteIndexReader(self.sqlite_path)
 
     def worker_close(self):
-        if hasattr(self.thread_local, "_sqlite_reader"):
+        if getattr(self.thread_local, "_sqlite_reader", None) is not None:
             self.thread_local._sqlite_reader.close()
             del self.thread_local._sqlite_reader
 

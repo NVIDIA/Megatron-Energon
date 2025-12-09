@@ -166,7 +166,7 @@ class WebdatasetFileStore(SqliteITarEntryReader, FileStore[bytes]):
     def get_media_metadata(self, key: str) -> MediaMetadataBase:
         if self._media_metadata_available is None:
             try:
-                has_metadata = self.sqlite_reader.db_has_media_metadata()
+                has_metadata = self._sqlite_reader.db_has_media_metadata()
             except sqlite3.Error as exc:  # pragma: no cover - defensive
                 raise RuntimeError(
                     "Failed to inspect media metadata table. Re-run `energon prepare --media-metadata-by-...`."
@@ -181,7 +181,7 @@ class WebdatasetFileStore(SqliteITarEntryReader, FileStore[bytes]):
             self._media_metadata_available = True
 
         try:
-            row = self.sqlite_reader.get_media_metadata(key)
+            row = self._sqlite_reader.get_media_metadata(key)
         except sqlite3.Error as exc:  # pragma: no cover - defensive
             raise RuntimeError(
                 "Failed to load media metadata. Re-run `energon prepare --media-metadata-by-...`."
