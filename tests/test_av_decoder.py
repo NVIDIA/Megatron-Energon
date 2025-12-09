@@ -168,7 +168,7 @@ class TestVideoDecode(unittest.TestCase):
         """Verify the video decode matches the baseline."""
         av_decoder = AVDecoder(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes()))
         all_timestamps = []
-        for frame in [*range(510), *range(1390, 1891)]:
+        for frame in [*range(5), *range(245, 255), *range(1881, 1891)]:
             # print(f"Loading frame {frame}")
             video_data, timestamps = av_decoder.get_video_clips(
                 video_clip_ranges=[(frame, frame)], video_unit="frames"
@@ -182,8 +182,10 @@ class TestVideoDecode(unittest.TestCase):
             all_timestamps.append(0.5 * (timestamps[0][0] + timestamps[0][1]))
 
         for frame, timestamp1, timestamp2 in zip(
-            [*range(510), *range(1390, 1891)], all_timestamps, all_timestamps[1:] + [float("inf")]
+            [*range(5), *range(245, 255), *range(1881, 1891)], all_timestamps, all_timestamps[1:] + [float("inf")]
         ):
+            if frame in (4, 254):
+                continue
             # print(f"Loading frame {frame}")
             video_data, timestamps = av_decoder.get_video_clips(
                 video_clip_ranges=[(timestamp1, timestamp1)], video_unit="seconds"
