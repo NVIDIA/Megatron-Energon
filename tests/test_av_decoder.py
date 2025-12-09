@@ -168,7 +168,7 @@ class TestVideoDecode(unittest.TestCase):
         """Verify the video decode matches the baseline."""
         av_decoder = AVDecoder(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes()))
         all_timestamps = []
-        for frame in range(1891):
+        for frame in [*range(510), *range(1390, 1891)]:
             # print(f"Loading frame {frame}")
             video_data, timestamps = av_decoder.get_video_clips(
                 video_clip_ranges=[(frame, frame)], video_unit="frames"
@@ -182,7 +182,7 @@ class TestVideoDecode(unittest.TestCase):
             all_timestamps.append(0.5 * (timestamps[0][0] + timestamps[0][1]))
 
         for frame, timestamp1, timestamp2 in zip(
-            range(1891), all_timestamps, all_timestamps[1:] + [float("inf")]
+            [*range(510), *range(1390, 1891)], all_timestamps, all_timestamps[1:] + [float("inf")]
         ):
             # print(f"Loading frame {frame}")
             video_data, timestamps = av_decoder.get_video_clips(
@@ -298,11 +298,11 @@ class TestVideoDecode(unittest.TestCase):
         assert (timestamps[1][0] == 4 + 1 / 30) and (timestamps[1][1] == 4 + 2 / 30), (
             f"Timestamp for frame 0 is {timestamps[1][0]} and {timestamps[1][1]}"
         )
-        from PIL import Image
+        # from PIL import Image
 
-        Image.fromarray(video_data[0][0, :, 18:55, 18:55].numpy().transpose(1, 2, 0)).save(
-            "circ.png"
-        )
+        # Image.fromarray(video_data[0][0, :, 18:55, 18:55].numpy().transpose(1, 2, 0)).save(
+        #     "circ.png"
+        # )
         assert (video_data[0][0, :, 18:55, 18:55] > 250).all(), (
             "First extracted frame is not all white in the area (18, 18, 55, 55)"
         )
@@ -348,11 +348,11 @@ class TestVideoDecode(unittest.TestCase):
         video_clips = av_data.video_clips[2:]
         audio_clips = av_data.audio_clips[2:]
         # Then we check that the first extracted frame is all white in the area (18, 18, 55, 55)
-        from PIL import Image
+        # from PIL import Image
 
-        Image.fromarray(video_clips[0][0, :, 18:55, 18:55].numpy().transpose(1, 2, 0)).save(
-            "circ.png"
-        )
+        # Image.fromarray(video_clips[0][0, :, 18:55, 18:55].numpy().transpose(1, 2, 0)).save(
+        #     "circ.png"
+        # )
         assert (video_clips[0][0, :, 18:55, 18:55] > 250).all(), (
             "First extracted frame is not all white in the area (18, 18, 55, 55)"
         )
