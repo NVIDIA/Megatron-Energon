@@ -1,5 +1,72 @@
+[run]
+# Source directories to measure coverage for
+source = src
+
+# Parallel mode for multiprocessing support
+parallel = True
+
+# Branch coverage measurement
+branch = True
+
+# Data file location
+data_file = .coverage
+
 [report]
-include = ./src/megatron/energon/**
+# Include source code in the report
+include = src/megatron/energon/**
+
+# Minimum coverage percentage to pass
+fail_under = 80
+
+# Show missing lines in the report
+show_missing = True
+
+# Skip covered files in the report
+skip_covered = False
+
+# Skip empty files
+skip_empty = True
+
+# Precision for coverage percentages
+precision = 2
+
+# Sort order for the report
+sort = filename
+
+# Exclude lines from coverage
+exclude_lines =
+    # Have to re-enable the standard pragma
+    pragma: no cover
+
+    # Don't complain about missing debug-only code:
+    def __repr__
+    if self\.debug
+
+    # Don't complain if tests don't hit exceptions:
+    raise .*
+
+    # Don't complain if non-runnable code isn't run:
+    if 0:
+    if __name__ == .__main__.:
+
+    # Don't complain about abstract methods, they aren't run:
+    @(abc\.)?abstractmethod
+
+    # Don't complain about type checking code:
+    if TYPE_CHECKING:
+
+
+[html]
+# Directory to put the HTML report
+directory = htmlcov
+
+# Title for the HTML report
+title = Megatron Energon Coverage Report
 
 [xml]
-output = ./coverage.xml
+# Output file for XML report
+output = coverage.xml
+
+[lcov]
+# Output file for LCOV report
+output = lcov.info

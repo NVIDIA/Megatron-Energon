@@ -70,7 +70,6 @@ from megatron.energon.metadataset import (
     load_dataset,
     prepare_metadataset,
 )
-from megatron.energon.savable_loader import SavableDataLoader
 from megatron.energon.source_info import SourceInfo
 from megatron.energon.task_encoder import (
     AugmentTaskEncoder,
@@ -189,7 +188,6 @@ __all__ = [
     "reraise_exception",
     "Sample",
     "SampleDecoder",
-    "SavableDataLoader",
     "SavableDataset",
     "ShuffleBufferDataset",
     "SimilarityInterleavedSample",

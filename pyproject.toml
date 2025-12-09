@@ -37,6 +37,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  "coverage",
+  "pytest",
   "ruff",
   "sphinxcontrib-napoleon",
   "sphinx",
@@ -114,3 +116,17 @@ exclude = [
   "docs",
 ]
 
+[tool.coverage.run]
+branch = true
+parallel = true
+concurrency = ["multiprocessing"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+
+[tool.coverage.html]
+show_contexts = true
+
+[tool.pytest.ini_options]
+addopts = "--tb=native --capture=no"

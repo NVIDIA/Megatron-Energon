@@ -507,7 +507,7 @@ class SqliteIndexReader:
 
     def close(self):
         """Close the database connection."""
-        if self.db is not None:
+        if getattr(self, "db", None) is not None:
             self.db.thread_close()
             del self.db
 

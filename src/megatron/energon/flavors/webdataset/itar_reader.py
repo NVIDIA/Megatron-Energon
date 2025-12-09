@@ -1,6 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+import threading
 from abc import ABC, abstractmethod
 from bisect import bisect_right
 from typing import (
@@ -30,13 +31,64 @@ from megatron.energon.flavors.webdataset.itar import (
     ITarSamplePointer,
 )
 from megatron.energon.flavors.webdataset.metadata import get_info_shard_files
-from megatron.energon.flavors.webdataset.structs import FilteredSample, ShardInfo
+from megatron.energon.flavors.webdataset.multi_key_cache import MultiKeyCache
+from megatron.energon.flavors.webdataset.structs import (
+    FilteredSample,
+    ShardInfo,
+    WebdatasetRestoreKey,
+)
 from megatron.energon.source_info import SourceInfo
 
 T_index = TypeVar("T_index", covariant=False)
 
 
-class ITarReader(ABC, Generic[T_index]):
+class RawSampleReaderInterface(ABC, Generic[T_index]):
+    """
+    An abstract base class for reading a sequence of raw samples.
+    """
+
+    @abstractmethod
+    def __len__(self) -> int:
+        """Returns the total number of samples in the reader."""
+        ...
+
+    @abstractmethod
+    def __str__(self) -> str:
+        """
+        Must return a descriptive string of the concrete reader.
+        """
+        ...
+
+    @abstractmethod
+    def worker_init(self):
+        """
+        Initialize the reader for the worker.
+        """
+        ...
+
+    @abstractmethod
+    def worker_close(self):
+        """
+        Close the reader for the worker.
+        """
+        ...
+
+    @abstractmethod
+    def close(self):
+        """
+        Close the reader and clear all shared resources.
+        """
+        ...
+
+    @abstractmethod
+    def __getitem__(self, idx: T_index) -> FilteredSample | None:
+        """
+        Get a sample from the dataset or slice it. Thread-safe.
+        """
+        ...
+
+
+class ITarReader(RawSampleReaderInterface[T_index], Generic[T_index]):
     """
     An abstract base class for reading a sequence of tar files containing samples.
 
@@ -55,7 +107,8 @@ class ITarReader(ABC, Generic[T_index]):
     tar_filenames: List[str]
     tar_filepaths: List[EPath]
     part_filter: Optional[Callable[[str], bool]]
-    itar_files_cache: Dict[int, ITarFile]
+    cache_lock: threading.Lock
+    itar_files_cache: MultiKeyCache[int, ITarFile]
     sample_filter: Optional[Callable[[str], bool]]
 
     def __init__(
@@ -75,27 +128,19 @@ class ITarReader(ABC, Generic[T_index]):
         self.tar_filenames = tar_filenames
         self.tar_filepaths = tar_filepaths
         self.part_filter = part_filter
-        self.itar_files_cache = {}
+        self.cache_lock = threading.Lock()
+        self.itar_files_cache = MultiKeyCache()
         self.itar_cache_size = itar_cache_size
         self.sample_filter = sample_filter
 
-    @abstractmethod
-    def __len__(self) -> int:
-        """Returns the total number of samples in the reader."""
-        raise NotImplementedError
-
-    @abstractmethod
-    def __str__(self) -> str:
-        """
-        Must return a descriptive string of the concrete reader.
-        """
-        raise NotImplementedError
-
     def close(self):
-        for tar_file in self.itar_files_cache.values():
-            tar_file.fileobj.close()
-            tar_file.close()
-        self.itar_files_cache.clear()
+        """Effectively clears the internal shared cache."""
+        with self.cache_lock:
+            for tar_file in self.itar_files_cache.flush():
+                fileobj = tar_file.fileobj
+                tar_file.close()
+                if fileobj is not None:
+                    fileobj.close()
 
     @abstractmethod
     def _get_itar_sample_pointer(self, idx: T_index) -> ITarSamplePointer:
@@ -105,24 +150,24 @@ class ITarReader(ABC, Generic[T_index]):
     def _get_itarfile_cached(self, tar_file_id: int) -> ITarFile:
         """
         Get the ITarFile object for the given tar file id.
-        If the file is not already open, open it. If we exceed
-        the global cache limit, close the least recently used file.
+        If the file is not already open, open it.
         """
-        if tar_file_id not in self.itar_files_cache:
-            file_object = self.tar_filepaths[tar_file_id].open(mode="rb")
-            tar_file = ITarFile.open(fileobj=file_object, mode="r:")
-            self.itar_files_cache[tar_file_id] = tar_file
+        with self.cache_lock:
+            reader = self.itar_files_cache.pop(tar_file_id)
+            if reader is None:
+                file_object = self.tar_filepaths[tar_file_id].open(mode="rb")
+                reader = ITarFile.open(fileobj=file_object, mode="r:")
+        return reader
 
-        # If we hit the limit of open files, close the least recently used file
-        while len(self.itar_files_cache) > self.itar_cache_size:
-            # Get the oldest file
-            lru_key = next(iter(self.itar_files_cache))
-
-            self.itar_files_cache[lru_key].fileobj.close()
-            self.itar_files_cache[lru_key].close()
-            del self.itar_files_cache[lru_key]
-
-        return self.itar_files_cache[tar_file_id]
+    def _update_itarfile_cache(self, tar_file_id: int, reader: ITarFile) -> None:
+        """
+        Update the ITarFile object for the given tar file id.
+        """
+        with self.cache_lock:
+            while len(self.itar_files_cache) >= self.itar_cache_size:
+                # Evict the oldest file
+                self.itar_files_cache.pop().close()
+            self.itar_files_cache.add(tar_file_id, reader)
 
     def _get_part_by_raw_sample_pointer(
         self,
@@ -175,7 +220,6 @@ class ITarReader(ABC, Generic[T_index]):
         """
 
         # Open the tar file (cached)
-        tar_file = self._get_itarfile_cached(sample_pointer.tar_file_id)
         shard_name = self.tar_filenames[sample_pointer.tar_file_id]
         sample_base_name = None
         sample_name = None
@@ -183,55 +227,63 @@ class ITarReader(ABC, Generic[T_index]):
         file_names: list[str] = []
 
         # Position the tar file at the correct offset
-        tar_file.offset = sample_pointer.byte_offset
+        tar_file = self._get_itarfile_cached(sample_pointer.tar_file_id)
+        try:
+            tar_file.offset = sample_pointer.byte_offset
 
-        while tar_file.offset < sample_pointer.byte_offset + sample_pointer.byte_size:
-            tarinfo = tar_file.next()
-            if tarinfo is None:
-                raise ValueError(
-                    f"Unexpected end of tar file: {self.tar_filenames[sample_pointer.tar_file_id]}"
-                )
-            fname = tarinfo.name
-            if not tarinfo.isfile() or fname is None:
-                continue
-            if skip_meta_re.match(fname):
-                continue
+            while tar_file.offset < sample_pointer.byte_offset + sample_pointer.byte_size:
+                tarinfo = tar_file.next()
+                if tarinfo is None:
+                    if tar_file.offset == sample_pointer.byte_offset + sample_pointer.byte_size:
+                        break
+                    else:
+                        raise ValueError(
+                            f"Unexpected end of tar file: {self.tar_filenames[sample_pointer.tar_file_id]}"
+                        )
+                fname = tarinfo.name
+                if not tarinfo.isfile() or fname is None:
+                    continue
+                if skip_meta_re.match(fname):
+                    continue
 
-            # Extract the base_name and extension
-            m = split_name_re.match(fname)
-            if not m:
-                continue
-            cur_base_name, cur_ext = m.groups()
+                # Extract the base_name and extension
+                m = split_name_re.match(fname)
+                if not m:
+                    continue
+                cur_base_name, cur_ext = m.groups()
 
+                if sample_base_name is None:
+                    sample_base_name = cur_base_name
+                    sample_name = f"{shard_name}/{cur_base_name}"
+                    if self.sample_filter is not None and not self.sample_filter(sample_name):
+                        return None
+                else:
+                    if sample_base_name != cur_base_name:
+                        raise ValueError(
+                            f"Inconsistent sample base name: {sample_base_name} vs {cur_base_name}"
+                        )
+
+                if entry_match_fn is not None:
+                    # If entry_match_fn is provided, use it to determine if we should take this entry
+                    take_entry = entry_match_fn(fname)
+                else:
+                    # If no entry_match_fn is provided, use the part_filter to determine if we should take this entry
+                    take_entry = self.part_filter is None or self.part_filter(cur_ext)
+
+                if take_entry:
+                    member_bytes = tar_file.extractfile(tarinfo).read()
+                    group_parts[cur_ext] = member_bytes
+                    file_names.append(fname)
             if sample_base_name is None:
-                sample_base_name = cur_base_name
-                sample_name = f"{shard_name}/{cur_base_name}"
-                if self.sample_filter is not None and not self.sample_filter(sample_name):
-                    return None
-            else:
-                if sample_base_name != cur_base_name:
-                    raise ValueError(
-                        f"Inconsistent sample base name: {sample_base_name} vs {cur_base_name}"
-                    )
-
-            if entry_match_fn is not None:
-                # If entry_match_fn is provided, use it to determine if we should take this entry
-                take_entry = entry_match_fn(fname)
-            else:
-                # If no entry_match_fn is provided, use the part_filter to determine if we should take this entry
-                take_entry = self.part_filter is None or self.part_filter(cur_ext)
-
-            if take_entry:
-                member_bytes = tar_file.extractfile(tarinfo).read()
-                group_parts[cur_ext] = member_bytes
-                file_names.append(fname)
-        if sample_base_name is None:
-            raise ValueError(f"No valid files found in sample {sample_pointer}")
+                raise ValueError(f"No valid files found in sample {sample_pointer}")
+        finally:
+            # Return the reader to the cache
+            self._update_itarfile_cache(sample_pointer.tar_file_id, tar_file)
 
         return FilteredSample(
             __key__=sample_base_name,
             __shard__=self.tar_filenames[sample_pointer.tar_file_id],
-            __restore_key__=("Webdataset", restore_index),
+            __restore_key__=WebdatasetRestoreKey(index=restore_index),
             __sources__=(
                 SourceInfo(
                     dataset_path=self.base_path,
@@ -259,7 +311,9 @@ class JoinIndexFileITarReader(ITarReader[int]):
 
     index_file: EPath
     column: int
-    index_reader_cache: Dict[int, JoinIndexReader]
+    index_reader_cache_lock: threading.Lock
+    index_reader_cache: MultiKeyCache[int, JoinIndexReader]
+    active_readers: int = 0
     index_reader_cache_size: int
 
     def __init__(
@@ -278,7 +332,8 @@ class JoinIndexFileITarReader(ITarReader[int]):
         # Create the full path to each tar file
         tar_filepaths = [base_path / fn for fn in tar_filenames]
 
-        self.index_reader_cache = {}
+        self.index_reader_cache_lock = threading.Lock()
+        self.index_reader_cache = MultiKeyCache()
         self.index_reader_cache_size = itar_cache_size
 
         super().__init__(
@@ -290,24 +345,36 @@ class JoinIndexFileITarReader(ITarReader[int]):
             sample_filter=sample_filter,
         )
 
+    def worker_init(self):
+        pass
+
+    def worker_close(self):
+        pass
+
     def _get_join_index_reader_cached(self, sample_idx: int) -> JoinIndexReader:
         """
         Get the JoinIndexReader object for the given sample index, or create it if it doesn't exist.
         """
+        with self.index_reader_cache_lock:
+            index_reader = self.index_reader_cache.pop(sample_idx)
+            if index_reader is None:
+                if len(self.index_reader_cache) < self.index_reader_cache_size:
+                    index_reader = JoinIndexReader(self.index_file, column=self.column)
+                else:
+                    # Just reuse the oldest reader
+                    index_reader = self.index_reader_cache.pop()
 
-        if sample_idx not in self.index_reader_cache:
-            index_reader = JoinIndexReader(self.index_file, column=self.column)
-            self.index_reader_cache[sample_idx] = index_reader
+            return index_reader
 
-        # If we hit the limit of open files, close the least recently used file
-        while len(self.index_reader_cache) > self.index_reader_cache_size:
-            # Get the oldest file
-            lru_key = next(iter(self.index_reader_cache))
-
-            self.index_reader_cache[lru_key].close()
-            del self.index_reader_cache[lru_key]
-
-        return self.index_reader_cache[sample_idx]
+    def _update_index_reader_cache(self, sample_idx: int, reader: JoinIndexReader) -> None:
+        """
+        Update the JoinIndexReader object for the given tar file id.
+        """
+        with self.index_reader_cache_lock:
+            # If we hit the limit of open files, close the least recently used file
+            while len(self.index_reader_cache) >= self.index_reader_cache_size:
+                self.index_reader_cache.pop().close()
+            self.index_reader_cache.add(sample_idx, reader)
 
     def _get_itar_sample_pointer(self, sample_idx: int) -> ITarSamplePointer:
         """
@@ -318,8 +385,11 @@ class JoinIndexFileITarReader(ITarReader[int]):
 
         # Update cache entry
         new_offset = index_reader.tell_row()
-        del self.index_reader_cache[sample_idx]
-        self.index_reader_cache[new_offset] = index_reader
+        assert new_offset == sample_idx + 1, (
+            f"Expected new offset to be {sample_idx + 1}, got {new_offset}"
+        )
+
+        self._update_index_reader_cache(new_offset, index_reader)
 
         assert len(row) == 1
         shard_idx, byte_offset, byte_size = row[0]
@@ -333,8 +403,8 @@ class JoinIndexFileITarReader(ITarReader[int]):
     def __len__(self) -> int:
         try:
             # Get any reader, they will all work
-            index_reader = next(iter(self.index_reader_cache.values()))
-        except StopIteration:
+            index_reader = self.index_reader_cache.pop()
+        except IndexError:
             # If there's no reader yet, we need to create one to get the length
             index_reader = self._get_join_index_reader_cached(0)
 
@@ -357,7 +427,7 @@ class ShardInfosITarReader(ITarReader[int]):
     shard_infos: List[ShardInfo]
     shard_tar_file_idxs: List[int]
     shard_count_cumsum: List[int]
-    cached_offset_reader: CachedItarOffsetReader
+    _thread_local: threading.local
 
     def __init__(
         self,
@@ -394,8 +464,8 @@ class ShardInfosITarReader(ITarReader[int]):
         tar_filenames = list(cur_tar_files.keys())
         tar_filepaths = [p[1] for p in cur_tar_files.values()]
 
-        # Instantiate cached reader for the .tar.idx files
-        self.cached_offset_reader = CachedItarOffsetReader(cache_size=itar_cache_size)
+        self._itar_cache_size = itar_cache_size
+        self._thread_local = threading.local()
 
         super().__init__(
             base_path=base_path,
@@ -405,6 +475,20 @@ class ShardInfosITarReader(ITarReader[int]):
             itar_cache_size=itar_cache_size,
             sample_filter=sample_filter,
         )
+
+    @property
+    def _cached_offset_reader(self) -> CachedItarOffsetReader:
+        return self._thread_local._cached_offset_reader
+
+    def worker_init(self):
+        self._thread_local._cached_offset_reader = CachedItarOffsetReader(
+            cache_size=self._itar_cache_size
+        )
+
+    def worker_close(self):
+        if hasattr(self._thread_local, "_cached_offset_reader"):
+            self._thread_local._cached_offset_reader.close()
+            del self._thread_local._cached_offset_reader
 
     def _get_itar_sample_pointer(self, idx: int) -> ITarSamplePointer:
         """
@@ -423,7 +507,7 @@ class ShardInfosITarReader(ITarReader[int]):
         # Now we know the tar file and the sample offset in the file.
         # We need to figure out the byte offset and size of the sample,
         # by looking it up in the .tar.idx file.
-        byte_offset, byte_size = self.cached_offset_reader.get_itar_byte_offset(
+        byte_offset, byte_size = self._cached_offset_reader.get_itar_byte_offset(
             shard.path, sample_idx_in_shard_file
         )
 
@@ -450,8 +534,9 @@ class SqliteITarEntryReader(ITarReader[str]):
     A concrete ITarReader that constructs its internal sample list from a SQLite database.
     """
 
-    sqlite_reader: SqliteIndexReader
     db_has_sample_parts: int
+
+    thread_local: threading.local
 
     def __init__(
         self,
@@ -469,12 +554,12 @@ class SqliteITarEntryReader(ITarReader[str]):
         tar_filepaths = [base_path / fn for fn in tar_filenames]
 
         # Initialize the SQLite reader
-        sqlite_path = base_path / MAIN_FOLDER_NAME / INDEX_SQLITE_FILENAME
-        self.sqlite_reader = SqliteIndexReader(sqlite_path)
-
-        self.db_has_sample_parts = self.sqlite_reader.db_has_sample_parts()
+        self.sqlite_path = base_path / MAIN_FOLDER_NAME / INDEX_SQLITE_FILENAME
+        with SqliteIndexReader(self.sqlite_path) as check_db:
+            self.db_has_sample_parts = check_db.db_has_sample_parts()
 
         self.key_is_full_entryname = key_is_full_entryname
+        self.thread_local = threading.local()
 
         super().__init__(
             base_path=base_path,
@@ -485,12 +570,24 @@ class SqliteITarEntryReader(ITarReader[str]):
             sample_filter=sample_filter,
         )
 
+    @property
+    def _sqlite_reader(self) -> SqliteIndexReader:
+        return self.thread_local._sqlite_reader
+
+    def worker_init(self):
+        self.thread_local._sqlite_reader = SqliteIndexReader(self.sqlite_path)
+
+    def worker_close(self):
+        if getattr(self.thread_local, "_sqlite_reader", None) is not None:
+            self.thread_local._sqlite_reader.close()
+            del self.thread_local._sqlite_reader
+
     def _get_itar_sample_pointer(self, sample_key: str) -> ITarSamplePointer:
         """
         Get the ITarSample object for the given index.
         """
 
-        return self.sqlite_reader.get_sample_pointer_by_key(sample_key)
+        return self._sqlite_reader.get_sample_pointer_by_key(sample_key)
 
     def list_all_samples(self) -> Generator[Tuple[str, int, int], None, None]:
         """List all samples in the jsonl file.
@@ -498,7 +595,7 @@ class SqliteITarEntryReader(ITarReader[str]):
         Returns:
             A generator of tuples of (sample_key, size, tar_file_id)
         """
-        return self.sqlite_reader.list_all_samples()
+        return self._sqlite_reader.list_all_samples()
 
     def list_all_sample_parts(self) -> Generator[Tuple[str, int, int], None, None]:
         """List all sample parts in the jsonl file.
@@ -506,7 +603,7 @@ class SqliteITarEntryReader(ITarReader[str]):
         Returns:
             A generator of tuples of (sample_key + "." + part_name, size, tar_file_id)
         """
-        return self.sqlite_reader.list_all_sample_parts()
+        return self._sqlite_reader.list_all_sample_parts()
 
     def list_sample_parts(
         self, sample_key: str, slow_mode: bool = False
@@ -528,7 +625,7 @@ class SqliteITarEntryReader(ITarReader[str]):
         """
 
         if not slow_mode:
-            yield from self.sqlite_reader.list_sample_parts(sample_key)
+            yield from self._sqlite_reader.list_sample_parts(sample_key)
         else:
             sample_pointer = self._get_itar_sample_pointer(sample_key)
 
@@ -540,7 +637,7 @@ class SqliteITarEntryReader(ITarReader[str]):
                     yield ext, len(sample[ext]), sample_pointer.tar_file_id
 
     def get_total_size(self) -> int:
-        return self.sqlite_reader.get_total_size()
+        return self._sqlite_reader.get_total_size()
 
     @overload
     def __getitem__(self, key: str) -> Union[FilteredSample, tuple[bytes, SourceInfo]]: ...
@@ -571,7 +668,7 @@ class SqliteITarEntryReader(ITarReader[str]):
 
             if self.db_has_sample_parts:
                 # Directly fetch the sample part (byte offset and size) from the database
-                raw_sample_pointer = self.sqlite_reader.get_sample_part(sample_key, sample_ext)
+                raw_sample_pointer = self._sqlite_reader.get_sample_part(sample_key, sample_ext)
                 raw_data, source_info = self._get_part_by_raw_sample_pointer(
                     raw_sample_pointer, key
                 )
@@ -598,7 +695,7 @@ class SqliteITarEntryReader(ITarReader[str]):
 
     def __len__(self) -> int:
         """Return the total number of samples in the database."""
-        return self.sqlite_reader.get_sample_count()
+        return self._sqlite_reader.get_sample_count()
 
     def __str__(self) -> str:
         """Return a descriptive string of this reader."""
@@ -612,12 +709,11 @@ class SqliteITarEntryReader(ITarReader[str]):
     def close(self):
         """Close the SQLite reader and any open ITarFiles."""
         # Close the SQLite reader
-        if hasattr(self, "sqlite_reader") and self.sqlite_reader is not None:
-            self.sqlite_reader.close()
+        if hasattr(self, "_sqlite_reader") and self._sqlite_reader is not None:
+            self._sqlite_reader.close()
 
         # Close any open ITarFiles (using parent class implementation)
-        for tar_file_id in list(self.itar_files_cache.keys()):
-            tar_file = self.itar_files_cache[tar_file_id]
+        for tar_file in self.itar_files_cache.flush():
             if (
                 tar_file is not None
                 and hasattr(tar_file, "fileobj")
@@ -626,4 +722,3 @@ class SqliteITarEntryReader(ITarReader[str]):
                 tar_file.fileobj.close()
             if tar_file is not None and hasattr(tar_file, "close"):
                 tar_file.close()
-            del self.itar_files_cache[tar_file_id]

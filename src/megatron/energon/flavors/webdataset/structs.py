@@ -1,11 +1,12 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from dataclasses import field
-from typing import Dict, List, Optional, Tuple, TypedDict
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, TypedDict
 
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
+from megatron.energon.flavors.base_dataset import RestoreKey
 from megatron.energon.source_info import SourceInfo
 
 
@@ -42,6 +43,15 @@ class ShardInfo:
     count: int
 
 
+@dataclass(kw_only=True, slots=True, frozen=True)
+class WebdatasetRestoreKey(RestoreKey):
+    """Restore key for the webdataset sample loader."""
+
+    #: The global index of the sample. Either an integer representing the global sample index,
+    # or a string representing the sample key within the shard.
+    index: int | str
+
+
 class FilteredSample(TypedDict):
     """This is just a definition for the internal loaders. Not exposed to the user."""
 
@@ -52,8 +62,7 @@ class FilteredSample(TypedDict):
     #: The base name of the shard file e.g. "shard_000"
     __shard__: str
     #: Globally unique key to restore a sample from disk.
-    #: For example `("Webdataset", 123)` would restore the sample at index 123.
-    __restore_key__: Tuple[str, int]
+    __restore_key__: WebdatasetRestoreKey
     #: The source information for the sample.
     __sources__: tuple[SourceInfo, ...]
 

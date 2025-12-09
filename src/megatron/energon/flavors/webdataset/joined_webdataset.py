@@ -220,8 +220,7 @@ class JoinedWebdatasetFactory(BaseCoreDatasetFactory[T_sample], Sharder, Generic
         # Then combine the loaded smaples into the final type
         return set_sample_restore_key(
             self._sample_joiner(*loaded_samples),
-            *samples.__restore_key__,
-            src=self,
+            samples.__restore_key__,
             fail_otherwise=True,
         )
 

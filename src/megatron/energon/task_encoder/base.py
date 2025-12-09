@@ -4,6 +4,7 @@
 import dataclasses
 import functools
 import inspect
+import threading
 from abc import ABC
 from dataclasses import is_dataclass
 from types import MethodType
@@ -38,9 +39,9 @@ from megatron.energon.flavors import (
     SampleDecoder,
     SavableDataset,
 )
-from megatron.energon.flavors.base_dataset import ExtendableDataclassMixin
+from megatron.energon.flavors.base_dataset import ExtendableDataclassMixin, RestoreKey
 from megatron.energon.metadataset.loader_interface import DatasetBlendMode, LoadedDataset
-from megatron.energon.rng import SystemRng
+from megatron.energon.rng import SystemRng, UserRng
 from megatron.energon.source_info import SourceInfo
 from megatron.energon.task_encoder.cooking import Cooker
 from megatron.energon.worker import WorkerConfig
@@ -56,6 +57,7 @@ from megatron.energon.wrappers import (
     PackingDataset,
     ShuffleBufferDataset,
 )
+from megatron.energon.wrappers.file_store_init_wrapper import FileStoreInitWrapper
 from megatron.energon.wrappers.repeat_dataset import RepeatDataset
 
 T = TypeVar("T")
@@ -135,6 +137,7 @@ def stateless(
     fn: Optional[Callable[..., T]] = None,
     *,
     restore_seeds: bool = False,
+    restore_task_encoder_seeds: bool = False,
     failure_tolerance: Optional[int] = None,
 ) -> Union[Callable[[Callable[..., T]], Callable[..., T]], Callable[..., T]]:
     """Decorator to mark a function of the task encoder as restorable.
@@ -142,6 +145,9 @@ def stateless(
     Args:
         fn: The function to decorate.
         restore_seeds: Whether to restore the seeds for the function. I.e. the seeds are set
+            from the sample index and the worker seed, such that they can be restored when a sample
+            is restored from that function.
+        restore_task_encoder_seeds: Whether to restore the seeds for the task encoder. I.e. the seeds are set
             from the sample index and the worker seed, such that they can be restored when a sample
             is restored from that function.
         failure_tolerance: The number of consecutive exceptions that are handled, after which a `FatalSampleError` is
@@ -168,77 +174,132 @@ def stateless(
         )
     if restore_seeds:
         worker_seed = None
+        orig_fn = fn
 
-        @functools.wraps(fn)
-        def seed_wrapper_generator(self, *args, **kwargs):
-            nonlocal worker_seed
-            if worker_seed is None:
-                worker_seed = WorkerConfig.active_worker_config.worker_seed()
+        if inspect.isgeneratorfunction(orig_fn):
 
-            # Save the RNG states and set the new seed
-            outer_rng_state = SystemRng.save_state()
+            @functools.wraps(orig_fn)
+            def seed_wrapper_generator(self, *args, **kwargs):
+                nonlocal worker_seed
+                if worker_seed is None:
+                    worker_seed = WorkerConfig.active_worker_config.worker_seed()
 
-            # Before constructing the generator and before the first
-            # iteration, set inner RNG based on seed computed
-            # from worker_seed and current sample index
-            SystemRng.seed_args(worker_seed, self.current_sample_index)
-
-            it = iter(fn(self, *args, **kwargs))
-
-            inner_rand_state = None
-
-            while True:
-                if inner_rand_state is not None:
-                    # Restore inner random state before calling the generator
-                    # This will not be done on the first iteration
-                    SystemRng.restore_state(inner_rand_state)
-
-                try:
-                    # Now call the generator. This will yield the sample
-                    # But note it may also throw an exception or a StopIteration
-                    sample = next(it)
-
-                    # Save inner random state after calling the generator
-                    inner_rand_state = SystemRng.save_state()
-                except StopIteration:
-                    # We're stopping here, but the outer random state
-                    # will be restored before returning (in finally below)
-                    break
-                finally:
-                    # Restore outer rand state before yielding or when an exception was raised
-                    SystemRng.restore_state(outer_rng_state)
-
-                # Now yield the sample.
-                # This will give control back to the caller who may
-                # change the random state.
-                yield sample
-
-                # Save outer random state after yielding
+                # Save the RNG states and set the new seed
                 outer_rng_state = SystemRng.save_state()
 
-        @functools.wraps(fn)
-        def seed_wrapper(self, *args, **kwargs):
-            nonlocal worker_seed
-            if worker_seed is None:
-                worker_seed = WorkerConfig.active_worker_config.worker_seed()
+                # Before constructing the generator and before the first
+                # iteration, set inner RNG based on seed computed
+                # from worker_seed and current sample index
+                SystemRng.seed_args(worker_seed, self.current_sample_index)
 
-            # Save the RNG states and set the new seed
-            rng_state = SystemRng.save_state()
+                it = iter(orig_fn(self, *args, **kwargs))
 
-            SystemRng.seed_args(worker_seed, self.current_sample_index)
+                inner_rand_state = None
 
-            try:
-                return fn(self, *args, **kwargs)
-            finally:
-                # Restore the RNGs
-                SystemRng.restore_state(rng_state)
+                while True:
+                    if inner_rand_state is not None:
+                        # Restore inner random state before calling the generator
+                        # This will not be done on the first iteration
+                        SystemRng.restore_state(inner_rand_state)
 
-        if inspect.isgeneratorfunction(fn):
-            setattr(seed_wrapper_generator, "__stateless__", True)
-            return seed_wrapper_generator
+                    try:
+                        # Now call the generator. This will yield the sample
+                        # But note it may also throw an exception or a StopIteration
+                        sample = next(it)
+
+                        # Save inner random state after calling the generator
+                        inner_rand_state = SystemRng.save_state()
+                    except StopIteration:
+                        # We're stopping here, but the outer random state
+                        # will be restored before returning (in finally below)
+                        break
+                    finally:
+                        # Restore outer rand state before yielding or when an exception was raised
+                        SystemRng.restore_state(outer_rng_state)
+
+                    # Now yield the sample.
+                    # This will give control back to the caller who may
+                    # change the random state.
+                    yield sample
+
+                    # Save outer random state after yielding
+                    outer_rng_state = SystemRng.save_state()
+
+            fn = seed_wrapper_generator
         else:
-            setattr(seed_wrapper, "__stateless__", True)
-            return seed_wrapper
+
+            @functools.wraps(orig_fn)
+            def seed_wrapper(self, *args, **kwargs):
+                nonlocal worker_seed
+                if worker_seed is None:
+                    worker_seed = WorkerConfig.active_worker_config.worker_seed()
+
+                # Save the RNG states and set the new seed
+                rng_state = SystemRng.save_state()
+
+                SystemRng.seed_args(worker_seed, self.current_sample_index)
+
+                try:
+                    return orig_fn(self, *args, **kwargs)
+                finally:
+                    # Restore the RNGs
+                    SystemRng.restore_state(rng_state)
+
+            fn = seed_wrapper
+
+    if restore_task_encoder_seeds:
+        te_orig_fn = fn
+        worker_seed = None
+        if inspect.isgeneratorfunction(te_orig_fn):
+
+            @functools.wraps(te_orig_fn)
+            def seed_wrapper_generator(self, *args, **kwargs):
+                nonlocal worker_seed
+                if worker_seed is None:
+                    worker_seed = WorkerConfig.active_worker_config.worker_seed()
+
+                te_outer_rng_state = self.rng.save_state()
+
+                self.rng.seed_args(worker_seed, self.current_sample_index)
+
+                it = iter(te_orig_fn(self, *args, **kwargs))
+
+                inner_rand_state = None
+
+                while True:
+                    if inner_rand_state is not None:
+                        self.rng.restore_state(inner_rand_state)
+                    try:
+                        sample = next(it)
+                        inner_rand_state = self.rng.save_state()
+                    except StopIteration:
+                        break
+                    finally:
+                        self.rng.restore_state(te_outer_rng_state)
+
+                    yield sample
+
+                    te_outer_rng_state = self.rng.save_state()
+        else:
+
+            @functools.wraps(te_orig_fn)
+            def seed_wrapper(self, *args, **kwargs):
+                nonlocal worker_seed
+                if worker_seed is None:
+                    worker_seed = WorkerConfig.active_worker_config.worker_seed()
+
+                # Save the RNG states and set the new seed
+                te_rng_state = self.rng.save_state()
+
+                self.rng.seed_args(worker_seed, self.current_sample_index)
+
+                try:
+                    return te_orig_fn(self, *args, **kwargs)
+                finally:
+                    # Restore the RNGs
+                    self.rng.restore_state(te_rng_state)
+
+            fn = seed_wrapper
 
     setattr(fn, "__stateless__", True)
     if failure_tolerance is not None:
@@ -266,7 +327,7 @@ class Batch(PinMemoryMixin, ExtendableDataclassMixin):
     __key__: list[str]
     #: Key for restoring the sample. This is used to restore the sample from a checkpoint. It
     # should be a (nested) tuple of strings and integers, which can be used to index the dataset.
-    __restore_key__: Tuple[Union[str, int, tuple], ...]
+    __restore_key__: Tuple[RestoreKey | None, ...]
 
     #: A dataset may define a subflavors to distinguish between samples of the same sample type.
     __subflavors__: Optional[list[Optional[Dict[str, Any]]]] = None
@@ -347,7 +408,7 @@ class Batch(PinMemoryMixin, ExtendableDataclassMixin):
         return cls(**init_args)
 
 
-class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]):
+class TaskEncoder(Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]):
     """
     Base class for task encoders.
 
@@ -372,6 +433,13 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
 
     #: The decoder to use for decoding samples. Set manually as needed to override options.
     decoder: Optional[SampleDecoder] = SampleDecoder()
+
+    #: Thread-local state. Used for properties, that are worker-local.
+    _worker_local: threading.local
+
+    def __init__(self):
+        # Create a thread-local state for the workers.
+        self._worker_local = threading.local()
 
     def _is_overridden(
         self, bound_method: Callable[..., Any], bases: Optional[Sequence[Type[Any]]] = None
@@ -626,6 +694,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 fixed_batch_size=batch_size,
                 sample_group_key=self.batch_group_criterion,
                 batcher=self.batch,
+                batcher_stateless=get_stateless(self.batch),
                 drop_last=batch_drop_last,
                 worker_config=worker_config,
                 failure_tolerance=get_failure_tolerance(
@@ -697,9 +766,13 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         else:
             raise ValueError(f"No cooker found for subflavors: {subflavors}")
 
+        all_aux_datasets = list(aux.values())
+
         if cooker.need_primary and "primary" not in aux:
             try:
                 primary_aux = get_primary_aux()
+                primary_aux.worker_init()
+                all_aux_datasets.append(primary_aux)
                 assert primary_aux is not None, "Primary auxiliary dataset must always exist"
                 if self.decoder is not None:
                     primary_aux = DecodeFileStore(primary_aux, decoder=self.decoder)
@@ -710,19 +783,25 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
 
         cook_fn = functools.partial(self.cook_crude_sample, cooker=cooker, aux=aux)
 
-        return MapDataset(
-            dataset,
-            cook_fn,
-            worker_config=worker_config,
-            stateless_map_fn=get_stateless(self.cook_crude_sample),
-            map_fn_config=dict(
-                cooker=dict(
-                    cook=SavableDataset._function_config(cooker.cook),
-                    has_subflavors=cooker.has_subflavors,
-                    aux={k: {"_path": str(v.get_path())} for k, v in aux.items()},
+        return FileStoreInitWrapper(
+            MapDataset(
+                dataset,
+                cook_fn,
+                worker_config=worker_config,
+                stateless_map_fn=get_stateless(self.cook_crude_sample),
+                map_fn_config=dict(
+                    cooker=dict(
+                        cook=SavableDataset._function_config(cooker.cook),
+                        has_subflavors=cooker.has_subflavors,
+                        aux={k: {"_path": str(v.get_path())} for k, v in aux.items()},
+                    ),
+                ),
+                failure_tolerance=get_failure_tolerance(
+                    cook_fn, self.__default_failure_tolerance__
                 ),
             ),
-            failure_tolerance=get_failure_tolerance(cook_fn, self.__default_failure_tolerance__),
+            auxiliary_datasets=all_aux_datasets,
+            worker_config=worker_config,
         )
 
     def _load_dataset(
@@ -981,10 +1060,21 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         assert WorkerConfig.active_worker_config is not None, (
             "The cache can only be fetched within the worker, and to be usable, you must use the get_(savable_)loader methods provided from the package."
         )
-        assert WorkerConfig.active_worker_config._cache_pool is not None, (
-            "Cache pool must be set by the loader."
-        )
-        return WorkerConfig.active_worker_config._cache_pool
+        cache_pool = WorkerConfig.active_worker_cache_pool()
+        assert cache_pool is not None, "Cache pool must be set by the loader."
+        return cache_pool
+
+    # State fields, they are initialized when the dataloader is started.
+    @property
+    def rng(self) -> UserRng:
+        """The random generator that should be used within user methods (like `encode_sample`) for reproducibility (and
+        thus for savability).
+        """
+        if not hasattr(self._worker_local, "rng"):
+            # Initialize when needed.
+            self._worker_local.rng = UserRng(WorkerConfig.active_worker_config.worker_seed())
+
+        return self._worker_local.rng
 
 
 class DefaultTaskEncoder(

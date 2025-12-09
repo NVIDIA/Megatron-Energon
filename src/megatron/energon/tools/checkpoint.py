@@ -1,17 +1,22 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+import dataclasses
 import re
-from typing import List, Optional
+from typing import Callable, Generator, List, Optional
 
 import click
 import torch
 
+from megatron.energon.dataloader.dataloader import RankState
+from megatron.energon.dataloader.workers.base_worker import WorkerState
 from megatron.energon.epathlib import EPath
-from megatron.energon.savable_loader import SavableDataLoaderState
+from megatron.energon.flavors.base_dataset import RestoreKey
+from megatron.energon.wrappers.base import WrappedRestoreKey
+from megatron.energon.wrappers.batch_dataset import BatchRestoreKey
 
 
-def natural_sort_key(s):
+def natural_sort_key(s: str) -> List[str | int]:
     """
     Function to use for natural sorting of filenames.
 
@@ -21,7 +26,7 @@ def natural_sort_key(s):
     return [int(text) if text.isdigit() else text.lower() for text in re.split(r"(\d+)", s)]
 
 
-def detect_and_replicate_pattern(file_list):
+def detect_and_replicate_pattern(file_list: List[str]) -> Callable[[int], str]:
     """
     Given a list of file paths, detect the single numeric pattern and return
     a function that, when called with integer n (starting from 0), generates
@@ -156,7 +161,7 @@ class RankStateIterable:
         else:
             self.megatron_style = False
 
-        if isinstance(first_state, SavableDataLoaderState):
+        if isinstance(first_state, RankState):
             if self.megatron_style:
                 self.rank_states = [first_state] + [
                     torch.load(str(state_file), weights_only=False)["dataloader_state_dict"]
@@ -170,7 +175,7 @@ class RankStateIterable:
             self.is_global_checkpoint = False
         elif isinstance(first_state, list):
             assert len(state_files) == 1, "Global checkpoint must contain exactly one file"
-            assert all(isinstance(state, SavableDataLoaderState) for state in first_state)
+            assert all(isinstance(state, RankState) for state in first_state)
             self.rank_states = first_state
             self.is_global_checkpoint = True
         else:
@@ -184,9 +189,12 @@ class RankStateIterable:
             self.rank_num_workers[0] == num_workers for num_workers in self.rank_num_workers
         ), "All ranks must have the same number of workers."
 
-    def write_new_states_to_folder(
-        self, output_folder: EPath, new_states: List[SavableDataLoaderState]
-    ):
+        assert all(
+            rank_state.micro_batch_size == self.rank_states[0].micro_batch_size
+            for rank_state in self.rank_states[1:]
+        ), "All ranks must have the same micro batch size."
+
+    def write_new_states_to_folder(self, output_folder: EPath, new_states: List[RankState]):
         for rank_idx, rank_state in enumerate(new_states):
             output_file = output_folder / self.file_pattern_func(rank_idx)
             if self.megatron_style:
@@ -197,20 +205,69 @@ class RankStateIterable:
             else:
                 torch.save(rank_state, str(output_file))
 
-    def get_num_ranks(self):
+    def get_num_ranks(self) -> int:
         return len(self.rank_states)
 
-    def get_num_workers(self):
+    def get_num_workers(self) -> int:
         return self.rank_num_workers[0]
 
-    def get_micro_batch_size(self):
+    def get_micro_batch_size(self) -> int | None:
         return self.rank_states[0].micro_batch_size
 
-    def __iter__(self):
-        """Iterates the SavableDatasetCheckpoints of mulitple ranks in a round-robin fashion."""
-        for rank, state in enumerate(self.rank_states):
-            for worker_state in state.worker_states:
-                yield worker_state
+    def __iter__(self) -> Generator[tuple[WorkerState | None, list[RestoreKey | None]], None, None]:
+        """Iterates the WorkerStates of multiple ranks in a round-robin fashion."""
+        for rank_state in self.rank_states:
+            for worker_state, prefetched_samples_keys in zip(
+                rank_state.worker_states, rank_state.prefetched_restore_keys
+            ):
+                yield worker_state, prefetched_samples_keys
+
+
+def split_batch_restore_key(
+    restore_key: RestoreKey | None, batch_split_factor: int
+) -> list[RestoreKey | None]:
+    """Split the given restore_key into multiple restore keys, one for each batch."""
+    if restore_key is None:
+        raise ValueError("Cannot split None restore key")
+    if isinstance(restore_key, BatchRestoreKey):
+        # Split the inner keys into batch_split_factor keys
+        # Duplicate the sample_idx for each batch
+        assert len(restore_key.inner) % batch_split_factor == 0, (
+            "Batch size must be a multiple of the batch split factor"
+        )
+        split_size = len(restore_key.inner) // batch_split_factor
+        return [
+            BatchRestoreKey(
+                inner=tuple(restore_key.inner[i : i + split_size]),
+                sample_idx=restore_key.sample_idx,
+            )
+            for i in range(0, len(restore_key.inner), split_size)
+        ]
+    elif isinstance(restore_key, WrappedRestoreKey):
+        inner_restore_keys = split_batch_restore_key(restore_key.inner, batch_split_factor)
+        inner_kwargs = {
+            field.name: getattr(restore_key, field.name)
+            for field in dataclasses.fields(restore_key)
+        }
+        inner_kwargs.pop("inner")
+        return [
+            type(restore_key)(**inner_kwargs, inner=inner_restore_key)
+            for inner_restore_key in inner_restore_keys
+        ]
+    else:
+        raise ValueError(f"Unsupported restore key type for splitting batch: {type(restore_key)}")
+
+
+def split_batch_restore_keys(
+    restore_keys: list[RestoreKey | None], batch_split_factor: int
+) -> list[RestoreKey | None]:
+    if batch_split_factor == 1:
+        return restore_keys
+    return [
+        new_restore_key
+        for restore_key in restore_keys
+        for new_restore_key in split_batch_restore_key(restore_key, batch_split_factor)
+    ]
 
 
 @click.command(name="redist")
@@ -227,8 +284,12 @@ class RankStateIterable:
 @click.option(
     "--new-world-size", type=int, help="Number of ranks to redistribute to", required=False
 )
+@click.option("--new-micro-batch-size", type=int, help="New micro batch size", required=False)
 def command_redist(
-    input_files: List[EPath], output_path: EPath, new_world_size: Optional[int] = None
+    input_files: List[EPath],
+    output_path: EPath,
+    new_world_size: Optional[int] = None,
+    new_micro_batch_size: Optional[int] = None,
 ):
     """Redistribute a checkpoint.
 
@@ -267,22 +328,52 @@ def command_redist(
     # Ensure output directory exists
     output_path.mkdir(exist_ok=True, parents=True)
 
-    new_rank_states = [list() for _ in range(new_world_size)]
+    # A list (rank) of lists (workers) of (worker_state, prefetched_sample_keys) for each new rank
+    new_rank_states = [[] for _ in range(new_world_size)]
     rsi_iter = iter(rsi)
     for rank_idx in range(new_world_size):
         for _ in range(new_workers_per_rank):
-            state = next(rsi_iter)
-            new_rank_states[rank_idx].append(state)
+            worker_state, prefetched_sample_keys = next(rsi_iter)
+            new_rank_states[rank_idx].append((worker_state, prefetched_sample_keys))
 
     assert all(
-        len(new_rank_states[0]) == len(new_rank_states[rank]) for rank in range(1, new_world_size)
+        len(new_rank_states[0]) == len(rank_states) for rank_states in new_rank_states[1:]
     ), "All ranks must have the same number of workers, also for the new distribution."
 
+    # Check batch sizes (before and after)
+    old_micro_batch_size = rsi.get_micro_batch_size()
+    if old_micro_batch_size is not None and new_micro_batch_size != old_micro_batch_size:
+        assert new_micro_batch_size is not None and old_micro_batch_size is not None, (
+            "Cannot resume with different batching mode (batching to non-batching or vice versa)"
+        )
+
+        if new_micro_batch_size > old_micro_batch_size:
+            raise ValueError(
+                "Resuming with larger micro batch size is not allowed: "
+                f"{new_micro_batch_size} > {old_micro_batch_size}"
+            )
+        elif (
+            new_micro_batch_size < old_micro_batch_size
+            and old_micro_batch_size % new_micro_batch_size != 0
+        ):
+            raise ValueError(
+                "Resuming with smaller micro batch size only allowed if the old "
+                f"micro batch size is a multiple of the new one: {new_micro_batch_size} < {old_micro_batch_size}"
+            )
+        batch_split_factor = old_micro_batch_size // new_micro_batch_size
+        print(f"Splitting batches by {batch_split_factor}x")
+    else:
+        batch_split_factor = 1
+
     new_states = [
-        SavableDataLoaderState(
-            worker_states=new_rank_state,
+        RankState(
+            worker_states=[worker_state for worker_state, prefetched_sample_keys in new_rank_state],
             next_worker_id=0,  # Reset the next worker ID
-            micro_batch_size=rsi.get_micro_batch_size(),
+            micro_batch_size=new_micro_batch_size,
+            prefetched_restore_keys=[
+                split_batch_restore_keys(prefetched_sample_keys, batch_split_factor)
+                for worker_state, prefetched_sample_keys in new_rank_state
+            ],
         )
         for new_rank_state in new_rank_states
     ]

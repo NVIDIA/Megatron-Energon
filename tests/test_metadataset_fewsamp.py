@@ -7,11 +7,11 @@ import gc
 import logging
 import sys
 import tempfile
-import unittest
 import warnings
 from pathlib import Path
 from typing import Iterable
 
+import pytest
 import torch
 import webdataset as wds
 
@@ -61,130 +61,129 @@ def get_blend_dataset(ds: SavableDataset):
             raise ValueError("No blend dataset found")
 
 
-class TestDataset(unittest.TestCase):
-    # Set up the test fixture
-    def setUp(self):
-        logging.basicConfig(stream=sys.stderr, level=logging.INFO)
-        warnings.simplefilter("ignore", ResourceWarning)
+@pytest.fixture
+def temp_dir():
+    """Create a temporary directory for test files."""
+    temp_dir = tempfile.TemporaryDirectory()
+    yield temp_dir
+    gc.collect()
+    temp_dir.cleanup()
 
-        # Create a temporary directory
-        self.temp_dir = tempfile.TemporaryDirectory()
-        self.dataset_path = Path(self.temp_dir.name)
-        # self.dataset_path = Path("./test_dataset")
 
-        self.dataset_path.mkdir(exist_ok=True, parents=True)
+@pytest.fixture
+def dataset_path(temp_dir):
+    """Create dataset path and setup test data."""
+    logging.basicConfig(stream=sys.stderr, level=logging.INFO)
+    warnings.simplefilter("ignore", ResourceWarning)
 
-        (self.dataset_path / "ds1").mkdir(exist_ok=True, parents=True)
-        (self.dataset_path / "ds2").mkdir(exist_ok=True, parents=True)
-        (self.dataset_path / "ds3").mkdir(exist_ok=True, parents=True)
+    dataset_path = Path(temp_dir.name)
+    dataset_path.mkdir(exist_ok=True, parents=True)
 
-        # Create a small dummy captioning dataset
-        self.create_text_test_dataset(self.dataset_path / "ds1", range(55), range(55))
-        self.create_text_test_dataset(self.dataset_path / "ds2", range(100, 107), range(100, 107))
-        self.create_text_test_dataset(self.dataset_path / "ds3", range(200, 255), range(0, 55))
+    (dataset_path / "ds1").mkdir(exist_ok=True, parents=True)
+    (dataset_path / "ds2").mkdir(exist_ok=True, parents=True)
+    (dataset_path / "ds3").mkdir(exist_ok=True, parents=True)
 
-        self.mds_path = self.dataset_path / "metadataset_v2.yaml"
-        with open(self.mds_path, "w") as f:
-            f.write(
-                "\n".join(
-                    [
-                        "__module__: megatron.energon",
-                        "__class__: MetadatasetV2",
-                        "splits:",
-                        "  train:",
-                        "    blend:",
-                        "      - weight: 1",
-                        "        path: ds1",
-                        "      - weight: 1",
-                        "        path: ds2",
-                        "      - weight: 1",
-                        "        path: ds3",
-                    ]
-                )
+    # Create a small dummy captioning dataset
+    create_text_test_dataset(dataset_path / "ds1", range(55), range(55))
+    create_text_test_dataset(dataset_path / "ds2", range(100, 107), range(100, 107))
+    create_text_test_dataset(dataset_path / "ds3", range(200, 255), range(0, 55))
+
+    mds_path = dataset_path / "metadataset_v2.yaml"
+    with open(mds_path, "w") as f:
+        f.write(
+            "\n".join(
+                [
+                    "__module__: megatron.energon",
+                    "__class__: MetadatasetV2",
+                    "splits:",
+                    "  train:",
+                    "    blend:",
+                    "      - weight: 1",
+                    "        path: ds1",
+                    "      - weight: 1",
+                    "        path: ds2",
+                    "      - weight: 1",
+                    "        path: ds3",
+                ]
             )
-
-        print(self.dataset_path)
-
-    def tearDown(self):
-        # Remove all temporary files
-        gc.collect()
-        self.temp_dir.cleanup()
-
-    @staticmethod
-    def create_text_test_dataset(path: Path, txt_range: Iterable[int], key_range: Iterable[int]):
-        """Creates a small dummy test dataset for testing purposes."""
-
-        # Create num_samples unique captions
-        (path / "parts").mkdir(exist_ok=True, parents=True)
-
-        # Initialize the ShardWriter
-        with wds.ShardWriter(f"{path}/parts/data-%d.tar", maxcount=10) as shard_writer:
-            for key, txt in zip(key_range, txt_range):
-                # Write individual files to shards
-                shard_writer.write(
-                    {
-                        "__key__": f"{key:06d}",
-                        "txt": f"{txt}".encode(),
-                    },
-                )
-            total_shards = shard_writer.shard
-
-        from megatron.energon.flavors import BaseWebdatasetFactory
-
-        BaseWebdatasetFactory.prepare_dataset(
-            path,
-            [f"parts/data-{{0..{total_shards - 1}}}.tar"],
-            split_parts_ratio=[("train", 1.0)],
-            shuffle_seed=None,
         )
 
-        with open(path / MAIN_FOLDER_NAME / "dataset.yaml", "w") as f:
-            f.write(
-                "\n".join(
-                    [
-                        "__module__: megatron.energon",
-                        "__class__: TextWebdataset",
-                        "field_map:",
-                        "  text: txt",
-                        "subflavors:",
-                        "  source: dataset.yaml",
-                        "  dataset.yaml: true",
-                        "  number: 42",
-                    ]
-                )
+    print(dataset_path)
+    return dataset_path
+
+
+def create_text_test_dataset(path: Path, txt_range: Iterable[int], key_range: Iterable[int]):
+    """Creates a small dummy test dataset for testing purposes."""
+
+    # Create num_samples unique captions
+    (path / "parts").mkdir(exist_ok=True, parents=True)
+
+    # Initialize the ShardWriter
+    with wds.ShardWriter(f"{path}/parts/data-%d.tar", maxcount=10) as shard_writer:
+        for key, txt in zip(key_range, txt_range):
+            # Write individual files to shards
+            shard_writer.write(
+                {
+                    "__key__": f"{key:06d}",
+                    "txt": f"{txt}".encode(),
+                },
             )
+        total_shards = shard_writer.shard
 
-    def test_metadataset_few_samples_save_restore(self):
-        torch.manual_seed(42)
-        worker_config = WorkerConfig(
-            rank=0,
-            world_size=32,
-            num_workers=1,
-            seed_offset=42,
+    from megatron.energon.flavors import BaseWebdatasetFactory
+
+    BaseWebdatasetFactory.prepare_dataset(
+        path,
+        [f"parts/data-{{0..{total_shards - 1}}}.tar"],
+        split_parts_ratio=[("train", 1.0)],
+        shuffle_seed=None,
+    )
+
+    with open(path / MAIN_FOLDER_NAME / "dataset.yaml", "w") as f:
+        f.write(
+            "\n".join(
+                [
+                    "__module__: megatron.energon",
+                    "__class__: TextWebdataset",
+                    "field_map:",
+                    "  text: txt",
+                    "subflavors:",
+                    "  source: dataset.yaml",
+                    "  dataset.yaml: true",
+                    "  number: 42",
+                ]
+            )
         )
 
-        # Train mode dataset
-        train_dataset = get_train_dataset(
-            self.mds_path,
-            worker_config=worker_config,
-            batch_size=1,
-            shuffle_buffer_size=100,
-            max_samples_per_sequence=None,
-        )
-        print(len(train_dataset))
-        assert len(train_dataset) == 4
 
-        # The middle dataset should have 0 samples assigned to this rank
-        blend_ds = get_blend_dataset(train_dataset)
-        assert len(blend_ds.dataset_weights[1][0].dataset.dataset.workers_slice_offsets[0]) == 1
-        assert len(blend_ds.dataset_weights[1][0].dataset.dataset) == 0
+def test_metadataset_few_samples_save_restore(dataset_path):
+    torch.manual_seed(42)
+    worker_config = WorkerConfig(
+        rank=0,
+        world_size=32,
+        num_workers=1,
+        seed_offset=42,
+    )
 
-        train_loader = get_savable_loader(
-            train_dataset,
-            checkpoint_every_sec=0,
-            checkpoint_every_min_n_samples=1,
-        )
+    # Train mode dataset
+    train_dataset = get_train_dataset(
+        dataset_path / "metadataset_v2.yaml",
+        worker_config=worker_config,
+        batch_size=1,
+        shuffle_buffer_size=100,
+        max_samples_per_sequence=None,
+    )
+    print(len(train_dataset))
+    assert len(train_dataset) == 4
 
+    # The middle dataset should have 0 samples assigned to this rank
+    blend_ds = get_blend_dataset(train_dataset)
+    assert len(blend_ds.dataset_weights[1][0].dataset.dataset.workers_slice_offsets[0]) == 1
+    assert len(blend_ds.dataset_weights[1][0].dataset.dataset) == 0
+
+    with get_savable_loader(
+        train_dataset,
+    ) as train_loader:
         # Load 3 samples
         list(zip(train_loader, range(3)))
 
@@ -194,19 +193,16 @@ class TestDataset(unittest.TestCase):
         # Load 5 samples
         data1b = list(zip(train_loader, range(5)))
 
-        # Restore state
-        train_loader = get_savable_loader(
-            get_train_dataset(
-                self.mds_path,
-                worker_config=worker_config,
-                batch_size=1,
-                shuffle_buffer_size=100,
-                max_samples_per_sequence=None,
-            ),
-            checkpoint_every_sec=0,
-            checkpoint_every_min_n_samples=1,
-        )
-        train_loader.restore_state_rank(state1)
+    # Restore state
+    with get_savable_loader(
+        get_train_dataset(
+            dataset_path / "metadataset_v2.yaml",
+            worker_config=worker_config,
+            batch_size=1,
+            shuffle_buffer_size=100,
+            max_samples_per_sequence=None,
+        ),
+    ).with_restored_state_rank(state1) as train_loader:
         # Load 5 samples
         data2_restore = list(zip(train_loader, range(5)))
 
@@ -221,23 +217,22 @@ class TestDataset(unittest.TestCase):
 
         assert order1b == order2, "The restored state does not match the original state."
 
-    def test_too_few_samples(self):
-        # Will only give a single sample, as there are 117 samples in total, and 100 ranks
-        ws = 100
-        lens = []
-        for i_rank in range(ws):
-            worker_config = WorkerConfig(rank=i_rank, world_size=ws, num_workers=0)
-            loader = get_savable_loader(
-                get_train_dataset(
-                    self.mds_path,
-                    batch_size=1,
-                    worker_config=worker_config,
-                    shuffle_buffer_size=None,
-                    max_samples_per_sequence=None,
-                ),
-                checkpoint_every_min_n_samples=1,
-                checkpoint_every_sec=0,
-            )
+
+def test_too_few_samples(dataset_path):
+    # Will only give a single sample, as there are 117 samples in total, and 100 ranks
+    ws = 100
+    lens = []
+    for i_rank in range(ws):
+        worker_config = WorkerConfig(rank=i_rank, world_size=ws, num_workers=0)
+        with get_savable_loader(
+            get_train_dataset(
+                dataset_path / "metadataset_v2.yaml",
+                batch_size=1,
+                worker_config=worker_config,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+            ),
+        ) as loader:
             lens.append(len(loader))
 
             txts = []
@@ -249,15 +244,7 @@ class TestDataset(unittest.TestCase):
                 f"Rank {i_rank} should have exactly {len(loader)} sample, but got {txts}"
             )
 
-        assert lens == [
-            2 if i in [0, 3, 6, 12, 18, 25, 31, 37, 43, 50, 56, 62, 68, 75, 81, 87, 93] else 1
-            for i in range(100)
-        ]
-
-
-if __name__ == "__main__":
-    # unittest.main()
-    ds = TestDataset()
-    ds.setUp()
-    ds.test_metadataset_few_samples_save_restore()
-    ds.tearDown()
+    assert lens == [
+        2 if i in [0, 3, 6, 12, 18, 25, 31, 37, 43, 50, 56, 62, 68, 75, 81, 87, 93] else 1
+        for i in range(100)
+    ]

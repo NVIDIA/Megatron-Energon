@@ -25,7 +25,15 @@ check: dev-sync
 
 # Execute all unit tests
 test: dev-sync
-    uv run -m unittest discover -v -s tests
+    uv run pytest tests -v
+
+coverage: dev-sync
+    COVERAGE_PROCESS_START=.coveragerc uv run -m coverage run --parallel-mode --concurrency=multiprocessing -m pytest tests
+    # COVERAGE_PROCESS_START=.coveragerc uv run -m coverage run --parallel-mode --concurrency=multiprocessing -m pytest tests/test_dataloader.py
+    # COVERAGE_PROCESS_START=.coveragerc uv run -m coverage run --parallel-mode --concurrency=multiprocessing -m pytest tests/test_typed_converter.py
+    uv run -m coverage combine
+    uv run -m coverage lcov
+    echo "Coverage LCOV report generated at ./lcov.info"
 
 # Build the docs
 docs: dev-sync
