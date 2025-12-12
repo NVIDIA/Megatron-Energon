@@ -81,9 +81,10 @@ class TestFastseek(unittest.TestCase):
     def test_fastseek_mp4(self):
         """Test fastseek."""
         fastseek = Fastseek(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes()))
-        print(fastseek.keyframes_by_frames)
-        assert list(fastseek.keyframes_by_frames.keys()) == [1]
-        assert fastseek.keyframes_by_frames[1][0] == [
+        print(fastseek.keyframes)
+        assert list(fastseek.keyframes.keys()) == [1]
+        # There is one stream (id=1). Check that the first stream's keyframes are correct.
+        assert fastseek.keyframes[1].keyframes == [
             KeyframeInfo(index=0, pts=0),
             KeyframeInfo(index=250, pts=128000),
             KeyframeInfo(index=500, pts=256000),
@@ -93,10 +94,17 @@ class TestFastseek(unittest.TestCase):
             KeyframeInfo(index=1500, pts=768000),
             KeyframeInfo(index=1750, pts=896000),
         ]
-        assert fastseek.keyframe_pts == {
-            1: [0, 128000, 256000, 384000, 512000, 640000, 768000, 896000]
-        }
-        assert fastseek.frames_supported
+        assert fastseek.keyframes[1].keyframe_pts == [
+            0,
+            128000,
+            256000,
+            384000,
+            512000,
+            640000,
+            768000,
+            896000,
+        ]
+        assert fastseek.frame_index_supported
         assert fastseek.mime == "video/mp4"
 
         assert fastseek.should_seek(0, 0) is None
@@ -117,10 +125,30 @@ class TestFastseek(unittest.TestCase):
     def test_fastseek_mkv(self):
         """Test fastseek."""
         fastseek = Fastseek(io.BytesIO(Path("tests/data/sync_test.mkv").read_bytes()))
-        print(fastseek.keyframe_pts)
-        assert list(fastseek.keyframe_pts.keys()) == [1]
-        assert fastseek.keyframe_pts[1] == [0, 8354, 16688, 25021, 33354, 41688, 50021, 58354]
-        assert not fastseek.frames_supported
+        print(fastseek.keyframes)
+        assert list(fastseek.keyframes.keys()) == [1]
+        assert fastseek.keyframes[1].keyframe_pts == [
+            0,
+            8354,
+            16688,
+            25021,
+            33354,
+            41688,
+            50021,
+            58354,
+        ]
+        assert fastseek.keyframes[1].keyframe_indexes is None
+        assert fastseek.keyframes[1].keyframes == [
+            KeyframeInfo(index=-1, pts=0),
+            KeyframeInfo(index=-1, pts=8354),
+            KeyframeInfo(index=-1, pts=16688),
+            KeyframeInfo(index=-1, pts=25021),
+            KeyframeInfo(index=-1, pts=33354),
+            KeyframeInfo(index=-1, pts=41688),
+            KeyframeInfo(index=-1, pts=50021),
+            KeyframeInfo(index=-1, pts=58354),
+        ]
+        assert not fastseek.frame_index_supported
         assert fastseek.mime == "video/x-matroska"
 
         assert fastseek.get_next_keyframe_pts(0) == 8354
@@ -182,7 +210,9 @@ class TestVideoDecode(unittest.TestCase):
             all_timestamps.append(0.5 * (timestamps[0][0] + timestamps[0][1]))
 
         for frame, timestamp1, timestamp2 in zip(
-            [*range(5), *range(245, 255), *range(1881, 1891)], all_timestamps, all_timestamps[1:] + [float("inf")]
+            [*range(5), *range(245, 255), *range(1881, 1891)],
+            all_timestamps,
+            all_timestamps[1:] + [float("inf")],
         ):
             if frame in (4, 254):
                 continue

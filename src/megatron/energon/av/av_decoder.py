@@ -109,16 +109,18 @@ class AVDecoder:
             video_stream = input_container.streams.video[0]
 
             # Pre-calculate timing info for video
-            average_rate: Fraction = video_stream.average_rate  # Frames per second
+            # Frames per second
+            average_rate: Fraction = video_stream.average_rate
             assert average_rate, "Video stream has no FPS."
 
-            time_base: Fraction = video_stream.time_base  # Seconds per PTS unit
+            # Seconds per PTS unit
+            time_base: Fraction = video_stream.time_base
 
-            seeker: FastseekReader
+            reader: FastseekReader
             # Convert video_clip_ranges to seeker unit
             if video_unit == "frames":
-                if self.seeker.frames_supported:
-                    seeker = FastseekReaderByFrames(self.seeker, input_container)
+                if self.seeker.frame_index_supported:
+                    reader = FastseekReaderByFrames(self.seeker, input_container)
                 else:
                     # Convert from frames to pts units
                     video_clip_ranges = [
@@ -128,7 +130,7 @@ class AVDecoder:
                         )
                         for clip in video_clip_ranges
                     ]
-                    seeker = FastseekReaderByPts(self.seeker, input_container)
+                    reader = FastseekReaderByPts(self.seeker, input_container)
                     video_unit = "seconds"
 
                     if not self.suppress_warnings:
@@ -145,7 +147,7 @@ class AVDecoder:
                     )
                     for clip in video_clip_ranges
                 ]
-                seeker = FastseekReaderByPts(self.seeker, input_container)
+                reader = FastseekReaderByPts(self.seeker, input_container)
             else:
                 raise ValueError(f"Invalid video unit: {video_unit!r}")
 
@@ -164,7 +166,7 @@ class AVDecoder:
                 clip_timestamp_end = None
 
                 frame = None
-                for frame in seeker.seek_read(range_start, range_end):
+                for frame in reader.seek_read(range_start, range_end):
                     # print(f"Taking frame {frame.pts}+{frame.duration}")
                     if video_out_frame_size is not None:
                         frame = frame.reformat(
