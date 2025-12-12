@@ -361,6 +361,12 @@ class AVDecoder:
                 if decoded_samples:
                     # Combine all channels/samples along samples axis
                     clip_all = np.concatenate(decoded_samples, axis=-1)  # (channels, total_samples)
+
+                    # Prune codec delay (priming samples) if starting from the beginning
+                    codec_delay = audio_stream.codec_context.delay
+                    if codec_delay > 0 and start_time == 0:
+                        clip_all = clip_all[:, codec_delay:]
+
                     if clip_start_time is not None and clip_end_time is not None:
                         out_audio_clips.append(torch.from_numpy(clip_all))
                         out_audio_clips_timestamps.append((clip_start_time, clip_end_time))
@@ -545,6 +551,7 @@ class AVDecoder:
         get_video_frame_size: bool = True,
         get_audio: bool = True,
         get_audio_duration: bool = True,
+        get_audio_num_samples: bool = False,
     ) -> "AVMetadata":
         """Get the metadata of the media object.
 
@@ -555,6 +562,7 @@ class AVDecoder:
             get_video_frame_size: Compute video frame size if not found in header.
             get_audio: Compute audio metadata.
             get_audio_duration: Compute audio duration if not found in header.
+            get_audio_num_samples: Compute audio number of samples. This requires decoding the audio stream.
         """
         self.stream.seek(0)
         with av_open(self.stream) as input_container:
@@ -607,6 +615,23 @@ class AVDecoder:
                 audio_stream = input_container.streams.audio[0]
                 metadata.audio_sample_rate = audio_stream.sample_rate
                 metadata.audio_duration = audio_stream.duration
+                if get_audio_num_samples and metadata.audio_num_samples is None:
+                    num_samples = 0
+                    last_packet = None
+                    input_container.seek(0)
+                    for p in input_container.decode(audio=0):
+                        if p.pts is not None:
+                            last_packet = p
+                        num_samples += p.samples
+
+                    # Subtract codec delay (priming samples) for consistency with get_audio_clips
+                    codec_delay = audio_stream.codec_context.delay
+                    metadata.audio_num_samples = max(0, num_samples - codec_delay)
+
+                    if last_packet is not None and last_packet.duration is not None:
+                        assert last_packet.pts is not None
+                        metadata.audio_duration = last_packet.pts + last_packet.duration
+
                 if get_audio_duration and metadata.audio_duration is None:
                     last_packet = None
                     input_container.seek(0)

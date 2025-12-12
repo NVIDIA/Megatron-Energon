@@ -492,6 +492,7 @@ class TestVideoDecode(unittest.TestCase):
                 audio_duration=63.103,
                 audio_channels=2,
                 audio_sample_rate=48000,
+                audio_num_samples=3028992,
             ),
             AVMetadata(
                 video_duration=63.03333333333333,
@@ -502,13 +503,14 @@ class TestVideoDecode(unittest.TestCase):
                 audio_duration=63.068,
                 audio_channels=2,
                 audio_sample_rate=48000,
+                audio_num_samples=3027968,
             ),
         ]
         for video_file, expected_metadata in zip(
             ["tests/data/sync_test.mkv", "tests/data/sync_test.mp4"], expected_metadata
         ):
             av_decoder = AVDecoder(io.BytesIO(Path(video_file).read_bytes()))
-            assert av_decoder.get_metadata() == expected_metadata, (
+            assert av_decoder.get_metadata(get_audio_num_samples=True) == expected_metadata, (
                 f"Metadata does not match expected metadata for {video_file}"
             )
 
@@ -885,18 +887,20 @@ class TestAudioDecode(unittest.TestCase):
                 audio_duration=10.0,
                 audio_channels=1,
                 audio_sample_rate=32000,
+                audio_num_samples=320000,
             ),
             AVMetadata(
                 audio_duration=12.782585034013605,
                 audio_channels=2,
                 audio_sample_rate=44100,
+                audio_num_samples=563712,
             ),
         ]
         for audio_file, expected_metadata in zip(
             ["tests/data/test_audio.flac", "tests/data/test_audio.wav"], expected_metadata
         ):
             av_decoder = AVDecoder(io.BytesIO(Path(audio_file).read_bytes()))
-            assert av_decoder.get_metadata() == expected_metadata, (
+            assert av_decoder.get_metadata(get_audio_num_samples=True) == expected_metadata, (
                 f"Metadata does not match expected metadata for {audio_file}: {av_decoder.get_metadata()}"
             )
 
