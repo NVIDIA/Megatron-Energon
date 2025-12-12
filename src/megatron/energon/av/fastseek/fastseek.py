@@ -12,24 +12,37 @@ from .keyframeinfo import KeyframeInfo
 
 
 class StreamInfo:
-    """Information about a video stream."""
+    """Keyframe information about a video stream."""
 
     __slots__ = ("id", "keyframe_pts", "keyframe_indexes", "keyframes")
 
     #: The stream id.
     id: int
-    #: The PTS times of the keyframes, sorted by PTS.
-    keyframe_pts: list[int]
     #: The keyframes, sorted by frame index.
     keyframes: list[KeyframeInfo]
+    #: The PTS times of the keyframes, sorted by PTS.
+    keyframe_pts: list[int] | None
     #: The frame indexes of the keyframes if access by keyframes is allowed.
     keyframe_indexes: list[int] | None
 
-    def __init__(self, id: int, keyframes: list[KeyframeInfo], has_frame_index: bool) -> None:
+    def __init__(self, id: int, keyframes: list[KeyframeInfo]) -> None:
+        """Initialize the StreamInfo object. Given an unsorted list of KeyframeInfos, it provides attributes to access those sorted by PTS or by frame index.
+
+        Args:
+            id: The stream id.
+            keyframes: The list of KeyframeInfos.
+            has_frame_index: Whether frame indexes are supported for this container.
+        """
         self.id = id
-        self.keyframes = sorted(keyframes, key=lambda x: (x.index, x.pts))
-        self.keyframe_pts = sorted(x.pts for x in keyframes)
-        self.keyframe_indexes = [x.index for x in self.keyframes] if has_frame_index else None
+        self.keyframes = sorted(keyframes, key=lambda x: (x.index or -1, x.pts or -1))
+        if all(x.pts is None for x in keyframes):
+            self.keyframe_pts = None
+        else:
+            self.keyframe_pts = sorted(x.pts for x in keyframes if x.pts is not None)
+        if all(x.index is None for x in keyframes):
+            self.keyframe_indexes = None
+        else:
+            self.keyframe_indexes = [x.index for x in self.keyframes if x.index is not None]
 
     def __repr__(self) -> str:
         return f"StreamInfo(id={self.id}, keyframe_pts={self.keyframe_pts}, keyframe_indexes={self.keyframe_indexes}, keyframes={self.keyframes})"
@@ -57,9 +70,11 @@ class Fastseek:
     #: List of stream ids for indexed access.
     streams: list[int]
     #: Whether frame indexes are supported for this container.
-    #: If False, access is only possible by PTS.
-    #: If True, supports both PTS and frame indexes.
+    #: If True, supports frame index access.
     frame_index_supported: bool
+    #: Whether PTS are supported for this container.
+    #: If True, supports PTS access.
+    pts_supported: bool
     #: MIME type of the container.
     mime: str
 
@@ -73,7 +88,6 @@ class Fastseek:
         """
         if force_probe:
             keyframes = parse_probe(file)
-            self.frame_index_supported = True
         else:
             ftype = filetype.guess(file)
 
@@ -84,12 +98,10 @@ class Fastseek:
 
             self.mime = ftype.mime
 
-            if ftype.mime in ["video/x-matroska", "video/webm"]:
+            if ftype.mime in ("video/x-matroska", "video/webm"):
                 keyframes = parse_matroska(file)
-                self.frame_index_supported = False
             else:
                 keyframes = parse_probe(file)
-                self.frame_index_supported = True
 
         if len(keyframes) == 0:
             raise ValueError(
@@ -101,10 +113,13 @@ class Fastseek:
                 f"The parser for {ftype.mime} was unable to find any keyframes (hint: try passing probe=True to the Fastseek constructor)"
             )
 
-        self.keyframes = {
-            k: StreamInfo(k, keyframes, self.frame_index_supported)
-            for k, keyframes in keyframes.items()
-        }
+        self.keyframes = {k: StreamInfo(k, keyframes) for k, keyframes in keyframes.items()}
+        self.frame_index_supported = any(
+            stream.keyframe_indexes is not None for stream in self.keyframes.values()
+        )
+        self.pts_supported = any(
+            stream.keyframe_pts is not None for stream in self.keyframes.values()
+        )
         self.streams = list(self.keyframes.keys())
 
     def should_seek(
@@ -159,6 +174,8 @@ class Fastseek:
         if stream >= len(self.streams):
             raise ValueError(f"No stream with index {stream}")
 
+        assert self.frame_index_supported, "Frame indexes are not supported for this container"
+
         stream_id = self.streams[stream]
         stream_info = self.keyframes[stream_id]
 
@@ -175,29 +192,36 @@ class Fastseek:
         )
         return stream_info.keyframes[max(0, nearest_iframe_to_target_index)]
 
-    def get_next_keyframe_pts(self, current_frame_pts: int, stream: int = 0) -> int:
-        """Find the PTS of the next keyframe after the current frame.
+    def seek_to_pts(self, current_pts: int, target_pts: int, stream: int = 0) -> int | None:
+        """
+        Find the nearest keyframe that comes before the target frame index and return its PTS.
 
         Args:
-            current_frame_pts: The PTS of the current frame.
+            current_pts: The PTS of the current frame to be decoded.
+            target_pts: The target PTS to seek to.
             stream: The video stream index to use. Defaults to 0.
                 Used when the container has multiple video streams.
 
         Returns:
-            The PTS of the next keyframe after the current frame.
-            If no next keyframe is found, returns float("inf").
+            The PTS of the nearest keyframe at or before the target PTS.
+            If no such keyframe is found, returns None.
         """
-
         if stream >= len(self.streams):
             raise ValueError(f"No stream with index {stream}")
+
+        assert self.pts_supported, "PTS are not supported for this container"
 
         stream_id = self.streams[stream]
         stream_info = self.keyframes[stream_id]
 
-        if len(stream_info.keyframe_pts) == 0:
+        if stream_info.keyframe_pts is None or len(stream_info.keyframe_pts) == 0:
             raise ValueError(f"No keyframes found for stream {stream}")
 
-        pos = bisect_right(stream_info.keyframe_pts, current_frame_pts)
-        if pos == len(stream_info.keyframe_pts):
-            return float("inf")
-        return stream_info.keyframe_pts[pos]
+        pos = bisect_right(stream_info.keyframe_pts, target_pts) - 1
+        keyframe_pts = stream_info.keyframe_pts[max(0, pos)]
+
+        return (
+            keyframe_pts
+            if (current_pts < keyframe_pts <= target_pts) or (target_pts < current_pts)
+            else None
+        )

@@ -9,7 +9,7 @@ from ..keyframeinfo import KeyframeInfo
 
 
 class CueTrackPositions:
-    __slots__ = "track"
+    __slots__ = ("track",)
     track: int
 
     def __init__(self, el: MasterElement) -> None:
@@ -45,7 +45,7 @@ def parse_matroska(file: BitsType) -> dict[int, list[KeyframeInfo]]:
         el = stack.pop()
         if el.name == "CuePoint":
             cue = CuePoint(el)
-            cues[cue.track_positions.track].append(KeyframeInfo(-1, cue.time))
+            cues[cue.track_positions.track].append(KeyframeInfo(None, cue.time))
         elif isinstance(el, MasterElement):
             stack.extend([c for c in el if c.name in ["Cues", "CuePoint"]])
 

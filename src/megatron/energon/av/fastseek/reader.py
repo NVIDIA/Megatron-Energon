@@ -2,14 +2,28 @@
 # SPDX-License-Identifier: BSD-3-Clause
 from abc import ABC, abstractmethod
 from collections.abc import Generator
+from typing import Iterator
 
 import av
+import av.container
+import av.stream
 
 from .fastseek import Fastseek
 
 
 class FastseekReader(ABC):
     """A class that provides a interface for reading video frames from a video stream for frame range extraction."""
+
+    #: The Fastseek object to use for seeking.
+    seeker: Fastseek
+    #: The input container to read from.
+    input_container: av.container.InputContainer
+    #: The iterator over the video frames.
+    frame_iterator: Iterator[av.VideoFrame]
+    #: The video stream to read from.
+    stream: av.stream.Stream
+    #: Number of frames skipped by the reader. For statistical purposes.
+    skipped: int
 
     def __init__(
         self, seeker: Fastseek, input_container: av.container.InputContainer, stream_idx: int = 0
@@ -35,12 +49,11 @@ class FastseekReader(ABC):
     ) -> Generator[av.VideoFrame, None, None]:
         """
         Read video frames from the video stream for the given range.
-        Subsequent calls to this method must be called with increasing range_start/range_end values,
-        i.e. range_start(call i) <= range_end(call i) <= range_start(call i+1).
+        `range_start <= range_end` must hold. If `range_start == range_end` and within the video range, one frame is returned.
 
         Args:
             range_start: The start of the range to read from. The type of the range is defined by the subclass.
-            range_end: The end of the range to read from. The type of the range is defined by the subclass.
+            range_end: The end of the range to read from. The type of the range is defined by the subclass. If None, the range goes to the end of the video. This is inclusive!
 
         Returns:
             A generator of video frames.
@@ -51,70 +64,92 @@ class FastseekReader(ABC):
 class FastseekReaderByFrames(FastseekReader):
     """A video frame reader that seeks by frame index."""
 
-    next_frame_index: int = 0
-    last_frame: av.VideoFrame | None = None
+    #: The next frame index that would be returned by the iterator.
+    _next_frame_index: int = 0
+    #: The previous frame that was returned by the iterator.
+    _previous_frame: av.VideoFrame | None = None
 
     def seek_read(
         self, range_start: int, range_end: int | None
     ) -> Generator[av.VideoFrame, None, None]:
-        frame_info = self.seeker.should_seek(self.next_frame_index, range_start)
-        if frame_info is not None:
-            self.input_container.seek(frame_info.pts, stream=self.stream)
-            self.next_frame_index = frame_info.index
-        next_idx = self.next_frame_index
+        if (
+            keyframe_info := self.seeker.should_seek(self._next_frame_index - 1, range_start)
+        ) is not None:
+            seek_pts = keyframe_info.pts
+            if seek_pts is None:
+                # input_container.seek should seek to the nearest keyframe, which should be the requested one.
+                seek_pts = range_start
+            self.input_container.seek(seek_pts, stream=self.stream)
+            assert keyframe_info.index is not None, "Frame index is required for this container"
+            self._next_frame_index = keyframe_info.index
+            frame = None
+        else:
+            frame = self._previous_frame
+        # Skip the frames between the keyframe / previous frame and the requested range_start.
+        next_idx = self._next_frame_index
         for next_idx, frame in zip(
-            range(self.next_frame_index + 1, range_start + 1), self.frame_iterator
+            range(self._next_frame_index + 1, range_start + 1), self.frame_iterator
         ):
             # print(f"Skip frame {next_idx - 1} at {frame.pts} +{frame.duration}")
             pass
-        self.skipped += next_idx - self.next_frame_index
-        self.next_frame_index = next_idx
+        self.skipped += next_idx - self._next_frame_index
+        self._next_frame_index = next_idx
 
-        frame = self.last_frame
-        if frame is not None and self.next_frame_index == range_start:
-            # Repeat the previous frame. This is allowed.
+        if frame is not None and self._next_frame_index - 1 == range_start:
+            # Repeat the previous frame.
             yield frame
-            if range_end is not None and self.next_frame_index > range_end:
-                # Special case: User requested the last frame, not more.
+            if range_end == range_start:
+                # Special case: User requested the last frame again, not more.
                 return
         for frame in self.frame_iterator:
-            self.next_frame_index += 1
+            self._next_frame_index += 1
+            self._previous_frame = frame
             yield frame
-            if range_end is not None and self.next_frame_index > range_end:
+            if range_end is not None and self._next_frame_index > range_end:
                 break
-        self.last_frame = frame
 
 
 class FastseekReaderByPts(FastseekReader):
     """A video frame reader that seeks by PTS."""
 
-    next_frame_pts: int = 0
-    next_keyframe_pts: int = 0
-    last_frame: av.VideoFrame | None = None
+    #: The PTS of the next frame that would be returned by the iterator.
+    _next_frame_pts: int = 0
+    #: The previous frame that was returned by the iterator.
+    _previous_frame: av.VideoFrame | None = None
 
     def seek_read(
         self, range_start: int, range_end: int | None
     ) -> Generator[av.VideoFrame, None, None]:
-        if self.next_keyframe_pts < range_start:
+        if (seek_pts := self.seeker.seek_to_pts(self._next_frame_pts, range_start)) is not None:
+            # Seeking backward or forward beyond the next keyframe
             # print(f"Seeking to frame {self.next_keyframe_pts} for {range_start} from {self.next_frame_pts}")
-            self.input_container.seek(range_start, stream=self.stream)
-        skipped = 0
-        frame = self.last_frame
-        if frame is not None and range_start < (frame.pts + frame.duration):
-            # Repeat the previous frame. This is allowed.
-            yield frame
-            if range_end is not None and (frame.pts + frame.duration) >= range_end:
-                # Special case: User requested the last frame, not more.
-                return
-        for frame in self.frame_iterator:
-            if range_start >= (frame.pts + frame.duration):
+            self.input_container.seek(seek_pts, stream=self.stream)
+            self._next_frame_pts = seek_pts
+            frame = None
+        else:
+            frame = self._previous_frame
+        # Skip frames before start
+        if frame is None or range_start >= (frame.pts + frame.duration):
+            skipped = 0
+            for frame in self.frame_iterator:
+                if range_start < (frame.pts + frame.duration):
+                    break
                 skipped += 1
-                continue
-            yield frame
-            if range_end is not None and (frame.pts + frame.duration) >= range_end:
+            self.skipped += skipped
+            if frame is not None:
+                self._next_frame_pts = frame.pts
+                self._previous_frame = frame
+        if frame is None:
+            # No frame available
+            return
+        # Yield at least the current frame. It's after the start.
+        yield frame
+        while range_end is None or (frame.pts + frame.duration) <= range_end:
+            try:
+                frame = next(self.frame_iterator)
+            except StopIteration:
                 break
-        self.last_frame = frame
-        self.next_frame_pts = frame.pts + frame.duration
-        self.next_keyframe_pts = self.seeker.get_next_keyframe_pts(frame.pts + frame.duration)
-        # print(f"Next keyframe for {frame.pts + frame.duration} is {self.pts[max(0, bs-1): bs+2]} at {bs}")
-        self.skipped += skipped
+            # Store the current frame's PTS, because we can still access that frame!
+            self._next_frame_pts = frame.pts
+            self._previous_frame = frame
+            yield frame

@@ -15,5 +15,7 @@ class KeyframeInfo:
 
     """
 
-    index: int
-    pts: int
+    #: The index of the keyframe. If None, the keyframe is not indexed by frame number.
+    index: int | None
+    #: The PTS of the keyframe. If None, the keyframe is not indexed by PTS.
+    pts: int | None

@@ -121,7 +121,7 @@ class AVDecoder:
             if video_unit == "frames":
                 if self.seeker.frame_index_supported:
                     reader = FastseekReaderByFrames(self.seeker, input_container)
-                else:
+                elif self.seeker.pts_supported:
                     # Convert from frames to pts units
                     video_clip_ranges = [
                         (
@@ -138,16 +138,38 @@ class AVDecoder:
                             "Video container unit is frames, but seeking in time units. The resulting frames may be slightly off.",
                             RuntimeWarning,
                         )
+                else:
+                    raise ValueError("Video container does not support seeking in frames or PTS")
             elif video_unit == "seconds":
-                # Convert from seconds to frames
-                video_clip_ranges = [
-                    (
-                        clip[0] / time_base,
-                        clip[1] / time_base,
-                    )
-                    for clip in video_clip_ranges
-                ]
-                reader = FastseekReaderByPts(self.seeker, input_container)
+                if self.seeker.pts_supported:
+                    # Convert from seconds to frames
+                    video_clip_ranges = [
+                        (
+                            clip[0] / time_base,
+                            clip[1] / time_base,
+                        )
+                        for clip in video_clip_ranges
+                    ]
+                    reader = FastseekReaderByPts(self.seeker, input_container)
+                elif self.seeker.frame_index_supported:
+                    # Convert from frames to pts units
+                    video_clip_ranges = [
+                        (
+                            clip[0] * average_rate,
+                            clip[1] * average_rate,
+                        )
+                        for clip in video_clip_ranges
+                    ]
+                    reader = FastseekReaderByFrames(self.seeker, input_container)
+                    video_unit = "frames"
+
+                    if not self.suppress_warnings:
+                        warnings.warn(
+                            "Video container unit is seconds, but seeking only supports frames. The resulting frames may be slightly off.",
+                            RuntimeWarning,
+                        )
+                else:
+                    raise ValueError("Video container does not support seeking in frames or PTS")
             else:
                 raise ValueError(f"Invalid video unit: {video_unit!r}")
 

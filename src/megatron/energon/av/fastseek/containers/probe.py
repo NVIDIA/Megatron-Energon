@@ -23,7 +23,7 @@ def parse_probe(file: BitsType) -> dict[int, list[KeyframeInfo]]:
             keyframes[stream.id] = [
                 KeyframeInfo(index, p.pts)
                 for index, p in enumerate(input_container.demux(video=stream_idx))
-                if p.is_keyframe and p.pts is not None
+                if p.is_keyframe
             ]
 
     return keyframes
