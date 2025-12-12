@@ -151,7 +151,7 @@ class FileStoreCachePool(CachePool, ForkMixin):
     _pending_tasks: Dict[Tuple[str, str], _PendingTask]
 
     # Lock for all shared structures
-    _lock: threading.Lock
+    _lock: threading.RLock
     # Condition variable to signal when cache space is available
     _cache_space_available: threading.Condition
     # Whether the pool is shutting down
@@ -202,7 +202,7 @@ class FileStoreCachePool(CachePool, ForkMixin):
         self.current_cache_count = 0
 
         # A lock to protect all shared structures
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
 
         # Condition variable to signal when cache space is available
         self._cache_space_available = threading.Condition(self._lock)
