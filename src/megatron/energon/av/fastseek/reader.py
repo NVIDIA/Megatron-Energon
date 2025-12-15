@@ -135,6 +135,9 @@ class FastseekReaderByPts(FastseekReader):
                 if range_start < (frame.pts + frame.duration):
                     break
                 skipped += 1
+            else:
+                # Out of the end of the video
+                frame = None
             self.skipped += skipped
             if frame is not None:
                 self._next_frame_pts = frame.pts
