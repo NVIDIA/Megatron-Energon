@@ -772,6 +772,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
         if self.worker_config.num_workers > 0:
             kwargs["persistent_workers"] = True
             kwargs["prefetch_factor"] = prefetch_factor
+            kwargs["multiprocessing_context"] = "fork"
 
         # Assert that prefetch_factor works well with num_checkpoints.
         # This ensures that the oldest checkpoint is old enough to cover
@@ -1272,6 +1273,7 @@ class BasicDataLoader(DataLoader[T], Generic[T]):
             # These must not be specified for num_workers =0
             kwargs["persistent_workers"] = True
             kwargs["prefetch_factor"] = prefetch_factor
+            kwargs["multiprocessing_context"] = "fork"
 
         seed_per_worker = [
             self.worker_config.worker_seed(i) for i in range(self.worker_config.num_workers)
