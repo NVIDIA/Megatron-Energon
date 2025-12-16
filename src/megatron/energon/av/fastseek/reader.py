@@ -121,13 +121,16 @@ class FastseekReaderByPts(FastseekReader):
     def seek_read(
         self, range_start: int, range_end: int | None
     ) -> Generator[av.VideoFrame, None, None]:
+        assert range_end is None or range_start <= range_end, (
+            f"Range start {range_start} must be less or equal than range end {range_end}"
+        )
         if (
-            seek_pts := self.seeker.should_seek_by_pts(self._next_frame_pts, range_start)
+            seek_keyframe_pts := self.seeker.should_seek_by_pts(self._next_frame_pts, range_start)
         ) is not None:
             # Seeking backward or forward beyond the next keyframe
             # print(f"Seeking to frame {self.next_keyframe_pts} for {range_start} from {self.next_frame_pts}")
-            self.input_container.seek(seek_pts, stream=self.stream)
-            self._next_frame_pts = seek_pts
+            self.input_container.seek(seek_keyframe_pts, stream=self.stream)
+            self._next_frame_pts = seek_keyframe_pts
             frame = self._previous_frame = None
         else:
             frame = self._previous_frame
