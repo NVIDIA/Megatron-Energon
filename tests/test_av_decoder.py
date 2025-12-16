@@ -113,28 +113,28 @@ class TestFastseek(unittest.TestCase):
         ]
 
         # Going forward
-        assert fastseek.should_seek(0, 0) is None
-        assert fastseek.should_seek(0, 249) is None
-        assert fastseek.should_seek(0, 250) == KeyframeInfo(index=250, pts=128000)
-        assert fastseek.should_seek(0, 251) == KeyframeInfo(index=250, pts=128000)
-        assert fastseek.should_seek(0, 499) == KeyframeInfo(index=250, pts=128000)
-        assert fastseek.should_seek(499, 500) == KeyframeInfo(index=500, pts=256000)
-        assert fastseek.should_seek(250, 499) is None
-        assert fastseek.should_seek(250, 500) == KeyframeInfo(index=500, pts=256000)
+        assert fastseek.should_seek_by_frame(0, 0) is None
+        assert fastseek.should_seek_by_frame(0, 249) is None
+        assert fastseek.should_seek_by_frame(0, 250) == KeyframeInfo(index=250, pts=128000)
+        assert fastseek.should_seek_by_frame(0, 251) == KeyframeInfo(index=250, pts=128000)
+        assert fastseek.should_seek_by_frame(0, 499) == KeyframeInfo(index=250, pts=128000)
+        assert fastseek.should_seek_by_frame(499, 500) == KeyframeInfo(index=500, pts=256000)
+        assert fastseek.should_seek_by_frame(250, 499) is None
+        assert fastseek.should_seek_by_frame(250, 500) == KeyframeInfo(index=500, pts=256000)
 
         # Going backward
-        assert fastseek.should_seek(1, 0) == KeyframeInfo(index=0, pts=0)
-        assert fastseek.should_seek(249, 0) == KeyframeInfo(index=0, pts=0)
-        assert fastseek.should_seek(250, 0) == KeyframeInfo(index=0, pts=0)
+        assert fastseek.should_seek_by_frame(1, 0) == KeyframeInfo(index=0, pts=0)
+        assert fastseek.should_seek_by_frame(249, 0) == KeyframeInfo(index=0, pts=0)
+        assert fastseek.should_seek_by_frame(250, 0) == KeyframeInfo(index=0, pts=0)
 
-        assert fastseek.seek_to_pts(0, 0) is None
-        assert fastseek.seek_to_pts(0, 1) is None
-        assert fastseek.seek_to_pts(0, 127999) is None
-        assert fastseek.seek_to_pts(128000, 128000) is None
-        assert fastseek.seek_to_pts(128000, 255999) is None
-        assert fastseek.seek_to_pts(0, 128000) == 128000
-        assert fastseek.seek_to_pts(0, 256000) == 256000
-        assert fastseek.seek_to_pts(128000, 256000) == 256000
+        assert fastseek.should_seek_by_pts(0, 0) is None
+        assert fastseek.should_seek_by_pts(0, 1) is None
+        assert fastseek.should_seek_by_pts(0, 127999) is None
+        assert fastseek.should_seek_by_pts(128000, 128000) is None
+        assert fastseek.should_seek_by_pts(128000, 255999) is None
+        assert fastseek.should_seek_by_pts(0, 128000) == 128000
+        assert fastseek.should_seek_by_pts(0, 256000) == 256000
+        assert fastseek.should_seek_by_pts(128000, 256000) == 256000
 
     def test_fastseek_mkv(self):
         """Test fastseek."""
@@ -166,17 +166,17 @@ class TestFastseek(unittest.TestCase):
             KeyframeInfo(index=None, pts=58354),
         ]
 
-        assert fastseek.seek_to_pts(0, 0) is None
-        assert fastseek.seek_to_pts(0, 8353) is None
-        assert fastseek.seek_to_pts(8350, 8353) is None
-        assert fastseek.seek_to_pts(8354, 16687) is None
-        assert fastseek.seek_to_pts(0, 8354) == 8354
-        assert fastseek.seek_to_pts(0, 8355) == 8354
-        assert fastseek.seek_to_pts(0, 16688) == 16688
-        assert fastseek.seek_to_pts(1, 0) == 0
-        assert fastseek.seek_to_pts(10000, 0) == 0
-        assert fastseek.seek_to_pts(10000, 8354) == 8354
-        assert fastseek.seek_to_pts(10000, 8355) == 8354
+        assert fastseek.should_seek_by_pts(0, 0) is None
+        assert fastseek.should_seek_by_pts(0, 8353) is None
+        assert fastseek.should_seek_by_pts(8350, 8353) is None
+        assert fastseek.should_seek_by_pts(8354, 16687) is None
+        assert fastseek.should_seek_by_pts(0, 8354) == 8354
+        assert fastseek.should_seek_by_pts(0, 8355) == 8354
+        assert fastseek.should_seek_by_pts(0, 16688) == 16688
+        assert fastseek.should_seek_by_pts(1, 0) == 0
+        assert fastseek.should_seek_by_pts(10000, 0) == 0
+        assert fastseek.should_seek_by_pts(10000, 8354) == 8354
+        assert fastseek.should_seek_by_pts(10000, 8355) == 8354
 
     def test_fastseek_reader_mp4(self):
         """Test fastseek reader."""

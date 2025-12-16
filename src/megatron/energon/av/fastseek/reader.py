@@ -73,7 +73,9 @@ class FastseekReaderByFrames(FastseekReader):
         self, range_start: int, range_end: int | None
     ) -> Generator[av.VideoFrame, None, None]:
         if (
-            keyframe_info := self.seeker.should_seek(self._next_frame_index - 1, range_start)
+            keyframe_info := self.seeker.should_seek_by_frame(
+                self._next_frame_index - 1, range_start
+            )
         ) is not None:
             seek_pts = keyframe_info.pts
             if seek_pts is None:
@@ -90,7 +92,6 @@ class FastseekReaderByFrames(FastseekReader):
         for next_idx, frame in zip(
             range(self._next_frame_index + 1, range_start + 1), self.frame_iterator
         ):
-            # print(f"Skip frame {next_idx - 1} at {frame.pts} +{frame.duration}")
             pass
         self.skipped += next_idx - self._next_frame_index
         self._next_frame_index = next_idx
@@ -120,12 +121,14 @@ class FastseekReaderByPts(FastseekReader):
     def seek_read(
         self, range_start: int, range_end: int | None
     ) -> Generator[av.VideoFrame, None, None]:
-        if (seek_pts := self.seeker.seek_to_pts(self._next_frame_pts, range_start)) is not None:
+        if (
+            seek_pts := self.seeker.should_seek_by_pts(self._next_frame_pts, range_start)
+        ) is not None:
             # Seeking backward or forward beyond the next keyframe
             # print(f"Seeking to frame {self.next_keyframe_pts} for {range_start} from {self.next_frame_pts}")
             self.input_container.seek(seek_pts, stream=self.stream)
             self._next_frame_pts = seek_pts
-            frame = None
+            frame = self._previous_frame = None
         else:
             frame = self._previous_frame
         # Skip frames before start
@@ -143,7 +146,8 @@ class FastseekReaderByPts(FastseekReader):
                 self._next_frame_pts = frame.pts
                 self._previous_frame = frame
         if frame is None:
-            # No frame available
+            # No frame available -> at the end of the video
+            # Just keep the next_frame_pts as it was
             return
         # Yield at least the current frame. It's after the start.
         yield frame
@@ -151,6 +155,7 @@ class FastseekReaderByPts(FastseekReader):
             try:
                 frame = next(self.frame_iterator)
             except StopIteration:
+                self._previous_frame = None
                 break
             # Store the current frame's PTS, because we can still access that frame!
             self._next_frame_pts = frame.pts

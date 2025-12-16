@@ -122,7 +122,7 @@ class Fastseek:
         )
         self.streams = list(self.keyframes.keys())
 
-    def should_seek(
+    def should_seek_by_frame(
         self, current_frame_index: int, target_frame_index: int, stream: int = 0
     ) -> Optional[KeyframeInfo]:
         """Determine if seeking to a keyframe is necessary to reach the target frame.
@@ -141,7 +141,7 @@ class Fastseek:
             Information about the nearest keyframe if seeking would be beneficial,
             or None if sequential decoding from current position is more efficient.
         """
-        nearest_iframe: KeyframeInfo = self.nearest_keyframe(target_frame_index, stream)
+        nearest_iframe: KeyframeInfo = self.nearest_keyframe_by_frame(target_frame_index, stream)
         return (
             nearest_iframe
             if (current_frame_index < nearest_iframe.index <= target_frame_index)
@@ -149,7 +149,7 @@ class Fastseek:
             else None
         )
 
-    def nearest_keyframe(self, target_frame_index: int, stream: int = 0) -> KeyframeInfo:
+    def nearest_keyframe_by_frame(self, target_frame_index: int, stream: int = 0) -> KeyframeInfo:
         """Find the nearest keyframe that comes before the target frame.
 
         This method performs a binary search to find the keyframe that is closest to,
@@ -192,7 +192,7 @@ class Fastseek:
         )
         return stream_info.keyframes[max(0, nearest_iframe_to_target_index)]
 
-    def seek_to_pts(self, current_pts: int, target_pts: int, stream: int = 0) -> int | None:
+    def should_seek_by_pts(self, current_pts: int, target_pts: int, stream: int = 0) -> int | None:
         """
         Find the nearest keyframe that comes before the target frame index and return its PTS.
 
