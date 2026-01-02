@@ -169,6 +169,12 @@ def printify_json(data: Any) -> Any:
     is_flag=True,
 )
 @click.option(
+    "--dataset-yaml-name",
+    help="Name of the dataset.yaml file to create.",
+    default="dataset.yaml",
+    type=str,
+)
+@click.option(
     "--sample-type",
     help="Sample type class name (e.g., 'CaptioningSample', 'CrudeWebdataset'). Required for non-interactive dataset.yaml creation if creating the dataset.yaml.",
     default=None,
@@ -196,6 +202,7 @@ def command(
     sample_type: Optional[str],
     field_map: Optional[str],
     skip_dataset_yaml: bool,
+    dataset_yaml_name: str,
 ):
     """Prepare WebDataset for use with energon.
 
@@ -370,7 +377,6 @@ def command(
         allow_interactive_field_map = True
 
     # Determine if we should create dataset.yaml
-    should_create_yaml = False
     if skip_dataset_yaml:
         should_create_yaml = False
     elif sample_type is not None:
@@ -566,7 +572,7 @@ def command(
                 dataset_definition["part_filter"] = "sample_loader.py:part_filter"
 
         # Write the dataset.yaml file
-        with (path / MAIN_FOLDER_NAME / "dataset.yaml").open("w") as f:
+        with (path / MAIN_FOLDER_NAME / dataset_yaml_name).open("w") as f:
             yaml.dump(dataset_definition, f, sort_keys=False)
     else:
         click.echo("You will have to add a dataset.yaml manually.")
