@@ -361,12 +361,6 @@ class AVDecoder:
                 if decoded_samples:
                     # Combine all channels/samples along samples axis
                     clip_all = np.concatenate(decoded_samples, axis=-1)  # (channels, total_samples)
-
-                    # Prune codec delay (priming samples) if starting from the beginning
-                    codec_delay = audio_stream.codec_context.delay
-                    if codec_delay > 0 and start_time == 0:
-                        clip_all = clip_all[:, codec_delay:]
-
                     if clip_start_time is not None and clip_end_time is not None:
                         out_audio_clips.append(torch.from_numpy(clip_all))
                         out_audio_clips_timestamps.append((clip_start_time, clip_end_time))
@@ -624,9 +618,7 @@ class AVDecoder:
                             last_packet = p
                         num_samples += p.samples
 
-                    # Subtract codec delay (priming samples) for consistency with get_audio_clips
-                    codec_delay = audio_stream.codec_context.delay
-                    metadata.audio_num_samples = max(0, num_samples - codec_delay)
+                    metadata.audio_num_samples = num_samples
 
                     if last_packet is not None and last_packet.duration is not None:
                         assert last_packet.pts is not None
