@@ -61,6 +61,7 @@ class AVMetadata(MediaMetadataBase):
     audio_duration: float | None = None
     audio_channels: int | None = None
     audio_sample_rate: int | None = None
+    audio_num_samples: int | None = None
 
 
 @edataclass

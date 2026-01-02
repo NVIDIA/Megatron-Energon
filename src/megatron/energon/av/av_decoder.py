@@ -545,6 +545,7 @@ class AVDecoder:
         get_video_frame_size: bool = True,
         get_audio: bool = True,
         get_audio_duration: bool = True,
+        get_audio_num_samples: bool = False,
     ) -> "AVMetadata":
         """Get the metadata of the media object.
 
@@ -555,6 +556,7 @@ class AVDecoder:
             get_video_frame_size: Compute video frame size if not found in header.
             get_audio: Compute audio metadata.
             get_audio_duration: Compute audio duration if not found in header.
+            get_audio_num_samples: Compute audio number of samples. This requires decoding the audio stream.
         """
         self.stream.seek(0)
         with av_open(self.stream) as input_container:
@@ -607,6 +609,21 @@ class AVDecoder:
                 audio_stream = input_container.streams.audio[0]
                 metadata.audio_sample_rate = audio_stream.sample_rate
                 metadata.audio_duration = audio_stream.duration
+                if get_audio_num_samples and metadata.audio_num_samples is None:
+                    num_samples = 0
+                    last_packet = None
+                    input_container.seek(0)
+                    for p in input_container.decode(audio=0):
+                        if p.pts is not None:
+                            last_packet = p
+                        num_samples += p.samples
+
+                    metadata.audio_num_samples = num_samples
+
+                    if last_packet is not None and last_packet.duration is not None:
+                        assert last_packet.pts is not None
+                        metadata.audio_duration = last_packet.pts + last_packet.duration
+
                 if get_audio_duration and metadata.audio_duration is None:
                     last_packet = None
                     input_container.seek(0)
