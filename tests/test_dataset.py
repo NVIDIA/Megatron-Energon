@@ -1743,6 +1743,66 @@ class TestDataset(unittest.TestCase):
         assert result.exit_code == 0, "Prepare failed, see output"
         assert "Done" in result.stdout, "Prepare failed, see output"
 
+    def test_prepare_dataset_noninteractive(self):
+        runner = CliRunner()
+        result = runner.invoke(
+            prepare_command,
+            [
+                str(self.dataset_path),
+                "--non-interactive",
+                "--force-overwrite",
+                "--split-ratio=1,0,0",
+                "--sample-type=CaptioningSample",
+                '--field-map={"image": "png", "caption": "txt"}',
+            ],
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 0, "Prepare failed, see output"
+        assert "Done" in result.stdout, "Prepare failed, see output"
+
+        # Check failure with non-interactive mode
+        result = runner.invoke(
+            prepare_command,
+            [
+                str(self.dataset_path),
+                "--non-interactive",
+            ],
+            catch_exceptions=True,
+        )
+        assert result.exit_code == 1, "Prepare failed, see output"
+
+    def test_prepare_dataset_noninteractive_crude(self):
+        runner = CliRunner()
+        result = runner.invoke(
+            prepare_command,
+            [
+                str(self.dataset_path),
+                "--non-interactive",
+                "--force-overwrite",
+                "--split-ratio=1,0,0",
+                "--sample-type=CrudeWebdataset",
+                "--dataset-yaml-name=dataset_crude.yaml",
+            ],
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 0, "Prepare failed, see output"
+        assert "Done" in result.stdout, "Prepare failed, see output"
+
+        # Check failure with non-interactive mode
+        result = runner.invoke(
+            prepare_command,
+            [
+                str(self.dataset_path),
+                "--non-interactive",
+            ],
+            catch_exceptions=True,
+        )
+        assert result.exit_code == 1, "Prepare failed, see output"
+
+        with open(self.dataset_path / MAIN_FOLDER_NAME / "dataset_crude.yaml", "r") as f:
+            content = f.read()
+            assert "CrudeWebdataset" in content
+
     def test_preview_captioning_dataset(self):
         runner = CliRunner()
         result = runner.invoke(
