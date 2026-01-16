@@ -19,13 +19,14 @@ from megatron.energon.flavors import (
     CrudeWebdataset,
     Sample,
 )
-from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
 from megatron.energon.flavors.webdataset.metadata import (
     EnergonDatasetType,
     check_dataset_info_present,
     get_dataset_info,
     get_dataset_type,
 )
+from megatron.energon.media.extractor import MediaFilterConfig
 from megatron.energon.metadataset.loader import prepare_metadataset
 
 
@@ -127,6 +128,62 @@ def printify_json(data: Any) -> Any:
     help="If set, the tar files will be shuffled before splitting.",
     is_flag=True,
 )
+@click.option(
+    "--media-metadata-by-glob",
+    type=str,
+    help="Media detection by using one or more glob patterns such as '*.jpg'. Separate multiple patterns by commas.",
+)
+@click.option(
+    "--media-metadata-by-header",
+    is_flag=True,
+    help="Media detection by binary file header.",
+)
+@click.option(
+    "--media-metadata-by-extension",
+    is_flag=True,
+    help="Media detection by standard file extensions.",
+)
+@click.option(
+    "--fix-duplicates",
+    help="Fix duplicate keys in the dataset.",
+    is_flag=True,
+)
+@click.option(
+    "--non-interactive",
+    help="If set, the prepare will not ask for interactive input.",
+    is_flag=True,
+)
+@click.option(
+    "--split-ratio",
+    help="Train/val/test split ratio in the form '0.8,0.1,0.1' or '8,1,1'. Required for non-interactive mode unless --split-parts or --tar-index-only is used.",
+    default=None,
+)
+@click.option(
+    "--force-overwrite",
+    help="Overwrite existing dataset preparation without confirmation.",
+    is_flag=True,
+)
+@click.option(
+    "--skip-dataset-yaml",
+    help="Skip dataset.yaml creation (i.e. no sample loader or dataset.yaml will be created).",
+    is_flag=True,
+)
+@click.option(
+    "--dataset-yaml-name",
+    help="Name of the dataset.yaml file to create.",
+    default="dataset.yaml",
+    type=str,
+)
+@click.option(
+    "--sample-type",
+    help="Sample type class name (e.g., 'CaptioningSample', 'CrudeWebdataset'). Required for non-interactive dataset.yaml creation if creating the dataset.yaml.",
+    default=None,
+)
+@click.option(
+    "--field-map",
+    help='Field mapping in JSON format (e.g., \'{"image": "jpg", "caption": "txt"}\'). If not set in non-interactive mode, a sample loader from template will be created. Use with --sample-type. Only applies if sample_type is not set to CrudeWebdataset.',
+    default=None,
+)
 def command(
     path: EPath,
     progress: bool,
@@ -135,6 +192,17 @@ def command(
     num_workers: int,
     tar_index_only: bool,
     shuffle_tars: bool,
+    media_metadata_by_glob: str | None,
+    media_metadata_by_header: bool,
+    media_metadata_by_extension: bool,
+    fix_duplicates: bool,
+    non_interactive: bool,
+    split_ratio: Optional[str],
+    force_overwrite: bool,
+    sample_type: Optional[str],
+    field_map: Optional[str],
+    skip_dataset_yaml: bool,
+    dataset_yaml_name: str,
 ):
     """Prepare WebDataset for use with energon.
 
@@ -143,16 +211,45 @@ def command(
     details.
     """
 
+    do_media_metadata = bool(
+        media_metadata_by_glob is not None
+        or media_metadata_by_header
+        or media_metadata_by_extension
+    )
+
+    if do_media_metadata and tar_index_only:
+        raise click.UsageError("--media-metadata-by-... cannot be combined with --tar-index-only")
+
+    media_filter_config = (
+        MediaFilterConfig.parse(
+            media_metadata_by_glob, media_metadata_by_header, media_metadata_by_extension
+        )
+        if do_media_metadata
+        else None
+    )
+
     ds_type = get_dataset_type(path)
     if ds_type == EnergonDatasetType.METADATASET:
+        if do_media_metadata:
+            raise click.ClickException(
+                "Metadatasets cannot store media metadata. Remove --media-metadata-by-... to continue."
+            )
         print("Preparing metadataset...")
         prepare_metadataset(path)
         return
     elif ds_type == EnergonDatasetType.JSONL:
+        if do_media_metadata:
+            raise click.ClickException(
+                "JSONL datasets do not support media metadata. Remove --media-metadata-by-... to continue."
+            )
         print("Preparing jsonl dataset...")
         count = CrudeJsonlDatasetFactory.prepare_dataset(path)
         print(f"Done. Found {count} samples.")
         return
+    elif ds_type == EnergonDatasetType.FILESYSTEM:
+        raise click.ClickException(
+            "Filesystem datasets must be prepared using 'energon prepare-media'."
+        )
 
     assert path.is_dir(), f"Path {path} is not a known dataset type"
 
@@ -161,10 +258,18 @@ def command(
         all_tars = list(info["shard_counts"].keys())
     else:
         if check_dataset_info_present(path):
-            if not click.confirm(
-                "It seems the dataset had already been prepared. Do you want to continue?"
-            ):
-                return
+            if force_overwrite:
+                # Silently continue if force_overwrite is set
+                pass
+            elif non_interactive:
+                raise click.ClickException(
+                    "Dataset has already been prepared. Use --force-overwrite to overwrite."
+                )
+            else:
+                if not click.confirm(
+                    "It seems the dataset had already been prepared. Do you want to continue?"
+                ):
+                    return
 
         all_tars = list(path.glob("**/*.tar")) + list(path.glob("**/*.tgz"))
         all_tars = [str(p.relative_to(path)) for p in sorted(all_tars)]
@@ -190,9 +295,19 @@ def command(
         split_parts_patterns = [tuple(x.split(":", 1)) for x in split_parts]
         split_parts_ratio = None
     elif not tar_index_only:
-        split_input = click.prompt(
-            'Please enter a desired train/val/test split like "0.5, 0.2, 0.3" or "8,1,1"', type=str
-        )
+        if split_ratio is not None:
+            # Use the provided split_ratio flag
+            split_input = split_ratio
+        elif non_interactive:
+            raise click.ClickException(
+                "--split-ratio is required in non-interactive mode "
+                "(unless --split-parts or --tar-index-only is used)."
+            )
+        else:
+            split_input = click.prompt(
+                'Please enter a desired train/val/test split like "0.5, 0.2, 0.3" or "8,1,1"',
+                type=str,
+            )
         # Extract split floats
         try:
             split = [float(x.strip()) for x in split_input.split(",")]
@@ -222,7 +337,7 @@ def command(
         def progress_fn(els, length=None):
             return els
 
-    found_types, duplicates = BaseWebdatasetFactory.prepare_dataset(
+    found_types = BaseWebdatasetFactory.prepare_dataset(
         path,
         all_tars,
         split_parts_ratio=split_parts_ratio,
@@ -231,24 +346,13 @@ def command(
         tar_index_only=tar_index_only,
         shuffle_seed=42 if shuffle_tars else None,
         workers=num_workers,
+        media_filter=media_filter_config,
+        fix_duplicates=fix_duplicates,
     )
-
-    if duplicates:
-        print(f"Examples of duplicates found: {duplicates}")
-        print()
-        print(
-            "The dataset has duplicate keys. Best practice is to use unique keys. "
-            "You won't be able to use this dataset for joining "
-            "later on."
-        )
 
     found_types = list(found_types)
     if tar_index_only:
         return
-
-    if duplicates:
-        if not click.confirm("Do you want to continue?"):
-            return
 
     # Print json of first two samples
     for sample_idx, data in enumerate(
@@ -272,7 +376,20 @@ def command(
         click.echo(f"Found the following part types in the dataset: {', '.join(found_types)}")
         allow_interactive_field_map = True
 
-    if click.confirm("Do you want to create a dataset.yaml interactively?", default=True):
+    # Determine if we should create dataset.yaml
+    if skip_dataset_yaml:
+        should_create_yaml = False
+    elif sample_type is not None:
+        should_create_yaml = True
+    elif non_interactive:
+        click.echo("Skipping dataset.yaml creation (use --sample-type to create it).")
+        should_create_yaml = False
+    else:
+        should_create_yaml = click.confirm(
+            "Do you want to create a dataset.yaml interactively?", default=True
+        )
+
+    if should_create_yaml:
         # Get a list of all classes in megatron.energon that are subclasses of WebdatasetBase
         import megatron.energon as data_import
 
@@ -283,18 +400,34 @@ def command(
         ]
         display_name_and_class.append(("Crude sample (plain dict for cooking)", CrudeWebdataset))
 
-        # Print all classes and ask user to pick one
-        click.echo("The following sample types are available:")
-        for i, (name, cls) in enumerate(display_name_and_class):
-            click.echo(f"{i}. {name}")
-        while True:
-            choice = click.prompt("Please enter a number to choose a class", type=int)
-            try:
-                _, cls = display_name_and_class[choice]
-                break
-            except IndexError:
-                click.echo("Invalid choice. Please try again.")
-                continue
+        # Find the class by name if sample_type is provided
+        cls = None
+        if sample_type is not None:
+            for name, candidate_cls in display_name_and_class:
+                if candidate_cls.__name__ == sample_type:
+                    cls = candidate_cls
+                    break
+            if cls is None:
+                available = "\n".join(f"  - {c.__name__}" for _, c in display_name_and_class)
+                raise click.ClickException(
+                    f"Sample type '{sample_type}' not found.\nAvailable sample types:\n{available}"
+                )
+        elif non_interactive:
+            # This should not happen due to earlier checks, but just in case
+            raise click.ClickException("--sample-type is required in non-interactive mode.")
+        else:
+            # Print all classes and ask user to pick one
+            click.echo("The following sample types are available:")
+            for i, (name, candidate_cls) in enumerate(display_name_and_class):
+                click.echo(f"{i}. {name}")
+            while True:
+                choice = click.prompt("Please enter a number to choose a class", type=int)
+                try:
+                    _, cls = display_name_and_class[choice]
+                    break
+                except IndexError:
+                    click.echo("Invalid choice. Please try again.")
+                    continue
 
         if cls == CrudeWebdataset:
             click.echo(
@@ -308,8 +441,9 @@ def command(
                 "__class__": cls.__name__,
             }
         else:
-            click.echo("The sample type you selected:\n")
-            click.echo(inspect.getsource(cls))
+            if not non_interactive:
+                click.echo("The sample type you selected:\n")
+                click.echo(inspect.getsource(cls))
 
             dataset_definition = {
                 "sample_type": {
@@ -318,74 +452,111 @@ def command(
                 },
             }
 
-            if not allow_interactive_field_map:
+            if not allow_interactive_field_map and not non_interactive:
                 click.echo(
                     "You cannot set a field_map for this dataset. You will need a sample_loader."
                 )
 
-            if allow_interactive_field_map and click.confirm(
+            # Determine whether to use field_map or sample_loader
+            use_field_map = False
+            if field_map is not None:
+                use_field_map = True
+            elif non_interactive:
+                # In non-interactive mode without field_map, use sample_loader
+                use_field_map = False
+            elif allow_interactive_field_map and click.confirm(
                 "Do you want to set a simple field_map[Y] (or write your own sample_loader [n])?",
                 default=True,
             ):
-                click.echo(
-                    "\nFor each field, please specify the corresponding name in the WebDataset."
-                )
-                click.echo(f"Available types in WebDataset: {', '.join(found_types)}")
-                click.echo("Leave empty for skipping optional field")
-                click.echo(
-                    "You may also access json fields e.g. by setting the field to: json[field][field]"
-                )
-                click.echo("You may also specify alternative fields e.g. by setting to: jpg,png")
+                use_field_map = True
 
-                click.echo(f"Please enter the field_map for {cls.__name__}:")
+            if use_field_map:
+                if field_map is not None:
+                    # Parse field_map from JSON string
+                    try:
+                        parsed_field_map = json.loads(field_map)
+                        dataset_definition["field_map"] = parsed_field_map
+                    except json.JSONDecodeError as e:
+                        raise click.ClickException(f"Invalid JSON in --field-map: {e}")
+                elif non_interactive:
+                    # This shouldn't happen due to earlier checks, but just in case
+                    raise click.ClickException(
+                        "--field-map is required when using field mapping in non-interactive mode."
+                    )
+                else:
+                    click.echo(
+                        "\nFor each field, please specify the corresponding name in the WebDataset."
+                    )
+                    click.echo(f"Available types in WebDataset: {', '.join(found_types)}")
+                    click.echo("Leave empty for skipping optional field")
+                    click.echo(
+                        "You may also access json fields e.g. by setting the field to: json[field][field]"
+                    )
+                    click.echo(
+                        "You may also specify alternative fields e.g. by setting to: jpg,png"
+                    )
 
-                dataset_definition["field_map"] = field_map = {}
-                for field in dataclasses.fields(cls):
-                    if field.name in (
-                        "__key__",
-                        "__restore_key__",
-                        "__subflavors__",
-                        "__sources__",
-                    ):
-                        continue
-                    while True:
-                        if (
-                            field.default is dataclasses.MISSING
-                            and field.default_factory is dataclasses.MISSING
+                    click.echo(f"Please enter the field_map for {cls.__name__}:")
+
+                    dataset_definition["field_map"] = field_map_dict = {}
+                    for field in dataclasses.fields(cls):
+                        if field.name in (
+                            "__key__",
+                            "__restore_key__",
+                            "__subflavors__",
+                            "__sources__",
                         ):
-                            default = ""
-                        elif field.default is not dataclasses.MISSING:
-                            default = f", default: {field.default}"
-                        elif field.default_factory is not dataclasses.MISSING:
-                            default = f", default: {field.default_factory!r}"
-                        else:
-                            raise RuntimeError("This should never happen")
-                        field_map[field.name] = input(
-                            f"Please enter a webdataset field name for '{field.name}' "
-                            f"({field.type}{default}): ",
-                        )
-                        if not field_map[field.name] and default:
-                            del field_map[field.name]
-                            break
-                        type_ok = True
-                        for option in field_map[field.name].split(","):
-                            field_name = option.split("[", 1)[0]
-                            if field_name not in found_types:
-                                click.echo(
-                                    "That type doesn't exist in the WebDataset. Please try again."
-                                )
-                                type_ok = False
-                        if type_ok:
-                            break
+                            continue
+                        while True:
+                            if (
+                                field.default is dataclasses.MISSING
+                                and field.default_factory is dataclasses.MISSING
+                            ):
+                                default = ""
+                            elif field.default is not dataclasses.MISSING:
+                                default = f", default: {field.default}"
+                            elif field.default_factory is not dataclasses.MISSING:
+                                default = f", default: {field.default_factory!r}"
+                            else:
+                                raise RuntimeError("This should never happen")
+                            field_map_dict[field.name] = input(
+                                f"Please enter a webdataset field name for '{field.name}' "
+                                f"({field.type}{default}): ",
+                            )
+                            if not field_map_dict[field.name] and default:
+                                del field_map_dict[field.name]
+                                break
+                            type_ok = True
+                            for option in field_map_dict[field.name].split(","):
+                                field_name = option.split("[", 1)[0]
+                                if field_name not in found_types:
+                                    click.echo(
+                                        "That type doesn't exist in the WebDataset. Please try again."
+                                    )
+                                    type_ok = False
+                            if type_ok:
+                                break
             else:
                 if not allow_interactive_field_map:
                     template_part_types = set(["TODO"])
                 else:
                     template_part_types = found_types
 
-                if not (path / MAIN_FOLDER_NAME / "sample_loader.py").is_file() or click.confirm(
-                    "Do you want to override the existing sample loader?"
-                ):
+                sample_loader_exists = (path / MAIN_FOLDER_NAME / "sample_loader.py").is_file()
+
+                if not sample_loader_exists:
+                    # Always create if it doesn't exist
+                    should_create_sample_loader = True
+                elif non_interactive:
+                    # In non-interactive mode, don't override existing file
+                    should_create_sample_loader = False
+                else:
+                    # In interactive mode, ask user
+                    should_create_sample_loader = click.confirm(
+                        "Do you want to override the existing sample loader?"
+                    )
+
+                if should_create_sample_loader:
                     with (path / MAIN_FOLDER_NAME / "sample_loader.py").open("w") as f:
                         f.write(
                             sample_loader_template(
@@ -401,7 +572,7 @@ def command(
                 dataset_definition["part_filter"] = "sample_loader.py:part_filter"
 
         # Write the dataset.yaml file
-        with (path / MAIN_FOLDER_NAME / "dataset.yaml").open("w") as f:
+        with (path / MAIN_FOLDER_NAME / dataset_yaml_name).open("w") as f:
             yaml.dump(dataset_definition, f, sort_keys=False)
     else:
         click.echo("You will have to add a dataset.yaml manually.")

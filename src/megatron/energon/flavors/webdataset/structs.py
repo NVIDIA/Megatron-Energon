@@ -113,16 +113,3 @@ class DatasetSubset:
             "range": self.range,
             "absolute_range": self.absolute_range,
         }
-
-
-def reraise_exception(
-    exc: Exception, key: Optional[str], sources: Optional[list[SourceInfo]] = None
-) -> None:
-    if sources:
-        raise Exception(
-            f"For sample {key!r} from {', '.join(f'{source.dataset_path}[{source.index}] {source.shard_name}{source.file_names!r}' for source in sources)}"
-        ) from exc
-    elif key:
-        raise Exception(f"For sample {key!r}") from exc
-    else:
-        raise

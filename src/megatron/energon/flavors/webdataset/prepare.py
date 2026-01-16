@@ -6,6 +6,7 @@ import json
 import logging
 import random
 import re
+import sys
 import tarfile
 import uuid
 from dataclasses import asdict
@@ -34,10 +35,24 @@ from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
 from megatron.energon.eyaml import load_yaml
 from megatron.energon.flavors.webdataset.aggregator_pool import AggregatorPool, BaseAggregator
-from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME, skip_meta_re, split_name_re
-from megatron.energon.flavors.webdataset.indexing import SqliteIndexWriter
+from megatron.energon.flavors.webdataset.config import (
+    INDEX_SQLITE_FILENAME,
+    INDEX_UUID_FILENAME,
+    INFO_JSON_FILENAME,
+    INFO_YAML_FILENAME,
+    MAIN_FOLDER_NAME,
+    skip_meta_re,
+    split_name_re,
+)
+from megatron.energon.flavors.webdataset.indexing import (
+    DuplicateSampleKeyError,
+    SqliteIndexWriter,
+)
 from megatron.energon.flavors.webdataset.itar import TarIndexWriter
+from megatron.energon.flavors.webdataset.metadata import get_dataset_info
 from megatron.energon.flavors.webdataset.structs import ShardInfo, WebdatasetInfo, WebdatasetSplits
+from megatron.energon.media.extractor import MediaFilterConfig
+from megatron.energon.media.metadata import serialize_media_metadata
 from megatron.energon.typed_converter import to_json_object
 
 logger = logging.getLogger(__name__)
@@ -74,15 +89,20 @@ class IndexSamplePart(IndexAggregatable):
 
 
 @edataclass
+class IndexMediaMetadata(IndexAggregatable):
+    entry_key: str
+    metadata_type: str
+    metadata_json: str
+
+
+@edataclass
 class IndexShardInfo(IndexAggregatable):
     shard_info: ShardInfo
     parts: Set[str]
 
 
 class SqliteIndexWriterAggregator(
-    BaseAggregator[
-        Tuple[ShardInfo, Set[str]], Tuple[List[ShardInfo], Set[str], bool, List[Tuple[str, int]]]
-    ]
+    BaseAggregator[IndexAggregatable, Tuple[List[ShardInfo], Set[str], bool, List[Tuple[str, int]]]]
 ):
     sqlite_path: EPath
     total_tasks: int
@@ -92,12 +112,24 @@ class SqliteIndexWriterAggregator(
     shards: List[ShardInfo]
     found_parts: Set[str]
     prog_iter: Iterator
+    enable_sample_tables: bool
+    enable_media_metadata: bool
+    media_filter: Optional[MediaFilterConfig]
+    reset_tables: bool
+    media_metadata_written: int
+    progress_on_media: bool
 
     def __init__(
         self,
         sqlite_path: EPath,
         total_tasks: int,
         progress_fn: Optional[Callable[[Iterator[Any], int], Iterator[T]]] = None,
+        *,
+        enable_sample_tables: bool = True,
+        enable_media_metadata: bool = False,
+        media_filter: Optional[MediaFilterConfig] = None,
+        reset_tables: bool = True,
+        progress_on_media: bool = False,
     ):
         self.sqlite_path = sqlite_path
         self.total_tasks = total_tasks
@@ -105,6 +137,12 @@ class SqliteIndexWriterAggregator(
         self.had_update = False
         self.shards = []
         self.found_parts = set()
+        self.enable_sample_tables = enable_sample_tables
+        self.enable_media_metadata = enable_media_metadata
+        self.media_filter = media_filter
+        self.reset_tables = reset_tables
+        self.media_metadata_written = 0
+        self.progress_on_media = progress_on_media
 
         if progress_fn is not None:
             self.prog_iter = progress_fn(iter(range(self.total_tasks)), self.total_tasks)
@@ -112,7 +150,12 @@ class SqliteIndexWriterAggregator(
             self.prog_iter = iter(range(self.total_tasks))
 
     def on_start(self, aggregator_pool: AggregatorPool) -> None:
-        self.writer = SqliteIndexWriter(self.sqlite_path)
+        self.writer = SqliteIndexWriter(
+            self.sqlite_path,
+            enable_sample_tables=self.enable_sample_tables,
+            enable_media_metadata=self.enable_media_metadata,
+            reset_tables=self.reset_tables,
+        )
 
     def on_item(
         self,
@@ -125,9 +168,20 @@ class SqliteIndexWriterAggregator(
             self.had_update = True
         elif isinstance(item, IndexSamplePart):
             self.writer.append_part(**asdict(item))
+        elif isinstance(item, IndexMediaMetadata):
+            self.writer.append_media_metadata(
+                entry_key=item.entry_key,
+                metadata_type=item.metadata_type,
+                metadata_json=item.metadata_json,
+            )
+            self.had_update = True
+            self.media_metadata_written += 1
+            if self.progress_on_media:
+                self._advance_progress()
         elif isinstance(item, IndexShardInfo):
             # This is a (shard_info, parts) tuple
-            next(self.prog_iter)
+            if not self.progress_on_media:
+                self._advance_progress()
 
             shard_info, cur_parts = item.shard_info, item.parts
             assert shard_info.count != 0, f"Shard {shard_info.name} has no samples."
@@ -137,22 +191,57 @@ class SqliteIndexWriterAggregator(
 
     def on_finish(self, aggregator_pool: AggregatorPool) -> None:
         assert self.writer is not None, "Writer is not initialized."
+        if self.enable_media_metadata and self.media_filter is not None:
+            self.writer.append_media_filter(
+                strategy=self.media_filter.strategy.value,
+                patterns=",".join(self.media_filter.patterns),
+            )
         self.writer.close()
 
     def get_final_result_data(
         self,
-    ) -> Tuple[List[ShardInfo], Set[str], bool, List[Tuple[str, int]]]:
+    ) -> Tuple[List[ShardInfo], Set[str], bool]:
         assert self.writer is not None, "Writer is not initialized."
-        return self.shards, self.found_parts, self.had_update, self.writer.duplicates
+        return self.shards, self.found_parts, self.had_update
+
+    def _advance_progress(self) -> None:
+        try:
+            next(self.prog_iter)
+        except StopIteration:
+            pass
 
 
 class WebdatasetPreparator:
+    @staticmethod
+    def _iter_tar_sample_members(
+        tar: tarfile.TarFile,
+    ) -> Iterator[Tuple[tarfile.TarInfo, str, str]]:
+        """Yield (member, base_name, part_name) for relevant tar entries."""
+
+        member: tarfile.TarInfo
+        for member in tar:
+            if not member.isreg():
+                continue
+            if member.name is None:
+                continue
+            if skip_meta_re.match(member.name):
+                continue
+
+            name_match = split_name_re.match(member.name)
+            if name_match is None:
+                continue
+
+            base_name = name_match.group(1)
+            part_name = name_match.group(2)
+            yield member, base_name, part_name
+
     @staticmethod
     def _preprocess_tar(
         path: str,
         shard_to_idx: Dict[str, int],
         parent_path: EPath,
         max_parts: int,
+        media_filter: Optional[MediaFilterConfig] = None,
     ) -> Generator[IndexAggregatable, None, None]:
         """Process a single tar file, i.e. read the tarinfos, generate the tar index and return
         stats.
@@ -189,25 +278,16 @@ class WebdatasetPreparator:
                     parts = set()
 
                     last_base_name = None
-                    member: tarfile.TarInfo
 
                     next_index_sample = None
 
-                    for member in tar:
-                        if not member.isreg():
-                            continue
-                        if member.name is None:
-                            continue
-                        if skip_meta_re.match(member.name):
-                            continue
-
-                        name_match = split_name_re.match(member.name)
-                        if name_match is None:
-                            continue
-
-                        base_name = name_match.group(1)
+                    for (
+                        member,
+                        base_name,
+                        part_name,
+                    ) in WebdatasetPreparator._iter_tar_sample_members(tar):
                         if len(parts) < max_parts:
-                            parts.add(name_match.group(2))
+                            parts.add(part_name)
 
                         if last_base_name != base_name:
                             iw.append(member.offset)
@@ -227,14 +307,36 @@ class WebdatasetPreparator:
                             last_base_name = base_name
                             count += 1
 
+                        entry_key = f"{base_name}.{part_name}"
+
                         # Yield this part of the sample to the aggregator
                         yield IndexSamplePart(
                             tar_file_id=shard_to_idx[path],
                             sample_index=count - 1,
-                            part_name=name_match.group(2),
+                            part_name=part_name,
                             content_byte_offset=member.offset_data,
                             content_byte_size=member.size,
                         )
+
+                        if media_filter is not None:
+                            if not media_filter.should_consider_media(entry_key):
+                                continue
+                            file_member = tar.extractfile(member)
+                            if file_member is not None:
+                                data = file_member.read()
+                                extracted_metadata = media_filter.extract_metadata(
+                                    data,
+                                    filename=entry_key,
+                                )
+                                if extracted_metadata is not None:
+                                    stored_type, metadata_json = serialize_media_metadata(
+                                        extracted_metadata
+                                    )
+                                    yield IndexMediaMetadata(
+                                        entry_key=entry_key,
+                                        metadata_type=stored_type.value,
+                                        metadata_json=metadata_json,
+                                    )
 
                     shard_info.count = count
                     iw.append(tar.offset)
@@ -249,6 +351,68 @@ class WebdatasetPreparator:
             logger.exception(f"Shard failed to load: {path!r}. Skipping it.")
             yield IndexShardInfo(shard_info=shard_info, parts=set())
             return
+
+    @staticmethod
+    def _extract_media_from_tar(
+        path: str,
+        *,
+        parent_path: EPath,
+        media_filter: MediaFilterConfig,
+        shard_counts: Dict[str, int],
+    ) -> Generator[IndexAggregatable, None, None]:
+        """Yield ``IndexMediaMetadata`` entries for media within an existing tar shard."""
+
+        shard_path = parent_path / path
+
+        try:
+            with shard_path.open("rb") as handle:
+                with tarfile.open(fileobj=handle, mode="r:*") as tar:
+                    for (
+                        member,
+                        base_name,
+                        part_name,
+                    ) in WebdatasetPreparator._iter_tar_sample_members(tar):
+                        entry_key = f"{base_name}.{part_name}"
+
+                        if not media_filter.should_consider_media(entry_key):
+                            continue
+
+                        file_member = tar.extractfile(member)
+                        if file_member is None:
+                            continue
+
+                        extracted_metadata = media_filter.extract_metadata(
+                            file_member,
+                            filename=entry_key,
+                        )
+                        if extracted_metadata is None:
+                            continue
+
+                        stored_type, metadata_json = serialize_media_metadata(extracted_metadata)
+
+                        yield IndexMediaMetadata(
+                            entry_key=entry_key,
+                            metadata_type=stored_type.value,
+                            metadata_json=metadata_json,
+                        )
+
+        except BaseException:  # pragma: no cover - dependent on malformed archives
+            logger.exception(
+                f"Shard failed to load when extracting media metadata: {path!r}. Skipping it."
+            )
+
+        shard_count = shard_counts.get(path)
+        if shard_count is None:
+            raise ValueError(f"Shard count for '{path}' not found in dataset metadata")
+
+        yield IndexShardInfo(
+            shard_info=ShardInfo(
+                name=path,
+                path=parent_path / path,
+                count=shard_count,
+            ),
+            parts=set(),
+        )
 
     @staticmethod
     def iter_dataset_content(
@@ -307,6 +471,8 @@ class WebdatasetPreparator:
         progress_fn: Callable[[Iterator[Any], int], Iterator[T]] = (lambda x, y: x),
         workers: int = 32,
         tar_index_only: bool = False,
+        media_filter: Optional[MediaFilterConfig] = None,
+        fix_duplicates: bool = False,
     ) -> Tuple[Set[str], List[Tuple[str, int]]]:
         """
         Preprocess the shards and write the split config. Preprocessing is done in parallel.
@@ -323,6 +489,8 @@ class WebdatasetPreparator:
             progress_fn: Callback for progress bar
             workers: Number of parallel workers for reading each shard
             tar_index_only: Only create tar-index, then exit
+            media_filter: Media filter configuration
+            fix_duplicates: If True, fix duplicate keys in the dataset by renaming the files in the shards.
 
         Returns:
             The set of all parts found in the shards. But at most 50.
@@ -336,10 +504,39 @@ class WebdatasetPreparator:
 
         (parent_path / MAIN_FOLDER_NAME).mkdir(exist_ok=True)
 
+        if fix_duplicates:
+            try:
+                from megatron.energon.flavors.webdataset.tar_patcher import TarPatcher
+            except ImportError:
+                print("Install energon with [tar_patcher] extra to fix duplicate keys.")
+                raise
+            tar_patcher = TarPatcher(show_progress=True)
+            scan_result = tar_patcher.dataset_scan(
+                paths, parent_path=parent_path, num_workers=workers
+            )
+
+            if scan_result.has_duplicates:
+                print("The dataset contains duplicate keys.")
+                if not scan_result.compatible:
+                    print(
+                        "But the tar files are not compatible with the in-place rename, aborting."
+                    )
+                    sys.exit(1)
+
+                print("Fixing the dataset now.")
+                tar_patcher.dataset_apply_prefix(
+                    paths, parent_path=parent_path, num_workers=workers
+                )
+                print("Duplicate keys fixed successfully.")
+            else:
+                print("No duplicate keys found, continuing.")
+
         aggregator = SqliteIndexWriterAggregator(
-            parent_path / MAIN_FOLDER_NAME / "index.sqlite",
+            parent_path / MAIN_FOLDER_NAME / INDEX_SQLITE_FILENAME,
             total_tasks=len(paths),
             progress_fn=progress_fn,
+            enable_media_metadata=media_filter is not None,
+            media_filter=media_filter,
         )
 
         process_tar = functools.partial(
@@ -347,6 +544,7 @@ class WebdatasetPreparator:
             shard_to_idx=shard_to_idx,
             parent_path=parent_path,
             max_parts=50,
+            media_filter=media_filter,
         )
 
         pool = AggregatorPool(
@@ -358,15 +556,30 @@ class WebdatasetPreparator:
         for path in paths:
             pool.submit_task(path)
 
-        shards, found_parts, had_update, duplicates = pool.process()
+        try:
+            shards, found_parts, had_update = pool.process()
+        except DuplicateSampleKeyError as error:
+            print("The data contains duplicate keys (e.g. same filename in different shards).")
+            print(f'Example duplicate key: "{error.sample_key}"')
+            print()
+            print(
+                "Energon does not support duplicate keys anymore, but we offer a tool to fix your dataset. "
+                "Run `energon prepare` with `--fix-duplicates` to fix your dataset. Inside each tar, it will "
+                "put each file in a subfolder with the shard name like `shard_0/filename.ext`."
+            )
+
+            if (parent_path / MAIN_FOLDER_NAME / INDEX_SQLITE_FILENAME).is_file():
+                (parent_path / MAIN_FOLDER_NAME / INDEX_SQLITE_FILENAME).unlink()
+
+            sys.exit(1)
 
         if had_update:
             logger.info("Regenerating dataset UUID...")
-            with (parent_path / MAIN_FOLDER_NAME / "index.uuid").open("w") as f:
+            with (parent_path / MAIN_FOLDER_NAME / INDEX_UUID_FILENAME).open("w") as f:
                 f.write(str(uuid.uuid4()))
 
-        json_info_config = parent_path / MAIN_FOLDER_NAME / ".info.json"
-        yaml_info_config = parent_path / MAIN_FOLDER_NAME / ".info.yaml"
+        json_info_config = parent_path / MAIN_FOLDER_NAME / INFO_JSON_FILENAME
+        yaml_info_config = parent_path / MAIN_FOLDER_NAME / INFO_YAML_FILENAME
 
         if tar_index_only:
             if yaml_info_config.is_file() and not json_info_config.is_file():
@@ -374,7 +587,7 @@ class WebdatasetPreparator:
                 with json_info_config.open("w") as f:
                     json.dump(load_yaml(yaml_info_config.read_bytes()), f, indent=2)
 
-            return found_parts, duplicates
+            return found_parts
 
         assert len(shards) == len(shard_to_idx), (
             f"Lengths of shards and shard_to_idx do not match: {len(shards)} != {len(shard_to_idx)}"
@@ -453,4 +666,61 @@ class WebdatasetPreparator:
             else:
                 raise ValueError(f"Invalid split config extension: {split_config}")
 
-        return found_parts, duplicates
+        return found_parts
+
+    @classmethod
+    def add_media_metadata(
+        cls,
+        parent_path: Union[Path, EPath],
+        *,
+        media_filter: MediaFilterConfig,
+        workers: int = 32,
+        progress_fn: Callable[[Iterator[Any], int], Iterator[T]] = (lambda x, y: x),
+    ) -> int:
+        """Add or refresh media metadata in an existing WebDataset index."""
+
+        parent_path = EPath(parent_path)
+
+        dataset_info = get_dataset_info(parent_path)
+        shard_counts: Dict[str, int] = dataset_info.get("shard_counts", {})
+
+        paths = list(shard_counts.keys())
+
+        expanded_paths = [path for path in paths for path in braceexpand.braceexpand(path)]
+        if not expanded_paths:
+            return 0
+
+        for path in expanded_paths:
+            if path not in shard_counts:
+                raise ValueError(f"Shard '{path}' not present in dataset metadata")
+
+        aggregator = SqliteIndexWriterAggregator(
+            parent_path / MAIN_FOLDER_NAME / INDEX_SQLITE_FILENAME,
+            total_tasks=len(expanded_paths),
+            progress_fn=progress_fn,
+            enable_sample_tables=False,
+            enable_media_metadata=True,
+            media_filter=media_filter,
+            reset_tables=False,
+            progress_on_media=False,
+        )
+
+        process_tar = functools.partial(
+            cls._extract_media_from_tar,
+            parent_path=parent_path,
+            media_filter=media_filter,
+            shard_counts=shard_counts,
+        )
+
+        pool = AggregatorPool(
+            num_workers=min(workers, len(expanded_paths)) or 1,
+            user_produce_data=process_tar,
+            aggregator=aggregator,
+        )
+
+        for path in expanded_paths:
+            pool.submit_task(path)
+
+        pool.process()
+
+        return aggregator.media_metadata_written

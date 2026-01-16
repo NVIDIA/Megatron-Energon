@@ -147,6 +147,8 @@ Let's also talk about the {py:class}`WorkerConfig <megatron.energon.WorkerConfig
 you always need to provide a worker config to the dataset so specify how many ranks and workers there are and which rank you're currently on.
 For this simple tutorial, we don't really distribute the work, so we use only a single rank with 4 workers. Check out the helper method {py:meth}`default_worker_config <megatron.energon.WorkerConfig.default_worker_config>` to see how the worker config is constructed. Also don't be afraid to click the *`[source]`* link and look at the very short source code of it.
 
+The worker config also controls error handling behavior. See [](../advanced/error_handling) for details on customizing error handlers.
+
 ## Tutorial 3: Batch Size
 
 Actually, we would like to use a `batch_size` of more than one, let's go with 2 for now.

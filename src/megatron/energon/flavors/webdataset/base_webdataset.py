@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import logging
+import os
 from abc import ABC, abstractmethod
 from typing import Any, Callable, Dict, Generic, List, Optional, Sequence, TypeVar
 
@@ -12,9 +13,7 @@ from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.base_dataset import (
     BaseCoreDatasetFactory,
     SavableDataset,
-    legacy_handler,
 )
-from megatron.energon.flavors.webdataset.error_handler import ErrorHandler
 from megatron.energon.flavors.webdataset.metadata import WebdatasetMeta
 from megatron.energon.flavors.webdataset.prepare import WebdatasetPreparator
 from megatron.energon.flavors.webdataset.sample_loader import (
@@ -26,9 +25,7 @@ from megatron.energon.flavors.webdataset.structs import (
     DatasetSubset,
     FilteredSample,
     ShardInfo,
-    reraise_exception,
 )
-from megatron.energon.source_info import SourceInfo
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.map_dataset import MapDataset
 
@@ -37,12 +34,13 @@ T = TypeVar("T", covariant=True)
 
 logger = logging.getLogger(__name__)
 
+DEBUG_SHARD_PRINT = os.getenv("ENERGON_DEBUG_SHARD_PRINT", "0") == "1"
+
 
 class BaseWebdatasetFactory(
     BaseCoreDatasetFactory[T_sample],
     WebdatasetPreparator,
     Sharder,
-    ErrorHandler,
     Generic[T_sample],
     ABC,
 ):
@@ -67,9 +65,6 @@ class BaseWebdatasetFactory(
     subset: Optional[DatasetSubset]
 
     part_filter: Optional[Callable[[str], bool]]
-    handler: Callable[[Exception, Optional[str], Optional[list[SourceInfo]]], None]
-
-    shards: List[ShardInfo]
 
     def __init__(
         self,
@@ -84,9 +79,6 @@ class BaseWebdatasetFactory(
         subset: Optional[DatasetSubset] = None,
         split_config: Optional[str] = None,
         part_filter: Optional[Callable[[str], bool]] = None,
-        handler: Callable[
-            [Exception, Optional[str], Optional[list[SourceInfo]]], None
-        ] = reraise_exception,
     ):
         """
         Base factory for the webdataset sample loader.
@@ -109,7 +101,6 @@ class BaseWebdatasetFactory(
             subset: If specified, the dataset will be subsetted.
             split_config: Config file to use for shard split definitions.
             part_filter: (internal) Function for filtering tar files by dict keys
-            handler: Exception handler. Args: (exception, key, source_info).
         """
         assert self.__sample_type__ is not None, f"Class {type(self)} must define __sample_type__"
         wds_meta = WebdatasetMeta.from_config(
@@ -127,7 +118,6 @@ class BaseWebdatasetFactory(
         self.max_samples_per_sequence = max_samples_per_sequence
         self.subset = subset
         self.part_filter = part_filter
-        self.handler = legacy_handler(handler)
 
     def __len__(self) -> int:
         return sum(shard.count for shard in self.shards)
@@ -151,7 +141,8 @@ class BaseWebdatasetFactory(
             rotation_offset=worker_rotation_offset,
             subset=self.subset,
         )
-        _print_shard_slices(self.worker_config, self.shards, workers_sample_slice_offsets)
+        if DEBUG_SHARD_PRINT:
+            _print_shard_slices(self.worker_config, self.shards, workers_sample_slice_offsets)
 
         itar_reader = ShardInfosITarReader(
             self.path,
@@ -171,7 +162,6 @@ class BaseWebdatasetFactory(
         return MapDataset(
             dataset,
             self._load_sample_raw,
-            error_handler=self.error_handler,
             stateless_map_fn=True,
             map_fn_config=self.config,
             worker_config=self.worker_config,

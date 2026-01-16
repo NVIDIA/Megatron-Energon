@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import Any, Dict, Literal, Optional, Tuple, TypeVar
 
 from megatron.energon.cache.base import CachePool, FileStore, Lazy
-from megatron.energon.cache.file_store import DecodeFileStore
 from megatron.energon.edataclass import edataclass
 from megatron.energon.fork_hook import ForkMixin
 from megatron.energon.source_info import SourceInfo, add_source_info
@@ -152,7 +151,7 @@ class FileStoreCachePool(CachePool, ForkMixin):
     _pending_tasks: Dict[Tuple[str, str], _PendingTask]
 
     # Lock for all shared structures
-    _lock: threading.Lock
+    _lock: threading.RLock
     # Condition variable to signal when cache space is available
     _cache_space_available: threading.Condition
     # Whether the pool is shutting down
@@ -203,7 +202,7 @@ class FileStoreCachePool(CachePool, ForkMixin):
         self.current_cache_count = 0
 
         # A lock to protect all shared structures
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
 
         # Condition variable to signal when cache space is available
         self._cache_space_available = threading.Condition(self._lock)
@@ -282,10 +281,7 @@ class FileStoreCachePool(CachePool, ForkMixin):
 
         # Perform the data read
         if self.method == "raw":
-            if isinstance(ds, DecodeFileStore):
-                data, entry.source_info = ds.inner_reader[fname]
-            else:
-                data, entry.source_info = ds[fname]
+            data, entry.source_info = ds._get_raw(fname)
         elif self.method == "pickle":
             data, entry.source_info = ds[fname]
             data = pickle.dumps(data)
@@ -428,10 +424,7 @@ class FileStoreCachePool(CachePool, ForkMixin):
         with open(entry.cache_path, "rb") as f:
             if self.method == "raw":
                 raw = f.read()
-                if isinstance(entry.ds, DecodeFileStore):
-                    return entry.ds.decoder.decode(entry.fname, raw), entry.source_info
-                else:
-                    return raw, entry.source_info
+                return entry.ds._decode_raw(raw, fname=entry.fname), entry.source_info
             else:
                 return pickle.load(f), entry.source_info
 

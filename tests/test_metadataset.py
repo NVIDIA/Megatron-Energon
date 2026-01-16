@@ -26,7 +26,7 @@ from megatron.energon import (
     get_val_dataset,
     load_dataset,
 )
-from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
 from megatron.energon.metadataset.loader_interface import DatasetBlendMode
 from megatron.energon.wrappers.blend_dataset import BlendDataset
 
@@ -757,7 +757,6 @@ class TestDataset(unittest.TestCase):
                     "batcher": "megatron.energon.task_encoder.base.DefaultTaskEncoder.batch",
                     "batcher_stateless": True,
                     "drop_last": False,
-                    "error_handler": "megatron.energon.wrappers._log_exception.log_exception",
                     "worker_config": wrk_cfg,
                     "dataset": {
                         "type": "MapDataset",

@@ -48,7 +48,7 @@ from megatron.energon import (
 from megatron.energon.dataset_config import get_dataset_from_config
 from megatron.energon.edataclass import edataclass
 from megatron.energon.flavors import BaseWebdatasetFactory
-from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
 from megatron.energon.task_encoder.base import stateless
 from megatron.energon.tools.analyze_debug import command as analyze_debug_command
 from megatron.energon.tools.info import command as info_command
@@ -91,6 +91,10 @@ class CaptioningEncodedBatch(CaptioningSample):
 class CaptioningBatch(Batch):
     image: torch.Tensor
     caption: torch.Tensor
+
+
+class ShouldRaiseException(Exception):
+    pass
 
 
 class TestDataset(unittest.TestCase):
@@ -431,9 +435,7 @@ class TestDataset(unittest.TestCase):
             sample_type=CaptioningSample,
         )
         captions = set(sample["caption"] for sample in self.samples)
-        keys = set(
-            f"<SL>parts/data-{idx // 30:d}.tar/{idx:06d}" for idx in range(len(self.samples))
-        )
+        keys = set(f"<SL>{idx:06d}" for idx in range(len(self.samples)))
         for sample in get_loader(ds.build()):
             assert sample.caption[:4] == "<SL>"
             captions.remove(sample.caption[4:])
@@ -452,9 +454,7 @@ class TestDataset(unittest.TestCase):
         )
 
         keys = [entry.__key__ for entry in get_loader(ds.build())]
-        assert keys == [
-            f"parts/data-1.tar/{i:06d}" for i in list(range(30, 35)) + list(range(40, 50))
-        ], keys
+        assert keys == [f"{i:06d}" for i in list(range(30, 35)) + list(range(40, 50))], keys
 
     def test_loader(self):
         torch.manual_seed(42)
@@ -516,8 +516,8 @@ class TestDataset(unittest.TestCase):
         assert len(loader2) == 5
         # The order in the split is shuffled this way
         assert list(key for batch in loader2 for key in batch.__key__) == [
-            f"parts/data-1.tar/{i:06d}" for i in range(30, 50)
-        ] + [f"parts/data-0.tar/{i:06d}" for i in range(30)]
+            f"{i:06d}" for i in range(30, 50)
+        ] + [f"{i:06d}" for i in range(30)]
 
     def test_default_dataset(self):
         torch.manual_seed(42)
@@ -1567,7 +1567,7 @@ class TestDataset(unittest.TestCase):
         ):
             @stateless
             def encode_sample(self, sample: CaptioningSample) -> CaptioningSample:
-                sample.caption = sample.__key__.split("/")[-2]
+                sample.caption = sample.__sources__[0].shard_name.split("/")[-1]
                 return sample
 
             def batch_group_criterion(self, sample: CaptioningSample) -> Tuple[Hashable, int]:
@@ -1743,6 +1743,66 @@ class TestDataset(unittest.TestCase):
         assert result.exit_code == 0, "Prepare failed, see output"
         assert "Done" in result.stdout, "Prepare failed, see output"
 
+    def test_prepare_dataset_noninteractive(self):
+        runner = CliRunner()
+        result = runner.invoke(
+            prepare_command,
+            [
+                str(self.dataset_path),
+                "--non-interactive",
+                "--force-overwrite",
+                "--split-ratio=1,0,0",
+                "--sample-type=CaptioningSample",
+                '--field-map={"image": "png", "caption": "txt"}',
+            ],
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 0, "Prepare failed, see output"
+        assert "Done" in result.stdout, "Prepare failed, see output"
+
+        # Check failure with non-interactive mode
+        result = runner.invoke(
+            prepare_command,
+            [
+                str(self.dataset_path),
+                "--non-interactive",
+            ],
+            catch_exceptions=True,
+        )
+        assert result.exit_code == 1, "Prepare failed, see output"
+
+    def test_prepare_dataset_noninteractive_crude(self):
+        runner = CliRunner()
+        result = runner.invoke(
+            prepare_command,
+            [
+                str(self.dataset_path),
+                "--non-interactive",
+                "--force-overwrite",
+                "--split-ratio=1,0,0",
+                "--sample-type=CrudeWebdataset",
+                "--dataset-yaml-name=dataset_crude.yaml",
+            ],
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 0, "Prepare failed, see output"
+        assert "Done" in result.stdout, "Prepare failed, see output"
+
+        # Check failure with non-interactive mode
+        result = runner.invoke(
+            prepare_command,
+            [
+                str(self.dataset_path),
+                "--non-interactive",
+            ],
+            catch_exceptions=True,
+        )
+        assert result.exit_code == 1, "Prepare failed, see output"
+
+        with open(self.dataset_path / MAIN_FOLDER_NAME / "dataset_crude.yaml", "r") as f:
+            content = f.read()
+            assert "CrudeWebdataset" in content
+
     def test_preview_captioning_dataset(self):
         runner = CliRunner()
         result = runner.invoke(
@@ -1752,7 +1812,7 @@ class TestDataset(unittest.TestCase):
             catch_exceptions=False,
         )
         # First sample!
-        assert "__key__ (<class 'str'>): 'parts/data-1.tar/000030'" in result.stdout
+        assert "__key__ (<class 'str'>): '000030'" in result.stdout
         assert result.exit_code == 0, "Preview failed, see output"
 
     def test_info_captioning_dataset(self):
@@ -1768,6 +1828,106 @@ class TestDataset(unittest.TestCase):
         assert str(self.dataset_path) in result.stdout
         assert "train" in result.stdout
         assert result.exit_code == 0, "Preview failed, see output"
+
+    def test_custom_error_handler(self):
+        """Test that custom error handlers work correctly in TaskEncoder."""
+        torch.manual_seed(42)
+
+        # Track error handler calls
+        error_calls = []
+
+        class ErrorProneTaskEncoder(DefaultTaskEncoder):
+            def __init__(self):
+                super().__init__(raw_batch_type=CaptioningBatch)
+
+            @stateless
+            def encode_sample(self, sample: CaptioningSample) -> EncodedCaptioningSample:
+                # Intentionally raise an error for specific samples to test error handling
+                if "000035" in sample.__key__:
+                    raise ValueError(f"Intentional error for {sample.__key__}")
+                return EncodedCaptioningSample.derive_from(
+                    sample,
+                    image=sample.image,
+                    caption=torch.frombuffer(bytearray(sample.caption.encode()), dtype=torch.uint8),
+                )
+
+        # Test with custom error handler
+
+        worker_config = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=0,
+            global_error_handler=lambda e, s, sources: error_calls.append(
+                {
+                    "exception": e,
+                    "sample_key": getattr(s, "__key__", None),
+                    "exception_type": type(e).__name__,
+                }
+            ),
+        )
+
+        loader = get_loader(
+            get_train_dataset(
+                self.dataset_path,
+                batch_size=5,
+                worker_config=worker_config,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                virtual_epoch_length=50,
+                task_encoder=ErrorProneTaskEncoder(),
+            )
+        )
+
+        # Iterate through the loader - errors should be handled by custom handler
+        batches = []
+        for i, batch in enumerate(loader):
+            batches.append(batch)
+            if i >= 9:  # Get 10 batches (50 samples total)
+                break
+
+        # Verify that the error handler was called
+        assert len(error_calls) > 0, "Error handler should have been called"
+
+        # Verify that the error was for the right sample
+        assert any("000035" in call["sample_key"] for call in error_calls), (
+            f"Error should have been for sample 000035, got: {error_calls}"
+        )
+
+        # Verify the exception type
+        assert all(call["exception_type"] == "ValueError" for call in error_calls), (
+            "All errors should be ValueError"
+        )
+
+        print("Step 2: Reraise")
+
+        def reraise(e, s, sources):
+            raise ShouldRaiseException() from e
+
+        worker_config_r1 = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=1,
+            global_error_handler=reraise,
+        )
+
+        loader = get_loader(
+            get_train_dataset(
+                self.dataset_path,
+                batch_size=5,
+                worker_config=worker_config_r1,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                virtual_epoch_length=50,
+                task_encoder=ErrorProneTaskEncoder(),
+            )
+        )
+
+        with self.assertRaises(ShouldRaiseException):
+            batches = []
+            for i, batch in enumerate(loader):
+                batches.append(batch)
+                if i >= 9:  # Get 10 batches (50 samples total)
+                    break
 
 
 if __name__ == "__main__":

@@ -57,6 +57,8 @@ advanced/subsets
 advanced/epochized_blending
 advanced/custom_blending
 advanced/parallelism
+advanced/error_handling
+advanced/data_prep_api
 ```
 
 

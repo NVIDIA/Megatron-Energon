@@ -17,7 +17,14 @@ import numpy as np
 import torch
 import torchvision.transforms as transforms
 
-from megatron.energon.av import AVDecoder, AVMetadata, get_clips_uniform, get_single_frames_uniform
+from megatron.energon.av import AVDecoder, get_clips_uniform, get_single_frames_uniform
+from megatron.energon.av.fastseek.fastseek import Fastseek
+from megatron.energon.av.fastseek.keyframeinfo import KeyframeInfo
+from megatron.energon.av.fastseek.reader import (
+    FastseekReaderByFrames,
+    FastseekReaderByPts,
+)
+from megatron.energon.media import AVMetadata
 
 # Set multiprocessing start method to 'spawn' on macOS to avoid DataLoader cleanup issues
 if sys.platform == "darwin":
@@ -72,6 +79,319 @@ def tensors_close(tensor1: torch.Tensor, tensor2: torch.Tensor, tolerance: float
     return mae <= tolerance
 
 
+class TestFastseek(unittest.TestCase):
+    """Test fastseek functionality."""
+
+    def test_fastseek_mp4(self):
+        """Test fastseek."""
+        fastseek = Fastseek(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes()))
+        assert fastseek.mime == "video/mp4"
+        assert fastseek.frame_index_supported
+        assert fastseek.pts_supported
+        print(fastseek.keyframes)
+        assert list(fastseek.keyframes.keys()) == [1]
+        # There is one stream (id=1). Check that the first stream's keyframes are correct.
+        assert fastseek.keyframes[1].keyframes == [
+            KeyframeInfo(index=0, pts=0),
+            KeyframeInfo(index=250, pts=128000),
+            KeyframeInfo(index=500, pts=256000),
+            KeyframeInfo(index=750, pts=384000),
+            KeyframeInfo(index=1000, pts=512000),
+            KeyframeInfo(index=1250, pts=640000),
+            KeyframeInfo(index=1500, pts=768000),
+            KeyframeInfo(index=1750, pts=896000),
+        ]
+        assert fastseek.keyframes[1].keyframe_pts == [
+            0,
+            128000,
+            256000,
+            384000,
+            512000,
+            640000,
+            768000,
+            896000,
+        ]
+
+        # Going forward
+        assert fastseek.should_seek_by_frame(0, 0) is None
+        assert fastseek.should_seek_by_frame(0, 249) is None
+        assert fastseek.should_seek_by_frame(0, 250) == KeyframeInfo(index=250, pts=128000)
+        assert fastseek.should_seek_by_frame(0, 251) == KeyframeInfo(index=250, pts=128000)
+        assert fastseek.should_seek_by_frame(0, 499) == KeyframeInfo(index=250, pts=128000)
+        assert fastseek.should_seek_by_frame(499, 500) == KeyframeInfo(index=500, pts=256000)
+        assert fastseek.should_seek_by_frame(250, 499) is None
+        assert fastseek.should_seek_by_frame(250, 500) == KeyframeInfo(index=500, pts=256000)
+
+        # Going backward
+        assert fastseek.should_seek_by_frame(1, 0) == KeyframeInfo(index=0, pts=0)
+        assert fastseek.should_seek_by_frame(249, 0) == KeyframeInfo(index=0, pts=0)
+        assert fastseek.should_seek_by_frame(250, 0) == KeyframeInfo(index=0, pts=0)
+
+        assert fastseek.should_seek_by_pts(0, 0) is None
+        assert fastseek.should_seek_by_pts(0, 1) is None
+        assert fastseek.should_seek_by_pts(0, 127999) is None
+        assert fastseek.should_seek_by_pts(128000, 128000) is None
+        assert fastseek.should_seek_by_pts(128000, 255999) is None
+        assert fastseek.should_seek_by_pts(0, 128000) == 128000
+        assert fastseek.should_seek_by_pts(0, 256000) == 256000
+        assert fastseek.should_seek_by_pts(128000, 256000) == 256000
+
+    def test_fastseek_mkv(self):
+        """Test fastseek."""
+        fastseek = Fastseek(io.BytesIO(Path("tests/data/sync_test.mkv").read_bytes()))
+        assert fastseek.mime == "video/x-matroska"
+        assert not fastseek.frame_index_supported
+        assert fastseek.pts_supported
+        print(fastseek.keyframes)
+        assert list(fastseek.keyframes.keys()) == [1]
+        assert fastseek.keyframes[1].keyframe_pts == [
+            0,
+            8354,
+            16688,
+            25021,
+            33354,
+            41688,
+            50021,
+            58354,
+        ]
+        assert fastseek.keyframes[1].keyframe_indexes is None
+        assert fastseek.keyframes[1].keyframes == [
+            KeyframeInfo(index=None, pts=0),
+            KeyframeInfo(index=None, pts=8354),
+            KeyframeInfo(index=None, pts=16688),
+            KeyframeInfo(index=None, pts=25021),
+            KeyframeInfo(index=None, pts=33354),
+            KeyframeInfo(index=None, pts=41688),
+            KeyframeInfo(index=None, pts=50021),
+            KeyframeInfo(index=None, pts=58354),
+        ]
+
+        assert fastseek.should_seek_by_pts(0, 0) is None
+        assert fastseek.should_seek_by_pts(0, 8353) is None
+        assert fastseek.should_seek_by_pts(8350, 8353) is None
+        assert fastseek.should_seek_by_pts(8354, 16687) is None
+        assert fastseek.should_seek_by_pts(0, 8354) == 8354
+        assert fastseek.should_seek_by_pts(0, 8355) == 8354
+        assert fastseek.should_seek_by_pts(0, 16688) == 16688
+        assert fastseek.should_seek_by_pts(1, 0) == 0
+        assert fastseek.should_seek_by_pts(10000, 0) == 0
+        assert fastseek.should_seek_by_pts(10000, 8354) == 8354
+        assert fastseek.should_seek_by_pts(10000, 8355) == 8354
+
+    def test_fastseek_reader_mp4(self):
+        """Test fastseek reader."""
+        with open("tests/data/sync_test.mp4", "rb") as f:
+            fastseek = Fastseek(f)
+            f.seek(0)
+            with av.open(f, mode="r") as container:
+                reader = FastseekReaderByFrames(fastseek, container)
+
+                frames = list(reader.seek_read(0, 1))
+                assert len(frames) == 2
+                assert frames[0].time == 0
+                assert frames[1].time == 1 / 30
+                assert reader.skipped == 0
+
+                # Read more frames, repeating the previous frame
+                frames = list(reader.seek_read(1, 2))
+                assert len(frames) == 2, len(frames)
+                assert frames[0].time == 1 / 30
+                assert frames[1].time == 2 / 30
+                assert reader.skipped == 0
+
+                # Read next frame
+                frames = list(reader.seek_read(3, 3))
+                assert len(frames) == 1, len(frames)
+                assert frames[0].time == 3 / 30
+                assert reader.skipped == 0
+
+                # Seek to last frame before next keyframe
+                frames = list(reader.seek_read(249, 249))
+                assert len(frames) == 1, len(frames)
+                assert frames[0].time == 249 / 30
+                # Skipped frames 4-248 (inclusive)
+                assert reader.skipped == 245, reader.skipped
+
+                reader.skipped = 0
+
+                # Seek through keyframe, repeating the previous frame
+                frames = list(reader.seek_read(249, 250))
+                assert len(frames) == 2, len(frames)
+                assert frames[0].time == 249 / 30
+                assert frames[1].time == 250 / 30
+                assert reader.skipped == 0, reader.skipped
+
+                reader.skipped = 0
+
+                # Seek to next keyframe
+                frames = list(reader.seek_read(500, 500))
+                assert len(frames) == 1, len(frames)
+                assert frames[0].time == 500 / 30
+                assert reader.skipped == 0, reader.skipped
+
+                # Seek backwards 1 frame, but need previous keyframe
+                frames = list(reader.seek_read(499, 499))
+                assert len(frames) == 1, len(frames)
+                assert frames[0].time == 499 / 30
+                # Skipped frames 250-498 (inclusive)
+                assert reader.skipped == 249, reader.skipped
+
+                reader.skipped = 0
+
+                # Seek to previous keyframe
+                frames = list(reader.seek_read(498, 498))
+                assert len(frames) == 1, len(frames)
+                assert frames[0].time == 498 / 30
+                # Skipped frames 250-497 (inclusive)
+                assert reader.skipped == 248, reader.skipped
+
+            f.seek(0)
+            with av.open(f, mode="r") as container:
+                reader = FastseekReaderByPts(fastseek, container)
+
+                # 512 PTS per frame
+
+                frames = list(reader.seek_read(0, 1023))
+                assert len(frames) == 2, len(frames)
+                assert frames[0].pts == 0
+                assert frames[0].duration == 512
+                assert frames[1].pts == 512
+                assert frames[1].duration == 512
+                assert reader.skipped == 0
+
+                frames = list(reader.seek_read(512, 3 * 512 - 1))
+                assert len(frames) == 2, len(frames)
+                assert frames[0].time == 1 / 30
+                assert frames[1].time == 2 / 30
+                assert frames[0].pts == 512
+                assert frames[1].pts == 1024
+                assert reader.skipped == 0
+
+                frames = list(reader.seek_read(249 * 512, 249 * 512))
+                assert len(frames) == 1, len(frames)
+                assert frames[0].pts == 249 * 512
+                # Skipped frames 2-248 (inclusive)
+                assert reader.skipped == 246
+
+                reader.skipped = 0
+
+                frames = list(reader.seek_read(249 * 512, 250 * 512))
+                assert len(frames) == 2, len(frames)
+                assert frames[0].pts == 249 * 512
+                assert frames[1].pts == 250 * 512
+                assert reader.skipped == 0
+
+    def test_fastseek_reader_mkv(self):
+        """Test fastseek reader."""
+        with open("tests/data/sync_test.mkv", "rb") as f:
+            fastseek = Fastseek(f)
+            f.seek(0)
+            with av.open(f, mode="r") as container:
+                # Note: This video has frames of 33 PTS duration,
+                # But the time for the next frame increases by 54, 34, 12, 54, 34, 33
+                # (afterwards by [33, 33, 34], repeating)
+                # last_pts = 0
+                # for idx, frame in enumerate(container.decode(video=0)):
+                #     print(f"+{frame.pts - last_pts}")
+                #     last_pts = frame.pts
+                #     print(f"{idx}: {frame.pts}+{frame.duration} {'KF' if frame.key_frame else ''}")
+                #     if idx > 500:
+                #         break
+                reader = FastseekReaderByPts(fastseek, container)
+
+                """
+                Frame 1 and 2 actually overlap
+                0: 0+33 KF
+                +54
+                1: 54+33 
+                +34
+                2: 88+33 
+                +12
+                3: 100+33 
+                +54
+                4: 154+33 
+                +34
+                5: 188+33 
+
+                247: 8254+33 
+                +34
+                248: 8288+33 
+                +33
+                249: 8321+33 
+                +33
+                250: 8354+33 KF
+                +34
+                251: 8388+33 
+                +33
+                252: 8421+33 
+                +33
+                253: 8454+33 
+                """
+
+                # Frame 0, 1
+                frames = list(reader.seek_read(0, 85))
+                assert len(frames) == 2, len(frames)
+                assert frames[0].pts == 0
+                assert frames[1].pts == 54
+                assert reader.skipped == 0
+
+                # Frame 1, 2
+                frames = list(reader.seek_read(85, 103))
+                assert len(frames) == 2, len(frames)
+                assert frames[0].pts == 54
+                assert frames[1].pts == 88
+                assert reader.skipped == 0
+
+                # Frame 2
+                frames = list(reader.seek_read(100, 100))
+                assert len(frames) == 1, len(frames)
+                assert frames[0].pts == 88
+                assert reader.skipped == 0
+
+                # Frame 3 (overlaps with frame 2)
+                frames = list(reader.seek_read(132, 132))
+                assert len(frames) == 1, len(frames)
+                assert frames[0].pts == 100
+                assert reader.skipped == 0
+
+                # Frame 249
+                frames = list(reader.seek_read(8321, 8321))
+                assert len(frames) == 1, len(frames)
+                assert frames[0].pts == 8321
+                # Skipped frames 4-248 (inclusive)
+                assert reader.skipped == 245
+
+                reader.skipped = 0
+
+                # Frame 249
+                frames = list(reader.seek_read(8353, 8353))
+                assert len(frames) == 1, len(frames)
+                assert frames[0].pts == 8321
+                assert reader.skipped == 0
+
+                # Frame 249-251
+                frames = list(reader.seek_read(8353, 8388))
+                assert len(frames) == 3, len(frames)
+                assert frames[0].pts == 8321
+                assert frames[1].pts == 8354
+                assert frames[2].pts == 8388
+                assert reader.skipped == 0
+
+                # Frame 0 (go backwards and skip 1 frame)
+                frames = list(reader.seek_read(85, 85))
+                assert len(frames) == 1, len(frames)
+                assert frames[0].pts == 54
+                assert reader.skipped == 1
+
+                reader.skipped = 0
+
+                # Frame 251 (seek to keyframe 250 and skip 1 frame)
+                frames = list(reader.seek_read(8388, 8388))
+                assert len(frames) == 1, len(frames)
+                assert frames[0].pts == 8388
+                assert reader.skipped == 1
+
+
 class TestVideoDecode(unittest.TestCase):
     """Test video decoding functionality."""
 
@@ -108,6 +428,58 @@ class TestVideoDecode(unittest.TestCase):
             "Energon decoded video does not match baseline"
         )
 
+    def test_verify_video_decode(self):
+        """Verify the video decode matches the baseline."""
+        av_decoder = AVDecoder(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes()))
+        all_timestamps = []
+        for frame in [*range(5), *range(245, 255), *range(1881, 1891)]:
+            # print(f"Loading frame {frame}")
+            video_data, timestamps = av_decoder.get_video_clips(
+                video_clip_ranges=[(frame, frame)], video_unit="frames"
+            )
+            assert len(video_data) == 1
+            assert video_data[0].shape == (1, 3, 108, 192), (
+                f"Shape of frame {frame} is {video_data[0].shape}"
+            )
+            assert (video_data[0] == self.complete_video_tensor[frame : frame + 1]).all()
+            # print(f"Timestamp for frame {frame}: {timestamps[0]}")
+            all_timestamps.append(0.5 * (timestamps[0][0] + timestamps[0][1]))
+
+        for frame, timestamp1, timestamp2 in zip(
+            [*range(5), *range(245, 255), *range(1881, 1891)],
+            all_timestamps,
+            all_timestamps[1:] + [float("inf")],
+        ):
+            if frame in (4, 254):
+                continue
+            # print(f"Loading frame {frame}")
+            video_data, timestamps = av_decoder.get_video_clips(
+                video_clip_ranges=[(timestamp1, timestamp1)], video_unit="seconds"
+            )
+            assert len(video_data) == 1
+            assert video_data[0].shape == (1, 3, 108, 192), (
+                f"Shape of frame {frame} is {video_data[0].shape}"
+            )
+            assert (video_data[0] == self.complete_video_tensor[frame : frame + 1]).all()
+            assert 0.5 * (timestamps[0][0] + timestamps[0][1]) == timestamp1, (
+                f"Timestamp for frame {frame} is {timestamps[0][0]} + {timestamps[0][1]}"
+            )
+
+            video_data, timestamps = av_decoder.get_video_clips(
+                video_clip_ranges=[(timestamp1, timestamp2)], video_unit="seconds"
+            )
+            assert len(video_data) == 1
+            if frame == 1890:
+                assert video_data[0].shape == (1, 3, 108, 192), (
+                    f"Shape of frame {frame} is {video_data[0].shape}"
+                )
+                assert (video_data[0] == self.complete_video_tensor[frame : frame + 1]).all()
+            else:
+                assert video_data[0].shape == (2, 3, 108, 192), (
+                    f"Shape of frame {frame} is {video_data[0].shape}"
+                )
+                assert (video_data[0] == self.complete_video_tensor[frame : frame + 2]).all()
+
     def test_decode_metadata(self):
         """Test decoding metadata."""
         expected_metadata = [
@@ -120,6 +492,7 @@ class TestVideoDecode(unittest.TestCase):
                 audio_duration=63.103,
                 audio_channels=2,
                 audio_sample_rate=48000,
+                audio_num_samples=3028992,
             ),
             AVMetadata(
                 video_duration=63.03333333333333,
@@ -130,13 +503,14 @@ class TestVideoDecode(unittest.TestCase):
                 audio_duration=63.068,
                 audio_channels=2,
                 audio_sample_rate=48000,
+                audio_num_samples=3027968,
             ),
         ]
         for video_file, expected_metadata in zip(
             ["tests/data/sync_test.mkv", "tests/data/sync_test.mp4"], expected_metadata
         ):
             av_decoder = AVDecoder(io.BytesIO(Path(video_file).read_bytes()))
-            assert av_decoder.get_metadata() == expected_metadata, (
+            assert av_decoder.get_metadata(get_audio_num_samples=True) == expected_metadata, (
                 f"Metadata does not match expected metadata for {video_file}"
             )
 
@@ -178,6 +552,51 @@ class TestVideoDecode(unittest.TestCase):
                 "Energon decoded video does not match baseline"
             )
 
+    def test_time_precision(self):
+        """Test decoding video frames with time precision."""
+        av_decoder = AVDecoder(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes()))
+        video_data, timestamps = av_decoder.get_video_clips(
+            video_clip_ranges=[
+                (4 + 1 / 30, 4 + 1 / 30),
+                (4 + 1 / 30 + 1 / 60, 4 + 1 / 30 + 1 / 60),
+            ],
+            video_unit="seconds",
+        )
+        assert (timestamps[0][0] == 4 + 1 / 30) and (timestamps[0][1] == 4 + 2 / 30), (
+            f"Timestamp for frame 0 is {timestamps[0][0]} and {timestamps[0][1]}"
+        )
+        assert (timestamps[1][0] == 4 + 1 / 30) and (timestamps[1][1] == 4 + 2 / 30), (
+            f"Timestamp for frame 0 is {timestamps[1][0]} and {timestamps[1][1]}"
+        )
+        # from PIL import Image
+
+        # Image.fromarray(video_data[0][0, :, 18:55, 18:55].numpy().transpose(1, 2, 0)).save(
+        #     "circ.png"
+        # )
+        assert (video_data[0][0, :, 18:55, 18:55] > 250).all(), (
+            "First extracted frame is not all white in the area (18, 18, 55, 55)"
+        )
+
+        av_decoder = AVDecoder(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes()))
+        video_data, timestamps = av_decoder.get_video_clips(
+            video_clip_ranges=[(4 * 30 + 1, 4 * 30 + 1), (4 * 30 + 1, 4 * 30 + 1)],
+            video_unit="frames",
+        )
+        assert (timestamps[0][0] == 4 + 1 / 30) and (timestamps[0][1] == 4 + 2 / 30), (
+            f"Timestamp for frame 0 is {timestamps[0][0]} and {timestamps[0][1]}"
+        )
+        assert (timestamps[1][0] == 4 + 1 / 30) and (timestamps[1][1] == 4 + 2 / 30), (
+            f"Timestamp for frame 0 is {timestamps[1][0]} and {timestamps[1][1]}"
+        )
+        from PIL import Image
+
+        Image.fromarray(video_data[0][0, :, 18:55, 18:55].numpy().transpose(1, 2, 0)).save(
+            "circ.png"
+        )
+        assert (video_data[0][0, :, 18:55, 18:55] > 250).all(), (
+            "First extracted frame is not all white in the area (18, 18, 55, 55)"
+        )
+
     def test_video_audio_sync(self):
         """Test decoding video frames and audio clips together."""
         av_decoder = AVDecoder(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes()))
@@ -199,7 +618,11 @@ class TestVideoDecode(unittest.TestCase):
         video_clips = av_data.video_clips[2:]
         audio_clips = av_data.audio_clips[2:]
         # Then we check that the first extracted frame is all white in the area (18, 18, 55, 55)
-        # Image.fromarray(video_clips[0][0, :, 18:55, 18:55].numpy().transpose(1,2,0)).save('circ.png')
+        # from PIL import Image
+
+        # Image.fromarray(video_clips[0][0, :, 18:55, 18:55].numpy().transpose(1, 2, 0)).save(
+        #     "circ.png"
+        # )
         assert (video_clips[0][0, :, 18:55, 18:55] > 250).all(), (
             "First extracted frame is not all white in the area (18, 18, 55, 55)"
         )
@@ -222,29 +645,29 @@ class TestVideoDecode(unittest.TestCase):
     def test_pickle_decoder(self):
         """Test AVDecoder on a video file can be pickled and unpickled."""
         av_decoder = AVDecoder(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes()))
-        
+
         # Get metadata from original decoder
         original_metadata = av_decoder.get_metadata()
-        
+
         # Pickle the decoder
         pickled_data = pickle.dumps(av_decoder)
-        
+
         # Unpickle the decoder
         unpickled_decoder = pickle.loads(pickled_data)
-        
+
         # Verify metadata matches
         unpickled_metadata = unpickled_decoder.get_metadata()
         assert unpickled_metadata == original_metadata, (
             f"Unpickled metadata {unpickled_metadata} does not match original {original_metadata}"
         )
-        
+
         # Verify we can still decode frames from the unpickled decoder
         video_tensor = get_single_frames_uniform(
             av_decoder=unpickled_decoder,
             num_frames=16,
             video_out_frame_size=(64, 64),
         )
-        
+
         # Check that we got the expected shape
         assert video_tensor.shape == (16, 3, 64, 64), (
             f"Expected shape (16, 3, 64, 64), got {video_tensor.shape}"
@@ -464,18 +887,20 @@ class TestAudioDecode(unittest.TestCase):
                 audio_duration=10.0,
                 audio_channels=1,
                 audio_sample_rate=32000,
+                audio_num_samples=320000,
             ),
             AVMetadata(
                 audio_duration=12.782585034013605,
                 audio_channels=2,
                 audio_sample_rate=44100,
+                audio_num_samples=563712,
             ),
         ]
         for audio_file, expected_metadata in zip(
             ["tests/data/test_audio.flac", "tests/data/test_audio.wav"], expected_metadata
         ):
             av_decoder = AVDecoder(io.BytesIO(Path(audio_file).read_bytes()))
-            assert av_decoder.get_metadata() == expected_metadata, (
+            assert av_decoder.get_metadata(get_audio_num_samples=True) == expected_metadata, (
                 f"Metadata does not match expected metadata for {audio_file}: {av_decoder.get_metadata()}"
             )
 

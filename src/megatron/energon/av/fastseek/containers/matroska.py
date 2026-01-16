@@ -4,12 +4,12 @@ from collections import defaultdict
 
 from bitstring.bits import BitsType
 from ebmlite import MasterElement, loadSchema
-from sortedcontainers import SortedList
 
 from ..keyframeinfo import KeyframeInfo
 
 
 class CueTrackPositions:
+    __slots__ = ("track",)
     track: int
 
     def __init__(self, el: MasterElement) -> None:
@@ -19,6 +19,7 @@ class CueTrackPositions:
 
 
 class CuePoint:
+    __slots__ = ("time", "track_positions")
     time: int
     track_positions: CueTrackPositions
 
@@ -30,7 +31,7 @@ class CuePoint:
                 self.track_positions = CueTrackPositions(c)
 
 
-def parse_matroska(file: BitsType) -> SortedList:
+def parse_matroska(file: BitsType) -> dict[int, list[KeyframeInfo]]:
     try:
         schema = loadSchema("matroska.xml")
         doc = schema.load(file, headers=True)
@@ -39,12 +40,12 @@ def parse_matroska(file: BitsType) -> SortedList:
 
     # Get cue times
     stack = [c for c in doc if c.name == "Segment"]
-    cues = defaultdict(SortedList)
+    cues = defaultdict(list)
     while len(stack) > 0:
         el = stack.pop()
         if el.name == "CuePoint":
             cue = CuePoint(el)
-            cues[cue.track_positions.track].add(KeyframeInfo(cue.time, cue.time))
+            cues[cue.track_positions.track].append(KeyframeInfo(None, cue.time))
         elif isinstance(el, MasterElement):
             stack.extend([c for c in el if c.name in ["Cues", "CuePoint"]])
 

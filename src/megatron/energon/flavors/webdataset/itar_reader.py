@@ -17,7 +17,11 @@ from typing import (
 )
 
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.webdataset.config import skip_meta_re, split_name_re
+from megatron.energon.flavors.webdataset.config import (
+    INDEX_SQLITE_FILENAME,
+    skip_meta_re,
+    split_name_re,
+)
 from megatron.energon.flavors.webdataset.indexing import JoinIndexReader, SqliteIndexReader
 from megatron.energon.flavors.webdataset.itar import (
     CachedItarOffsetReader,
@@ -225,7 +229,7 @@ class ITarReader(ABC, Generic[T_index]):
             raise ValueError(f"No valid files found in sample {sample_pointer}")
 
         return FilteredSample(
-            __key__=f"{shard_name}/{sample_base_name}",
+            __key__=sample_base_name,
             __shard__=self.tar_filenames[sample_pointer.tar_file_id],
             __restore_key__=("Webdataset", restore_index),
             __sources__=(
@@ -465,7 +469,7 @@ class SqliteITarEntryReader(ITarReader[str]):
         tar_filepaths = [base_path / fn for fn in tar_filenames]
 
         # Initialize the SQLite reader
-        sqlite_path = base_path / MAIN_FOLDER_NAME / "index.sqlite"
+        sqlite_path = base_path / MAIN_FOLDER_NAME / INDEX_SQLITE_FILENAME
         self.sqlite_reader = SqliteIndexReader(sqlite_path)
 
         self.db_has_sample_parts = self.sqlite_reader.db_has_sample_parts()
