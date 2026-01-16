@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import logging
+import os
 from abc import ABC, abstractmethod
 from typing import Any, Callable, Dict, Generic, List, Optional, Sequence, TypeVar
 
@@ -32,6 +33,8 @@ T_sample = TypeVar("T_sample", covariant=True)
 T = TypeVar("T", covariant=True)
 
 logger = logging.getLogger(__name__)
+
+DEBUG_SHARD_PRINT = os.getenv("ENERGON_DEBUG_SHARD_PRINT", "0") == "1"
 
 
 class BaseWebdatasetFactory(
@@ -138,7 +141,8 @@ class BaseWebdatasetFactory(
             rotation_offset=worker_rotation_offset,
             subset=self.subset,
         )
-        _print_shard_slices(self.worker_config, self.shards, workers_sample_slice_offsets)
+        if DEBUG_SHARD_PRINT:
+            _print_shard_slices(self.worker_config, self.shards, workers_sample_slice_offsets)
 
         itar_reader = ShardInfosITarReader(
             self.path,
