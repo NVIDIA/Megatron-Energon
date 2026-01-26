@@ -11,7 +11,7 @@ import struct
 import sys
 import unittest
 
-from megatron.energon.epathlib import EPath
+from megatron.energon.epathlib import DEFAULT_PROFILE_NAME, EPath
 from tests.epath_s3_emulator import setup_s3_emulator
 
 
@@ -174,7 +174,7 @@ class TestEPath(unittest.TestCase):
     def test_multi_storage_client(self):
         """Test the Multi-Storage Client integration"""
         # Test path handling
-        p = EPath("msc://default/etc/resolv.conf")
+        p = EPath(f"msc://{DEFAULT_PROFILE_NAME}/etc/resolv.conf")
         assert str(p) == "/etc/resolv.conf", str(p)
         assert p.is_file()
 
@@ -182,7 +182,7 @@ class TestEPath(unittest.TestCase):
         assert str(p2) == "/etc/hosts", str(p2)
 
         # Test glob
-        p3 = EPath("msc://default/etc/")
+        p3 = EPath(f"msc://{DEFAULT_PROFILE_NAME}/etc/")
         assert p3.is_dir()
         for i in p3.glob("*.conf"):
             assert str(i).endswith(".conf")
@@ -193,13 +193,13 @@ class TestEPath(unittest.TestCase):
             assert len(fp.read()) > 0
 
         # Test move and delete
-        p4 = EPath("msc://default/tmp/random_file_0001")
+        p4 = EPath(f"msc://{DEFAULT_PROFILE_NAME}/tmp/random_file_0001")
         if p4.is_file():
             p4.unlink()
         with p4.open("w") as fp:
             fp.write("*****")
         assert p4.is_file()
-        p5 = EPath("msc://default/tmp/random_file_0002")
+        p5 = EPath(f"msc://{DEFAULT_PROFILE_NAME}/tmp/random_file_0002")
         if p5.is_file():
             p5.unlink()
         assert p5.is_file() is False
@@ -239,7 +239,7 @@ class TestEPath(unittest.TestCase):
 
     def test_multiprocessing_msc(self):
         """Test EPath in multiprocessing context"""
-        p = EPath("msc://default/tmp/random_file_0001")
+        p = EPath(f"msc://{DEFAULT_PROFILE_NAME}/tmp/random_file_0001")
         with p.open("w") as fp:
             fp.write("*****")
 

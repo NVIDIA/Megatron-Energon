@@ -99,7 +99,8 @@ def cook_text(sample: dict) -> TextSample:
 
 @stateless
 def cook_other(sample: dict) -> TextSample:
-    d = pickle.loads(sample["pkl"])
+    pkl_value = sample["pkl"]
+    d = pickle.loads(pkl_value) if isinstance(pkl_value, (bytes, str)) else pkl_value
     return TextSample(
         **basic_sample_keys(sample),
         text=f"<{sample['txt']}|{d['idx']}>",
