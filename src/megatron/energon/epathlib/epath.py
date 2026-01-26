@@ -195,7 +195,7 @@ class EPath:
         return f"msc://{self.profile}{int_path_str}"
 
     def is_local(self) -> bool:
-        return self.profile == "default"
+        return self.profile == DEFAULT_PROFILE_NAME
 
     def is_dir(self) -> bool:
         try:
