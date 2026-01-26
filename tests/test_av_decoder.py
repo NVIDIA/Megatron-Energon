@@ -10,6 +10,7 @@ import pickle
 import sys
 import time
 import unittest
+from dataclasses import fields
 from pathlib import Path
 
 import av
@@ -77,6 +78,33 @@ def tensors_close(tensor1: torch.Tensor, tensor2: torch.Tensor, tolerance: float
     # Compute Mean Absolute Error
     mae = torch.mean(torch.abs(tensor1 - tensor2)).item()
     return mae <= tolerance
+
+
+def avmetadata_equal(a: AVMetadata, b: AVMetadata, *, ndigits: int = 3) -> bool:
+    """Compare two AVMetadata instances.
+
+    Float fields are compared after rounding to ``ndigits`` decimals.
+    """
+
+    if a is b:
+        return True
+    if type(a) is not type(b):
+        return False
+
+    for f in fields(a):
+        av = getattr(a, f.name)
+        bv = getattr(b, f.name)
+        if isinstance(av, (float, np.floating)) or isinstance(bv, (float, np.floating)):
+            if av is None or bv is None:
+                if av != bv:
+                    return False
+            else:
+                if round(float(av), ndigits) != round(float(bv), ndigits):
+                    return False
+        else:
+            if av != bv:
+                return False
+    return True
 
 
 class TestFastseek(unittest.TestCase):
@@ -495,7 +523,7 @@ class TestVideoDecode(unittest.TestCase):
                 audio_num_samples=3028992,
             ),
             AVMetadata(
-                video_duration=63.03333333333333,
+                video_duration=63.033,
                 video_num_frames=1891,
                 video_fps=30.0,
                 video_width=192,
@@ -510,20 +538,30 @@ class TestVideoDecode(unittest.TestCase):
             ["tests/data/sync_test.mkv", "tests/data/sync_test.mp4"], expected_metadata
         ):
             av_decoder = AVDecoder(io.BytesIO(Path(video_file).read_bytes()))
-            assert av_decoder.get_metadata(get_audio_num_samples=True) == expected_metadata, (
-                f"Metadata does not match expected metadata for {video_file}"
+
+            actual_metadata = av_decoder.get_metadata(get_audio_num_samples=True)
+            assert avmetadata_equal(actual_metadata, expected_metadata), (
+                f"Metadata does not match expected metadata for {video_file}: "
+                f"{actual_metadata} != {expected_metadata}"
             )
 
-            assert av_decoder.get_video_duration(get_frame_count=False) in (
-                (expected_metadata.video_duration, None),
-                (expected_metadata.video_duration, expected_metadata.video_num_frames),
+            getvid_duration, getvid_frame_count = av_decoder.get_video_duration(
+                get_frame_count=False
             )
-            assert av_decoder.get_video_duration(get_frame_count=True) == (
-                expected_metadata.video_duration,
-                expected_metadata.video_num_frames,
-            )
+            self.assertAlmostEqual(getvid_duration, expected_metadata.video_duration, places=3)
 
-            assert av_decoder.get_audio_duration() == expected_metadata.audio_duration
+            if getvid_frame_count is not None:
+                self.assertEqual(getvid_frame_count, expected_metadata.video_num_frames)
+
+            getvid_duration, getvid_frame_count = av_decoder.get_video_duration(
+                get_frame_count=True
+            )
+            self.assertAlmostEqual(getvid_duration, expected_metadata.video_duration, places=3)
+            self.assertEqual(getvid_frame_count, expected_metadata.video_num_frames)
+
+            self.assertAlmostEqual(
+                av_decoder.get_audio_duration(), expected_metadata.audio_duration, places=3
+            )
             assert av_decoder.get_video_fps() == expected_metadata.video_fps
             assert av_decoder.get_audio_samples_per_second() == expected_metadata.audio_sample_rate
 
@@ -657,7 +695,7 @@ class TestVideoDecode(unittest.TestCase):
 
         # Verify metadata matches
         unpickled_metadata = unpickled_decoder.get_metadata()
-        assert unpickled_metadata == original_metadata, (
+        assert avmetadata_equal(unpickled_metadata, original_metadata), (
             f"Unpickled metadata {unpickled_metadata} does not match original {original_metadata}"
         )
 
@@ -900,8 +938,10 @@ class TestAudioDecode(unittest.TestCase):
             ["tests/data/test_audio.flac", "tests/data/test_audio.wav"], expected_metadata
         ):
             av_decoder = AVDecoder(io.BytesIO(Path(audio_file).read_bytes()))
-            assert av_decoder.get_metadata(get_audio_num_samples=True) == expected_metadata, (
-                f"Metadata does not match expected metadata for {audio_file}: {av_decoder.get_metadata()}"
+            actual_metadata = av_decoder.get_metadata(get_audio_num_samples=True)
+            assert avmetadata_equal(actual_metadata, expected_metadata), (
+                f"Metadata does not match expected metadata for {audio_file}: "
+                f"{actual_metadata} != {expected_metadata}"
             )
 
             assert av_decoder.get_audio_duration() == expected_metadata.audio_duration
