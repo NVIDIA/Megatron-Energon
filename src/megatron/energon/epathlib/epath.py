@@ -11,6 +11,13 @@ import multistorageclient as msc
 
 from megatron.energon.deprecation import warn_deprecated
 
+try:
+    from multistorageclient.config import RESERVED_POSIX_PROFILE_NAME
+
+    DEFAULT_PROFILE_NAME = RESERVED_POSIX_PROFILE_NAME
+except ImportError:
+    DEFAULT_PROFILE_NAME = "default"
+
 
 class EPath:
     """EPath work much like pathlib.Path but does support local as well as remote file systems.
@@ -42,11 +49,11 @@ class EPath:
         else:
             if isinstance(initial_path, PathlibPath):
                 path = str(initial_path.absolute())
-                profile = "default"
+                profile = DEFAULT_PROFILE_NAME
             else:
                 protocol, profile, path = self._split_protocol(initial_path)
                 if protocol is None or protocol == "file":
-                    profile = "default"
+                    profile = DEFAULT_PROFILE_NAME
                     path = str(PathlibPath(path).absolute())
                 elif protocol == "rclone":
                     warn_deprecated("rclone:// protocol is deprecated. Use msc:// instead.")
