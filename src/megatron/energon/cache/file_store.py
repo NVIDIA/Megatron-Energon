@@ -148,7 +148,11 @@ class WebdatasetFileStore(SqliteITarEntryReader, FileStore[bytes]):
         self,
         dataset_path: EPath,
     ):
-        super().__init__(base_path=dataset_path, key_is_full_entryname=True)
+        super().__init__(
+            base_path=dataset_path,
+            key_is_full_entryname=True,
+            disable_cache=True,
+        )
         self._media_metadata_available: Optional[bool] = None
 
     def get_path(self) -> str:
