@@ -1,5 +1,8 @@
 name: tests_noextras
 
+permissions:
+  contents: read
+
 on:
   push:
     branches:
