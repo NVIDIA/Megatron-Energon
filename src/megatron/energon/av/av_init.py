@@ -1,7 +1,12 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from bitstring.bits import BitsType
+from typing import Any, TypeAlias
+
+try:
+    from bitstring.bits import BitsType
+except ImportError:
+    BitsType: TypeAlias = Any
 
 try:
     # Try importing optional dependencies
