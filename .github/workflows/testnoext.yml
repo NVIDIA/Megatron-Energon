@@ -1,0 +1,36 @@
+name: tests_noextras
+
+on:
+  push:
+    branches:
+      - develop
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - develop
+
+jobs:
+  unittest:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v6
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+
+    - name: Install just
+      uses: extractions/setup-just@v3
+
+    - name: Install minimum supported python version
+      run: |
+        uv python pin 3.10
+
+    - name: Install dependencies
+      run: |
+        uv sync --no-dev --cache-dir .uv_cache
+
+    - name: Run simple command
+      run: |
+        uv run energon --version
