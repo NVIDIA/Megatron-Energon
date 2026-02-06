@@ -6,7 +6,16 @@ import re
 import shutil
 from pathlib import Path as PathlibPath
 from pathlib import PurePosixPath
-from typing import BinaryIO, Generator, Literal, Optional, TextIO, Tuple, Union, overload
+from typing import (
+    BinaryIO,
+    Generator,
+    Literal,
+    Optional,
+    TextIO,
+    Tuple,
+    Union,
+    overload,
+)
 
 import multistorageclient as msc
 
@@ -130,11 +139,14 @@ class EPath:
 
     @staticmethod
     def _split_protocol(path: str) -> Tuple[Optional[str], Optional[str], str]:
-        regex = re.compile(r"^(?P<protocol>[a-z]+)://(?P<profile>[^/]+?)/(?P<path>.+)$")
+        regex = re.compile(r"^(?P<protocol>[a-z]+)://(?P<profile>[^/]+?)(?:/(?P<path>.*))?$")
         m = regex.match(path)
         if m is None:
             return None, None, path
-        return m.group("protocol"), m.group("profile"), m.group("path")
+        inner_path = m.group("path")
+        if not inner_path:
+            inner_path = ""
+        return m.group("protocol"), m.group("profile"), inner_path
 
     @property
     def _internal_str_path(self) -> str:
