@@ -10,7 +10,14 @@ from typing import BinaryIO, Generator, Literal, Optional, TextIO, Tuple, Union,
 
 import multistorageclient as msc
 
-from megatron.energon.errors import warn_deprecated
+from megatron.energon.deprecation import warn_deprecated
+
+try:
+    from multistorageclient.config import RESERVED_POSIX_PROFILE_NAME
+
+    DEFAULT_PROFILE_NAME = RESERVED_POSIX_PROFILE_NAME
+except ImportError:
+    DEFAULT_PROFILE_NAME = "default"
 
 
 class EPath:
@@ -45,19 +52,19 @@ class EPath:
         else:
             if isinstance(initial_path, PathlibPath):
                 path = str(initial_path.absolute())
-                profile = "default"
+                profile = DEFAULT_PROFILE_NAME
             else:
                 protocol, profile, path = self._split_protocol(initial_path)
                 if protocol is None:
                     # Just a local absolute/relative path
                     assert profile is None
-                    profile = "default"
+                    profile = DEFAULT_PROFILE_NAME
                     path = str(PathlibPath(path).absolute())
                 elif protocol == "file":
                     # A file:// path, e.g. file:///home/user/file.txt (absolute) or file://file.txt (relative)
                     assert profile is not None
                     path = profile + "/" + path
-                    profile = "default"
+                    profile = DEFAULT_PROFILE_NAME
                     path = str(PathlibPath(path).absolute())
                 elif protocol == "rclone":
                     warn_deprecated("rclone:// protocol is deprecated. Use msc:// instead.")
@@ -144,22 +151,35 @@ class EPath:
             return str(self.internal_path)
 
     @overload
-    def open(self, mode: Literal["r", "w"] = "r", block_size: Optional[int] = None) -> TextIO: ...
+    def open(
+        self,
+        mode: Literal["r", "w"] = "r",
+        block_size: Optional[int] = None,
+        prefetch_file: bool = False,
+    ) -> TextIO: ...
 
     @overload
-    def open(self, mode: Literal["rb", "wb"], block_size: Optional[int] = None) -> BinaryIO: ...
+    def open(
+        self,
+        mode: Literal["rb", "wb"],
+        block_size: Optional[int] = None,
+        prefetch_file: bool = False,
+    ) -> BinaryIO: ...
 
     def open(
-        self, mode: Literal["r", "rb", "w", "wb"] = "r", block_size: Optional[int] = None
+        self,
+        mode: Literal["r", "rb", "w", "wb"] = "r",
+        block_size: Optional[int] = None,
+        prefetch_file: bool = False,
     ) -> Union[TextIO, BinaryIO]:
-        return self.fs.open(self._internal_str_path, mode)
+        return self.fs.open(self._internal_str_path, mode, prefetch_file=prefetch_file)
 
     def read_text(self) -> str:
-        with self.open() as f:
+        with self.open(prefetch_file=True) as f:
             return f.read()
 
     def read_bytes(self) -> bytes:
-        with self.open("rb") as f:
+        with self.open("rb", prefetch_file=True) as f:
             return f.read()
 
     def write_text(self, text: str) -> None:
@@ -211,7 +231,7 @@ class EPath:
         return f"msc://{self.profile}{int_path_str}"
 
     def is_local(self) -> bool:
-        return self.profile == "default"
+        return self.profile == DEFAULT_PROFILE_NAME
 
     def is_dir(self) -> bool:
         try:

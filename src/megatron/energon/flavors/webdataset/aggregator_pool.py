@@ -143,18 +143,32 @@ class AggregatorPool(Generic[T_input_data, T_aggregation_data, T_result]):
         """
         workers: List[multiprocessing.Process] = []
 
-        # Start worker processes
-        for w_id in range(self.num_workers):
-            p = multiprocessing.Process(target=self._worker, args=(w_id,), daemon=True)
-            p.start()
-            workers.append(p)
+        # Only works with forking for now because we pass self to the worker processes.
+        orig_start_method = multiprocessing.get_start_method()
+        multiprocessing.set_start_method("fork", force=True)
+        try:
+            # Start worker processes
+            for w_id in range(self.num_workers):
+                p = multiprocessing.Process(target=self._worker, args=(w_id,), daemon=True)
+                p.start()
+                workers.append(p)
+        finally:
+            multiprocessing.set_start_method(orig_start_method, force=True)
 
         # Send the sentinel (None) to each worker
         for _ in range(self.num_workers):
             self.task_queue.put(None)
 
         # Now wait for aggregator to finish reading the queue
-        result = self._aggregator_run()
+        try:
+            result = self._aggregator_run()
+        except Exception:
+            for p in workers:
+                if p.is_alive():
+                    p.terminate()
+            for p in workers:
+                p.join()
+            raise
 
         # Wait for all workers to finish
         for p in workers:

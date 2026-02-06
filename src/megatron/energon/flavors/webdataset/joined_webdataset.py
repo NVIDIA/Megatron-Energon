@@ -1,6 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+import os
 from abc import ABC
 from typing import (
     Any,
@@ -22,11 +23,9 @@ from megatron.energon.flavors.base_dataset import (
     BaseCoreDatasetFactory,
     Sample,
     SavableDataset,
-    legacy_handler,
     set_sample_restore_key,
 )
 from megatron.energon.flavors.webdataset.base_webdataset import BaseWebdatasetFactory
-from megatron.energon.flavors.webdataset.error_handler import ErrorHandler
 from megatron.energon.flavors.webdataset.indexing import JoinIndexReader
 from megatron.energon.flavors.webdataset.itar_reader import JoinIndexFileITarReader
 from megatron.energon.flavors.webdataset.sample_loader import (
@@ -34,17 +33,16 @@ from megatron.energon.flavors.webdataset.sample_loader import (
     WebdatasetSampleLoaderDataset,
 )
 from megatron.energon.flavors.webdataset.sharder import Sharder
-from megatron.energon.flavors.webdataset.structs import DatasetSubset, ShardInfo, reraise_exception
-from megatron.energon.source_info import SourceInfo
+from megatron.energon.flavors.webdataset.structs import DatasetSubset, ShardInfo
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.map_dataset import MapDataset
 
 T_sample = TypeVar("T_sample", covariant=True)
 
+DEBUG_SHARD_PRINT = os.getenv("ENERGON_DEBUG_SHARD_PRINT", "0") == "1"
 
-class JoinedWebdatasetFactory(
-    BaseCoreDatasetFactory[T_sample], Sharder, ErrorHandler[T_sample], Generic[T_sample], ABC
-):
+
+class JoinedWebdatasetFactory(BaseCoreDatasetFactory[T_sample], Sharder, Generic[T_sample], ABC):
     """
     Base class for all webdataset loaders. Applies proper sharding across workers. Can join multiple datasets.
     """
@@ -57,7 +55,6 @@ class JoinedWebdatasetFactory(
     subset: Optional[DatasetSubset]
 
     join_index: EPath
-    handler: Callable[[Exception, Optional[str], Optional[list[SourceInfo]]], None]
 
     shards: List[Sequence[ShardInfo]]
     part_datasets: SavableDataset[T_sample]
@@ -78,9 +75,6 @@ class JoinedWebdatasetFactory(
         subset: Optional[DatasetSubset] = None,
         join_index: EPath,
         joiner: Union[Type[T_sample], Callable[..., T_sample]],
-        handler: Callable[
-            [Exception, Optional[str], Optional[list[SourceInfo]]], None
-        ] = reraise_exception,
     ):
         """
         Constructs the loader for a joined webdataset. The samples from the inner datasets are joined into a single
@@ -105,7 +99,6 @@ class JoinedWebdatasetFactory(
             subset: If specified, the inner dataset(s) will be subsetted.
             join_index: Path to the join index file. Only required for join_method="left".
             joiner: Type of the joined samples or a method for joining the samples.
-            handler: Exception handler. Args: (exception, key).
         """
         self.__sample_type__ = joiner
         assert all(not hasattr(d, "dataset") for d in inner_datasets), (
@@ -138,7 +131,6 @@ class JoinedWebdatasetFactory(
         self.parallel_shard_iters = parallel_shard_iters
         self.max_samples_per_sequence = max_samples_per_sequence
         self.subset = subset
-        self.handler = legacy_handler(handler)
 
     def __len__(self) -> int:
         return sum(shard.count for shard in self.inner_datasets[0].shards)
@@ -172,19 +164,20 @@ class JoinedWebdatasetFactory(
             subset=self.subset,
         )
 
-        for worker_idx, sample_slice_offsets in enumerate(workers_sample_slice_offsets):
-            start_idx = sample_slice_offsets[0]
-            end_idx = sample_slice_offsets[-1]
+        if DEBUG_SHARD_PRINT:
+            for worker_idx, sample_slice_offsets in enumerate(workers_sample_slice_offsets):
+                start_idx = sample_slice_offsets[0]
+                end_idx = sample_slice_offsets[-1]
 
-            if len(sample_slice_offsets) > 6:
-                offset_str = f"{', '.join(str(o) for o in sample_slice_offsets[:3])} ...<{len(sample_slice_offsets) - 6}> {', '.join(str(o) for o in sample_slice_offsets[-3:])}"
-            else:
-                offset_str = ", ".join(str(o) for o in sample_slice_offsets)
+                if len(sample_slice_offsets) > 6:
+                    offset_str = f"{', '.join(str(o) for o in sample_slice_offsets[:3])} ...<{len(sample_slice_offsets) - 6}> {', '.join(str(o) for o in sample_slice_offsets[-3:])}"
+                else:
+                    offset_str = ", ".join(str(o) for o in sample_slice_offsets)
 
-            print(
-                f"rank={self.worker_config.rank}, worker={worker_idx}: sample_range=[{start_idx}, {end_idx}) in {len(sample_slice_offsets) - 1} slices, "
-                f"sum(count)={end_idx - start_idx}: [{offset_str}]"
-            )
+                print(
+                    f"rank={self.worker_config.rank}, worker={worker_idx}: sample_range=[{start_idx}, {end_idx}) in {len(sample_slice_offsets) - 1} slices, "
+                    f"sum(count)={end_idx - start_idx}: [{offset_str}]"
+                )
 
         itar_readers = [
             JoinIndexFileITarReader(
@@ -215,7 +208,6 @@ class JoinedWebdatasetFactory(
         return MapDataset(
             dataset,
             self.load_sample,
-            error_handler=self.error_handler,
             stateless_map_fn=True,
             map_fn_config=self.config,
             worker_config=self.worker_config,

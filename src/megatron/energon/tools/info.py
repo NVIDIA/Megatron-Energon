@@ -11,7 +11,7 @@ import megatron.energon
 from megatron.energon.epathlib import EPath
 from megatron.energon.eyaml import load_yaml, load_yaml_json
 from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory
-from megatron.energon.flavors.webdataset import MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
 from megatron.energon.flavors.webdataset.metadata import get_dataset_info
 
 fmt = """

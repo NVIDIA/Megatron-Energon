@@ -10,6 +10,7 @@ import torch.utils.data.dataloader
 from torch.distributed._shard.sharded_tensor import ShardedTensorBase
 from torch.distributed.distributed_c10d import reduce_op
 
+from megatron.energon.errors import SYSTEM_EXCEPTIONS
 from megatron.energon.flavors.base_dataset import SavableDataset
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset
@@ -52,6 +53,13 @@ def gc_init_worker(worker_id: int):
                     o._shutdown = True
         except ReferenceError:
             # Can happen if the object is a weakref proxy, don't care
+            # (Also in SYSTEM_EXCEPTIONS, thus catch before)
+            pass
+        except SYSTEM_EXCEPTIONS:
+            # Reraise these exceptions
+            raise
+        except Exception:
+            # Can happen if the object is a weakref proxy, or any other exception, don't care
             pass
 
     _frozen_cuda_tensors_initialized = True

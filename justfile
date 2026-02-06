@@ -32,7 +32,7 @@ docs: dev-sync
     uv run sphinx-build -b html docs/source docs/build
 
 # Build the release package
-build: dev-sync
+build:
     rm -rf dist
     uv build --wheel
     uv build --sdist

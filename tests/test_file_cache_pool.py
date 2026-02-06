@@ -65,8 +65,8 @@ class TestFileStoreCachePool(unittest.TestCase):
         )
 
         mock_decode_file_store = DecodeFileStore(
+            inner=mock_raw_file_store,
             decoder=MockDecoder(),
-            inner_reader=mock_raw_file_store,
         )
         pool = FileStoreCachePool(parent_cache_dir=self.temp_path)
         try:
@@ -530,8 +530,8 @@ class TestFileStoreCachePool(unittest.TestCase):
             }
         )
         mock_decode_file_store = DecodeFileStore(
+            inner=mock_raw_file_store,
             decoder=MockDecoder(),
-            inner_reader=mock_raw_file_store,
         )
         try:
             # Request lazy loading
@@ -563,8 +563,8 @@ class TestFileStoreCachePool(unittest.TestCase):
             }
         )
         mock_decode_file_store = DecodeFileStore(
+            inner=mock_raw_file_store,
             decoder=MockDecoder(),
-            inner_reader=mock_raw_file_store,
         )
         try:
             # Request lazy loading
@@ -616,13 +616,18 @@ class TestFileStoreCachePool(unittest.TestCase):
         results = []
 
         def worker(filename):
-            lazy_ref = pool.get_lazy(mock_raw_file_store, filename)
-            result, source_info = lazy_ref.get()
-            results.append(result)
-            assert source_info.dataset_path == mock_raw_file_store.get_path()
-            assert source_info.index is None
-            assert source_info.shard_name is None
-            assert source_info.file_names == (filename,)
+            try:
+                lazy_ref = pool.get_lazy(mock_raw_file_store, filename)
+                sample_for_source_info = {"__sources__": ()}
+                result = lazy_ref.get(sample_for_source_info)
+                assert sample_for_source_info["__sources__"][0].dataset_path == mock_raw_file_store.get_path()
+                assert sample_for_source_info["__sources__"][0].index is None
+                assert sample_for_source_info["__sources__"][0].shard_name is None
+                assert sample_for_source_info["__sources__"][0].file_names == (filename,)
+            except Exception as e:
+                results.append(e)
+            else:
+                results.append(result)
 
         try:
             # Start multiple threads accessing the same file
@@ -638,6 +643,8 @@ class TestFileStoreCachePool(unittest.TestCase):
 
             # All threads should get the correct result
             for r in results:
+                if isinstance(r, Exception):
+                    raise r
                 assert r == b"test data 1"
         finally:
             pool.close()

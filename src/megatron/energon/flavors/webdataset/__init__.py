@@ -3,7 +3,6 @@
 
 from megatron.energon.av import AVData, AVDecoder
 from megatron.energon.flavors.webdataset.base_webdataset import BaseWebdatasetFactory
-from megatron.energon.flavors.webdataset.config import JOIN_INDEX_FILENAME, MAIN_FOLDER_NAME
 from megatron.energon.flavors.webdataset.default_decoder_webdataset import (
     DefaultDecoderWebdatasetFactory,
 )
@@ -29,9 +28,7 @@ __all__ = [
     "DefaultGenericWebdatasetFactory",
     "EmptyDatasetError",
     "ImageDecoderType",
-    "JOIN_INDEX_FILENAME",
     "JoinedWebdatasetFactory",
-    "MAIN_FOLDER_NAME",
     "SampleDecoder",
     "StandardWebdatasetFactory",
     "WebdatasetMeta",

@@ -20,9 +20,11 @@ from megatron.energon.cache import (
     Lazy,
     MockLazy,
     NoCachePool,
+    PrimaryFileStore,
     SystemFileStore,
 )
 from megatron.energon.edataclass import edataclass
+from megatron.energon.errors import log_exception, reraise_exception
 from megatron.energon.flavors import (
     BaseCoreDatasetFactory,
     BaseWebdatasetFactory,
@@ -168,6 +170,7 @@ __all__ = [
     "Lazy",
     "LimitDataset",
     "load_dataset",
+    "log_exception",
     "LogSampleDataset",
     "MapDataset",
     "Metadataset",
@@ -180,8 +183,10 @@ __all__ = [
     "OCRSample",
     "OCRWebdataset",
     "PackingDataset",
+    "PrimaryFileStore",
     "prepare_metadataset",
     "RepeatDataset",
+    "reraise_exception",
     "Sample",
     "SampleDecoder",
     "SavableDataLoader",

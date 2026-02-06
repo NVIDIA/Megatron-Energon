@@ -55,7 +55,6 @@ class StandardWebdatasetFactory(DefaultDecoderWebdatasetFactory[T_sample], Gener
                     will be sequentially iterated).
             subset: If specified, the dataset will be subsetted.
             split_config: Config file to use for shard split definitions.
-            handler: Exception handler. Args: (exception, key).
         """
         self.__sample_type__ = sample_type
         assert issubclass(sample_type, Sample), (

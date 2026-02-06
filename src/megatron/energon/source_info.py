@@ -36,3 +36,23 @@ def add_source_info(sample: Any, *source_infos: SourceInfo) -> Any:
         else:
             sample["__sources__"] = (*sample["__sources__"], *source_infos)
     return sample
+
+
+def get_source_info(sample: Any) -> list[SourceInfo] | None:
+    """Extracts source info from a sample."""
+    from megatron.energon.flavors.base_dataset import Sample
+
+    if isinstance(sample, dict):
+        sources = sample.get("__sources__")
+    elif isinstance(sample, list):
+        if len(sample) > 0 and isinstance(sample[0], dict):
+            sources = [src for s in sample for src in s.get("__sources__", ())]
+        elif len(sample) > 0 and isinstance(sample[0], Sample):
+            sources = [src for s in sample for src in s.__sources__]
+        else:
+            sources = None
+    elif isinstance(sample, Sample):
+        sources = sample.__sources__
+    else:
+        sources = None
+    return list(sources) if sources else None

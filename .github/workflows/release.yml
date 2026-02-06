@@ -15,21 +15,19 @@ jobs:
       id-token: write  # This permission is mandatory for trusted publishing
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
   
       - name: Install just
         uses: extractions/setup-just@v3
-  
-      - name: Install dependencies
-        run: |
-          just dev-sync
 
       - name: Build package
         run: |
           just build
 
       - name: Publish package
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@release/v1.13  # release/v1.13

@@ -10,13 +10,11 @@ from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.base_dataset import (
     BaseCoreDatasetFactory,
     SavableDataset,
-    legacy_handler,
 )
 from megatron.energon.flavors.crude import CrudeSample
 from megatron.energon.flavors.jsonl.ijsonl import IJsonlIndexReader
 from megatron.energon.flavors.jsonl.jsonl_prepare import JsonlPreparator
 from megatron.energon.flavors.webdataset.base_webdataset import _print_shard_slices
-from megatron.energon.flavors.webdataset.error_handler import ErrorHandler
 from megatron.energon.flavors.webdataset.sample_loader import (
     RawSampleData,
     WebdatasetSampleLoaderDataset,
@@ -26,9 +24,7 @@ from megatron.energon.flavors.webdataset.structs import (
     DatasetSubset,
     FilteredSample,
     ShardInfo,
-    reraise_exception,
 )
-from megatron.energon.source_info import SourceInfo
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.map_dataset import MapDataset
 
@@ -39,7 +35,6 @@ class CrudeJsonlDatasetFactory(
     BaseCoreDatasetFactory[CrudeSample],
     JsonlPreparator,
     Sharder,
-    ErrorHandler,
 ):
     """
     Factory class for creating a crude dataset from JSONL (JSON Lines) files.
@@ -66,9 +61,6 @@ class CrudeJsonlDatasetFactory(
         max_samples_per_sequence: Optional[int] = None,
         subset: Optional[DatasetSubset] = None,
         part_filter: Optional[Callable[[str], bool]] = None,
-        handler: Callable[
-            [Exception, Optional[str], Optional[list[SourceInfo]]], None
-        ] = reraise_exception,
     ):
         """
         Factory for a jsonl file as a crude dataset.
@@ -89,7 +81,6 @@ class CrudeJsonlDatasetFactory(
                     will be sequentially iterated).
             subset: If specified, the dataset will be subsetted.
             part_filter: (internal) Function for filtering tar files by dict keys
-            handler: Exception handler. Args: (exception, key).
         """
         assert self.__sample_type__ is not None, f"Class {type(self)} must define __sample_type__"
         self.path = path
@@ -102,7 +93,6 @@ class CrudeJsonlDatasetFactory(
         self.max_samples_per_sequence = max_samples_per_sequence
         self.subset = subset
         self.part_filter = part_filter
-        self.handler = legacy_handler(handler)
         if part_filter is None or part_filter("json"):
             self._len = IJsonlIndexReader.count_samples(path)
         else:
@@ -158,7 +148,6 @@ class CrudeJsonlDatasetFactory(
         return MapDataset(
             dataset,
             self._load_sample_raw,
-            error_handler=self.error_handler,
             stateless_map_fn=True,
             map_fn_config=self.config,
             worker_config=self.worker_config,
