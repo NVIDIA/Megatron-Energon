@@ -10,6 +10,7 @@ from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory
 from megatron.energon.flavors.webdataset.structs import DatasetSubset
+from megatron.energon.weights import WeightSpec
 from megatron.energon.worker import WorkerConfig
 
 
@@ -27,7 +28,7 @@ class DatasetBlendMode(Enum):
 @edataclass
 class LoadedDataset:
     dataset: BaseCoreDatasetFactory
-    weight: Union[float, int, None] = None
+    weight: Union[float, int, WeightSpec, None] = None
     repetitions: Union[float, int, None] = None
     aux: Optional[Dict[str, FileStore]] = None
 

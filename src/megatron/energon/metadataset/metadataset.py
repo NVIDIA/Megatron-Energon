@@ -15,6 +15,7 @@ from megatron.energon.metadataset.loader_interface import (
     DatasetLoaderInterface,
     LoadedDatasetList,
 )
+from megatron.energon.weights import compose_weights, weight_from_config
 from megatron.energon.worker import WorkerConfig
 
 
@@ -128,6 +129,7 @@ class MetadatasetBlender:
         **kwargs,
     ) -> LoadedDatasetList:
         sum_weight = sum(dataset.weight for dataset in self.datasets)
+        assert sum_weight > 0, "Sum of blend weights must be > 0"
         datasets = []
         for dataset in self.datasets:
             inner_result = dataset.get_datasets(
@@ -148,11 +150,14 @@ class MetadatasetBlender:
                 )
             for loaded_dataset in inner_result.datasets:
                 if inner_result.blend_mode == DatasetBlendMode.DATASET_WEIGHT:
-                    assert isinstance(loaded_dataset.weight, float)
+                    assert loaded_dataset.weight is not None
                 else:
                     assert loaded_dataset.weight is None
                     loaded_dataset.weight = 1.0
-                loaded_dataset.weight = loaded_dataset.weight * dataset.weight / sum_weight
+                loaded_dataset.weight = compose_weights(
+                    weight_from_config(loaded_dataset.weight),
+                    float(dataset.weight) / float(sum_weight),
+                )
                 datasets.append(loaded_dataset)
         return LoadedDatasetList(
             blend_mode=DatasetBlendMode.DATASET_WEIGHT,

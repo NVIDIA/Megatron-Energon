@@ -809,7 +809,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                         ),
                         worker_config=worker_config,
                     ),
-                    1.0 if dataset.weight is None else float(dataset.weight),
+                    1.0 if dataset.weight is None else dataset.weight,
                 )
                 for dataset, worker_rotation_offset in zip(datasets, worker_rotation_offsets)
             ]

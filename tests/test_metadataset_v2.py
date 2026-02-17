@@ -257,6 +257,104 @@ class TestDataset(unittest.TestCase):
         assert len(Counter(train_order1)) == 110
         assert all(48 <= v <= 52 for v in Counter(train_order1).values())
 
+    def test_scheduled_blend_save_restore(self):
+        # Schedule is evaluated from WorkerConfig.active_worker_batch_index (per yielded batch).
+        inner_mds_path = self.dataset_path / "inner_mds_for_schedule.yaml"
+        with open(inner_mds_path, "w") as f:
+            f.write(
+                "\n".join(
+                    [
+                        "__module__: megatron.energon",
+                        "__class__: MetadatasetV2",
+                        "splits:",
+                        "  train:",
+                        "    blend:",
+                        "      - weight: 1",
+                        "        path: ds1",
+                        "      - weight: 1",
+                        "        path: ds2",
+                    ]
+                )
+            )
+
+        outer_mds_path = self.dataset_path / "outer_mds_with_schedule.yaml"
+        with open(outer_mds_path, "w") as f:
+            f.write(
+                "\n".join(
+                    [
+                        "__module__: megatron.energon",
+                        "__class__: MetadatasetV2",
+                        "splits:",
+                        "  train:",
+                        "    blend:",
+                        "      - weight: 1",
+                        "        path: ds3",
+                        "      - weight:",
+                        "          step:",
+                        "            0: 100",
+                        "            5: 0",
+                        "        path: ./inner_mds_for_schedule.yaml",
+                        "        split_part: train",
+                    ]
+                )
+            )
+
+        prepare_metadataset(EPath(outer_mds_path))
+
+        for num_workers in (0, 1):
+            torch.manual_seed(42)
+            worker_config = WorkerConfig(
+                rank=0,
+                world_size=1,
+                num_workers=num_workers,
+                seed_offset=42,
+            )
+
+            train_dataset_a = get_train_dataset(
+                outer_mds_path,
+                worker_config=worker_config,
+                batch_size=1,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+            )
+            loader_a = get_savable_loader(
+                train_dataset_a,
+                checkpoint_every_sec=0,
+                checkpoint_every_min_n_samples=1,
+            )
+
+            # Consume a few batches, then checkpoint.
+            pre_count = 3
+            _data_pre = [data.text[0] for idx, data in zip(range(pre_count), loader_a)]
+            state = loader_a.save_state_rank()
+
+            # Consume batches across the schedule boundary (batch_idx >= 5 => ds3 only).
+            post_count = 10
+            data_post = [data.text[0] for idx, data in zip(range(post_count), loader_a)]
+
+            # After 2 more batches (batch_idx 3 and 4), the scheduled subtree weight becomes 0,
+            # so we must sample exclusively from ds3 (text values 200..254).
+            assert all(int(x) >= 200 for x in data_post[2:]), data_post
+
+            # Restore into a fresh loader instance and verify exact continuation.
+            torch.manual_seed(123)  # different global seed; dataset determinism must still hold
+            train_dataset_b = get_train_dataset(
+                outer_mds_path,
+                worker_config=worker_config,
+                batch_size=1,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+            )
+            loader_b = get_savable_loader(
+                train_dataset_b,
+                checkpoint_every_sec=0,
+                checkpoint_every_min_n_samples=1,
+            )
+            loader_b.restore_state_rank(state)
+            data_restored = [data.text[0] for idx, data in zip(range(post_count), loader_b)]
+
+            assert data_post == data_restored
+
     def test_nested_metadataset(self):
         torch.manual_seed(42)
         worker_config = WorkerConfig(
