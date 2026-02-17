@@ -141,15 +141,18 @@ class ScheduledWeight(WeightSpec):
         if batch_idx >= xs[-1]:
             return ys[-1] * self.scale
 
-        # xs[lo] < batch_idx < xs[hi]
+        if self.kind == "step":
+            # Step schedule semantics: take the last point with key <= batch_idx.
+            # This makes knot points inclusive, e.g. {100: 10} applies at batch_idx=100.
+            idx = bisect.bisect_right(xs, batch_idx) - 1
+            return ys[idx] * self.scale
+
+        # linear interpolation: xs[lo] < batch_idx <= xs[hi]
         hi = bisect.bisect_left(xs, batch_idx)
         lo = hi - 1
 
         x0, y0 = xs[lo], ys[lo]
         x1, y1 = xs[hi], ys[hi]
-
-        if self.kind == "step":
-            return y0 * self.scale
 
         # linear interpolation
         assert self.kind == "linear"
