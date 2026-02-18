@@ -6,6 +6,8 @@ SPDX-License-Identifier: BSD-3-Clause -->
 As an alternative to blending with a weight for each dataset, blending can be made accurate and
 iterating the dataset can follow epochs (i.e. interrupt iteration after an epoch) with this concept.
 
+If you want **changing sampling proportions over training** (instead of an epoch-defined repetition scheme), see scheduled blend weights in [](../basic/metadataset).
+
 Here is an example `metadataset.yaml` config file that changes to epochized blending:
 
 ```yaml

@@ -25,6 +25,13 @@ from megatron.energon.metadataset.loader_interface import (
     LoadedDatasetList,
 )
 from megatron.energon.metadataset.metadataset import Metadataset
+from megatron.energon.weights import (
+    WeightConfig,
+    WeightLike,
+    compose_weights,
+    make_node_entry_weights,
+    weight_from_config,
+)
 from megatron.energon.worker import WorkerConfig
 
 # Regex for any URL-like string (any protocol)
@@ -398,7 +405,23 @@ class MetadatasetJoin(SubsetRatioMixin, DatasetLoaderInterface):
 
 @dataclass
 class BlendWeightMixin:
-    weight: float = 1.0
+    """Mixin for metadataset blend entries that carry a sampling weight.
+
+    `weight` may be a constant number or a schedule mapping:
+      - `weight: 5`
+      - `weight: {step: {0: 100, 1500: 10, 3000: 0}}`
+      - `weight: {linear: {0: 100, 1500: 10, 3000: 0}}`
+
+    Schedules are evaluated per-rank batch index and are intended to be deterministic and
+    checkpoint/resume-safe.
+    """
+
+    # Supports either a constant numeric weight or a schedule like:
+    #   weight:
+    #     step:
+    #       0: 100
+    #       1000: 0
+    weight: WeightConfig = 1.0
 
 
 @edataclass
@@ -440,9 +463,12 @@ class MetadatasetBlend(DatasetLoaderInterface, SubsetRatioMixin):
         **kwargs,
     ) -> LoadedDatasetList:
         subset = self._get_subset(subset)
-        sum_weight = sum(dataset.weight for dataset in self.blend)
+        # Node-level weights must be normalized at this node to preserve hierarchical blend semantics.
+        entry_weights: List[WeightLike] = make_node_entry_weights(
+            [dataset.weight for dataset in self.blend]
+        )
         datasets = []
-        for dataset in self.blend:
+        for dataset, entry_weight in zip(self.blend, entry_weights):
             inner_result = dataset.get_datasets(
                 training=training,
                 split_part=split_part,
@@ -461,13 +487,16 @@ class MetadatasetBlend(DatasetLoaderInterface, SubsetRatioMixin):
                 )
             for loaded_dataset in inner_result.datasets:
                 if inner_result.blend_mode == DatasetBlendMode.DATASET_WEIGHT:
-                    assert isinstance(loaded_dataset.weight, float)
+                    assert loaded_dataset.weight is not None
                 else:
                     assert inner_result.blend_mode == DatasetBlendMode.NONE
                     assert loaded_dataset.weight is None
                     assert loaded_dataset.repetitions is None
                     loaded_dataset.weight = 1.0
-                loaded_dataset.weight = loaded_dataset.weight * dataset.weight / sum_weight
+                loaded_dataset.weight = compose_weights(
+                    weight_from_config(loaded_dataset.weight),
+                    entry_weight,
+                )
                 datasets.append(loaded_dataset)
         return LoadedDatasetList(
             blend_mode=DatasetBlendMode.DATASET_WEIGHT,
