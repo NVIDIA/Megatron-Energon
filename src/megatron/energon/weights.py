@@ -1,6 +1,18 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+"""Weight specifications for dataset blending.
+
+This module provides a small abstraction (`WeightSpec`) for blend weights that may be constant or
+scheduled over training. Scheduled weights are evaluated as a pure function of an integer
+`batch_idx`, which in Energon is typically the per-rank batch index
+(`WorkerConfig.active_worker_batch_index`). Keeping evaluation stateless ensures determinism and
+checkpoint/resume safety when used inside savable datasets.
+
+The repository-wide strict YAML parser is optimized for mappings with string keys. Therefore,
+schedule point keys may arrive as strings and are converted to integers during parsing.
+"""
+
 from __future__ import annotations
 
 import bisect
@@ -29,14 +41,20 @@ WeightConfig: TypeAlias = Union[float, int, dict[str, dict[str, float]]]
 
 
 class WeightSpec:
-    """A time-varying (or constant) non-negative weight function."""
+    """A non-negative weight function for blending.
+
+    Implementations must be deterministic and side-effect free. In the dataset pipeline, the
+    `batch_idx` argument is expected to be a stable counter (typically per-rank batch index).
+    """
 
     is_scheduled: bool = True
 
     def evaluate(self, batch_idx: int) -> float:  # pragma: no cover (interface)
+        """Evaluate the weight at a given batch index (must return a non-negative finite float)."""
         raise NotImplementedError
 
     def scale_by(self, factor: float) -> "WeightSpec":
+        """Return a new weight scaled by a non-negative constant factor."""
         if not math.isfinite(factor):
             raise ValueError(f"Invalid weight scale factor: {factor!r}")
         if factor < 0:
@@ -48,6 +66,7 @@ WeightLike: TypeAlias = Union[float, WeightSpec]
 
 
 def _as_float_weight(value: float | int) -> float:
+    """Validate and coerce a numeric weight to a non-negative finite float."""
     f = float(value)
     if not math.isfinite(f):
         raise ValueError(f"Invalid weight: {value!r}")
@@ -57,6 +76,7 @@ def _as_float_weight(value: float | int) -> float:
 
 
 def eval_weight(weight: WeightLike, batch_idx: int) -> float:
+    """Evaluate a `WeightLike` (float or `WeightSpec`) to a validated float at `batch_idx`."""
     if isinstance(weight, WeightSpec):
         v = weight.evaluate(batch_idx)
     else:
@@ -69,11 +89,14 @@ def eval_weight(weight: WeightLike, batch_idx: int) -> float:
 
 
 def is_scheduled_weight(weight: WeightLike) -> bool:
+    """Return True if the weight is a scheduled (time-varying) `WeightSpec`."""
     return isinstance(weight, WeightSpec) and weight.is_scheduled
 
 
 @dataclass(frozen=True, slots=True)
 class ConstantWeight(WeightSpec):
+    """A constant (time-invariant) weight."""
+
     value: float
     is_scheduled: bool = False
 
@@ -90,6 +113,8 @@ class ConstantWeight(WeightSpec):
 
 @dataclass(frozen=True, slots=True)
 class ScaledWeight(WeightSpec):
+    """A weight scaled by a constant non-negative factor."""
+
     inner: WeightSpec
     scale: float
 
@@ -102,6 +127,18 @@ class ScaledWeight(WeightSpec):
 
 @dataclass(frozen=True, slots=True)
 class ScheduledWeight(WeightSpec):
+    """A piecewise scheduled weight.
+
+    Args:
+        kind: Either `\"step\"` or `\"linear\"`.
+        points: Sorted `(batch_idx, weight)` control points. Keys must be unique and >= 0.
+        scale: Optional non-negative multiplier applied to the evaluated value.
+
+    Semantics:
+        - `step`: value at the last point with key <= batch_idx (knot points inclusive).
+        - `linear`: linear interpolation between points; clamped outside endpoints.
+    """
+
     kind: WeightScheduleKind
     points: tuple[tuple[int, float], ...]
     scale: float = 1.0
@@ -125,6 +162,7 @@ class ScheduledWeight(WeightSpec):
     def from_points(
         kind: WeightScheduleKind, points: Mapping[Any, Any], *, scale: float = 1.0
     ) -> "ScheduledWeight":
+        """Create from a mapping of point_key -> weight (keys are coerced to int)."""
         items = sorted((int(k), float(v)) for k, v in points.items())
         return ScheduledWeight(kind=kind, points=tuple(items), scale=float(scale))
 
@@ -162,7 +200,11 @@ class ScheduledWeight(WeightSpec):
 
 
 class NormalizedWeightGroup:
-    """Shared normalizer for a set of sibling weights at a blend node."""
+    """Node-level normalizer for a set of sibling blend weights.
+
+    Given raw sibling weights (constants and/or schedules), this computes normalized weights that
+    sum to 1 for a given batch index. Results are cached per batch index.
+    """
 
     def __init__(self, raw_weights: Sequence[WeightLike]) -> None:
         if len(raw_weights) == 0:
@@ -176,6 +218,7 @@ class NormalizedWeightGroup:
         return self._raw_weights
 
     def normalized(self, batch_idx: int) -> tuple[float, ...]:
+        """Return normalized sibling weights for the given batch index (sums to 1)."""
         if self._cached_batch_idx == batch_idx and self._cached_norm is not None:
             return self._cached_norm
 
@@ -193,6 +236,8 @@ class NormalizedWeightGroup:
 
 @dataclass(frozen=True, slots=True)
 class NormalizedWeight(WeightSpec):
+    """A scheduled weight that represents one entry of a normalized sibling weight group."""
+
     group: NormalizedWeightGroup
     index: int
     is_scheduled: bool = True
@@ -234,7 +279,7 @@ def weight_from_config(weight: WeightConfig | WeightLike | None) -> WeightLike:
     """Convert a YAML-facing weight config to a WeightLike.
 
     - numeric -> float
-    - {\"linear\"|\"step\": {int: float, ...}} -> ScheduledWeight
+    - {\"linear\"|\"step\": {<point_key>: float, ...}} -> ScheduledWeight (point_key coerced to int)
     - WeightSpec -> returned as-is
     - None -> 1.0 (default)
     """
@@ -297,7 +342,10 @@ def make_node_entry_weights(
 ) -> list[WeightLike]:
     """Turn a list of raw entry weights into *node-normalized* weights.
 
-    - If any entry is scheduled, returns NormalizedWeight specs (shared group) so they sum to 1 per batch_idx.
+    This preserves hierarchical blending semantics by normalizing at each blend node.
+
+    - If any entry is scheduled, returns `NormalizedWeight` specs (shared group) so they sum to 1
+      per `batch_idx`.
     - Otherwise returns constant normalized floats summing to 1.
     """
     raw = [weight_from_config(w) for w in entry_weights]

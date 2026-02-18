@@ -405,6 +405,17 @@ class MetadatasetJoin(SubsetRatioMixin, DatasetLoaderInterface):
 
 @dataclass
 class BlendWeightMixin:
+    """Mixin for metadataset blend entries that carry a sampling weight.
+
+    `weight` may be a constant number or a schedule mapping:
+      - `weight: 5`
+      - `weight: {step: {0: 100, 1500: 10, 3000: 0}}`
+      - `weight: {linear: {0: 100, 1500: 10, 3000: 0}}`
+
+    Schedules are evaluated per-rank batch index and are intended to be deterministic and
+    checkpoint/resume-safe.
+    """
+
     # Supports either a constant numeric weight or a schedule like:
     #   weight:
     #     step:

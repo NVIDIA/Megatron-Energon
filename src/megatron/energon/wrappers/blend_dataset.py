@@ -16,8 +16,19 @@ T_sample = TypeVar("T_sample")
 
 class BlendDataset(BaseWrapperDataset[T_sample, T_sample]):
     """
-    This dataset wrapper blends multiple iterable datasets together give a weighting.
-    The datasets may be infinite. This dataset is always infinite.
+    Blend multiple iterable datasets according to their (possibly scheduled) weights.
+
+    Samples are drawn from the inner datasets with probability proportional to their weights.
+    Weights may be constants or schedules; schedules are evaluated per batch index (typically
+    `WorkerConfig.active_worker_batch_index`) to support deterministic schedules.
+
+    Notes:
+    - If inner datasets are finite, this iterator stops once all inner iterators are exhausted.
+      In the standard training pipeline, inner datasets are typically wrapped in `RepeatDataset`,
+      making blending effectively infinite.
+    - Weights must be >= 0; 0 disables sampling from a dataset (until the weight becomes > 0 again).
+    - If all active datasets have weight 0 for a given batch index on a worker, iteration raises
+      `RuntimeError`.
     """
 
     datasets: List[SavableDataset[T_sample]]
