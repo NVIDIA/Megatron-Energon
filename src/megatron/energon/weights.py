@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import bisect
 import math
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Literal, Mapping, Sequence, TypeAlias, Union, cast
 
@@ -40,7 +41,7 @@ WeightSchedulePoints: TypeAlias = Mapping[int, float]
 WeightConfig: TypeAlias = Union[float, int, dict[str, dict[str, float]]]
 
 
-class WeightSpec:
+class WeightSpec(ABC):
     """A non-negative weight function for blending.
 
     Implementations must be deterministic and side-effect free. In the dataset pipeline, the
@@ -49,6 +50,7 @@ class WeightSpec:
 
     is_scheduled: bool = True
 
+    @abstractmethod
     def evaluate(self, batch_idx: int) -> float:  # pragma: no cover (interface)
         """Evaluate the weight at a given batch index (must return a non-negative finite float)."""
         raise NotImplementedError
