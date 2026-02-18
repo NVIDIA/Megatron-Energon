@@ -1,4 +1,4 @@
-# Copyright (c) 2026, NVIDIA CORPORATION.
+# Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
 import unittest
@@ -85,4 +85,3 @@ class TestWeights(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

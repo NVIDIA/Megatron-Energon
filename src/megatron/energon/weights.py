@@ -1,13 +1,12 @@
-# Copyright (c) 2026, NVIDIA CORPORATION.
+# Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Iterable, Literal, Mapping, Sequence, TypeAlias, Union, cast
-
 import bisect
 import math
+from dataclasses import dataclass
+from typing import Any, Literal, Mapping, Sequence, TypeAlias, Union, cast
 
 WeightScheduleKind: TypeAlias = Literal["linear", "step"]
 WeightSchedulePoints: TypeAlias = Mapping[int, float]
@@ -293,7 +292,9 @@ def compose_weights(inner: WeightLike, outer: WeightLike) -> WeightLike:
     assert False, "Unhandled weight composition case"
 
 
-def make_node_entry_weights(entry_weights: Sequence[WeightConfig | WeightLike | None]) -> list[WeightLike]:
+def make_node_entry_weights(
+    entry_weights: Sequence[WeightConfig | WeightLike | None],
+) -> list[WeightLike]:
     """Turn a list of raw entry weights into *node-normalized* weights.
 
     - If any entry is scheduled, returns NormalizedWeight specs (shared group) so they sum to 1 per batch_idx.
@@ -310,4 +311,3 @@ def make_node_entry_weights(entry_weights: Sequence[WeightConfig | WeightLike | 
     if denom <= 0:
         raise ValueError("Blend weights must sum to > 0")
     return [_as_float_weight(v / denom) for v in raw_f]
-
