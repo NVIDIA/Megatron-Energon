@@ -152,3 +152,9 @@ See [](../advanced/error_handling) for details.
 
 In each of these scenarios, ensure that the logic for saving and restoring the state is appropriately synchronized across ranks to maintain consistency.
 If you encounter torch distributed errors, likely torch distributed calls are out of sync, or not all ranks are called correctly. If unsure, debug using the first scenario, saving each rank separately.
+
+```{admonition} Scheduled blend weights
+:class: note
+If you use scheduled metadataset blend weights (e.g. `weight: {step: ...}` / `weight: {linear: ...}`), they remain deterministic across save/restore.
+Schedules are evaluated from the per-rank batch index embedded in the loader state, and the blend RNG state is checkpointed as part of the dataset state.
+```

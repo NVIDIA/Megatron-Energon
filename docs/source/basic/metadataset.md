@@ -35,6 +35,48 @@ splits:
 In the above example, we create a blend of three datasets. Out of the yielded training samples, 62.5% ({math}`=\frac{5}{8}`) will come from `./coco`, 25% from `./coyo` and 12.5% from `./other`.
 Note that the relative paths in the metadataset are relative to the location of the metadataset file. Absolute paths are allowed but won't work for object storage.
 
+## Scheduled weights
+
+Instead of using a constant number for `weight:`, you can use a schedule to change sampling proportions over training (based on the **batch index**).
+
+Example (step schedule):
+
+```yaml
+splits:
+  train:
+    blend:
+      - weight: 1
+        path: ./ds1
+      - weight:
+          step:
+            0: 100
+            1500: 10
+            3000: 0
+        path: ./ds2
+```
+
+Example (linear schedule):
+
+```yaml
+splits:
+  train:
+    blend:
+      - weight: 1
+        path: ./ds1
+      - weight:
+          linear:
+            0: 100
+            1500: 10
+            3000: 0
+        path: ./ds2
+```
+
+Notes:
+- The schedule x-axis is the **batch index** (how many batches have been yielded by the loader on that rank).
+- `step` uses the last point with key \(\le\) the current batch index (knot points are inclusive).
+- `linear` linearly interpolates between points and clamps outside the endpoints.
+- You may combine scheduled and constant weights across nested metadatasets (*schedule × constant*), but **schedule × schedule** along one path is not supported.
+
 To use the metadataset in your loader, simply load it with {py:func}`get_train_dataset <megatron.energon.get_train_dataset>` instead of a normal energon dataset:
 ```python
 from megatron.energon import get_train_dataset

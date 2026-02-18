@@ -211,6 +211,8 @@ splits:
 
 This assumes, that the datasets `coyo` and `coco` exist in subfolders next to the `coyo-coco-dataset.yaml` file. You could also use absolute paths, but that will not work well when using object storage such as S3.
 
+You can also use **scheduled weights** (step/linear) to change sampling proportions over training. See [](metadataset) for details and examples.
+
 Usage in your loader, simply use {py:func}`get_train_dataset <megatron.energon.get_train_dataset>`:
 ```python
 from megatron.energon import get_train_dataset, get_loader, WorkerConfig
