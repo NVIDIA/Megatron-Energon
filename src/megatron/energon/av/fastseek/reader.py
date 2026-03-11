@@ -8,14 +8,10 @@ import av
 import av.container
 import av.stream
 
-from .fastseek import Fastseek
-
 
 class FastseekReader(ABC):
     """A class that provides a interface for reading video frames from a video stream for frame range extraction."""
 
-    #: The Fastseek object to use for seeking.
-    seeker: Fastseek
     #: The input container to read from.
     input_container: av.container.InputContainer
     #: The iterator over the video frames.
@@ -26,16 +22,14 @@ class FastseekReader(ABC):
     skipped: int
 
     def __init__(
-        self, seeker: Fastseek, input_container: av.container.InputContainer, stream_idx: int = 0
+        self, input_container: av.container.InputContainer, stream_idx: int = 0
     ) -> None:
         """Initialize the fastseek reader.
 
         Args:
-            seeker: The Fastseek object to use for seeking.
             input_container: The pyav input container to read from.
             stream_idx: The index of the video stream to read from.
         """
-        self.seeker = seeker
         self.input_container = input_container
         self.frame_iterator = input_container.decode(video=stream_idx)
         self.stream = input_container.streams.video[stream_idx]
@@ -72,18 +66,16 @@ class FastseekReaderByFrames(FastseekReader):
     def seek_read(
         self, range_start: int, range_end: int | None
     ) -> Generator[av.VideoFrame, None, None]:
-        if (
-            keyframe_info := self.seeker.should_seek_by_frame(
-                self._next_frame_index - 1, range_start
-            )
-        ) is not None:
-            seek_pts = keyframe_info.pts
-            if seek_pts is None:
-                # input_container.seek should seek to the nearest keyframe, which should be the requested one.
-                seek_pts = range_start
-            self.input_container.seek(seek_pts, stream=self.stream)
-            assert keyframe_info.index is not None, "Frame index is required for this container"
-            self._next_frame_index = keyframe_info.index
+        assert range_end is None or range_start <= range_end, (
+            f"Range start {range_start} must be less or equal than range end {range_end}"
+        )
+
+        target_ts = self.stream.index_entries[range_start].timestamp
+        keyframe_frame_num = self.stream.index_entries.search_timestamp(target_ts)
+        keyframe_ts = self.stream.index_entries[keyframe_frame_num].timestamp
+        if (self._next_frame_index < keyframe_frame_num) or (range_start < self._next_frame_index):
+            self.input_container.seek(keyframe_ts, stream=self.stream)
+            self._next_frame_index = keyframe_frame_num
             frame = None
         else:
             frame = self._previous_frame
@@ -111,7 +103,10 @@ class FastseekReaderByFrames(FastseekReader):
 
 
 class FastseekReaderByPts(FastseekReader):
-    """A video frame reader that seeks by PTS."""
+    """A video frame reader that seeks by PTS.
+
+      NOTE: this assumes the container index uses PTS (mp4 uses DTS for example).
+    """
 
     #: The PTS of the next frame that would be returned by the iterator.
     _next_frame_pts: int = 0
@@ -124,13 +119,13 @@ class FastseekReaderByPts(FastseekReader):
         assert range_end is None or range_start <= range_end, (
             f"Range start {range_start} must be less or equal than range end {range_end}"
         )
-        if (
-            seek_keyframe_pts := self.seeker.should_seek_by_pts(self._next_frame_pts, range_start)
-        ) is not None:
-            # Seeking backward or forward beyond the next keyframe
-            # print(f"Seeking to frame {self.next_keyframe_pts} for {range_start} from {self.next_frame_pts}")
-            self.input_container.seek(seek_keyframe_pts, stream=self.stream)
-            self._next_frame_pts = seek_keyframe_pts
+
+        keyframe_frame_num = self.stream.index_entries.search_timestamp(range_start)
+        keyframe_ts = self.stream.index_entries[keyframe_frame_num].timestamp
+
+        if (self._next_frame_pts < keyframe_ts) or (range_start < self._next_frame_pts):
+            self.input_container.seek(keyframe_ts, stream=self.stream)
+            self._next_frame_pts = keyframe_ts
             frame = self._previous_frame = None
         else:
             frame = self._previous_frame
