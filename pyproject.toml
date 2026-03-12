@@ -50,13 +50,6 @@ transforms = [
   "torchvision",  # Needed for megatron.energon.transforms
 ]
 
-# Optional: use CPU-only PyTorch from pytorch.org (default install uses PyPI torch)
-# (see below in tool.uv.sources)
-cpu-only = [
-  "torch",
-]
-
-
 # Storage services for MSC
 s3 = [
   "multi-storage-client[boto3]",
@@ -90,6 +83,10 @@ tar_patcher = [
   "numba",
 ]
 
+all = [
+  "megatron-energon[av_decode,aistore,azure-storage-blob,dev,google-cloud-storage,huggingface,oci,s3,tar_patcher,transforms]",
+]
+
 [project.urls]
 Homepage = "https://github.com/NVIDIA/Megatron-Energon"
 
@@ -117,14 +114,3 @@ exclude = [
   ".idea",
   "docs",
 ]
-
-# Default: torch comes from PyPI (GPU-capable). Only with [cpu-only] extra use pytorch-cpu index.
-[tool.uv.sources]
-torch = [
-  { index = "pytorch-cpu", extra = "cpu-only" },
-]
-
-[[tool.uv.index]]
-name = "pytorch-cpu"
-url = "https://download.pytorch.org/whl/cpu"
-explicit = true
