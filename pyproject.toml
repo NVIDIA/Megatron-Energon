@@ -50,7 +50,8 @@ transforms = [
   "torchvision",  # Needed for megatron.energon.transforms
 ]
 
-# Special cpu-only pytorch dependency (see below in tool.uv.sources)
+# Optional: use CPU-only PyTorch from pytorch.org (default install uses PyPI torch)
+# (see below in tool.uv.sources)
 cpu-only = [
   "torch",
 ]
@@ -117,6 +118,7 @@ exclude = [
   "docs",
 ]
 
+# Default: torch comes from PyPI (GPU-capable). Only with [cpu-only] extra use pytorch-cpu index.
 [tool.uv.sources]
 torch = [
   { index = "pytorch-cpu", extra = "cpu-only" },
