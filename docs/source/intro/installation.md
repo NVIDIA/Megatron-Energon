@@ -26,6 +26,12 @@ pip install megatron-energon[s3,av_decode]
 
 For all available extras, check out the above links and the `pyproject.toml` file.
 
+If you want to install the energon commandline tool, we recommend the following extras:
+```shell
+# Note that cpu-only will install torch cpu to reduce the dependencies.
+uv tool install megatron-energon[cpu-only,av_decode,tar_patcher,s3,aistore,azure-storage-blob,google-cloud-storage,oci,huggingface]
+```
+
 ## Installation for Development
 
 If you want to manage, debug or modify the code of energon itself, we recommend that you clone this repository
