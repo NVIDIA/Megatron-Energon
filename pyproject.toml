@@ -50,6 +50,12 @@ transforms = [
   "torchvision",  # Needed for megatron.energon.transforms
 ]
 
+# Special cpu-only pytorch dependency (see below in tool.uv.sources)
+cpu-only = [
+  "torch",
+]
+
+
 # Storage services for MSC
 s3 = [
   "multi-storage-client[boto3]",
@@ -111,3 +117,12 @@ exclude = [
   "docs",
 ]
 
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cpu", extra = "cpu-only" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
