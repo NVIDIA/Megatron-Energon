@@ -13,21 +13,21 @@ import av.stream
 
 
 @dataclass(slots=True)
-class ProbeIndexEntry:
+class AVProbeIndexEntry:
     """A single entry in a ProbeIndex."""
 
     timestamp: int
     is_keyframe: bool
 
 
-class ProbeIndex:
+class AVProbeIndex:
     """An index built by demuxing the container to find keyframe positions.
 
     Used as a fallback for containers (e.g. AVI) where stream.index_entries
     is not populated on open.
     """
 
-    _entries: list[ProbeIndexEntry]
+    _entries: list[AVProbeIndexEntry]
     _keyframe_timestamps: list[int]
 
     def __init__(self, container: av.container.InputContainer, stream_idx: int = 0) -> None:
@@ -37,7 +37,7 @@ class ProbeIndex:
         for packet in container.demux(video=stream_idx):
             if packet.pts is None:
                 continue
-            entry = ProbeIndexEntry(timestamp=packet.pts, is_keyframe=packet.is_keyframe)
+            entry = AVProbeIndexEntry(timestamp=packet.pts, is_keyframe=packet.is_keyframe)
             self._entries.append(entry)
             if packet.is_keyframe:
                 self._keyframe_timestamps.append(packet.pts)
@@ -47,7 +47,7 @@ class ProbeIndex:
     def __len__(self) -> int:
         return len(self._entries)
 
-    def __getitem__(self, idx: int) -> ProbeIndexEntry:
+    def __getitem__(self, idx: int) -> AVProbeIndexEntry:
         return self._entries[idx]
 
     def search_timestamp(
@@ -102,7 +102,7 @@ class AVReader(ABC):
     #: The video stream to read from.
     stream: av.stream.Stream
     #: The index to use for seeking (either stream.index_entries or a ProbeIndex).
-    index: Union[av.indexentries.IndexEntries, "ProbeIndex"]
+    index: Union[av.indexentries.IndexEntries, "AVProbeIndex"]
     #: Number of frames skipped by the reader. For statistical purposes.
     skipped: int
 
@@ -110,7 +110,7 @@ class AVReader(ABC):
         self,
         input_container: av.container.InputContainer,
         stream_idx: int = 0,
-        index: Union[av.indexentries.IndexEntries, "ProbeIndex", None] = None,
+        index: Union[av.indexentries.IndexEntries, "AVProbeIndex", None] = None,
     ) -> None:
         """Initialize the reader.
 
