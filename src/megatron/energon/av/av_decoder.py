@@ -3,6 +3,7 @@
 
 import io
 import warnings
+from dataclasses import dataclass
 from fractions import Fraction
 from typing import BinaryIO, Literal, Optional, Sequence, Union, overload
 
@@ -15,11 +16,11 @@ try:
     import av.container
     import filetype
 
-    from megatron.energon.av.fastseek.reader import (
-        Fastseek,
-        FastseekReader,
-        FastseekReaderByFrames,
-        FastseekReaderByPts,
+    from megatron.energon.av.av_reader import (
+        AVProbeIndex,
+        AVReader,
+        AVReaderByFrames,
+        AVReaderByPts,
     )
 
     AV_DECODE_AVAILABLE = True
@@ -32,6 +33,13 @@ from megatron.energon.av.av_init import av_open
 from megatron.energon.media import AVMetadata
 
 
+@dataclass
+class AVInspection:
+    supports_frame_index: bool = False
+    supports_pts: bool = False
+    requires_probe: bool = False
+
+
 class AVDecoder:
     """A class that provides a flexible interface for decoding audio and video data.
 
@@ -40,7 +48,6 @@ class AVDecoder:
     decoding parameters.
     """
 
-    seeker: "Fastseek | None" = None
     stream: BinaryIO
     suppress_warnings: bool
 
@@ -58,12 +65,6 @@ class AVDecoder:
             "Stream must not be opened in text mode"
         )
 
-    def _ensure_seeker(self) -> None:
-        if self.seeker is None:
-            self.stream.seek(0)
-            self.seeker = Fastseek(self.stream)
-            self.stream.seek(0)
-
     def get_video(self) -> AVData:
         """Get the entire video data from the stream (without audio)."""
 
@@ -73,6 +74,31 @@ class AVDecoder:
             video_timestamps=video_timestamps,
             audio_clips=[],
             audio_timestamps=[],
+        )
+
+    def inspect_video(self) -> AVInspection:
+        self.stream.seek(0)
+        ftype = filetype.guess(self.stream)
+        self.stream.seek(0)
+
+        if ftype is not None:
+            if ftype.mime in ("video/x-matroska", "video/webm"):
+                return AVInspection(
+                  supports_frame_index=False,
+                  supports_pts=True,
+                  requires_probe=False,
+                )
+            elif ftype.mime in ("video/mp4", "video/quicktime"):
+                return AVInspection(
+                  supports_frame_index=True,
+                  supports_pts=False,
+                  requires_probe=False,
+                )
+
+        return AVInspection(
+          supports_frame_index=True,
+          supports_pts=True,
+          requires_probe=True,
         )
 
     def get_video_clips(
@@ -95,11 +121,9 @@ class AVDecoder:
                 - video_clips_timestamps: List of timestamps for each video clip start and end in seconds
         """
 
-        self._ensure_seeker()
-
         assert video_unit in ("frames", "seconds")
 
-        self.stream.seek(0)  # Reset the video stream so that pyav can read the entire container
+        inspection = self.inspect_video()
 
         with av_open(self.stream) as input_container:
             assert len(input_container.streams.video) > 0, (
@@ -107,6 +131,11 @@ class AVDecoder:
             )
 
             video_stream = input_container.streams.video[0]
+
+            if inspection.requires_probe:
+              frame_index = AVProbeIndex(input_container, 0)
+            else:
+              frame_index = video_stream.index_entries
 
             # Pre-calculate timing info for video
             # Frames per second
@@ -116,12 +145,12 @@ class AVDecoder:
             # Seconds per PTS unit
             time_base: Fraction = video_stream.time_base
 
-            reader: FastseekReader
+            reader: AVReader
             # Convert video_clip_ranges to seeker unit
             if video_unit == "frames":
-                if self.seeker.frame_index_supported:
-                    reader = FastseekReaderByFrames(self.seeker, input_container)
-                elif self.seeker.pts_supported:
+                if inspection.supports_frame_index:
+                    reader = AVReaderByFrames(input_container, 0, frame_index)
+                elif inspection.supports_pts:
                     # Convert from frames to pts units
                     video_clip_ranges = [
                         (
@@ -130,7 +159,7 @@ class AVDecoder:
                         )
                         for clip in video_clip_ranges
                     ]
-                    reader = FastseekReaderByPts(self.seeker, input_container)
+                    reader = AVReaderByPts(input_container, 0, frame_index)
                     video_unit = "seconds"
 
                     if not self.suppress_warnings:
@@ -141,7 +170,7 @@ class AVDecoder:
                 else:
                     raise ValueError("Video container does not support seeking in frames or PTS")
             elif video_unit == "seconds":
-                if self.seeker.pts_supported:
+                if inspection.supports_pts:
                     # Convert from seconds to frames
                     video_clip_ranges = [
                         (
@@ -150,8 +179,8 @@ class AVDecoder:
                         )
                         for clip in video_clip_ranges
                     ]
-                    reader = FastseekReaderByPts(self.seeker, input_container)
-                elif self.seeker.frame_index_supported:
+                    reader = AVReaderByPts(input_container, 0, frame_index)
+                elif inspection.supports_frame_index:
                     # Convert from frames to pts units
                     video_clip_ranges = [
                         (
@@ -160,7 +189,7 @@ class AVDecoder:
                         )
                         for clip in video_clip_ranges
                     ]
-                    reader = FastseekReaderByFrames(self.seeker, input_container)
+                    reader = AVReaderByFrames(input_container, 0, frame_index)
                     video_unit = "frames"
 
                     if not self.suppress_warnings:
