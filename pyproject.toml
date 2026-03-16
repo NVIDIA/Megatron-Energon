@@ -77,7 +77,7 @@ av_decode = [
   "sortedcontainers>=2.4.0",
   "filetype>=1.2.0",
   "ebmlite>=3.3.1",
-  "av>=14.4.0",
+  "av>=17.0.0",
 ]
 tar_patcher = [
   "numba",
@@ -110,4 +110,3 @@ exclude = [
   ".idea",
   "docs",
 ]
-
