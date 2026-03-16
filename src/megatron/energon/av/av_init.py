@@ -1,12 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from typing import Any, TypeAlias
-
-try:
-    from bitstring.bits import BitsType
-except ImportError:
-    BitsType: TypeAlias = Any
+from typing import Any
 
 try:
     # Try importing optional dependencies
@@ -17,7 +12,7 @@ except ImportError:
     pass
 
 
-def av_open(file: BitsType) -> "av.container.InputContainer":
+def av_open(file: Any) -> "av.container.InputContainer":
     """Open a file with PyAV.
 
     This function is a wrapper around av.open that disables additional threads in the container.
