@@ -3,7 +3,7 @@
 
 import io
 import warnings
-from dataclasses import dataclass
+from enum import Enum
 from fractions import Fraction
 from typing import BinaryIO, Literal, Optional, Sequence, Union, overload
 
@@ -33,11 +33,10 @@ from megatron.energon.av.av_init import av_open
 from megatron.energon.media import AVMetadata
 
 
-@dataclass
-class AVInspection:
-    supports_frame_index: bool = False
-    supports_pts: bool = False
-    requires_probe: bool = False
+class AVIndexMode(Enum):
+    FRAMES = "frames"
+    PTS = "pts"
+    PROBE = "probe"
 
 
 class AVDecoder:
@@ -76,30 +75,16 @@ class AVDecoder:
             audio_timestamps=[],
         )
 
-    def inspect_video(self) -> AVInspection:
-        self.stream.seek(0)
-        ftype = filetype.guess(self.stream)
-        self.stream.seek(0)
+    def _inspect_index_mode(self) -> AVIndexMode:
+        extension = self._get_extension()
 
-        if ftype is not None:
-            if ftype.mime in ("video/x-matroska", "video/webm"):
-                return AVInspection(
-                  supports_frame_index=False,
-                  supports_pts=True,
-                  requires_probe=False,
-                )
-            elif ftype.mime in ("video/mp4", "video/quicktime"):
-                return AVInspection(
-                  supports_frame_index=True,
-                  supports_pts=False,
-                  requires_probe=False,
-                )
+        if extension is not None:
+            if extension in ("mkv", "webm"):
+                return AVIndexMode.PTS
+            elif extension in ("mp4", "mov", "m4v"):
+                return AVIndexMode.FRAMES
 
-        return AVInspection(
-          supports_frame_index=True,
-          supports_pts=True,
-          requires_probe=True,
-        )
+        return AVIndexMode.PROBE
 
     def get_video_clips(
         self,
@@ -123,7 +108,7 @@ class AVDecoder:
 
         assert video_unit in ("frames", "seconds")
 
-        inspection = self.inspect_video()
+        index_mode = self._inspect_index_mode()
 
         with av_open(self.stream) as input_container:
             assert len(input_container.streams.video) > 0, (
@@ -132,7 +117,7 @@ class AVDecoder:
 
             video_stream = input_container.streams.video[0]
 
-            if inspection.requires_probe:
+            if index_mode == AVIndexMode.PROBE:
               frame_index = AVProbeIndex(input_container, 0)
             else:
               frame_index = video_stream.index_entries
@@ -146,61 +131,43 @@ class AVDecoder:
             time_base: Fraction = video_stream.time_base
 
             reader: AVReader
-            # Convert video_clip_ranges to seeker unit
-            if video_unit == "frames":
-                if inspection.supports_frame_index:
+            # Select reader and convert video_clip_ranges to the index's native unit
+            match (video_unit, index_mode):
+                case ("frames", AVIndexMode.FRAMES | AVIndexMode.PROBE):
                     reader = AVReaderByFrames(input_container, 0, frame_index)
-                elif inspection.supports_pts:
-                    # Convert from frames to pts units
+
+                case ("seconds", AVIndexMode.PTS | AVIndexMode.PROBE):
                     video_clip_ranges = [
-                        (
-                            clip[0] / average_rate / time_base,
-                            clip[1] / average_rate / time_base,
-                        )
+                        (clip[0] / time_base, clip[1] / time_base)
+                        for clip in video_clip_ranges
+                    ]
+                    reader = AVReaderByPts(input_container, 0, frame_index)
+
+                case ("frames", AVIndexMode.PTS):
+                    video_clip_ranges = [
+                        (clip[0] / average_rate / time_base, clip[1] / average_rate / time_base)
                         for clip in video_clip_ranges
                     ]
                     reader = AVReaderByPts(input_container, 0, frame_index)
                     video_unit = "seconds"
-
                     if not self.suppress_warnings:
                         warnings.warn(
                             "Video container unit is frames, but seeking in time units. The resulting frames may be slightly off.",
                             RuntimeWarning,
                         )
-                else:
-                    raise ValueError("Video container does not support seeking in frames or PTS")
-            elif video_unit == "seconds":
-                if inspection.supports_pts:
-                    # Convert from seconds to frames
+
+                case ("seconds", AVIndexMode.FRAMES):
                     video_clip_ranges = [
-                        (
-                            clip[0] / time_base,
-                            clip[1] / time_base,
-                        )
-                        for clip in video_clip_ranges
-                    ]
-                    reader = AVReaderByPts(input_container, 0, frame_index)
-                elif inspection.supports_frame_index:
-                    # Convert from frames to pts units
-                    video_clip_ranges = [
-                        (
-                            clip[0] * average_rate,
-                            clip[1] * average_rate,
-                        )
+                        (clip[0] * average_rate, clip[1] * average_rate)
                         for clip in video_clip_ranges
                     ]
                     reader = AVReaderByFrames(input_container, 0, frame_index)
                     video_unit = "frames"
-
                     if not self.suppress_warnings:
                         warnings.warn(
                             "Video container unit is seconds, but seeking only supports frames. The resulting frames may be slightly off.",
                             RuntimeWarning,
                         )
-                else:
-                    raise ValueError("Video container does not support seeking in frames or PTS")
-            else:
-                raise ValueError(f"Invalid video unit: {video_unit!r}")
 
             video_clips_frames: list[list[torch.Tensor]] = []
             video_clips_timestamps: list[tuple[float, float]] = []
@@ -240,7 +207,6 @@ class AVDecoder:
                     video_clips_frames.append(clip_frames)
                     video_clips_timestamps.append((clip_timestamp_start, clip_timestamp_end))
 
-        # print(f"Skipped {seeker.skipped} frames")
         # Stack frames within each clip
         out_video_clips = [
             torch.stack(clip_frames).permute((0, 3, 1, 2)) for clip_frames in video_clips_frames
