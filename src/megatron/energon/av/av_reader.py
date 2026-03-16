@@ -1,16 +1,99 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 from abc import ABC, abstractmethod
+from bisect import bisect_right
 from collections.abc import Generator
-from typing import Iterator
+from dataclasses import dataclass
+from typing import Iterator, Union
 
 import av
 import av.container
+import av.indexentries
 import av.stream
 
 
-class Reader(ABC):
-    """A class that provides a interface for reading video frames from a video stream for frame range extraction."""
+@dataclass(slots=True)
+class ProbeIndexEntry:
+    """A single entry in a ProbeIndex."""
+
+    timestamp: int
+    is_keyframe: bool
+
+
+class ProbeIndex:
+    """An index built by demuxing the container to find keyframe positions.
+
+    Used as a fallback for containers (e.g. AVI) where stream.index_entries
+    is not populated on open.
+    """
+
+    _entries: list[ProbeIndexEntry]
+    _keyframe_timestamps: list[int]
+
+    def __init__(self, container: av.container.InputContainer, stream_idx: int = 0) -> None:
+        self._entries = []
+        self._keyframe_timestamps = []
+
+        for packet in container.demux(video=stream_idx):
+            if packet.pts is None:
+                continue
+            entry = ProbeIndexEntry(timestamp=packet.pts, is_keyframe=packet.is_keyframe)
+            self._entries.append(entry)
+            if packet.is_keyframe:
+                self._keyframe_timestamps.append(packet.pts)
+
+        container.seek(0)
+
+    def __len__(self) -> int:
+        return len(self._entries)
+
+    def __getitem__(self, idx: int) -> ProbeIndexEntry:
+        return self._entries[idx]
+
+    def search_timestamp(
+        self, timestamp: int, *, backward: bool = True, any_frame: bool = False
+    ) -> int:
+        """Find the index of the nearest keyframe to the given timestamp.
+
+        Args:
+            timestamp: The timestamp to search for.
+            backward: If True, find the keyframe at or before the timestamp.
+            any_frame: If True, search all frames, not just keyframes.
+
+        Returns:
+            The index into this ProbeIndex, or -1 if not found.
+        """
+        if any_frame:
+            timestamps = [e.timestamp for e in self._entries]
+        else:
+            timestamps = self._keyframe_timestamps
+
+        if not timestamps:
+            return -1
+
+        if backward:
+            pos = bisect_right(timestamps, timestamp) - 1
+            if pos < 0:
+                return 0 if not any_frame else 0
+            found_ts = timestamps[pos]
+        else:
+            pos = bisect_right(timestamps, timestamp - 1)
+            if pos >= len(timestamps):
+                return -1
+            found_ts = timestamps[pos]
+
+        # Map back to entry index if searching keyframes only
+        if not any_frame:
+            for i, e in enumerate(self._entries):
+                if e.timestamp == found_ts and e.is_keyframe:
+                    return i
+            return -1
+        else:
+            return pos
+
+
+class AVReader(ABC):
+    """A class that provides an interface for reading video frames from a video stream for frame range extraction."""
 
     #: The input container to read from.
     input_container: av.container.InputContainer
@@ -18,21 +101,28 @@ class Reader(ABC):
     frame_iterator: Iterator[av.VideoFrame]
     #: The video stream to read from.
     stream: av.stream.Stream
+    #: The index to use for seeking (either stream.index_entries or a ProbeIndex).
+    index: Union[av.indexentries.IndexEntries, "ProbeIndex"]
     #: Number of frames skipped by the reader. For statistical purposes.
     skipped: int
 
     def __init__(
-        self, input_container: av.container.InputContainer, stream_idx: int = 0
+        self,
+        input_container: av.container.InputContainer,
+        stream_idx: int = 0,
+        index: Union[av.indexentries.IndexEntries, "ProbeIndex", None] = None,
     ) -> None:
-        """Initialize the fastseek reader.
+        """Initialize the reader.
 
         Args:
             input_container: The pyav input container to read from.
             stream_idx: The index of the video stream to read from.
+            index: Optional index to use for seeking. If None, uses stream.index_entries.
         """
         self.input_container = input_container
         self.frame_iterator = input_container.decode(video=stream_idx)
         self.stream = input_container.streams.video[stream_idx]
+        self.index = index if index is not None else self.stream.index_entries
         self.skipped = 0
 
     @abstractmethod
@@ -55,7 +145,7 @@ class Reader(ABC):
         ...
 
 
-class FastseekReaderByFrames(Reader):
+class AVReaderByFrames(AVReader):
     """A video frame reader that seeks by frame index."""
 
     #: The next frame index that would be returned by the iterator.
@@ -70,9 +160,9 @@ class FastseekReaderByFrames(Reader):
             f"Range start {range_start} must be less or equal than range end {range_end}"
         )
 
-        target_ts = self.stream.index_entries[range_start].timestamp
-        keyframe_frame_num = self.stream.index_entries.search_timestamp(target_ts)
-        keyframe_ts = self.stream.index_entries[keyframe_frame_num].timestamp
+        target_ts = self.index[range_start].timestamp
+        keyframe_frame_num = self.index.search_timestamp(target_ts)
+        keyframe_ts = self.index[keyframe_frame_num].timestamp
         if (self._next_frame_index < keyframe_frame_num) or (range_start < self._next_frame_index):
             self.input_container.seek(keyframe_ts, stream=self.stream)
             self._next_frame_index = keyframe_frame_num
@@ -102,7 +192,7 @@ class FastseekReaderByFrames(Reader):
                 break
 
 
-class FastseekReaderByPts(Reader):
+class AVReaderByPts(AVReader):
     """A video frame reader that seeks by PTS.
 
       NOTE: this assumes the container index uses PTS (mp4 uses DTS for example).
@@ -120,8 +210,8 @@ class FastseekReaderByPts(Reader):
             f"Range start {range_start} must be less or equal than range end {range_end}"
         )
 
-        keyframe_frame_num = self.stream.index_entries.search_timestamp(range_start)
-        keyframe_ts = self.stream.index_entries[keyframe_frame_num].timestamp
+        keyframe_frame_num = self.index.search_timestamp(range_start)
+        keyframe_ts = self.index[keyframe_frame_num].timestamp
 
         if (self._next_frame_pts < keyframe_ts) or (range_start < self._next_frame_pts):
             self.input_container.seek(keyframe_ts, stream=self.stream)
