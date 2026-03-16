@@ -9,7 +9,7 @@ import av.container
 import av.stream
 
 
-class FastseekReader(ABC):
+class Reader(ABC):
     """A class that provides a interface for reading video frames from a video stream for frame range extraction."""
 
     #: The input container to read from.
@@ -55,7 +55,7 @@ class FastseekReader(ABC):
         ...
 
 
-class FastseekReaderByFrames(FastseekReader):
+class FastseekReaderByFrames(Reader):
     """A video frame reader that seeks by frame index."""
 
     #: The next frame index that would be returned by the iterator.
@@ -102,7 +102,7 @@ class FastseekReaderByFrames(FastseekReader):
                 break
 
 
-class FastseekReaderByPts(FastseekReader):
+class FastseekReaderByPts(Reader):
     """A video frame reader that seeks by PTS.
 
       NOTE: this assumes the container index uses PTS (mp4 uses DTS for example).
