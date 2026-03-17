@@ -313,7 +313,11 @@ class TestVideoDecode(unittest.TestCase):
 
     def test_decode_strided_resized(self):
         """Test decoding a subset of frames with resizing."""
-        for video_file in ["tests/data/sync_test.avi"]:
+        for video_file in [
+            "tests/data/sync_test.mkv",
+            "tests/data/sync_test.mp4",
+            "tests/data/sync_test.avi",
+        ]:
             print(f"================= Testing {video_file} ==================")
             av_decoder = AVDecoder(io.BytesIO(Path(video_file).read_bytes()))
 
