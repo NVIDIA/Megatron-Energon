@@ -8,7 +8,6 @@ from typing import Iterator, Union
 
 import av
 import av.container
-import av.indexentries
 import av.stream
 
 
@@ -102,7 +101,7 @@ class AVReader(ABC):
     #: The video stream to read from.
     stream: av.stream.Stream
     #: The index to use for seeking (either stream.index_entries or a ProbeIndex).
-    index: Union[av.indexentries.IndexEntries, "AVProbeIndex"]
+    index: Union["av.IndexEntries", "AVProbeIndex"]
     #: Number of frames skipped by the reader. For statistical purposes.
     skipped: int
 
@@ -110,7 +109,7 @@ class AVReader(ABC):
         self,
         input_container: av.container.InputContainer,
         stream_idx: int = 0,
-        index: Union[av.indexentries.IndexEntries, "AVProbeIndex", None] = None,
+        index: Union["av.IndexEntries", "AVProbeIndex", None] = None,
     ) -> None:
         """Initialize the reader.
 
