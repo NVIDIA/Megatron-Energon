@@ -160,6 +160,13 @@ class AVReaderByFrames(AVReader):
             f"Range start {range_start} must be less or equal than range end {range_end}"
         )
 
+        # Clamp to index bounds — requests beyond the video length yield no frames
+        # (Matches ByPTS behavior)
+        if range_start >= len(self.index):
+            return
+        if range_end is not None and range_end >= len(self.index):
+            range_end = len(self.index) - 1
+
         target_ts = self.index[range_start].timestamp
         keyframe_frame_num = self.index.search_timestamp(target_ts)
         keyframe_ts = self.index[keyframe_frame_num].timestamp
