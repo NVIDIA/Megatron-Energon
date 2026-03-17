@@ -19,6 +19,7 @@ import torch
 import torchvision.transforms as transforms
 
 from megatron.energon.av import AVDecoder, get_clips_uniform, get_single_frames_uniform
+from megatron.energon.av.av_reader import AVProbeIndex
 from megatron.energon.media import AVMetadata
 
 # Set multiprocessing start method to 'spawn' on macOS to avoid DataLoader cleanup issues
@@ -99,6 +100,58 @@ def avmetadata_equal(a: AVMetadata, b: AVMetadata, *, ndigits: int = 3) -> bool:
             if av != bv:
                 return False
     return True
+
+
+class TestVideoProbe(unittest.TestCase):
+    """Test video probe indexing functionality."""
+
+    def test_video_probe_keyframe_data(self) -> None:
+        """Confirm keyframe index and pts values are correct."""
+        with av.open(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes())) as container:
+            index = AVProbeIndex(container, 0)
+
+            assert len(index) == container.streams.video[0].frames
+            keyframes = [(i, e.timestamp) for i, e in enumerate(index) if e.is_keyframe]
+            assert keyframes == [
+                (0, 0),
+                (250, 128000),
+                (500, 256000),
+                (750, 384000),
+                (1000, 512000),
+                (1250, 640000),
+                (1500, 768000),
+                (1750, 896000),
+            ]
+
+    def test_video_probe_search_timestamps(self) -> None:
+        """Test search_timestamp functionality"""
+        with av.open(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes())) as container:
+            index = AVProbeIndex(container, 0)
+
+            keyframes = [
+                (0, 0),
+                (250, 128000),
+                (500, 256000),
+                (750, 384000),
+                (1000, 512000),
+                (1250, 640000),
+                (1500, 768000),
+                (1750, 896000),
+            ]
+
+            # searching for a keyframe should match that keyframe
+            for k in keyframes:
+                assert index.search_timestamp(k[1]) == k[0]
+
+            # searching for a timestamp between keyframes should return the previous keyframe
+            for i in range(1, len(keyframes)):
+                mid = (keyframes[i-1][1] + keyframes[i][1]) // 2
+                assert index.search_timestamp(mid) == keyframes[i-1][0]
+
+            # searching for a timestamp between keyframes should return the next keyframe when backward=False
+            for i in range(1, len(keyframes)):
+                mid = (keyframes[i-1][1] + keyframes[i][1]) // 2
+                assert index.search_timestamp(mid, backward=False) == keyframes[i][0]
 
 
 class TestVideoDecode(unittest.TestCase):
