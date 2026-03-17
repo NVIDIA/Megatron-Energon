@@ -216,10 +216,26 @@ class DatasetReference(SubsetRatioMixin, DatasetLoaderInterface):
                 new_aux = {}
                 for k, v in self.aux.items():
                     if m := url_regex.match(v):
-                        if m.group("protocol") == "filesystem":
-                            new_aux[k] = AuxFilesystemReference(fs_path=m.group("path"))
+                        prot = m.group("protocol")
+                        if prot.count("+") == 1:
+                            # filesystem+fs_prot://
+                            fs_type, fs_prot = prot.split("+")
+                            assert fs_type == "filesystem"
+                            path = f"{fs_prot}://{m.group('path')}"
+                        elif prot == "filesystem":
+                            # filesystem:// (may be relative or absolute)
+                            fs_type = "filesystem"
+                            path = m.group("path")
                         else:
-                            raise ValueError(f"Unsupported protocol: {m.group('protocol')}")
+                            # msc:// or other protocol
+                            fs_type = ""
+                            path = v
+                        # With filesystem or without.
+                        if fs_type == "filesystem":
+                            new_aux[k] = AuxFilesystemReference(fs_path=path)
+                        else:
+                            assert not fs_type, f"Invalid filesystem type: {fs_type} in path {v}"
+                            new_aux[k] = AuxDatasetReference(path=path)
                     else:
                         new_aux[k] = AuxDatasetReference(path=v)
 
