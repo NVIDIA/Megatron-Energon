@@ -171,7 +171,10 @@ class AVReaderByFrames(AVReader):
         keyframe_frame_num = self.index.search_timestamp(target_ts)
         keyframe_ts = self.index[keyframe_frame_num].timestamp
         if (self._next_frame_index < keyframe_frame_num) or (range_start < self._next_frame_index):
-            self.input_container.seek(keyframe_ts, stream=self.stream)
+            # Use backward=False because keyframe_ts comes directly from the index,
+            # so a forward seek should land exactly on it. backward=True can overshoot
+            # to the previous keyframe when timestamps are DTS-based (e.g. MP4).
+            self.input_container.seek(keyframe_ts, stream=self.stream, backward=False)
             self._next_frame_index = keyframe_frame_num
             frame = None
         else:
