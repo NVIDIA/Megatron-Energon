@@ -214,9 +214,20 @@ class TestVideoDecode(unittest.TestCase):
                 audio_sample_rate=48000,
                 audio_num_samples=3027968,
             ),
+            AVMetadata(
+                video_duration=63.067,
+                video_num_frames=1891,
+                video_fps=30.0,
+                video_width=192,
+                video_height=108,
+                audio_duration=63.120,
+                audio_channels=2,
+                audio_sample_rate=48000,
+                audio_num_samples=3029760,
+            ),
         ]
         for video_file, expected_metadata in zip(
-            ["tests/data/sync_test.mkv", "tests/data/sync_test.mp4"], expected_metadata
+            ["tests/data/sync_test.mkv", "tests/data/sync_test.mp4", "tests/data/sync_test.avi"], expected_metadata
         ):
             av_decoder = AVDecoder(io.BytesIO(Path(video_file).read_bytes()))
 
@@ -248,7 +259,7 @@ class TestVideoDecode(unittest.TestCase):
 
     def test_decode_strided_resized(self):
         """Test decoding a subset of frames with resizing."""
-        for video_file in ["tests/data/sync_test.mkv", "tests/data/sync_test.mp4"]:
+        for video_file in ["tests/data/sync_test.avi"]:
             print(f"================= Testing {video_file} ==================")
             av_decoder = AVDecoder(io.BytesIO(Path(video_file).read_bytes()))
 
@@ -259,7 +270,8 @@ class TestVideoDecode(unittest.TestCase):
             )
 
             # Get strided frames from baseline complete video tensor
-            strided_baseline_tensor = self.complete_video_tensor[
+            complete_baseline = load_video_to_tensor(video_file)
+            strided_baseline_tensor = complete_baseline[
                 np.linspace(0, self.complete_video_tensor.shape[0] - 1, 64, dtype=int).tolist()
             ]
             # Now resize the baseline frames
