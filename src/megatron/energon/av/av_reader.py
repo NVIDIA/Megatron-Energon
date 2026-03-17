@@ -204,7 +204,7 @@ class AVReaderByFrames(AVReader):
 class AVReaderByPts(AVReader):
     """A video frame reader that seeks by PTS.
 
-      NOTE: this assumes the container index uses PTS (mp4 uses DTS for example).
+    NOTE: this assumes the container index uses PTS (mp4 uses DTS for example).
     """
 
     #: The PTS of the next frame that would be returned by the iterator.

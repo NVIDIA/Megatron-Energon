@@ -145,12 +145,12 @@ class TestVideoProbe(unittest.TestCase):
 
             # searching for a timestamp between keyframes should return the previous keyframe
             for i in range(1, len(keyframes)):
-                mid = (keyframes[i-1][1] + keyframes[i][1]) // 2
-                assert index.search_timestamp(mid) == keyframes[i-1][0]
+                mid = (keyframes[i - 1][1] + keyframes[i][1]) // 2
+                assert index.search_timestamp(mid) == keyframes[i - 1][0]
 
             # searching for a timestamp between keyframes should return the next keyframe when backward=False
             for i in range(1, len(keyframes)):
-                mid = (keyframes[i-1][1] + keyframes[i][1]) // 2
+                mid = (keyframes[i - 1][1] + keyframes[i][1]) // 2
                 assert index.search_timestamp(mid, backward=False) == keyframes[i][0]
 
 
@@ -280,7 +280,8 @@ class TestVideoDecode(unittest.TestCase):
             ),
         ]
         for video_file, expected_metadata in zip(
-            ["tests/data/sync_test.mkv", "tests/data/sync_test.mp4", "tests/data/sync_test.avi"], expected_metadata
+            ["tests/data/sync_test.mkv", "tests/data/sync_test.mp4", "tests/data/sync_test.avi"],
+            expected_metadata,
         ):
             av_decoder = AVDecoder(io.BytesIO(Path(video_file).read_bytes()))
 

@@ -118,9 +118,9 @@ class AVDecoder:
             video_stream = input_container.streams.video[0]
 
             if index_mode == AVIndexMode.PROBE:
-              frame_index = AVProbeIndex(input_container, 0)
+                frame_index = AVProbeIndex(input_container, 0)
             else:
-              frame_index = video_stream.index_entries
+                frame_index = video_stream.index_entries
 
             # Pre-calculate timing info for video
             # Frames per second
@@ -138,8 +138,7 @@ class AVDecoder:
 
                 case ("seconds", AVIndexMode.PTS | AVIndexMode.PROBE):
                     video_clip_ranges = [
-                        (clip[0] / time_base, clip[1] / time_base)
-                        for clip in video_clip_ranges
+                        (clip[0] / time_base, clip[1] / time_base) for clip in video_clip_ranges
                     ]
                     reader = AVReaderByPts(input_container, 0, frame_index)
 
@@ -169,7 +168,9 @@ class AVDecoder:
                             RuntimeWarning,
                         )
                 case _:
-                    raise ValueError(f"Unsupported video_unit={video_unit}, index_mode={index_mode}")
+                    raise ValueError(
+                        f"Unsupported video_unit={video_unit}, index_mode={index_mode}"
+                    )
 
             video_clips_frames: list[list[torch.Tensor]] = []
             video_clips_timestamps: list[tuple[float, float]] = []
