@@ -168,6 +168,8 @@ class AVDecoder:
                             "Video container unit is seconds, but seeking only supports frames. The resulting frames may be slightly off.",
                             RuntimeWarning,
                         )
+                case _:
+                    raise ValueError(f"Unsupported video_unit={video_unit}, index_mode={index_mode}")
 
             video_clips_frames: list[list[torch.Tensor]] = []
             video_clips_timestamps: list[tuple[float, float]] = []
