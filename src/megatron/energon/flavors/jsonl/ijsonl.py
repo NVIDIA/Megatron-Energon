@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import struct
+from pathlib import Path
 from typing import BinaryIO, Dict, Generator, Optional, Tuple, Union
 
 from megatron.energon.edataclass import edataclass
@@ -74,6 +75,7 @@ class IJsonlIndexReader:
 
 class IJsonlIndexWriter:
     def __init__(self, jsonl_path: EPath):
+        self.jsonl_path = jsonl_path
         self.final_name = jsonl_path.with_suffix(IJSONL_SUFFIX)
         self.tmp_name = jsonl_path.with_suffix(IJSONL_SUFFIX + ".tmp")
         self.ijsonl = self.tmp_name.open("wb")
@@ -85,6 +87,16 @@ class IJsonlIndexWriter:
         self.ijsonl.close()
         if finalize:
             self.tmp_name.move(self.final_name)
+            if self.jsonl_path.is_local():
+                # To ensure the final file permissions match the jsonl path in the local setting.
+                # Copy permissions from jsonl_path to final_name, making sure the owner can read and write.
+                try:
+                    Path(str(self.final_name)).chmod(
+                        Path(str(self.jsonl_path)).stat().st_mode | 0o600
+                    )
+                except OSError:
+                    # Just ignore the error, it's not a big deal.
+                    pass
         else:
             self.tmp_name.unlink()
 

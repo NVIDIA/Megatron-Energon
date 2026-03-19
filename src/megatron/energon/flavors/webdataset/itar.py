@@ -4,6 +4,7 @@
 import contextlib
 import struct
 import tarfile
+from pathlib import Path
 from types import TracebackType
 from typing import BinaryIO, Dict, Generator, Optional, Tuple, Type, Union
 
@@ -85,6 +86,7 @@ class TarIndexReader:
 
 class TarIndexWriter:
     def __init__(self, tar_path: EPath):
+        self.tar_path = tar_path
         self.final_name = tar_path.with_suffix(ITAR_SUFFIX)
         self.tmp_name = tar_path.with_suffix(ITAR_SUFFIX + ".tmp")
         self.itar = self.tmp_name.open("wb")
@@ -96,6 +98,16 @@ class TarIndexWriter:
         self.itar.close()
         if finalize:
             self.tmp_name.move(self.final_name)
+            if self.tar_path.is_local():
+                # To ensure the final file permissions match the tar path in the local setting.
+                # Copy permissions from tar_path to final_name, making sure the owner can read and write.
+                try:
+                    Path(str(self.final_name)).chmod(
+                        Path(str(self.tar_path)).stat().st_mode | 0o600
+                    )
+                except OSError:
+                    # Just ignore the error, it's not a big deal.
+                    pass
         else:
             self.tmp_name.unlink()
 

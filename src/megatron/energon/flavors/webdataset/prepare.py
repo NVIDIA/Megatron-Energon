@@ -504,6 +504,21 @@ class WebdatasetPreparator:
 
         (parent_path / MAIN_FOLDER_NAME).mkdir(exist_ok=True)
 
+        if parent_path.is_local():
+            # Copy permissions from parent_path to json_info_config and yaml_info_config, making sure the owner can read and write.
+            # Copy permissions from the first shard
+            try:
+                dir_perms = Path(str(parent_path)).stat().st_mode | 0o700
+                file_perms = Path(str(parent_path / paths[0])).stat().st_mode | 0o600
+                Path(str(parent_path / MAIN_FOLDER_NAME)).chmod(dir_perms)
+                fix_local_permissions = True
+            except OSError:
+                # Just ignore the error, it's not a big deal.
+                pass
+                fix_local_permissions = False
+        else:
+            fix_local_permissions = False
+
         if fix_duplicates:
             try:
                 from megatron.energon.flavors.webdataset.tar_patcher import TarPatcher
@@ -573,10 +588,26 @@ class WebdatasetPreparator:
 
             sys.exit(1)
 
+        # Fix permissions if needed
+        if fix_local_permissions:
+            try:
+                Path(str(parent_path / MAIN_FOLDER_NAME / INDEX_SQLITE_FILENAME)).chmod(file_perms)
+            except OSError:
+                pass
+
         if had_update:
             logger.info("Regenerating dataset UUID...")
             with (parent_path / MAIN_FOLDER_NAME / INDEX_UUID_FILENAME).open("w") as f:
                 f.write(str(uuid.uuid4()))
+
+            # Fix permissions if needed
+            if fix_local_permissions:
+                try:
+                    Path(str(parent_path / MAIN_FOLDER_NAME / INDEX_UUID_FILENAME)).chmod(
+                        file_perms
+                    )
+                except OSError:
+                    pass
 
         json_info_config = parent_path / MAIN_FOLDER_NAME / INFO_JSON_FILENAME
         yaml_info_config = parent_path / MAIN_FOLDER_NAME / INFO_YAML_FILENAME
@@ -586,6 +617,12 @@ class WebdatasetPreparator:
                 # Convert legacy .info.yaml to .info.json
                 with json_info_config.open("w") as f:
                     json.dump(load_yaml(yaml_info_config.read_bytes()), f, indent=2)
+
+                if fix_local_permissions:
+                    try:
+                        Path(str(json_info_config)).chmod(file_perms)
+                    except OSError:
+                        pass
 
             return found_parts
 
@@ -609,6 +646,13 @@ class WebdatasetPreparator:
 
         with json_info_config.open("w") as wf:
             json.dump(to_json_object(info), wf, indent=2)
+
+        # Fix permissions if needed
+        if fix_local_permissions:
+            try:
+                Path(str(json_info_config)).chmod(file_perms)
+            except OSError:
+                pass
 
         if yaml_info_config.is_file():
             # If a .info.yaml existed previously, let's also update it
@@ -665,6 +709,13 @@ class WebdatasetPreparator:
                 json.dump(to_json_object(splits_config), wf, indent=2)
             else:
                 raise ValueError(f"Invalid split config extension: {split_config}")
+
+        # Fix permissions if needed
+        if fix_local_permissions:
+            try:
+                Path(str(parent_path / MAIN_FOLDER_NAME / split_config)).chmod(file_perms)
+            except OSError:
+                pass
 
         return found_parts
 
