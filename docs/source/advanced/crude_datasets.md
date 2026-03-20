@@ -150,7 +150,7 @@ You can specify multiple aux sources each of which can be one of
 * Relative or absolute path to a local prepared energon dataset
 * Relative or absolute path to a local folder (use the prefix `filesystem://`)
 * Path to a remote prepared energon dataset (use prefix `msc://`)
-* *[Planned future feature]*: Path to a remote folder (use prefix `filesystem+msc://`)
+* Path to a remote folder (use prefix `filesystem+msc://`)
 
 In your code, the cooker will automatically receive a {py:class}`FileStore <megatron.energon.FileStore>` reference to the data source as a keyword argument:
 
