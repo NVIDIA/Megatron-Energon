@@ -401,6 +401,7 @@ class BaseCoreDatasetFactory(Generic[T_sample], ABC):
 
     __sample_type__: Type[T_sample] = cast(Type[T_sample], None)
     paths: List[EPath]
+    name: str
 
     subflavors: Dict[str, Any]
 
