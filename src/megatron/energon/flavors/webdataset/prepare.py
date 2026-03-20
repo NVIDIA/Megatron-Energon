@@ -508,9 +508,9 @@ class WebdatasetPreparator:
             # Copy permissions from parent_path to json_info_config and yaml_info_config, making sure the owner can read and write.
             # Copy permissions from the first shard
             try:
-                dir_perms = Path(str(parent_path)).stat().st_mode | 0o700
-                file_perms = Path(str(parent_path / paths[0])).stat().st_mode | 0o600
-                Path(str(parent_path / MAIN_FOLDER_NAME)).chmod(dir_perms)
+                dir_perms = parent_path.local_path().stat().st_mode | 0o700
+                file_perms = (parent_path / paths[0]).local_path().stat().st_mode | 0o600
+                (parent_path / MAIN_FOLDER_NAME).local_path().chmod(dir_perms)
                 fix_local_permissions = True
             except OSError:
                 # Just ignore the error, it's not a big deal.
@@ -603,7 +603,7 @@ class WebdatasetPreparator:
             # Fix permissions if needed
             if fix_local_permissions:
                 try:
-                    Path(str(parent_path / MAIN_FOLDER_NAME / INDEX_UUID_FILENAME)).chmod(
+                    (parent_path / MAIN_FOLDER_NAME / INDEX_UUID_FILENAME).local_path().chmod(
                         file_perms
                     )
                 except OSError:
@@ -620,7 +620,7 @@ class WebdatasetPreparator:
 
                 if fix_local_permissions:
                     try:
-                        Path(str(json_info_config)).chmod(file_perms)
+                        json_info_config.local_path().chmod(file_perms)
                     except OSError:
                         pass
 
@@ -650,7 +650,7 @@ class WebdatasetPreparator:
         # Fix permissions if needed
         if fix_local_permissions:
             try:
-                Path(str(json_info_config)).chmod(file_perms)
+                json_info_config.local_path().chmod(file_perms)
             except OSError:
                 pass
 
@@ -713,7 +713,7 @@ class WebdatasetPreparator:
         # Fix permissions if needed
         if fix_local_permissions:
             try:
-                Path(str(parent_path / MAIN_FOLDER_NAME / split_config)).chmod(file_perms)
+                (parent_path / MAIN_FOLDER_NAME / split_config).local_path().chmod(file_perms)
             except OSError:
                 pass
 

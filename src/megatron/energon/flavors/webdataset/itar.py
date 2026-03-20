@@ -4,7 +4,6 @@
 import contextlib
 import struct
 import tarfile
-from pathlib import Path
 from types import TracebackType
 from typing import BinaryIO, Dict, Generator, Optional, Tuple, Type, Union
 
@@ -102,8 +101,8 @@ class TarIndexWriter:
                 # To ensure the final file permissions match the tar path in the local setting.
                 # Copy permissions from tar_path to final_name, making sure the owner can read and write.
                 try:
-                    Path(str(self.final_name)).chmod(
-                        Path(str(self.tar_path)).stat().st_mode | 0o600
+                    self.final_name.local_path().chmod(
+                        self.tar_path.local_path().stat().st_mode | 0o600
                     )
                 except OSError:
                     # Just ignore the error, it's not a big deal.

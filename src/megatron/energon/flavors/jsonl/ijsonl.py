@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import struct
-from pathlib import Path
 from typing import BinaryIO, Dict, Generator, Optional, Tuple, Union
 
 from megatron.energon.edataclass import edataclass
@@ -91,8 +90,8 @@ class IJsonlIndexWriter:
                 # To ensure the final file permissions match the jsonl path in the local setting.
                 # Copy permissions from jsonl_path to final_name, making sure the owner can read and write.
                 try:
-                    Path(str(self.final_name)).chmod(
-                        Path(str(self.jsonl_path)).stat().st_mode | 0o600
+                    self.final_name.local_path().chmod(
+                        self.jsonl_path.local_path().stat().st_mode | 0o600
                     )
                 except OSError:
                     # Just ignore the error, it's not a big deal.
