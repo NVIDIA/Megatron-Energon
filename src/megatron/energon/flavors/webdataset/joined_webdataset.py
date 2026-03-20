@@ -203,6 +203,10 @@ class JoinedWebdatasetFactory(BaseCoreDatasetFactory[T_sample], Sharder, Generic
     def as_file_store(self) -> FileStore:
         raise NotImplementedError("Not supported on joined datasets")
 
+    @property
+    def paths(self) -> List[EPath]:
+        return [dataset.path for dataset in self.inner_datasets]
+
     def _process_samples(self, dataset: SavableDataset[RawSampleData]) -> SavableDataset[T_sample]:
         """Internally loads the sample."""
         return MapDataset(

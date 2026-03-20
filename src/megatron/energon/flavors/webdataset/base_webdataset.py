@@ -49,6 +49,7 @@ class BaseWebdatasetFactory(
     """
 
     path: EPath
+    paths: list[EPath]
 
     shards: List[ShardInfo]
     sample_excludes: set[str]

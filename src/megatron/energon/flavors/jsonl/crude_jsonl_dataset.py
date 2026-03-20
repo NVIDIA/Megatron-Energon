@@ -159,9 +159,7 @@ class CrudeJsonlDatasetFactory(
         return JsonlFileStore(self.path)
 
     def _load_sample(self, sample: FilteredSample) -> CrudeSample:
-        s = CrudeSample(sample)
-        s["__key__"] = self.name + "/" + s["__key__"]
-        return s
+        return CrudeSample(sample)
 
     def _load_sample_raw(self, raw_sample: RawSampleData) -> CrudeSample:
         # Just a wrapper for the inner tuple. Tuple should be of length 1.
