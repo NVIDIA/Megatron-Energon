@@ -237,13 +237,20 @@ class EPath:
 
     @property
     def url(self) -> str:
-        if self.is_local():
+        if self.is_pure_local():
             return self._internal_str_path
         int_path_str = str(self.internal_path)
+        if self.profile == "dss":
+            if int_path_str.startswith("/"):
+                int_path_str = int_path_str[1:]
+            return f"dss://{int_path_str}"
         return f"msc://{self.profile}{int_path_str}"
 
-    def is_local(self) -> bool:
+    def is_pure_local(self) -> bool:
         return self.profile == DEFAULT_PROFILE_NAME
+
+    def is_local(self) -> bool:
+        return self.profile == DEFAULT_PROFILE_NAME or self.profile == "dss"
 
     def local_path(self) -> PathlibPath:
         if not self.is_local():

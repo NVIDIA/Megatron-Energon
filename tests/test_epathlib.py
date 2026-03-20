@@ -9,7 +9,9 @@ import os
 import pickle
 import struct
 import sys
+import tempfile
 import unittest
+from pathlib import Path
 
 from megatron.energon.epathlib import DEFAULT_PROFILE_NAME, EPath
 from tests.epath_s3_emulator import setup_s3_emulator
@@ -278,6 +280,84 @@ class TestEPath(unittest.TestCase):
             assert not p.is_file()
             # assert not EPath("msc://s3test_msc/test").is_dir()
             assert not EPath("msc://s3test_msc/test/dir").is_dir()
+
+    def test_metadataset_v2_dss_path_parsing_str(self):
+        """Parse a MetadatasetV2 config and ensure DSS URLs stringify correctly as EPath."""
+
+        # Ensure DSS paths are supported even when tests are run without NVDATASET_CACHE_DIR set
+        # at process start (EPath reads it at import time).
+        import megatron.energon.epathlib.epath as epath_mod
+        from megatron.energon.metadataset.loader import load_dataset
+
+        yaml_text = "\n".join(
+            [
+                "__module__: megatron.energon",
+                "__class__: MetadatasetV2",
+                "splits:",
+                "  train:",
+                "    blend:",
+                "      - path: dss://charts1234_zh@v0",
+                "        weight: 1",
+                "        aux:",
+                "          media_source: dss://charts1234@v0",
+            ]
+        )
+
+        orig_env_cache_dir = os.environ.get("NVDATASET_CACHE_DIR")
+        orig_mod_cache_dir = epath_mod.NVDATASET_CACHE_DIR
+
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            cache_dir = td_path / "nvds_cache"
+            cache_dir.mkdir(parents=True, exist_ok=True)
+
+            # Create dummy DSS datasets in the cache dir so that `load_dataset()` can run
+            # post-initialization without hitting missing-path errors.
+            #
+            # - charts1234_zh@v0: minimal "webdataset" marker (presence of .nv-meta/.info.json)
+            # - charts1234@v0: folder with images (aux media source)
+            webdataset_root = cache_dir / "charts1234_zh@v0"
+            (webdataset_root / ".nv-meta").mkdir(parents=True, exist_ok=True)
+            (webdataset_root / ".nv-meta" / ".info.json").write_text("{}", encoding="utf-8")
+
+            media_root = cache_dir / "charts1234@v0"
+            (media_root / "images").mkdir(parents=True, exist_ok=True)
+            (media_root / "images" / "000.jpg").write_bytes(b"\xff\xd8\xff\xd9")
+            (media_root / "images" / "001.jpg").write_bytes(b"\xff\xd8\xff\xd9")
+
+            mds_yaml_path = td_path / "metadataset_v2_dss.yaml"
+            mds_yaml_path.write_text(yaml_text, encoding="utf-8")
+
+            try:
+                os.environ["NVDATASET_CACHE_DIR"] = str(cache_dir)
+                epath_mod.NVDATASET_CACHE_DIR = EPath(cache_dir)
+
+                mds_path = EPath(mds_yaml_path)
+                mds = load_dataset(mds_path)
+
+                train = mds.splits["train"]
+                from megatron.energon.metadataset.metadataset_v2 import AuxFilesystemReference
+
+                assert isinstance(train.blend[0].path, EPath)
+                ds0 = train.blend[0].path
+
+                assert train.blend[0].aux is not None
+                aux_ref0 = train.blend[0].aux["media_source"]
+                assert isinstance(aux_ref0, AuxFilesystemReference)
+                assert isinstance(aux_ref0.fs_path, EPath)
+                aux0 = aux_ref0.fs_path
+
+                for p in (ds0, aux0):
+                    print(f"Dataset: {str(p)}, url: {p.url}")
+
+                assert ds0.url == "dss://charts1234_zh@v0"
+                assert aux0.url == "dss://charts1234@v0"
+            finally:
+                if orig_env_cache_dir is None:
+                    os.environ.pop("NVDATASET_CACHE_DIR", None)
+                else:
+                    os.environ["NVDATASET_CACHE_DIR"] = orig_env_cache_dir
+                epath_mod.NVDATASET_CACHE_DIR = orig_mod_cache_dir
 
 
 def _multiproc_test_func(p: EPath, test_function: bool):
