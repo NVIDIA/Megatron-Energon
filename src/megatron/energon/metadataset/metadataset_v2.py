@@ -228,7 +228,7 @@ class DatasetReference(SubsetRatioMixin, DatasetLoaderInterface):
                             path = m.group("path")
                         else:
                             # msc:// or other protocol
-                            fs_type = ""
+                            fs_type = None
                             path = v
                         # With filesystem or without.
                         if fs_type == "filesystem":
