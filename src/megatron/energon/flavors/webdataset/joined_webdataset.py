@@ -119,9 +119,6 @@ class JoinedWebdatasetFactory(BaseCoreDatasetFactory[T_sample], Sharder, Generic
             self._sample_joiner = joiner
             self.inner_dataset_keys = None
 
-        self.paths = [dataset.path for dataset in inner_datasets]
-        self.name = inner_datasets[0].name
-
         self.join_index = join_index
         self.inner_datasets = inner_datasets
         self.shards = list(zip(*(dataset.shards for dataset in self.inner_datasets)))
