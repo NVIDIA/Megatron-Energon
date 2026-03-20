@@ -234,7 +234,7 @@ class DatasetReference(SubsetRatioMixin, DatasetLoaderInterface):
                         if fs_type == "filesystem":
                             new_aux[k] = AuxFilesystemReference(fs_path=path)
                         else:
-                            assert not fs_type, f"Invalid filesystem type: {fs_type} in path {v}"
+                            assert fs_type is None, f"Invalid filesystem type: {fs_type} in path {v}"
                             new_aux[k] = AuxDatasetReference(path=path)
                     else:
                         new_aux[k] = AuxDatasetReference(path=v)
