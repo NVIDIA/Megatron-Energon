@@ -197,6 +197,11 @@ class EPath:
     def is_local(self) -> bool:
         return self.profile == DEFAULT_PROFILE_NAME
 
+    def local_path(self) -> PathlibPath:
+        if not self.is_local():
+            raise ValueError(f"Path {self} is not local")
+        return PathlibPath(self._internal_str_path)
+
     def is_dir(self) -> bool:
         try:
             return self.fs.info(self._internal_str_path).type == "directory"

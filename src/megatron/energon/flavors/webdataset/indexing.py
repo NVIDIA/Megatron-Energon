@@ -3,7 +3,6 @@
 
 import sqlite3
 import struct
-from pathlib import Path
 from typing import BinaryIO, Generator, List, Optional, Tuple, Union
 
 from numpy import int8
@@ -64,13 +63,10 @@ class SqliteIndexWriter:
         self.reset_tables = reset_tables
 
         # Initialize SQLite connection
-        path = str(self.sqlite_path)
         # Only supporting local file system, because sqlite does not support remote file systems.
         # TODO: Implement remote file systems. Maybe create locally in tmp then upload?
-        assert path.startswith("/"), (
-            f"SQLite path must be absolute local file system path: {self.sqlite_path}"
-        )
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        path = self.sqlite_path.local_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(path)
         self.db.execute("PRAGMA busy_timeout = 5000;")  # wait up to 5000ms when locked
 
@@ -328,12 +324,8 @@ class SqliteIndexReader:
         self.sqlite_path = ensure_local_copy(sqlite_path)
 
         # Initialize SQLite connection
-        path = str(self.sqlite_path)
         # Only supporting local file system, because sqlite does not support remote file systems
-        assert path.startswith("/"), (
-            f"SQLite path must be absolute local file system path: {self.sqlite_path}"
-        )
-
+        path = self.sqlite_path.local_path()
         path = f"file:{path}?mode=ro&immutable=1"
 
         self.db = ThreadLocalSqlite(path, is_uri=True)
