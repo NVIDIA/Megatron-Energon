@@ -156,7 +156,6 @@ class EPath:
             assert NVDATASET_CACHE_DIR is not None, (
                 "Environment variable NVDATASET_CACHE_DIR is not set"
             )
-            # Applying a trick for efficiency:
             # The internal path is relative to the NVDATASET_CACHE_DIR (i.e. strip the leading /, then concat with /)
             return NVDATASET_CACHE_DIR._internal_str_path + str(self.internal_path)
         else:
@@ -250,7 +249,13 @@ class EPath:
         return self.profile == DEFAULT_PROFILE_NAME
 
     def is_local(self) -> bool:
-        return self.profile == DEFAULT_PROFILE_NAME or self.profile == "dss"
+        if self.profile == "dss":
+            # For DSS, a path is only considered local if it exists in the local cache
+            # NOTE: We should use something like self.fs.exists() here, but MSC does not support it yet.
+            # So we use direct FS access
+            return PathlibPath(self._internal_str_path).exists()
+        else:
+            return self.profile == DEFAULT_PROFILE_NAME
 
     def local_path(self) -> PathlibPath:
         if not self.is_local():
