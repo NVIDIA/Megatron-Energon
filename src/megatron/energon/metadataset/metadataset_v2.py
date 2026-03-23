@@ -3,7 +3,17 @@
 
 import re
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Literal, Optional, Sequence, Type, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Sequence,
+    Type,
+    Union,
+)
 
 from megatron.energon.cache import FileStore
 from megatron.energon.cache.file_store import (
@@ -23,6 +33,7 @@ from megatron.energon.metadataset.loader_interface import (
     DatasetBlendMode,
     DatasetLoaderInterface,
     LoadedDatasetList,
+    ScannedDatasetReference,
 )
 from megatron.energon.metadataset.metadataset import Metadataset
 from megatron.energon.worker import WorkerConfig
@@ -337,6 +348,17 @@ class DatasetReference(SubsetRatioMixin, DatasetLoaderInterface):
                     loaded_dataset.aux.update(aux)
         return result
 
+    def get_scanned_dataset_references(
+        self,
+        *,
+        split_part: Union[Literal["train", "val", "test"], str],
+    ) -> List[ScannedDatasetReference]:
+        if self._dataset is None:
+            return [self]
+        return self._dataset.get_scanned_dataset_references(
+            split_part=self.split_part or split_part
+        )
+
 
 @edataclass
 class JoinDatasetReference(DatasetReference):
@@ -375,6 +397,15 @@ class JoinDatasetReference(DatasetReference):
     ) -> LoadedDatasetList:
         assert False, (
             "JoinDatasetReference should not be used directly, but only by MetadatasetJoin"
+        )
+
+    def get_scanned_dataset_references(
+        self,
+        *,
+        split_part: Union[Literal["train", "val", "test"], str],
+    ) -> List[ScannedDatasetReference]:
+        raise NotImplementedError(
+            "get_scanned_dataset_references() does not support joined datasets."
         )
 
 
@@ -469,6 +500,15 @@ class MetadatasetJoin(SubsetRatioMixin, DatasetLoaderInterface):
             **kwargs,
         )
 
+    def get_scanned_dataset_references(
+        self,
+        *,
+        split_part: Union[Literal["train", "val", "test"], str],
+    ) -> List[ScannedDatasetReference]:
+        raise NotImplementedError(
+            "get_scanned_dataset_references() does not support joined datasets."
+        )
+
 
 @dataclass
 class BlendWeightMixin:
@@ -552,6 +592,16 @@ class MetadatasetBlend(DatasetLoaderInterface, SubsetRatioMixin):
             blend_mode=DatasetBlendMode.DATASET_WEIGHT,
             datasets=datasets,
         )
+
+    def get_scanned_dataset_references(
+        self,
+        *,
+        split_part: Union[Literal["train", "val", "test"], str],
+    ) -> List[ScannedDatasetReference]:
+        flattened: List[ScannedDatasetReference] = []
+        for dataset in self.blend:
+            flattened.extend(dataset.get_scanned_dataset_references(split_part=split_part))
+        return flattened
 
 
 @dataclass
@@ -638,6 +688,16 @@ class MetadatasetBlendEpochized(SubsetRatioMixin, DatasetLoaderInterface):
             datasets=datasets,
         )
 
+    def get_scanned_dataset_references(
+        self,
+        *,
+        split_part: Union[Literal["train", "val", "test"], str],
+    ) -> List[ScannedDatasetReference]:
+        flattened: List[ScannedDatasetReference] = []
+        for dataset in self.blend_epochized:
+            flattened.extend(dataset.get_scanned_dataset_references(split_part=split_part))
+        return flattened
+
 
 @edataclass
 class MetadatasetV2(DatasetLoaderInterface):
@@ -697,3 +757,10 @@ class MetadatasetV2(DatasetLoaderInterface):
             subset=subset,
             **kwargs,
         )
+
+    def get_scanned_dataset_references(
+        self,
+        *,
+        split_part: Union[Literal["train", "val", "test"], str],
+    ) -> List[ScannedDatasetReference]:
+        return self.splits[split_part].get_scanned_dataset_references(split_part=split_part)

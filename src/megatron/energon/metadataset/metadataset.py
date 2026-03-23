@@ -14,6 +14,7 @@ from megatron.energon.metadataset.loader_interface import (
     DatasetBlendMode,
     DatasetLoaderInterface,
     LoadedDatasetList,
+    ScannedDatasetReference,
 )
 from megatron.energon.worker import WorkerConfig
 
@@ -119,6 +120,17 @@ class DatasetReference:
             **kwargs,
         )
 
+    def get_scanned_dataset_references(
+        self,
+        *,
+        split_part: Union[Literal["train", "val", "test"], str],
+    ) -> List[ScannedDatasetReference]:
+        if self._dataset is None:
+            return [self]
+        return self._dataset.get_scanned_dataset_references(
+            split_part=self.split_part or split_part
+        )
+
 
 @edataclass
 class MetadatasetBlender:
@@ -179,6 +191,16 @@ class MetadatasetBlender:
             datasets=datasets,
         )
 
+    def get_scanned_dataset_references(
+        self,
+        *,
+        split_part: Union[Literal["train", "val", "test"], str],
+    ) -> List[ScannedDatasetReference]:
+        flattened: List[ScannedDatasetReference] = []
+        for dataset in self.datasets:
+            flattened.extend(dataset.get_scanned_dataset_references(split_part=split_part))
+        return flattened
+
 
 class Metadataset(DatasetLoaderInterface):
     """Main entry for metadataset."""
@@ -225,3 +247,10 @@ class Metadataset(DatasetLoaderInterface):
             subset=subset,
             **kwargs,
         )
+
+    def get_scanned_dataset_references(
+        self,
+        *,
+        split_part: Union[Literal["train", "val", "test"], str],
+    ) -> List[ScannedDatasetReference]:
+        return self._splits[split_part].get_scanned_dataset_references(split_part=split_part)
