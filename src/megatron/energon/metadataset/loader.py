@@ -46,6 +46,26 @@ def load_dataset(
         raise ValueError(f"Invalid dataset at {path}")
 
 
+def scan_metadataset(
+    path: Union[str, EPath, Path],
+    **kwargs,
+) -> DatasetLoaderInterface:
+    """Scans a metadataset recursively and also handles non-existent datasets."""
+
+    path = EPath(path)
+    ds_type = get_dataset_type(path)
+    assert ds_type == EnergonDatasetType.METADATASET, (
+        f"scan_metadataset only supports metadatasets, got {ds_type} at {path}"
+    )
+    mds = load_config(
+        path,
+        default_type=Metadataset,
+        default_kwargs=dict(path=path, **kwargs),
+    )
+    mds.scan()
+    return mds
+
+
 class MockJsonParser(JsonParser):
     """Json Parser, which translates unknown objects to a mock class."""
 

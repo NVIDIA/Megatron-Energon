@@ -35,10 +35,14 @@ url_regex = re.compile(r"^(?P<protocol>[a-z][a-z0-9+.-]*)://(?P<path>.*)", re.IG
 class AuxDatasetReference:
     path: Union[str, EPath]
 
-    def post_initialize(self, mds_path: Optional[EPath] = None) -> None:
+    def _resolve_path(self, mds_path: Optional[EPath]) -> EPath:
         assert mds_path is not None
         if not isinstance(self.path, EPath):
             self.path = mds_path.parent / self.path
+        return self.path
+
+    def post_initialize(self, mds_path: Optional[EPath] = None) -> None:
+        self._resolve_path(mds_path)
         assert not self.path.is_file(), (
             "Auxiliary datasets must not be metadataset, but direct dataset references"
         )
@@ -56,10 +60,14 @@ class AuxDatasetReference:
 class AuxFilesystemReference:
     fs_path: Union[str, EPath]
 
-    def post_initialize(self, mds_path: Optional[EPath] = None) -> None:
+    def _resolve_path(self, mds_path: Optional[EPath]) -> EPath:
         assert mds_path is not None
         if not isinstance(self.fs_path, EPath):
             self.fs_path = mds_path.parent / self.fs_path
+        return self.fs_path
+
+    def post_initialize(self, mds_path: Optional[EPath] = None) -> None:
+        self._resolve_path(mds_path)
 
     def get_file_store(self) -> FileStore:
         assert isinstance(self.fs_path, EPath), "Missing call to post_initialize"
@@ -185,25 +193,74 @@ class DatasetReference(SubsetRatioMixin, DatasetLoaderInterface):
     #: Auxiliary datasets. May only be specified for crude datasets for cooking. Cooking will get
     # these references to load data from. If specified as string, it will be interpreted as a
     # dataset path.
-    aux: Optional[Dict[str, str]] = None
+    aux: Optional[Dict[str, Union[str, AuxDatasetReference, AuxFilesystemReference]]] = None
 
     _dataset: Optional[DatasetLoaderInterface] = None
 
-    def post_initialize(self, mds_path: Optional[EPath] = None) -> None:
+    def _resolve_path(self, mds_path: Optional[EPath]) -> EPath:
         assert mds_path is not None
         if not isinstance(self.path, EPath):
             self.path = mds_path.parent / self.path
+        return self.path
+
+    @staticmethod
+    def _normalize_aux_reference(
+        reference: Union[str, AuxDatasetReference, AuxFilesystemReference],
+    ) -> Union[AuxDatasetReference, AuxFilesystemReference]:
+        if isinstance(reference, (AuxDatasetReference, AuxFilesystemReference)):
+            return reference
+        if m := url_regex.match(reference):
+            prot = m.group("protocol")
+            if prot.count("+") == 1:
+                # filesystem+fs_prot://
+                fs_type, fs_prot = prot.split("+")
+                assert fs_type == "filesystem"
+                path = f"{fs_prot}://{m.group('path')}"
+            elif prot == "filesystem":
+                # filesystem:// (may be relative or absolute)
+                fs_type = "filesystem"
+                path = m.group("path")
+            else:
+                # msc:// or other protocol
+                fs_type = None
+                path = reference
+            # With filesystem or without.
+            if fs_type == "filesystem":
+                return AuxFilesystemReference(fs_path=path)
+            assert fs_type is None, f"Invalid filesystem type: {fs_type} in path {reference}"
+            return AuxDatasetReference(path=path)
+        return AuxDatasetReference(path=reference)
+
+    def _normalize_aux_references(self, mds_path: Optional[EPath], *, validate: bool) -> None:
+        if self.aux is None:
+            return
+        new_aux: Dict[str, Union[AuxDatasetReference, AuxFilesystemReference]] = {}
+        for key, value in self.aux.items():
+            normalized = self._normalize_aux_reference(value)
+            if validate:
+                normalized.post_initialize(mds_path)
+            else:
+                normalized._resolve_path(mds_path)
+            new_aux[key] = normalized
+        self.aux = new_aux
+
+    def _load_nested_metadataset(self) -> DatasetLoaderInterface:
+        assert isinstance(self.path, EPath)
+        assert self.aux is None, "Cannot specify auxiliary datasets for crude datasets"
+        assert self.dataset_config is None, "Must not set dataset_config"
+        assert self.split_config is None, "Must not set split_config"
+        # Note: For backwards compatibility, the type must be Metadataset (V1).
+        return load_config(
+            self.path,
+            default_type=Metadataset,
+            default_kwargs=dict(path=self.path),
+        )
+
+    def post_initialize(self, mds_path: Optional[EPath] = None) -> None:
+        self._resolve_path(mds_path)
         ds_type = get_dataset_type(self.path)
         if ds_type == EnergonDatasetType.METADATASET:
-            assert self.aux is None, "Cannot specify auxiliary datasets for crude datasets"
-            assert self.dataset_config is None, "Must not set dataset_config"
-            assert self.split_config is None, "Must not set split_config"
-            # Note: For backwards compatibility, the type must be Metadataset (V1).
-            self._dataset = load_config(
-                self.path,
-                default_type=Metadataset,
-                default_kwargs=dict(path=self.path),
-            )
+            self._dataset = self._load_nested_metadataset()
             self._dataset.post_initialize()
         elif ds_type in (EnergonDatasetType.WEBDATASET, EnergonDatasetType.JSONL):
             self._dataset = DatasetLoader(
@@ -212,43 +269,23 @@ class DatasetReference(SubsetRatioMixin, DatasetLoaderInterface):
                 dataset_config=self.dataset_config,
             )
             self._dataset.post_initialize()
-            if self.aux is not None:
-                new_aux = {}
-                for k, v in self.aux.items():
-                    if m := url_regex.match(v):
-                        prot = m.group("protocol")
-                        if prot.count("+") == 1:
-                            # filesystem+fs_prot://
-                            fs_type, fs_prot = prot.split("+")
-                            assert fs_type == "filesystem"
-                            path = f"{fs_prot}://{m.group('path')}"
-                        elif prot == "filesystem":
-                            # filesystem:// (may be relative or absolute)
-                            fs_type = "filesystem"
-                            path = m.group("path")
-                        else:
-                            # msc:// or other protocol
-                            fs_type = None
-                            path = v
-                        # With filesystem or without.
-                        if fs_type == "filesystem":
-                            new_aux[k] = AuxFilesystemReference(fs_path=path)
-                        else:
-                            assert fs_type is None, (
-                                f"Invalid filesystem type: {fs_type} in path {v}"
-                            )
-                            new_aux[k] = AuxDatasetReference(path=path)
-                    else:
-                        new_aux[k] = AuxDatasetReference(path=v)
-
-                    new_aux[k].post_initialize(mds_path)
-                self.aux = new_aux
+            self._normalize_aux_references(mds_path, validate=True)
         elif ds_type == EnergonDatasetType.FILESYSTEM:
             raise ValueError(
                 "Filesystem datasets are not supported within metadatasets except as auxiliary datasets."
             )
         else:
             raise FileNotFoundError(self.path)
+
+    def scan(self, mds_path: Optional[EPath] = None) -> None:
+        self._resolve_path(mds_path)
+        self._dataset = None
+        ds_type = get_dataset_type(self.path)
+        if ds_type == EnergonDatasetType.METADATASET:
+            self._dataset = self._load_nested_metadataset()
+            self._dataset.scan()
+        else:
+            self._normalize_aux_references(mds_path, validate=False)
 
     def prepare(self, split_part: Optional[str] = None) -> Sequence[EPath]:
         assert self._dataset is not None
@@ -309,8 +346,7 @@ class JoinDatasetReference(DatasetReference):
         assert mds_path is not None
         # Override and disable another metadataset reference, only allow direct dataset references.
         # Do not store the loader, the parent MetadatasetJoin will do that.
-        if not isinstance(self.path, EPath):
-            self.path = mds_path.parent / self.path
+        self._resolve_path(mds_path)
         ds_type = get_dataset_type(self.path)
         if ds_type == EnergonDatasetType.WEBDATASET:
             return DatasetLoader(
@@ -323,6 +359,10 @@ class JoinDatasetReference(DatasetReference):
             )
         else:
             raise ValueError(f"Not a joinabledataset at {self.path}")
+
+    def scan(self, mds_path: Optional[EPath] = None) -> None:
+        self._resolve_path(mds_path)
+        self._dataset = None
 
     def prepare(self, split_part: Optional[str] = None):
         assert False, (
@@ -386,6 +426,22 @@ class MetadatasetJoin(SubsetRatioMixin, DatasetLoaderInterface):
         )
         self._dataset.post_initialize(mds_path)
 
+    def scan(self, mds_path: Optional[EPath] = None):
+        assert mds_path is not None
+        assert self.join is not None
+        assert self.joiner is not None, "Must set joiner for joining datasets"
+        assert self.dataset_config is None, "Cannot set dataset_config for joining datasets"
+        assert self.split_config is None, "Cannot set split_config for joining datasets"
+        self._dataset = None
+        if isinstance(self.join, list):
+            for join in self.join:
+                join.scan(mds_path)
+        elif isinstance(self.join, dict):
+            for join in self.join.values():
+                join.scan(mds_path)
+        else:
+            raise ValueError("Invalid join type")
+
     def prepare(self, split_part: Optional[str] = None) -> Sequence[EPath]:
         assert self._dataset is not None, "Missing post_initialize call."
         return self._dataset.prepare(split_part=split_part)
@@ -439,6 +495,11 @@ class MetadatasetBlend(DatasetLoaderInterface, SubsetRatioMixin):
         assert mds_path is not None
         for dataset in self.blend:
             dataset.post_initialize(mds_path)
+
+    def scan(self, mds_path: Optional[EPath] = None):
+        assert mds_path is not None
+        for dataset in self.blend:
+            dataset.scan(mds_path)
 
     def prepare(self, split_part: Optional[str] = None) -> Sequence[EPath]:
         files = []
@@ -522,6 +583,11 @@ class MetadatasetBlendEpochized(SubsetRatioMixin, DatasetLoaderInterface):
         for dataset in self.blend_epochized:
             dataset.post_initialize(mds_path)
 
+    def scan(self, mds_path: Optional[EPath] = None):
+        assert mds_path is not None
+        for dataset in self.blend_epochized:
+            dataset.scan(mds_path)
+
     def prepare(self, split_part: Optional[str] = None) -> Sequence[EPath]:
         files = []
         for dataset in self.blend_epochized:
@@ -584,6 +650,11 @@ class MetadatasetV2(DatasetLoaderInterface):
         assert mds_path is None
         for split in self.splits.values():
             split.post_initialize(self.path)
+
+    def scan(self, mds_path: Optional[EPath] = None):
+        assert mds_path is None
+        for split in self.splits.values():
+            split.scan(self.path)
 
     def prepare(self, split_part: Optional[str] = None) -> Sequence[EPath]:
         # In the case of prepare for MetadatasetV2, we ignore the passed cache_path

@@ -44,18 +44,26 @@ class DatasetReference:
                 self.subflavors = {"__subflavor__": self.subflavor, **(self.subflavors or {})}
             self.subflavor = None
 
-    def post_initialize(self, mds_path: Optional[EPath] = None):
+    def _resolve_path(self, mds_path: Optional[EPath]) -> EPath:
         assert mds_path is not None
         if not isinstance(self.path, EPath):
             self.path = mds_path.parent / self.path
+        return self.path
+
+    def _load_nested_metadataset(self) -> DatasetLoaderInterface:
+        assert isinstance(self.path, EPath)
+        assert self.dataset_config is None, "Must not set dataset_config"
+        assert self.split_config is None, "Must not set split_config"
+        return load_config(
+            self.path,
+            default_type=Metadataset,
+            default_kwargs=dict(path=self.path),
+        )
+
+    def post_initialize(self, mds_path: Optional[EPath] = None):
+        self._resolve_path(mds_path)
         if self.path.is_file():
-            assert self.dataset_config is None, "Must not set dataset_config"
-            assert self.split_config is None, "Must not set split_config"
-            self._dataset = load_config(
-                self.path,
-                default_type=Metadataset,
-                default_kwargs=dict(path=self.path),
-            )
+            self._dataset = self._load_nested_metadataset()
             self._dataset.post_initialize()
         elif check_dataset_info_present(self.path):
             self._dataset = DatasetLoader(
@@ -66,6 +74,13 @@ class DatasetReference:
             self._dataset.post_initialize()
         else:
             raise FileNotFoundError(self.path)
+
+    def scan(self, mds_path: Optional[EPath] = None):
+        self._resolve_path(mds_path)
+        self._dataset = None
+        if self.path.is_file():
+            self._dataset = self._load_nested_metadataset()
+            self._dataset.scan()
 
     def get_datasets(
         self,
@@ -115,6 +130,11 @@ class MetadatasetBlender:
         assert mds_path is not None
         for dataset in self.datasets:
             dataset.post_initialize(mds_path)
+
+    def scan(self, mds_path: Optional[EPath] = None):
+        assert mds_path is not None
+        for dataset in self.datasets:
+            dataset.scan(mds_path)
 
     def get_datasets(
         self,
@@ -179,6 +199,11 @@ class Metadataset(DatasetLoaderInterface):
         assert mds_path is None
         for split in self._splits.values():
             split.post_initialize(self._path)
+
+    def scan(self, mds_path: Optional[EPath] = None):
+        assert mds_path is None
+        for split in self._splits.values():
+            split.scan(self._path)
 
     def get_datasets(
         self,

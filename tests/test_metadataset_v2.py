@@ -30,7 +30,7 @@ from megatron.energon import (
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib.epath import EPath
 from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
-from megatron.energon.metadataset.loader import prepare_metadataset
+from megatron.energon.metadataset.loader import prepare_metadataset, scan_metadataset
 from megatron.energon.metadataset.loader_interface import DatasetBlendMode
 from megatron.energon.task_encoder.base import DefaultTaskEncoder
 from megatron.energon.wrappers.watchdog_dataset import WatchdogDataset
@@ -310,6 +310,107 @@ class TestDataset(unittest.TestCase):
                 "mds": "nested_val",
             },
         ]
+
+    def test_scan_metadataset_recurses_nested_v2_references(self):
+        from megatron.energon.metadataset.metadataset_v2 import MetadatasetV2
+
+        dataset = scan_metadataset(self.nested_mds_path)
+
+        assert isinstance(dataset, MetadatasetV2)
+
+        # Check that the first dataset in the blend
+        # points to the nested metadataset self.mds_path (i.e. "metadataset_v2.yaml")
+        train = dataset.splits["train"]
+        nested_ref = train.blend[0]
+        assert isinstance(nested_ref.path, EPath)
+        assert nested_ref.path == EPath(self.mds_path)
+        assert isinstance(nested_ref._dataset, MetadatasetV2)
+
+        # Check that the first dataset in the inner blend
+        # points to "ds1" and that the dataset is not instantiated.
+        inner_train = nested_ref._dataset.splits["train"]
+        inner_leaf_ref = inner_train.blend[0]
+        assert isinstance(inner_leaf_ref.path, EPath)
+        assert inner_leaf_ref.path == EPath(self.dataset_path / "ds1")
+        assert inner_leaf_ref._dataset is None
+
+    def test_scan_metadataset_preserves_missing_v2_leaf_and_aux(self):
+        from megatron.energon.metadataset.metadataset_v2 import (
+            AuxDatasetReference,
+            AuxFilesystemReference,
+            DatasetReference,
+            MetadatasetV2,
+        )
+
+        missing_leaf_mds_path = self.dataset_path / "missing_leaf_metadataset_v2.yaml"
+        missing_leaf_mds_path.write_text(
+            "\n".join(
+                [
+                    "__module__: megatron.energon",
+                    "__class__: MetadatasetV2",
+                    "splits:",
+                    "  train:",
+                    "    path: missing_ds",
+                    "    aux:",
+                    "      labels: missing_aux",
+                    "      media: filesystem://media",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        dataset = scan_metadataset(missing_leaf_mds_path)
+
+        assert isinstance(dataset, MetadatasetV2)
+        train = dataset.splits["train"]
+
+        # Check that all references paths are there, even though they don't exist.
+        assert isinstance(train, DatasetReference)
+        assert isinstance(train.path, EPath)
+        assert train.path == EPath(self.dataset_path / "missing_ds")
+        assert train._dataset is None
+        assert train.aux is not None
+        assert isinstance(train.aux["labels"], AuxDatasetReference)
+        assert train.aux["labels"].path == EPath(self.dataset_path / "missing_aux")
+        assert isinstance(train.aux["media"], AuxFilesystemReference)
+        assert train.aux["media"].fs_path == EPath(self.dataset_path / "media")
+
+    def test_scan_metadataset_preserves_join_references(self):
+        from megatron.energon.metadataset.metadataset_v2 import MetadatasetJoin, MetadatasetV2
+
+        join_scan_path = self.dataset_path / "joined_metadataset_scan_v2.yaml"
+        join_scan_path.write_text(
+            "\n".join(
+                [
+                    "__module__: megatron.energon",
+                    "__class__: MetadatasetV2",
+                    "splits:",
+                    "  train:",
+                    "    join:",
+                    "      existing:",
+                    "        path: ds1",
+                    "      missing:",
+                    "        path: missing_join_ds",
+                    "    joiner:",
+                    f"      __module__: {TestJoinedSample.__module__}",
+                    f"      __class__: {TestJoinedSample.__name__}",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        dataset = scan_metadataset(join_scan_path)
+
+        assert isinstance(dataset, MetadatasetV2)
+        train = dataset.splits["train"]
+        assert isinstance(train, MetadatasetJoin)
+        assert train._dataset is None
+        assert isinstance(train.join["existing"].path, EPath)
+        assert train.join["existing"].path == EPath(self.dataset_path / "ds1")
+        assert train.join["existing"]._dataset is None
+        assert isinstance(train.join["missing"].path, EPath)
+        assert train.join["missing"].path == EPath(self.dataset_path / "missing_join_ds")
+        assert train.join["missing"]._dataset is None
 
     def test_joined_metadataset(self):
         torch.manual_seed(42)

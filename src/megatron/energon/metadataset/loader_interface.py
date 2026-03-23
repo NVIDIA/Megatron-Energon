@@ -46,6 +46,10 @@ class DatasetLoaderInterface(ABC):
         """Called to finally initialize the dataset."""
         ...
 
+    def scan(self, mds_path: Optional[EPath] = None):
+        """Recursively discover dataset references without loading leaf datasets."""
+        raise NotImplementedError(f"{type(self).__name__} does not implement scan()")
+
     @abstractmethod
     def get_datasets(
         self,

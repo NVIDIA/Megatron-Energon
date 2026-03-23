@@ -250,10 +250,12 @@ class EPath:
 
     def is_local(self) -> bool:
         if self.profile == "dss":
-            # For DSS, a path is only considered local if it exists in the local cache
-            # NOTE: We should use something like self.fs.exists() here, but MSC does not support it yet.
-            # So we use direct FS access
-            return PathlibPath(self._internal_str_path).exists()
+            try:
+                # Tries to get metadata, which will fail if the local file or folder does not exist
+                self.fs.info(self._internal_str_path)
+                return True
+            except FileNotFoundError:
+                return False
         else:
             return self.profile == DEFAULT_PROFILE_NAME
 
