@@ -14,6 +14,11 @@ import unittest
 from pathlib import Path
 
 from megatron.energon.epathlib import DEFAULT_PROFILE_NAME, EPath
+from megatron.energon.flavors.webdataset.config import (
+    INDEX_SQLITE_FILENAME,
+    INFO_JSON_FILENAME,
+    MAIN_FOLDER_NAME,
+)
 from tests.epath_s3_emulator import setup_s3_emulator
 
 
@@ -299,7 +304,7 @@ class TestEPath(unittest.TestCase):
                 "      - path: dss://charts1234_zh@v0",
                 "        weight: 1",
                 "        aux:",
-                "          media_source: dss://charts1234@v0",
+                "          media_source: filesystem+dss://charts1234@v0",
             ]
         )
 
@@ -317,13 +322,19 @@ class TestEPath(unittest.TestCase):
             # - charts1234_zh@v0: minimal "webdataset" marker (presence of .nv-meta/.info.json)
             # - charts1234@v0: folder with images (aux media source)
             webdataset_root = cache_dir / "charts1234_zh@v0"
-            (webdataset_root / ".nv-meta").mkdir(parents=True, exist_ok=True)
-            (webdataset_root / ".nv-meta" / ".info.json").write_text("{}", encoding="utf-8")
+            (webdataset_root / MAIN_FOLDER_NAME).mkdir(parents=True, exist_ok=True)
+            (webdataset_root / MAIN_FOLDER_NAME / INFO_JSON_FILENAME).write_text(
+                "{}", encoding="utf-8"
+            )
 
             media_root = cache_dir / "charts1234@v0"
             (media_root / "images").mkdir(parents=True, exist_ok=True)
             (media_root / "images" / "000.jpg").write_bytes(b"\xff\xd8\xff\xd9")
             (media_root / "images" / "001.jpg").write_bytes(b"\xff\xd8\xff\xd9")
+            (media_root / MAIN_FOLDER_NAME).mkdir(parents=True, exist_ok=True)
+            (media_root / MAIN_FOLDER_NAME / INDEX_SQLITE_FILENAME).write_text(
+                "{}", encoding="utf-8"
+            )
 
             mds_yaml_path = td_path / "metadataset_v2_dss.yaml"
             mds_yaml_path.write_text(yaml_text, encoding="utf-8")

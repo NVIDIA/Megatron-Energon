@@ -875,7 +875,7 @@ class TestDataset(unittest.TestCase):
                     )
                 )
             emu.add_file(self.dataset_path, "bucket")
-            
+
             torch.manual_seed(42)
             loader = get_savable_loader(
                 get_train_dataset(
@@ -892,7 +892,7 @@ class TestDataset(unittest.TestCase):
                 ),
             )
             sample = next(iter(loader))
-            assert sample.txts[0].endswith("|aux|__module__: megatron.ener>")            
+            assert sample.txts[0].endswith("|aux|__module__: megatron.ener>")
 
             torch.manual_seed(42)
             loader = get_savable_loader(
