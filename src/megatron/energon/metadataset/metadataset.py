@@ -97,7 +97,6 @@ class DatasetReference:
             flattened traversal result of the nested metadataset when this reference points to one.
         """
         self._resolve_path(mds_path)
-        self._dataset = None
         if self.path.is_file():
             return self._load_nested_metadataset().traverse(
                 split_part=self.split_part or split_part

@@ -328,7 +328,6 @@ class DatasetReference(SubsetRatioMixin, DatasetLoaderInterface):
         """
 
         self._resolve_path(mds_path)
-        self._dataset = None
         ds_type = get_dataset_type(self.path)
         if ds_type == EnergonDatasetType.METADATASET:
             return self._load_nested_metadataset().traverse(
