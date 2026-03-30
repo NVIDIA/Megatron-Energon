@@ -250,12 +250,9 @@ class EPath:
 
     def is_local(self) -> bool:
         if self.profile == "dss":
-            try:
-                # Tries to get metadata, which will fail if the local file or folder does not exist
-                self.fs.info(self._internal_str_path)
-                return True
-            except FileNotFoundError:
-                return False
+            # For now, a DSS path is always considered local.
+            # Note that this does not mean it exists on the local filesystem.
+            return True
         else:
             return self.profile == DEFAULT_PROFILE_NAME
 

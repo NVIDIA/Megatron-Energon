@@ -55,7 +55,26 @@ def traverse_metadataset(
     split_part: str,
     **kwargs,
 ) -> list[TraversedDatasetReference]:
-    """Traverses one metadataset split recursively and returns the flattened leaf references."""
+    """Traverse one metadataset split and return flattened leaf dataset references.
+
+    This is the main public entrypoint for traversal-only inspection of a metadataset. It loads
+    the root metadataset configuration, resolves nested metadatasets recursively, and returns the
+    final leaf dataset references without constructing the intermediate scanned/traversed loader
+    tree.
+
+    Args:
+        path: Path to the metadataset YAML file to traverse.
+        split_part: Split to traverse, such as `\"train\"`, `\"val\"`, or `\"test\"`.
+        **kwargs: Additional keyword arguments forwarded to `load_config()` while loading the root
+            metadataset object.
+
+    Returns:
+        A flattened list of `TraversedDatasetReference` values describing the reachable leaf
+        datasets for the requested split.
+
+    Raises:
+        AssertionError: If `path` does not point to a metadataset.
+    """
 
     path = EPath(path)
     ds_type = get_dataset_type(path)

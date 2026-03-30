@@ -82,6 +82,20 @@ class DatasetReference:
         *,
         split_part: Union[Literal["train", "val", "test"], str],
     ) -> List[TraversedDatasetReference]:
+        """Traverse this V1 dataset reference into flattened leaf references.
+
+        Args:
+            mds_path: Parent metadataset path used internally to resolve relative dataset and
+                auxiliary paths. Must be set for nested references and inner traversal nodes;
+                use None only for top-level metadatasets.
+            split_part: Split inherited from the parent traversal. If this reference defines its
+                own split override, that split takes precedence for nested traversal and the
+                returned leaf reference.
+
+        Returns:
+            A single leaf `TraversedDatasetReference` for direct dataset references, or the
+            flattened traversal result of the nested metadataset when this reference points to one.
+        """
         self._resolve_path(mds_path)
         self._dataset = None
         if self.path.is_file():
@@ -225,6 +239,15 @@ class Metadataset(DatasetLoaderInterface):
         *,
         split_part: Union[Literal["train", "val", "test"], str],
     ) -> List[TraversedDatasetReference]:
+        """Traverse the selected V1 split and flatten all reachable leaf references.
+
+        Args:
+            mds_path: Unused for top-level metadatasets. Present to satisfy the shared interface.
+            split_part: Split to traverse.
+
+        Returns:
+            The flattened list of traversed leaf dataset references for `split_part`.
+        """
         assert mds_path is None
         return self._splits[split_part].traverse(self._path, split_part=split_part)
 

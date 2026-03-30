@@ -41,6 +41,14 @@ class LoadedDatasetList:
 
 @dataclass
 class TraversedDatasetReference:
+    """Flattened leaf dataset reference produced by metadataset traversal.
+
+    Attributes:
+        path: Resolved path to the referenced leaf dataset.
+        split_part: Effective split part to use when loading the leaf dataset.
+        aux: Resolved auxiliary dataset or filesystem references keyed by auxiliary name.
+    """
+
     path: EPath
     split_part: str
     aux: dict[str, EPath]
@@ -60,7 +68,23 @@ class DatasetLoaderInterface(ABC):
         *,
         split_part: Union[Literal["train", "val", "test"], str],
     ) -> List[TraversedDatasetReference]:
-        """Recursively discover leaf dataset references for one split in a single traversal."""
+        """Traverse a metadataset subtree and collect flattened leaf dataset references.
+
+        This method is the traversal-side counterpart to `get_datasets()`. Instead of
+        instantiating dataset loaders for leaf datasets, it walks the hierarchy, resolves nested
+        metadataset references, and returns the final leaf dataset references for a single split.
+
+        Args:
+            mds_path: Parent metadataset path used internally to resolve relative dataset and
+                auxiliary paths. Must be set for nested references and inner traversal nodes;
+                use None only for top-level metadatasets.
+            split_part: Split to traverse, such as `\"train\"`, `\"val\"`, or `\"test\"`. Nested
+                references may override this with their own configured split.
+
+        Returns:
+            A flattened list of `TraversedDatasetReference` values for all leaf datasets reached
+            during the traversal.
+        """
         raise NotImplementedError(f"{type(self).__name__} does not implement traverse()")
 
     @abstractmethod
