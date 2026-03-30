@@ -14,7 +14,7 @@ from megatron.energon.metadataset.loader_interface import (
     DatasetBlendMode,
     DatasetLoaderInterface,
     LoadedDatasetList,
-    ScannedDatasetReference,
+    TraversedDatasetReference,
 )
 from megatron.energon.worker import WorkerConfig
 
@@ -76,18 +76,20 @@ class DatasetReference:
         else:
             raise FileNotFoundError(self.path)
 
-    def scan(
+    def traverse(
         self,
         mds_path: Optional[EPath] = None,
         *,
         split_part: Union[Literal["train", "val", "test"], str],
-    ) -> List[ScannedDatasetReference]:
+    ) -> List[TraversedDatasetReference]:
         self._resolve_path(mds_path)
         self._dataset = None
         if self.path.is_file():
-            return self._load_nested_metadataset().scan(split_part=self.split_part or split_part)
+            return self._load_nested_metadataset().traverse(
+                split_part=self.split_part or split_part
+            )
         return [
-            ScannedDatasetReference(
+            TraversedDatasetReference(
                 path=self.path,
                 split_part=self.split_part or split_part,
                 aux={},
@@ -142,16 +144,16 @@ class MetadatasetBlender:
         for dataset in self.datasets:
             dataset.post_initialize(mds_path)
 
-    def scan(
+    def traverse(
         self,
         mds_path: Optional[EPath] = None,
         *,
         split_part: Union[Literal["train", "val", "test"], str],
-    ) -> List[ScannedDatasetReference]:
+    ) -> List[TraversedDatasetReference]:
         assert mds_path is not None
-        flattened: List[ScannedDatasetReference] = []
+        flattened: List[TraversedDatasetReference] = []
         for dataset in self.datasets:
-            flattened.extend(dataset.scan(mds_path, split_part=split_part))
+            flattened.extend(dataset.traverse(mds_path, split_part=split_part))
         return flattened
 
     def get_datasets(
@@ -217,14 +219,14 @@ class Metadataset(DatasetLoaderInterface):
         for split in self._splits.values():
             split.post_initialize(self._path)
 
-    def scan(
+    def traverse(
         self,
         mds_path: Optional[EPath] = None,
         *,
         split_part: Union[Literal["train", "val", "test"], str],
-    ) -> List[ScannedDatasetReference]:
+    ) -> List[TraversedDatasetReference]:
         assert mds_path is None
-        return self._splits[split_part].scan(self._path, split_part=split_part)
+        return self._splits[split_part].traverse(self._path, split_part=split_part)
 
     def get_datasets(
         self,

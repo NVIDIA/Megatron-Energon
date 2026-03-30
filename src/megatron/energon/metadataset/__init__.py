@@ -5,7 +5,7 @@ from megatron.energon.metadataset.dataset_loader import DatasetLoader
 from megatron.energon.metadataset.loader import (
     load_dataset,
     prepare_metadataset,
-    scan_metadataset,
+    traverse_metadataset,
 )
 from megatron.energon.metadataset.loader_interface import DatasetLoaderInterface
 from megatron.energon.metadataset.metadataset import Metadataset
@@ -18,5 +18,5 @@ __all__ = [
     "Metadataset",
     "MetadatasetV2",
     "prepare_metadataset",
-    "scan_metadataset",
+    "traverse_metadataset",
 ]

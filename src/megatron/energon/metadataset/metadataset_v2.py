@@ -33,7 +33,7 @@ from megatron.energon.metadataset.loader_interface import (
     DatasetBlendMode,
     DatasetLoaderInterface,
     LoadedDatasetList,
-    ScannedDatasetReference,
+    TraversedDatasetReference,
 )
 from megatron.energon.metadataset.metadataset import Metadataset
 from megatron.energon.worker import WorkerConfig
@@ -255,19 +255,19 @@ class DatasetReference(SubsetRatioMixin, DatasetLoaderInterface):
             new_aux[key] = normalized
         self.aux = new_aux
 
-    def _get_scanned_aux_references(self) -> dict[str, EPath]:
+    def _get_traversed_aux_references(self) -> dict[str, EPath]:
         if self.aux is None:
             return {}
-        scanned_aux: dict[str, EPath] = {}
+        traversed_aux: dict[str, EPath] = {}
         for key, value in self.aux.items():
             if isinstance(value, AuxDatasetReference):
                 assert isinstance(value.path, EPath)
-                scanned_aux[key] = value.path
+                traversed_aux[key] = value.path
             else:
                 assert isinstance(value, AuxFilesystemReference)
                 assert isinstance(value.fs_path, EPath)
-                scanned_aux[key] = value.fs_path
-        return scanned_aux
+                traversed_aux[key] = value.fs_path
+        return traversed_aux
 
     def _load_nested_metadataset(self) -> DatasetLoaderInterface:
         assert isinstance(self.path, EPath)
@@ -302,23 +302,25 @@ class DatasetReference(SubsetRatioMixin, DatasetLoaderInterface):
         else:
             raise FileNotFoundError(self.path)
 
-    def scan(
+    def traverse(
         self,
         mds_path: Optional[EPath] = None,
         *,
         split_part: Union[Literal["train", "val", "test"], str],
-    ) -> List[ScannedDatasetReference]:
+    ) -> List[TraversedDatasetReference]:
         self._resolve_path(mds_path)
         self._dataset = None
         ds_type = get_dataset_type(self.path)
         if ds_type == EnergonDatasetType.METADATASET:
-            return self._load_nested_metadataset().scan(split_part=self.split_part or split_part)
+            return self._load_nested_metadataset().traverse(
+                split_part=self.split_part or split_part
+            )
         self._normalize_aux_references(mds_path, validate=False)
         return [
-            ScannedDatasetReference(
+            TraversedDatasetReference(
                 path=self.path,
                 split_part=self.split_part or split_part,
-                aux=self._get_scanned_aux_references(),
+                aux=self._get_traversed_aux_references(),
             )
         ]
 
@@ -394,13 +396,13 @@ class JoinDatasetReference(DatasetReference):
         else:
             raise ValueError(f"Not a joinabledataset at {self.path}")
 
-    def scan(
+    def traverse(
         self,
         mds_path: Optional[EPath] = None,
         *,
         split_part: Union[Literal["train", "val", "test"], str],
-    ) -> List[ScannedDatasetReference]:
-        raise NotImplementedError("scan_metadataset() does not support joined datasets.")
+    ) -> List[TraversedDatasetReference]:
+        raise NotImplementedError("traverse_metadataset() does not support joined datasets.")
 
     def prepare(self, split_part: Optional[str] = None):
         assert False, (
@@ -463,13 +465,13 @@ class MetadatasetJoin(SubsetRatioMixin, DatasetLoaderInterface):
         )
         self._dataset.post_initialize(mds_path)
 
-    def scan(
+    def traverse(
         self,
         mds_path: Optional[EPath] = None,
         *,
         split_part: Union[Literal["train", "val", "test"], str],
-    ) -> List[ScannedDatasetReference]:
-        raise NotImplementedError("scan_metadataset() does not support joined datasets.")
+    ) -> List[TraversedDatasetReference]:
+        raise NotImplementedError("traverse_metadataset() does not support joined datasets.")
 
     def prepare(self, split_part: Optional[str] = None) -> Sequence[EPath]:
         assert self._dataset is not None, "Missing post_initialize call."
@@ -524,16 +526,16 @@ class MetadatasetBlend(DatasetLoaderInterface, SubsetRatioMixin):
         for dataset in self.blend:
             dataset.post_initialize(mds_path)
 
-    def scan(
+    def traverse(
         self,
         mds_path: Optional[EPath] = None,
         *,
         split_part: Union[Literal["train", "val", "test"], str],
-    ) -> List[ScannedDatasetReference]:
+    ) -> List[TraversedDatasetReference]:
         assert mds_path is not None
-        flattened: List[ScannedDatasetReference] = []
+        flattened: List[TraversedDatasetReference] = []
         for dataset in self.blend:
-            flattened.extend(dataset.scan(mds_path, split_part=split_part))
+            flattened.extend(dataset.traverse(mds_path, split_part=split_part))
         return flattened
 
     def prepare(self, split_part: Optional[str] = None) -> Sequence[EPath]:
@@ -617,16 +619,16 @@ class MetadatasetBlendEpochized(SubsetRatioMixin, DatasetLoaderInterface):
         for dataset in self.blend_epochized:
             dataset.post_initialize(mds_path)
 
-    def scan(
+    def traverse(
         self,
         mds_path: Optional[EPath] = None,
         *,
         split_part: Union[Literal["train", "val", "test"], str],
-    ) -> List[ScannedDatasetReference]:
+    ) -> List[TraversedDatasetReference]:
         assert mds_path is not None
-        flattened: List[ScannedDatasetReference] = []
+        flattened: List[TraversedDatasetReference] = []
         for dataset in self.blend_epochized:
-            flattened.extend(dataset.scan(mds_path, split_part=split_part))
+            flattened.extend(dataset.traverse(mds_path, split_part=split_part))
         return flattened
 
     def prepare(self, split_part: Optional[str] = None) -> Sequence[EPath]:
@@ -691,14 +693,14 @@ class MetadatasetV2(DatasetLoaderInterface):
         for split in self.splits.values():
             split.post_initialize(self.path)
 
-    def scan(
+    def traverse(
         self,
         mds_path: Optional[EPath] = None,
         *,
         split_part: Union[Literal["train", "val", "test"], str],
-    ) -> List[ScannedDatasetReference]:
+    ) -> List[TraversedDatasetReference]:
         assert mds_path is None
-        return self.splits[split_part].scan(self.path, split_part=split_part)
+        return self.splits[split_part].traverse(self.path, split_part=split_part)
 
     def prepare(self, split_part: Optional[str] = None) -> Sequence[EPath]:
         # In the case of prepare for MetadatasetV2, we ignore the passed cache_path

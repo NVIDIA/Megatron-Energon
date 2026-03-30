@@ -10,7 +10,7 @@ from megatron.energon.flavors.webdataset.metadata import EnergonDatasetType, get
 from megatron.energon.metadataset.dataset_loader import DatasetLoader
 from megatron.energon.metadataset.loader_interface import (
     DatasetLoaderInterface,
-    ScannedDatasetReference,
+    TraversedDatasetReference,
 )
 from megatron.energon.metadataset.metadataset import Metadataset
 from megatron.energon.typed_converter import JsonParser
@@ -54,7 +54,7 @@ def traverse_metadataset(
     *,
     split_part: str,
     **kwargs,
-) -> list[ScannedDatasetReference]:
+) -> list[TraversedDatasetReference]:
     """Traverses one metadataset split recursively and returns the flattened leaf references."""
 
     path = EPath(path)
@@ -67,7 +67,7 @@ def traverse_metadataset(
         default_type=Metadataset,
         default_kwargs=dict(path=path, **kwargs),
     )
-    return mds.scan(split_part=split_part)
+    return mds.traverse(split_part=split_part)
 
 
 class MockJsonParser(JsonParser):

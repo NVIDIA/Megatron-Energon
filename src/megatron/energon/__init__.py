@@ -69,7 +69,7 @@ from megatron.energon.metadataset import (
     MetadatasetV2,
     load_dataset,
     prepare_metadataset,
-    scan_metadataset,
+    traverse_metadataset,
 )
 from megatron.energon.savable_loader import SavableDataLoader
 from megatron.energon.source_info import SourceInfo
@@ -192,7 +192,7 @@ __all__ = [
     "SampleDecoder",
     "SavableDataLoader",
     "SavableDataset",
-    "scan_metadataset",
+    "traverse_metadataset",
     "ShuffleBufferDataset",
     "SimilarityInterleavedSample",
     "SimilarityInterleavedWebdataset",

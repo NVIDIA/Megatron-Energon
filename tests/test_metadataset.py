@@ -28,7 +28,7 @@ from megatron.energon import (
 )
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
-from megatron.energon.metadataset.loader import scan_metadataset
+from megatron.energon.metadataset.loader import traverse_metadataset
 from megatron.energon.metadataset.loader_interface import DatasetBlendMode
 from megatron.energon.wrappers.blend_dataset import BlendDataset
 
@@ -501,8 +501,8 @@ class TestDataset(unittest.TestCase):
         print(Counter(val_order1))
         assert all(v == 1 for v in Counter(val_order1).values())
 
-    def test_scan_metadataset_flattens_nested_v1_references(self):
-        refs = scan_metadataset(self.nested_mds_path, split_part="train")
+    def test_traverse_metadataset_flattens_nested_v1_references(self):
+        refs = traverse_metadataset(self.nested_mds_path, split_part="train")
 
         assert [ref.path for ref in refs] == [
             EPath(self.dataset_path / "ds1"),

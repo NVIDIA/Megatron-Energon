@@ -40,7 +40,7 @@ class LoadedDatasetList:
 
 
 @dataclass
-class ScannedDatasetReference:
+class TraversedDatasetReference:
     path: EPath
     split_part: str
     aux: dict[str, EPath]
@@ -54,14 +54,14 @@ class DatasetLoaderInterface(ABC):
         """Called to finally initialize the dataset."""
         ...
 
-    def scan(
+    def traverse(
         self,
         mds_path: Optional[EPath] = None,
         *,
         split_part: Union[Literal["train", "val", "test"], str],
-    ) -> List[ScannedDatasetReference]:
+    ) -> List[TraversedDatasetReference]:
         """Recursively discover leaf dataset references for one split in a single traversal."""
-        raise NotImplementedError(f"{type(self).__name__} does not implement scan()")
+        raise NotImplementedError(f"{type(self).__name__} does not implement traverse()")
 
     @abstractmethod
     def get_datasets(

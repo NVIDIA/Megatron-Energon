@@ -30,7 +30,7 @@ from megatron.energon import (
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib.epath import EPath
 from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
-from megatron.energon.metadataset.loader import prepare_metadataset, scan_metadataset
+from megatron.energon.metadataset.loader import prepare_metadataset, traverse_metadataset
 from megatron.energon.metadataset.loader_interface import DatasetBlendMode
 from megatron.energon.task_encoder.base import DefaultTaskEncoder
 from megatron.energon.wrappers.watchdog_dataset import WatchdogDataset
@@ -311,8 +311,8 @@ class TestDataset(unittest.TestCase):
             },
         ]
 
-    def test_scan_metadataset_recurses_nested_v2_references(self):
-        refs = scan_metadataset(self.nested_mds_path, split_part="train")
+    def test_traverse_metadataset_recurses_nested_v2_references(self):
+        refs = traverse_metadataset(self.nested_mds_path, split_part="train")
 
         assert [ref.path for ref in refs] == [
             EPath(self.dataset_path / "ds1"),
@@ -323,7 +323,7 @@ class TestDataset(unittest.TestCase):
         assert [ref.split_part for ref in refs] == ["train", "train", "train", "train"]
         assert all(ref.aux == {} for ref in refs)
 
-    def test_scan_metadataset_preserves_missing_v2_leaf_and_aux(self):
+    def test_traverse_metadataset_preserves_missing_v2_leaf_and_aux(self):
         missing_leaf_mds_path = self.dataset_path / "missing_leaf_metadataset_v2.yaml"
         missing_leaf_mds_path.write_text(
             "\n".join(
@@ -341,7 +341,7 @@ class TestDataset(unittest.TestCase):
             encoding="utf-8",
         )
 
-        refs = scan_metadataset(missing_leaf_mds_path, split_part="train")
+        refs = traverse_metadataset(missing_leaf_mds_path, split_part="train")
 
         assert len(refs) == 1
         assert refs[0].path == EPath(self.dataset_path / "missing_ds")
