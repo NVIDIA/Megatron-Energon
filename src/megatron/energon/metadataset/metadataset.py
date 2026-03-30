@@ -76,12 +76,23 @@ class DatasetReference:
         else:
             raise FileNotFoundError(self.path)
 
-    def scan(self, mds_path: Optional[EPath] = None):
+    def scan(
+        self,
+        mds_path: Optional[EPath] = None,
+        *,
+        split_part: Union[Literal["train", "val", "test"], str],
+    ) -> List[ScannedDatasetReference]:
         self._resolve_path(mds_path)
         self._dataset = None
         if self.path.is_file():
-            self._dataset = self._load_nested_metadataset()
-            self._dataset.scan()
+            return self._load_nested_metadataset().scan(split_part=self.split_part or split_part)
+        return [
+            ScannedDatasetReference(
+                path=self.path,
+                split_part=self.split_part or split_part,
+                aux={},
+            )
+        ]
 
     def get_datasets(
         self,
@@ -120,18 +131,6 @@ class DatasetReference:
             **kwargs,
         )
 
-    def get_scanned_dataset_references(
-        self,
-        *,
-        split_part: Union[Literal["train", "val", "test"], str],
-    ) -> List[ScannedDatasetReference]:
-        if self._dataset is None:
-            return [self]
-        return self._dataset.get_scanned_dataset_references(
-            split_part=self.split_part or split_part
-        )
-
-
 @edataclass
 class MetadatasetBlender:
     """Internal blending of the dataset."""
@@ -143,10 +142,17 @@ class MetadatasetBlender:
         for dataset in self.datasets:
             dataset.post_initialize(mds_path)
 
-    def scan(self, mds_path: Optional[EPath] = None):
+    def scan(
+        self,
+        mds_path: Optional[EPath] = None,
+        *,
+        split_part: Union[Literal["train", "val", "test"], str],
+    ) -> List[ScannedDatasetReference]:
         assert mds_path is not None
+        flattened: List[ScannedDatasetReference] = []
         for dataset in self.datasets:
-            dataset.scan(mds_path)
+            flattened.extend(dataset.scan(mds_path, split_part=split_part))
+        return flattened
 
     def get_datasets(
         self,
@@ -191,17 +197,6 @@ class MetadatasetBlender:
             datasets=datasets,
         )
 
-    def get_scanned_dataset_references(
-        self,
-        *,
-        split_part: Union[Literal["train", "val", "test"], str],
-    ) -> List[ScannedDatasetReference]:
-        flattened: List[ScannedDatasetReference] = []
-        for dataset in self.datasets:
-            flattened.extend(dataset.get_scanned_dataset_references(split_part=split_part))
-        return flattened
-
-
 class Metadataset(DatasetLoaderInterface):
     """Main entry for metadataset."""
 
@@ -222,10 +217,14 @@ class Metadataset(DatasetLoaderInterface):
         for split in self._splits.values():
             split.post_initialize(self._path)
 
-    def scan(self, mds_path: Optional[EPath] = None):
+    def scan(
+        self,
+        mds_path: Optional[EPath] = None,
+        *,
+        split_part: Union[Literal["train", "val", "test"], str],
+    ) -> List[ScannedDatasetReference]:
         assert mds_path is None
-        for split in self._splits.values():
-            split.scan(self._path)
+        return self._splits[split_part].scan(self._path, split_part=split_part)
 
     def get_datasets(
         self,
@@ -248,9 +247,3 @@ class Metadataset(DatasetLoaderInterface):
             **kwargs,
         )
 
-    def get_scanned_dataset_references(
-        self,
-        *,
-        split_part: Union[Literal["train", "val", "test"], str],
-    ) -> List[ScannedDatasetReference]:
-        return self._splits[split_part].get_scanned_dataset_references(split_part=split_part)

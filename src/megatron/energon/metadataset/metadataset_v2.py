@@ -255,6 +255,20 @@ class DatasetReference(SubsetRatioMixin, DatasetLoaderInterface):
             new_aux[key] = normalized
         self.aux = new_aux
 
+    def _get_scanned_aux_references(self) -> dict[str, EPath]:
+        if self.aux is None:
+            return {}
+        scanned_aux: dict[str, EPath] = {}
+        for key, value in self.aux.items():
+            if isinstance(value, AuxDatasetReference):
+                assert isinstance(value.path, EPath)
+                scanned_aux[key] = value.path
+            else:
+                assert isinstance(value, AuxFilesystemReference)
+                assert isinstance(value.fs_path, EPath)
+                scanned_aux[key] = value.fs_path
+        return scanned_aux
+
     def _load_nested_metadataset(self) -> DatasetLoaderInterface:
         assert isinstance(self.path, EPath)
         assert self.aux is None, "Cannot specify auxiliary datasets for crude datasets"
@@ -288,15 +302,25 @@ class DatasetReference(SubsetRatioMixin, DatasetLoaderInterface):
         else:
             raise FileNotFoundError(self.path)
 
-    def scan(self, mds_path: Optional[EPath] = None) -> None:
+    def scan(
+        self,
+        mds_path: Optional[EPath] = None,
+        *,
+        split_part: Union[Literal["train", "val", "test"], str],
+    ) -> List[ScannedDatasetReference]:
         self._resolve_path(mds_path)
         self._dataset = None
         ds_type = get_dataset_type(self.path)
         if ds_type == EnergonDatasetType.METADATASET:
-            self._dataset = self._load_nested_metadataset()
-            self._dataset.scan()
-        else:
-            self._normalize_aux_references(mds_path, validate=False)
+            return self._load_nested_metadataset().scan(split_part=self.split_part or split_part)
+        self._normalize_aux_references(mds_path, validate=False)
+        return [
+            ScannedDatasetReference(
+                path=self.path,
+                split_part=self.split_part or split_part,
+                aux=self._get_scanned_aux_references(),
+            )
+        ]
 
     def prepare(self, split_part: Optional[str] = None) -> Sequence[EPath]:
         assert self._dataset is not None
@@ -348,18 +372,6 @@ class DatasetReference(SubsetRatioMixin, DatasetLoaderInterface):
                     loaded_dataset.aux.update(aux)
         return result
 
-    def get_scanned_dataset_references(
-        self,
-        *,
-        split_part: Union[Literal["train", "val", "test"], str],
-    ) -> List[ScannedDatasetReference]:
-        if self._dataset is None:
-            return [self]
-        return self._dataset.get_scanned_dataset_references(
-            split_part=self.split_part or split_part
-        )
-
-
 @edataclass
 class JoinDatasetReference(DatasetReference):
     nonmatch: Literal["skip", "none", "error"] = "error"
@@ -382,9 +394,13 @@ class JoinDatasetReference(DatasetReference):
         else:
             raise ValueError(f"Not a joinabledataset at {self.path}")
 
-    def scan(self, mds_path: Optional[EPath] = None) -> None:
-        self._resolve_path(mds_path)
-        self._dataset = None
+    def scan(
+        self,
+        mds_path: Optional[EPath] = None,
+        *,
+        split_part: Union[Literal["train", "val", "test"], str],
+    ) -> List[ScannedDatasetReference]:
+        raise NotImplementedError("scan_metadataset() does not support joined datasets.")
 
     def prepare(self, split_part: Optional[str] = None):
         assert False, (
@@ -398,16 +414,6 @@ class JoinDatasetReference(DatasetReference):
         assert False, (
             "JoinDatasetReference should not be used directly, but only by MetadatasetJoin"
         )
-
-    def get_scanned_dataset_references(
-        self,
-        *,
-        split_part: Union[Literal["train", "val", "test"], str],
-    ) -> List[ScannedDatasetReference]:
-        raise NotImplementedError(
-            "get_scanned_dataset_references() does not support joined datasets."
-        )
-
 
 @edataclass
 class MetadatasetJoin(SubsetRatioMixin, DatasetLoaderInterface):
@@ -457,21 +463,13 @@ class MetadatasetJoin(SubsetRatioMixin, DatasetLoaderInterface):
         )
         self._dataset.post_initialize(mds_path)
 
-    def scan(self, mds_path: Optional[EPath] = None):
-        assert mds_path is not None
-        assert self.join is not None
-        assert self.joiner is not None, "Must set joiner for joining datasets"
-        assert self.dataset_config is None, "Cannot set dataset_config for joining datasets"
-        assert self.split_config is None, "Cannot set split_config for joining datasets"
-        self._dataset = None
-        if isinstance(self.join, list):
-            for join in self.join:
-                join.scan(mds_path)
-        elif isinstance(self.join, dict):
-            for join in self.join.values():
-                join.scan(mds_path)
-        else:
-            raise ValueError("Invalid join type")
+    def scan(
+        self,
+        mds_path: Optional[EPath] = None,
+        *,
+        split_part: Union[Literal["train", "val", "test"], str],
+    ) -> List[ScannedDatasetReference]:
+        raise NotImplementedError("scan_metadataset() does not support joined datasets.")
 
     def prepare(self, split_part: Optional[str] = None) -> Sequence[EPath]:
         assert self._dataset is not None, "Missing post_initialize call."
@@ -500,16 +498,6 @@ class MetadatasetJoin(SubsetRatioMixin, DatasetLoaderInterface):
             **kwargs,
         )
 
-    def get_scanned_dataset_references(
-        self,
-        *,
-        split_part: Union[Literal["train", "val", "test"], str],
-    ) -> List[ScannedDatasetReference]:
-        raise NotImplementedError(
-            "get_scanned_dataset_references() does not support joined datasets."
-        )
-
-
 @dataclass
 class BlendWeightMixin:
     weight: float = 1.0
@@ -536,10 +524,17 @@ class MetadatasetBlend(DatasetLoaderInterface, SubsetRatioMixin):
         for dataset in self.blend:
             dataset.post_initialize(mds_path)
 
-    def scan(self, mds_path: Optional[EPath] = None):
+    def scan(
+        self,
+        mds_path: Optional[EPath] = None,
+        *,
+        split_part: Union[Literal["train", "val", "test"], str],
+    ) -> List[ScannedDatasetReference]:
         assert mds_path is not None
+        flattened: List[ScannedDatasetReference] = []
         for dataset in self.blend:
-            dataset.scan(mds_path)
+            flattened.extend(dataset.scan(mds_path, split_part=split_part))
+        return flattened
 
     def prepare(self, split_part: Optional[str] = None) -> Sequence[EPath]:
         files = []
@@ -593,17 +588,6 @@ class MetadatasetBlend(DatasetLoaderInterface, SubsetRatioMixin):
             datasets=datasets,
         )
 
-    def get_scanned_dataset_references(
-        self,
-        *,
-        split_part: Union[Literal["train", "val", "test"], str],
-    ) -> List[ScannedDatasetReference]:
-        flattened: List[ScannedDatasetReference] = []
-        for dataset in self.blend:
-            flattened.extend(dataset.get_scanned_dataset_references(split_part=split_part))
-        return flattened
-
-
 @dataclass
 class BlendRepetitionsMixin:
     repetitions: Union[int, float] = 1
@@ -633,10 +617,17 @@ class MetadatasetBlendEpochized(SubsetRatioMixin, DatasetLoaderInterface):
         for dataset in self.blend_epochized:
             dataset.post_initialize(mds_path)
 
-    def scan(self, mds_path: Optional[EPath] = None):
+    def scan(
+        self,
+        mds_path: Optional[EPath] = None,
+        *,
+        split_part: Union[Literal["train", "val", "test"], str],
+    ) -> List[ScannedDatasetReference]:
         assert mds_path is not None
+        flattened: List[ScannedDatasetReference] = []
         for dataset in self.blend_epochized:
-            dataset.scan(mds_path)
+            flattened.extend(dataset.scan(mds_path, split_part=split_part))
+        return flattened
 
     def prepare(self, split_part: Optional[str] = None) -> Sequence[EPath]:
         files = []
@@ -688,17 +679,6 @@ class MetadatasetBlendEpochized(SubsetRatioMixin, DatasetLoaderInterface):
             datasets=datasets,
         )
 
-    def get_scanned_dataset_references(
-        self,
-        *,
-        split_part: Union[Literal["train", "val", "test"], str],
-    ) -> List[ScannedDatasetReference]:
-        flattened: List[ScannedDatasetReference] = []
-        for dataset in self.blend_epochized:
-            flattened.extend(dataset.get_scanned_dataset_references(split_part=split_part))
-        return flattened
-
-
 @edataclass
 class MetadatasetV2(DatasetLoaderInterface):
     path: EPath
@@ -711,10 +691,14 @@ class MetadatasetV2(DatasetLoaderInterface):
         for split in self.splits.values():
             split.post_initialize(self.path)
 
-    def scan(self, mds_path: Optional[EPath] = None):
+    def scan(
+        self,
+        mds_path: Optional[EPath] = None,
+        *,
+        split_part: Union[Literal["train", "val", "test"], str],
+    ) -> List[ScannedDatasetReference]:
         assert mds_path is None
-        for split in self.splits.values():
-            split.scan(self.path)
+        return self.splits[split_part].scan(self.path, split_part=split_part)
 
     def prepare(self, split_part: Optional[str] = None) -> Sequence[EPath]:
         # In the case of prepare for MetadatasetV2, we ignore the passed cache_path
@@ -758,9 +742,3 @@ class MetadatasetV2(DatasetLoaderInterface):
             **kwargs,
         )
 
-    def get_scanned_dataset_references(
-        self,
-        *,
-        split_part: Union[Literal["train", "val", "test"], str],
-    ) -> List[ScannedDatasetReference]:
-        return self.splits[split_part].get_scanned_dataset_references(split_part=split_part)

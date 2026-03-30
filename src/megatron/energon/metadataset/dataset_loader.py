@@ -13,7 +13,6 @@ from megatron.energon.metadataset.loader_interface import (
     DatasetLoaderInterface,
     LoadedDataset,
     LoadedDatasetList,
-    ScannedDatasetReference,
 )
 from megatron.energon.worker import WorkerConfig
 
@@ -31,15 +30,6 @@ class DatasetLoader(DatasetLoaderInterface):
 
     def post_initialize(self, mds_path: Optional[EPath] = None):
         pass
-
-    def get_scanned_dataset_references(
-        self,
-        *,
-        split_part: Union[Literal["train", "val", "test"], str],
-    ) -> list[ScannedDatasetReference]:
-        raise TypeError(
-            "get_scanned_dataset_references() expects the output of scan_metadataset()."
-        )
 
     def get_dataset(
         self,

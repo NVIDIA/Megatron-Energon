@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Sequence, TypeAlias, Union
+from typing import Any, Dict, List, Literal, Optional, Sequence, Union
 
 from megatron.energon.cache import FileStore
 from megatron.energon.edataclass import edataclass
@@ -11,14 +12,6 @@ from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory
 from megatron.energon.flavors.webdataset.structs import DatasetSubset
 from megatron.energon.worker import WorkerConfig
-
-if TYPE_CHECKING:
-    from megatron.energon.metadataset.metadataset import DatasetReference as DatasetReferenceV1
-    from megatron.energon.metadataset.metadataset_v2 import DatasetReference as DatasetReferenceV2
-
-    ScannedDatasetReference: TypeAlias = Union[DatasetReferenceV1, DatasetReferenceV2]
-else:
-    ScannedDatasetReference: TypeAlias = Any
 
 
 class DatasetBlendMode(Enum):
@@ -46,6 +39,13 @@ class LoadedDatasetList:
     blend_mode: DatasetBlendMode = DatasetBlendMode.NONE
 
 
+@dataclass
+class ScannedDatasetReference:
+    path: EPath
+    split_part: str
+    aux: dict[str, EPath]
+
+
 class DatasetLoaderInterface(ABC):
     """General interface for a dataset loader."""
 
@@ -54,19 +54,14 @@ class DatasetLoaderInterface(ABC):
         """Called to finally initialize the dataset."""
         ...
 
-    def scan(self, mds_path: Optional[EPath] = None):
-        """Recursively discover dataset references without loading leaf datasets."""
-        raise NotImplementedError(f"{type(self).__name__} does not implement scan()")
-
-    def get_scanned_dataset_references(
+    def scan(
         self,
+        mds_path: Optional[EPath] = None,
         *,
         split_part: Union[Literal["train", "val", "test"], str],
     ) -> List[ScannedDatasetReference]:
-        """Flatten the leaf dataset references from a scanned metadataset."""
-        raise NotImplementedError(
-            f"{type(self).__name__} does not implement get_scanned_dataset_references()"
-        )
+        """Recursively discover leaf dataset references for one split in a single traversal."""
+        raise NotImplementedError(f"{type(self).__name__} does not implement scan()")
 
     @abstractmethod
     def get_datasets(

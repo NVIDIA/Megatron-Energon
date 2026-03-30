@@ -8,7 +8,10 @@ from megatron.energon.dataset_config import load_config
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.webdataset.metadata import EnergonDatasetType, get_dataset_type
 from megatron.energon.metadataset.dataset_loader import DatasetLoader
-from megatron.energon.metadataset.loader_interface import DatasetLoaderInterface
+from megatron.energon.metadataset.loader_interface import (
+    DatasetLoaderInterface,
+    ScannedDatasetReference,
+)
 from megatron.energon.metadataset.metadataset import Metadataset
 from megatron.energon.typed_converter import JsonParser
 
@@ -46,24 +49,25 @@ def load_dataset(
         raise ValueError(f"Invalid dataset at {path}")
 
 
-def scan_metadataset(
+def traverse_metadataset(
     path: Union[str, EPath, Path],
+    *,
+    split_part: str,
     **kwargs,
-) -> DatasetLoaderInterface:
-    """Scans a metadataset recursively and also handles non-existent datasets."""
+) -> list[ScannedDatasetReference]:
+    """Traverses one metadataset split recursively and returns the flattened leaf references."""
 
     path = EPath(path)
     ds_type = get_dataset_type(path)
     assert ds_type == EnergonDatasetType.METADATASET, (
-        f"scan_metadataset only supports metadatasets, got {ds_type} at {path}"
+        f"traverse_metadataset only supports metadatasets, got {ds_type} at {path}"
     )
     mds = load_config(
         path,
         default_type=Metadataset,
         default_kwargs=dict(path=path, **kwargs),
     )
-    mds.scan()
-    return mds
+    return mds.scan(split_part=split_part)
 
 
 class MockJsonParser(JsonParser):
