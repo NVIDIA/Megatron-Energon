@@ -147,6 +147,7 @@ class DatasetReference:
             **kwargs,
         )
 
+
 @edataclass
 class MetadatasetBlender:
     """Internal blending of the dataset."""
@@ -213,6 +214,7 @@ class MetadatasetBlender:
             datasets=datasets,
         )
 
+
 class Metadataset(DatasetLoaderInterface):
     """Main entry for metadataset."""
 
@@ -271,4 +273,3 @@ class Metadataset(DatasetLoaderInterface):
             subset=subset,
             **kwargs,
         )
-
