@@ -6,6 +6,7 @@
 import gc
 import io
 import logging
+import os
 import pickle
 import re
 import shutil
@@ -19,6 +20,7 @@ from typing import List
 import torch
 import webdataset as wds
 
+import megatron.energon.epathlib.epath as epath_mod
 from megatron.energon import (
     Batch,
     Cooker,
@@ -627,6 +629,61 @@ class TestDataset(unittest.TestCase):
         print(samples_restored)
 
         assert all([a == b for a, b in zip(samples_after, samples_restored)])
+
+    def test_dss_path(self):
+        dss_mds_path = self.dataset_path / "metadataset_dss.yaml"
+        dss_mds_path.write_text(
+            "\n".join(
+                [
+                    "__module__: megatron.energon",
+                    "__class__: MetadatasetV2",
+                    "splits:",
+                    "  train:",
+                    "    path: dss://ds1",
+                    "    subflavors:",
+                    "      crude_type: txtpkl",
+                ]
+            )
+        )
+
+        orig_env_cache_dir = os.environ.get("NVDATASET_CACHE_DIR")
+        orig_mod_cache_dir = epath_mod.NVDATASET_CACHE_DIR
+
+        try:
+            os.environ["NVDATASET_CACHE_DIR"] = str(self.dataset_path)
+            epath_mod.NVDATASET_CACHE_DIR = EPath(self.dataset_path)
+
+            torch.manual_seed(42)
+            worker_config = WorkerConfig(
+                rank=0,
+                world_size=1,
+                num_workers=0,
+            )
+
+            loader = get_savable_loader(
+                get_train_dataset(
+                    dss_mds_path,
+                    batch_size=1,
+                    worker_config=worker_config,
+                    task_encoder=CookingTaskEncoder(),
+                    shuffle_buffer_size=None,
+                    max_samples_per_sequence=None,
+                ),
+                checkpoint_every_sec=0,
+                checkpoint_every_min_n_samples=1,
+            )
+
+            texts = [batch.txts[0] for _, batch in zip(range(3), loader)]
+            assert len(texts) == 3
+            assert len(set(texts)) == 3
+            assert all(re.fullmatch(r"<\d+>", txt) for txt in texts)
+            assert all(0 <= int(txt.removeprefix("<").removesuffix(">")) < 55 for txt in texts)
+        finally:
+            if orig_env_cache_dir is None:
+                os.environ.pop("NVDATASET_CACHE_DIR", None)
+            else:
+                os.environ["NVDATASET_CACHE_DIR"] = orig_env_cache_dir
+            epath_mod.NVDATASET_CACHE_DIR = orig_mod_cache_dir
 
     def test_aux_random_access_with_cache(self):
         torch.manual_seed(42)

@@ -236,7 +236,7 @@ class EPath:
 
     @property
     def url(self) -> str:
-        if self.is_pure_local():
+        if self.profile == DEFAULT_PROFILE_NAME:
             return self._internal_str_path
         int_path_str = str(self.internal_path)
         if self.profile == "dss":
@@ -244,9 +244,6 @@ class EPath:
                 int_path_str = int_path_str[1:]
             return f"dss://{int_path_str}"
         return f"msc://{self.profile}{int_path_str}"
-
-    def is_pure_local(self) -> bool:
-        return self.profile == DEFAULT_PROFILE_NAME
 
     def is_local(self) -> bool:
         if self.profile == "dss":
@@ -308,7 +305,8 @@ class EPath:
     def display_name(self) -> str:
         if self.profile == "dss":
             # Use the ds name for DSS paths
-            return self.internal_path.parents[-2].name
+            # E.g. from /charts@v0/something return parts[1] i.e. "charts@v0"
+            return self.internal_path.parts[1]
         # Use the name for other paths
         return self.name
 
