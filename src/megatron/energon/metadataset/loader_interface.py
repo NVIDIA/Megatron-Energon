@@ -62,7 +62,6 @@ class DatasetLoaderInterface(ABC):
         """Called to finally initialize the dataset."""
         ...
 
-    @abstractmethod
     def traverse(
         self,
         mds_path: Optional[EPath] = None,
