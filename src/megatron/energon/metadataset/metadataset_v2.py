@@ -269,6 +269,26 @@ class DatasetReference(SubsetRatioMixin, DatasetLoaderInterface):
                 traversed_aux[key] = value.fs_path
         return traversed_aux
 
+    def _merge_traversed_subflavors(
+        self, inherited_subflavors: Optional[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """Merge this reference's subflavors with the inherited traversal subflavors.
+
+        The merge order mirrors `get_datasets(...)`: this reference contributes the base mapping,
+        and inherited outer-hierarchy subflavors override on key conflicts.
+
+        Args:
+            inherited_subflavors: Effective subflavors accumulated from outer metadataset
+                references during traversal.
+
+        Returns:
+            The effective subflavor mapping for this reference, after applying outer-overrides-inner
+            merge semantics.
+        """
+        if self.subflavors is not None:
+            return {**self.subflavors, **(inherited_subflavors or {})}
+        return dict(inherited_subflavors or {})
+
     def _load_nested_metadataset(self) -> DatasetLoaderInterface:
         assert isinstance(self.path, EPath)
         assert self.aux is None, "Cannot specify auxiliary datasets for crude datasets"
@@ -307,6 +327,7 @@ class DatasetReference(SubsetRatioMixin, DatasetLoaderInterface):
         mds_path: Optional[EPath] = None,
         *,
         split_part: Union[Literal["train", "val", "test"], str],
+        _subflavors: Optional[Dict[str, Any]] = None,
     ) -> List[TraversedDatasetReference]:
         """Traverse this V2 dataset reference into flattened leaf references.
 
@@ -326,12 +347,13 @@ class DatasetReference(SubsetRatioMixin, DatasetLoaderInterface):
             A single leaf `TraversedDatasetReference` for direct dataset references, or the
             flattened traversal result of the nested metadataset when this reference points to one.
         """
-
         self._resolve_path(mds_path)
+        effective_subflavors = self._merge_traversed_subflavors(_subflavors)
         ds_type = get_dataset_type(self.path)
         if ds_type == EnergonDatasetType.METADATASET:
             return self._load_nested_metadataset().traverse(
-                split_part=self.split_part or split_part
+                split_part=self.split_part or split_part,
+                _subflavors=effective_subflavors,
             )
         self._normalize_aux_references(mds_path, validate=False)
         return [
@@ -339,6 +361,7 @@ class DatasetReference(SubsetRatioMixin, DatasetLoaderInterface):
                 path=self.path,
                 split_part=self.split_part or split_part,
                 aux=self._get_traversed_aux_references(),
+                subflavors=effective_subflavors,
             )
         ]
 
@@ -420,6 +443,7 @@ class JoinDatasetReference(DatasetReference):
         mds_path: Optional[EPath] = None,
         *,
         split_part: Union[Literal["train", "val", "test"], str],
+        _subflavors: Optional[Dict[str, Any]] = None,
     ) -> List[TraversedDatasetReference]:
         raise NotImplementedError("traverse_metadataset() does not support joined datasets.")
 
@@ -490,6 +514,7 @@ class MetadatasetJoin(SubsetRatioMixin, DatasetLoaderInterface):
         mds_path: Optional[EPath] = None,
         *,
         split_part: Union[Literal["train", "val", "test"], str],
+        _subflavors: Optional[Dict[str, Any]] = None,
     ) -> List[TraversedDatasetReference]:
         raise NotImplementedError("traverse_metadataset() does not support joined datasets.")
 
@@ -552,11 +577,18 @@ class MetadatasetBlend(DatasetLoaderInterface, SubsetRatioMixin):
         mds_path: Optional[EPath] = None,
         *,
         split_part: Union[Literal["train", "val", "test"], str],
+        _subflavors: Optional[Dict[str, Any]] = None,
     ) -> List[TraversedDatasetReference]:
         assert mds_path is not None
         flattened: List[TraversedDatasetReference] = []
         for dataset in self.blend:
-            flattened.extend(dataset.traverse(mds_path, split_part=split_part))
+            flattened.extend(
+                dataset.traverse(
+                    mds_path,
+                    split_part=split_part,
+                    _subflavors=_subflavors,
+                )
+            )
         return flattened
 
     def prepare(self, split_part: Optional[str] = None) -> Sequence[EPath]:
@@ -646,11 +678,18 @@ class MetadatasetBlendEpochized(SubsetRatioMixin, DatasetLoaderInterface):
         mds_path: Optional[EPath] = None,
         *,
         split_part: Union[Literal["train", "val", "test"], str],
+        _subflavors: Optional[Dict[str, Any]] = None,
     ) -> List[TraversedDatasetReference]:
         assert mds_path is not None
         flattened: List[TraversedDatasetReference] = []
         for dataset in self.blend_epochized:
-            flattened.extend(dataset.traverse(mds_path, split_part=split_part))
+            flattened.extend(
+                dataset.traverse(
+                    mds_path,
+                    split_part=split_part,
+                    _subflavors=_subflavors,
+                )
+            )
         return flattened
 
     def prepare(self, split_part: Optional[str] = None) -> Sequence[EPath]:
@@ -721,6 +760,7 @@ class MetadatasetV2(DatasetLoaderInterface):
         mds_path: Optional[EPath] = None,
         *,
         split_part: Union[Literal["train", "val", "test"], str],
+        _subflavors: Optional[Dict[str, Any]] = None,
     ) -> List[TraversedDatasetReference]:
         """Traverse the selected V2 split and flatten all reachable leaf references.
 
@@ -732,7 +772,11 @@ class MetadatasetV2(DatasetLoaderInterface):
             The flattened list of traversed leaf dataset references for `split_part`.
         """
         assert mds_path is None
-        return self.splits[split_part].traverse(self.path, split_part=split_part)
+        return self.splits[split_part].traverse(
+            self.path,
+            split_part=split_part,
+            _subflavors=_subflavors,
+        )
 
     def prepare(self, split_part: Optional[str] = None) -> Sequence[EPath]:
         # In the case of prepare for MetadatasetV2, we ignore the passed cache_path

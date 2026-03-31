@@ -47,11 +47,13 @@ class TraversedDatasetReference:
         path: Resolved path to the referenced leaf dataset.
         split_part: Effective split part to use when loading the leaf dataset.
         aux: Resolved auxiliary dataset or filesystem references keyed by auxiliary name.
+        subflavors: Effective subflavors implied by the traversed metadataset hierarchy.
     """
 
     path: EPath
     split_part: str
     aux: dict[str, EPath]
+    subflavors: dict[str, Any]
 
 
 class DatasetLoaderInterface(ABC):
@@ -67,6 +69,7 @@ class DatasetLoaderInterface(ABC):
         mds_path: Optional[EPath] = None,
         *,
         split_part: Union[Literal["train", "val", "test"], str],
+        _subflavors: Optional[Dict[str, Any]] = None,
     ) -> List[TraversedDatasetReference]:
         """Traverse a metadataset subtree and collect flattened leaf dataset references.
 

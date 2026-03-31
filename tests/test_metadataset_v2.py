@@ -312,7 +312,24 @@ class TestDataset(unittest.TestCase):
         ]
 
     def test_traverse_metadataset_recurses_nested_v2_references(self):
+        """Traversed subflavors only reflect metadataset hierarchy merges.
+
+        They intentionally do not include the leaf dataset's own `dataset.yaml` subflavors, which
+        are only applied later when `get_datasets()` loads the concrete dataset factory.
+        """
+
+        worker_config = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=0,
+        )
         refs = traverse_metadataset(self.nested_mds_path, split_part="train")
+        dataset = load_dataset(self.nested_mds_path)
+        raw_datasets = dataset.get_datasets(
+            training=False,
+            split_part="train",
+            worker_config=worker_config,
+        )
 
         assert [ref.path for ref in refs] == [
             EPath(self.dataset_path / "ds1"),
@@ -322,6 +339,31 @@ class TestDataset(unittest.TestCase):
         ]
         assert [ref.split_part for ref in refs] == ["train", "train", "train", "train"]
         assert all(ref.aux == {} for ref in refs)
+        # Traversal records only hierarchy-derived subflavors, not the loaded leaf dataset.yaml.
+        assert [ref.subflavors for ref in refs] == [
+            {
+                "source": "nested_metadataset.yaml",
+                "number": 43,
+                "mds": "nested_train",
+            },
+            {
+                "source": "nested_metadataset.yaml",
+                "number": 44,
+                "mds": "nested_train",
+            },
+            {
+                "source": "nested_metadataset.yaml",
+                "mds": "nested_val",
+            },
+            {
+                "source": "nested_metadataset.yaml",
+                "mds": "nested_val",
+            },
+        ]
+
+        for ref, raw_dataset in zip(refs, raw_datasets.datasets):
+            for key, value in ref.subflavors.items():
+                assert raw_dataset.dataset.subflavors[key] == value
 
     def test_traverse_metadataset_preserves_missing_v2_leaf_and_aux(self):
         missing_leaf_mds_path = self.dataset_path / "missing_leaf_metadataset_v2.yaml"
