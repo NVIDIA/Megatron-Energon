@@ -185,7 +185,7 @@ class TestDataset(unittest.TestCase):
             "000004",  # Shard 2
             "000005",
             "000006",
-        ]
+        ], f"All keys: {all_keys}"
 
     def test_text_dataset(self):
         worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0)
