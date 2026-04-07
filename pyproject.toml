@@ -79,6 +79,10 @@ tar_patcher = [
   "numba",
 ]
 
+all = [
+  "megatron-energon[av_decode,aistore,azure-storage-blob,dev,google-cloud-storage,huggingface,oci,s3,tar_patcher,transforms]",
+]
+
 [project.urls]
 Homepage = "https://github.com/NVIDIA/Megatron-Energon"
 

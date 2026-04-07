@@ -41,11 +41,7 @@ def prepare_filesystem_dataset(
 
     # Only supporting local file system, because sqlite does not support remote file systems.
     # TODO: Implement remote file systems. Maybe create locally in tmp then upload?
-    assert str(root_path).startswith("/"), (
-        f"SQLite path must be absolute local file system path: {root_path}"
-    )
-
-    root = Path(str(root_path))
+    root = root_path.local_path()
     assert root.is_dir(), f"Expected directory for filesystem dataset, got {root}"
     assert root.is_absolute(), f"Filesystem dataset path must be absolute: {root}"
 
@@ -93,6 +89,14 @@ def prepare_filesystem_dataset(
         pool.submit_task(file_path)
 
     pool.process()
+
+    try:
+        # Copy group permissions from the parent dir
+        meta_dir.chmod((root.stat().st_mode | 0o700))
+        # Just read/write, no execute
+        sqlite_path.local_path().chmod((root.stat().st_mode | 0o600) & 0o666)
+    except OSError:
+        pass
 
     return aggregator.media_metadata_written
 
