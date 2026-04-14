@@ -24,7 +24,7 @@ from megatron.energon.cache import (
     SystemFileStore,
 )
 from megatron.energon.edataclass import edataclass
-from megatron.energon.errors import log_exception, reraise_exception
+from megatron.energon.errors import SkipSample, log_exception, reraise_exception
 from megatron.energon.flavors import (
     BaseCoreDatasetFactory,
     BaseWebdatasetFactory,
@@ -107,7 +107,6 @@ from megatron.energon.wrappers import (
     PackingDataset,
     RepeatDataset,
     ShuffleBufferDataset,
-    SkipSample,
     concat_pad,
     generic_concat,
     homogeneous_concat_mix,
