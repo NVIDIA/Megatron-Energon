@@ -1,17 +1,17 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-import warnings
+from megatron.energon.deprecation import warn_deprecated
+from megatron.energon.errors import SkipSample as _SkipSample
 
 
-class SkipSample(Exception):
-    """DEPRECATED, USE `megatron.energon.SkipSample` INSTEAD.
-    Exception to raise in the map_fn to skip a sample."""
+class SkipSample(_SkipSample):
+    """Deprecated alias for :class:`megatron.energon.SkipSample`."""
 
     def __init__(self, *args, **kwargs):
-        warnings.warn(
-            "SkipSample is deprecated and will be removed in a future version. Use megatron.energon.SkipSample instead.",
-            DeprecationWarning,
+        warn_deprecated(
+            "megatron.energon.wrappers.SkipSample is deprecated and will be removed in a future "
+            "version. Use megatron.energon.SkipSample instead.",
             stacklevel=2,
         )
         super().__init__(*args, **kwargs)
