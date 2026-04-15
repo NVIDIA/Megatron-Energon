@@ -38,10 +38,26 @@ class TestSqliteIndexWriter(unittest.TestCase):
                 row[1]: row
                 for row in db.execute("PRAGMA index_list(samples)")
             }
+            unique_sample_key_indexes = []
+            for index_name, row in sample_indexes.items():
+                is_unique = bool(row[2])
+                if not is_unique:
+                    continue
+                index_columns = [
+                    index_info_row[2]
+                    for index_info_row in db.execute(
+                        f"PRAGMA index_info('{index_name}')"
+                    )
+                ]
+                if "sample_key" in index_columns:
+                    unique_sample_key_indexes.append(index_name)
 
-        self.assertIn("sqlite_autoindex_samples_1", sample_indexes)
         self.assertIn("idx_samples_by_tar_and_idx", sample_indexes)
         self.assertNotIn("idx_samples_sample_key", sample_indexes)
+        self.assertTrue(
+            unique_sample_key_indexes,
+            "Expected a UNIQUE index on samples that includes sample_key",
+        )
 
     def test_sample_key_lookup_still_works_with_implicit_unique_index(self):
         writer = SqliteIndexWriter(EPath(self.sqlite_path))
