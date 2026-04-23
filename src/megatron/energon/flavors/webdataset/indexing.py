@@ -173,7 +173,7 @@ class SqliteIndexWriter:
                 """,
                 rows,
             )
-        except sqlite3.IntegrityError as exc:  # pragma: no cover - defensive programming
+        except sqlite3.IntegrityError as exc:
             raise DuplicateSampleKeyError(self._find_duplicate_sample_key(rows)) from exc
 
     def append_part(
