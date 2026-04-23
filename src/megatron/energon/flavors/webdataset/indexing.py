@@ -3,6 +3,7 @@
 
 import sqlite3
 import struct
+from collections.abc import Sequence
 from typing import BinaryIO, Generator, List, Optional, Tuple, Union
 
 from numpy import int8
@@ -150,17 +151,30 @@ class SqliteIndexWriter:
 
         assert self.db is not None, "Database is closed"
 
-        # Insert a row in the samples table
+        self.append_samples([(tar_file_id, sample_key, sample_index, byte_offset, byte_size)])
+
+    def append_samples(
+        self,
+        rows: Sequence[Tuple[int8, str, int, Optional[int], Optional[int]]],
+    ) -> None:
+        """Insert multiple sample rows efficiently."""
+
+        assert self.db is not None, "Database is closed"
+
+        if len(rows) == 0:
+            return
+
         try:
-            self.db.execute(
+            # One executemany() is substantially cheaper than one execute() per row.
+            self.db.executemany(
                 """
                 INSERT INTO samples (tar_file_id, sample_key, sample_index, byte_offset, byte_size)
                 VALUES (?, ?, ?, ?, ?)
                 """,
-                (tar_file_id, sample_key, sample_index, byte_offset, byte_size),
+                rows,
             )
         except sqlite3.IntegrityError as exc:  # pragma: no cover - defensive programming
-            raise DuplicateSampleKeyError(sample_key) from exc
+            raise DuplicateSampleKeyError(self._find_duplicate_sample_key(rows)) from exc
 
     def append_part(
         self,
@@ -174,13 +188,35 @@ class SqliteIndexWriter:
 
         assert self.db is not None, "Database is closed"
 
-        # Insert a row in the sample parts table
-        self.db.execute(
+        self.append_parts(
+            [
+                (
+                    tar_file_id,
+                    sample_index,
+                    part_name,
+                    content_byte_offset,
+                    content_byte_size,
+                )
+            ]
+        )
+
+    def append_parts(
+        self,
+        rows: Sequence[Tuple[int8, int, str, int, int]],
+    ) -> None:
+        """Insert multiple sample part rows efficiently."""
+
+        assert self.db is not None, "Database is closed"
+
+        if len(rows) == 0:
+            return
+
+        self.db.executemany(
             """
             INSERT INTO sample_parts (tar_file_id, sample_index, part_name, content_byte_offset, content_byte_size)
             VALUES (?, ?, ?, ?, ?)
             """,
-            (tar_file_id, sample_index, part_name, content_byte_offset, content_byte_size),
+            rows,
         )
 
     def append_media_metadata(
@@ -195,12 +231,26 @@ class SqliteIndexWriter:
 
         assert self.db is not None, "Database is closed"
 
-        self.db.execute(
+        self.append_media_metadata_batch([(entry_key, metadata_type, metadata_json)])
+
+    def append_media_metadata_batch(
+        self,
+        rows: Sequence[Tuple[str, str, str]],
+    ) -> None:
+        """Insert or update multiple media metadata records efficiently."""
+
+        assert self.enable_media_metadata, "Adding media metadata, although not enabled"
+        assert self.db is not None, "Database is closed"
+
+        if len(rows) == 0:
+            return
+
+        self.db.executemany(
             """
             INSERT OR REPLACE INTO media_metadata (entry_key, metadata_type, metadata_json)
             VALUES (?, ?, ?)
             """,
-            (entry_key, metadata_type, metadata_json),
+            rows,
         )
 
     def append_media_filter(self, *, strategy: str, patterns: str | None) -> None:
@@ -250,6 +300,29 @@ class SqliteIndexWriter:
     def __exit__(self, exc_type, exc_val, exc_tb):
         # If an exception occurred, do not finalize (so you can inspect the temp file)
         self.close()
+
+    def _find_duplicate_sample_key(
+        self,
+        rows: Sequence[Tuple[int8, str, int, Optional[int], Optional[int]]],
+    ) -> str:
+        """Resolve the sample key responsible for a uniqueness violation.
+
+        sqlite3 only tells us that *some* row in the batch violated the unique
+        constraint. We do a targeted follow-up lookup so the caller still gets
+        the concrete duplicate key in the raised error.
+        """
+
+        assert self.db is not None, "Database is closed"
+
+        for _tar_file_id, sample_key, _sample_index, _byte_offset, _byte_size in rows:
+            existing = self.db.execute(
+                "SELECT 1 FROM samples WHERE sample_key = ?",
+                (sample_key,),
+            ).fetchone()
+            if existing is not None:
+                return sample_key
+
+        return rows[0][1]
 
 
 class JoinIndexWriter:
