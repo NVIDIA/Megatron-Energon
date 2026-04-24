@@ -164,6 +164,8 @@ class SqliteIndexWriter:
         if len(rows) == 0:
             return
 
+        savepoint_name = "append_samples_batch"
+        self.db.execute(f"SAVEPOINT {savepoint_name}")
         try:
             # One executemany() is substantially cheaper than one execute() per row.
             self.db.executemany(
@@ -173,7 +175,11 @@ class SqliteIndexWriter:
                 """,
                 rows,
             )
+            self.db.execute(f"RELEASE SAVEPOINT {savepoint_name}")
         except sqlite3.IntegrityError as exc:
+            # executemany() may already have inserted earlier rows in the batch
+            self.db.execute(f"ROLLBACK TO SAVEPOINT {savepoint_name}")
+            self.db.execute(f"RELEASE SAVEPOINT {savepoint_name}")
             raise DuplicateSampleKeyError(self._find_duplicate_sample_key(rows)) from exc
 
     def append_part(
@@ -314,13 +320,19 @@ class SqliteIndexWriter:
 
         assert self.db is not None, "Database is closed"
 
+        seen_in_batch: set[str] = set()
         for _tar_file_id, sample_key, _sample_index, _byte_offset, _byte_size in rows:
+            if sample_key in seen_in_batch:
+                return sample_key
+
             existing = self.db.execute(
                 "SELECT 1 FROM samples WHERE sample_key = ?",
                 (sample_key,),
             ).fetchone()
             if existing is not None:
                 return sample_key
+
+            seen_in_batch.add(sample_key)
 
         return rows[0][1]
 

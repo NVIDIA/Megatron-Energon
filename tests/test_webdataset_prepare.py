@@ -25,12 +25,16 @@ class TestSqliteIndexWriterBatching(unittest.TestCase):
             with self.assertRaises(DuplicateSampleKeyError) as exc:
                 writer.append_samples(
                     [
-                        (0, "duplicate", 0, 0, 10),
-                        (1, "duplicate", 0, 10, 10),
+                        (0, "first", 0, 0, 10),
+                        (0, "duplicate", 1, 10, 10),
+                        (1, "duplicate", 0, 20, 10),
                     ]
                 )
+            assert writer.db is not None
+            row_count = writer.db.execute("SELECT COUNT(*) FROM samples").fetchone()[0]
 
         self.assertEqual(exc.exception.sample_key, "duplicate")
+        self.assertEqual(row_count, 0)
 
 
 if __name__ == "__main__":
