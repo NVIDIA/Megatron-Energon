@@ -132,8 +132,8 @@ class EPath:
                 "Environment variable NVDATASET_CACHE_DIR is not set"
             )
             if self.dss_dataset_name is None or self.dss_dataset_version is None:
-                self.dss_dataset_name, self.dss_dataset_version = (
-                    self._split_dss_name_and_version(self.internal_path.parts[1])
+                self.dss_dataset_name, self.dss_dataset_version = self._split_dss_name_and_version(
+                    self.internal_path.parts[1]
                 )
             self.fs = NVDATASET_CACHE_DIR.fs
         else:
