@@ -41,13 +41,7 @@ class EPath:
     for more information.
     """
 
-    __slots__ = (
-        "internal_path",
-        "profile",
-        "fs",
-        "dss_dataset_name",
-        "dss_dataset_version",
-    )
+    __slots__ = ("internal_path", "profile", "fs")
 
     # The path without the protocol/profile. Can also be in S3 for example
     internal_path: PurePosixPath
@@ -55,9 +49,6 @@ class EPath:
     profile: str
     # The file system
     fs: msc.StorageClient
-    # DSS dataset name and version, extracted from dss://name@version URLs.
-    dss_dataset_name: Optional[str]
-    dss_dataset_version: Optional[str]
 
     def __init__(
         self,
@@ -67,11 +58,7 @@ class EPath:
             self.internal_path = initial_path.internal_path
             self.profile = initial_path.profile
             self.fs = initial_path.fs
-            self.dss_dataset_name = initial_path.dss_dataset_name
-            self.dss_dataset_version = initial_path.dss_dataset_version
         else:
-            self.dss_dataset_name = None
-            self.dss_dataset_version = None
             if isinstance(initial_path, PathlibPath):
                 path = str(initial_path.absolute())
                 profile = DEFAULT_PROFILE_NAME
@@ -93,9 +80,7 @@ class EPath:
                 elif protocol == "dss":
                     # Profile corresponds to the dataset name and version
                     assert profile is not None
-                    self.dss_dataset_name, self.dss_dataset_version = (
-                        self._split_dss_name_and_version(profile)
-                    )
+                    self._split_dss_name_and_version(profile)
                     assert NVDATASET_CACHE_DIR is not None, (
                         "Environment variable NVDATASET_CACHE_DIR is not set"
                     )
@@ -117,24 +102,17 @@ class EPath:
         return {
             "internal_path": self.internal_path,
             "profile": self.profile,
-            "dss_dataset_name": self.dss_dataset_name,
-            "dss_dataset_version": self.dss_dataset_version,
             # Do not save the fs when serializing, to avoid leaking credentials
         }
 
     def __setstate__(self, state: dict) -> None:
         self.internal_path = state["internal_path"]
         self.profile = state["profile"]
-        self.dss_dataset_name = state.get("dss_dataset_name")
-        self.dss_dataset_version = state.get("dss_dataset_version")
         if self.profile == "dss":
             assert NVDATASET_CACHE_DIR is not None, (
                 "Environment variable NVDATASET_CACHE_DIR is not set"
             )
-            if self.dss_dataset_name is None or self.dss_dataset_version is None:
-                self.dss_dataset_name, self.dss_dataset_version = self._split_dss_name_and_version(
-                    self.internal_path.parts[1]
-                )
+            self._split_dss_name_and_version(self.internal_path.parts[1])
             self.fs = NVDATASET_CACHE_DIR.fs
         else:
             self.fs, _ = msc.resolve_storage_client(f"msc://{self.profile}")
@@ -190,10 +168,13 @@ class EPath:
                 "Environment variable NVDATASET_CACHE_DIR is not set"
             )
             # The internal path is relative to the NVDATASET_CACHE_DIR (i.e. strip the leading /, then concat with /)
+            dss_dataset_name, dss_dataset_version = self._split_dss_name_and_version(
+                self.internal_path.parts[1]
+            )
             cache_path = PurePosixPath(
                 "/",
-                self.dss_dataset_name,  # type: ignore[arg-type]
-                self.dss_dataset_version,  # type: ignore[arg-type]
+                dss_dataset_name,
+                dss_dataset_version,
                 *self.internal_path.parts[2:],
             )
             return NVDATASET_CACHE_DIR._internal_str_path + str(cache_path)
