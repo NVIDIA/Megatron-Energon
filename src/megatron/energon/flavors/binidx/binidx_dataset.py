@@ -12,7 +12,7 @@ from megatron.energon.flavors.base_dataset import (
     BaseCoreDatasetFactory,
     SavableDataset,
 )
-from megatron.energon.flavors.binidx.binidx_reader import IBinIdxReader
+from megatron.energon.flavors.binidx.binidx_reader import BinIdxReader
 from megatron.energon.flavors.crude import CrudeSample
 from megatron.energon.flavors.webdataset.base_webdataset import _print_shard_slices
 from megatron.energon.flavors.webdataset.sample_loader import (
@@ -40,7 +40,7 @@ class BinIdxDatasetFactory(
 
     This factory creates datasets from pre-tokenized binary files (.bin + .idx)
     where the .idx file contains sequence offsets and the .bin file contains token data.
-    The samples are returned as CrudeSample objects containing the raw `tokens` array.
+    The samples are returned as CrudeSample objects containing raw token arrays.
     """
 
     __sample_type__ = CrudeSample
@@ -86,7 +86,7 @@ class BinIdxDatasetFactory(
         self.max_samples_per_sequence = max_samples_per_sequence
         self.subset = subset
         self.part_filter = part_filter
-        self._len = IBinIdxReader.count_samples(self.path)
+        self._len = BinIdxReader.count_samples(self.path)
 
     def __len__(self) -> int:
         return self._len
@@ -126,7 +126,7 @@ class BinIdxDatasetFactory(
         )
         _print_shard_slices(self.worker_config, virtual_shards, workers_sample_slice_offsets)
 
-        reader = IBinIdxReader(
+        reader = BinIdxReader(
             self.path,
             index_cache_size=parallel_shard_iters,
         )
@@ -187,18 +187,18 @@ class DefaultBinIdxDatasetFactory(BinIdxDatasetFactory):
     Adds subflavors to the sample and decodes token bytes back to a numpy array.
     """
 
-    def __init__(self, path: EPath, *, subflavors: dict[str, Any] | None = None, **kwargs):
+    def __init__(self, path: EPath, *, subflavors: Optional[Dict[str, Any]] = None, **kwargs):
         if "decoder" in kwargs:
             del kwargs["decoder"]
         super().__init__(path, **kwargs)
-        self.subflavors = subflavors or {}
-        self._dtype = IBinIdxReader.read_dtype(self.path)
+        self.subflavors = subflavors
+        self._dtype = BinIdxReader.read_dtype(self.path)
 
     def _load_sample(self, sample: FilteredSample) -> CrudeSample:
         sample["__subflavors__"] = self.subflavors
-        if "tokens" in sample:
-            sample["tokens"] = numpy.frombuffer(sample["tokens"], dtype=self._dtype)
-        return CrudeSample(sample)
+        # Decode token bytes back to numpy array
+        sample["tokens"] = numpy.frombuffer(sample["tokens"], dtype=self._dtype)
+        return super()._load_sample(sample)
 
     def config(self) -> Dict[str, Any]:
         return dict(

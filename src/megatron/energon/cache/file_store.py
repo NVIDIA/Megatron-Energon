@@ -6,7 +6,7 @@ from typing import Any, Callable, Optional, Union
 
 from megatron.energon.cache.base import FileStore, FileStoreDecoder, FileStoreWrapper
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.binidx.binidx_reader import IBinIdxReader
+from megatron.energon.flavors.binidx.binidx_reader import BinIdxReader
 from megatron.energon.flavors.jsonl.ijsonl_reader import IJsonlReader
 from megatron.energon.flavors.parquet.reader import IParquetReader
 from megatron.energon.flavors.webdataset.config import INDEX_SQLITE_FILENAME, MAIN_FOLDER_NAME
@@ -198,7 +198,7 @@ class JsonlFileStore(IJsonlReader, FileStore[bytes]):
         return str(self.jsonl_path)
 
 
-class BinIdxFileStore(IBinIdxReader, FileStore[bytes]):
+class BinIdxFileStore(BinIdxReader, FileStore[bytes]):
     """This dataset will directly read entries from a bin-idx file pair."""
 
     def get_path(self) -> str:

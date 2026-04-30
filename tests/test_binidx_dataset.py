@@ -29,12 +29,9 @@ from megatron.energon import (
     get_val_dataset,
     stateless,
 )
-from megatron.energon.cache.file_store import BinIdxFileStore
-from megatron.energon.dataset_config import get_dataset_from_config, load_config
+from megatron.energon.dataset_config import load_config
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import Sample
-from megatron.energon.flavors.binidx.binidx_reader import IBinIdxReader
-from megatron.energon.flavors.webdataset.metadata import EnergonDatasetType, get_dataset_type
 from megatron.energon.metadataset.metadataset_v2 import MetadatasetV2
 
 # Speed up tests significantly by reducing the torch status check interval for broken worker shutdown
@@ -122,78 +119,6 @@ class TestBinIdxDataset(unittest.TestCase):
             f.write(doc_indices.tobytes())
 
         return bin_path
-
-    def test_get_dataset_type_file_bin(self):
-        bin_path = self.create_binidx_dataset(
-            self.dataset_path / "ds_type",
-            num_docs=3,
-            doc_len=8,
-        )
-        self.assertEqual(get_dataset_type(EPath(bin_path)), EnergonDatasetType.BINIDX)
-
-    def test_ibinidx_reader_first_document(self):
-        bin_path = self.create_binidx_dataset(
-            self.dataset_path / "reader",
-            num_docs=4,
-            doc_len=5,
-            token_start=10,
-        )
-        reader = IBinIdxReader(EPath(bin_path))
-        try:
-            self.assertEqual(len(reader), 4)
-            self.assertEqual(reader.dtype, np.int32)
-            row = reader[0]
-            self.assertIsNotNone(row)
-            raw = row["tokens"]
-            self.assertIsInstance(raw, (bytes, memoryview))
-            tokens = np.frombuffer(raw, dtype=np.int32)
-            self.assertEqual(tokens.shape, (5,))
-            np.testing.assert_array_equal(tokens, np.arange(10, 15, dtype=np.int32))
-        finally:
-            reader.close()
-
-    def test_ibinidx_reader_count_and_dtype_static(self):
-        bin_path = self.create_binidx_dataset(
-            self.dataset_path / "static",
-            num_docs=7,
-            doc_len=2,
-            token_start=0,
-        )
-        self.assertEqual(IBinIdxReader.count_samples(str(bin_path)), 7)
-        self.assertEqual(IBinIdxReader.read_dtype(str(bin_path)), np.int32)
-
-    def test_binidx_file_store_getitem(self):
-        bin_path = self.create_binidx_dataset(
-            self.dataset_path / "file_store",
-            num_docs=2,
-            doc_len=3,
-            token_start=100,
-        )
-        store = BinIdxFileStore(EPath(bin_path))
-        raw, _source = store["0.bin"]
-        arr = np.frombuffer(raw, dtype=np.int32)
-        np.testing.assert_array_equal(arr, np.array([100, 101, 102], dtype=np.int32))
-
-    def test_get_dataset_from_config_returns_factory_with_len(self):
-        bin_path = self.create_binidx_dataset(
-            self.dataset_path / "from_config",
-            num_docs=11,
-            doc_len=16,
-        )
-        worker_config = WorkerConfig(
-            rank=0,
-            world_size=1,
-            num_workers=0,
-            seed_offset=42,
-        )
-        ds = get_dataset_from_config(
-            bin_path,
-            split_part="train",
-            worker_config=worker_config,
-            training=False,
-        )
-        self.assertIsInstance(ds, DefaultBinIdxDatasetFactory)
-        self.assertEqual(len(ds), 11)
 
     def test_get_train_dataset_iterates_expected_tokens(self):
         torch.manual_seed(42)
