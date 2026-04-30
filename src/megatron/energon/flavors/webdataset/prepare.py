@@ -43,10 +43,7 @@ from megatron.energon.flavors.webdataset.config import (
     skip_meta_re,
     split_name_re,
 )
-from megatron.energon.flavors.webdataset.indexing import (
-    DuplicateSampleKeyError,
-    SqliteIndexWriter,
-)
+from megatron.energon.flavors.webdataset.indexing import DuplicateSampleKeyError, SqliteIndexWriter
 from megatron.energon.flavors.webdataset.itar import TarIndexWriter
 from megatron.energon.flavors.webdataset.metadata import get_dataset_info
 from megatron.energon.flavors.webdataset.structs import ShardInfo, WebdatasetInfo, WebdatasetSplits
@@ -99,15 +96,6 @@ class IndexMediaMetadata(IndexAggregatable):
 class IndexShardInfo(IndexAggregatable):
     shard_info: ShardInfo
     parts: Set[str]
-
-
-@edataclass
-class IndexBatch(IndexAggregatable):
-    """A chunk of rows produced by one worker and consumed by the SQLite aggregator."""
-
-    samples: Tuple[Tuple[int, str, int, int, int], ...]
-    sample_parts: Tuple[Tuple[int, int, str, int, int], ...]
-    media_metadata: Tuple[Tuple[str, str, str], ...]
 
 
 class SqliteIndexWriterAggregator(
@@ -168,62 +156,54 @@ class SqliteIndexWriterAggregator(
 
     def on_item(
         self,
-        item: IndexAggregatable,
+        items: List[IndexAggregatable],
         aggregator_pool: AggregatorPool,
     ) -> None:
         assert self.writer is not None, "Writer is not initialized."
-        if isinstance(item, IndexBatch):
-            # IndexBatch can be partial, e.g. it can contain only sample_parts without samples,
-            # so we check each of them before writing.
-            if item.samples:
-                self.writer.append_samples(item.samples)
-            if item.sample_parts:
-                self.writer.append_parts(item.sample_parts)
-            if item.media_metadata:
-                self.writer.append_media_metadata_batch(item.media_metadata)
-            if item.samples or item.sample_parts or item.media_metadata:
-                self.had_update = True
-            self.media_metadata_written += len(item.media_metadata)
-            if self.progress_on_media:
-                self._advance_progress(count=len(item.media_metadata))
-        elif isinstance(item, IndexSample):
-            self.writer.append_sample(
-                tar_file_id=item.tar_file_id,
-                sample_key=item.sample_key,
-                sample_index=item.sample_index,
-                byte_offset=item.byte_offset,
-                byte_size=item.byte_size,
-            )
-            self.had_update = True
-        elif isinstance(item, IndexSamplePart):
-            self.writer.append_part(
-                tar_file_id=item.tar_file_id,
-                sample_index=item.sample_index,
-                part_name=item.part_name,
-                content_byte_offset=item.content_byte_offset,
-                content_byte_size=item.content_byte_size,
-            )
-            self.had_update = True
-        elif isinstance(item, IndexMediaMetadata):
-            self.writer.append_media_metadata(
-                entry_key=item.entry_key,
-                metadata_type=item.metadata_type,
-                metadata_json=item.metadata_json,
-            )
-            self.had_update = True
-            self.media_metadata_written += 1
-            if self.progress_on_media:
-                self._advance_progress()
-        elif isinstance(item, IndexShardInfo):
-            # This is a (shard_info, parts) tuple
-            if not self.progress_on_media:
-                self._advance_progress()
+        sample_rows: List[IndexSample] = []
+        sample_part_rows: List[IndexSamplePart] = []
+        media_metadata_rows: List[IndexMediaMetadata] = []
 
-            shard_info, cur_parts = item.shard_info, item.parts
-            assert shard_info.count != 0, f"Shard {shard_info.name} has no samples."
-            self.shards.append(shard_info)
-            if len(self.found_parts) < 50:
-                self.found_parts.update(cur_parts)
+        def flush_rows() -> None:
+            if sample_rows:
+                self.writer.append_samples(sample_rows)
+            if sample_part_rows:
+                self.writer.append_parts(sample_part_rows)
+            if media_metadata_rows:
+                self.writer.append_media_metadata_batch(media_metadata_rows)
+
+            if sample_rows or sample_part_rows or media_metadata_rows:
+                self.had_update = True
+                self.media_metadata_written += len(media_metadata_rows)
+                if self.progress_on_media and media_metadata_rows:
+                    self._advance_progress(count=len(media_metadata_rows))
+
+            sample_rows.clear()
+            sample_part_rows.clear()
+            media_metadata_rows.clear()
+
+        for item in items:
+            if isinstance(item, IndexSample):
+                sample_rows.append(item)
+            elif isinstance(item, IndexSamplePart):
+                sample_part_rows.append(item)
+            elif isinstance(item, IndexMediaMetadata):
+                media_metadata_rows.append(item)
+            elif isinstance(item, IndexShardInfo):
+                flush_rows()
+
+                if not self.progress_on_media:
+                    self._advance_progress()
+
+                shard_info, cur_parts = item.shard_info, item.parts
+                assert shard_info.count != 0, f"Shard {shard_info.name} has no samples."
+                self.shards.append(shard_info)
+                if len(self.found_parts) < 50:
+                    self.found_parts.update(cur_parts)
+            else:
+                raise TypeError(f"Unsupported index item type: {type(item)!r}")
+
+        flush_rows()
 
     def on_finish(self, aggregator_pool: AggregatorPool) -> None:
         assert self.writer is not None, "Writer is not initialized."
@@ -294,42 +274,12 @@ class WebdatasetPreparator:
             A generator of items that will be processed by SqliteIndexWriterAggregator.
             See method `on_item` of SqliteIndexWriterAggregator.
             The items are either:
-            - A sample dictionary with information about the offset, key etc.
-            - Or a tuple of shard info and a set of found parts for statistics.
+            - typed row objects describing samples, sample parts, or media metadata
+            - or shard info for statistics.
         """
         shard_info = ShardInfo(name=path, path=parent_path / path, count=0)
 
         try:
-            # These buffers are local to one worker and one shard. Once they
-            # reach the threshold below, they are emitted as a single IndexBatch.
-            sample_rows: list[tuple[int, str, int, int, int]] = []
-            sample_part_rows: list[tuple[int, int, str, int, int]] = []
-            media_metadata_rows: list[tuple[str, str, str]] = []
-
-            def flush_batch() -> IndexBatch | None:
-                if not sample_rows and not sample_part_rows and not media_metadata_rows:
-                    return None
-                batch = IndexBatch(
-                    samples=tuple(sample_rows),
-                    sample_parts=tuple(sample_part_rows),
-                    media_metadata=tuple(media_metadata_rows),
-                )
-                sample_rows.clear()
-                sample_part_rows.clear()
-                media_metadata_rows.clear()
-                return batch
-
-            def append_completed_sample(next_index_sample: dict[str, int | str]) -> None:
-                sample_rows.append(
-                    (
-                        int(next_index_sample["tar_file_id"]),
-                        str(next_index_sample["sample_key"]),
-                        int(next_index_sample["sample_index"]),
-                        int(next_index_sample["byte_offset"]),
-                        int(next_index_sample["byte_size"]),
-                    )
-                )
-
             # Note: Write to .tmp file first, then remove .tmp extension, to make sure only complete
             # files are used.
             tar: tarfile.TarFile
@@ -363,7 +313,7 @@ class WebdatasetPreparator:
                                 next_index_sample["byte_size"] = (
                                     member.offset - next_index_sample["byte_offset"]
                                 )
-                                append_completed_sample(next_index_sample)
+                                yield IndexSample(**next_index_sample)
 
                             next_index_sample = dict(
                                 tar_file_id=shard_to_idx[path],
@@ -376,14 +326,12 @@ class WebdatasetPreparator:
 
                         entry_key = f"{base_name}.{part_name}"
 
-                        sample_part_rows.append(
-                            (
-                                shard_to_idx[path],
-                                count - 1,
-                                part_name,
-                                member.offset_data,
-                                member.size,
-                            )
+                        yield IndexSamplePart(
+                            tar_file_id=shard_to_idx[path],
+                            sample_index=count - 1,
+                            part_name=part_name,
+                            content_byte_offset=member.offset_data,
+                            content_byte_size=member.size,
                         )
 
                         if media_filter is not None:
@@ -400,24 +348,11 @@ class WebdatasetPreparator:
                                     stored_type, metadata_json = serialize_media_metadata(
                                         extracted_metadata
                                     )
-                                    media_metadata_rows.append(
-                                        (
-                                            entry_key,
-                                            stored_type.value,
-                                            metadata_json,
-                                        )
+                                    yield IndexMediaMetadata(
+                                        entry_key=entry_key,
+                                        metadata_type=stored_type.value,
+                                        metadata_json=metadata_json,
                                     )
-
-                        # We batch across all row types, because all of them were
-                        # previously sent as individual queue messages to one
-                        # serialized SQLite writer.
-                        if (
-                            len(sample_rows) + len(sample_part_rows) + len(media_metadata_rows)
-                            >= _INDEX_BATCH_SIZE
-                        ):
-                            batch = flush_batch()
-                            if batch is not None:
-                                yield batch
 
                     shard_info.count = count
                     iw.append(tar.offset)
@@ -425,12 +360,7 @@ class WebdatasetPreparator:
                         next_index_sample["byte_size"] = (
                             tar.offset - next_index_sample["byte_offset"]
                         )
-                        append_completed_sample(next_index_sample)
-                    # Flush the tail of the shard so the aggregator sees all
-                    # rows before it receives the final IndexShardInfo message.
-                    batch = flush_batch()
-                    if batch is not None:
-                        yield batch
+                        yield IndexSample(**next_index_sample)
             yield IndexShardInfo(shard_info=shard_info, parts=parts)
             return
         except BaseException:
@@ -451,19 +381,6 @@ class WebdatasetPreparator:
         shard_path = parent_path / path
 
         try:
-            media_metadata_rows: list[tuple[str, str, str]] = []
-
-            def flush_batch() -> IndexBatch | None:
-                if not media_metadata_rows:
-                    return None
-                batch = IndexBatch(
-                    samples=(),
-                    sample_parts=(),
-                    media_metadata=tuple(media_metadata_rows),
-                )
-                media_metadata_rows.clear()
-                return batch
-
             with shard_path.open("rb") as handle:
                 with tarfile.open(fileobj=handle, mode="r:*") as tar:
                     for (
@@ -489,24 +406,11 @@ class WebdatasetPreparator:
 
                         stored_type, metadata_json = serialize_media_metadata(extracted_metadata)
 
-                        media_metadata_rows.append(
-                            (
-                                entry_key,
-                                stored_type.value,
-                                metadata_json,
-                            )
+                        yield IndexMediaMetadata(
+                            entry_key=entry_key,
+                            metadata_type=stored_type.value,
+                            metadata_json=metadata_json,
                         )
-
-                        if len(media_metadata_rows) >= _INDEX_BATCH_SIZE:
-                            batch = flush_batch()
-                            if batch is not None:
-                                yield batch
-
-                    # Media-only extraction uses the same batching mechanism so
-                    # filesystem- and tar-backed media metadata follow one write path.
-                    batch = flush_batch()
-                    if batch is not None:
-                        yield batch
 
         except BaseException:  # pragma: no cover - dependent on malformed archives
             logger.exception(
@@ -678,6 +582,7 @@ class WebdatasetPreparator:
             num_workers=workers,
             user_produce_data=process_tar,
             aggregator=aggregator,
+            batch_size=_INDEX_BATCH_SIZE,
         )
 
         for path in paths:
@@ -879,6 +784,7 @@ class WebdatasetPreparator:
             num_workers=min(workers, len(expanded_paths)) or 1,
             user_produce_data=process_tar,
             aggregator=aggregator,
+            batch_size=_INDEX_BATCH_SIZE,
         )
 
         for path in expanded_paths:

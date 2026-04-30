@@ -4,7 +4,7 @@
 import sqlite3
 import struct
 from collections.abc import Sequence
-from typing import BinaryIO, Generator, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, BinaryIO, Generator, List, Optional, Tuple, Union
 
 from numpy import int8
 
@@ -12,6 +12,13 @@ from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.webdataset.itar import ITarRawSamplePartPointer, ITarSamplePointer
 from megatron.energon.flavors.webdataset.thread_local_sqlite import ThreadLocalSqlite
 from megatron.energon.local_copy import ensure_local_copy
+
+if TYPE_CHECKING:
+    from megatron.energon.flavors.webdataset.prepare import (
+        IndexMediaMetadata,
+        IndexSample,
+        IndexSamplePart,
+    )
 
 
 class DuplicateSampleKeyError(RuntimeError):
@@ -151,11 +158,20 @@ class SqliteIndexWriter:
 
         assert self.db is not None, "Database is closed"
 
-        self.append_samples([(tar_file_id, sample_key, sample_index, byte_offset, byte_size)])
+        try:
+            self.db.execute(
+                """
+                INSERT INTO samples (tar_file_id, sample_key, sample_index, byte_offset, byte_size)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (tar_file_id, sample_key, sample_index, byte_offset, byte_size),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise DuplicateSampleKeyError(sample_key) from exc
 
     def append_samples(
         self,
-        rows: Sequence[Tuple[int8, str, int, Optional[int], Optional[int]]],
+        rows: Sequence["IndexSample"],
     ) -> None:
         """Insert multiple sample rows efficiently."""
 
@@ -173,7 +189,16 @@ class SqliteIndexWriter:
                 INSERT INTO samples (tar_file_id, sample_key, sample_index, byte_offset, byte_size)
                 VALUES (?, ?, ?, ?, ?)
                 """,
-                rows,
+                (
+                    (
+                        row.tar_file_id,
+                        row.sample_key,
+                        row.sample_index,
+                        row.byte_offset,
+                        row.byte_size,
+                    )
+                    for row in rows
+                ),
             )
             self.db.execute(f"RELEASE SAVEPOINT {savepoint_name}")
         except sqlite3.IntegrityError as exc:
@@ -194,21 +219,17 @@ class SqliteIndexWriter:
 
         assert self.db is not None, "Database is closed"
 
-        self.append_parts(
-            [
-                (
-                    tar_file_id,
-                    sample_index,
-                    part_name,
-                    content_byte_offset,
-                    content_byte_size,
-                )
-            ]
+        self.db.execute(
+            """
+            INSERT INTO sample_parts (tar_file_id, sample_index, part_name, content_byte_offset, content_byte_size)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (tar_file_id, sample_index, part_name, content_byte_offset, content_byte_size),
         )
 
     def append_parts(
         self,
-        rows: Sequence[Tuple[int8, int, str, int, int]],
+        rows: Sequence["IndexSamplePart"],
     ) -> None:
         """Insert multiple sample part rows efficiently."""
 
@@ -222,7 +243,16 @@ class SqliteIndexWriter:
             INSERT INTO sample_parts (tar_file_id, sample_index, part_name, content_byte_offset, content_byte_size)
             VALUES (?, ?, ?, ?, ?)
             """,
-            rows,
+            (
+                (
+                    row.tar_file_id,
+                    row.sample_index,
+                    row.part_name,
+                    row.content_byte_offset,
+                    row.content_byte_size,
+                )
+                for row in rows
+            ),
         )
 
     def append_media_metadata(
@@ -237,11 +267,17 @@ class SqliteIndexWriter:
 
         assert self.db is not None, "Database is closed"
 
-        self.append_media_metadata_batch([(entry_key, metadata_type, metadata_json)])
+        self.db.execute(
+            """
+            INSERT OR REPLACE INTO media_metadata (entry_key, metadata_type, metadata_json)
+            VALUES (?, ?, ?)
+            """,
+            (entry_key, metadata_type, metadata_json),
+        )
 
     def append_media_metadata_batch(
         self,
-        rows: Sequence[Tuple[str, str, str]],
+        rows: Sequence["IndexMediaMetadata"],
     ) -> None:
         """Insert or update multiple media metadata records efficiently."""
 
@@ -256,7 +292,7 @@ class SqliteIndexWriter:
             INSERT OR REPLACE INTO media_metadata (entry_key, metadata_type, metadata_json)
             VALUES (?, ?, ?)
             """,
-            rows,
+            ((row.entry_key, row.metadata_type, row.metadata_json) for row in rows),
         )
 
     def append_media_filter(self, *, strategy: str, patterns: str | None) -> None:
@@ -309,7 +345,7 @@ class SqliteIndexWriter:
 
     def _find_duplicate_sample_key(
         self,
-        rows: Sequence[Tuple[int8, str, int, Optional[int], Optional[int]]],
+        rows: Sequence["IndexSample"],
     ) -> str:
         """Resolve the sample key responsible for a uniqueness violation.
 
@@ -321,7 +357,8 @@ class SqliteIndexWriter:
         assert self.db is not None, "Database is closed"
 
         seen_in_batch: set[str] = set()
-        for _tar_file_id, sample_key, _sample_index, _byte_offset, _byte_size in rows:
+        for row in rows:
+            sample_key = row.sample_key
             if sample_key in seen_in_batch:
                 return sample_key
 
@@ -334,7 +371,7 @@ class SqliteIndexWriter:
 
             seen_in_batch.add(sample_key)
 
-        return rows[0][1]
+        return rows[0].sample_key
 
 
 class JoinIndexWriter:
