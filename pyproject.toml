@@ -46,6 +46,10 @@ dev = [
   "sphinx-rtd-theme",
   "sphinx-click",
 ]
+# Backwards-compatible alias; pyarrow is a core dependency (Parquet flavor).
+parquet = [
+  "pyarrow>=14.0.0",
+]
 transforms = [
   "torchvision",  # Needed for megatron.energon.transforms
 ]
