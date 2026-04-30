@@ -1833,6 +1833,7 @@ class TestDataset(unittest.TestCase):
                         "--split-ratio=1,0,0",
                         "--sample-type=CaptioningSample",
                         '--field-map={"image": "png", "caption": "txt"}',
+                        "--media-metadata-by-extension",
                     ],
                     catch_exceptions=False,
                 )
@@ -1840,7 +1841,7 @@ class TestDataset(unittest.TestCase):
                 assert "Done" in result.stdout, result.stdout
                 info_path = s3_root / MAIN_FOLDER_NAME / INFO_JSON_FILENAME
                 assert info_path.is_file(), f"missing {info_path}"
-            
+
                 # Iterate over the new dataset
                 loader = get_loader(
                     get_train_dataset(

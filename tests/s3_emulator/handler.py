@@ -459,11 +459,15 @@ class S3RequestHandler(BaseHTTPRequestHandler):
         if delimiter:
             fragments.append(f"<Delimiter>{_escape_xml(delimiter)}</Delimiter>")
         if truncated and next_token:
-            fragments.append(f"<NextContinuationToken>{_escape_xml(next_token)}</NextContinuationToken>")
+            fragments.append(
+                f"<NextContinuationToken>{_escape_xml(next_token)}</NextContinuationToken>"
+            )
 
         for kind, path in page:
             if kind == "cp":
-                fragments.append(f"<CommonPrefixes><Prefix>{_escape_xml(path)}</Prefix></CommonPrefixes>")
+                fragments.append(
+                    f"<CommonPrefixes><Prefix>{_escape_xml(path)}</Prefix></CommonPrefixes>"
+                )
             else:
                 try:
                     data = state.get_object(bucket, path)

@@ -55,6 +55,16 @@ class SqliteIndexWriter:
                          part_name TEXT,
                          content_byte_offset INTEGER,
                          content_byte_size INTEGER)
+        if enable_media_metadata is True, it also creates the media_metadata table:
+          - media_metadata(entry_key TEXT PRIMARY KEY,
+                           metadata_type TEXT NOT NULL,
+                           metadata_json TEXT NOT NULL)
+        if enable_media_metadata is True, it also creates the media_filters table:
+          - media_filters(filter_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                          strategy TEXT NOT NULL,
+                          patterns TEXT,
+                          created_at_utc TEXT DEFAULT CURRENT_TIMESTAMP,
+                          UNIQUE(strategy, patterns))
         Also creates indexes:
           - samples(sample_key)
           - samples(tar_file_id, sample_index)
@@ -354,6 +364,9 @@ class SqliteIndexReader:
                    part_name TEXT,
                    content_byte_offset INTEGER,
                    content_byte_size INTEGER)
+    - media_metadata(entry_key TEXT PRIMARY KEY,
+                     metadata_type TEXT NOT NULL,
+                     metadata_json TEXT NOT NULL)
     """
 
     sqlite_path: EPath

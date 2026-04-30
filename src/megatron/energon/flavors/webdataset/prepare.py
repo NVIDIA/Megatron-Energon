@@ -155,6 +155,8 @@ class SqliteIndexWriterAggregator(
         local_sqlite = self.sqlite_path
         if self.sqlite_local_build_path is not None:
             local_sqlite = EPath(self.sqlite_local_build_path)
+            if self.sqlite_path.is_file():
+                self.sqlite_path.copy(local_sqlite)
         self.writer = SqliteIndexWriter(
             local_sqlite,
             enable_sample_tables=self.enable_sample_tables,
@@ -581,7 +583,9 @@ class WebdatasetPreparator:
         remote_sqlite_tmp_dir: Optional[Path] = None
         if not parent_path.is_local():
             if index_sqlite_tmp_path is None:
-                remote_sqlite_tmp_dir = Path(tempfile.mkdtemp(dir="/tmp", prefix="energon-prepare-"))
+                remote_sqlite_tmp_dir = Path(
+                    tempfile.mkdtemp(dir="/tmp", prefix="energon-prepare-")
+                )
                 index_sqlite_tmp_path = remote_sqlite_tmp_dir / INDEX_SQLITE_FILENAME
                 owns_remote_sqlite_tmp = True
         else:
@@ -635,7 +639,9 @@ class WebdatasetPreparator:
             # Fix permissions if needed
             if fix_local_permissions:
                 try:
-                    Path(str(parent_path / MAIN_FOLDER_NAME / INDEX_SQLITE_FILENAME)).chmod(file_perms)
+                    Path(str(parent_path / MAIN_FOLDER_NAME / INDEX_SQLITE_FILENAME)).chmod(
+                        file_perms
+                    )
                 except OSError:
                     pass
 
@@ -720,7 +726,9 @@ class WebdatasetPreparator:
                 for split_part, split_ratio in split_parts_ratio:
                     split_total += split_ratio
                     split_end = int(len(shards) * split_total)
-                    split_shards[split_part] = [shard.name for shard in shards[split_offset:split_end]]
+                    split_shards[split_part] = [
+                        shard.name for shard in shards[split_offset:split_end]
+                    ]
                     split_offset = split_end
             else:
                 assert split_parts_patterns is not None, (
@@ -766,7 +774,6 @@ class WebdatasetPreparator:
             if owns_remote_sqlite_tmp and remote_sqlite_tmp_dir is not None:
                 shutil.rmtree(remote_sqlite_tmp_dir, ignore_errors=True)
 
-
     @classmethod
     def add_media_metadata(
         cls,
@@ -798,11 +805,15 @@ class WebdatasetPreparator:
         remote_sqlite_tmp_dir: Optional[Path] = None
         if not parent_path.is_local():
             if index_sqlite_tmp_path is None:
-                remote_sqlite_tmp_dir = Path(tempfile.mkdtemp(dir="/tmp", prefix="energon-prepare-media-"))
+                remote_sqlite_tmp_dir = Path(
+                    tempfile.mkdtemp(dir="/tmp", prefix="energon-prepare-media-")
+                )
                 index_sqlite_tmp_path = remote_sqlite_tmp_dir / INDEX_SQLITE_FILENAME
                 owns_remote_sqlite_tmp = True
         else:
             index_sqlite_tmp_path = None
+
+        sqlite_path = parent_path / MAIN_FOLDER_NAME / INDEX_SQLITE_FILENAME
 
         try:
             aggregator = SqliteIndexWriterAggregator(
@@ -835,6 +846,18 @@ class WebdatasetPreparator:
                 pool.submit_task(path)
 
             pool.process()
+
+            if sqlite_path.is_local():
+                try:
+                    meta_dir = (parent_path / MAIN_FOLDER_NAME).local_path()
+                    # Copy group permissions from the parent dir
+                    meta_dir.chmod((parent_path.local_path().stat().st_mode | 0o700))
+                    # Just read/write, no execute
+                    sqlite_path.local_path().chmod(
+                        (parent_path.local_path().stat().st_mode | 0o600) & 0o666
+                    )
+                except OSError:
+                    pass
 
             return aggregator.media_metadata_written
         finally:

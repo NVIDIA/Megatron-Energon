@@ -336,6 +336,9 @@ class EPath:
 
         return str(self.internal_path.relative_to(other.internal_path))
 
+    def stat(self) -> msc.types.ObjectMetadata:
+        return self.fs.info(self._internal_str_path)
+
     @property
     def display_name(self) -> str:
         if self.profile == "dss":
