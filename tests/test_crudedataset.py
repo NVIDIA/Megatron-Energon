@@ -631,6 +631,15 @@ class TestDataset(unittest.TestCase):
         assert all([a == b for a, b in zip(samples_after, samples_restored)])
 
     def test_dss_path(self):
+        dss_dataset_name = "crude_text"
+        dss_dataset_version = "v1"
+        dss_dataset_root = self.dataset_path / dss_dataset_name
+        dss_dataset_root.mkdir(parents=True, exist_ok=True)
+        (dss_dataset_root / dss_dataset_version).symlink_to(
+            self.dataset_path / "ds1",
+            target_is_directory=True,
+        )
+
         dss_mds_path = self.dataset_path / "metadataset_dss.yaml"
         dss_mds_path.write_text(
             "\n".join(
@@ -639,7 +648,7 @@ class TestDataset(unittest.TestCase):
                     "__class__: MetadatasetV2",
                     "splits:",
                     "  train:",
-                    "    path: dss://ds1",
+                    f"    path: dss://{dss_dataset_name}@{dss_dataset_version}",
                     "    subflavors:",
                     "      crude_type: txtpkl",
                 ]
