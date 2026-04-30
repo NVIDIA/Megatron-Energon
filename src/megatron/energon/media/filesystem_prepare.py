@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import tempfile
 from functools import partial
@@ -138,8 +139,8 @@ def _collect_media_files(
 
     if root.is_local():
         paths = (
-            EPath(path / file)
-            for path, _dirs, files in root.local_path().walk(follow_symlinks=False)
+            EPath(f"{path}/{file}")
+            for path, _dirs, files in os.walk(root.local_path(), followlinks=False)
             for file in files
         )
     else:
