@@ -2,12 +2,13 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import sqlite3
-from typing import Any, Optional, Union
+from typing import Any, Callable, Optional, Union
 
 from megatron.energon.cache.base import FileStore, FileStoreDecoder, FileStoreWrapper
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.binidx.binidx_reader import IBinIdxReader
 from megatron.energon.flavors.jsonl.ijsonl_reader import IJsonlReader
+from megatron.energon.flavors.parquet.reader import IParquetReader
 from megatron.energon.flavors.webdataset.config import INDEX_SQLITE_FILENAME, MAIN_FOLDER_NAME
 from megatron.energon.flavors.webdataset.itar_reader import SqliteITarEntryReader
 from megatron.energon.flavors.webdataset.thread_local_sqlite import ThreadLocalSqlite
@@ -202,3 +203,45 @@ class BinIdxFileStore(IBinIdxReader, FileStore[bytes]):
 
     def get_path(self) -> str:
         return str(self.bin_path)
+
+
+class ParquetFileStore(IParquetReader, FileStore[Any]):
+    """Random access to rows of a Parquet dataset directory (layout from Parquet footers).
+
+    Per-column keys ``{row_index}.{column}`` return native pyarrow ``as_py()`` values, not bytes.
+    """
+
+    def __init__(
+        self,
+        dataset_root: EPath | str,
+        *,
+        part_filter: Callable[[str], bool] | None = None,
+        parquet_file_cache_size: int = 5,
+    ):
+        from megatron.energon.flavors.parquet.prepare import (
+            assert_layout_columns_subset,
+            scan_parquet_dataset,
+        )
+
+        root = EPath(dataset_root)
+        layout = scan_parquet_dataset(root)
+        layout_cols = list(layout.columns)
+        if part_filter is None:
+            read_columns = layout_cols
+        else:
+            read_columns = [c for c in layout_cols if part_filter(c)]
+        if not read_columns:
+            raise ValueError(
+                "part_filter excluded all Parquet columns; nothing to load. "
+                f"Layout columns: {layout_cols}"
+            )
+        assert_layout_columns_subset(layout_cols, read_columns)
+        super().__init__(
+            root,
+            layout,
+            read_columns,
+            parquet_file_cache_size=parquet_file_cache_size,
+        )
+
+    def get_path(self) -> str:
+        return str(self.dataset_root)

@@ -11,6 +11,7 @@ from megatron.energon.flavors import (
     CrudeSample,
     DefaultBinIdxDatasetFactory,
     DefaultCrudeJsonlDatasetFactory,
+    DefaultParquetDatasetFactory,
     StandardWebdatasetFactory,
 )
 from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
@@ -89,6 +90,7 @@ def get_dataset_from_config(
     path = EPath(path)
     dataset: BaseCoreDatasetFactory[T_sample]
     ds_type = get_dataset_type(path)
+
     if ds_type == EnergonDatasetType.JSONL:
         assert sample_type is CrudeSample or sample_type is None, (
             f"Sample type must be CrudeSample for jsonl datasets, but got {sample_type}"
@@ -126,6 +128,24 @@ def get_dataset_from_config(
             worker_config=worker_config,
             **kwargs,
         )
+    elif ds_type == EnergonDatasetType.PARQUET:
+        assert sample_type is CrudeSample or sample_type is None, (
+            f"Sample type must be CrudeSample for Parquet datasets, but got {sample_type}"
+        )
+        assert dataset_config is None, (
+            f"Dataset config must be None for Parquet datasets, but got {dataset_config}"
+        )
+        assert split_config is None, (
+            f"Split config must be None for Parquet datasets, but got {split_config}"
+        )
+
+        dataset = DefaultParquetDatasetFactory(
+            path,
+            training=training,
+            subflavors=subflavors,
+            worker_config=worker_config,
+            **kwargs,
+        )
     elif ds_type == EnergonDatasetType.WEBDATASET:
         if dataset_config is None:
             dataset_config = "dataset.yaml"
@@ -151,7 +171,7 @@ def get_dataset_from_config(
     else:
         raise ValueError(
             f"Path {path} does not contain a {MAIN_FOLDER_NAME}/.info.yaml or .info.json file, "
-            f"nor is it a jsonl or .bin (bin-idx) file. "
+            f"nor is it a jsonl file, a .bin (bin-idx) file, or a directory of .parquet files. "
             f"Did you forget to prepare the dataset? Please check the documentation for an introduction to dataset "
             f"preparation."
         )

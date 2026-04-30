@@ -43,6 +43,7 @@ def load_dataset(
         EnergonDatasetType.WEBDATASET,
         EnergonDatasetType.JSONL,
         EnergonDatasetType.BINIDX,
+        EnergonDatasetType.PARQUET,
     ):
         ds = DatasetLoader(path=path, **kwargs)
         ds.post_initialize()

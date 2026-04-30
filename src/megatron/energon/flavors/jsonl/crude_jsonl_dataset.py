@@ -93,10 +93,7 @@ class CrudeJsonlDatasetFactory(
         self.max_samples_per_sequence = max_samples_per_sequence
         self.subset = subset
         self.part_filter = part_filter
-        if part_filter is None or part_filter("json"):
-            self._len = IJsonlIndexReader.count_samples(path)
-        else:
-            self._len = 0
+        self._len = IJsonlIndexReader.count_samples(path)
         assert self.path.size() == IJsonlIndexReader.size(path), (
             "The index of the jsonl file does not match the file. Regenerate the index."
         )
@@ -104,7 +101,9 @@ class CrudeJsonlDatasetFactory(
     def __len__(self) -> int:
         return self._len
 
-    def build(self, worker_rotation_offset: int = 0) -> SavableDataset[CrudeSample]:
+    def build(
+        self, worker_rotation_offset: int = 0, part_filter: Callable[[str], bool] | None = None
+    ) -> SavableDataset[CrudeSample]:
         from megatron.energon.flavors.jsonl.ijsonl_reader import IJsonlReader
 
         if self.parallel_shard_iters is None:
@@ -145,9 +144,18 @@ class CrudeJsonlDatasetFactory(
             shuffle_over_epochs=self.shuffle_over_epochs if self.training else None,
             parallel_slice_iters=parallel_shard_iters,
         )
+        if (part_filter is not None and not part_filter("json")) or (
+            self.part_filter is not None and not self.part_filter("json")
+        ):
+
+            def load_fn(sample: RawSampleData) -> CrudeSample:
+                sample.data[0].pop("json", None)
+                return self._load_sample_raw(sample)
+        else:
+            load_fn = self._load_sample_raw
         return MapDataset(
             dataset,
-            self._load_sample_raw,
+            load_fn,
             stateless_map_fn=True,
             map_fn_config=self.config,
             worker_config=self.worker_config,
@@ -198,7 +206,8 @@ class DefaultCrudeJsonlDatasetFactory(CrudeJsonlDatasetFactory):
         sample["__subflavors__"] = self.subflavors
 
         # Instead of using a decoder, we just load the json here, as we know it's json.
-        sample["json"] = json.loads(sample["json"])
+        if "json" in sample:
+            sample["json"] = json.loads(sample["json"])
 
         return super()._load_sample(sample)
 

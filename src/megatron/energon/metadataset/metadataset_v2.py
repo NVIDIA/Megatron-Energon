@@ -311,6 +311,7 @@ class DatasetReference(SubsetRatioMixin, DatasetLoaderInterface):
             EnergonDatasetType.WEBDATASET,
             EnergonDatasetType.JSONL,
             EnergonDatasetType.BINIDX,
+            EnergonDatasetType.PARQUET,
         ):
             self._dataset = DatasetLoader(
                 path=self.path,

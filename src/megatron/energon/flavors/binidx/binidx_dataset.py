@@ -40,7 +40,7 @@ class BinIdxDatasetFactory(
 
     This factory creates datasets from pre-tokenized binary files (.bin + .idx)
     where the .idx file contains sequence offsets and the .bin file contains token data.
-    The samples are returned as CrudeSample objects containing raw token arrays.
+    The samples are returned as CrudeSample objects containing the raw `tokens` array.
     """
 
     __sample_type__ = CrudeSample
@@ -86,15 +86,14 @@ class BinIdxDatasetFactory(
         self.max_samples_per_sequence = max_samples_per_sequence
         self.subset = subset
         self.part_filter = part_filter
-        if part_filter is None or part_filter("bin"):
-            self._len = IBinIdxReader.count_samples(self.path)
-        else:
-            self._len = 0
+        self._len = IBinIdxReader.count_samples(self.path)
 
     def __len__(self) -> int:
         return self._len
 
-    def build(self, worker_rotation_offset: int = 0) -> SavableDataset[CrudeSample]:
+    def build(
+        self, worker_rotation_offset: int = 0, part_filter: Callable[[str], bool] | None = None
+    ) -> SavableDataset[CrudeSample]:
         if self.parallel_shard_iters is None:
             if self.training:
                 parallel_shard_iters = 16
@@ -102,6 +101,13 @@ class BinIdxDatasetFactory(
                 parallel_shard_iters = 1
         else:
             parallel_shard_iters = self.parallel_shard_iters
+
+        if self.part_filter is not None:
+            if part_filter is not None:
+                inner_pf, outer_pf = part_filter, self.part_filter
+                part_filter = lambda p, _i=inner_pf, _o=outer_pf: _o(p) and _i(p)
+            else:
+                part_filter = self.part_filter
 
         virtual_shards = [
             ShardInfo(
@@ -132,9 +138,16 @@ class BinIdxDatasetFactory(
             shuffle_over_epochs=self.shuffle_over_epochs if self.training else None,
             parallel_slice_iters=parallel_shard_iters,
         )
+        if part_filter is not None and not part_filter("tokens"):
+
+            def load_fn(sample: RawSampleData) -> CrudeSample:
+                sample.data[0].pop("tokens", None)
+                return self._load_sample_raw(sample)
+        else:
+            load_fn = self._load_sample_raw
         return MapDataset(
             dataset,
-            self._load_sample_raw,
+            load_fn,
             stateless_map_fn=True,
             map_fn_config=self.config,
             worker_config=self.worker_config,
@@ -174,18 +187,18 @@ class DefaultBinIdxDatasetFactory(BinIdxDatasetFactory):
     Adds subflavors to the sample and decodes token bytes back to a numpy array.
     """
 
-    def __init__(self, path: EPath, *, subflavors: Optional[Dict[str, Any]] = None, **kwargs):
+    def __init__(self, path: EPath, *, subflavors: dict[str, Any] | None = None, **kwargs):
         if "decoder" in kwargs:
             del kwargs["decoder"]
         super().__init__(path, **kwargs)
-        self.subflavors = subflavors
+        self.subflavors = subflavors or {}
         self._dtype = IBinIdxReader.read_dtype(self.path)
 
     def _load_sample(self, sample: FilteredSample) -> CrudeSample:
         sample["__subflavors__"] = self.subflavors
-        # Decode token bytes back to numpy array
-        sample["tokens"] = numpy.frombuffer(sample["tokens"], dtype=self._dtype)
-        return super()._load_sample(sample)
+        if "tokens" in sample:
+            sample["tokens"] = numpy.frombuffer(sample["tokens"], dtype=self._dtype)
+        return CrudeSample(sample)
 
     def config(self) -> Dict[str, Any]:
         return dict(

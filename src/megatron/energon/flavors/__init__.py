@@ -25,6 +25,7 @@ from megatron.energon.flavors.jsonl import (
 )
 from megatron.energon.flavors.multichoice_vqa import MultiChoiceVQASample, MultiChoiceVQAWebdataset
 from megatron.energon.flavors.ocr import OCRSample, OCRWebdataset
+from megatron.energon.flavors.parquet.dataset import DefaultParquetDatasetFactory
 from megatron.energon.flavors.similarity_interleaved import (
     SimilarityInterleavedSample,
     SimilarityInterleavedWebdataset,
@@ -63,6 +64,7 @@ __all__ = [
     "DefaultBinIdxDatasetFactory",
     "DefaultCrudeJsonlDatasetFactory",
     "DefaultDecoderWebdatasetFactory",
+    "DefaultParquetDatasetFactory",
     "DefaultGenericWebdatasetFactory",
     "EmptyDatasetError",
     "ImageClassificationSample",
