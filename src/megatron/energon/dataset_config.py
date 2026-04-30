@@ -9,6 +9,7 @@ from megatron.energon.eyaml import load_yaml
 from megatron.energon.flavors import (
     BaseCoreDatasetFactory,
     CrudeSample,
+    DefaultBinIdxDatasetFactory,
     DefaultCrudeJsonlDatasetFactory,
     StandardWebdatasetFactory,
 )
@@ -107,6 +108,24 @@ def get_dataset_from_config(
             worker_config=worker_config,
             **kwargs,
         )
+    elif ds_type == EnergonDatasetType.BINIDX:
+        assert sample_type is CrudeSample or sample_type is None, (
+            f"Sample type must be CrudeSample for bin-idx datasets, but got {sample_type}"
+        )
+        assert dataset_config is None, (
+            f"Dataset config must be None for bin-idx datasets, but got {dataset_config}"
+        )
+        assert split_config is None, (
+            f"Split config must be None for bin-idx datasets, but got {split_config}"
+        )
+
+        dataset = DefaultBinIdxDatasetFactory(
+            path,
+            training=training,
+            subflavors=subflavors,
+            worker_config=worker_config,
+            **kwargs,
+        )
     elif ds_type == EnergonDatasetType.WEBDATASET:
         if dataset_config is None:
             dataset_config = "dataset.yaml"
@@ -131,7 +150,8 @@ def get_dataset_from_config(
         raise ValueError("Filesystem datasets are only supported as auxiliary datasets. ")
     else:
         raise ValueError(
-            f"Path {path} does not contain a {MAIN_FOLDER_NAME}/.info.yaml or .info.json file nor is it a jsonl file. "
+            f"Path {path} does not contain a {MAIN_FOLDER_NAME}/.info.yaml or .info.json file, "
+            f"nor is it a jsonl or .bin (bin-idx) file. "
             f"Did you forget to prepare the dataset? Please check the documentation for an introduction to dataset "
             f"preparation."
         )

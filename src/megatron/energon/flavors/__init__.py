@@ -7,6 +7,10 @@ from megatron.energon.flavors.base_dataset import (
     Sample,
     SavableDataset,
 )
+from megatron.energon.flavors.binidx import (
+    BinIdxDatasetFactory,
+    DefaultBinIdxDatasetFactory,
+)
 from megatron.energon.flavors.captioning import CaptioningSample, CaptioningWebdataset
 from megatron.energon.flavors.crude import CrudeSample, CrudeWebdataset
 from megatron.energon.flavors.image import ImageSample, ImageWebdataset
@@ -50,11 +54,13 @@ __all__ = [
     "AVDecoderType",
     "BaseCoreDatasetFactory",
     "BaseWebdatasetFactory",
+    "BinIdxDatasetFactory",
     "CaptioningSample",
     "CaptioningWebdataset",
     "CrudeJsonlDatasetFactory",
     "CrudeSample",
     "CrudeWebdataset",
+    "DefaultBinIdxDatasetFactory",
     "DefaultCrudeJsonlDatasetFactory",
     "DefaultDecoderWebdatasetFactory",
     "DefaultGenericWebdatasetFactory",

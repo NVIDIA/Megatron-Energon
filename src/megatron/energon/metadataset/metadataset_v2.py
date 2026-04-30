@@ -307,7 +307,11 @@ class DatasetReference(SubsetRatioMixin, DatasetLoaderInterface):
         if ds_type == EnergonDatasetType.METADATASET:
             self._dataset = self._load_nested_metadataset()
             self._dataset.post_initialize()
-        elif ds_type in (EnergonDatasetType.WEBDATASET, EnergonDatasetType.JSONL):
+        elif ds_type in (
+            EnergonDatasetType.WEBDATASET,
+            EnergonDatasetType.JSONL,
+            EnergonDatasetType.BINIDX,
+        ):
             self._dataset = DatasetLoader(
                 path=self.path,
                 split_config=self.split_config,

@@ -29,6 +29,7 @@ class EnergonDatasetType(Enum):
     METADATASET = "metadataset"
     WEBDATASET = "webdataset"
     JSONL = "jsonl"
+    BINIDX = "binidx"
     FILESYSTEM = "filesystem"
     INVALID = "invalid"
 
@@ -162,6 +163,8 @@ def get_dataset_type(path: EPath) -> EnergonDatasetType:
     if path.is_file():
         if path.name.endswith(".jsonl"):
             return EnergonDatasetType.JSONL
+        elif path.name.endswith(".bin"):
+            return EnergonDatasetType.BINIDX
         elif path.name.endswith(".yaml"):
             return EnergonDatasetType.METADATASET
         else:

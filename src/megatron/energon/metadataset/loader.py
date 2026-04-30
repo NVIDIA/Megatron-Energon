@@ -39,7 +39,11 @@ def load_dataset(
         )
         mds.post_initialize()
         return mds
-    elif ds_type in (EnergonDatasetType.WEBDATASET, EnergonDatasetType.JSONL):
+    elif ds_type in (
+        EnergonDatasetType.WEBDATASET,
+        EnergonDatasetType.JSONL,
+        EnergonDatasetType.BINIDX,
+    ):
         ds = DatasetLoader(path=path, **kwargs)
         ds.post_initialize()
         return ds
