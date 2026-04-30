@@ -278,13 +278,64 @@ class TestEPath(unittest.TestCase):
             assert p.is_file()
             assert p.size() > 0
             assert p.read_text() == "dummy"
-            # TODO: Fix when fixed in MSC.
-            # assert EPath("msc://s3test_msc/test").is_dir()
+            assert EPath("msc://s3test_msc/test").is_dir()
             assert EPath("msc://s3test_msc/test/dir").is_dir()
             p.unlink()
             assert not p.is_file()
-            # assert not EPath("msc://s3test_msc/test").is_dir()
+            assert not EPath("msc://s3test_msc/test").is_dir()
             assert not EPath("msc://s3test_msc/test/dir").is_dir()
+
+    def test_msc_s3_dataprep_path_operations(self):
+        """EPath operations used by remote webdataset ``prepare`` (glob, rb, meta, sqlite upload, move).
+
+        Mirrors ``tools/prepare.py`` shard discovery, ``WebdatasetPreparator._preprocess_tar``
+        binary reads, and ``SqliteIndexWriterAggregator`` uploading ``index.sqlite`` from disk.
+        """
+        profile = "s3test_msc_dataprep"
+        with setup_s3_emulator(profile_name=profile):
+            root = EPath(f"msc://{profile}/dataset_root")
+            parts = root / "parts"
+            (parts / "data-0.tar").write_bytes(b"shard0-bytes")
+            (parts / "data-1.tar").write_bytes(b"shard1-bytes")
+
+            found = sorted(root.glob("**/*.tar"))
+            assert [p.name for p in found] == ["data-0.tar", "data-1.tar"]
+
+            with (parts / "data-0.tar").open("rb") as f:
+                assert f.read(6) == b"shard0"
+
+            meta_dir = root / MAIN_FOLDER_NAME
+            info = meta_dir / INFO_JSON_FILENAME
+            info.write_text('{"shard_counts": {"parts/data-0.tar": 1}}')
+            assert '"shard_counts"' in info.read_text()
+
+            probe_idx = parts / "probe.idx"
+            probe_idx_tmp = parts / "probe.idx.tmp"
+            with probe_idx_tmp.open("wb") as out:
+                out.write(struct.pack("QQ", 0, 512))
+            assert probe_idx_tmp.size() == 16
+            assert struct.unpack("QQ", probe_idx_tmp.read_bytes()) == (0, 512)
+
+            probe_idx_tmp.move(probe_idx)
+
+            assert probe_idx.size() == 16
+            assert struct.unpack("QQ", probe_idx.read_bytes()) == (0, 512)
+            probe_idx.unlink()
+
+            with tempfile.NamedTemporaryFile(delete=False) as lf:
+                lf.write(b"sqlite-placeholder")
+                local_sqlite = lf.name
+            try:
+                EPath(local_sqlite).copy(meta_dir / INDEX_SQLITE_FILENAME)
+                remote_db = meta_dir / INDEX_SQLITE_FILENAME
+                assert remote_db.read_bytes() == b"sqlite-placeholder"
+                remote_db.unlink()
+            finally:
+                Path(local_sqlite).unlink(missing_ok=True)
+
+            info.unlink()
+            for p in found:
+                p.unlink()
 
     def test_dss_path_requires_version(self):
         with self.assertRaisesRegex(

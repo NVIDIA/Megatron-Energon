@@ -6,7 +6,7 @@ from email.utils import formatdate
 from hashlib import md5
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler
-from typing import Protocol
+from typing import Literal, Protocol
 
 from .auth import InvalidSignature, S3Auth
 from .state import S3State
@@ -112,6 +112,37 @@ class S3RequestHandler(BaseHTTPRequestHandler):
 
         qs = _up.parse_qs(parsed.query, keep_blank_values=True)
 
+        # S3 CopyObject: PUT to destination key with x-amz-copy-source and empty body.
+        copy_src = (
+            self.headers.get("x-amz-copy-source") or self.headers.get("X-Amz-Copy-Source") or ""
+        ).strip()
+        if copy_src:
+            if not bucket:
+                self._send_error(HTTPStatus.BAD_REQUEST, "Bucket must be specified")
+                return
+            if key == "":
+                self._send_error(HTTPStatus.BAD_REQUEST, "CopyObject requires an object key")
+                return
+            try:
+                src_bucket, src_key = _parse_copy_source(copy_src)
+            except ValueError as err:
+                self._send_error(HTTPStatus.BAD_REQUEST, str(err))
+                return
+            try:
+                data = self.server.state.copy_object(bucket, key, src_bucket, src_key)
+            except FileNotFoundError:
+                self._send_error(HTTPStatus.NOT_FOUND, "NoSuchKey")
+                return
+            xml = (
+                '<?xml version="1.0" encoding="UTF-8"?>'
+                "<CopyObjectResult>"
+                f"<LastModified>{_escape_xml(formatdate(usegmt=True))}</LastModified>"
+                f"<ETag>&quot;{_escape_xml(_etag(data))}&quot;</ETag>"
+                "</CopyObjectResult>"
+            ).encode()
+            self._send_bytes(xml, status=HTTPStatus.OK, content_type="application/xml")
+            return
+
         # Multipart: upload part
         if "uploadId" in qs and "partNumber" in qs:
             upload_id = qs["uploadId"][0]
@@ -160,15 +191,15 @@ class S3RequestHandler(BaseHTTPRequestHandler):
             self._send_error(HTTPStatus.BAD_REQUEST, "Bucket must be specified")
             return
 
-        if key == "":  # List bucket contents
+        if key == "":  # List bucket contents (ListObjects / ListObjectsV2)
             if not listing:
-                # We treat listing with GET only
                 try:
                     objects = self.server.state.list_objects(bucket)
                 except KeyError:
                     self._send_error(HTTPStatus.NOT_FOUND, "Bucket not found")
                     return
-                xml_body = self._render_bucket_list(bucket, objects)
+                qs = _up.parse_qs(parsed.query, keep_blank_values=True)
+                xml_body = self._render_list_bucket_result(bucket, objects, qs)
                 self._send_bytes(xml_body, content_type="application/xml")
             else:
                 self._send_error(HTTPStatus.NOT_IMPLEMENTED, "Listing not implemented")
@@ -359,49 +390,133 @@ class S3RequestHandler(BaseHTTPRequestHandler):
         if self.command != "HEAD":
             self.wfile.write(data)
 
-    @staticmethod
-    def _render_bucket_list(bucket: str, objects: list[str]) -> bytes:
-        """Generate an XML listing of objects in a bucket.
+    def _render_list_bucket_result(
+        self,
+        bucket: str,
+        all_keys: list[str],
+        qs: dict[str, list[str]],
+    ) -> bytes:
+        """Build ListBucketResult XML (ListObjectsV2-compatible).
 
-        Args:
-            bucket: The bucket name.
-            objects: List of object keys in the bucket.
-
-        Returns:
-            The XML document as bytes.
+        Clients (e.g. MSC) send ``delimiter=/`` and ``prefix=`` and expect
+        ``CommonPrefixes`` for nested keys such as ``parts/data-0.tar``, not
+        only flat ``Contents``.
         """
-        entries = []
+        prefix = (qs.get("prefix") or [""])[0]
+        delimiter = (qs.get("delimiter") or [None])[0]
+        max_keys_s = (qs.get("max-keys") or qs.get("maxkeys") or ["1000"])[0]
+        try:
+            max_keys = max(1, min(int(max_keys_s), 1000))
+        except ValueError:
+            max_keys = 1000
+
+        continuation = (qs.get("continuation-token") or [""])[0]
+        start_after = (qs.get("start-after") or [""])[0]
+        exclusive_after = continuation or start_after
+
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
-        for key in objects:
-            try:
-                data = S3RequestHandler.server.state.get_object(bucket, key)  # type: ignore[attr-defined]
-                size = len(data)
-                etag = _etag(data)
-            except Exception:  # noqa: BLE001
-                size = 0
-                etag = '""'
-            entries.append(
-                "<Contents>"
-                f"<Key>{_escape_xml(key)}</Key>"
-                f"<LastModified>{now}</LastModified>"
-                f"<ETag>{etag}</ETag>"
-                f"<Size>{size}</Size>"
-                "</Contents>"
-            )
-        obj_elems = "".join(entries)
-        xml = (
-            '<?xml version="1.0" encoding="UTF-8"?>'
-            "<ListBucketResult>"
-            f"<Name>{_escape_xml(bucket)}</Name>"
-            f"{obj_elems}"
-            "</ListBucketResult>"
-        )
-        return xml.encode()
+        state = self.server.state
+
+        items: list[tuple[Literal["cp", "key"], str]] = []
+        if not delimiter:
+            for k in sorted(all_keys):
+                if k.startswith(prefix):
+                    items.append(("key", k))
+        else:
+            common: set[str] = set()
+            contents: list[str] = []
+            for k in sorted(all_keys):
+                if not k.startswith(prefix):
+                    continue
+                relative = k[len(prefix) :]
+                if delimiter in relative:
+                    idx = relative.index(delimiter)
+                    common.add(prefix + relative[: idx + len(delimiter)])
+                else:
+                    contents.append(k)
+            for cp in sorted(common):
+                items.append(("cp", cp))
+            for ck in sorted(contents):
+                items.append(("key", ck))
+            items.sort(key=lambda x: x[1])
+
+        if exclusive_after:
+            items = [it for it in items if it[1] > exclusive_after]
+
+        page = items[:max_keys]
+        truncated = len(items) > max_keys
+        next_token = page[-1][1] if truncated and page else ""
+
+        fragments: list[str] = [
+            '<?xml version="1.0" encoding="UTF-8"?>',
+            "<ListBucketResult>",
+            f"<Name>{_escape_xml(bucket)}</Name>",
+            f"<Prefix>{_escape_xml(prefix)}</Prefix>",
+            f"<KeyCount>{len(page)}</KeyCount>",
+            f"<MaxKeys>{max_keys}</MaxKeys>",
+            f"<IsTruncated>{str(truncated).lower()}</IsTruncated>",
+        ]
+        if delimiter:
+            fragments.append(f"<Delimiter>{_escape_xml(delimiter)}</Delimiter>")
+        if truncated and next_token:
+            fragments.append(f"<NextContinuationToken>{_escape_xml(next_token)}</NextContinuationToken>")
+
+        for kind, path in page:
+            if kind == "cp":
+                fragments.append(f"<CommonPrefixes><Prefix>{_escape_xml(path)}</Prefix></CommonPrefixes>")
+            else:
+                try:
+                    data = state.get_object(bucket, path)
+                    size = len(data)
+                    etag = _etag(data)
+                except Exception:  # noqa: BLE001
+                    size = 0
+                    etag = '""'
+                fragments.append(
+                    "<Contents>"
+                    f"<Key>{_escape_xml(path)}</Key>"
+                    f"<LastModified>{now}</LastModified>"
+                    f"<ETag>{etag}</ETag>"
+                    f"<Size>{size}</Size>"
+                    "</Contents>"
+                )
+
+        fragments.append("</ListBucketResult>")
+        return "".join(fragments).encode()
 
 
 class S3ServerProtocol(Protocol):  # noqa: D101
     state: S3State
     auth: S3Auth
+
+
+def _parse_copy_source(raw: str) -> tuple[str, str]:
+    """Parse ``x-amz-copy-source`` into ``(bucket, key)``.
+
+    Accepts ``/bucket/key``, ``bucket/key``, URL-encoded keys, and strips ``?versionId=``.
+
+    Args:
+        raw: Raw header value.
+
+    Returns:
+        Source bucket and object key.
+
+    Raises:
+        ValueError: If the value cannot be parsed.
+    """
+    s = raw.strip()
+    if not s:
+        raise ValueError("Empty x-amz-copy-source")
+    s = s.split("?", 1)[0]
+    s = _up.unquote(s)
+    if s.startswith("/"):
+        s = s[1:]
+    if "/" not in s:
+        raise ValueError("x-amz-copy-source must be /bucket/key")
+    src_bucket, src_key = s.split("/", 1)
+    if not src_bucket or not src_key:
+        raise ValueError("Invalid x-amz-copy-source")
+    return src_bucket, src_key
 
 
 def _escape_xml(text: str) -> str:  # noqa: D401

@@ -70,7 +70,6 @@ class SqliteIndexWriter:
 
         # Initialize SQLite connection
         # Only supporting local file system, because sqlite does not support remote file systems.
-        # TODO: Implement remote file systems. Maybe create locally in tmp then upload?
         path = self.sqlite_path.local_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(path)

@@ -111,6 +111,35 @@ class S3State:
             except KeyError as exc:
                 raise FileNotFoundError(f"{bucket}/{key}") from exc
 
+    def copy_object(self, dest_bucket: str, dest_key: str, src_bucket: str, src_key: str) -> bytes:
+        """Copy an object to another key (S3 CopyObject).
+
+        Args:
+            dest_bucket: Destination bucket.
+            dest_key: Destination object key.
+            src_bucket: Source bucket.
+            src_key: Source object key.
+
+        Returns:
+            Copied object bytes (for ETag in the CopyObject XML response).
+
+        Raises:
+            FileNotFoundError: If the source object does not exist.
+        """
+        with self._lock:
+            try:
+                payload = bytes(self._fs[src_bucket][src_key])
+            except KeyError as exc:
+                raise FileNotFoundError(f"{src_bucket}/{src_key}") from exc
+            if dest_bucket not in self._fs:
+                self._fs[dest_bucket] = {}
+            self._fs[dest_bucket][dest_key] = payload
+        if self._root_dir is not None:
+            obj_path = (self._root_dir / dest_bucket / dest_key).resolve()
+            obj_path.parent.mkdir(parents=True, exist_ok=True)
+            obj_path.write_bytes(payload)
+        return payload
+
     def delete_object(self, bucket: str, key: str) -> None:
         """Delete an object from a bucket.
 

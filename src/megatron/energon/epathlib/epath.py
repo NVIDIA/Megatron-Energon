@@ -292,12 +292,27 @@ class EPath:
 
     def glob(self, pattern) -> Generator["EPath", None, None]:
         search_path_pattern = (self / pattern)._internal_str_path
+        # MSC S3 glob matches keys like ``bucket/key``; a leading ``/`` breaks wcmatch (pattern
+        # ``/b/**`` never matches ``b/parts/x``). Returned keys may repeat the bucket prefix; strip
+        # it before joining with ``internal_path`` so we do not get ``/b/b/parts/...``.
+        if not self.is_local() and search_path_pattern.startswith("/"):
+            search_path_pattern = search_path_pattern.lstrip("/")
+
+        root_prefix = str(self.internal_path).lstrip("/")
 
         for path in self.fs.glob(search_path_pattern):
             assert isinstance(path, str)
 
+            rel = path
+            if not self.is_local() and root_prefix:
+                pfx = root_prefix + "/"
+                if rel.startswith(pfx):
+                    rel = rel[len(pfx) :]
+                elif rel == root_prefix:
+                    rel = "."
+
             new_path = EPath(self)
-            new_path.internal_path = self._resolve(self.internal_path / PurePosixPath(path))
+            new_path.internal_path = self._resolve(self.internal_path / PurePosixPath(rel))
 
             yield new_path
 
