@@ -137,38 +137,6 @@ class SqliteIndexWriter:
                 """
             )
 
-    def append_sample(
-        self,
-        tar_file_id: int8,
-        sample_key: str,
-        sample_index: int,
-        byte_offset: Optional[int],
-        byte_size: Optional[int],
-    ):
-        """
-        Adds a new sample row to the samples table.
-
-        Args:
-            tar_file_id: The index of the tar file in the reader.
-            sample_key: The key of the sample.
-            sample_index: The index of the sample in the tar file.
-            byte_offset: The byte offset of the sample in the tar file.
-            byte_size: The size of the sample in the tar file.
-        """
-
-        assert self.db is not None, "Database is closed"
-
-        try:
-            self.db.execute(
-                """
-                INSERT INTO samples (tar_file_id, sample_key, sample_index, byte_offset, byte_size)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (tar_file_id, sample_key, sample_index, byte_offset, byte_size),
-            )
-        except sqlite3.IntegrityError as exc:
-            raise DuplicateSampleKeyError(sample_key) from exc
-
     def append_samples(
         self,
         rows: Sequence["IndexSample"],
@@ -207,26 +175,6 @@ class SqliteIndexWriter:
             self.db.execute(f"RELEASE SAVEPOINT {savepoint_name}")
             raise DuplicateSampleKeyError(self._find_duplicate_sample_key(rows)) from exc
 
-    def append_part(
-        self,
-        tar_file_id: int8,
-        sample_index: int,
-        part_name: str,
-        content_byte_offset: int,
-        content_byte_size: int,
-    ):
-        """Adds a new part row to the samples table."""
-
-        assert self.db is not None, "Database is closed"
-
-        self.db.execute(
-            """
-            INSERT INTO sample_parts (tar_file_id, sample_index, part_name, content_byte_offset, content_byte_size)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (tar_file_id, sample_index, part_name, content_byte_offset, content_byte_size),
-        )
-
     def append_parts(
         self,
         rows: Sequence["IndexSamplePart"],
@@ -253,26 +201,6 @@ class SqliteIndexWriter:
                 )
                 for row in rows
             ),
-        )
-
-    def append_media_metadata(
-        self,
-        entry_key: str,
-        metadata_type: str,
-        metadata_json: str,
-    ) -> None:
-        """Insert or update a media metadata record."""
-
-        assert self.enable_media_metadata, "Adding media metadata, although not enabled"
-
-        assert self.db is not None, "Database is closed"
-
-        self.db.execute(
-            """
-            INSERT OR REPLACE INTO media_metadata (entry_key, metadata_type, metadata_json)
-            VALUES (?, ?, ?)
-            """,
-            (entry_key, metadata_type, metadata_json),
         )
 
     def append_media_metadata_batch(
