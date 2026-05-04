@@ -35,6 +35,7 @@ from megatron.energon.epathlib import EPath
 from megatron.energon.eyaml import load_yaml
 from megatron.energon.flavors.webdataset.aggregator_pool import AggregatorPool, BaseAggregator
 from megatron.energon.flavors.webdataset.config import (
+    INDEX_BATCH_SIZE,
     INDEX_SQLITE_FILENAME,
     INDEX_UUID_FILENAME,
     INFO_JSON_FILENAME,
@@ -54,7 +55,6 @@ from megatron.energon.typed_converter import to_json_object
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T", covariant=True)
-_INDEX_BATCH_SIZE = 4096
 
 
 @edataclass
@@ -582,7 +582,7 @@ class WebdatasetPreparator:
             num_workers=workers,
             user_produce_data=process_tar,
             aggregator=aggregator,
-            batch_size=_INDEX_BATCH_SIZE,
+            batch_size=INDEX_BATCH_SIZE,
         )
 
         for path in paths:
@@ -784,7 +784,7 @@ class WebdatasetPreparator:
             num_workers=min(workers, len(expanded_paths)) or 1,
             user_produce_data=process_tar,
             aggregator=aggregator,
-            batch_size=_INDEX_BATCH_SIZE,
+            batch_size=INDEX_BATCH_SIZE,
         )
 
         for path in expanded_paths:
