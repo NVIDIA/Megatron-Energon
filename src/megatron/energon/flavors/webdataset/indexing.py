@@ -6,8 +6,6 @@ import struct
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, BinaryIO, Generator, List, Optional, Tuple, Union
 
-from numpy import int8
-
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.webdataset.itar import ITarRawSamplePartPointer, ITarSamplePointer
 from megatron.energon.flavors.webdataset.thread_local_sqlite import ThreadLocalSqlite
