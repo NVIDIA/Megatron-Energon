@@ -286,6 +286,13 @@ class TestEPath(unittest.TestCase):
             # assert not EPath("msc://s3test_msc/test").is_dir()
             assert not EPath("msc://s3test_msc/test/dir").is_dir()
 
+    def test_dss_path_requires_version(self):
+        with self.assertRaisesRegex(
+            AssertionError,
+            "DSS paths must include a dataset version separated by '@'",
+        ):
+            EPath("dss://charts1234")
+
     def test_metadataset_v2_dss_path_parsing_str(self):
         """Parse a MetadatasetV2 config and ensure DSS URLs stringify correctly as EPath."""
 
@@ -319,15 +326,15 @@ class TestEPath(unittest.TestCase):
             # Create dummy DSS datasets in the cache dir so that `load_dataset()` can run
             # post-initialization without hitting missing-path errors.
             #
-            # - charts1234_zh@v0: minimal "webdataset" marker (presence of .nv-meta/.info.json)
-            # - charts1234@v0: folder with images (aux media source)
-            webdataset_root = cache_dir / "charts1234_zh@v0"
+            # - charts1234_zh/v0: minimal "webdataset" marker (presence of .nv-meta/.info.json)
+            # - charts1234/v0: folder with images (aux media source)
+            webdataset_root = cache_dir / "charts1234_zh" / "v0"
             (webdataset_root / MAIN_FOLDER_NAME).mkdir(parents=True, exist_ok=True)
             (webdataset_root / MAIN_FOLDER_NAME / INFO_JSON_FILENAME).write_text(
                 "{}", encoding="utf-8"
             )
 
-            media_root = cache_dir / "charts1234@v0"
+            media_root = cache_dir / "charts1234" / "v0"
             (media_root / "images").mkdir(parents=True, exist_ok=True)
             (media_root / "images" / "000.jpg").write_bytes(b"\xff\xd8\xff\xd9")
             (media_root / "images" / "001.jpg").write_bytes(b"\xff\xd8\xff\xd9")
@@ -363,6 +370,8 @@ class TestEPath(unittest.TestCase):
 
                 assert ds0.url == "dss://charts1234_zh@v0"
                 assert aux0.url == "dss://charts1234@v0"
+                assert ds0.local_path() == cache_dir / "charts1234_zh" / "v0"
+                assert aux0.local_path() == cache_dir / "charts1234" / "v0"
             finally:
                 if orig_env_cache_dir is None:
                     os.environ.pop("NVDATASET_CACHE_DIR", None)

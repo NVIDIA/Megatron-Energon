@@ -7,6 +7,7 @@ split_name_re = re.compile(r"^((?:.*/|)[^.]+)[.]([^/]*)$")
 skip_meta_re = re.compile(r"__[^/]*__($|/)")
 MAIN_FOLDER_NAME = ".nv-meta"
 JOIN_INDEX_FILENAME = "join_index.bin"
+INDEX_BATCH_SIZE = 4096
 INDEX_SQLITE_FILENAME = "index.sqlite"
 INDEX_UUID_FILENAME = "index.uuid"
 INFO_JSON_FILENAME = ".info.json"

@@ -9,7 +9,6 @@ import re
 import sys
 import tarfile
 import uuid
-from dataclasses import asdict
 from pathlib import Path
 from typing import (
     Any,
@@ -36,6 +35,7 @@ from megatron.energon.epathlib import EPath
 from megatron.energon.eyaml import load_yaml
 from megatron.energon.flavors.webdataset.aggregator_pool import AggregatorPool, BaseAggregator
 from megatron.energon.flavors.webdataset.config import (
+    INDEX_BATCH_SIZE,
     INDEX_SQLITE_FILENAME,
     INDEX_UUID_FILENAME,
     INFO_JSON_FILENAME,
@@ -44,10 +44,7 @@ from megatron.energon.flavors.webdataset.config import (
     skip_meta_re,
     split_name_re,
 )
-from megatron.energon.flavors.webdataset.indexing import (
-    DuplicateSampleKeyError,
-    SqliteIndexWriter,
-)
+from megatron.energon.flavors.webdataset.indexing import DuplicateSampleKeyError, SqliteIndexWriter
 from megatron.energon.flavors.webdataset.itar import TarIndexWriter
 from megatron.energon.flavors.webdataset.metadata import get_dataset_info
 from megatron.energon.flavors.webdataset.structs import ShardInfo, WebdatasetInfo, WebdatasetSplits
@@ -159,35 +156,54 @@ class SqliteIndexWriterAggregator(
 
     def on_item(
         self,
-        item: IndexAggregatable,
+        items: List[IndexAggregatable],
         aggregator_pool: AggregatorPool,
     ) -> None:
         assert self.writer is not None, "Writer is not initialized."
-        if isinstance(item, IndexSample):
-            self.writer.append_sample(**asdict(item))
-            self.had_update = True
-        elif isinstance(item, IndexSamplePart):
-            self.writer.append_part(**asdict(item))
-        elif isinstance(item, IndexMediaMetadata):
-            self.writer.append_media_metadata(
-                entry_key=item.entry_key,
-                metadata_type=item.metadata_type,
-                metadata_json=item.metadata_json,
-            )
-            self.had_update = True
-            self.media_metadata_written += 1
-            if self.progress_on_media:
-                self._advance_progress()
-        elif isinstance(item, IndexShardInfo):
-            # This is a (shard_info, parts) tuple
-            if not self.progress_on_media:
-                self._advance_progress()
+        sample_rows: List[IndexSample] = []
+        sample_part_rows: List[IndexSamplePart] = []
+        media_metadata_rows: List[IndexMediaMetadata] = []
 
-            shard_info, cur_parts = item.shard_info, item.parts
-            assert shard_info.count != 0, f"Shard {shard_info.name} has no samples."
-            self.shards.append(shard_info)
-            if len(self.found_parts) < 50:
-                self.found_parts.update(cur_parts)
+        def flush_rows() -> None:
+            if sample_rows:
+                self.writer.append_samples(sample_rows)
+            if sample_part_rows:
+                self.writer.append_parts(sample_part_rows)
+            if media_metadata_rows:
+                self.writer.append_media_metadata_batch(media_metadata_rows)
+
+            if sample_rows or sample_part_rows or media_metadata_rows:
+                self.had_update = True
+                self.media_metadata_written += len(media_metadata_rows)
+                if self.progress_on_media and media_metadata_rows:
+                    self._advance_progress(count=len(media_metadata_rows))
+
+            sample_rows.clear()
+            sample_part_rows.clear()
+            media_metadata_rows.clear()
+
+        for item in items:
+            if isinstance(item, IndexSample):
+                sample_rows.append(item)
+            elif isinstance(item, IndexSamplePart):
+                sample_part_rows.append(item)
+            elif isinstance(item, IndexMediaMetadata):
+                media_metadata_rows.append(item)
+            elif isinstance(item, IndexShardInfo):
+                flush_rows()
+
+                if not self.progress_on_media:
+                    self._advance_progress()
+
+                shard_info, cur_parts = item.shard_info, item.parts
+                assert shard_info.count != 0, f"Shard {shard_info.name} has no samples."
+                self.shards.append(shard_info)
+                if len(self.found_parts) < 50:
+                    self.found_parts.update(cur_parts)
+            else:
+                raise TypeError(f"Unsupported index item type: {type(item)!r}")
+
+        flush_rows()
 
     def on_finish(self, aggregator_pool: AggregatorPool) -> None:
         assert self.writer is not None, "Writer is not initialized."
@@ -204,11 +220,12 @@ class SqliteIndexWriterAggregator(
         assert self.writer is not None, "Writer is not initialized."
         return self.shards, self.found_parts, self.had_update
 
-    def _advance_progress(self) -> None:
-        try:
-            next(self.prog_iter)
-        except StopIteration:
-            pass
+    def _advance_progress(self, *, count: int = 1) -> None:
+        for _ in range(count):
+            try:
+                next(self.prog_iter)
+            except StopIteration:
+                break
 
 
 class WebdatasetPreparator:
@@ -257,8 +274,8 @@ class WebdatasetPreparator:
             A generator of items that will be processed by SqliteIndexWriterAggregator.
             See method `on_item` of SqliteIndexWriterAggregator.
             The items are either:
-            - A sample dictionary with information about the offset, key etc.
-            - Or a tuple of shard info and a set of found parts for statistics.
+            - typed row objects describing samples, sample parts, or media metadata
+            - or shard info for statistics.
         """
         shard_info = ShardInfo(name=path, path=parent_path / path, count=0)
 
@@ -309,7 +326,6 @@ class WebdatasetPreparator:
 
                         entry_key = f"{base_name}.{part_name}"
 
-                        # Yield this part of the sample to the aggregator
                         yield IndexSamplePart(
                             tar_file_id=shard_to_idx[path],
                             sample_index=count - 1,
@@ -566,6 +582,7 @@ class WebdatasetPreparator:
             num_workers=workers,
             user_produce_data=process_tar,
             aggregator=aggregator,
+            batch_size=INDEX_BATCH_SIZE,
         )
 
         for path in paths:
@@ -767,6 +784,7 @@ class WebdatasetPreparator:
             num_workers=min(workers, len(expanded_paths)) or 1,
             user_produce_data=process_tar,
             aggregator=aggregator,
+            batch_size=INDEX_BATCH_SIZE,
         )
 
         for path in expanded_paths:
