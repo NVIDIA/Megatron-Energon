@@ -10,7 +10,11 @@ from typing import Callable, Iterator
 
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.webdataset.aggregator_pool import AggregatorPool
-from megatron.energon.flavors.webdataset.config import INDEX_SQLITE_FILENAME, MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset.config import (
+    INDEX_BATCH_SIZE,
+    INDEX_SQLITE_FILENAME,
+    MAIN_FOLDER_NAME,
+)
 from megatron.energon.flavors.webdataset.prepare import (
     IndexAggregatable,
     IndexMediaMetadata,
@@ -83,6 +87,7 @@ def prepare_filesystem_dataset(
             media_filter=media_filter,
         ),
         aggregator=aggregator,
+        batch_size=INDEX_BATCH_SIZE,
     )
 
     for file_path in files:
