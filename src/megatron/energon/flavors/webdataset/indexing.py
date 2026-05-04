@@ -237,10 +237,7 @@ class SqliteIndexWriter:
 
         if self.enable_sample_tables:
             # Create the index after adding all the samples for better speed
-            # Index on sample_key for fast lookups
-            self.db.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS idx_samples_sample_key ON samples(sample_key)"
-            )
+            # sample_key uniqueness already creates an implicit SQLite index via the table schema.
 
             # Create index on the samples table.  Help the planner if it chooses `samples` as the probe side of the join
             self.db.execute(
