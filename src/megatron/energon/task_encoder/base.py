@@ -56,6 +56,7 @@ from megatron.energon.wrappers import (
     PackingDataset,
     ShuffleBufferDataset,
 )
+from megatron.energon.wrappers.packing_dataset import PackedSamplesOutput
 from megatron.energon.wrappers.repeat_dataset import RepeatDataset
 
 T = TypeVar("T")
@@ -536,16 +537,18 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
 
     def select_samples_to_pack(
         self, samples: List[T_encoded_sample]
-    ) -> List[List[T_encoded_sample]]:
+    ) -> list[list[T_encoded_sample]] | PackedSamplesOutput[T_encoded_sample]:
         """
         For packing, selects the samples to be packed together.
         Packing is only active when packing_buffer_size is set.
         Internally this stage is called "pre_packing".
 
         Args:
-            samples: The samples to pre-pack. A full buffer will be passed into the function.
+            samples: The samples to pre-pack (a full reading buffer per call when ``packing_buffer_size`` is set).
 
-        Returns: The pre-packed samples as a list of lists of samples.
+        Returns:
+            Either a ``list[list[T]]`` of packs, or :class:`PackedSamplesOutput`
+            to attach a ``pushback`` sequence reapplied to the reading buffer before the next fill.
         """
         raise NotImplementedError("Packing only effective when overridden.")
 
