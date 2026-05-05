@@ -27,9 +27,16 @@ class DatasetBlendMode(Enum):
 
 @edataclass
 class LoadedDataset:
+    #: The dataset factory.
     dataset: BaseCoreDatasetFactory
+    #: Sampling weight when using dataset-weight blending.
     weight: Union[float, int, None] = None
+    #: Epochized repetition count when using repetition-based blending.
     repetitions: Union[float, int, None] = None
+    #: Packing group key for train pipelines with ``packing_buffer_size`` (see Metadataset V2).
+    #: ``None`` is the default group.
+    packing_group: Optional[str] = None
+    #: Auxiliary datasets for crude cooking.
     aux: Optional[Dict[str, FileStore]] = None
 
 
@@ -48,12 +55,16 @@ class TraversedDatasetReference:
         split_part: Effective split part to use when loading the leaf dataset.
         aux: Resolved auxiliary dataset or filesystem references keyed by auxiliary name.
         subflavors: Effective subflavors implied by the traversed metadataset hierarchy.
+        packing_group: Optional packing group name from metadataset references (for tooling).
+        shuffle_over_epochs_multiplier: Effective shuffle over epochs multiplier from metadataset references.
     """
 
     path: EPath
     split_part: str
     aux: dict[str, EPath]
     subflavors: dict[str, Any]
+    packing_group: Optional[str] = None
+    shuffle_over_epochs_multiplier: Optional[int] = 1
 
 
 class DatasetLoaderInterface(ABC):
@@ -69,6 +80,8 @@ class DatasetLoaderInterface(ABC):
         mds_path: Optional[EPath] = None,
         *,
         split_part: Union[Literal["train", "val", "test"], str],
+        _packing_group: Optional[str] = None,
+        _shuffle_over_epochs_multiplier: Optional[int] = 1,
         _subflavors: Optional[Dict[str, Any]] = None,
     ) -> List[TraversedDatasetReference]:
         """Traverse a metadataset subtree and collect flattened leaf dataset references.
@@ -83,6 +96,10 @@ class DatasetLoaderInterface(ABC):
                 use None only for top-level metadatasets.
             split_part: Split to traverse, such as `\"train\"`, `\"val\"`, or `\"test\"`. Nested
                 references may override this with their own configured split.
+            _packing_group: Effective packing group from metadataset references (for tooling).
+            _shuffle_over_epochs_multiplier: Inherited shuffle multiplier (merged per node like
+                ``get_datasets``); default ``1``.
+            _subflavors: Effective subflavors implied by the traversed metadataset hierarchy.
 
         Returns:
             A flattened list of `TraversedDatasetReference` values for all leaf datasets reached
@@ -100,6 +117,7 @@ class DatasetLoaderInterface(ABC):
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: Optional[int] = 1,
         subset: Optional[DatasetSubset] = None,
+        packing_group: Optional[str] = None,
         **kwargs,
     ) -> LoadedDatasetList:
         """
@@ -120,6 +138,9 @@ class DatasetLoaderInterface(ABC):
                 an infinite number of epochs (effectively, this will draw shard slices with
                 replacement).
             subset: If specified, the inner dataset(s) will be subsetted.
+            packing_group: When set, this leaf belongs to a packing group: samples from datasets sharing the same key
+                are blended and shuffled together, then packed in one :class:`~megatron.energon.PackingDataset`
+                buffer before blending across groups. ``None`` means the default group.
             **kwargs: Additional arguments to the dataset constructor.
 
         Returns:
