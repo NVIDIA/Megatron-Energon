@@ -34,6 +34,7 @@ from megatron.energon import (
     DefaultTaskEncoder,
     MapDataset,
     MixBatchDataset,
+    PackedSamplesOutput,
     Sample,
     SavableDataLoader,
     TaskEncoder,
@@ -1560,6 +1561,96 @@ class TestDataset(unittest.TestCase):
         restored_sample_1 = loader.restore_sample(samples[1].__restore_key__)
         assert restored_sample_1.__key__ == samples[1].__key__
         assert restored_sample_1.__restore_key__ == samples[1].__restore_key__
+
+    def test_packing_pushback(self):
+        """Pushback must prepend deferred samples ahead of new iterator pulls.
+
+        With ``buffer_size`` 5, the first full buffer follows the dataset iterator order (not
+        necessarily sorted ``__key__``). We pack only the first sample and push the rest back; the
+        next pre-pack must see the four deferred samples first, then one newly drawn sample — i.e.
+        the second buffer's keys must start with the first buffer's keys at indices ``[1:5]``.
+        """
+        torch.manual_seed(42)
+
+        buf = 5
+
+        class TestTaskEncoder(DefaultTaskEncoder):
+            def __init__(self):
+                super().__init__(raw_batch_type=CaptioningBatch)
+                self.buffer_keys_per_call: list[list[str]] = []
+                self.first_fill_keys: list[str] | None = None
+
+            @stateless
+            def encode_sample(self, sample: CaptioningSample) -> EncodedCaptioningSample:
+                return EncodedCaptioningSample.derive_from(
+                    sample,
+                    image=sample.image,
+                    caption=torch.frombuffer(sample.caption.encode(), dtype=torch.uint8),
+                )
+
+            def select_samples_to_pack(
+                self, samples: list[EncodedCaptioningSample]
+            ) -> PackedSamplesOutput[EncodedCaptioningSample]:
+                keys = [s.__key__ for s in samples]
+                self.buffer_keys_per_call.append(keys.copy())
+                call = len(self.buffer_keys_per_call)
+                if call == 1:
+                    assert len(samples) == buf
+                    self.first_fill_keys = keys.copy()
+                    return PackedSamplesOutput(
+                        packs=[samples[:1]],
+                        pushback=tuple(samples[1:]),
+                    )
+                if call == 2:
+                    assert len(samples) == buf
+                    assert self.first_fill_keys is not None
+                    assert keys[: buf - 1] == self.first_fill_keys[1:buf], (
+                        "Pushback did not appear before new samples: "
+                        f"second_fill[:4]={keys[: buf - 1]!r} "
+                        f"expected first_fill[1:5]={self.first_fill_keys[1:buf]!r}"
+                    )
+                    return PackedSamplesOutput(
+                        packs=[[s] for s in samples],
+                        pushback=(),
+                    )
+                return PackedSamplesOutput(
+                    packs=[[s] for s in samples],
+                    pushback=(),
+                )
+
+            @stateless
+            def pack_selected_samples(
+                self, samples: list[EncodedCaptioningSample]
+            ) -> EncodedCaptioningSample:
+                return EncodedCaptioningSample(
+                    __key__=",".join(sample.__key__ for sample in samples),
+                    __restore_key__=(),
+                    image=torch.stack([sample.image for sample in samples]),
+                    caption=torch.cat([sample.caption for sample in samples]),
+                )
+
+        task_encoder = TestTaskEncoder()
+        loader = get_loader(
+            get_train_dataset(
+                self.dataset_path,
+                batch_size=2,
+                packing_buffer_size=buf,
+                worker_config=no_worker_config,
+                virtual_epoch_length=4,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                task_encoder=task_encoder,
+            )
+        )
+
+        out = list(loader)
+        assert len(out) == 4
+        assert task_encoder.first_fill_keys is not None
+        assert (
+            task_encoder.buffer_keys_per_call[1][: buf - 1] == task_encoder.first_fill_keys[1:buf]
+        )
+        restored = loader.restore_sample(out[0].__restore_key__)
+        assert restored.__key__ == out[0].__key__
 
     def test_group_batch(self):
         class GroupingTaskEncoder(

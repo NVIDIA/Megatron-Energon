@@ -32,7 +32,7 @@ from megatron.energon.epathlib.epath import EPath
 from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
 from megatron.energon.metadataset.loader import prepare_metadataset, traverse_metadataset
 from megatron.energon.metadataset.loader_interface import DatasetBlendMode
-from megatron.energon.task_encoder.base import DefaultTaskEncoder
+from megatron.energon.task_encoder.base import DefaultTaskEncoder, stateless
 from megatron.energon.wrappers.watchdog_dataset import WatchdogDataset
 from tests.epath_s3_emulator import setup_s3_emulator
 
@@ -257,6 +257,86 @@ class TestDataset(unittest.TestCase):
         assert len(Counter(train_order1)) == 110
         assert all(48 <= v <= 52 for v in Counter(train_order1).values())
 
+    def test_packing_group(self):
+        """Distinct ``packing_group`` on blend leaves; packed samples never mix ds1 and ds2."""
+        mds_path = self.dataset_path / "packing_group_blend.yaml"
+        with open(mds_path, "w") as f:
+            f.write(
+                "\n".join(
+                    [
+                        "__module__: megatron.energon",
+                        "__class__: MetadatasetV2",
+                        "splits:",
+                        "  train:",
+                        "    blend:",
+                        "      - weight: 1",
+                        "        path: ds1",
+                        "        packing_group: alpha",
+                        "        subflavors:",
+                        "          packing_source: ds1",
+                        "      - weight: 1",
+                        "        path: ds2",
+                        "        packing_group: beta",
+                        "        subflavors:",
+                        "          packing_source: ds2",
+                    ]
+                )
+            )
+
+        leaves = traverse_metadataset(mds_path, split_part="train")
+        assert len(leaves) == 2
+        assert {ref.packing_group for ref in leaves} == {"alpha", "beta"}
+
+        worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0, seed_offset=0)
+        loaded = load_dataset(mds_path).get_datasets(
+            training=True,
+            split_part="train",
+            worker_config=worker_config,
+        )
+        assert loaded.blend_mode == DatasetBlendMode.DATASET_WEIGHT
+        assert {d.packing_group for d in loaded.datasets} == {"alpha", "beta"}
+
+        class PackingGroupIsolationEncoder(DefaultTaskEncoder):
+            """Each returned packed sample must come from exactly one packing source."""
+
+            @stateless
+            def encode_sample(self, sample: TextSample) -> TextSample:
+                return sample
+
+            def select_samples_to_pack(self, samples: list[TextSample]) -> list[list[TextSample]]:
+                return [samples]
+
+            @stateless
+            def pack_selected_samples(self, samples: list[TextSample]) -> TextSample:
+                packing_sources = {
+                    sample.__subflavors__.get("packing_source")
+                    for sample in samples
+                    if sample.__subflavors__ is not None
+                }
+                assert len(packing_sources) == 1, (
+                    "Mixed sources in one packed sample: "
+                    f"{packing_sources} for keys {[sample.__key__ for sample in samples]}"
+                )
+                return TextSample.derive_from(
+                    samples[0],
+                    __key__=",".join(s.__key__ for s in samples),
+                    __restore_key__=(),
+                    text=f"{next(iter(packing_sources))}:" + " | ".join(s.text for s in samples),
+                )
+
+        torch.manual_seed(42)
+        packed_ds = get_train_dataset(
+            mds_path,
+            worker_config=worker_config,
+            batch_size=2,
+            packing_buffer_size=8,
+            shuffle_buffer_size=None,
+            max_samples_per_sequence=None,
+            task_encoder=PackingGroupIsolationEncoder(),
+            virtual_epoch_length=10,
+        )
+        list(get_loader(packed_ds))
+
     def test_nested_metadataset(self):
         torch.manual_seed(42)
         worker_config = WorkerConfig(
@@ -375,9 +455,15 @@ class TestDataset(unittest.TestCase):
                     "splits:",
                     "  train:",
                     "    path: missing_ds",
+                    "    subflavors:",
+                    "      source: missing_leaf_metadataset_v2.yaml",
+                    "      number: 42",
+                    "      mds: nested_val",
                     "    aux:",
                     "      labels: missing_aux",
                     "      media: filesystem://media",
+                    "    packing_group: abc",
+                    "    shuffle_over_epochs_multiplier: 2",
                 ]
             ),
             encoding="utf-8",
@@ -392,6 +478,13 @@ class TestDataset(unittest.TestCase):
             "labels": EPath(self.dataset_path / "missing_aux"),
             "media": EPath(self.dataset_path / "media"),
         }
+        assert refs[0].subflavors == {
+            "source": "missing_leaf_metadataset_v2.yaml",
+            "number": 42,
+            "mds": "nested_val",
+        }
+        assert refs[0].packing_group == "abc"
+        assert refs[0].shuffle_over_epochs_multiplier == 2
 
     def test_joined_metadataset(self):
         torch.manual_seed(42)
