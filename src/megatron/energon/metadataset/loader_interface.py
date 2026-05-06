@@ -33,9 +33,10 @@ class LoadedDataset:
     weight: Union[float, int, None] = None
     #: Epochized repetition count when using repetition-based blending.
     repetitions: Union[float, int, None] = None
-    #: Packing group key for train pipelines with ``packing_buffer_size`` (see Metadataset V2).
-    #: ``None`` is the default group.
-    packing_group: Optional[str] = None
+    #: Dataset group key from Metadataset V2 (YAML ``group`` field). Must match keys used in
+    #: ``packing_buffer_size`` / ``shuffle_buffer_size`` when those are dicts. ``None`` is the
+    #: default group.
+    group: Optional[str] = None
     #: Auxiliary datasets for crude cooking.
     aux: Optional[Dict[str, FileStore]] = None
 
@@ -55,7 +56,9 @@ class TraversedDatasetReference:
         split_part: Effective split part to use when loading the leaf dataset.
         aux: Resolved auxiliary dataset or filesystem references keyed by auxiliary name.
         subflavors: Effective subflavors implied by the traversed metadataset hierarchy.
-        packing_group: Optional packing group name from metadataset references (for tooling).
+        group: Merged dataset group name from Metadataset V2 ``group`` fields along the path to this
+            leaf (nested segments join with ``+``). Keys dict entries for per-group
+            ``packing_buffer_size`` and ``shuffle_buffer_size``.
         shuffle_over_epochs_multiplier: Effective shuffle over epochs multiplier from metadataset references.
     """
 
@@ -63,7 +66,7 @@ class TraversedDatasetReference:
     split_part: str
     aux: dict[str, EPath]
     subflavors: dict[str, Any]
-    packing_group: Optional[str] = None
+    group: Optional[str] = None
     shuffle_over_epochs_multiplier: Optional[int] = 1
 
 
@@ -80,7 +83,7 @@ class DatasetLoaderInterface(ABC):
         mds_path: Optional[EPath] = None,
         *,
         split_part: Union[Literal["train", "val", "test"], str],
-        _packing_group: Optional[str] = None,
+        _group: Optional[str] = None,
         _shuffle_over_epochs_multiplier: Optional[int] = 1,
         _subflavors: Optional[Dict[str, Any]] = None,
     ) -> List[TraversedDatasetReference]:
@@ -96,7 +99,9 @@ class DatasetLoaderInterface(ABC):
                 use None only for top-level metadatasets.
             split_part: Split to traverse, such as `\"train\"`, `\"val\"`, or `\"test\"`. Nested
                 references may override this with their own configured split.
-            _packing_group: Effective packing group from metadataset references (for tooling).
+            _group: Inherited merged group name from Metadataset V2 ``group`` fields (nested segments
+                join with ``+``). Used to match dict keys in ``packing_buffer_size`` /
+                ``shuffle_buffer_size``.
             _shuffle_over_epochs_multiplier: Inherited shuffle multiplier (merged per node like
                 ``get_datasets``); default ``1``.
             _subflavors: Effective subflavors implied by the traversed metadataset hierarchy.
@@ -117,7 +122,7 @@ class DatasetLoaderInterface(ABC):
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: Optional[int] = 1,
         subset: Optional[DatasetSubset] = None,
-        packing_group: Optional[str] = None,
+        group: Optional[str] = None,
         **kwargs,
     ) -> LoadedDatasetList:
         """
@@ -138,9 +143,11 @@ class DatasetLoaderInterface(ABC):
                 an infinite number of epochs (effectively, this will draw shard slices with
                 replacement).
             subset: If specified, the inner dataset(s) will be subsetted.
-            packing_group: When set, this leaf belongs to a packing group: samples from datasets sharing the same key
-                are blended and shuffled together, then packed in one :class:`~megatron.energon.PackingDataset`
-                buffer before blending across groups. ``None`` means the default group.
+            group: Dataset group for this leaf (merged with outer scopes). Datasets that share the same
+                non-``None`` key are blended and shuffled together, then each group's stream runs through
+                packing (:class:`~megatron.energon.PackingDataset`) before streams from different groups
+                are blended. Must match dict keys in ``packing_buffer_size`` / ``shuffle_buffer_size`` when
+                those are mappings. ``None`` selects the default group.
             **kwargs: Additional arguments to the dataset constructor.
 
         Returns:

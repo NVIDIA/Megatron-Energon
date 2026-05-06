@@ -569,13 +569,24 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         self,
         dataset: SavableDataset[T_encoded_sample],
         *,
-        packing_group: Optional[str],
+        group: Optional[str],
         packing_buffer_size: int | dict[str | None, int | None] | None,
         worker_config: WorkerConfig,
     ) -> SavableDataset[T_encoded_sample]:
-        """Builds the (packing +) post-encode."""
+        """Builds the (packing +) post-encode stage after encoding.
+
+        When ``packing_buffer_size`` is a dict, selects the buffer size (or ``None`` to disable
+        packing) for this leaf's dataset group via ``group`` (must match
+        :attr:`~megatron.energon.metadataset.loader_interface.LoadedDataset.group`).
+
+        Args:
+            dataset: Encoded sample stream for one group.
+            group: Key into ``packing_buffer_size`` when it is a dict; ``None`` is the default group.
+            packing_buffer_size: Global buffer size, per-group mapping, or ``None`` to disable packing.
+            worker_config: Worker configuration for wrapped datasets.
+        """
         if isinstance(packing_buffer_size, dict):
-            packing_buffer_size = packing_buffer_size[packing_group]
+            packing_buffer_size = packing_buffer_size[group]
 
         if packing_buffer_size is None:
             if self._is_overridden(self.postencode_sample):
@@ -786,14 +797,14 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             )
         return dataset
 
-    def _packing_group_stream_weight(
+    def _group_weight(
         self,
         group_ds: List[LoadedDataset],
         blend_mode: DatasetBlendMode,
         *,
         repeat: bool,
     ) -> float:
-        """Blend weight for one packing group when merging packed streams."""
+        """Blend weight for one dataset group when merging packed streams after grouping."""
         if blend_mode == DatasetBlendMode.DATASET_WEIGHT:
             return sum(float(d.weight) for d in group_ds)
         if blend_mode == DatasetBlendMode.SAMPLE_REPETITIONS or (
@@ -905,74 +916,69 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             rotation_lengths[i] += rotation_lengths[i - 1]
         return [rotation_length % global_workers for rotation_length in [0] + rotation_lengths[:-1]]
 
-    def _build_train_blend_shuffle_encode_packing_groups(
+    def _build_train_blend_shuffle_encode_groups(
         self,
         datasets: List[LoadedDataset],
         packing_buffer_size: Optional[int | dict[str | None, int | None]],
         blend_mode: DatasetBlendMode,
         repeat: bool,
-        shuffle_buffer_size: Optional[int],
+        shuffle_buffer_size: Optional[int | dict[str | None, int | None]],
         worker_config: WorkerConfig,
     ) -> SavableDataset[T_encoded_sample]:
-        """
-        Builds the (blend) → (shuffle) → (select_samples_to_pack) → (postencode) → (pack_selected_samples) pipeline.
-        Also grouping:
-        [(blend) → (shuffle) → (select_samples_to_pack) → (postencode) → (pack_selected_samples)](per group) → (blend) pipeline.
+        """Builds the train pipeline with optional per-dataset-group isolation.
+
+        Splits ``datasets`` by :attr:`~megatron.energon.metadataset.loader_interface.LoadedDataset.group`.
+        For each group, runs blend → (optional shuffle) → encode, then applies packing/postencode for
+        that group's ``packing_buffer_size`` / ``shuffle_buffer_size`` entries. When multiple groups
+        exist, blends the resulting streams with weights from :meth:`_group_weight`.
+
+        Pipeline per group:
+        ``blend → shuffle → encode → select_samples_to_pack → postencode → pack_selected_samples``.
+        Multiple groups: ``(... per group ...) → blend``.
         """
         rotation_offsets = self._compute_rotation_offsets(datasets, worker_config)
 
-        packing_groups: dict[Optional[str], tuple[list[LoadedDataset], list[int]]] = {}
-        if packing_buffer_size is not None:
-            for ld, ro in zip(datasets, rotation_offsets):
-                if ld.packing_group in packing_groups:
-                    packing_groups[ld.packing_group][0].append(ld)
-                    packing_groups[ld.packing_group][1].append(ro)
-                else:
-                    packing_groups[ld.packing_group] = ([ld], [ro])
+        dataset_groups: dict[Optional[str], tuple[list[LoadedDataset], list[int]]] = {}
+        for ld, ro in zip(datasets, rotation_offsets):
+            if ld.group in dataset_groups:
+                dataset_groups[ld.group][0].append(ld)
+                dataset_groups[ld.group][1].append(ro)
+            else:
+                dataset_groups[ld.group] = ([ld], [ro])
 
-        if packing_buffer_size is not None and len(packing_groups) > 1:
-            streams: List[tuple[SavableDataset[Any], float]] = []
-            for group_key, (group_ds, rotation_offsets) in packing_groups.items():
-                branch = self._build_train_blend_shuffle_encode_branch(
-                    datasets=group_ds,
-                    worker_rotation_offsets=rotation_offsets,
-                    blend_mode=blend_mode,
-                    repeat=repeat,
-                    shuffle_buffer_size=shuffle_buffer_size,
-                    worker_config=worker_config,
-                )
-                # Post-encode is included
-                branch = self._build_packing_postencode(
-                    branch,
-                    packing_group=group_key,
-                    packing_buffer_size=packing_buffer_size,
-                    worker_config=worker_config,
-                )
-                streams.append(
-                    (
-                        branch,
-                        self._packing_group_stream_weight(group_ds, blend_mode, repeat=repeat),
-                    )
-                )
-            return BlendDataset(*streams, worker_config=worker_config)
-        else:
+        streams: List[tuple[SavableDataset[Any], float]] = []
+        for group_key, (group_ds, rotation_offsets) in dataset_groups.items():
+            if isinstance(shuffle_buffer_size, dict):
+                group_shuffle_buffer_size = shuffle_buffer_size[group_key]
+            else:
+                group_shuffle_buffer_size = shuffle_buffer_size
+
             dataset = self._build_train_blend_shuffle_encode_branch(
-                datasets=datasets,
+                datasets=group_ds,
                 worker_rotation_offsets=rotation_offsets,
                 blend_mode=blend_mode,
                 repeat=repeat,
-                shuffle_buffer_size=shuffle_buffer_size,
+                shuffle_buffer_size=group_shuffle_buffer_size,
                 worker_config=worker_config,
             )
+            # Post-encode is included
             dataset = self._build_packing_postencode(
                 dataset,
-                packing_group=None
-                if len(packing_groups) == 0
-                else next(iter(packing_groups.keys())),
+                group=group_key,
                 packing_buffer_size=packing_buffer_size,
                 worker_config=worker_config,
             )
-            return dataset
+            streams.append(
+                (
+                    dataset,
+                    self._group_weight(group_ds, blend_mode, repeat=repeat),
+                )
+            )
+
+        if len(streams) > 1:
+            return BlendDataset(*streams, worker_config=worker_config)
+        else:
+            return streams[0][0]
 
     def build_train_datasets(
         self,
@@ -981,20 +987,38 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         worker_config: WorkerConfig,
         batch_size: Optional[int],
         batch_drop_last: bool = False,
-        packing_buffer_size: Optional[int] = None,
+        packing_buffer_size: Optional[int | dict[str | None, int | None]] = None,
         virtual_epoch_length: int = 0,
-        shuffle_buffer_size: Optional[int] = None,
+        shuffle_buffer_size: Optional[int | dict[str | None, int | None]] = None,
         blend_mode: DatasetBlendMode = DatasetBlendMode.NONE,
         repeat: bool = True,
     ) -> SavableDataset[T_batch]:
-        """Combines train datasets to a single dataset."""
+        """Combines train datasets into one batched dataset pipeline.
+
+        Args:
+            datasets: Loaded leaf datasets (each carries a ``group`` key when using Metadataset V2).
+            worker_config: Worker configuration for wrapped datasets.
+            batch_size: Batch dimension; ``None`` skips batching.
+            batch_drop_last: If true, drop the last batch when smaller than ``batch_size``.
+            packing_buffer_size: Packing buffer size, or a dict mapping dataset group keys
+                (including ``None`` for the default group) to sizes or ``None`` to disable packing
+                per group.
+            virtual_epoch_length: If positive, wraps with epochization at this length.
+            shuffle_buffer_size: Shuffle buffer before encoding, or per-group dict like
+                ``packing_buffer_size``.
+            blend_mode: How leaf weights map to the inner :class:`~megatron.energon.BlendDataset`.
+            repeat: Whether inner datasets loop indefinitely.
+
+        Returns:
+            The full train :class:`~megatron.energon.flavors.SavableDataset` pipeline.
+        """
 
         # Check if there's a CrudeWebdataset but no cookers
         for dataset in datasets:
             if isinstance(dataset.dataset, CrudeWebdataset):
                 assert self.cookers, "CrudeWebdataset found, but no cookers registered."
 
-        dataset = self._build_train_blend_shuffle_encode_packing_groups(
+        dataset = self._build_train_blend_shuffle_encode_groups(
             datasets=datasets,
             packing_buffer_size=packing_buffer_size,
             blend_mode=blend_mode,
@@ -1041,60 +1065,51 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             raise ValueError("No datasets given.")
         return self.build_encode_sample(dataset, worker_config=worker_config)
 
-    def _build_val_concat_encode_packing_groups(
+    def _build_val_concat_encode_groups(
         self,
         datasets: List[LoadedDataset],
         packing_buffer_size: Optional[int | dict[str | None, int | None]],
         worker_config: WorkerConfig,
     ) -> SavableDataset[T_encoded_sample]:
-        """
-        Builds the (concat) → (select_samples_to_pack) → (postencode) → (pack_selected_samples) pipeline.
-        Also grouping:
-        [(concat) → (select_samples_to_pack) → (postencode) → (pack_selected_samples)](per group) → (concat) pipeline.
+        """Builds the validation pipeline with optional per-dataset-group isolation.
+
+        Like :meth:`_build_train_blend_shuffle_encode_groups`, but concatenates leaves instead of
+        blending, and omits shuffle/repeat. Splits ``datasets`` by ``LoadedDataset.group``, applies
+        packing per group's ``packing_buffer_size`` entry, then concatenates group streams when needed.
+
+        Pipeline per group:
+        ``concat loaded leaves → encode → select_samples_to_pack → postencode → pack_selected_samples``.
+        Multiple groups: ``(... per group ...) → concat``.
         """
         rotation_offsets = self._compute_rotation_offsets(datasets, worker_config)
 
-        packing_groups: dict[Optional[str], tuple[list[LoadedDataset], list[int]]] = {}
-        if packing_buffer_size is not None:
-            for ld, ro in zip(datasets, rotation_offsets):
-                if ld.packing_group in packing_groups:
-                    packing_groups[ld.packing_group][0].append(ld)
-                    packing_groups[ld.packing_group][1].append(ro)
-                else:
-                    packing_groups[ld.packing_group] = ([ld], [ro])
+        dataset_groups: dict[Optional[str], tuple[list[LoadedDataset], list[int]]] = {}
+        for ld, ro in zip(datasets, rotation_offsets):
+            if ld.group in dataset_groups:
+                dataset_groups[ld.group][0].append(ld)
+                dataset_groups[ld.group][1].append(ro)
+            else:
+                dataset_groups[ld.group] = ([ld], [ro])
 
-        if packing_buffer_size is not None and len(packing_groups) > 1:
-            streams: List[SavableDataset[Any]] = []
-            for group_key, (group_ds, rotation_offsets) in packing_groups.items():
-                branch = self._build_val_concat_encode_branch(
-                    datasets=group_ds,
-                    worker_rotation_offsets=rotation_offsets,
-                    worker_config=worker_config,
-                )
-                # Post-encode is included
-                branch = self._build_packing_postencode(
-                    branch,
-                    packing_group=group_key,
-                    packing_buffer_size=packing_buffer_size,
-                    worker_config=worker_config,
-                )
-                streams.append(branch)
-            return ConcatDataset(*streams, worker_config=worker_config)
-        else:
-            dataset = self._build_val_concat_encode_branch(
-                datasets=datasets,
+        streams: List[SavableDataset[Any]] = []
+        for group_key, (group_ds, rotation_offsets) in dataset_groups.items():
+            branch = self._build_val_concat_encode_branch(
+                datasets=group_ds,
                 worker_rotation_offsets=rotation_offsets,
                 worker_config=worker_config,
             )
-            dataset = self._build_packing_postencode(
-                dataset,
-                packing_group=None
-                if len(packing_groups) == 0
-                else next(iter(packing_groups.keys())),
+            # Post-encode is included
+            branch = self._build_packing_postencode(
+                branch,
+                group=group_key,
                 packing_buffer_size=packing_buffer_size,
                 worker_config=worker_config,
             )
-            return dataset
+            streams.append(branch)
+        if len(streams) > 1:
+            return ConcatDataset(*streams, worker_config=worker_config)
+        else:
+            return streams[0]
 
     def build_val_datasets(
         self,
@@ -1103,17 +1118,30 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         worker_config: WorkerConfig,
         batch_size: int,
         batch_drop_last: bool = False,
-        packing_buffer_size: Optional[int] = None,
+        packing_buffer_size: Optional[int | dict[str | None, int | None]] = None,
         limit: Optional[int] = None,
     ) -> SavableDataset[T_batch]:
-        """Combines val datasets to a single dataset."""
+        """Combines validation datasets into one batched dataset pipeline.
+
+        Args:
+            datasets: Loaded leaf datasets (each may carry a ``group`` key when using Metadataset V2).
+            worker_config: Worker configuration for wrapped datasets.
+            batch_size: Batch dimension.
+            batch_drop_last: If true, drop the last batch when smaller than ``batch_size``.
+            packing_buffer_size: Packing buffer size, or per-group dict (keys include ``None`` for the
+                default group).
+            limit: If set and positive, caps the number of batches via :class:`~megatron.energon.LimitDataset`.
+
+        Returns:
+            The full validation :class:`~megatron.energon.flavors.SavableDataset` pipeline.
+        """
 
         # Check if there's a CrudeWebdataset but no cookers
         for dataset in datasets:
             if isinstance(dataset, CrudeWebdataset):
                 assert self.cookers, "CrudeWebdataset found, but no cookers registered."
 
-        dataset = self._build_val_concat_encode_packing_groups(
+        dataset = self._build_val_concat_encode_groups(
             datasets=datasets,
             packing_buffer_size=packing_buffer_size,
             worker_config=worker_config,

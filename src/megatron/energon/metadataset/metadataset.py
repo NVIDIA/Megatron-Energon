@@ -117,25 +117,10 @@ class DatasetReference:
         mds_path: Optional[EPath] = None,
         *,
         split_part: Union[Literal["train", "val", "test"], str],
-        _packing_group: Optional[str] = None,
+        _group: Optional[str] = None,
         _shuffle_over_epochs_multiplier: Optional[int] = 1,
         _subflavors: Optional[Dict[str, Any]] = None,
     ) -> List[TraversedDatasetReference]:
-        """Traverse this V1 dataset reference into flattened leaf references.
-
-        Args:
-            mds_path: Parent metadataset path used internally to resolve relative dataset and
-                auxiliary paths. Must be set for nested references and inner traversal nodes;
-                use None only for top-level metadatasets.
-            split_part: Split inherited from the parent traversal. If this reference defines its
-                own split override, that split takes precedence for nested traversal and the
-                returned leaf reference.
-            _packing_group: Forwarded for compatibility when nesting under Metadataset V2.
-
-        Returns:
-            A single leaf `TraversedDatasetReference` for direct dataset references, or the
-            flattened traversal result of the nested metadataset when this reference points to one.
-        """
         self._resolve_path(mds_path)
         _subflavors = self._merge_traversed_subflavors(_subflavors)
         _shuffle_over_epochs_multiplier = self._merge_shuffle_over_epochs_multiplier(
@@ -144,7 +129,7 @@ class DatasetReference:
         if self.path.is_file():
             return self._load_nested_metadataset().traverse(
                 split_part=self.split_part or split_part,
-                _packing_group=_packing_group,
+                _group=_group,
                 _shuffle_over_epochs_multiplier=_shuffle_over_epochs_multiplier,
                 _subflavors=_subflavors,
             )
@@ -154,7 +139,7 @@ class DatasetReference:
                 split_part=self.split_part or split_part,
                 aux={},
                 subflavors=_subflavors,
-                packing_group=_packing_group,
+                group=_group,
                 shuffle_over_epochs_multiplier=_shuffle_over_epochs_multiplier,
             )
         ]
@@ -168,7 +153,7 @@ class DatasetReference:
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: Optional[int] = 1,
         subset: Optional[DatasetSubset] = None,
-        packing_group: Optional[str] = None,
+        group: Optional[str] = None,
         **kwargs,
     ) -> LoadedDatasetList:
         if self.subflavors is not None:
@@ -194,7 +179,7 @@ class DatasetReference:
             subflavors=subflavors,
             shuffle_over_epochs_multiplier=new_shuffle_over_epochs_multiplier,
             subset=subset,
-            packing_group=packing_group,
+            group=group,
             **kwargs,
         )
 
@@ -215,7 +200,7 @@ class MetadatasetBlender:
         mds_path: Optional[EPath] = None,
         *,
         split_part: Union[Literal["train", "val", "test"], str],
-        _packing_group: Optional[str] = None,
+        _group: Optional[str] = None,
         _shuffle_over_epochs_multiplier: Optional[int] = 1,
         _subflavors: Optional[Dict[str, Any]] = None,
     ) -> List[TraversedDatasetReference]:
@@ -226,7 +211,7 @@ class MetadatasetBlender:
                 dataset.traverse(
                     mds_path,
                     split_part=split_part,
-                    _packing_group=_packing_group,
+                    _group=_group,
                     _shuffle_over_epochs_multiplier=_shuffle_over_epochs_multiplier,
                     _subflavors=_subflavors,
                 )
@@ -242,7 +227,7 @@ class MetadatasetBlender:
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: Optional[int] = 1,
         subset: Optional[DatasetSubset] = None,
-        packing_group: Optional[str] = None,
+        group: Optional[str] = None,
         **kwargs,
     ) -> LoadedDatasetList:
         sum_weight = sum(dataset.weight for dataset in self.datasets)
@@ -255,7 +240,7 @@ class MetadatasetBlender:
                 subflavors=subflavors,
                 shuffle_over_epochs_multiplier=shuffle_over_epochs_multiplier,
                 subset=subset,
-                packing_group=packing_group,
+                group=group,
                 **kwargs,
             )
             if inner_result.blend_mode not in (
@@ -304,7 +289,7 @@ class Metadataset(DatasetLoaderInterface):
         mds_path: Optional[EPath] = None,
         *,
         split_part: Union[Literal["train", "val", "test"], str],
-        _packing_group: Optional[str] = None,
+        _group: Optional[str] = None,
         _shuffle_over_epochs_multiplier: Optional[int] = 1,
         _subflavors: Optional[Dict[str, Any]] = None,
     ) -> List[TraversedDatasetReference]:
@@ -312,7 +297,7 @@ class Metadataset(DatasetLoaderInterface):
         return self._splits[split_part].traverse(
             self._path,
             split_part=split_part,
-            _packing_group=_packing_group,
+            _group=_group,
             _shuffle_over_epochs_multiplier=_shuffle_over_epochs_multiplier,
             _subflavors=_subflavors,
         )
@@ -326,7 +311,7 @@ class Metadataset(DatasetLoaderInterface):
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: Optional[int] = 1,
         subset: Optional[DatasetSubset] = None,
-        packing_group: Optional[str] = None,
+        group: Optional[str] = None,
         **kwargs,
     ) -> LoadedDatasetList:
         return self._splits[split_part].get_datasets(
@@ -336,6 +321,6 @@ class Metadataset(DatasetLoaderInterface):
             subflavors=subflavors,
             shuffle_over_epochs_multiplier=shuffle_over_epochs_multiplier,
             subset=subset,
-            packing_group=packing_group,
+            group=group,
             **kwargs,
         )

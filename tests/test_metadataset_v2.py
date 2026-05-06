@@ -257,9 +257,9 @@ class TestDataset(unittest.TestCase):
         assert len(Counter(train_order1)) == 110
         assert all(48 <= v <= 52 for v in Counter(train_order1).values())
 
-    def test_packing_group(self):
-        """Distinct ``packing_group`` on blend leaves; packed samples never mix ds1 and ds2."""
-        mds_path = self.dataset_path / "packing_group_blend.yaml"
+    def test_group(self):
+        """Group-specific shuffle + packing keeps returned samples source-homogeneous."""
+        mds_path = self.dataset_path / "group_blend.yaml"
         with open(mds_path, "w") as f:
             f.write(
                 "\n".join(
@@ -271,12 +271,12 @@ class TestDataset(unittest.TestCase):
                         "    blend:",
                         "      - weight: 1",
                         "        path: ds1",
-                        "        packing_group: alpha",
+                        "        group: alpha",
                         "        subflavors:",
                         "          packing_source: ds1",
                         "      - weight: 1",
                         "        path: ds2",
-                        "        packing_group: beta",
+                        "        group: beta",
                         "        subflavors:",
                         "          packing_source: ds2",
                     ]
@@ -285,7 +285,7 @@ class TestDataset(unittest.TestCase):
 
         leaves = traverse_metadataset(mds_path, split_part="train")
         assert len(leaves) == 2
-        assert {ref.packing_group for ref in leaves} == {"alpha", "beta"}
+        assert {ref.group for ref in leaves} == {"alpha", "beta"}
 
         worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0, seed_offset=0)
         loaded = load_dataset(mds_path).get_datasets(
@@ -294,9 +294,9 @@ class TestDataset(unittest.TestCase):
             worker_config=worker_config,
         )
         assert loaded.blend_mode == DatasetBlendMode.DATASET_WEIGHT
-        assert {d.packing_group for d in loaded.datasets} == {"alpha", "beta"}
+        assert {d.group for d in loaded.datasets} == {"alpha", "beta"}
 
-        class PackingGroupIsolationEncoder(DefaultTaskEncoder):
+        class GroupIsolationEncoder(DefaultTaskEncoder):
             """Each returned packed sample must come from exactly one packing source."""
 
             @stateless
@@ -330,9 +330,9 @@ class TestDataset(unittest.TestCase):
             worker_config=worker_config,
             batch_size=2,
             packing_buffer_size=8,
-            shuffle_buffer_size=None,
+            shuffle_buffer_size={"alpha": 8, "beta": None},
             max_samples_per_sequence=None,
-            task_encoder=PackingGroupIsolationEncoder(),
+            task_encoder=GroupIsolationEncoder(),
             virtual_epoch_length=10,
         )
         list(get_loader(packed_ds))
@@ -462,7 +462,7 @@ class TestDataset(unittest.TestCase):
                     "    aux:",
                     "      labels: missing_aux",
                     "      media: filesystem://media",
-                    "    packing_group: abc",
+                    "    group: abc",
                     "    shuffle_over_epochs_multiplier: 2",
                 ]
             ),
@@ -483,7 +483,7 @@ class TestDataset(unittest.TestCase):
             "number": 42,
             "mds": "nested_val",
         }
-        assert refs[0].packing_group == "abc"
+        assert refs[0].group == "abc"
         assert refs[0].shuffle_over_epochs_multiplier == 2
 
     def test_joined_metadataset(self):
