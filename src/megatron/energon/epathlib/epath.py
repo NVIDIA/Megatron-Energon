@@ -41,7 +41,7 @@ class EPath:
     for more information.
     """
 
-    __slots__ = ("internal_path", "profile", "fs")
+    __slots__ = ("internal_path", "profile", "fs", "_resolved_local_str")
 
     # The path without the protocol/profile. Can also be in S3 for example
     internal_path: PurePosixPath
@@ -49,6 +49,9 @@ class EPath:
     profile: str
     # The file system
     fs: msc.StorageClient
+    # For DSS paths: cached canonical absolute local path (symlinks resolved).
+    # None for non-DSS paths or when the underlying path does not (yet) exist on disk.
+    _resolved_local_str: Optional[str]
 
     def __init__(
         self,
@@ -58,7 +61,9 @@ class EPath:
             self.internal_path = initial_path.internal_path
             self.profile = initial_path.profile
             self.fs = initial_path.fs
+            self._resolved_local_str = initial_path._resolved_local_str
         else:
+            self._resolved_local_str = None
             if isinstance(initial_path, PathlibPath):
                 path = str(initial_path.absolute())
                 profile = DEFAULT_PROFILE_NAME
@@ -87,6 +92,7 @@ class EPath:
                     self.fs = NVDATASET_CACHE_DIR.fs
                     self.profile = "dss"
                     self.internal_path = self._resolve(f"/{profile}/{path}")
+                    self._refresh_resolved()
                     return
                 else:
                     assert protocol == "msc", f"Unknown protocol: {protocol}"
@@ -102,12 +108,14 @@ class EPath:
         return {
             "internal_path": self.internal_path,
             "profile": self.profile,
+            "_resolved_local_str": self._resolved_local_str,
             # Do not save the fs when serializing, to avoid leaking credentials
         }
 
     def __setstate__(self, state: dict) -> None:
         self.internal_path = state["internal_path"]
         self.profile = state["profile"]
+        self._resolved_local_str = state.get("_resolved_local_str")
         if self.profile == "dss":
             assert NVDATASET_CACHE_DIR is not None, (
                 "Environment variable NVDATASET_CACHE_DIR is not set"
@@ -159,25 +167,56 @@ class EPath:
         )
         return dataset_name, dataset_version
 
+    def _unresolved_local_str(self) -> str:
+        """For a DSS path, compute the underlying local filesystem path under
+        ``NVDATASET_CACHE_DIR`` without resolving any symlinks."""
+        assert self.profile == "dss"
+        assert NVDATASET_CACHE_DIR is not None, (
+            "Environment variable NVDATASET_CACHE_DIR is not set"
+        )
+        dss_dataset_name, dss_dataset_version = self._split_dss_name_and_version(
+            self.internal_path.parts[1]
+        )
+        cache_path = PurePosixPath(
+            "/",
+            dss_dataset_name,
+            dss_dataset_version,
+            *self.internal_path.parts[2:],
+        )
+        return NVDATASET_CACHE_DIR._internal_str_path + str(cache_path)
+
+    @staticmethod
+    def _compute_resolved_local_str(unresolved_local_str: str) -> Optional[str]:
+        """Resolve symlinks in a local filesystem path string.
+
+        Returns the canonical absolute path string if the underlying file or
+        directory exists, or ``None`` otherwise (so callers can degrade to the
+        unresolved path)."""
+        try:
+            return str(PathlibPath(unresolved_local_str).resolve(strict=True))
+        except (FileNotFoundError, OSError):
+            return None
+
+    def _refresh_resolved(self) -> None:
+        """Refresh the cached resolved local path for DSS paths.
+
+        Sets ``self._resolved_local_str`` based on the current ``internal_path``.
+        For non-DSS paths this is a no-op (the cache is always ``None``)."""
+        if self.profile == "dss":
+            self._resolved_local_str = self._compute_resolved_local_str(
+                self._unresolved_local_str()
+            )
+        else:
+            self._resolved_local_str = None
+
     @property
     def _internal_str_path(self) -> str:
         """Return the path as used inside the file system, without the protocol and fs part.
         This is for usage with `self.fs` functions."""
         if self.profile == "dss":
-            assert NVDATASET_CACHE_DIR is not None, (
-                "Environment variable NVDATASET_CACHE_DIR is not set"
-            )
-            # The internal path is relative to the NVDATASET_CACHE_DIR (i.e. strip the leading /, then concat with /)
-            dss_dataset_name, dss_dataset_version = self._split_dss_name_and_version(
-                self.internal_path.parts[1]
-            )
-            cache_path = PurePosixPath(
-                "/",
-                dss_dataset_name,
-                dss_dataset_version,
-                *self.internal_path.parts[2:],
-            )
-            return NVDATASET_CACHE_DIR._internal_str_path + str(cache_path)
+            if self._resolved_local_str is not None:
+                return self._resolved_local_str
+            return self._unresolved_local_str()
         else:
             return str(self.internal_path)
 
@@ -242,6 +281,7 @@ class EPath:
             inner_path = EPath(self)
             for fpath in self.fs.list(self._internal_str_path):
                 inner_path.internal_path = PurePosixPath("/" + fpath.key)
+                inner_path._refresh_resolved()
                 inner_path.copy(target / inner_path.relative_to(self))
 
     @property
@@ -252,6 +292,7 @@ class EPath:
     def parent(self) -> "EPath":
         new_path = EPath(self)
         new_path.internal_path = self.internal_path.parent
+        new_path._refresh_resolved()
         return new_path
 
     @property
@@ -298,6 +339,7 @@ class EPath:
 
             new_path = EPath(self)
             new_path.internal_path = self._resolve(self.internal_path / PurePosixPath(path))
+            new_path._refresh_resolved()
 
             yield new_path
 
@@ -307,6 +349,7 @@ class EPath:
     def with_suffix(self, suffix: str) -> "EPath":
         new_path = EPath(self)
         new_path.internal_path = self.internal_path.with_suffix(suffix)
+        new_path._refresh_resolved()
         return new_path
 
     def move(self, target: "EPath") -> None:
@@ -339,6 +382,7 @@ class EPath:
 
         new_path = EPath(self)
         new_path.internal_path = self._resolve(self.internal_path / other)
+        new_path._refresh_resolved()
         return new_path
 
     def __lt__(self, other: "EPath") -> bool:
