@@ -484,7 +484,8 @@ class SqliteITarEntryReader(ITarReader[str]):
     """
 
     sqlite_reader: SqliteIndexReader
-    db_has_sample_parts: int
+    db_has_sample_parts: bool
+    db_has_samples: bool
 
     def __init__(
         self,
@@ -496,7 +497,10 @@ class SqliteITarEntryReader(ITarReader[str]):
         disable_cache: bool = False,
     ):
         from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
-        from megatron.energon.flavors.webdataset.indexing import SqliteIndexReader
+        from megatron.energon.flavors.webdataset.indexing import (
+            MissingSamplesTableError,
+            SqliteIndexReader,
+        )
 
         # shard_name_to_info_idx = {name: i for i, name in enumerate(wds_meta.info_shard_files)}
         tar_filenames = get_info_shard_files(base_path)
@@ -507,6 +511,10 @@ class SqliteITarEntryReader(ITarReader[str]):
         self.sqlite_reader = SqliteIndexReader(sqlite_path)
 
         self.db_has_sample_parts = self.sqlite_reader.db_has_sample_parts()
+        self.db_has_samples = self.sqlite_reader.db_has_samples()
+
+        if not self.db_has_samples:
+            raise MissingSamplesTableError(sqlite_path)
 
         self.key_is_full_entryname = key_is_full_entryname
 

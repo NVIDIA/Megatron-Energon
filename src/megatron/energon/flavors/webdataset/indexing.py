@@ -36,9 +36,9 @@ class MissingSamplesTableError(RuntimeError):
     datasets and do not support sample-key lookups.
     """
 
-    def __init__(self, sqlite_path: "EPath") -> None:
+    def __init__(self, sqlite_path: EPath) -> None:
         super().__init__(
-            f"Dataset at {sqlite_path} was prepared without the SQLite samples tables "
+            f"Dataset at {sqlite_path.parent.parent} was prepared without the SQLite samples tables "
             f"(`energon prepare --no-sample-tables` / `enable_sample_tables=False`). "
             f"Re-prepare the dataset without that option to use it as an auxiliary dataset "
             f"or for any sample-key lookup."
@@ -397,7 +397,6 @@ class SqliteIndexReader:
 
     sqlite_path: EPath
     db: ThreadLocalSqlite
-    _samples_table_checked: bool
 
     def __init__(self, sqlite_path: EPath):
         """Initialize the SQLite database reader.
@@ -413,25 +412,20 @@ class SqliteIndexReader:
         path = f"file:{path}?mode=ro&immutable=1"
 
         self.db = ThreadLocalSqlite(path, is_uri=True)
-        self._samples_table_checked = False
 
-    def _check_samples_table(self) -> None:
-        """Verify the ``samples`` table is present, raising a clear error if not.
+    def db_has_samples(self) -> bool:
+        """Check if the database has a samples table.
 
-        Called by every method that queries the ``samples`` / ``sample_parts`` tables, so callers
-        accessing a dataset prepared with ``--no-sample-tables`` get a descriptive error instead
-        of a raw ``sqlite3.OperationalError: no such table: samples``. The check runs once per
-        reader instance.
+        Returns:
+            True if samples table exists, False otherwise.
         """
-        if self._samples_table_checked:
-            return
         assert self.db is not None, "Database is closed"
-        row = self.db.select_one(
+
+        db_exists = self.db.select_one(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='samples'"
         )
-        if row is None:
-            raise MissingSamplesTableError(self.sqlite_path)
-        self._samples_table_checked = True
+        self.db.thread_close()
+        return db_exists is not None
 
     def db_has_sample_parts(self) -> bool:
         """Check if the database has a sample_parts table.
@@ -466,7 +460,6 @@ class SqliteIndexReader:
         """
 
         assert self.db is not None, "Database is closed"
-        self._check_samples_table()
 
         for row in self.db.select_all("SELECT sample_key, byte_size, tar_file_id FROM samples"):
             yield row[0], row[1], row[2]
@@ -479,7 +472,6 @@ class SqliteIndexReader:
         """
 
         assert self.db is not None, "Database is closed"
-        self._check_samples_table()
 
         # Select all parts (sorted by tar_file_id, sample_index) but joined with the sample_key names
         for row in self.db.select_all(
@@ -505,7 +497,6 @@ class SqliteIndexReader:
         """
 
         assert self.db is not None, "Database is closed"
-        self._check_samples_table()
 
         # Select all parts (sorted by tar_file_id, sample_index) but joined with the sample_key names
         for row in self.db.select_all(
@@ -525,7 +516,6 @@ class SqliteIndexReader:
     def get_total_size(self) -> int:
         """Get the total size of all samples in the database."""
         assert self.db is not None, "Database is closed"
-        self._check_samples_table()
 
         count = self.db.select_one("SELECT SUM(byte_size) FROM samples")
         return count[0] if count else 0
@@ -533,7 +523,6 @@ class SqliteIndexReader:
     def get_sample_count(self) -> int:
         """Get the total number of samples in the database."""
         assert self.db is not None, "Database is closed"
-        self._check_samples_table()
 
         count = self.db.select_one("SELECT COUNT(*) FROM samples")
         return count[0] if count else 0
@@ -549,7 +538,6 @@ class SqliteIndexReader:
             Pointer to the sample part raw data.
         """
         assert self.db is not None, "Database is closed"
-        self._check_samples_table()
 
         row = self.db.select_one(
             "SELECT sp.tar_file_id, sp.content_byte_offset, sp.content_byte_size "
@@ -579,7 +567,6 @@ class SqliteIndexReader:
             Tuple of (tar_file_id, sample_key, sample_index, byte_offset, byte_size)
         """
         assert self.db is not None, "Database is closed"
-        self._check_samples_table()
 
         sample = self.db.select_one(
             "SELECT tar_file_id, sample_key, sample_index, byte_offset, byte_size "

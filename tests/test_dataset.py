@@ -10,6 +10,7 @@ import json
 import logging
 import math
 import random
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -48,8 +49,11 @@ from megatron.energon import (
 )
 from megatron.energon.dataset_config import get_dataset_from_config
 from megatron.energon.edataclass import edataclass
+from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import BaseWebdatasetFactory
 from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset.indexing import MissingSamplesTableError, SqliteIndexReader
+from megatron.energon.flavors.webdataset.itar_reader import SqliteITarEntryReader
 from megatron.energon.task_encoder.base import stateless
 from megatron.energon.tools.analyze_debug import command as analyze_debug_command
 from megatron.energon.tools.info import command as info_command
@@ -1814,8 +1818,6 @@ class TestDataset(unittest.TestCase):
           - The flag rejects being combined with `--tar-index-only`.
         """
 
-        import sqlite3
-
         runner = CliRunner()
         result = runner.invoke(
             prepare_command,
@@ -1862,25 +1864,13 @@ class TestDataset(unittest.TestCase):
             result.stdout + (result.stderr or "")
         ) or isinstance(result.exception, click.UsageError)
 
-        # Sample-key operations against the SQLite reader must raise a descriptive error,
-        # not the raw `sqlite3.OperationalError: no such table: samples`.
-        from megatron.energon.epathlib import EPath
-        from megatron.energon.flavors.webdataset.indexing import (
-            MissingSamplesTableError,
-            SqliteIndexReader,
-        )
+        # SqliteIndexReader exposes db_has_samples() as part of its public surface.
+        index_reader = SqliteIndexReader(EPath(str(sqlite_path)))
+        assert index_reader.db_has_samples() is False
 
-        reader = SqliteIndexReader(EPath(str(sqlite_path)))
-        try:
-            with self.assertRaises(MissingSamplesTableError) as ctx:
-                reader.get_sample_pointer_by_key("any-key")
-            assert "no-sample-tables" in str(ctx.exception)
-            with self.assertRaises(MissingSamplesTableError):
-                reader.get_sample_count()
-            with self.assertRaises(MissingSamplesTableError):
-                reader.get_sample_part("any-key", "txt")
-        finally:
-            reader.close()
+        with self.assertRaises(MissingSamplesTableError) as ctx:
+            SqliteITarEntryReader(EPath(str(self.dataset_path)))
+        assert "no-sample-tables" in str(ctx.exception)
 
     def test_prepare_dataset_no_sample_tables_save_restore(self):
         """Resume after a mid-iteration checkpoint must reach the same samples in the
@@ -1893,8 +1883,6 @@ class TestDataset(unittest.TestCase):
         field-map (so ``get_train_dataset`` yields decodable samples), then compare
         a save/restore round-trip against a reference run.
         """
-
-        from megatron.energon import get_savable_loader, get_train_dataset
 
         runner = CliRunner()
         result = runner.invoke(

@@ -688,13 +688,13 @@ The `media_metadata` table is used to store the media metadata for the selected 
 
 #### Skipping the samples tables for very large datasets
 
-For very large datasets (100M+ samples), populating the `samples` and `sample_parts` tables can dominate `energon prepare` runtime. If the dataset will only be consumed sequentially (not as an auxiliary dataset), you can skip these tables:
+For very large datasets (100M+ samples), populating the `samples` and `sample_parts` tables can dominate `energon prepare` runtime. If the dataset will not be used as an auxiliary dataset or mounted, you can skip these tables:
 
 ```sh
 > energon prepare --no-sample-tables /path/to/dataset
 ```
 
-A dataset prepared this way cannot be used as an [auxiliary dataset](aux-data).
+A dataset prepared this way cannot be used as an [auxiliary dataset](aux-data) or with `energon mount`.
 
 (data-on-disk-jsonl)=
 ## Dataset Format on Disk for JSONL Datasets
