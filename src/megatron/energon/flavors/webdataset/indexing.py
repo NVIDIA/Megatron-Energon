@@ -79,6 +79,10 @@ class SqliteIndexWriter:
         if self.enable_sample_tables:
             assert self.reset_tables, "Reset tables is required when enabling sample tables"
 
+        if self.reset_tables:
+            # Always drop on reset — stale tables from a previous prepare run with
+            # enable_sample_tables=True must not survive a re-prepare with
+            # enable_sample_tables=False (and vice versa).
             self.db.execute("DROP INDEX IF EXISTS idx_samples_sample_key")
             self.db.execute("DROP INDEX IF EXISTS idx_samples_by_tar_and_idx")
             self.db.execute("DROP TABLE IF EXISTS samples")
@@ -87,6 +91,7 @@ class SqliteIndexWriter:
             self.db.execute("DROP INDEX IF EXISTS idx_sample_parts_full")
             self.db.execute("DROP TABLE IF EXISTS sample_parts")
 
+        if self.enable_sample_tables:
             self.db.execute(
                 """
                 CREATE TABLE IF NOT EXISTS samples (
@@ -139,9 +144,16 @@ class SqliteIndexWriter:
         self,
         rows: Sequence["IndexSample"],
     ) -> None:
-        """Insert multiple sample rows efficiently."""
+        """Insert multiple sample rows efficiently.
+
+        No-op when ``enable_sample_tables`` was set to False at construction time — the
+        ``samples`` table does not exist in that case.
+        """
 
         assert self.db is not None, "Database is closed"
+
+        if not self.enable_sample_tables:
+            return
 
         if len(rows) == 0:
             return
@@ -177,9 +189,16 @@ class SqliteIndexWriter:
         self,
         rows: Sequence["IndexSamplePart"],
     ) -> None:
-        """Insert multiple sample part rows efficiently."""
+        """Insert multiple sample part rows efficiently.
+
+        No-op when ``enable_sample_tables`` was set to False at construction time — the
+        ``sample_parts`` table does not exist in that case.
+        """
 
         assert self.db is not None, "Database is closed"
+
+        if not self.enable_sample_tables:
+            return
 
         if len(rows) == 0:
             return

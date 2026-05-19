@@ -489,6 +489,7 @@ class WebdatasetPreparator:
         tar_index_only: bool = False,
         media_filter: Optional[MediaFilterConfig] = None,
         fix_duplicates: bool = False,
+        enable_sample_tables: bool = True,
     ) -> Tuple[Set[str], List[Tuple[str, int]]]:
         """
         Preprocess the shards and write the split config. Preprocessing is done in parallel.
@@ -507,6 +508,13 @@ class WebdatasetPreparator:
             tar_index_only: Only create tar-index, then exit
             media_filter: Media filter configuration
             fix_duplicates: If True, fix duplicate keys in the dataset by renaming the files in the shards.
+            enable_sample_tables: If True (default), populate the ``samples`` and ``sample_parts``
+                tables in the SQLite index. Set to False to skip these tables and their post-insert
+                btree builds — only the per-tar ``.tar.idx`` files, ``.info.json`` and split config
+                are produced. Use this for datasets consumed purely by the integer-indexed loader
+                (``ShardInfosITarReader``); sample-key lookups, polylithic joins and media-metadata
+                filtering will not work. Substantially reduces preparation time on very large
+                datasets (100M+ samples) where the SQLite inserts and index builds dominate runtime.
 
         Returns:
             The set of all parts found in the shards. But at most 50.
@@ -566,6 +574,7 @@ class WebdatasetPreparator:
             parent_path / MAIN_FOLDER_NAME / INDEX_SQLITE_FILENAME,
             total_tasks=len(paths),
             progress_fn=progress_fn,
+            enable_sample_tables=enable_sample_tables,
             enable_media_metadata=media_filter is not None,
             media_filter=media_filter,
         )

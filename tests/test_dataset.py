@@ -22,6 +22,7 @@ from typing import Hashable, List, Tuple, Type, Union
 import numpy as np
 import torch
 import webdataset as wds
+import click
 from click.testing import CliRunner
 from PIL import Image
 
@@ -1802,6 +1803,67 @@ class TestDataset(unittest.TestCase):
         with open(self.dataset_path / MAIN_FOLDER_NAME / "dataset_crude.yaml", "r") as f:
             content = f.read()
             assert "CrudeWebdataset" in content
+
+    def test_prepare_dataset_no_sample_tables(self):
+        """`--no-sample-tables` skips the SQLite samples/sample_parts tables.
+
+        Verifies that:
+          - Prepare still succeeds and emits .info.json + the per-tar .tar.idx files.
+          - The SQLite database exists but does not contain the `samples` or `sample_parts`
+            tables (the bulk of the SQLite cost on large datasets).
+          - The flag rejects being combined with `--tar-index-only`.
+        """
+
+        import sqlite3
+
+        runner = CliRunner()
+        result = runner.invoke(
+            prepare_command,
+            [
+                str(self.dataset_path),
+                "--non-interactive",
+                "--force-overwrite",
+                "--split-ratio=1,0,0",
+                "--sample-type=CrudeWebdataset",
+                "--no-sample-tables",
+            ],
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 0, f"Prepare failed: {result.stdout}"
+
+        # .info.json and per-tar .tar.idx files must still exist.
+        assert (self.dataset_path / MAIN_FOLDER_NAME / ".info.json").is_file()
+        tar_idx_files = list(self.dataset_path.glob("**/*.tar.idx"))
+        assert len(tar_idx_files) > 0, "Expected per-tar .tar.idx files to be produced"
+
+        # SQLite file exists, but the samples / sample_parts tables must NOT be created.
+        sqlite_path = self.dataset_path / MAIN_FOLDER_NAME / "index.sqlite"
+        assert sqlite_path.is_file()
+        with sqlite3.connect(str(sqlite_path)) as conn:
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+        assert "samples" not in tables, f"unexpected samples table: {tables}"
+        assert "sample_parts" not in tables, f"unexpected sample_parts table: {tables}"
+
+        # --no-sample-tables + --tar-index-only must be rejected.
+        result = runner.invoke(
+            prepare_command,
+            [
+                str(self.dataset_path),
+                "--non-interactive",
+                "--no-sample-tables",
+                "--tar-index-only",
+            ],
+            catch_exceptions=True,
+        )
+        assert result.exit_code != 0
+        assert "--no-sample-tables cannot be combined with --tar-index-only" in (
+            result.stdout + (result.stderr or "")
+        ) or isinstance(result.exception, click.UsageError)
 
     def test_preview_captioning_dataset(self):
         runner = CliRunner()
