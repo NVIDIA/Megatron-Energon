@@ -19,10 +19,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Hashable, List, Tuple, Type, Union
 
+import click
 import numpy as np
 import torch
 import webdataset as wds
-import click
 from click.testing import CliRunner
 from PIL import Image
 
@@ -1841,10 +1841,7 @@ class TestDataset(unittest.TestCase):
         assert sqlite_path.is_file()
         with sqlite3.connect(str(sqlite_path)) as conn:
             tables = {
-                row[0]
-                for row in conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table'"
-                )
+                row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
             }
         assert "samples" not in tables, f"unexpected samples table: {tables}"
         assert "sample_parts" not in tables, f"unexpected sample_parts table: {tables}"
@@ -1864,6 +1861,26 @@ class TestDataset(unittest.TestCase):
         assert "--no-sample-tables cannot be combined with --tar-index-only" in (
             result.stdout + (result.stderr or "")
         ) or isinstance(result.exception, click.UsageError)
+
+        # Sample-key operations against the SQLite reader must raise a descriptive error,
+        # not the raw `sqlite3.OperationalError: no such table: samples`.
+        from megatron.energon.epathlib import EPath
+        from megatron.energon.flavors.webdataset.indexing import (
+            MissingSamplesTableError,
+            SqliteIndexReader,
+        )
+
+        reader = SqliteIndexReader(EPath(str(sqlite_path)))
+        try:
+            with self.assertRaises(MissingSamplesTableError) as ctx:
+                reader.get_sample_pointer_by_key("any-key")
+            assert "no-sample-tables" in str(ctx.exception)
+            with self.assertRaises(MissingSamplesTableError):
+                reader.get_sample_count()
+            with self.assertRaises(MissingSamplesTableError):
+                reader.get_sample_part("any-key", "txt")
+        finally:
+            reader.close()
 
     def test_preview_captioning_dataset(self):
         runner = CliRunner()
