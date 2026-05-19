@@ -6,8 +6,7 @@ from typing import Any, Dict, Generator, Iterator, List, Optional, Sequence, Tup
 import torch
 
 from megatron.energon.edataclass import edataclass
-from megatron.energon.flavors.base_dataset import FlexState, SavableDataset
-from megatron.energon.flavors.webdataset.itar_reader import ITarReader
+from megatron.energon.flavors.base_dataset import DatasetSampleReader, FlexState, SavableDataset
 from megatron.energon.flavors.webdataset.structs import FilteredSample
 from megatron.energon.rng import WorkerRng
 from megatron.energon.worker import WorkerConfig
@@ -34,10 +33,10 @@ class SliceState:
 
 
 class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
-    """Internal class for loading samples from webdataset slices"""
+    """Internal class for sampling from random access datasets efficiently (the "core sampler")."""
 
     #: The readers for each joined dataset
-    join_readers: Sequence[ITarReader]
+    join_readers: Sequence[DatasetSampleReader]
 
     #: The offsets of the slice slices to iterate over for the current worker
     slice_offsets: Optional[Sequence[int]]
@@ -83,7 +82,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
 
     def __init__(
         self,
-        join_readers: Sequence[ITarReader],
+        join_readers: Sequence[DatasetSampleReader],
         workers_sample_slice_offsets: Sequence[Sequence[int]],
         *,
         worker_config: WorkerConfig,

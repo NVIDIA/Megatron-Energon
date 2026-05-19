@@ -1,16 +1,19 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from abc import ABC
 from typing import (
     Callable,
     Generator,
     Optional,
     Tuple,
     TypeVar,
+    overload,
 )
 
+from typing_extensions import Self
+
 from megatron.energon.epathlib import EPath
+from megatron.energon.flavors.base_dataset import DatasetSampleReader, RawSample
 from megatron.energon.flavors.jsonl.ijsonl import (
     CachedIJsonlOffsetReader,
     IJsonlFile,
@@ -23,7 +26,7 @@ from megatron.energon.source_info import SourceInfo
 T_index = TypeVar("T_index", covariant=False)
 
 
-class IJsonlReader(ABC):
+class IJsonlReader(DatasetSampleReader):
     """
     Class for reading indexed jsonl files containing json samples.
 
@@ -102,6 +105,12 @@ class IJsonlReader(ABC):
             json=json_data,
         )
 
+    @overload
+    def __getitem__(self, idx: int) -> FilteredSample | None: ...
+
+    @overload
+    def __getitem__(self, idx: str) -> tuple[bytes, SourceInfo] | None: ...
+
     def __getitem__(self, idx: int | str) -> FilteredSample | tuple[bytes, SourceInfo] | None:
         """
         Get a sample from the dataset.
@@ -135,6 +144,10 @@ class IJsonlReader(ABC):
             return sample["json"], sample["__sources__"][0]
         else:
             return sample
+
+    def __iter__(self) -> Generator[RawSample | None, None, None]:
+        for idx in range(len(self)):
+            yield self[idx]
 
     def list_all_samples(self) -> Generator[Tuple[str, int, int], None, None]:
         """List all samples in the jsonl file.
@@ -183,6 +196,12 @@ class IJsonlReader(ABC):
 
     def get_total_size(self) -> int:
         return self.cached_offset_reader.get_total_size()
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self.close()
 
     def close(self):
         if self.ijsonl_file is not None:
