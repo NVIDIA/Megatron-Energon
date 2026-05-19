@@ -686,6 +686,28 @@ The `media_metadata` table is used to store the media metadata for the selected 
 | 00002.mp4 | ... | ... |
 
 
+#### Skipping the samples tables for very large datasets
+
+On very large datasets (100M+ samples) the `samples` and `sample_parts` table inserts, combined with the post-load btree index builds over the unique `sample_key`, can dominate `energon prepare` runtime. For datasets that are consumed purely sequentially via the integer-indexed loader (`ShardInfosITarReader` — the default loader for monolithic webdatasets), those tables are never queried at training time: shard cumulative counts come from `.info.json`, and per-sample byte offsets come from the per-tar `.tar.idx` files. Checkpoint/resume uses integer `SliceState` offsets resolved through the same path.
+
+If you do not need sample-key lookups, you can skip populating the SQLite sample tables:
+
+```sh
+> energon prepare --no-sample-tables /path/to/dataset
+```
+
+This still produces `.tar.idx`, `.info.json` and the split config — everything the integer-indexed loader needs.
+
+```{admonition} Trade-off
+:class: warning
+Datasets prepared with `--no-sample-tables` cannot be used with features that look samples up by `sample_key`. In particular:
+
+- [Polylithic datasets](aux-data) — the join is built by an SQL `JOIN` over the `samples` tables.
+- The {py:meth}`as_file_store <megatron.energon.flavors.webdataset.base_webdataset.BaseWebdatasetFactory.as_file_store>` method and the {py:class}`WebdatasetFileStore <megatron.energon.WebdatasetFileStore>`, which are used for aux-data access on [crude datasets](crude-data) and by [`energon mount`](energon-mount).
+
+Failures are loud (`sqlite3.OperationalError: no such table: samples`), not silent. The flag cannot be combined with `--tar-index-only` (which operates on an already-prepared dataset).
+```
+
 (data-on-disk-jsonl)=
 ## Dataset Format on Disk for JSONL Datasets
 
