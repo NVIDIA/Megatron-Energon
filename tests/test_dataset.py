@@ -1882,6 +1882,72 @@ class TestDataset(unittest.TestCase):
         finally:
             reader.close()
 
+    def test_prepare_dataset_no_sample_tables_save_restore(self):
+        """Resume after a mid-iteration checkpoint must reach the same samples in the
+        same order on a dataset prepared with ``--no-sample-tables``.
+
+        This is the load-bearing claim of the flag: the integer-indexed loader
+        (``ShardInfosITarReader``) and the savable state (``SliceState``) do not
+        touch the SQLite samples tables, so save/restore must work without them.
+        We re-prepare the fixture with ``--no-sample-tables`` plus a captioning
+        field-map (so ``get_train_dataset`` yields decodable samples), then compare
+        a save/restore round-trip against a reference run.
+        """
+
+        from megatron.energon import get_savable_loader, get_train_dataset
+
+        runner = CliRunner()
+        result = runner.invoke(
+            prepare_command,
+            [
+                str(self.dataset_path),
+                "--non-interactive",
+                "--force-overwrite",
+                "--split-ratio=1,0,0",
+                "--sample-type=CaptioningSample",
+                '--field-map={"image": "png", "caption": "txt"}',
+                "--no-sample-tables",
+            ],
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 0, f"Prepare failed: {result.stdout}"
+
+        def loader_factory():
+            return get_savable_loader(
+                get_train_dataset(
+                    self.dataset_path,
+                    batch_size=2,
+                    worker_config=no_worker_config,
+                    shuffle_buffer_size=20,
+                    max_samples_per_sequence=10,
+                )
+            )
+
+        def keys_from(loader, n):
+            return [tuple(batch.__key__) for _, batch in zip(range(n), loader)]
+
+        # Reference: a single uninterrupted run, used as the ground truth.
+        reference = keys_from(loader_factory(), 20)
+
+        # Capture state mid-stream.
+        loader = loader_factory()
+        first_half = keys_from(loader, 10)
+        state = loader.save_state_rank()
+        post_save = keys_from(loader, 10)
+
+        # Restore into a fresh loader and continue. The resumed sequence must
+        # match what the original loader produced after `save_state_rank()`.
+        resumed = loader_factory()
+        resumed.restore_state_rank(state)
+        post_restore = keys_from(resumed, 10)
+
+        assert first_half + post_save == reference, (
+            f"Uninterrupted iteration diverges from reference: {first_half + post_save} != {reference}"
+        )
+        assert post_restore == post_save, (
+            f"Resume diverged from continued iteration: {post_restore} != {post_save}"
+        )
+
     def test_preview_captioning_dataset(self):
         runner = CliRunner()
         result = runner.invoke(
