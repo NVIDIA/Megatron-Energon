@@ -11,11 +11,11 @@ from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
 from megatron.energon.eyaml import load_yaml, load_yaml_json
 from megatron.energon.flavors.webdataset.config import (
-    INDEX_SQLITE_FILENAME,
     INFO_JSON_FILENAME,
     INFO_YAML_FILENAME,
     MAIN_FOLDER_NAME,
 )
+from megatron.energon.flavors.webdataset.index_store import has_prepared_index
 from megatron.energon.flavors.webdataset.empty_dataset_error import EmptyDatasetError
 from megatron.energon.flavors.webdataset.structs import (
     ShardInfo,
@@ -157,7 +157,7 @@ def get_dataset_type(path: EPath) -> EnergonDatasetType:
     Returns:
         The type of the dataset.
     """
-    metadata_db = path / MAIN_FOLDER_NAME / INDEX_SQLITE_FILENAME
+    meta_dir = path / MAIN_FOLDER_NAME
 
     if path.is_file():
         if path.name.endswith(".jsonl"):
@@ -168,9 +168,8 @@ def get_dataset_type(path: EPath) -> EnergonDatasetType:
             return EnergonDatasetType.INVALID
     elif check_dataset_info_present(path):
         return EnergonDatasetType.WEBDATASET
-    elif metadata_db.is_file():
-        # There is an sqlite, but no .info.json or .info.yaml,
-        # so it's a filesystem dataset
+    elif has_prepared_index(meta_dir):
+        # Index without .info.json/.info.yaml is a filesystem dataset (media metadata only).
         return EnergonDatasetType.FILESYSTEM
     else:
         return EnergonDatasetType.INVALID

@@ -1,16 +1,14 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-import sqlite3
 from typing import Any, Optional, Union
 
 from megatron.energon.cache.base import FileStore, FileStoreDecoder, FileStoreWrapper
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.jsonl.ijsonl_reader import IJsonlReader
-from megatron.energon.flavors.webdataset.config import INDEX_SQLITE_FILENAME, MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset.index_store import IndexReader, has_prepared_index, open_index_reader
 from megatron.energon.flavors.webdataset.itar_reader import SqliteITarEntryReader
-from megatron.energon.flavors.webdataset.thread_local_sqlite import ThreadLocalSqlite
-from megatron.energon.local_copy import ensure_local_copy
 from megatron.energon.media.metadata import MediaMetadataBase, deserialize_media_metadata
 from megatron.energon.source_info import SourceInfo
 
@@ -62,7 +60,7 @@ class SystemFileStore(FileStore[bytes]):
         """
 
         self.base_dir = EPath(base_dir) if base_dir is not None else None
-        self._media_metadata_reader: Optional[ThreadLocalSqlite] = None
+        self._index_reader: Optional[IndexReader] = None
         self._media_metadata_checked = False
 
     def __getitem__(self, key: str) -> tuple[bytes, SourceInfo]:
@@ -94,11 +92,8 @@ class SystemFileStore(FileStore[bytes]):
         if self.base_dir is None:
             raise RuntimeError("Media metadata requires a base directory for SystemFileStore")
 
-        reader = self._ensure_media_metadata_reader()
-        row = reader.select_one(
-            "SELECT metadata_type, metadata_json FROM media_metadata WHERE entry_key = ?",
-            (key,),
-        )
+        reader = self._ensure_index_reader()
+        row = reader.get_media_metadata(key)
         if row is None:
             file_path = self.base_dir / key
             if file_path.is_file():
@@ -110,35 +105,28 @@ class SystemFileStore(FileStore[bytes]):
         metadata_type, metadata_json = row
         return deserialize_media_metadata(metadata_type, metadata_json)
 
-    def _ensure_media_metadata_reader(self) -> ThreadLocalSqlite:
+    def _ensure_index_reader(self) -> IndexReader:
         assert self.base_dir is not None
-        if self._media_metadata_reader is None:
-            sqlite_path = self.base_dir / MAIN_FOLDER_NAME / INDEX_SQLITE_FILENAME
-
-            if not sqlite_path.is_file():
+        if self._index_reader is None:
+            meta_dir = self.base_dir / MAIN_FOLDER_NAME
+            if not has_prepared_index(meta_dir):
                 raise RuntimeError(
-                    f"Media metadata database missing at {sqlite_path}. "
+                    f"Prepared index missing under {meta_dir}. "
                     "Run `energon prepare --media-metadata-by-...` for this dataset."
                 )
-
-            local_sqlite_path = ensure_local_copy(sqlite_path)
-            db_uri = f"file:{str(local_sqlite_path)}?mode=ro&immutable=1"
-            self._media_metadata_reader = ThreadLocalSqlite(db_uri, is_uri=True)
+            self._index_reader = open_index_reader(self.base_dir)
 
         if not self._media_metadata_checked:
-            assert self._media_metadata_reader is not None
-            exists = self._media_metadata_reader.select_one(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='media_metadata'"
-            )
-            if exists is None:
-                self._media_metadata_reader.thread_close()
-                self._media_metadata_reader = None
+            assert self._index_reader is not None
+            if not self._index_reader.db_has_media_metadata():
+                self._index_reader.close()
+                self._index_reader = None
                 raise RuntimeError(
                     "Media metadata table missing. Re-run `energon prepare --media-metadata-by-...`."
                 )
             self._media_metadata_checked = True
 
-        return self._media_metadata_reader
+        return self._index_reader
 
 
 class WebdatasetFileStore(SqliteITarEntryReader, FileStore[bytes]):
@@ -160,28 +148,14 @@ class WebdatasetFileStore(SqliteITarEntryReader, FileStore[bytes]):
 
     def get_media_metadata(self, key: str) -> MediaMetadataBase:
         if self._media_metadata_available is None:
-            try:
-                has_metadata = self.sqlite_reader.db_has_media_metadata()
-            except sqlite3.Error as exc:  # pragma: no cover - defensive
-                raise RuntimeError(
-                    "Failed to inspect media metadata table. Re-run `energon prepare --media-metadata-by-...`."
-                ) from exc
-
-            if not has_metadata:
+            if not self.index_reader.db_has_media_metadata():
                 raise RuntimeError(
                     "Media metadata is not available for this dataset. "
                     "Run `energon prepare --media-metadata-by-...` to generate it."
                 )
-
             self._media_metadata_available = True
 
-        try:
-            row = self.sqlite_reader.get_media_metadata(key)
-        except sqlite3.Error as exc:  # pragma: no cover - defensive
-            raise RuntimeError(
-                "Failed to load media metadata. Re-run `energon prepare --media-metadata-by-...`."
-            ) from exc
-
+        row = self.index_reader.get_media_metadata(key)
         if row is None:
             raise KeyError(f"Sample {key!r} not found")
 

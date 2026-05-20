@@ -3,6 +3,7 @@
 
 import sqlite3
 import struct
+import time
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, BinaryIO, Generator, List, Optional, Tuple, Union
 
@@ -25,6 +26,22 @@ class DuplicateSampleKeyError(RuntimeError):
     def __init__(self, sample_key: str) -> None:
         super().__init__(f"Duplicate sample key encountered while indexing: {sample_key!r}")
         self.sample_key = sample_key
+
+
+def _apply_sqlite_bulk_load_pragmas(db: sqlite3.Connection) -> None:
+    """Tune SQLite for a single-writer bulk index build."""
+    db.execute("PRAGMA journal_mode = OFF")
+    db.execute("PRAGMA synchronous = OFF")
+    db.execute("PRAGMA temp_store = MEMORY")
+    db.execute("PRAGMA locking_mode = EXCLUSIVE")
+    db.execute("PRAGMA cache_size = -2000000")
+
+
+def _restore_sqlite_production_pragmas(db: sqlite3.Connection) -> None:
+    """Restore durable settings before handing the index to readers."""
+    db.execute("PRAGMA journal_mode = DELETE")
+    db.execute("PRAGMA synchronous = NORMAL")
+    db.execute("PRAGMA locking_mode = NORMAL")
 
 
 class SqliteIndexWriter:
@@ -56,10 +73,9 @@ class SqliteIndexWriter:
                          content_byte_offset INTEGER,
                          content_byte_size INTEGER)
         Also creates indexes:
-          - samples(sample_key)
+          - samples(sample_key) via UNIQUE constraint
           - samples(tar_file_id, sample_index)
           - sample_parts(tar_file_id, sample_index, content_byte_offset)
-          - sample_parts(tar_file_id, sample_index, part_name, content_byte_offset, content_byte_size)
         """
 
         # Final path and temporary path
@@ -74,7 +90,9 @@ class SqliteIndexWriter:
         path = self.sqlite_path.local_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(path)
+        # self.db = sqlite3.connect(":memory:")
         self.db.execute("PRAGMA busy_timeout = 5000;")  # wait up to 5000ms when locked
+        _apply_sqlite_bulk_load_pragmas(self.db)
 
         if self.enable_sample_tables:
             assert self.reset_tables, "Reset tables is required when enabling sample tables"
@@ -84,7 +102,6 @@ class SqliteIndexWriter:
             self.db.execute("DROP TABLE IF EXISTS samples")
 
             self.db.execute("DROP INDEX IF EXISTS idx_sample_parts_seq")
-            self.db.execute("DROP INDEX IF EXISTS idx_sample_parts_full")
             self.db.execute("DROP TABLE IF EXISTS sample_parts")
 
             self.db.execute(
@@ -108,6 +125,16 @@ class SqliteIndexWriter:
                     content_byte_size INTEGER
                 )
                 """
+            )
+
+            # Create index on the samples table.  Help the planner if it chooses `samples` as the probe side of the join
+            self.db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_samples_by_tar_and_idx ON samples(tar_file_id, sample_index)"
+            )
+
+            # Create index on the sample_parts table for fast sequential access
+            self.db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_sample_parts_seq ON sample_parts(tar_file_id, sample_index, content_byte_offset)"
             )
 
         if self.enable_media_metadata:
@@ -135,6 +162,8 @@ class SqliteIndexWriter:
                 """
             )
 
+        self.db.execute("BEGIN IMMEDIATE")
+
     def append_samples(
         self,
         rows: Sequence["IndexSample"],
@@ -146,8 +175,6 @@ class SqliteIndexWriter:
         if len(rows) == 0:
             return
 
-        savepoint_name = "append_samples_batch"
-        self.db.execute(f"SAVEPOINT {savepoint_name}")
         try:
             # One executemany() is substantially cheaper than one execute() per row.
             self.db.executemany(
@@ -166,11 +193,8 @@ class SqliteIndexWriter:
                     for row in rows
                 ),
             )
-            self.db.execute(f"RELEASE SAVEPOINT {savepoint_name}")
         except sqlite3.IntegrityError as exc:
-            # executemany() may already have inserted earlier rows in the batch
-            self.db.execute(f"ROLLBACK TO SAVEPOINT {savepoint_name}")
-            self.db.execute(f"RELEASE SAVEPOINT {savepoint_name}")
+            self.db.rollback()
             raise DuplicateSampleKeyError(self._find_duplicate_sample_key(rows)) from exc
 
     def append_parts(
@@ -238,33 +262,27 @@ class SqliteIndexWriter:
         if self.enable_sample_tables:
             # Create the index after adding all the samples for better speed
             # sample_key uniqueness already creates an implicit SQLite index via the table schema.
+            pass
 
-            # Create index on the samples table.  Help the planner if it chooses `samples` as the probe side of the join
-            self.db.execute(
-                "CREATE INDEX IF NOT EXISTS idx_samples_by_tar_and_idx ON samples(tar_file_id, sample_index)"
-            )
+        self.db.commit()
+        _restore_sqlite_production_pragmas(self.db)
+        self.db.close()
+        self.db = None
 
-            # Create index on the sample_parts table for fast sequential access
-            self.db.execute(
-                "CREATE INDEX IF NOT EXISTS idx_sample_parts_seq ON sample_parts(tar_file_id, sample_index, content_byte_offset)"
-            )
-
-            # Create a full index on the sample_parts table for equality lookups and getting offsets directly from key
-            self.db.execute(
-                "CREATE INDEX IF NOT EXISTS idx_sample_parts_full ON sample_parts(tar_file_id, sample_index, part_name, content_byte_offset, content_byte_size)"
-            )
-
+    def _abort(self) -> None:
         if self.db is not None:
-            self.db.commit()
+            self.db.rollback()
             self.db.close()
             self.db = None
 
     def __enter__(self):
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        # If an exception occurred, do not finalize (so you can inspect the temp file)
-        self.close()
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        if exc_type is None:
+            self.close()
+        else:
+            self._abort()
 
     def _find_duplicate_sample_key(
         self,

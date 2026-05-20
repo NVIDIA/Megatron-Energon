@@ -10,15 +10,11 @@ from typing import Callable, Iterator
 
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.webdataset.aggregator_pool import AggregatorPool
-from megatron.energon.flavors.webdataset.config import (
-    INDEX_BATCH_SIZE,
-    INDEX_SQLITE_FILENAME,
-    MAIN_FOLDER_NAME,
-)
+from megatron.energon.flavors.webdataset.config import INDEX_BATCH_SIZE, MAIN_FOLDER_NAME
 from megatron.energon.flavors.webdataset.prepare import (
     IndexAggregatable,
     IndexMediaMetadata,
-    SqliteIndexWriterAggregator,
+    IndexWriterAggregator,
 )
 from megatron.energon.flavors.webdataset.structs import ShardInfo
 from megatron.energon.media.extractor import MediaFilterConfig
@@ -54,7 +50,7 @@ def prepare_filesystem_dataset(
 
     files = _collect_media_files(root=root, media_filter=media_filter, progress=progress)
 
-    sqlite_path = EPath(meta_dir / INDEX_SQLITE_FILENAME)
+    meta_dir_path = EPath(meta_dir)
 
     agg_progress_fn: Callable[[Iterator[int], int], Iterator[int]] | None = None
     if progress:
@@ -64,8 +60,8 @@ def prepare_filesystem_dataset(
             with tqdm(iterator, total=total, unit="file", desc="Processing media files") as bar:
                 yield from bar
 
-    aggregator = SqliteIndexWriterAggregator(
-        sqlite_path,
+    aggregator = IndexWriterAggregator(
+        meta_dir_path,
         total_tasks=len(files),
         progress_fn=agg_progress_fn,
         enable_media_metadata=True,
@@ -99,7 +95,9 @@ def prepare_filesystem_dataset(
         # Copy group permissions from the parent dir
         meta_dir.chmod((root.stat().st_mode | 0o700))
         # Just read/write, no execute
-        sqlite_path.local_path().chmod((root.stat().st_mode | 0o600) & 0o666)
+        from megatron.energon.flavors.webdataset.index_store import index_lmdb_path
+
+        index_lmdb_path(meta_dir_path).local_path().chmod((root.stat().st_mode | 0o600) & 0o666)
     except OSError:
         pass
 

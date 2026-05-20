@@ -24,7 +24,8 @@ from megatron.energon.dataset_config import load_config
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import Sample
-from megatron.energon.flavors.webdataset.config import INDEX_SQLITE_FILENAME, MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset.index_store import has_prepared_index
 from megatron.energon.flavors.webdataset.metadata import EnergonDatasetType, get_dataset_type
 from megatron.energon.flavors.webdataset.structs import DatasetSubset
 from megatron.energon.metadataset.dataset_loader import DatasetLoader
@@ -57,7 +58,7 @@ class AuxDatasetReference:
         assert not self.path.is_file(), (
             "Auxiliary datasets must not be metadataset, but direct dataset references"
         )
-        assert (self.path / MAIN_FOLDER_NAME / INDEX_SQLITE_FILENAME).is_file(), (
+        assert has_prepared_index(self.path / MAIN_FOLDER_NAME), (
             "Auxiliary datasets must be prepared Energon datasets. This one does not exist or is not prepared: "
             + str(self.path)
         )
@@ -475,6 +476,9 @@ class MetadatasetJoin(SubsetRatioMixin, DatasetLoaderInterface):
     _dataset: Optional[JoinDatasetLoader] = None
 
     def post_initialize(self, mds_path: Optional[EPath] = None):
+        raise NotImplementedError(
+            "Joined datasets are no longer supported. Use a single prepared dataset per blend entry."
+        )
         assert mds_path is not None
         assert self.join is not None
         assert self.joiner is not None, "Must set joiner for joining datasets"

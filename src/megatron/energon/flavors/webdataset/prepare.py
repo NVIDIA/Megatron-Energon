@@ -4,6 +4,7 @@
 import functools
 import json
 import logging
+import shutil
 import random
 import re
 import sys
@@ -36,6 +37,7 @@ from megatron.energon.eyaml import load_yaml
 from megatron.energon.flavors.webdataset.aggregator_pool import AggregatorPool, BaseAggregator
 from megatron.energon.flavors.webdataset.config import (
     INDEX_BATCH_SIZE,
+    INDEX_LMDB_DIRNAME,
     INDEX_SQLITE_FILENAME,
     INDEX_UUID_FILENAME,
     INFO_JSON_FILENAME,
@@ -44,7 +46,13 @@ from megatron.energon.flavors.webdataset.config import (
     skip_meta_re,
     split_name_re,
 )
-from megatron.energon.flavors.webdataset.indexing import DuplicateSampleKeyError, SqliteIndexWriter
+from megatron.energon.flavors.webdataset.index_store import (
+    IndexWriter,
+    index_lmdb_path,
+    open_index_writer,
+    remove_prepared_index,
+)
+from megatron.energon.flavors.webdataset.indexing import DuplicateSampleKeyError
 from megatron.energon.flavors.webdataset.itar import TarIndexWriter
 from megatron.energon.flavors.webdataset.metadata import get_dataset_info
 from megatron.energon.flavors.webdataset.structs import ShardInfo, WebdatasetInfo, WebdatasetSplits
@@ -61,7 +69,7 @@ T = TypeVar("T", covariant=True)
 class IndexAggregatable:
     """
     A base class for all objects that can be returned/yielded by `_preprocess_tar` and
-    received by `SqliteIndexWriterAggregator.on_item`.
+    received by `IndexWriterAggregator.on_item`.
     """
 
     ...
@@ -98,13 +106,13 @@ class IndexShardInfo(IndexAggregatable):
     parts: Set[str]
 
 
-class SqliteIndexWriterAggregator(
+class IndexWriterAggregator(
     BaseAggregator[IndexAggregatable, Tuple[List[ShardInfo], Set[str], bool, List[Tuple[str, int]]]]
 ):
-    sqlite_path: EPath
+    meta_dir: EPath
     total_tasks: int
     progress_fn: Optional[Callable]
-    writer: Optional[SqliteIndexWriter]
+    writer: Optional[IndexWriter]
     had_update: bool
     shards: List[ShardInfo]
     found_parts: Set[str]
@@ -118,7 +126,7 @@ class SqliteIndexWriterAggregator(
 
     def __init__(
         self,
-        sqlite_path: EPath,
+        meta_dir: EPath,
         total_tasks: int,
         progress_fn: Optional[Callable[[Iterator[Any], int], Iterator[T]]] = None,
         *,
@@ -128,7 +136,7 @@ class SqliteIndexWriterAggregator(
         reset_tables: bool = True,
         progress_on_media: bool = False,
     ):
-        self.sqlite_path = sqlite_path
+        self.meta_dir = meta_dir
         self.total_tasks = total_tasks
         self.writer = None
         self.had_update = False
@@ -147,8 +155,8 @@ class SqliteIndexWriterAggregator(
             self.prog_iter = iter(range(self.total_tasks))
 
     def on_start(self, aggregator_pool: AggregatorPool) -> None:
-        self.writer = SqliteIndexWriter(
-            self.sqlite_path,
+        self.writer = open_index_writer(
+            self.meta_dir,
             enable_sample_tables=self.enable_sample_tables,
             enable_media_metadata=self.enable_media_metadata,
             reset_tables=self.reset_tables,
@@ -228,6 +236,9 @@ class SqliteIndexWriterAggregator(
                 break
 
 
+SqliteIndexWriterAggregator = IndexWriterAggregator
+
+
 class WebdatasetPreparator:
     @staticmethod
     def _iter_tar_sample_members(
@@ -271,8 +282,8 @@ class WebdatasetPreparator:
             max_parts: Maximum number of different parts to return
 
         Returns:
-            A generator of items that will be processed by SqliteIndexWriterAggregator.
-            See method `on_item` of SqliteIndexWriterAggregator.
+            A generator of items that will be processed by IndexWriterAggregator.
+            See method `on_item` of IndexWriterAggregator.
             The items are either:
             - typed row objects describing samples, sample parts, or media metadata
             - or shard info for statistics.
@@ -562,8 +573,9 @@ class WebdatasetPreparator:
             else:
                 print("No duplicate keys found, continuing.")
 
-        aggregator = SqliteIndexWriterAggregator(
-            parent_path / MAIN_FOLDER_NAME / INDEX_SQLITE_FILENAME,
+        meta_dir = parent_path / MAIN_FOLDER_NAME
+        aggregator = IndexWriterAggregator(
+            meta_dir,
             total_tasks=len(paths),
             progress_fn=progress_fn,
             enable_media_metadata=media_filter is not None,
@@ -600,15 +612,14 @@ class WebdatasetPreparator:
                 "put each file in a subfolder with the shard name like `shard_0/filename.ext`."
             )
 
-            if (parent_path / MAIN_FOLDER_NAME / INDEX_SQLITE_FILENAME).is_file():
-                (parent_path / MAIN_FOLDER_NAME / INDEX_SQLITE_FILENAME).unlink()
+            remove_prepared_index(meta_dir)
 
             sys.exit(1)
 
         # Fix permissions if needed
         if fix_local_permissions:
             try:
-                Path(str(parent_path / MAIN_FOLDER_NAME / INDEX_SQLITE_FILENAME)).chmod(file_perms)
+                index_lmdb_path(meta_dir).local_path().chmod(file_perms)
             except OSError:
                 pass
 
@@ -762,8 +773,8 @@ class WebdatasetPreparator:
             if path not in shard_counts:
                 raise ValueError(f"Shard '{path}' not present in dataset metadata")
 
-        aggregator = SqliteIndexWriterAggregator(
-            parent_path / MAIN_FOLDER_NAME / INDEX_SQLITE_FILENAME,
+        aggregator = IndexWriterAggregator(
+            parent_path / MAIN_FOLDER_NAME,
             total_tasks=len(expanded_paths),
             progress_fn=progress_fn,
             enable_sample_tables=False,
