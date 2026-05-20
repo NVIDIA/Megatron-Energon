@@ -485,7 +485,6 @@ class SqliteITarEntryReader(ITarReader[str]):
 
     sqlite_reader: SqliteIndexReader
     db_has_sample_parts: bool
-    db_has_samples: bool
 
     def __init__(
         self,
