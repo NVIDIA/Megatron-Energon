@@ -511,9 +511,7 @@ class SqliteITarEntryReader(ITarReader[str]):
         self.sqlite_reader = SqliteIndexReader(sqlite_path)
 
         self.db_has_sample_parts = self.sqlite_reader.db_has_sample_parts()
-        self.db_has_samples = self.sqlite_reader.db_has_samples()
-
-        if not self.db_has_samples:
+        if not self.sqlite_reader.db_has_samples():
             raise MissingSamplesTableError(sqlite_path)
 
         self.key_is_full_entryname = key_is_full_entryname
