@@ -20,7 +20,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Hashable, List, Tuple, Type, Union
 
-import click
 import numpy as np
 import torch
 import webdataset as wds
@@ -1860,9 +1859,7 @@ class TestDataset(unittest.TestCase):
             catch_exceptions=True,
         )
         assert result.exit_code != 0
-        assert "--no-sample-tables cannot be combined with --tar-index-only" in (
-            result.stdout + (result.stderr or "")
-        ) or isinstance(result.exception, click.UsageError)
+        assert "--no-sample-tables cannot be combined with --tar-index-only" in result.output
 
         # SqliteIndexReader exposes db_has_samples() as part of its public surface.
         index_reader = SqliteIndexReader(EPath(str(sqlite_path)))
