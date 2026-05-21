@@ -124,6 +124,17 @@ def printify_json(data: Any) -> Any:
     is_flag=True,
 )
 @click.option(
+    "--no-sample-tables",
+    help=(
+        "Skip populating the SQLite samples and sample_parts tables. Only the per-tar "
+        ".tar.idx files, .info.json and split config are produced. Use for datasets "
+        "consumed purely by the integer-indexed loader; sample-key lookups, polylithic "
+        "joins and media-metadata filtering will not work. Substantially reduces "
+        "preparation time on very large datasets."
+    ),
+    is_flag=True,
+)
+@click.option(
     "--shuffle-tars",
     help="If set, the tar files will be shuffled before splitting.",
     is_flag=True,
@@ -191,6 +202,7 @@ def command(
     exclude: str,
     num_workers: int,
     tar_index_only: bool,
+    no_sample_tables: bool,
     shuffle_tars: bool,
     media_metadata_by_glob: str | None,
     media_metadata_by_header: bool,
@@ -219,6 +231,12 @@ def command(
 
     if do_media_metadata and tar_index_only:
         raise click.UsageError("--media-metadata-by-... cannot be combined with --tar-index-only")
+
+    if no_sample_tables and tar_index_only:
+        raise click.UsageError(
+            "--no-sample-tables cannot be combined with --tar-index-only "
+            "(--tar-index-only operates on an already-prepared dataset)"
+        )
 
     media_filter_config = (
         MediaFilterConfig.parse(
@@ -348,6 +366,7 @@ def command(
         workers=num_workers,
         media_filter=media_filter_config,
         fix_duplicates=fix_duplicates,
+        enable_sample_tables=not no_sample_tables,
     )
 
     found_types = list(found_types)

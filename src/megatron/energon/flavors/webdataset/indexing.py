@@ -27,6 +27,25 @@ class DuplicateSampleKeyError(RuntimeError):
         self.sample_key = sample_key
 
 
+class MissingSamplesTableError(RuntimeError):
+    """Raised when a sample-key operation is attempted on a dataset prepared without sample tables.
+
+    Datasets prepared with ``energon prepare --no-sample-tables`` (or programmatically with
+    ``prepare_dataset(..., enable_sample_tables=False)``) do not have the ``samples`` /
+    ``sample_parts`` tables in their SQLite index. Such datasets cannot be used as auxiliary
+    datasets and do not support sample-key lookups.
+    """
+
+    def __init__(self, sqlite_path: EPath) -> None:
+        super().__init__(
+            f"Dataset at {sqlite_path.parent.parent} was prepared without the SQLite samples tables "
+            f"(`energon prepare --no-sample-tables` / `enable_sample_tables=False`). "
+            f"Re-prepare the dataset without that option to use it as an auxiliary dataset "
+            f"or for any sample-key lookup."
+        )
+        self.sqlite_path = sqlite_path
+
+
 class SqliteIndexWriter:
     sqlite_path: EPath
     db: Optional[sqlite3.Connection]
@@ -79,6 +98,10 @@ class SqliteIndexWriter:
         if self.enable_sample_tables:
             assert self.reset_tables, "Reset tables is required when enabling sample tables"
 
+        if self.reset_tables:
+            # Always drop on reset — stale tables from a previous prepare run with
+            # enable_sample_tables=True must not survive a re-prepare with
+            # enable_sample_tables=False (and vice versa).
             self.db.execute("DROP INDEX IF EXISTS idx_samples_sample_key")
             self.db.execute("DROP INDEX IF EXISTS idx_samples_by_tar_and_idx")
             self.db.execute("DROP TABLE IF EXISTS samples")
@@ -87,6 +110,7 @@ class SqliteIndexWriter:
             self.db.execute("DROP INDEX IF EXISTS idx_sample_parts_full")
             self.db.execute("DROP TABLE IF EXISTS sample_parts")
 
+        if self.enable_sample_tables:
             self.db.execute(
                 """
                 CREATE TABLE IF NOT EXISTS samples (
@@ -139,9 +163,16 @@ class SqliteIndexWriter:
         self,
         rows: Sequence["IndexSample"],
     ) -> None:
-        """Insert multiple sample rows efficiently."""
+        """Insert multiple sample rows efficiently.
+
+        No-op when ``enable_sample_tables`` was set to False at construction time — the
+        ``samples`` table does not exist in that case.
+        """
 
         assert self.db is not None, "Database is closed"
+
+        if not self.enable_sample_tables:
+            return
 
         if len(rows) == 0:
             return
@@ -177,9 +208,16 @@ class SqliteIndexWriter:
         self,
         rows: Sequence["IndexSamplePart"],
     ) -> None:
-        """Insert multiple sample part rows efficiently."""
+        """Insert multiple sample part rows efficiently.
+
+        No-op when ``enable_sample_tables`` was set to False at construction time — the
+        ``sample_parts`` table does not exist in that case.
+        """
 
         assert self.db is not None, "Database is closed"
+
+        if not self.enable_sample_tables:
+            return
 
         if len(rows) == 0:
             return
@@ -374,6 +412,20 @@ class SqliteIndexReader:
         path = f"file:{path}?mode=ro&immutable=1"
 
         self.db = ThreadLocalSqlite(path, is_uri=True)
+
+    def db_has_samples(self) -> bool:
+        """Check if the database has a samples table.
+
+        Returns:
+            True if samples table exists, False otherwise.
+        """
+        assert self.db is not None, "Database is closed"
+
+        db_exists = self.db.select_one(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='samples'"
+        )
+        self.db.thread_close()
+        return db_exists is not None
 
     def db_has_sample_parts(self) -> bool:
         """Check if the database has a sample_parts table.

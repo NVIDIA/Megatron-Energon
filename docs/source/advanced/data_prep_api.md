@@ -68,3 +68,7 @@ Then, run the script:
 if __name__ == "__main__":
     prepare_one_dataset(Path("/path/to/dataset"), 16, Path("/path/to/template_dir"))
 ```
+
+## Skipping the SQLite samples tables for very large datasets
+
+Pass `enable_sample_tables=False` to `prepare_dataset` (default `True`) to skip populating the `samples` and `sample_parts` tables. Useful when preparation is bottlenecked by SQLite indexing on very large datasets. A dataset prepared this way cannot be used as an [auxiliary dataset](aux-data).

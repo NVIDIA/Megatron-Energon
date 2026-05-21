@@ -10,6 +10,7 @@ import json
 import logging
 import math
 import random
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -47,8 +48,11 @@ from megatron.energon import (
 )
 from megatron.energon.dataset_config import get_dataset_from_config
 from megatron.energon.edataclass import edataclass
+from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import BaseWebdatasetFactory
 from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset.indexing import MissingSamplesTableError, SqliteIndexReader
+from megatron.energon.flavors.webdataset.itar_reader import SqliteITarEntryReader
 from megatron.energon.task_encoder.base import stateless
 from megatron.energon.tools.analyze_debug import command as analyze_debug_command
 from megatron.energon.tools.info import command as info_command
@@ -1802,6 +1806,132 @@ class TestDataset(unittest.TestCase):
         with open(self.dataset_path / MAIN_FOLDER_NAME / "dataset_crude.yaml", "r") as f:
             content = f.read()
             assert "CrudeWebdataset" in content
+
+    def test_prepare_dataset_no_sample_tables(self):
+        """`--no-sample-tables` skips the SQLite samples/sample_parts tables.
+
+        Verifies that:
+          - Prepare still succeeds and emits .info.json + the per-tar .tar.idx files.
+          - The SQLite database exists but does not contain the `samples` or `sample_parts`
+            tables (the bulk of the SQLite cost on large datasets).
+          - The flag rejects being combined with `--tar-index-only`.
+        """
+
+        runner = CliRunner()
+        result = runner.invoke(
+            prepare_command,
+            [
+                str(self.dataset_path),
+                "--non-interactive",
+                "--force-overwrite",
+                "--split-ratio=1,0,0",
+                "--sample-type=CrudeWebdataset",
+                "--no-sample-tables",
+            ],
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 0, f"Prepare failed: {result.stdout}"
+
+        # .info.json and per-tar .tar.idx files must still exist.
+        assert (self.dataset_path / MAIN_FOLDER_NAME / ".info.json").is_file()
+        tar_idx_files = list(self.dataset_path.glob("**/*.tar.idx"))
+        assert len(tar_idx_files) > 0, "Expected per-tar .tar.idx files to be produced"
+
+        # SQLite file exists, but the samples / sample_parts tables must NOT be created.
+        sqlite_path = self.dataset_path / MAIN_FOLDER_NAME / "index.sqlite"
+        assert sqlite_path.is_file()
+        with sqlite3.connect(str(sqlite_path)) as conn:
+            tables = {
+                row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            }
+        assert "samples" not in tables, f"unexpected samples table: {tables}"
+        assert "sample_parts" not in tables, f"unexpected sample_parts table: {tables}"
+
+        # --no-sample-tables + --tar-index-only must be rejected.
+        result = runner.invoke(
+            prepare_command,
+            [
+                str(self.dataset_path),
+                "--non-interactive",
+                "--no-sample-tables",
+                "--tar-index-only",
+            ],
+            catch_exceptions=True,
+        )
+        assert result.exit_code != 0
+        assert "--no-sample-tables cannot be combined with --tar-index-only" in result.output
+
+        # SqliteIndexReader exposes db_has_samples() as part of its public surface.
+        index_reader = SqliteIndexReader(EPath(str(sqlite_path)))
+        assert index_reader.db_has_samples() is False
+
+        with self.assertRaises(MissingSamplesTableError) as ctx:
+            SqliteITarEntryReader(EPath(str(self.dataset_path)))
+        assert "no-sample-tables" in str(ctx.exception)
+
+    def test_prepare_dataset_no_sample_tables_save_restore(self):
+        """Resume after a mid-iteration checkpoint must reach the same samples in the
+        same order on a dataset prepared with ``--no-sample-tables``.
+
+        This is the load-bearing claim of the flag: the integer-indexed loader
+        (``ShardInfosITarReader``) and the savable state (``SliceState``) do not
+        touch the SQLite samples tables, so save/restore must work without them.
+        We re-prepare the fixture with ``--no-sample-tables`` plus a captioning
+        field-map (so ``get_train_dataset`` yields decodable samples), then compare
+        a save/restore round-trip against a reference run.
+        """
+
+        runner = CliRunner()
+        result = runner.invoke(
+            prepare_command,
+            [
+                str(self.dataset_path),
+                "--non-interactive",
+                "--force-overwrite",
+                "--split-ratio=1,0,0",
+                "--sample-type=CaptioningSample",
+                '--field-map={"image": "png", "caption": "txt"}',
+                "--no-sample-tables",
+            ],
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 0, f"Prepare failed: {result.stdout}"
+
+        def loader_factory():
+            return get_savable_loader(
+                get_train_dataset(
+                    self.dataset_path,
+                    batch_size=2,
+                    worker_config=no_worker_config,
+                    shuffle_buffer_size=20,
+                    max_samples_per_sequence=10,
+                )
+            )
+
+        def keys_from(loader, n):
+            return [tuple(batch.__key__) for _, batch in zip(range(n), loader)]
+
+        # Reference: a single uninterrupted run, used as the ground truth.
+        reference = keys_from(loader_factory(), 20)
+
+        # Capture state mid-stream.
+        loader = loader_factory()
+        first_half = keys_from(loader, 10)
+        state = loader.save_state_rank()
+        post_save = keys_from(loader, 10)
+
+        # Restore into a fresh loader and continue. The resumed sequence must
+        # match what the original loader produced after `save_state_rank()`.
+        resumed = loader_factory()
+        resumed.restore_state_rank(state)
+        post_restore = keys_from(resumed, 10)
+
+        assert first_half + post_save == reference, (
+            f"Uninterrupted iteration diverges from reference: {first_half + post_save} != {reference}"
+        )
+        assert post_restore == post_save, (
+            f"Resume diverged from continued iteration: {post_restore} != {post_save}"
+        )
 
     def test_preview_captioning_dataset(self):
         runner = CliRunner()
