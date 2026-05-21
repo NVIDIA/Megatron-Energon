@@ -266,17 +266,15 @@ class EPath:
         return f"msc://{self.profile}{int_path_str}"
 
     def is_local(self) -> bool:
-        if self.profile == "dss":
-            # For now, a DSS path is always considered local.
-            # Note that this does not mean it exists on the local filesystem.
-            return True
-        else:
-            return self.profile == DEFAULT_PROFILE_NAME
+        # It will return a posix path if the fs is local, otherwise None
+        return self.fs.get_posix_path(self._internal_str_path) is not None
 
     def local_path(self) -> PathlibPath:
-        if not self.is_local():
+        # This resolves the path if it exists, probably ok.
+        posix_path = self.fs.get_posix_path(self._internal_str_path)
+        if posix_path is None:
             raise ValueError(f"Path {self} is not local")
-        return PathlibPath(self._internal_str_path)
+        return PathlibPath(posix_path)
 
     def is_dir(self) -> bool:
         try:
@@ -290,25 +288,46 @@ class EPath:
     def mkdir(self, exist_ok: bool = True, parents: bool = False):
         pass
 
-    def glob(self, pattern) -> Generator["EPath", None, None]:
+    def walk(self) -> Generator["EPath", None, None]:
+        """Returns all files within this path (no folders)."""
+        # Prefix to be removed from found paths to remap to relative paths
+        root_prefix = self._internal_str_path.lstrip("/")
+
+        for obj in self.fs.list_recursive(self._internal_str_path):
+            rel = obj.key
+            if root_prefix:
+                if rel.startswith(root_prefix + "/"):
+                    rel = rel[len(root_prefix) + 1 :]
+                elif rel.startswith("/" + root_prefix + "/"):
+                    rel = rel[len(root_prefix) + 2 :]
+                elif rel == root_prefix or rel == "/" + root_prefix:
+                    rel = "."
+
+            path = EPath(self)
+            path.internal_path = self._resolve(self.internal_path / PurePosixPath(rel))
+            yield path
+
+    def glob(self, pattern: str) -> Generator["EPath", None, None]:
+        """Returns all files matching the pattern within this path (no folders)."""
         search_path_pattern = (self / pattern)._internal_str_path
-        # MSC S3 glob matches keys like ``bucket/key``; a leading ``/`` breaks wcmatch (pattern
+        # MSC glob matches keys like ``bucket/key``; a leading ``/`` breaks wcmatch (pattern
         # ``/b/**`` never matches ``b/parts/x``). Returned keys may repeat the bucket prefix; strip
         # it before joining with ``internal_path`` so we do not get ``/b/b/parts/...``.
-        if not self.is_local() and search_path_pattern.startswith("/"):
-            search_path_pattern = search_path_pattern.lstrip("/")
+        search_path_pattern = search_path_pattern.lstrip("/")
 
-        root_prefix = str(self.internal_path).lstrip("/")
+        # Prefix to be removed from found paths to remap to relative paths
+        root_prefix = self._internal_str_path.lstrip("/")
 
         for path in self.fs.glob(search_path_pattern):
             assert isinstance(path, str)
 
             rel = path
-            if not self.is_local() and root_prefix:
-                pfx = root_prefix + "/"
-                if rel.startswith(pfx):
-                    rel = rel[len(pfx) :]
-                elif rel == root_prefix:
+            if root_prefix:
+                if rel.startswith(root_prefix + "/"):
+                    rel = rel[len(root_prefix) + 1 :]
+                elif rel.startswith("/" + root_prefix + "/"):
+                    rel = rel[len(root_prefix) + 2 :]
+                elif rel == root_prefix or rel == "/" + root_prefix:
                     rel = "."
 
             new_path = EPath(self)

@@ -521,7 +521,7 @@ class WebdatasetPreparator:
             tar_index_only: Only create tar-index, then exit
             media_filter: Media filter configuration
             fix_duplicates: If True, fix duplicate keys in the dataset by renaming the files in the shards.
-            index_sqlite_tmp_path: When ``parent_path`` is remote, directory used to build ``index.sqlite``
+            index_sqlite_tmp_path: When ``parent_path`` is remote, temp file path used to build ``index.sqlite``
                 locally before upload. If omitted, a new directory under ``/tmp`` is created and removed
                 after a successful run.
 
@@ -784,7 +784,17 @@ class WebdatasetPreparator:
         progress_fn: Callable[[Iterator[Any], int], Iterator[T]] = (lambda x, y: x),
         index_sqlite_tmp_path: Optional[Path] = None,
     ) -> int:
-        """Add or refresh media metadata in an existing WebDataset index."""
+        """Add or refresh media metadata in an existing WebDataset index.
+
+        Args:
+            parent_path: WebDataset root path.
+            media_filter: Media filtering configuration.
+            workers: Number of parallel workers.
+            progress_fn: Callback for progress updates.
+            index_sqlite_tmp_path: When ``parent_path`` is remote, sqlite file path used to build
+                ``index.sqlite`` locally before upload. If omitted, a new directory under
+                ``/tmp`` is created and removed after a successful run.
+        """
 
         parent_path = EPath(parent_path)
 

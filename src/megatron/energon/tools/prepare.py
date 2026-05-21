@@ -348,6 +348,11 @@ def command(
         def progress_fn(els, length=None):
             return els
 
+    if tmp_path is not None:
+        index_sqlite_tmp_path = tmp_path / "index.sqlite"
+    else:
+        index_sqlite_tmp_path = None
+
     found_types = BaseWebdatasetFactory.prepare_dataset(
         path,
         all_tars,
@@ -359,7 +364,7 @@ def command(
         workers=num_workers,
         media_filter=media_filter_config,
         fix_duplicates=fix_duplicates,
-        index_sqlite_tmp_path=tmp_path,
+        index_sqlite_tmp_path=index_sqlite_tmp_path,
     )
 
     found_types = list(found_types)

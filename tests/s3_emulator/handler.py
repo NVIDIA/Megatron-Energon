@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 import urllib.parse as _up
 from datetime import datetime, timezone
-from email.utils import formatdate
+from email.utils import format_datetime
 from hashlib import md5
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler
@@ -130,13 +130,14 @@ class S3RequestHandler(BaseHTTPRequestHandler):
                 return
             try:
                 data = self.server.state.copy_object(bucket, key, src_bucket, src_key)
+                last_modified = self.server.state.get_object_last_modified(bucket, key)
             except FileNotFoundError:
                 self._send_error(HTTPStatus.NOT_FOUND, "NoSuchKey")
                 return
             xml = (
                 '<?xml version="1.0" encoding="UTF-8"?>'
                 "<CopyObjectResult>"
-                f"<LastModified>{_escape_xml(formatdate(usegmt=True))}</LastModified>"
+                f"<LastModified>{_escape_xml(_s3_datetime(last_modified))}</LastModified>"
                 f"<ETag>&quot;{_escape_xml(_etag(data))}&quot;</ETag>"
                 "</CopyObjectResult>"
             ).encode()
@@ -207,6 +208,7 @@ class S3RequestHandler(BaseHTTPRequestHandler):
 
         try:
             data = self.server.state.get_object(bucket, key)
+            last_modified = self.server.state.get_object_last_modified(bucket, key)
         except FileNotFoundError:
             self._send_error(HTTPStatus.NOT_FOUND, "Not found")
             return
@@ -234,10 +236,10 @@ class S3RequestHandler(BaseHTTPRequestHandler):
                 "Accept-Ranges": "bytes",
                 "Content-Length": str(len(slice_data)),
                 "ETag": _etag(data),
+                "Last-Modified": _http_datetime(last_modified),
             }
             if only_headers:
                 headers.setdefault("Content-Type", "application/octet-stream")
-                headers.setdefault("Last-Modified", formatdate(usegmt=True))
                 self._send_status(HTTPStatus.PARTIAL_CONTENT, extra_headers=headers)
             else:
                 self._send_bytes(
@@ -254,7 +256,7 @@ class S3RequestHandler(BaseHTTPRequestHandler):
                         "Content-Length": str(len(data)),
                         "Accept-Ranges": "bytes",
                         "Content-Type": "application/octet-stream",
-                        "Last-Modified": formatdate(usegmt=True),
+                        "Last-Modified": _http_datetime(last_modified),
                         "ETag": _etag(data),
                     },
                 )
@@ -262,7 +264,11 @@ class S3RequestHandler(BaseHTTPRequestHandler):
                 self._send_bytes(
                     data,
                     content_type="application/octet-stream",
-                    extra_headers={"Accept-Ranges": "bytes"},
+                    extra_headers={
+                        "Accept-Ranges": "bytes",
+                        "Last-Modified": _http_datetime(last_modified),
+                        "ETag": _etag(data),
+                    },
                 )
 
     def _handle_delete(self):
@@ -414,7 +420,6 @@ class S3RequestHandler(BaseHTTPRequestHandler):
         start_after = (qs.get("start-after") or [""])[0]
         exclusive_after = continuation or start_after
 
-        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
         state = self.server.state
 
         items: list[tuple[Literal["cp", "key"], str]] = []
@@ -471,15 +476,17 @@ class S3RequestHandler(BaseHTTPRequestHandler):
             else:
                 try:
                     data = state.get_object(bucket, path)
+                    last_modified = state.get_object_last_modified(bucket, path)
                     size = len(data)
                     etag = _etag(data)
                 except Exception:  # noqa: BLE001
                     size = 0
                     etag = '""'
+                    last_modified = datetime.fromtimestamp(0, tz=timezone.utc)
                 fragments.append(
                     "<Contents>"
                     f"<Key>{_escape_xml(path)}</Key>"
-                    f"<LastModified>{now}</LastModified>"
+                    f"<LastModified>{_s3_datetime(last_modified)}</LastModified>"
                     f"<ETag>{etag}</ETag>"
                     f"<Size>{size}</Size>"
                     "</Contents>"
@@ -539,6 +546,18 @@ def _escape_xml(text: str) -> str:  # noqa: D401
         .replace('"', "&quot;")
         .replace("'", "&apos;")
     )
+
+
+def _http_datetime(value: datetime) -> str:
+    """Format an aware datetime for HTTP Last-Modified headers."""
+
+    return format_datetime(value.astimezone(timezone.utc), usegmt=True)
+
+
+def _s3_datetime(value: datetime) -> str:
+    """Format an aware datetime for S3 XML LastModified fields."""
+
+    return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
 
 def _etag(data: bytes) -> str:  # noqa: D401

@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import os
 import shutil
 import tempfile
 from functools import partial
@@ -41,6 +40,9 @@ def prepare_filesystem_dataset(
         root_path: Dataset root directory.
         media_filter: Media filtering configuration.
         progress: Whether to display a tqdm progress bar.
+        index_sqlite_tmp_path: When ``root_path`` is remote, temp file path used to build
+            ``index.sqlite`` locally before upload. If omitted, a new directory under
+            ``/tmp`` is created and removed after a successful run.
 
     Returns:
         Number of metadata entries written to the database.
@@ -137,23 +139,23 @@ def _collect_media_files(
 
         progress_bar = tqdm(total=None, unit="file", desc="Collecting media files")
 
-    if root.is_local():
-        paths = (
-            EPath(f"{path}/{file}")
-            for path, _dirs, files in os.walk(root.local_path(), followlinks=False)
-            for file in files
-        )
-    else:
-        paths = root.glob("**/*")
+    # if root.is_local() and not root.profile == "dss":
+    #     paths = (
+    #         EPath(path) / file
+    #         for path, _dirs, files in os.walk(root.local_path(), followlinks=False)
+    #         for file in files
+    #     )
+    # else:
+    #     paths = root.glob("**/*")
 
-    for file in paths:
+    for file in root.walk():
         if progress_bar is not None:
             progress_bar.update()
 
-        if not consider_all and not media_filter.should_consider_media(file.name):
+        if ("/" + MAIN_FOLDER_NAME + "/") in file.url:
             continue
 
-        if ("/" + MAIN_FOLDER_NAME + "/") in file.url:
+        if not consider_all and not media_filter.should_consider_media(file.name):
             continue
 
         files.append(file)

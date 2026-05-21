@@ -71,6 +71,11 @@ def command(
         media_metadata_by_glob, media_metadata_by_header, media_metadata_by_extension
     )
 
+    if tmp_path is not None:
+        index_sqlite_tmp_path = tmp_path / "index.sqlite"
+    else:
+        index_sqlite_tmp_path = None
+
     ds_type = get_dataset_type(path)
     if ds_type == EnergonDatasetType.WEBDATASET:
         click.echo("Preparing webdataset and computing media metadata...")
@@ -96,7 +101,7 @@ def command(
             media_filter=media_filter_config,
             workers=num_workers,
             progress_fn=progress_fn,
-            index_sqlite_tmp_path=tmp_path,
+            index_sqlite_tmp_path=index_sqlite_tmp_path,
         )
 
         click.echo(f"Done. Stored metadata for {count} files.")
@@ -112,6 +117,7 @@ def command(
         media_filter_config,
         progress=progress,
         workers=num_workers,
+        index_sqlite_tmp_path=index_sqlite_tmp_path,
     )
     click.echo(f"Done. Stored metadata for {stored} files.")
 

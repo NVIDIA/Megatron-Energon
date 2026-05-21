@@ -1,6 +1,8 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 import json
+import os
+from datetime import datetime, timezone
 from pathlib import Path
 from threading import RLock
 from typing import Dict, Optional
@@ -27,6 +29,7 @@ class S3State:
             root_dir: Path to persist the store on disk.
         """
         self._fs: Dict[str, Dict[str, bytes]] = {}
+        self._last_modified: Dict[str, Dict[str, datetime]] = {}
         self._uploads: Dict[str, _MultipartUpload] = {}
         self._lock = RLock()
         self._root_dir = root_dir
@@ -54,6 +57,7 @@ class S3State:
                 print(f"Bucket '{bucket}' already exists")
                 return
             self._fs[bucket] = {}
+            self._last_modified[bucket] = {}
         if self._root_dir is not None:
             (self._root_dir / bucket).mkdir(parents=True, exist_ok=True)
 
@@ -69,6 +73,7 @@ class S3State:
             if self._fs[bucket]:
                 raise RuntimeError("Bucket not empty")
             del self._fs[bucket]
+            del self._last_modified[bucket]
         if self._root_dir is not None:
             bucket_path = self._root_dir / bucket
             if bucket_path.exists():
@@ -76,24 +81,34 @@ class S3State:
                     p.unlink()
                 bucket_path.rmdir()
 
-    def put_object(self, bucket: str, key: str, data: bytes) -> None:
+    def put_object(
+        self, bucket: str, key: str, data: bytes, *, last_modified: datetime | None = None
+    ) -> None:
         """Store an object in a bucket.
 
         Args:
             bucket: Name of the bucket.
             key: Object key.
             data: Object data.
+            last_modified: Optional timestamp for the object. Defaults to now.
         """
         if not bucket:
             raise ValueError("Bucket name must be given")
+        if last_modified is None:
+            last_modified = datetime.now(timezone.utc)
+        else:
+            last_modified = last_modified.astimezone(timezone.utc)
         with self._lock:
             if bucket not in self._fs:
                 self._fs[bucket] = {}
+                self._last_modified[bucket] = {}
             self._fs[bucket][key] = data
+            self._last_modified[bucket][key] = last_modified
         if self._root_dir is not None:
             obj_path = (self._root_dir / bucket / key).resolve()
             obj_path.parent.mkdir(parents=True, exist_ok=True)
             obj_path.write_bytes(data)
+            os.utime(obj_path, (last_modified.timestamp(), last_modified.timestamp()))
 
     def get_object(self, bucket: str, key: str) -> bytes:
         """Retrieve an object from a bucket.
@@ -108,6 +123,15 @@ class S3State:
         with self._lock:
             try:
                 return self._fs[bucket][key]
+            except KeyError as exc:
+                raise FileNotFoundError(f"{bucket}/{key}") from exc
+
+    def get_object_last_modified(self, bucket: str, key: str) -> datetime:
+        """Return the stored Last-Modified timestamp for an object."""
+
+        with self._lock:
+            try:
+                return self._last_modified[bucket][key]
             except KeyError as exc:
                 raise FileNotFoundError(f"{bucket}/{key}") from exc
 
@@ -133,11 +157,15 @@ class S3State:
                 raise FileNotFoundError(f"{src_bucket}/{src_key}") from exc
             if dest_bucket not in self._fs:
                 self._fs[dest_bucket] = {}
+                self._last_modified[dest_bucket] = {}
+            last_modified = datetime.now(timezone.utc)
             self._fs[dest_bucket][dest_key] = payload
+            self._last_modified[dest_bucket][dest_key] = last_modified
         if self._root_dir is not None:
             obj_path = (self._root_dir / dest_bucket / dest_key).resolve()
             obj_path.parent.mkdir(parents=True, exist_ok=True)
             obj_path.write_bytes(payload)
+            os.utime(obj_path, (last_modified.timestamp(), last_modified.timestamp()))
         return payload
 
     def delete_object(self, bucket: str, key: str) -> None:
@@ -150,6 +178,7 @@ class S3State:
         with self._lock:
             try:
                 del self._fs[bucket][key]
+                del self._last_modified[bucket][key]
             except KeyError as exc:
                 raise FileNotFoundError(f"{bucket}/{key}") from exc
         if self._root_dir is not None:
@@ -191,7 +220,21 @@ class S3State:
             print(f"Failed to read persisted state: {err}")
             return
         with self._lock:
-            self._fs = {bucket: {key: b"" for key in keys} for bucket, keys in mapping.items()}
+            self._fs = {}
+            self._last_modified = {}
+            for bucket, keys in mapping.items():
+                bucket_path = self._root_dir / bucket
+                self._fs[bucket] = {}
+                self._last_modified[bucket] = {}
+                for key in keys:
+                    object_path = bucket_path / key
+                    self._fs[bucket][key] = (
+                        object_path.read_bytes() if object_path.is_file() else b""
+                    )
+                    self._last_modified[bucket][key] = datetime.fromtimestamp(
+                        object_path.stat().st_mtime if object_path.exists() else 0,
+                        tz=timezone.utc,
+                    )
 
     def flush(self) -> None:
         """Persist only the structure of the store to disk."""
@@ -215,6 +258,7 @@ class S3State:
             self._uploads[upload_id] = _MultipartUpload(bucket, key)
             if bucket not in self._fs:
                 self._fs[bucket] = {}
+                self._last_modified[bucket] = {}
             return upload_id
 
     def upload_part(self, upload_id: str, part_number: int, data: bytes) -> None:
@@ -244,11 +288,15 @@ class S3State:
             data = mp.assemble()
             if mp.bucket not in self._fs:
                 self._fs[mp.bucket] = {}
+                self._last_modified[mp.bucket] = {}
+            last_modified = datetime.now(timezone.utc)
             self._fs[mp.bucket][mp.key] = data
+            self._last_modified[mp.bucket][mp.key] = last_modified
         if self._root_dir is not None:
             obj_path = (self._root_dir / mp.bucket / mp.key).resolve()
             obj_path.parent.mkdir(parents=True, exist_ok=True)
             obj_path.write_bytes(data)
+            os.utime(obj_path, (last_modified.timestamp(), last_modified.timestamp()))
 
     def abort_multipart(self, upload_id: str) -> None:
         """Abort a multipart upload.
@@ -272,7 +320,8 @@ class S3State:
                 self.add_file(file, dst=f"{dst}/{file.name}")
         elif src.is_file():
             bucket, key = dst.removeprefix("/").split("/", 1)
-            self.put_object(bucket, key, src.read_bytes())
+            last_modified = datetime.fromtimestamp(src.stat().st_mtime, tz=timezone.utc)
+            self.put_object(bucket, key, src.read_bytes(), last_modified=last_modified)
         else:
             raise ValueError(f"Invalid file: {src}")
 
