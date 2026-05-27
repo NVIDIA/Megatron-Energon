@@ -52,6 +52,9 @@ def prepare_filesystem_dataset(
 
     files = _collect_media_files(root=root_path, media_filter=media_filter, progress=progress)
 
+    if len(files) == 0:
+        raise ValueError("No media files found to process")
+
     owns_remote_sqlite_tmp = False
     remote_sqlite_tmp_dir: Path | None = None
     if not root_path.is_local():

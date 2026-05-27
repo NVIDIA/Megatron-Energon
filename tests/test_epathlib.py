@@ -135,6 +135,9 @@ class TestEPath(unittest.TestCase):
             (media_dir / "000.jpg").write_bytes(b"\xff\xd8\xff\xd9")
             (media_dir / "001.jpg").write_bytes(b"\xff\xd8\xff\xd9")
             (media_dir / "002.txt").write_bytes(b"dummy")
+            (cache_dir / "charts1234" / "v0" / "symlink").symlink_to(
+                media_dir, target_is_directory=True
+            )
 
             try:
                 os.environ["NVDATASET_CACHE_DIR"] = str(cache_dir)
@@ -148,10 +151,14 @@ class TestEPath(unittest.TestCase):
                 assert [str(path) for path in found] == [
                     "dss://charts1234@v0/images/000.jpg",
                     "dss://charts1234@v0/images/001.jpg",
+                    "dss://charts1234@v0/symlink/000.jpg",
+                    "dss://charts1234@v0/symlink/001.jpg",
                 ]
                 assert [path.relative_to(root) for path in found] == [
                     "images/000.jpg",
                     "images/001.jpg",
+                    "symlink/000.jpg",
+                    "symlink/001.jpg",
                 ]
 
                 found = sorted(root.walk())
@@ -160,6 +167,21 @@ class TestEPath(unittest.TestCase):
                     "dss://charts1234@v0/images/000.jpg",
                     "dss://charts1234@v0/images/001.jpg",
                     "dss://charts1234@v0/images/002.txt",
+                    "dss://charts1234@v0/symlink/000.jpg",
+                    "dss://charts1234@v0/symlink/001.jpg",
+                    "dss://charts1234@v0/symlink/002.txt",
+                ]
+                found = sorted((root / "symlink").walk())
+                print(found)
+                assert [str(p) for p in found] == [
+                    "dss://charts1234@v0/symlink/000.jpg",
+                    "dss://charts1234@v0/symlink/001.jpg",
+                    "dss://charts1234@v0/symlink/002.txt",
+                ]
+                found = sorted(root.glob("symlink/*.txt"))
+                print(found)
+                assert [str(p) for p in found] == [
+                    "dss://charts1234@v0/symlink/002.txt",
                 ]
             finally:
                 if orig_env_cache_dir is None:
@@ -195,6 +217,7 @@ class TestEPath(unittest.TestCase):
             (td_path / "file.txt").write_text("dummy")
             (td_path / "subdir" / "file2.txt").write_text("dummy")
             (td_path / "subdir" / "file3.blob").write_text("dummy")
+            (Path(td) / "symlink").symlink_to(Path(td) / "subdir", target_is_directory=True)
             root = EPath(td_path)
             found = sorted(root.walk())
             print(found)
@@ -202,12 +225,27 @@ class TestEPath(unittest.TestCase):
                 str(td_path / "file.txt"),
                 str(td_path / "subdir" / "file2.txt"),
                 str(td_path / "subdir" / "file3.blob"),
+                str(td_path / "symlink" / "file2.txt"),
+                str(td_path / "symlink" / "file3.blob"),
             ]
             found = sorted(root.glob("**/*.txt"))
             print(found)
             assert [str(p) for p in found] == [
                 str(td_path / "file.txt"),
                 str(td_path / "subdir" / "file2.txt"),
+                str(td_path / "symlink" / "file2.txt"),
+            ]
+
+            found = sorted((root / "symlink").walk())
+            print(found)
+            assert [str(p) for p in found] == [
+                str(td_path / "symlink" / "file2.txt"),
+                str(td_path / "symlink" / "file3.blob"),
+            ]
+            found = sorted(root.glob("symlink/*.txt"))
+            print(found)
+            assert [str(p) for p in found] == [
+                str(td_path / "symlink" / "file2.txt"),
             ]
 
     def test_s3_path_resolution(self):

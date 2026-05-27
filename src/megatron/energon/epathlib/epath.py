@@ -293,6 +293,17 @@ class EPath:
         # Prefix to be removed from found paths to remap to relative paths
         root_prefix = self._internal_str_path.lstrip("/")
 
+        if self.is_local():
+            # Optimize for local file system.
+            # DSS would fetch all file attributes as well.
+            local_path = self.local_path()
+            for path, _, files in os.walk(local_path, followlinks=True):
+                rel_path = PathlibPath(path).relative_to(local_path)
+                base_path = self / str(rel_path)
+                for file in files:
+                    yield base_path / file
+            return
+
         for obj in self.fs.list_recursive(self._internal_str_path):
             rel = obj.key
             if root_prefix:
