@@ -11,6 +11,7 @@ import struct
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
 from megatron.energon.epathlib import DEFAULT_PROFILE_NAME, EPath
@@ -120,6 +121,132 @@ class TestEPath(unittest.TestCase):
         # Test globbing with a pattern
         p = EPath("/tmp").glob("epathtestfile_[0-3].bin")
         assert len(list(p)) == 4
+
+    def test_dss_glob_walk(self):
+        import megatron.energon.epathlib.epath as epath_mod
+
+        orig_env_cache_dir = os.environ.get("NVDATASET_CACHE_DIR")
+        orig_mod_cache_dir = epath_mod.NVDATASET_CACHE_DIR
+
+        with tempfile.TemporaryDirectory() as td:
+            cache_dir = Path(td) / "nvds_cache"
+            media_dir = cache_dir / "charts1234" / "v0" / "images"
+            media_dir.mkdir(parents=True)
+            (media_dir / "000.jpg").write_bytes(b"\xff\xd8\xff\xd9")
+            (media_dir / "001.jpg").write_bytes(b"\xff\xd8\xff\xd9")
+            (media_dir / "002.txt").write_bytes(b"dummy")
+            (cache_dir / "charts1234" / "v0" / "symlink").symlink_to(
+                media_dir, target_is_directory=True
+            )
+
+            try:
+                os.environ["NVDATASET_CACHE_DIR"] = str(cache_dir)
+                epath_mod.NVDATASET_CACHE_DIR = EPath(cache_dir)
+
+                root = EPath("dss://charts1234@v0")
+                found = sorted(root.glob("**/*.jpg"))
+
+                print(found)
+
+                assert [str(path) for path in found] == [
+                    "dss://charts1234@v0/images/000.jpg",
+                    "dss://charts1234@v0/images/001.jpg",
+                    "dss://charts1234@v0/symlink/000.jpg",
+                    "dss://charts1234@v0/symlink/001.jpg",
+                ]
+                assert [path.relative_to(root) for path in found] == [
+                    "images/000.jpg",
+                    "images/001.jpg",
+                    "symlink/000.jpg",
+                    "symlink/001.jpg",
+                ]
+
+                found = sorted(root.walk())
+                print(found)
+                assert [str(p) for p in found] == [
+                    "dss://charts1234@v0/images/000.jpg",
+                    "dss://charts1234@v0/images/001.jpg",
+                    "dss://charts1234@v0/images/002.txt",
+                    "dss://charts1234@v0/symlink/000.jpg",
+                    "dss://charts1234@v0/symlink/001.jpg",
+                    "dss://charts1234@v0/symlink/002.txt",
+                ]
+                found = sorted((root / "symlink").walk())
+                print(found)
+                assert [str(p) for p in found] == [
+                    "dss://charts1234@v0/symlink/000.jpg",
+                    "dss://charts1234@v0/symlink/001.jpg",
+                    "dss://charts1234@v0/symlink/002.txt",
+                ]
+                found = sorted(root.glob("symlink/*.txt"))
+                print(found)
+                assert [str(p) for p in found] == [
+                    "dss://charts1234@v0/symlink/002.txt",
+                ]
+            finally:
+                if orig_env_cache_dir is None:
+                    os.environ.pop("NVDATASET_CACHE_DIR", None)
+                else:
+                    os.environ["NVDATASET_CACHE_DIR"] = orig_env_cache_dir
+                epath_mod.NVDATASET_CACHE_DIR = orig_mod_cache_dir
+
+    def test_s3_glob_walk(self):
+        with setup_s3_emulator(profile_name="s3test_dss_walk") as s3_emulator:
+            s3_emulator.put_object("test", "dir/file.txt", b"dummy")
+            s3_emulator.put_object("test", "dir/subdir/file2.txt", b"dummy")
+            s3_emulator.put_object("test", "dir/subdir/file3.blob", b"dummy")
+            root = EPath("msc://s3test_dss_walk/test/dir")
+            found = sorted(root.walk())
+            print(found)
+            assert [str(p) for p in found] == [
+                "msc://s3test_dss_walk/test/dir/file.txt",
+                "msc://s3test_dss_walk/test/dir/subdir/file2.txt",
+                "msc://s3test_dss_walk/test/dir/subdir/file3.blob",
+            ]
+
+            found = sorted(root.glob("**/*.txt"))
+            print(found)
+            assert [str(p) for p in found] == [
+                "msc://s3test_dss_walk/test/dir/file.txt",
+                "msc://s3test_dss_walk/test/dir/subdir/file2.txt",
+            ]
+
+    def test_local_glob_walk(self):
+        with tempfile.TemporaryDirectory() as td:
+            td_path = EPath(td)
+            (td_path / "file.txt").write_text("dummy")
+            (td_path / "subdir" / "file2.txt").write_text("dummy")
+            (td_path / "subdir" / "file3.blob").write_text("dummy")
+            (Path(td) / "symlink").symlink_to(Path(td) / "subdir", target_is_directory=True)
+            root = EPath(td_path)
+            found = sorted(root.walk())
+            print(found)
+            assert [str(p) for p in found] == [
+                str(td_path / "file.txt"),
+                str(td_path / "subdir" / "file2.txt"),
+                str(td_path / "subdir" / "file3.blob"),
+                str(td_path / "symlink" / "file2.txt"),
+                str(td_path / "symlink" / "file3.blob"),
+            ]
+            found = sorted(root.glob("**/*.txt"))
+            print(found)
+            assert [str(p) for p in found] == [
+                str(td_path / "file.txt"),
+                str(td_path / "subdir" / "file2.txt"),
+                str(td_path / "symlink" / "file2.txt"),
+            ]
+
+            found = sorted((root / "symlink").walk())
+            print(found)
+            assert [str(p) for p in found] == [
+                str(td_path / "symlink" / "file2.txt"),
+                str(td_path / "symlink" / "file3.blob"),
+            ]
+            found = sorted(root.glob("symlink/*.txt"))
+            print(found)
+            assert [str(p) for p in found] == [
+                str(td_path / "symlink" / "file2.txt"),
+            ]
 
     def test_s3_path_resolution(self):
         """Test s3 path resolution"""
@@ -278,13 +405,84 @@ class TestEPath(unittest.TestCase):
             assert p.is_file()
             assert p.size() > 0
             assert p.read_text() == "dummy"
-            # TODO: Fix when fixed in MSC.
-            # assert EPath("msc://s3test_msc/test").is_dir()
+            assert EPath("msc://s3test_msc/test").is_dir()
             assert EPath("msc://s3test_msc/test/dir").is_dir()
             p.unlink()
             assert not p.is_file()
-            # assert not EPath("msc://s3test_msc/test").is_dir()
+            assert not EPath("msc://s3test_msc/test").is_dir()
             assert not EPath("msc://s3test_msc/test/dir").is_dir()
+
+    def test_msc_s3_dataprep_path_operations(self):
+        """EPath operations used by remote webdataset ``prepare`` (glob, rb, meta, sqlite upload, move).
+
+        Mirrors ``tools/prepare.py`` shard discovery, ``WebdatasetPreparator._preprocess_tar``
+        binary reads, and ``SqliteIndexWriterAggregator`` uploading ``index.sqlite`` from disk.
+        """
+        profile = "s3test_msc_dataprep"
+        with setup_s3_emulator(profile_name=profile):
+            root = EPath(f"msc://{profile}/dataset_root")
+            parts = root / "parts"
+            (parts / "data-0.tar").write_bytes(b"shard0-bytes")
+            (parts / "data-1.tar").write_bytes(b"shard1-bytes")
+
+            found = sorted(root.glob("**/*.tar"))
+            assert [p.name for p in found] == ["data-0.tar", "data-1.tar"]
+
+            with (parts / "data-0.tar").open("rb") as f:
+                assert f.read(6) == b"shard0"
+
+            meta_dir = root / MAIN_FOLDER_NAME
+            info = meta_dir / INFO_JSON_FILENAME
+            info.write_text('{"shard_counts": {"parts/data-0.tar": 1}}')
+            assert '"shard_counts"' in info.read_text()
+
+            probe_idx = parts / "probe.idx"
+            probe_idx_tmp = parts / "probe.idx.tmp"
+            with probe_idx_tmp.open("wb") as out:
+                out.write(struct.pack("QQ", 0, 512))
+            assert probe_idx_tmp.size() == 16
+            assert struct.unpack("QQ", probe_idx_tmp.read_bytes()) == (0, 512)
+
+            probe_idx_tmp.move(probe_idx)
+
+            assert probe_idx.size() == 16
+            assert struct.unpack("QQ", probe_idx.read_bytes()) == (0, 512)
+            probe_idx.unlink()
+
+            with tempfile.NamedTemporaryFile(delete=False) as lf:
+                lf.write(b"sqlite-placeholder")
+                local_sqlite = lf.name
+            try:
+                EPath(local_sqlite).copy(meta_dir / INDEX_SQLITE_FILENAME)
+                remote_db = meta_dir / INDEX_SQLITE_FILENAME
+                assert remote_db.read_bytes() == b"sqlite-placeholder"
+                remote_db.unlink()
+            finally:
+                Path(local_sqlite).unlink(missing_ok=True)
+
+            info.unlink()
+            for p in found:
+                p.unlink()
+
+    def test_msc_s3_stat_uses_stored_last_modified(self):
+        profile = "s3test_msc_timestamps"
+        with setup_s3_emulator(profile_name=profile) as state:
+            remote_path = EPath(f"msc://{profile}/bucket/data.bin")
+            original_mtime = datetime(2024, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+            updated_mtime = datetime(2024, 1, 3, 3, 4, 5, tzinfo=timezone.utc)
+
+            state.put_object("bucket", "data.bin", b"first", last_modified=original_mtime)
+
+            first_stat = remote_path.stat()
+            second_stat = remote_path.stat()
+            assert int(first_stat.last_modified.timestamp()) == int(original_mtime.timestamp())
+            assert second_stat.last_modified == first_stat.last_modified
+
+            state.put_object("bucket", "data.bin", b"second", last_modified=updated_mtime)
+
+            updated_stat = remote_path.stat()
+            assert int(updated_stat.last_modified.timestamp()) == int(updated_mtime.timestamp())
+            assert updated_stat.content_length == len(b"second")
 
     def test_dss_path_requires_version(self):
         with self.assertRaisesRegex(

@@ -6,8 +6,10 @@ import json
 import logging
 import random
 import re
+import shutil
 import sys
 import tarfile
+import tempfile
 import uuid
 from pathlib import Path
 from typing import (
@@ -115,6 +117,7 @@ class SqliteIndexWriterAggregator(
     reset_tables: bool
     media_metadata_written: int
     progress_on_media: bool
+    sqlite_local_build_path: Optional[Path]
 
     def __init__(
         self,
@@ -127,6 +130,7 @@ class SqliteIndexWriterAggregator(
         media_filter: Optional[MediaFilterConfig] = None,
         reset_tables: bool = True,
         progress_on_media: bool = False,
+        sqlite_local_build_path: Optional[Path] = None,
     ):
         self.sqlite_path = sqlite_path
         self.total_tasks = total_tasks
@@ -140,6 +144,7 @@ class SqliteIndexWriterAggregator(
         self.reset_tables = reset_tables
         self.media_metadata_written = 0
         self.progress_on_media = progress_on_media
+        self.sqlite_local_build_path = sqlite_local_build_path
 
         if progress_fn is not None:
             self.prog_iter = progress_fn(iter(range(self.total_tasks)), self.total_tasks)
@@ -147,8 +152,13 @@ class SqliteIndexWriterAggregator(
             self.prog_iter = iter(range(self.total_tasks))
 
     def on_start(self, aggregator_pool: AggregatorPool) -> None:
+        local_sqlite = self.sqlite_path
+        if self.sqlite_local_build_path is not None:
+            local_sqlite = EPath(self.sqlite_local_build_path)
+            if self.sqlite_path.is_file():
+                self.sqlite_path.copy(local_sqlite)
         self.writer = SqliteIndexWriter(
-            self.sqlite_path,
+            local_sqlite,
             enable_sample_tables=self.enable_sample_tables,
             enable_media_metadata=self.enable_media_metadata,
             reset_tables=self.reset_tables,
@@ -213,6 +223,9 @@ class SqliteIndexWriterAggregator(
                 patterns=",".join(self.media_filter.patterns),
             )
         self.writer.close()
+        if self.sqlite_local_build_path is not None:
+            EPath(self.sqlite_local_build_path).copy(self.sqlite_path)
+            self.sqlite_local_build_path.unlink(missing_ok=True)
 
     def get_final_result_data(
         self,
@@ -489,6 +502,7 @@ class WebdatasetPreparator:
         tar_index_only: bool = False,
         media_filter: Optional[MediaFilterConfig] = None,
         fix_duplicates: bool = False,
+        index_sqlite_tmp_path: Optional[Path] = None,
     ) -> Tuple[Set[str], List[Tuple[str, int]]]:
         """
         Preprocess the shards and write the split config. Preprocessing is done in parallel.
@@ -507,6 +521,9 @@ class WebdatasetPreparator:
             tar_index_only: Only create tar-index, then exit
             media_filter: Media filter configuration
             fix_duplicates: If True, fix duplicate keys in the dataset by renaming the files in the shards.
+            index_sqlite_tmp_path: When ``parent_path`` is remote, temp file path used to build ``index.sqlite``
+                locally before upload. If omitted, a new directory under ``/tmp`` is created and removed
+                after a successful run.
 
         Returns:
             The set of all parts found in the shards. But at most 50.
@@ -562,179 +579,200 @@ class WebdatasetPreparator:
             else:
                 print("No duplicate keys found, continuing.")
 
-        aggregator = SqliteIndexWriterAggregator(
-            parent_path / MAIN_FOLDER_NAME / INDEX_SQLITE_FILENAME,
-            total_tasks=len(paths),
-            progress_fn=progress_fn,
-            enable_media_metadata=media_filter is not None,
-            media_filter=media_filter,
-        )
-
-        process_tar = functools.partial(
-            cls._preprocess_tar,
-            shard_to_idx=shard_to_idx,
-            parent_path=parent_path,
-            max_parts=50,
-            media_filter=media_filter,
-        )
-
-        pool = AggregatorPool(
-            num_workers=workers,
-            user_produce_data=process_tar,
-            aggregator=aggregator,
-            batch_size=INDEX_BATCH_SIZE,
-        )
-
-        for path in paths:
-            pool.submit_task(path)
+        owns_remote_sqlite_tmp = False
+        remote_sqlite_tmp_dir: Optional[Path] = None
+        if not parent_path.is_local():
+            if index_sqlite_tmp_path is None:
+                remote_sqlite_tmp_dir = Path(
+                    tempfile.mkdtemp(dir="/tmp", prefix="energon-prepare-")
+                )
+                index_sqlite_tmp_path = remote_sqlite_tmp_dir / INDEX_SQLITE_FILENAME
+                owns_remote_sqlite_tmp = True
+        else:
+            index_sqlite_tmp_path = None
 
         try:
-            shards, found_parts, had_update = pool.process()
-        except DuplicateSampleKeyError as error:
-            print("The data contains duplicate keys (e.g. same filename in different shards).")
-            print(f'Example duplicate key: "{error.sample_key}"')
-            print()
-            print(
-                "Energon does not support duplicate keys anymore, but we offer a tool to fix your dataset. "
-                "Run `energon prepare` with `--fix-duplicates` to fix your dataset. Inside each tar, it will "
-                "put each file in a subfolder with the shard name like `shard_0/filename.ext`."
+            aggregator = SqliteIndexWriterAggregator(
+                parent_path / MAIN_FOLDER_NAME / INDEX_SQLITE_FILENAME,
+                total_tasks=len(paths),
+                progress_fn=progress_fn,
+                enable_media_metadata=media_filter is not None,
+                media_filter=media_filter,
+                sqlite_local_build_path=index_sqlite_tmp_path,
             )
 
-            if (parent_path / MAIN_FOLDER_NAME / INDEX_SQLITE_FILENAME).is_file():
-                (parent_path / MAIN_FOLDER_NAME / INDEX_SQLITE_FILENAME).unlink()
+            process_tar = functools.partial(
+                cls._preprocess_tar,
+                shard_to_idx=shard_to_idx,
+                parent_path=parent_path,
+                max_parts=50,
+                media_filter=media_filter,
+            )
 
-            sys.exit(1)
+            pool = AggregatorPool(
+                num_workers=workers,
+                user_produce_data=process_tar,
+                aggregator=aggregator,
+                batch_size=INDEX_BATCH_SIZE,
+            )
 
-        # Fix permissions if needed
-        if fix_local_permissions:
+            for path in paths:
+                pool.submit_task(path)
+
             try:
-                Path(str(parent_path / MAIN_FOLDER_NAME / INDEX_SQLITE_FILENAME)).chmod(file_perms)
-            except OSError:
-                pass
+                shards, found_parts, had_update = pool.process()
+            except DuplicateSampleKeyError as error:
+                print("The data contains duplicate keys (e.g. same filename in different shards).")
+                print(f'Example duplicate key: "{error.sample_key}"')
+                print()
+                print(
+                    "Energon does not support duplicate keys anymore, but we offer a tool to fix your dataset. "
+                    "Run `energon prepare` with `--fix-duplicates` to fix your dataset. Inside each tar, it will "
+                    "put each file in a subfolder with the shard name like `shard_0/filename.ext`."
+                )
 
-        if had_update:
-            logger.info("Regenerating dataset UUID...")
-            with (parent_path / MAIN_FOLDER_NAME / INDEX_UUID_FILENAME).open("w") as f:
-                f.write(str(uuid.uuid4()))
+                if (parent_path / MAIN_FOLDER_NAME / INDEX_SQLITE_FILENAME).is_file():
+                    (parent_path / MAIN_FOLDER_NAME / INDEX_SQLITE_FILENAME).unlink()
+
+                sys.exit(1)
 
             # Fix permissions if needed
             if fix_local_permissions:
                 try:
-                    (parent_path / MAIN_FOLDER_NAME / INDEX_UUID_FILENAME).local_path().chmod(
+                    Path(str(parent_path / MAIN_FOLDER_NAME / INDEX_SQLITE_FILENAME)).chmod(
                         file_perms
                     )
                 except OSError:
                     pass
 
-        json_info_config = parent_path / MAIN_FOLDER_NAME / INFO_JSON_FILENAME
-        yaml_info_config = parent_path / MAIN_FOLDER_NAME / INFO_YAML_FILENAME
+            if had_update:
+                logger.info("Regenerating dataset UUID...")
+                with (parent_path / MAIN_FOLDER_NAME / INDEX_UUID_FILENAME).open("w") as f:
+                    f.write(str(uuid.uuid4()))
 
-        if tar_index_only:
-            if yaml_info_config.is_file() and not json_info_config.is_file():
-                # Convert legacy .info.yaml to .info.json
-                with json_info_config.open("w") as f:
-                    json.dump(load_yaml(yaml_info_config.read_bytes()), f, indent=2)
-
+                # Fix permissions if needed
                 if fix_local_permissions:
                     try:
-                        json_info_config.local_path().chmod(file_perms)
+                        (parent_path / MAIN_FOLDER_NAME / INDEX_UUID_FILENAME).local_path().chmod(
+                            file_perms
+                        )
                     except OSError:
                         pass
 
-            return found_parts
+            json_info_config = parent_path / MAIN_FOLDER_NAME / INFO_JSON_FILENAME
+            yaml_info_config = parent_path / MAIN_FOLDER_NAME / INFO_YAML_FILENAME
 
-        assert len(shards) == len(shard_to_idx), (
-            f"Lengths of shards and shard_to_idx do not match: {len(shards)} != {len(shard_to_idx)}"
-        )
+            if tar_index_only:
+                if yaml_info_config.is_file() and not json_info_config.is_file():
+                    # Convert legacy .info.yaml to .info.json
+                    with json_info_config.open("w") as f:
+                        json.dump(load_yaml(yaml_info_config.read_bytes()), f, indent=2)
 
-        # Sort the shards according to the order in the input list
-        shards.sort(key=lambda shard: shard_to_idx[shard.name])
+                    if fix_local_permissions:
+                        try:
+                            json_info_config.local_path().chmod(file_perms)
+                        except OSError:
+                            pass
 
-        # Save info
-        assert [shard.name for shard in shards] == list(shard_to_idx.keys()), (
-            "Shards are not in the same order as in the input list."
-        )
+                return found_parts
 
-        info = WebdatasetInfo(
-            energon_version=__version__,
-            shard_counts={shard.name: shard.count for shard in shards},
-        )
-        print(f"Saving info to {json_info_config}")
-
-        with json_info_config.open("w") as wf:
-            json.dump(to_json_object(info), wf, indent=2)
-
-        # Fix permissions if needed
-        if fix_local_permissions:
-            try:
-                json_info_config.local_path().chmod(file_perms)
-            except OSError:
-                pass
-
-        if yaml_info_config.is_file():
-            # If a .info.yaml existed previously, let's also update it
-            # to keep them in sync
-            with yaml_info_config.open("w") as wf:
-                yaml.dump(to_json_object(info), wf)
-
-        if split_parts_ratio is not None:
-            # Normalize ratio
-            total_ratio = sum(split_ratio for _, split_ratio in split_parts_ratio)
-            split_parts_ratio = [
-                (split_part, split_ratio / total_ratio)
-                for split_part, split_ratio in split_parts_ratio
-            ]
-            # Sample from shards based on the split ratio from split parts
-            split_shards = {}
-            if shuffle_seed is not None:
-                random.Random(shuffle_seed).shuffle(shards)
-            split_total = 0
-            split_offset = 0
-            for split_part, split_ratio in split_parts_ratio:
-                split_total += split_ratio
-                split_end = int(len(shards) * split_total)
-                split_shards[split_part] = [shard.name for shard in shards[split_offset:split_end]]
-                split_offset = split_end
-        else:
-            assert split_parts_patterns is not None, (
-                "Require either split_parts_ratio or split_parts_patterns"
+            assert len(shards) == len(shard_to_idx), (
+                f"Lengths of shards and shard_to_idx do not match: {len(shards)} != {len(shard_to_idx)}"
             )
-            # Sample from shards based on the split patterns from split parts
-            split_shards = {}
-            for split_part, split_pattern in split_parts_patterns:
-                patterns = [
-                    re.compile(pattern) for pattern in braceexpand.braceexpand(split_pattern)
-                ]
-                split_shards[split_part] = [
-                    shard.name
-                    for shard in shards
-                    if any(pattern.match(shard.name) for pattern in patterns)
-                ]
 
-        # Optimize the split parts by trying to bracecollapse the shard names
-        print("Collapsing split parts... ", flush=True, end="")
-        for split_part in split_shards:
-            split_shards[split_part] = collapse(split_shards[split_part], keep_order=True)
-        print("Done", flush=True)
+            # Sort the shards according to the order in the input list
+            shards.sort(key=lambda shard: shard_to_idx[shard.name])
 
-        # Save split config
-        splits_config = WebdatasetSplits(split_parts=split_shards)
-        with (parent_path / MAIN_FOLDER_NAME / split_config).open("w") as wf:
-            if split_config.endswith(".yaml"):
-                yaml.dump(to_json_object(splits_config), wf, sort_keys=False)
-            elif split_config.endswith(".json"):
-                json.dump(to_json_object(splits_config), wf, indent=2)
+            # Save info
+            assert [shard.name for shard in shards] == list(shard_to_idx.keys()), (
+                "Shards are not in the same order as in the input list."
+            )
+
+            info = WebdatasetInfo(
+                energon_version=__version__,
+                shard_counts={shard.name: shard.count for shard in shards},
+            )
+            print(f"Saving info to {json_info_config}")
+
+            with json_info_config.open("w") as wf:
+                json.dump(to_json_object(info), wf, indent=2)
+
+            # Fix permissions if needed
+            if fix_local_permissions:
+                try:
+                    json_info_config.local_path().chmod(file_perms)
+                except OSError:
+                    pass
+
+            if yaml_info_config.is_file():
+                # If a .info.yaml existed previously, let's also update it
+                # to keep them in sync
+                with yaml_info_config.open("w") as wf:
+                    yaml.dump(to_json_object(info), wf)
+
+            if split_parts_ratio is not None:
+                # Normalize ratio
+                total_ratio = sum(split_ratio for _, split_ratio in split_parts_ratio)
+                split_parts_ratio = [
+                    (split_part, split_ratio / total_ratio)
+                    for split_part, split_ratio in split_parts_ratio
+                ]
+                # Sample from shards based on the split ratio from split parts
+                split_shards = {}
+                if shuffle_seed is not None:
+                    random.Random(shuffle_seed).shuffle(shards)
+                split_total = 0
+                split_offset = 0
+                for split_part, split_ratio in split_parts_ratio:
+                    split_total += split_ratio
+                    split_end = int(len(shards) * split_total)
+                    split_shards[split_part] = [
+                        shard.name for shard in shards[split_offset:split_end]
+                    ]
+                    split_offset = split_end
             else:
-                raise ValueError(f"Invalid split config extension: {split_config}")
+                assert split_parts_patterns is not None, (
+                    "Require either split_parts_ratio or split_parts_patterns"
+                )
+                # Sample from shards based on the split patterns from split parts
+                split_shards = {}
+                for split_part, split_pattern in split_parts_patterns:
+                    patterns = [
+                        re.compile(pattern) for pattern in braceexpand.braceexpand(split_pattern)
+                    ]
+                    split_shards[split_part] = [
+                        shard.name
+                        for shard in shards
+                        if any(pattern.match(shard.name) for pattern in patterns)
+                    ]
 
-        # Fix permissions if needed
-        if fix_local_permissions:
-            try:
-                (parent_path / MAIN_FOLDER_NAME / split_config).local_path().chmod(file_perms)
-            except OSError:
-                pass
+            # Optimize the split parts by trying to bracecollapse the shard names
+            print("Collapsing split parts... ", flush=True, end="")
+            for split_part in split_shards:
+                split_shards[split_part] = collapse(split_shards[split_part], keep_order=True)
+            print("Done", flush=True)
 
-        return found_parts
+            # Save split config
+            splits_config = WebdatasetSplits(split_parts=split_shards)
+            with (parent_path / MAIN_FOLDER_NAME / split_config).open("w") as wf:
+                if split_config.endswith(".yaml"):
+                    yaml.dump(to_json_object(splits_config), wf, sort_keys=False)
+                elif split_config.endswith(".json"):
+                    json.dump(to_json_object(splits_config), wf, indent=2)
+                else:
+                    raise ValueError(f"Invalid split config extension: {split_config}")
+
+            # Fix permissions if needed
+            if fix_local_permissions:
+                try:
+                    (parent_path / MAIN_FOLDER_NAME / split_config).local_path().chmod(file_perms)
+                except OSError:
+                    pass
+
+            return found_parts
+        finally:
+            if owns_remote_sqlite_tmp and remote_sqlite_tmp_dir is not None:
+                shutil.rmtree(remote_sqlite_tmp_dir, ignore_errors=True)
 
     @classmethod
     def add_media_metadata(
@@ -744,8 +782,19 @@ class WebdatasetPreparator:
         media_filter: MediaFilterConfig,
         workers: int = 32,
         progress_fn: Callable[[Iterator[Any], int], Iterator[T]] = (lambda x, y: x),
+        index_sqlite_tmp_path: Optional[Path] = None,
     ) -> int:
-        """Add or refresh media metadata in an existing WebDataset index."""
+        """Add or refresh media metadata in an existing WebDataset index.
+
+        Args:
+            parent_path: WebDataset root path.
+            media_filter: Media filtering configuration.
+            workers: Number of parallel workers.
+            progress_fn: Callback for progress updates.
+            index_sqlite_tmp_path: When ``parent_path`` is remote, sqlite file path used to build
+                ``index.sqlite`` locally before upload. If omitted, a new directory under
+                ``/tmp`` is created and removed after a successful run.
+        """
 
         parent_path = EPath(parent_path)
 
@@ -762,34 +811,65 @@ class WebdatasetPreparator:
             if path not in shard_counts:
                 raise ValueError(f"Shard '{path}' not present in dataset metadata")
 
-        aggregator = SqliteIndexWriterAggregator(
-            parent_path / MAIN_FOLDER_NAME / INDEX_SQLITE_FILENAME,
-            total_tasks=len(expanded_paths),
-            progress_fn=progress_fn,
-            enable_sample_tables=False,
-            enable_media_metadata=True,
-            media_filter=media_filter,
-            reset_tables=False,
-            progress_on_media=False,
-        )
+        owns_remote_sqlite_tmp = False
+        remote_sqlite_tmp_dir: Optional[Path] = None
+        if not parent_path.is_local():
+            if index_sqlite_tmp_path is None:
+                remote_sqlite_tmp_dir = Path(
+                    tempfile.mkdtemp(dir="/tmp", prefix="energon-prepare-media-")
+                )
+                index_sqlite_tmp_path = remote_sqlite_tmp_dir / INDEX_SQLITE_FILENAME
+                owns_remote_sqlite_tmp = True
+        else:
+            index_sqlite_tmp_path = None
 
-        process_tar = functools.partial(
-            cls._extract_media_from_tar,
-            parent_path=parent_path,
-            media_filter=media_filter,
-            shard_counts=shard_counts,
-        )
+        sqlite_path = parent_path / MAIN_FOLDER_NAME / INDEX_SQLITE_FILENAME
 
-        pool = AggregatorPool(
-            num_workers=min(workers, len(expanded_paths)) or 1,
-            user_produce_data=process_tar,
-            aggregator=aggregator,
-            batch_size=INDEX_BATCH_SIZE,
-        )
+        try:
+            aggregator = SqliteIndexWriterAggregator(
+                parent_path / MAIN_FOLDER_NAME / INDEX_SQLITE_FILENAME,
+                total_tasks=len(expanded_paths),
+                progress_fn=progress_fn,
+                enable_sample_tables=False,
+                enable_media_metadata=True,
+                media_filter=media_filter,
+                reset_tables=False,
+                progress_on_media=False,
+                sqlite_local_build_path=index_sqlite_tmp_path,
+            )
 
-        for path in expanded_paths:
-            pool.submit_task(path)
+            process_tar = functools.partial(
+                cls._extract_media_from_tar,
+                parent_path=parent_path,
+                media_filter=media_filter,
+                shard_counts=shard_counts,
+            )
 
-        pool.process()
+            pool = AggregatorPool(
+                num_workers=min(workers, len(expanded_paths)) or 1,
+                user_produce_data=process_tar,
+                aggregator=aggregator,
+                batch_size=INDEX_BATCH_SIZE,
+            )
 
-        return aggregator.media_metadata_written
+            for path in expanded_paths:
+                pool.submit_task(path)
+
+            pool.process()
+
+            if sqlite_path.is_local():
+                try:
+                    meta_dir = (parent_path / MAIN_FOLDER_NAME).local_path()
+                    # Copy group permissions from the parent dir
+                    meta_dir.chmod((parent_path.local_path().stat().st_mode | 0o700))
+                    # Just read/write, no execute
+                    sqlite_path.local_path().chmod(
+                        (parent_path.local_path().stat().st_mode | 0o600) & 0o666
+                    )
+                except OSError:
+                    pass
+
+            return aggregator.media_metadata_written
+        finally:
+            if owns_remote_sqlite_tmp and remote_sqlite_tmp_dir is not None:
+                shutil.rmtree(remote_sqlite_tmp_dir, ignore_errors=True)

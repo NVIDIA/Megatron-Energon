@@ -6,6 +6,7 @@ import inspect
 import json
 import re
 import typing
+from pathlib import Path
 from types import FunctionType
 from typing import Any, List, Optional, Tuple, Type
 
@@ -184,6 +185,15 @@ def printify_json(data: Any) -> Any:
     help='Field mapping in JSON format (e.g., \'{"image": "jpg", "caption": "txt"}\'). If not set in non-interactive mode, a sample loader from template will be created. Use with --sample-type. Only applies if sample_type is not set to CrudeWebdataset.',
     default=None,
 )
+@click.option(
+    "--tmp-path",
+    type=click.Path(path_type=Path),
+    default=None,
+    help=(
+        "When PATH is remote (e.g. S3), directory where index.sqlite is built locally before upload. "
+        "Default: a new directory under /tmp (removed after success)."
+    ),
+)
 def command(
     path: EPath,
     progress: bool,
@@ -203,6 +213,7 @@ def command(
     field_map: Optional[str],
     skip_dataset_yaml: bool,
     dataset_yaml_name: str,
+    tmp_path: Optional[Path],
 ):
     """Prepare WebDataset for use with energon.
 
@@ -337,6 +348,11 @@ def command(
         def progress_fn(els, length=None):
             return els
 
+    if tmp_path is not None:
+        index_sqlite_tmp_path = tmp_path / "index.sqlite"
+    else:
+        index_sqlite_tmp_path = None
+
     found_types = BaseWebdatasetFactory.prepare_dataset(
         path,
         all_tars,
@@ -348,6 +364,7 @@ def command(
         workers=num_workers,
         media_filter=media_filter_config,
         fix_duplicates=fix_duplicates,
+        index_sqlite_tmp_path=index_sqlite_tmp_path,
     )
 
     found_types = list(found_types)
