@@ -22,6 +22,23 @@ try:
 except ImportError:
     TorchDynamoOutputGraph = None
 
+try:
+    from torch.distributed.distributed_c10d import Work as TorchDistributedWork
+except ImportError:
+    TorchDistributedWork = None
+
+_frozen_gc_object_types = tuple(
+    object_type
+    for object_type in (
+        TorchDynamoOutputGraph,
+        TorchDistributedWork,
+        getattr(torch, "Event", None),
+        getattr(torch.cuda, "Event", None),
+        getattr(torch.cuda, "MemPool", None),
+    )
+    if object_type is not None
+)
+
 _frozen_gc_objects = []
 _frozen_gc_objects_initialized = False
 
@@ -54,7 +71,7 @@ def gc_init_worker(worker_id: int):
 
                         _frozen_gc_objects.append(o)
                         num_tensors += 1
-                elif TorchDynamoOutputGraph is not None and isinstance(o, TorchDynamoOutputGraph):
+                elif isinstance(o, _frozen_gc_object_types):
                     _frozen_gc_objects.append(o)
                 elif isinstance(o, torch.utils.data.dataloader._MultiProcessingDataLoaderIter):
                     o._shutdown = True
