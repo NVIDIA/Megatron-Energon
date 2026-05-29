@@ -54,6 +54,7 @@ from megatron.energon.wrappers import (
     LogSampleDataset,
     MapDataset,
     PackingDataset,
+    PartialSample,
     ShuffleBufferDataset,
 )
 from megatron.energon.wrappers.packing_dataset import PackedSamplesOutput
@@ -450,10 +451,14 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         return sample
 
     @stateless
-    def postencode_sample(self, sample: T_sample) -> T_encoded_sample:
+    def postencode_sample(
+        self, sample: T_sample | PartialSample[T_sample, Any]
+    ) -> T_encoded_sample:
         """Post-encode a single sample. May raise :exc:`megatron.energon.SkipSample` to skip a sample.
         Alternatively, this can be a generator that yields (or ignores) new samples.
         Use in conjunction with packing and caching.
+        When partial samples are returned by :meth:`select_samples_to_pack`, this method must
+        handle both full samples and :class:`PartialSample` inputs.
         If this is defined, :func:`encode_sample` must not be defined.
         """
         return sample
@@ -536,8 +541,11 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             raise ValueError("Unrecognized result type.")
 
     def select_samples_to_pack(
-        self, samples: List[T_encoded_sample]
-    ) -> list[list[T_encoded_sample]] | PackedSamplesOutput[T_encoded_sample]:
+        self, samples: List[T_encoded_sample | PartialSample[T_encoded_sample, Any]]
+    ) -> (
+        list[list[T_encoded_sample | PartialSample[T_encoded_sample, Any]]]
+        | PackedSamplesOutput[T_encoded_sample | PartialSample[T_encoded_sample, Any]]
+    ):
         """
         For packing, selects the samples to be packed together.
         Packing is only active when packing_buffer_size is set.
@@ -549,17 +557,22 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         Returns:
             Either a ``list[list[T]]`` of packs, or :class:`PackedSamplesOutput`
             to attach a ``pushback`` sequence reapplied to the reading buffer before the next fill.
+            Packs and pushback may contain :class:`PartialSample` values for user-defined slices.
         """
         raise NotImplementedError("Packing only effective when overridden.")
 
-    def pack_selected_samples(self, samples: List[T_encoded_sample]) -> T_encoded_sample:
+    def pack_selected_samples(
+        self, samples: List[T_encoded_sample | PartialSample[T_encoded_sample, Any]]
+    ) -> T_encoded_sample:
         """
         Given one set of samples to pack, returns the final packed sample.
         Packing is only active when packing_buffer_size is set.
         Internally this stage is called "final_packing".
 
         Args:
-            samples: The samples to pack into a single sample
+            samples: The samples to pack into a single sample. If partial samples were selected
+                and no post-encoding step is configured, this list may contain
+                :class:`PartialSample` values.
 
         Returns: The final packed sample.
         """

@@ -18,6 +18,7 @@ from typing import (
     Union,
 )
 
+from megatron.energon.edataclass import edataclass
 from megatron.energon.errors import ErrorContext, handle_restore_errors
 from megatron.energon.flavors.base_dataset import (
     SavableDataset,
@@ -25,12 +26,51 @@ from megatron.energon.flavors.base_dataset import (
     set_sample_restore_key,
 )
 from megatron.energon.worker import WorkerConfig
-from megatron.energon.wrappers.base import BaseWrapperDataset, SampleIndex, get_sample_restore_key
+from megatron.energon.wrappers.base import (
+    BaseWrapperDataset,
+    SampleIndex,
+    get_sample_restore_key,
+)
 from megatron.energon.wrappers.buffer import SavableSampleBuffer
 
 T_sample = TypeVar("T_sample")
 T_encoded_sample = TypeVar("T_encoded_sample")
 T_batch_sample = TypeVar("T_batch_sample")
+T_slice = TypeVar("T_slice")
+
+
+@edataclass
+class PartialSample(Generic[T_sample, T_slice]):
+    """A view onto part of a sample selected during packing."""
+
+    sample: T_sample
+    slice: T_slice
+    __restore_key__: tuple | None = field(init=False, repr=False, default=None)
+
+    def __post_init__(self) -> None:
+        inner_restore_key = get_sample_restore_key(self.sample)
+        if inner_restore_key is not None:
+            set_sample_restore_key(self, inner_restore_key, self.slice, src=self)
+
+
+class SavablePartialSampleBuffer(
+    SavableSampleBuffer[T_sample | PartialSample[T_sample, T_slice]],
+    Generic[T_sample, T_slice],
+):
+    """Sample buffer that can save and restore packing-only partial sample wrappers."""
+
+    def restore_sample(self, restore_key: Any) -> T_sample | PartialSample[T_sample, T_slice]:
+        if (
+            isinstance(restore_key, (tuple, list))
+            and len(restore_key) == 3
+            and restore_key[0] == PartialSample.__name__
+        ):
+            _, sample_restore_key, sample_slice = restore_key
+            return PartialSample(
+                sample=self.restore_sample(sample_restore_key),
+                slice=sample_slice,
+            )
+        return self.dataset.restore_sample(restore_key)
 
 
 @dataclass(slots=True, frozen=True)
@@ -48,25 +88,31 @@ class PackedSamplesOutput(Generic[T_sample]):
 
 class PackingDataset(
     BaseWrapperDataset[T_sample, T_batch_sample],
-    Generic[T_sample, T_encoded_sample, T_batch_sample],
+    Generic[T_sample, T_encoded_sample, T_batch_sample, T_slice],
 ):
     """This dataset wrapper transforms samples of a dataset into chunks/packs of samples, which are
     then combined into a batch."""
 
     buffer_size: int
-    pre_packer: Callable[[list[T_sample]], list[list[T_sample]] | PackedSamplesOutput[T_sample]]
-    sample_encoder: Optional[Callable[[T_sample], T_encoded_sample]]
+    pre_packer: Callable[
+        [list[T_sample | PartialSample[T_sample, Any]]],
+        list[list[T_sample | PartialSample[T_sample, Any]]]
+        | PackedSamplesOutput[T_sample | PartialSample[T_sample, Any]],
+    ]
+    sample_encoder: Optional[Callable[[T_sample | PartialSample[T_sample, Any]], T_encoded_sample]]
     sample_encoder_stateless: bool
-    final_packer: Callable[[List[T_encoded_sample]], T_batch_sample]
+    final_packer: Callable[
+        [List[T_encoded_sample | T_sample | PartialSample[T_sample, Any]]], T_batch_sample
+    ]
     final_packer_stateless: bool
     packer_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]]
 
     #: The buffer for collecting the samples that shall be packed.
-    _reading_buffer: SavableSampleBuffer
+    _reading_buffer: SavablePartialSampleBuffer[T_sample, T_slice]
 
     #: Contains the pre-selected samples to be packed.
     #: The full buffer will be passed to the pre_packer.
-    _pre_packing_buffer: SavableSampleBuffer
+    _pre_packing_buffer: SavablePartialSampleBuffer[T_sample, T_slice]
 
     #: Lengths of the selected groups of samples to be packed together.
     #: The samples are stored sequentially in the pre_packing_buffer because
@@ -102,12 +148,18 @@ class PackingDataset(
         dataset: SavableDataset[T_sample],
         buffer_size: int,
         pre_packer: Callable[
-            [list[T_sample]], list[list[T_sample]] | PackedSamplesOutput[T_sample]
+            [list[T_sample | PartialSample[T_sample, T_slice]]],
+            list[list[T_sample | PartialSample[T_sample, T_slice]]]
+            | PackedSamplesOutput[T_sample | PartialSample[T_sample, T_slice]],
         ],
-        final_packer: Callable[[List[T_encoded_sample]], T_batch_sample],
+        final_packer: Callable[
+            [List[T_encoded_sample | T_sample | PartialSample[T_sample, T_slice]]], T_batch_sample
+        ],
         *,
         final_packer_stateless: bool = False,
-        sample_encoder: Optional[Callable[[T_sample], T_encoded_sample]] = None,
+        sample_encoder: Optional[
+            Callable[[T_sample | PartialSample[T_sample, T_slice]], T_encoded_sample]
+        ] = None,
         sample_encoder_stateless: bool = False,
         packer_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]] = None,
         pre_packer_failure_tolerance: int = 100,
@@ -178,9 +230,13 @@ class PackingDataset(
         self.reset_state_own()
 
     def reset_state_own(self) -> None:
-        self._reading_buffer = SavableSampleBuffer(self.dataset, worker_config=self.worker_config)
-        self._pre_packing_buffer = SavableSampleBuffer(
-            self.dataset, worker_config=self.worker_config
+        self._reading_buffer = SavablePartialSampleBuffer(
+            self.dataset,
+            worker_config=self.worker_config,
+        )
+        self._pre_packing_buffer = SavablePartialSampleBuffer(
+            self.dataset,
+            worker_config=self.worker_config,
         )
         self._pre_packing_lengths = []
         self._pre_packing_sample_index = SampleIndex(self.worker_config, src=self)
@@ -236,7 +292,9 @@ class PackingDataset(
 
         is_initial_pack = True
 
-        def encode_pack_samples(pack: List[T_sample]) -> List[T_encoded_sample]:
+        def encode_pack_samples(
+            pack: List[T_sample | PartialSample[T_sample, Any]],
+        ) -> List[T_encoded_sample | T_sample | PartialSample[T_sample, Any]]:
             """Encode the samples in the pack using the sample encoder."""
 
             # Apply the sample encoder to the pack
@@ -244,10 +302,17 @@ class PackingDataset(
                 return pack
             encoded_pack = []
             for sample in pack:
+                input_restore_key = get_sample_restore_key(sample)
                 with self._sample_encoder_failure_handler.handle_errors(sample):
                     with self._sample_encoder_sample_index.ctx() as encode_idx:
                         encoded_sample = self.sample_encoder(sample)
                     assert not isinstance(encoded_sample, Generator), "Generator not supported"
+                    if isinstance(sample, PartialSample) and input_restore_key is not None:
+                        encoded_sample = set_sample_restore_key(
+                            encoded_sample,
+                            *input_restore_key[1:],
+                            src=sample,
+                        )
                     self._sample_encoder_failure_handler.reset()
                     encoded_pack.append(
                         add_sample_restore_key(
@@ -362,18 +427,26 @@ class PackingDataset(
 
             yield from next_final_pack()
 
-        # Yield the remaining packs, flushing the collecting buffer
-        while len(pre_packing_lengths) > 0:
-            yield from next_final_pack()
+        # Yield the remaining packs, flushing carryover partials until the source is exhausted.
+        flush_round = 0
+        while len(pre_packing_lengths) > 0 or self._reading_buffer.len_worker() > 0:
+            if len(pre_packing_lengths) > 0:
+                flush_round = 0
+                yield from next_final_pack()
+                continue
+            # If there are still samples in the partial reading buffer, pre-pack them and yield the
+            # resulting (partial) packs
 
-        # If there are still samples in the partial reading buffer, pre-pack them and yield the
-        # resulting (partial) packs
-        if self._reading_buffer.len_worker() > 0:
             next_pre_pack()
-
-        # Yield the remaining packs, flushing the collecting buffer
-        while len(pre_packing_lengths) > 0:
-            yield from next_final_pack()
+            if len(pre_packing_lengths) == 0 and self._reading_buffer.len_worker() > 0:
+                flush_round += 1
+                if (
+                    self.pre_packer_failure_tolerance > 0
+                    and flush_round > self.pre_packer_failure_tolerance
+                ):
+                    raise RuntimeError(
+                        f"Pre packer {self.pre_packer} did not yield any packs after {flush_round} flush rounds. Likely your code or dataset are broken."
+                    )
 
     def can_restore_sample(self) -> bool:
         # Cannot really verify if the returned elements contain a __restore_key__.
@@ -406,12 +479,20 @@ class PackingDataset(
                 id, sample_idx, *inner_idx = inner_idx
                 assert id == type(self).__name__
                 assert isinstance(sample_idx, int)
-            sample = self.dataset.restore_sample(inner_idx)
+            sample = self._reading_buffer.restore_sample(inner_idx)
             if self.sample_encoder is not None:
                 with handle_restore_errors(self.worker_config.restore_error_handler, sample):
+                    input_sample = sample
+                    input_restore_key = get_sample_restore_key(input_sample)
                     with self._sample_encoder_sample_index.ctx(sample_idx):
                         sample = self.sample_encoder(sample)
                     assert not isinstance(sample, Generator), "Generator not supported"
+                    if isinstance(input_sample, PartialSample) and input_restore_key is not None:
+                        sample = set_sample_restore_key(
+                            sample,
+                            *input_restore_key[1:],
+                            src=input_sample,
+                        )
                     sample = add_sample_restore_key(sample, sample_idx, src=self)
 
             pack.append(sample)
