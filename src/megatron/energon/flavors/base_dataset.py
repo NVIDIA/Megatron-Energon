@@ -405,8 +405,15 @@ class BaseCoreDatasetFactory(Generic[T_sample], ABC):
     subflavors: Dict[str, Any]
 
     @abstractmethod
-    def build(self, worker_rotation_offset: int = 0) -> SavableDataset[T_sample]:
-        """Builds the dataset."""
+    def build(
+        self, worker_rotation_offset: int = 0, part_filter: Callable[[str], bool] | None = None
+    ) -> SavableDataset[T_sample]:
+        """Builds the dataset.
+
+        Args:
+            worker_rotation_offset: The offset of the worker rotation.
+            part_filter: A function to filter the parts of the dataset.
+        """
         ...
 
     @abstractmethod

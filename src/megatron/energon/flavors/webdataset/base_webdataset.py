@@ -123,7 +123,9 @@ class BaseWebdatasetFactory(
     def __len__(self) -> int:
         return sum(shard.count for shard in self.shards)
 
-    def build(self, worker_rotation_offset: int = 0) -> SavableDataset[T_sample]:
+    def build(
+        self, worker_rotation_offset: int = 0, part_filter: Callable[[str], bool] | None = None
+    ) -> SavableDataset[T_sample]:
         from megatron.energon.flavors.webdataset.itar_reader import ShardInfosITarReader
 
         if self.parallel_shard_iters is None:
@@ -134,6 +136,15 @@ class BaseWebdatasetFactory(
                 parallel_shard_iters = 1
         else:
             parallel_shard_iters = self.parallel_shard_iters
+
+        effective_pf = part_filter
+        if self.part_filter is not None:
+            if effective_pf is not None:
+                inner_pf, outer_pf = effective_pf, self.part_filter
+                effective_pf = lambda p, _i=inner_pf, _o=outer_pf: _o(p) and _i(p)
+            else:
+                effective_pf = self.part_filter
+        part_filter = effective_pf
 
         workers_sample_slice_offsets = self.shard_workers(
             self.shards,
@@ -148,7 +159,7 @@ class BaseWebdatasetFactory(
         itar_reader = ShardInfosITarReader(
             self.path,
             self.shards,
-            part_filter=self.part_filter,
+            part_filter=part_filter,
             sample_filter=self.sample_filter,
             itar_cache_size=parallel_shard_iters,
         )

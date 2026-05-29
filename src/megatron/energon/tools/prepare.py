@@ -20,6 +20,7 @@ from megatron.energon.flavors import (
     CrudeWebdataset,
     Sample,
 )
+from megatron.energon.flavors.parquet.prepare import scan_parquet_dataset
 from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
 from megatron.energon.flavors.webdataset.metadata import (
     EnergonDatasetType,
@@ -256,6 +257,15 @@ def command(
         print("Preparing jsonl dataset...")
         count = CrudeJsonlDatasetFactory.prepare_dataset(path)
         print(f"Done. Found {count} samples.")
+        return
+    elif ds_type == EnergonDatasetType.PARQUET:
+        if do_media_metadata:
+            raise click.ClickException(
+                "Parquet datasets do not support media metadata. Remove --media-metadata-by-... to continue."
+            )
+        print("Validating Parquet dataset...")
+        layout = scan_parquet_dataset(path)
+        print(f"Done. {len(layout.files)} files, {layout.total_rows} rows.")
         return
     elif ds_type == EnergonDatasetType.FILESYSTEM:
         raise click.ClickException(
