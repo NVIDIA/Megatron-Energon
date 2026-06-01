@@ -85,6 +85,9 @@ class Cooker(Generic[T_sample]):
     # must match.
     has_subflavors: Optional[dict] = None
 
+    #: Optional ``part_filter(part: str) -> bool`` for dataset (column) filtering.
+    part_filter: Optional[Callable[[str], bool]] = None
+
     @property
     def need_primary(self) -> bool:
         return get_cooker_need_primary(self.cook)

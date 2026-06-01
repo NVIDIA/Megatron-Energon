@@ -10,6 +10,7 @@ import braceexpand
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
 from megatron.energon.eyaml import load_yaml, load_yaml_json
+from megatron.energon.flavors.parquet.prepare import discover_parquet_files
 from megatron.energon.flavors.webdataset.config import (
     INDEX_SQLITE_FILENAME,
     INFO_JSON_FILENAME,
@@ -29,6 +30,8 @@ class EnergonDatasetType(Enum):
     METADATASET = "metadataset"
     WEBDATASET = "webdataset"
     JSONL = "jsonl"
+    BINIDX = "binidx"
+    PARQUET = "parquet"
     FILESYSTEM = "filesystem"
     INVALID = "invalid"
 
@@ -162,6 +165,8 @@ def get_dataset_type(path: EPath) -> EnergonDatasetType:
     if path.is_file():
         if path.name.endswith(".jsonl"):
             return EnergonDatasetType.JSONL
+        elif path.name.endswith(".bin"):
+            return EnergonDatasetType.BINIDX
         elif path.name.endswith(".yaml"):
             return EnergonDatasetType.METADATASET
         else:
@@ -172,5 +177,7 @@ def get_dataset_type(path: EPath) -> EnergonDatasetType:
         # There is an sqlite, but no .info.json or .info.yaml,
         # so it's a filesystem dataset
         return EnergonDatasetType.FILESYSTEM
+    elif path.is_dir() and discover_parquet_files(path):
+        return EnergonDatasetType.PARQUET
     else:
         return EnergonDatasetType.INVALID

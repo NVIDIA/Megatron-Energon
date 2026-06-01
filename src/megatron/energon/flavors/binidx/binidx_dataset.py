@@ -1,9 +1,10 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-import json
 import logging
 from typing import Any, Callable, Dict, Optional
+
+import numpy
 
 from megatron.energon.cache import FileStore
 from megatron.energon.epathlib import EPath
@@ -11,9 +12,8 @@ from megatron.energon.flavors.base_dataset import (
     BaseCoreDatasetFactory,
     SavableDataset,
 )
+from megatron.energon.flavors.binidx.binidx_reader import BinIdxReader
 from megatron.energon.flavors.crude import CrudeSample
-from megatron.energon.flavors.jsonl.ijsonl import IJsonlIndexReader
-from megatron.energon.flavors.jsonl.jsonl_prepare import JsonlPreparator
 from megatron.energon.flavors.webdataset.base_webdataset import _print_shard_slices
 from megatron.energon.flavors.webdataset.sample_loader import (
     RawSampleData,
@@ -31,16 +31,16 @@ from megatron.energon.wrappers.map_dataset import MapDataset
 logger = logging.getLogger(__name__)
 
 
-class CrudeJsonlDatasetFactory(
+class BinIdxDatasetFactory(
     BaseCoreDatasetFactory[CrudeSample],
-    JsonlPreparator,
     Sharder,
 ):
     """
-    Factory class for creating a crude dataset from JSONL (JSON Lines) files.
+    Factory class for creating a crude dataset from Megatron-LM bin-idx files.
 
-    This factory creates datasets from JSONL files where each line contains a JSON object.
-    The samples are returned as CrudeSample objects (dictionary-like) containing the raw JSON data.
+    This factory creates datasets from pre-tokenized binary files (.bin + .idx)
+    where the .idx file contains sequence offsets and the .bin file contains token data.
+    The samples are returned as CrudeSample objects containing raw token arrays.
     """
 
     __sample_type__ = CrudeSample
@@ -63,29 +63,22 @@ class CrudeJsonlDatasetFactory(
         part_filter: Optional[Callable[[str], bool]] = None,
     ):
         """
-        Factory for a jsonl file as a crude dataset.
+        Factory for a bin-idx file pair as a crude dataset.
 
         Args:
-            path: Path to the jsonl file.
+            path: Path to the .bin file.
             training: If true, apply shuffling and loop the dataset.
             worker_config: Configuration for the workers.
             shuffle_over_epochs: Only effective if training=True.
                 How many epochs to shuffle over if training.
-                If = 1, every sample is seen exactly once per epoch.
-                If > 1, samples (or rather shard slices) are shuffled within this number of epochs
-                (i.e. randomly selected without replacement).
-                If -1, the shards are effectively shuffle over infinite epochs (i.e. shard slices
-                are drawn with replacement).
-            parallel_shard_iters: Number of parallel opened shards per worker, shuffling between.
-            max_samples_per_sequence: Maximum number of samples per sequence (=how many samples
-                    will be sequentially iterated).
+            parallel_shard_iters: Number of parallel opened shards per worker.
+            max_samples_per_sequence: Maximum number of samples per sequence.
             subset: If specified, the dataset will be subsetted.
-            part_filter: (internal) Function for filtering tar files by dict keys
+            part_filter: (internal) Function for filtering by dict keys.
         """
         assert self.__sample_type__ is not None, f"Class {type(self)} must define __sample_type__"
-        self.path = path
-        self.paths = [path]
-        self.name = path.display_name
+        self.path = EPath(path)
+        self.paths = [self.path]
         self.training = training
         self.worker_config = worker_config
         self.shuffle_over_epochs = shuffle_over_epochs
@@ -93,10 +86,7 @@ class CrudeJsonlDatasetFactory(
         self.max_samples_per_sequence = max_samples_per_sequence
         self.subset = subset
         self.part_filter = part_filter
-        self._len = IJsonlIndexReader.count_samples(path)
-        assert self.path.size() == IJsonlIndexReader.size(path), (
-            "The index of the jsonl file does not match the file. Regenerate the index."
-        )
+        self._len = BinIdxReader.count_samples(self.path)
 
     def __len__(self) -> int:
         return self._len
@@ -104,16 +94,20 @@ class CrudeJsonlDatasetFactory(
     def build(
         self, worker_rotation_offset: int = 0, part_filter: Callable[[str], bool] | None = None
     ) -> SavableDataset[CrudeSample]:
-        from megatron.energon.flavors.jsonl.ijsonl_reader import IJsonlReader
-
         if self.parallel_shard_iters is None:
             if self.training:
-                # 16 seems to be a good choice since we don't want too many file handles open
                 parallel_shard_iters = 16
             else:
                 parallel_shard_iters = 1
         else:
             parallel_shard_iters = self.parallel_shard_iters
+
+        if self.part_filter is not None:
+            if part_filter is not None:
+                inner_pf, outer_pf = part_filter, self.part_filter
+                part_filter = lambda p, _i=inner_pf, _o=outer_pf: _o(p) and _i(p)
+            else:
+                part_filter = self.part_filter
 
         virtual_shards = [
             ShardInfo(
@@ -132,24 +126,22 @@ class CrudeJsonlDatasetFactory(
         )
         _print_shard_slices(self.worker_config, virtual_shards, workers_sample_slice_offsets)
 
-        itar_reader = IJsonlReader(
+        reader = BinIdxReader(
             self.path,
             index_cache_size=parallel_shard_iters,
         )
 
         dataset = WebdatasetSampleLoaderDataset(
-            join_readers=[itar_reader],
+            join_readers=[reader],
             workers_sample_slice_offsets=workers_sample_slice_offsets,
             worker_config=self.worker_config,
             shuffle_over_epochs=self.shuffle_over_epochs if self.training else None,
             parallel_slice_iters=parallel_shard_iters,
         )
-        if (part_filter is not None and not part_filter("json")) or (
-            self.part_filter is not None and not self.part_filter("json")
-        ):
+        if part_filter is not None and not part_filter("tokens"):
 
             def load_fn(sample: RawSampleData) -> CrudeSample:
-                sample.data[0].pop("json", None)
+                sample.data[0].pop("tokens", None)
                 return self._load_sample_raw(sample)
         else:
             load_fn = self._load_sample_raw
@@ -162,15 +154,14 @@ class CrudeJsonlDatasetFactory(
         )
 
     def as_file_store(self) -> "FileStore":
-        from megatron.energon.cache.file_store import JsonlFileStore
+        from megatron.energon.cache.file_store import BinIdxFileStore
 
-        return JsonlFileStore(self.path)
+        return BinIdxFileStore(self.path)
 
     def _load_sample(self, sample: FilteredSample) -> CrudeSample:
         return CrudeSample(sample)
 
     def _load_sample_raw(self, raw_sample: RawSampleData) -> CrudeSample:
-        # Just a wrapper for the inner tuple. Tuple should be of length 1.
         assert len(raw_sample.data) == 1 and raw_sample.data[0] is not None
         return self._load_sample(raw_sample.data[0])
 
@@ -179,7 +170,7 @@ class CrudeJsonlDatasetFactory(
             type=type(self).__qualname__,
             training=self.training,
             _path=str(self.path),
-            jsonl_filename=self.path.name,
+            bin_filename=self.path.name,
             count=self._len,
             shuffle_over_epochs=self.shuffle_over_epochs,
             parallel_shard_iters=self.parallel_shard_iters,
@@ -191,9 +182,9 @@ class CrudeJsonlDatasetFactory(
         return f"{type(self).__name__}(path={self.path})"
 
 
-class DefaultCrudeJsonlDatasetFactory(CrudeJsonlDatasetFactory):
+class DefaultBinIdxDatasetFactory(BinIdxDatasetFactory):
     """
-    Adds subflavors to the sample and loads the json.
+    Adds subflavors to the sample and decodes token bytes back to a numpy array.
     """
 
     def __init__(self, path: EPath, *, subflavors: Optional[Dict[str, Any]] = None, **kwargs):
@@ -201,14 +192,12 @@ class DefaultCrudeJsonlDatasetFactory(CrudeJsonlDatasetFactory):
             del kwargs["decoder"]
         super().__init__(path, **kwargs)
         self.subflavors = subflavors
+        self._dtype = BinIdxReader.read_dtype(self.path)
 
     def _load_sample(self, sample: FilteredSample) -> CrudeSample:
         sample["__subflavors__"] = self.subflavors
-
-        # Instead of using a decoder, we just load the json here, as we know it's json.
-        if "json" in sample:
-            sample["json"] = json.loads(sample["json"])
-
+        # Decode token bytes back to numpy array
+        sample["tokens"] = numpy.frombuffer(sample["tokens"], dtype=self._dtype)
         return super()._load_sample(sample)
 
     def config(self) -> Dict[str, Any]:

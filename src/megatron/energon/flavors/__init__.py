@@ -7,6 +7,10 @@ from megatron.energon.flavors.base_dataset import (
     Sample,
     SavableDataset,
 )
+from megatron.energon.flavors.binidx import (
+    BinIdxDatasetFactory,
+    DefaultBinIdxDatasetFactory,
+)
 from megatron.energon.flavors.captioning import CaptioningSample, CaptioningWebdataset
 from megatron.energon.flavors.crude import CrudeSample, CrudeWebdataset
 from megatron.energon.flavors.image import ImageSample, ImageWebdataset
@@ -21,6 +25,7 @@ from megatron.energon.flavors.jsonl import (
 )
 from megatron.energon.flavors.multichoice_vqa import MultiChoiceVQASample, MultiChoiceVQAWebdataset
 from megatron.energon.flavors.ocr import OCRSample, OCRWebdataset
+from megatron.energon.flavors.parquet.dataset import DefaultParquetDatasetFactory
 from megatron.energon.flavors.similarity_interleaved import (
     SimilarityInterleavedSample,
     SimilarityInterleavedWebdataset,
@@ -50,13 +55,16 @@ __all__ = [
     "AVDecoderType",
     "BaseCoreDatasetFactory",
     "BaseWebdatasetFactory",
+    "BinIdxDatasetFactory",
     "CaptioningSample",
     "CaptioningWebdataset",
     "CrudeJsonlDatasetFactory",
     "CrudeSample",
     "CrudeWebdataset",
+    "DefaultBinIdxDatasetFactory",
     "DefaultCrudeJsonlDatasetFactory",
     "DefaultDecoderWebdatasetFactory",
+    "DefaultParquetDatasetFactory",
     "DefaultGenericWebdatasetFactory",
     "EmptyDatasetError",
     "ImageClassificationSample",
