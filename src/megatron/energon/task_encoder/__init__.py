@@ -10,6 +10,7 @@ from megatron.energon.task_encoder.base import (
     batch_pad_stack,
     batch_stack,
     generic_batch,
+    skip_safe,
     stateless,
 )
 from megatron.energon.task_encoder.cooking import Cooker, basic_sample_keys, cooker
@@ -33,6 +34,7 @@ __all__ = [
     "get_train_dataset",
     "get_val_dataset",
     "get_val_datasets",
+    "skip_safe",
     "stateless",
     "TaskEncoder",
 ]

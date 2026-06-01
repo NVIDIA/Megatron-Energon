@@ -13,9 +13,10 @@ import torch.utils.data
 
 from megatron.energon.cache import CachePool
 from megatron.energon.errors import log_exception, reraise_exception
+from megatron.energon.logical_worker import LogicalWorkerAssignment
 from megatron.energon.source_info import SourceInfo
 
-__all__ = ("WorkerConfig",)
+__all__ = ("WorkerConfig", "LogicalWorkerAssignment")
 
 T = TypeVar("T")
 
@@ -36,6 +37,10 @@ class WorkerConfig:
     world_size: int
     #: The number of workers per rank. May be 0 to disable worker processes.
     num_workers: int
+
+    #: Global number of logical dataset partitions. Defaults to physical worker count.
+    #: Must be a multiple of, or divide evenly into, physical worker count.
+    logical_workers: Optional[int] = None
 
     #: If not using all ranks for data parallel, set this to the corresponding group.
     data_parallel_group: Optional[torch.distributed.ProcessGroup] = None
@@ -78,10 +83,26 @@ class WorkerConfig:
     active_worker_config: ClassVar[Optional["WorkerConfig"]] = None
 
     #: The global rank override for the worker. Required for restoring samples.
-    _worker_override_global_rank: ClassVar[Optional[List[int]]] = None
+    _worker_override_global_rank: ClassVar[Optional[int]] = None
+
+    #: Active logical global worker id during restore.
+    _active_logical_global_worker_id: ClassVar[Optional[int]] = None
 
     #: The current cache pool for the worker.
     _cache_pool: "ClassVar[Optional[CachePool]]" = None
+
+    def __post_init__(self) -> None:
+        physical = self.physical_worker_count()
+        logical = self.logical_worker_count()
+        if logical > physical:
+            raise ValueError(
+                f"logical_workers ({logical}) must be less than or equal to "
+                f"physical_workers ({physical})"
+            )
+        if physical % logical != 0:
+            raise ValueError(
+                f"physical_workers ({physical}) must be divisible by logical_workers ({logical})"
+            )
 
     def worker_activate(
         self,
@@ -119,6 +140,7 @@ class WorkerConfig:
             WorkerConfig._sample_index_stack = None
             WorkerConfig.active_worker_config = None
             WorkerConfig._worker_override_global_rank = None
+            WorkerConfig._active_logical_global_worker_id = None
 
     @property
     def active_worker_sample_index(self) -> int:
@@ -147,6 +169,67 @@ class WorkerConfig:
 
         return torch.distributed.get_global_rank(self.data_parallel_group, self.rank)
 
+    def physical_workers_per_rank(self) -> int:
+        """PyTorch DataLoader worker processes per rank (0 means main process only)."""
+        return max(1, self.num_workers) if self.num_workers > 0 else 1
+
+    def physical_worker_count(self) -> int:
+        """Total physical workers across all ranks."""
+        if self.num_workers == 0:
+            return self.world_size
+        return self.world_size * self.num_workers
+
+    def logical_worker_count(self) -> int:
+        """Total logical dataset partitions across all ranks."""
+        if self.logical_workers is None:
+            return self.physical_worker_count()
+        return self.logical_workers
+
+    def logical_workers_per_rank(self) -> int:
+        """Logical dataset partitions per rank."""
+        logical = self.logical_worker_count()
+        assert logical % self.world_size == 0, (
+            f"logical_workers ({logical}) must be divisible by world_size ({self.world_size})"
+        )
+        return logical // self.world_size
+
+    def logical_assignment_for_physical(
+        self, physical_global_worker_id: int
+    ) -> LogicalWorkerAssignment:
+        """Map a physical global worker id to logical partition and striding."""
+        physical_count = self.physical_worker_count()
+        logical_count = self.logical_worker_count()
+        assert 0 <= physical_global_worker_id < physical_count
+
+        fanout = physical_count // logical_count
+        logical_id = physical_global_worker_id // fanout
+        return LogicalWorkerAssignment(
+            logical_global_worker_id=logical_id,
+            stride_offset=physical_global_worker_id % fanout,
+            stride=fanout,
+        )
+
+    def assignment_for_current_physical_worker(self) -> LogicalWorkerAssignment:
+        """Logical assignment for the currently active physical worker."""
+        return self.logical_assignment_for_physical(self.physical_global_worker_id())
+
+    def logical_global_worker_id(self, override_local_worker_id: Optional[int] = None) -> int:
+        """Global logical worker id used for dataset splits, RNG, and restore keys."""
+        if WorkerConfig._active_logical_global_worker_id is not None:
+            return WorkerConfig._active_logical_global_worker_id
+        if self._worker_override_global_rank is not None:
+            physical = self._worker_override_global_rank
+        else:
+            physical = self.physical_global_worker_id(override_local_worker_id)
+        return self.logical_assignment_for_physical(physical).logical_global_worker_id
+
+    def logical_local_worker_index(self, override_local_worker_id: Optional[int] = None) -> int:
+        """Logical worker index within the current rank."""
+        return (
+            self.logical_global_worker_id(override_local_worker_id)
+            - self.rank * self.logical_workers_per_rank()
+        )
+
     def __eq__(self, other):
         """Do not compare everything to check for equal config"""
         if not isinstance(other, WorkerConfig):
@@ -156,6 +239,7 @@ class WorkerConfig:
                 self.rank == other.rank,
                 self.world_size == other.world_size,
                 self.num_workers == other.num_workers,
+                self.logical_workers == other.logical_workers,
             ]
         )
 
@@ -208,23 +292,25 @@ class WorkerConfig:
                 f"match the configured number of workers ({self.num_workers})"
             )
 
-    def global_worker_id(self, override_local_worker_id: Optional[int] = None) -> int:
-        """Returns the global worker index by multiplying the rank with the number of workers.
-        Alternatively, you can override the local worker id.
-
-        Args:
-            override_local_worker_id (int, optional): The local worker id to override. None means
-                the current worker, which is the default.
-        """
+    def physical_global_worker_id(self, override_local_worker_id: Optional[int] = None) -> int:
+        """Global physical worker id (PyTorch DataLoader worker slot)."""
         if self._worker_override_global_rank is not None:
             assert override_local_worker_id is None
             return self._worker_override_global_rank
 
+        if self.num_workers == 0:
+            if override_local_worker_id is not None:
+                return self.rank
+            return self.rank
+
         if override_local_worker_id is not None:
             return self.rank * self.num_workers + override_local_worker_id
-        else:
-            self.assert_worker()
-            return self.rank * self.num_workers + self.rank_worker_id()
+        self.assert_worker()
+        return self.rank * self.num_workers + self.rank_worker_id()
+
+    def global_worker_id(self, override_local_worker_id: Optional[int] = None) -> int:
+        """Alias for :meth:`physical_global_worker_id` (DataLoader checkpointing)."""
+        return self.physical_global_worker_id(override_local_worker_id)
 
     def worker_seed(self, override_local_worker_id: Optional[int] = None) -> int:
         """Returns the seed for the current worker (or a specified worker).
@@ -237,11 +323,7 @@ class WorkerConfig:
                 the current worker, which is the default.
         """
 
-        if self.num_workers == 0:
-            # If we are not using workers, different ranks should still get a different seed
-            global_worker_id = self.rank
-        else:
-            global_worker_id = self.global_worker_id(override_local_worker_id)
+        global_worker_id = self.logical_global_worker_id(override_local_worker_id)
 
         seed_offset = self.seed_offset
 
@@ -254,10 +336,16 @@ class WorkerConfig:
             "rank": self.rank,
             "world_size": self.world_size,
             "num_workers": self.num_workers,
+            "logical_workers": self.logical_workers,
             "data_parallel_group": (
                 self.data_parallel_group.size() if self.data_parallel_group else None
             ),
         }
+
+    @staticmethod
+    def set_active_logical_global_worker_id(logical_global_worker_id: Optional[int]) -> None:
+        """Set the logical worker id used while restoring."""
+        WorkerConfig._active_logical_global_worker_id = logical_global_worker_id
 
     def should_log(self, level: int) -> bool:
         return level <= self.worker_log_level
