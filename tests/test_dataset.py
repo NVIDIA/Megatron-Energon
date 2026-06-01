@@ -1692,8 +1692,7 @@ class TestDataset(unittest.TestCase):
                     | PartialSample[EncodedCaptioningSample, tuple[int, int]]
                 ],
             ) -> PackedSamplesOutput[
-                EncodedCaptioningSample
-                | PartialSample[EncodedCaptioningSample, tuple[int, int]]
+                EncodedCaptioningSample | PartialSample[EncodedCaptioningSample, tuple[int, int]]
             ]:
                 pack: list[
                     EncodedCaptioningSample
@@ -1784,8 +1783,7 @@ class TestDataset(unittest.TestCase):
                     | PartialSample[EncodedCaptioningSample, tuple[int, int]]
                 ],
             ) -> PackedSamplesOutput[
-                EncodedCaptioningSample
-                | PartialSample[EncodedCaptioningSample, tuple[int, int]]
+                EncodedCaptioningSample | PartialSample[EncodedCaptioningSample, tuple[int, int]]
             ]:
                 return TestTaskEncoder.select_samples_to_pack(self, samples)
 
