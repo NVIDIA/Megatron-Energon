@@ -91,7 +91,7 @@ def get_dataset_from_config(
     dataset: BaseCoreDatasetFactory[T_sample]
     ds_type = get_dataset_type(path)
 
-    if ds_type == EnergonDatasetType.JSONL:
+    if ds_type == EnergonDatasetType.JSONL and path.is_file():
         assert sample_type is CrudeSample or sample_type is None, (
             f"Sample type must be CrudeSample for jsonl datasets, but got {sample_type}"
         )
@@ -146,7 +146,7 @@ def get_dataset_from_config(
             worker_config=worker_config,
             **kwargs,
         )
-    elif ds_type == EnergonDatasetType.WEBDATASET:
+    elif ds_type == EnergonDatasetType.MANIFEST_DATASET:
         if dataset_config is None:
             dataset_config = "dataset.yaml"
         if split_config is None:
@@ -162,6 +162,7 @@ def get_dataset_from_config(
                 split_part=split_part,
                 training=training,
                 worker_config=worker_config,
+                subflavors=subflavors,
                 **kwargs,
             ),
             default_type=StandardWebdatasetFactory,

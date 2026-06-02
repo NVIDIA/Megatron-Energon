@@ -40,7 +40,7 @@ def load_dataset(
         mds.post_initialize()
         return mds
     elif ds_type in (
-        EnergonDatasetType.WEBDATASET,
+        EnergonDatasetType.MANIFEST_DATASET,
         EnergonDatasetType.JSONL,
         EnergonDatasetType.BINIDX,
         EnergonDatasetType.PARQUET,

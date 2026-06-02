@@ -3,23 +3,10 @@
 
 import re
 from dataclasses import dataclass
-from typing import (
-    Any,
-    Callable,
-    Dict,
-    List,
-    Literal,
-    Optional,
-    Sequence,
-    Type,
-    Union,
-)
+from typing import Any, Callable, Dict, List, Literal, Optional, Sequence, Type, Union
 
 from megatron.energon.cache import FileStore
-from megatron.energon.cache.file_store import (
-    SystemFileStore,
-    WebdatasetFileStore,
-)
+from megatron.energon.cache.file_store import SystemFileStore, WebdatasetFileStore
 from megatron.energon.dataset_config import load_config
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
@@ -355,7 +342,7 @@ class DatasetReference(
             self._dataset = self._load_nested_metadataset()
             self._dataset.post_initialize()
         elif ds_type in (
-            EnergonDatasetType.WEBDATASET,
+            EnergonDatasetType.MANIFEST_DATASET,
             EnergonDatasetType.JSONL,
             EnergonDatasetType.BINIDX,
             EnergonDatasetType.PARQUET,
@@ -460,7 +447,7 @@ class JoinDatasetReference(DatasetReference):
         # Do not store the loader, the parent MetadatasetJoin will do that.
         self._resolve_path(mds_path)
         ds_type = get_dataset_type(self.path)
-        if ds_type == EnergonDatasetType.WEBDATASET:
+        if ds_type == EnergonDatasetType.MANIFEST_DATASET:
             return DatasetLoader(
                 path=self.path,
                 split_part=self.split_part,

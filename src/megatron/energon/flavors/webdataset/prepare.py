@@ -4,8 +4,6 @@
 import functools
 import json
 import logging
-import random
-import re
 import shutil
 import sys
 import tarfile
@@ -28,13 +26,11 @@ from typing import (
 )
 
 import braceexpand
-import yaml
 
-from megatron.energon import __version__
-from megatron.energon.bracecollapse import collapse
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
 from megatron.energon.eyaml import load_yaml
+from megatron.energon.flavors.manifest import write_manifest_dataset_metadata
 from megatron.energon.flavors.webdataset.aggregator_pool import AggregatorPool, BaseAggregator
 from megatron.energon.flavors.webdataset.config import (
     INDEX_BATCH_SIZE,
@@ -49,10 +45,9 @@ from megatron.energon.flavors.webdataset.config import (
 from megatron.energon.flavors.webdataset.indexing import DuplicateSampleKeyError, SqliteIndexWriter
 from megatron.energon.flavors.webdataset.itar import TarIndexWriter
 from megatron.energon.flavors.webdataset.metadata import get_dataset_info
-from megatron.energon.flavors.webdataset.structs import ShardInfo, WebdatasetInfo, WebdatasetSplits
+from megatron.energon.flavors.webdataset.structs import ShardInfo
 from megatron.energon.media.extractor import MediaFilterConfig
 from megatron.energon.media.metadata import serialize_media_metadata
-from megatron.energon.typed_converter import to_json_object
 
 logger = logging.getLogger(__name__)
 
@@ -688,86 +683,22 @@ class WebdatasetPreparator:
                 "Shards are not in the same order as in the input list."
             )
 
-            info = WebdatasetInfo(
-                energon_version=__version__,
-                shard_counts={shard.name: shard.count for shard in shards},
-            )
             print(f"Saving info to {json_info_config}")
-
-            with json_info_config.open("w") as wf:
-                json.dump(to_json_object(info), wf, indent=2)
-
-            # Fix permissions if needed
-            if fix_local_permissions:
-                try:
-                    json_info_config.local_path().chmod(file_perms)
-                except OSError:
-                    pass
-
-            if yaml_info_config.is_file():
-                # If a .info.yaml existed previously, let's also update it
-                # to keep them in sync
-                with yaml_info_config.open("w") as wf:
-                    yaml.dump(to_json_object(info), wf)
-
-            if split_parts_ratio is not None:
-                # Normalize ratio
-                total_ratio = sum(split_ratio for _, split_ratio in split_parts_ratio)
-                split_parts_ratio = [
-                    (split_part, split_ratio / total_ratio)
-                    for split_part, split_ratio in split_parts_ratio
-                ]
-                # Sample from shards based on the split ratio from split parts
-                split_shards = {}
-                if shuffle_seed is not None:
-                    random.Random(shuffle_seed).shuffle(shards)
-                split_total = 0
-                split_offset = 0
-                for split_part, split_ratio in split_parts_ratio:
-                    split_total += split_ratio
-                    split_end = int(len(shards) * split_total)
-                    split_shards[split_part] = [
-                        shard.name for shard in shards[split_offset:split_end]
-                    ]
-                    split_offset = split_end
-            else:
-                assert split_parts_patterns is not None, (
-                    "Require either split_parts_ratio or split_parts_patterns"
-                )
-                # Sample from shards based on the split patterns from split parts
-                split_shards = {}
-                for split_part, split_pattern in split_parts_patterns:
-                    patterns = [
-                        re.compile(pattern) for pattern in braceexpand.braceexpand(split_pattern)
-                    ]
-                    split_shards[split_part] = [
-                        shard.name
-                        for shard in shards
-                        if any(pattern.match(shard.name) for pattern in patterns)
-                    ]
 
             # Optimize the split parts by trying to bracecollapse the shard names
             print("Collapsing split parts... ", flush=True, end="")
-            for split_part in split_shards:
-                split_shards[split_part] = collapse(split_shards[split_part], keep_order=True)
+            write_manifest_dataset_metadata(
+                parent_path,
+                shards=shards,
+                split_config=split_config,
+                split_parts_ratio=split_parts_ratio,
+                split_parts_patterns=split_parts_patterns,
+                shuffle_seed=shuffle_seed,
+                update_legacy_yaml_info=True,
+                fix_local_permissions=fix_local_permissions,
+                file_perms=file_perms,
+            )
             print("Done", flush=True)
-
-            # Save split config
-            splits_config = WebdatasetSplits(split_parts=split_shards)
-            with (parent_path / MAIN_FOLDER_NAME / split_config).open("w") as wf:
-                if split_config.endswith(".yaml"):
-                    yaml.dump(to_json_object(splits_config), wf, sort_keys=False)
-                elif split_config.endswith(".json"):
-                    json.dump(to_json_object(splits_config), wf, indent=2)
-                else:
-                    raise ValueError(f"Invalid split config extension: {split_config}")
-
-            # Fix permissions if needed
-            if fix_local_permissions:
-                try:
-                    (parent_path / MAIN_FOLDER_NAME / split_config).local_path().chmod(file_perms)
-                except OSError:
-                    pass
 
             return found_parts
         finally:

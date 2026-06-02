@@ -8,10 +8,7 @@ from typing import Optional
 import click
 
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.webdataset.metadata import (
-    EnergonDatasetType,
-    get_dataset_type,
-)
+from megatron.energon.flavors.webdataset.metadata import EnergonDatasetType, get_dataset_type
 from megatron.energon.flavors.webdataset.prepare import WebdatasetPreparator
 from megatron.energon.media.extractor import MediaFilterConfig
 from megatron.energon.media.filesystem_prepare import prepare_filesystem_dataset
@@ -77,7 +74,7 @@ def command(
         index_sqlite_tmp_path = None
 
     ds_type = get_dataset_type(path)
-    if ds_type == EnergonDatasetType.WEBDATASET:
+    if ds_type == EnergonDatasetType.MANIFEST_DATASET:
         click.echo("Preparing webdataset and computing media metadata...")
 
         if progress:
@@ -108,7 +105,7 @@ def command(
         return
     elif ds_type not in (EnergonDatasetType.FILESYSTEM, EnergonDatasetType.INVALID):
         raise click.ClickException(
-            f"'prepare-media' only supports WebDatasets or filesystem datasets, but this path is a '{ds_type}' dataset"
+            f"'prepare-media' only supports manifest datasets or filesystem datasets, but this path is a '{ds_type}' dataset"
         )
 
     click.echo("Preparing filesystem dataset and computing media metadata...")

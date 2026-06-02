@@ -18,17 +18,13 @@ from megatron.energon.flavors.webdataset.config import (
     MAIN_FOLDER_NAME,
 )
 from megatron.energon.flavors.webdataset.empty_dataset_error import EmptyDatasetError
-from megatron.energon.flavors.webdataset.structs import (
-    ShardInfo,
-    WebdatasetInfo,
-    WebdatasetSplits,
-)
+from megatron.energon.flavors.webdataset.structs import ShardInfo, WebdatasetInfo, WebdatasetSplits
 from megatron.energon.typed_converter import JsonParser
 
 
 class EnergonDatasetType(Enum):
     METADATASET = "metadataset"
-    WEBDATASET = "webdataset"
+    MANIFEST_DATASET = "manifest_dataset"
     JSONL = "jsonl"
     BINIDX = "binidx"
     PARQUET = "parquet"
@@ -50,7 +46,7 @@ class WebdatasetMeta:
         path: EPath,
         *,
         split_part: str,
-        split_config: str | None = None,
+        split_config: str | WebdatasetSplits | None = None,
     ) -> "WebdatasetMeta":
         """
         Loads the metadata for a webdataset, i.e. the shards and sample excludes.
@@ -69,20 +65,23 @@ class WebdatasetMeta:
             info_object,
             WebdatasetInfo,
         )
-        try:
-            splits = parser.raw_to_typed(
-                load_yaml_json(path / MAIN_FOLDER_NAME / split_config),
-                WebdatasetSplits,
-            )
-        except FileNotFoundError:
-            if split_config == "split.yaml":
-                # Try split.json instead
+        if isinstance(split_config, WebdatasetSplits):
+            splits = split_config
+        else:
+            try:
                 splits = parser.raw_to_typed(
-                    load_yaml_json(path / MAIN_FOLDER_NAME / "split.json"),
+                    load_yaml_json(path / MAIN_FOLDER_NAME / split_config),
                     WebdatasetSplits,
                 )
-            else:
-                raise
+            except FileNotFoundError:
+                if split_config == "split.yaml":
+                    # Try split.json instead
+                    splits = parser.raw_to_typed(
+                        load_yaml_json(path / MAIN_FOLDER_NAME / "split.json"),
+                        WebdatasetSplits,
+                    )
+                else:
+                    raise
         assert split_part in splits.split_parts, f"Invalid split part: {split_part!r}"
         split_excludes = {
             excluded
@@ -172,7 +171,7 @@ def get_dataset_type(path: EPath) -> EnergonDatasetType:
         else:
             return EnergonDatasetType.INVALID
     elif check_dataset_info_present(path):
-        return EnergonDatasetType.WEBDATASET
+        return EnergonDatasetType.MANIFEST_DATASET
     elif metadata_db.is_file():
         # There is an sqlite, but no .info.json or .info.yaml,
         # so it's a filesystem dataset

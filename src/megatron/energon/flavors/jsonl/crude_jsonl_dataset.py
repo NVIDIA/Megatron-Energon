@@ -7,14 +7,13 @@ from typing import Any, Callable, Dict, Optional
 
 from megatron.energon.cache import FileStore
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.base_dataset import (
-    BaseCoreDatasetFactory,
-    SavableDataset,
-)
+from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory, SavableDataset
 from megatron.energon.flavors.crude import CrudeSample
 from megatron.energon.flavors.jsonl.ijsonl import IJsonlIndexReader
 from megatron.energon.flavors.jsonl.jsonl_prepare import JsonlPreparator
+from megatron.energon.flavors.jsonl.multi_jsonl_reader import MultiJsonlFileStore, MultiJsonlReader
 from megatron.energon.flavors.webdataset.base_webdataset import _print_shard_slices
+from megatron.energon.flavors.webdataset.metadata import WebdatasetMeta
 from megatron.energon.flavors.webdataset.sample_loader import (
     RawSampleData,
     WebdatasetSampleLoaderDataset,
@@ -24,6 +23,7 @@ from megatron.energon.flavors.webdataset.structs import (
     DatasetSubset,
     FilteredSample,
     ShardInfo,
+    WebdatasetSplits,
 )
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.map_dataset import MapDataset
@@ -191,6 +191,154 @@ class CrudeJsonlDatasetFactory(
         return f"{type(self).__name__}(path={self.path})"
 
 
+class CrudeJsonlShardListDatasetFactory(
+    BaseCoreDatasetFactory[CrudeSample],
+    Sharder,
+):
+    """Factory for a prepared logical dataset composed of many JSONL shards."""
+
+    __sample_type__ = CrudeSample
+
+    path: EPath
+    training: bool
+    worker_config: WorkerConfig
+
+    def __init__(
+        self,
+        path: EPath,
+        *,
+        training: bool,
+        worker_config: WorkerConfig,
+        split_config: str | WebdatasetSplits = "split.yaml",
+        split_part: str = "train",
+        shuffle_over_epochs: Optional[int] = 1,
+        parallel_shard_iters: Optional[int] = None,
+        max_samples_per_sequence: Optional[int] = None,
+        subset: Optional[DatasetSubset] = None,
+        part_filter: Optional[Callable[[str], bool]] = None,
+        reader_cache_size: int = 16,
+    ):
+        assert self.__sample_type__ is not None, f"Class {type(self)} must define __sample_type__"
+        self.path = EPath(path)
+        self.paths = [self.path]
+        self.training = training
+        self.worker_config = worker_config
+        self.split_config = split_config
+        self.split_part = split_part
+        self.shuffle_over_epochs = shuffle_over_epochs
+        self.parallel_shard_iters = parallel_shard_iters
+        self.max_samples_per_sequence = max_samples_per_sequence
+        self.subset = subset
+        self.part_filter = part_filter
+        self.reader_cache_size = reader_cache_size
+
+        meta = WebdatasetMeta.from_config(
+            self.path,
+            split_part=split_part,
+            split_config=split_config,
+        )
+        if meta.sample_excludes:
+            raise ValueError("Prepared JSONL shard datasets do not support sample-level excludes")
+        self._shards = meta.shards
+        self.jsonl_paths = [shard.path for shard in self._shards]
+        for shard in self._shards:
+            actual_count = IJsonlIndexReader.count_samples(shard.path)
+            assert shard.count == actual_count, (
+                f"JSONL shard count mismatch for {shard.path}: "
+                f"metadata={shard.count}, index={actual_count}"
+            )
+            assert shard.path.size() == IJsonlIndexReader.size(shard.path), (
+                "The index of the jsonl file does not match the file. Regenerate the index: "
+                f"{shard.path}"
+            )
+        self._len = sum(shard.count for shard in self._shards)
+
+    def __len__(self) -> int:
+        return self._len
+
+    def build(
+        self, worker_rotation_offset: int = 0, part_filter: Callable[[str], bool] | None = None
+    ) -> SavableDataset[CrudeSample]:
+        if self.parallel_shard_iters is None:
+            parallel_shard_iters = 16 if self.training else 1
+        else:
+            parallel_shard_iters = self.parallel_shard_iters
+
+        workers_sample_slice_offsets = self.shard_workers(
+            self._shards,
+            worker_config=self.worker_config,
+            max_samples_per_sequence=self.max_samples_per_sequence,
+            rotation_offset=worker_rotation_offset,
+            subset=self.subset,
+        )
+        _print_shard_slices(self.worker_config, self._shards, workers_sample_slice_offsets)
+
+        reader = MultiJsonlReader(
+            self.path,
+            self.jsonl_paths,
+            index_cache_size=parallel_shard_iters,
+            reader_cache_size=self.reader_cache_size,
+        )
+
+        dataset = WebdatasetSampleLoaderDataset(
+            join_readers=[reader],
+            workers_sample_slice_offsets=workers_sample_slice_offsets,
+            worker_config=self.worker_config,
+            shuffle_over_epochs=self.shuffle_over_epochs if self.training else None,
+            parallel_slice_iters=parallel_shard_iters,
+        )
+        if (part_filter is not None and not part_filter("json")) or (
+            self.part_filter is not None and not self.part_filter("json")
+        ):
+
+            def load_fn(sample: RawSampleData) -> CrudeSample:
+                sample.data[0].pop("json", None)
+                return self._load_sample_raw(sample)
+
+        else:
+            load_fn = self._load_sample_raw
+        return MapDataset(
+            dataset,
+            load_fn,
+            stateless_map_fn=True,
+            map_fn_config=self.config,
+            worker_config=self.worker_config,
+        )
+
+    def as_file_store(self) -> FileStore:
+        return MultiJsonlFileStore(
+            self.path,
+            self.jsonl_paths,
+            reader_cache_size=self.reader_cache_size,
+        )
+
+    def _load_sample(self, sample: FilteredSample) -> CrudeSample:
+        return CrudeSample(sample)
+
+    def _load_sample_raw(self, raw_sample: RawSampleData) -> CrudeSample:
+        assert len(raw_sample.data) == 1 and raw_sample.data[0] is not None
+        return self._load_sample(raw_sample.data[0])
+
+    def config(self) -> Dict[str, Any]:
+        return dict(
+            type=type(self).__qualname__,
+            training=self.training,
+            _path=str(self.path),
+            jsonl_shard_count=len(self._shards),
+            count=self._len,
+            split_config=self.split_config if isinstance(self.split_config, str) else "<inline>",
+            split_part=self.split_part,
+            shuffle_over_epochs=self.shuffle_over_epochs,
+            parallel_shard_iters=self.parallel_shard_iters,
+            max_samples_per_sequence=self.max_samples_per_sequence,
+            subset=self.subset.config() if self.subset is not None else None,
+            reader_cache_size=self.reader_cache_size,
+        )
+
+    def __str__(self):
+        return f"{type(self).__name__}(path={self.path}, shards={len(self._shards)})"
+
+
 class DefaultCrudeJsonlDatasetFactory(CrudeJsonlDatasetFactory):
     """
     Adds subflavors to the sample and loads the json.
@@ -209,6 +357,28 @@ class DefaultCrudeJsonlDatasetFactory(CrudeJsonlDatasetFactory):
         if "json" in sample:
             sample["json"] = json.loads(sample["json"])
 
+        return super()._load_sample(sample)
+
+    def config(self) -> Dict[str, Any]:
+        return dict(
+            **super().config(),
+            subflavors=self.subflavors,
+        )
+
+
+class DefaultCrudeJsonlShardListDatasetFactory(CrudeJsonlShardListDatasetFactory):
+    """Adds subflavors to samples and loads JSON for prepared JSONL shard datasets."""
+
+    def __init__(self, path: EPath, *, subflavors: Optional[Dict[str, Any]] = None, **kwargs):
+        if "decoder" in kwargs:
+            del kwargs["decoder"]
+        super().__init__(path, **kwargs)
+        self.subflavors = subflavors
+
+    def _load_sample(self, sample: FilteredSample) -> CrudeSample:
+        sample["__subflavors__"] = self.subflavors
+        if "json" in sample:
+            sample["json"] = json.loads(sample["json"])
         return super()._load_sample(sample)
 
     def config(self) -> Dict[str, Any]:

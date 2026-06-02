@@ -6,6 +6,7 @@ import inspect
 import json
 import re
 import typing
+from contextlib import nullcontext
 from pathlib import Path
 from types import FunctionType
 from typing import Any, List, Optional, Tuple, Type
@@ -20,6 +21,7 @@ from megatron.energon.flavors import (
     CrudeWebdataset,
     Sample,
 )
+from megatron.energon.flavors.manifest import write_manifest_dataset_metadata
 from megatron.energon.flavors.parquet.prepare import scan_parquet_dataset
 from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
 from megatron.energon.flavors.webdataset.metadata import (
@@ -28,6 +30,7 @@ from megatron.energon.flavors.webdataset.metadata import (
     get_dataset_info,
     get_dataset_type,
 )
+from megatron.energon.flavors.webdataset.structs import ShardInfo
 from megatron.energon.media.extractor import MediaFilterConfig
 from megatron.energon.metadataset.loader import prepare_metadataset
 
@@ -93,6 +96,122 @@ def printify_json(data: Any) -> Any:
     elif isinstance(data, str):
         return data[:25] + ("..." if len(data) > 25 else "")
     return data
+
+
+def _discover_jsonl_shards(path: EPath, exclude: str) -> list[tuple[str, EPath]]:
+    shards = []
+    for shard_path in sorted(path.glob("**/*.jsonl"), key=lambda candidate: candidate.url):
+        if not shard_path.is_file():
+            continue
+        rel_path = shard_path.relative_to(path)
+        if rel_path.startswith(f"{MAIN_FOLDER_NAME}/"):
+            continue
+        if exclude and re.search(exclude, rel_path):
+            continue
+        shards.append((rel_path, shard_path))
+    return shards
+
+
+def _is_jsonl_shard_manifest(path: EPath) -> bool:
+    dataset_yaml = path / MAIN_FOLDER_NAME / "dataset.yaml"
+    if not dataset_yaml.is_file():
+        return False
+    with dataset_yaml.open("r") as f:
+        dataset_definition = yaml.safe_load(f)
+    if not isinstance(dataset_definition, dict):
+        return False
+    return dataset_definition.get("__class__") == "DefaultCrudeJsonlShardListDatasetFactory"
+
+
+def _jsonl_split_parts_ratio(
+    *,
+    split_ratio: Optional[str],
+    non_interactive: bool,
+) -> list[tuple[str, float]]:
+    if split_ratio is not None:
+        split_input = split_ratio
+    elif non_interactive:
+        raise click.ClickException("--split-ratio is required in non-interactive mode.")
+    else:
+        split_input = click.prompt(
+            'Please enter a desired train/val/test split like "0.5, 0.2, 0.3" or "8,1,1"',
+            type=str,
+            default="1,0,0",
+        )
+
+    try:
+        split = [float(x.strip()) for x in split_input.split(",")]
+        assert len(split) == 3
+    except (ValueError, AssertionError):
+        raise click.ClickException("Invalid split. Expected three comma-separated numbers.")
+
+    if sum(split) <= 0:
+        raise click.ClickException("Split ratios must sum to a positive value.")
+    return [("train", split[0]), ("val", split[1]), ("test", split[2])]
+
+
+def _prepare_jsonl_shard_directory(
+    path: EPath,
+    *,
+    shards: list[tuple[str, EPath]],
+    progress: bool,
+    split_parts: Optional[List[str]],
+    shuffle_shards: bool,
+    non_interactive: bool,
+    split_ratio: Optional[str],
+    force_overwrite: bool,
+) -> int:
+    if check_dataset_info_present(path):
+        info = get_dataset_info(path)
+        if not force_overwrite:
+            if non_interactive:
+                raise click.ClickException(
+                    "JSONL shard dataset has already been prepared. "
+                    "Use --force-overwrite to overwrite."
+                )
+            if not click.confirm(
+                "It seems the JSONL shard dataset had already been prepared. "
+                "Do you want to continue?"
+            ):
+                return int(sum(info.get("shard_counts", {}).values()))
+
+    click.echo(f"Found {len(shards)} JSONL shard files.")
+    shard_counts = {}
+    iterable = shards
+    if progress:
+        iterable = click.progressbar(shards, label="Indexing JSONL shards", show_pos=True)
+    with iterable if progress else nullcontext(iterable) as shard_iter:
+        for rel_path, shard_path in shard_iter:
+            shard_counts[rel_path] = CrudeJsonlDatasetFactory.prepare_dataset(shard_path)
+
+    dataset_definition = {
+        "__module__": "megatron.energon",
+        "__class__": "DefaultCrudeJsonlShardListDatasetFactory",
+    }
+    jsonl_shards = [
+        ShardInfo(name=rel_path, path=shard_path, count=shard_counts[rel_path])
+        for rel_path, shard_path in shards
+    ]
+    if split_parts:
+        split_parts_patterns = [tuple(item.split(":", 1)) for item in split_parts]
+        split_parts_ratio = None
+    else:
+        split_parts_patterns = None
+        split_parts_ratio = _jsonl_split_parts_ratio(
+            split_ratio=split_ratio,
+            non_interactive=non_interactive,
+        )
+    write_manifest_dataset_metadata(
+        path,
+        shards=jsonl_shards,
+        split_config="split.yaml",
+        split_parts_ratio=split_parts_ratio,
+        split_parts_patterns=split_parts_patterns,
+        shuffle_seed=42 if shuffle_shards else None,
+        dataset_definition=dataset_definition,
+    )
+
+    return sum(shard_counts.values())
 
 
 @click.command(name="prepare")
@@ -249,13 +368,31 @@ def command(
         print("Preparing metadataset...")
         prepare_metadataset(path)
         return
-    elif ds_type == EnergonDatasetType.JSONL:
+    elif ds_type == EnergonDatasetType.JSONL and path.is_file():
         if do_media_metadata:
             raise click.ClickException(
                 "JSONL datasets do not support media metadata. Remove --media-metadata-by-... to continue."
             )
         print("Preparing jsonl dataset...")
         count = CrudeJsonlDatasetFactory.prepare_dataset(path)
+        print(f"Done. Found {count} samples.")
+        return
+    elif ds_type == EnergonDatasetType.MANIFEST_DATASET and _is_jsonl_shard_manifest(path):
+        if do_media_metadata:
+            raise click.ClickException(
+                "JSONL datasets do not support media metadata. Remove --media-metadata-by-... to continue."
+            )
+        print("Preparing jsonl shard dataset...")
+        count = _prepare_jsonl_shard_directory(
+            path,
+            shards=_discover_jsonl_shards(path, exclude),
+            progress=progress,
+            split_parts=list(split_parts) if split_parts is not None else None,
+            shuffle_shards=shuffle_tars,
+            non_interactive=non_interactive,
+            split_ratio=split_ratio,
+            force_overwrite=force_overwrite,
+        )
         print(f"Done. Found {count} samples.")
         return
     elif ds_type == EnergonDatasetType.PARQUET:
@@ -273,6 +410,28 @@ def command(
         )
 
     assert path.is_dir(), f"Path {path} is not a known dataset type"
+
+    jsonl_shards = (
+        _discover_jsonl_shards(path, exclude) if ds_type == EnergonDatasetType.INVALID else []
+    )
+    if jsonl_shards:
+        if do_media_metadata:
+            raise click.ClickException(
+                "JSONL datasets do not support media metadata. Remove --media-metadata-by-... to continue."
+            )
+        print("Preparing jsonl shard dataset...")
+        count = _prepare_jsonl_shard_directory(
+            path,
+            shards=jsonl_shards,
+            progress=progress,
+            split_parts=list(split_parts) if split_parts is not None else None,
+            shuffle_shards=shuffle_tars,
+            non_interactive=non_interactive,
+            split_ratio=split_ratio,
+            force_overwrite=force_overwrite,
+        )
+        print(f"Done. Found {count} samples.")
+        return
 
     if tar_index_only:
         info = get_dataset_info(path)
