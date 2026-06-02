@@ -12,6 +12,9 @@ from megatron.energon.metadataset import load_dataset
 from megatron.energon.task_encoder.base import DefaultTaskEncoder, TaskEncoder, WorkerConfig
 
 T = TypeVar("T", covariant=True)
+PackingBufferSize = (
+    int | Literal["stream"] | dict[str | None, int | Literal["stream"] | None] | None
+)
 
 
 def _split_kwargs(kwargs: dict) -> dict:
@@ -111,7 +114,7 @@ def get_train_dataset(
     worker_config: WorkerConfig,
     batch_size: Optional[int],
     batch_drop_last: bool = False,
-    packing_buffer_size: Optional[int | dict[str | None, int | None]] = None,
+    packing_buffer_size: PackingBufferSize = None,
     shuffle_buffer_size: Optional[int | dict[str | None, int | None]],
     max_samples_per_sequence: Optional[int],
     virtual_epoch_length: int = 0,
@@ -137,9 +140,10 @@ def get_train_dataset(
         worker_config: Worker configuration to use.
         batch_size: Size of a batch. If None, do not batch
         batch_drop_last: If true, drop the last batch if it is smaller than `batch_size`.
-        packing_buffer_size: Size of the packing buffer. If a dict, keys are dataset group names from
-            Metadataset V2 (YAML ``group``, merged along the path; ``None`` is the default group).
-            Values are buffer sizes, or ``None`` to disable packing for that group.
+        packing_buffer_size: Size of the packing buffer, or ``"stream"`` for pull-based packing
+            without a packing buffer. If a dict, keys are dataset group names from Metadataset V2
+            (YAML ``group``, merged along the path; ``None`` is the default group). Values are
+            buffer sizes, ``"stream"``, or ``None`` to disable packing for that group.
         shuffle_buffer_size: Sample shuffle buffer size before task encoding. If a dict, keys are the
             same dataset group names as for ``packing_buffer_size``; values are buffer sizes or ``None``
             to disable shuffling for that group.
@@ -191,7 +195,7 @@ def get_val_dataset(
     worker_config: WorkerConfig,
     batch_size: int,
     batch_drop_last: bool = False,
-    packing_buffer_size: Optional[int | dict[str | None, int | None]] = None,
+    packing_buffer_size: PackingBufferSize = None,
     limit: Optional[int] = None,
     task_encoder: TaskEncoder[Any, Any, Any, T] = DefaultTaskEncoder(),
     **kwargs,
@@ -213,8 +217,9 @@ def get_val_dataset(
         worker_config: Worker configuration to use.
         batch_size: Size of a batch
         batch_drop_last: If true, drop the last batch if it is smaller than `batch_size`.
-        packing_buffer_size: Size of the packing buffer. If a dict, keys are dataset group names from
-            Metadataset V2 (same as ``get_train_dataset``); values are buffer sizes or ``None`` to
+        packing_buffer_size: Size of the packing buffer, or ``"stream"`` for pull-based packing
+            without a packing buffer. If a dict, keys are dataset group names from Metadataset V2
+            (same as ``get_train_dataset``); values are buffer sizes, ``"stream"``, or ``None`` to
             disable packing per group.
         limit: If set, limit the number of batches loaded from the dataset to this.
         task_encoder: Task encoder to use.
@@ -249,7 +254,7 @@ def get_val_datasets(
     worker_config: WorkerConfig,
     batch_size: int,
     batch_drop_last: bool = False,
-    packing_buffer_size: Optional[int | dict[str | None, int | None]] = None,
+    packing_buffer_size: PackingBufferSize = None,
     limit: Optional[int] = None,
     task_encoder: TaskEncoder[Any, Any, Any, T] = DefaultTaskEncoder(),
     **kwargs,
@@ -271,8 +276,9 @@ def get_val_datasets(
         worker_config: Worker configuration to use.
         batch_size: Size of a batch
         batch_drop_last: If true, drop the last batch if it is smaller than `batch_size`.
-        packing_buffer_size: Size of the packing buffer. If a dict, keys are dataset group names from
-            Metadataset V2 (same as ``get_train_dataset``); values are buffer sizes or ``None`` to
+        packing_buffer_size: Size of the packing buffer, or ``"stream"`` for pull-based packing
+            without a packing buffer. If a dict, keys are dataset group names from Metadataset V2
+            (same as ``get_train_dataset``); values are buffer sizes, ``"stream"``, or ``None`` to
             disable packing per group.
         limit: If set, limit the number of batches loaded from the dataset to this.
         task_encoder: Task encoder to use.

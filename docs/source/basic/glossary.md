@@ -31,6 +31,9 @@ SPDX-License-Identifier: BSD-3-Clause -->
 * **Sequence Packing**
     * A method to better utilize the available context length / sequence length of a model and reduce padding.
     * Explained in [](../advanced/packing.md)
+* **Streaming Packing**
+    * A sequence packing mode selected with `packing_buffer_size="stream"`. The task encoder pulls samples from an iterator until the next pack is complete, instead of selecting packs from a fixed-size buffer.
+    * Explained in [](../advanced/packing.md)
 * **Task Encoder**
     * An Energon-specific concept: The TaskEncoder is a user-defined class to customize the steps of the data flow pipeline.
     * See [](../basic/basics_flow.md) and [](../basic/task_encoder.md)

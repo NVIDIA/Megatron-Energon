@@ -11,9 +11,9 @@ lengths leading to lots of padding and hence wasted compute.
 
 This section explains how you can pack samples together and utilize the full context length.
 
-## How to pack samples on the fly
+## Buffered packing
 
-To use packing, you need to implement the TaskEncoder methods {py:meth}`select_samples_to_pack <megatron.energon.TaskEncoder.select_samples_to_pack>`
+To use buffered packing, you need to implement the TaskEncoder methods {py:meth}`select_samples_to_pack <megatron.energon.TaskEncoder.select_samples_to_pack>`
 and {py:meth}`pack_selected_samples <megatron.energon.TaskEncoder.pack_selected_samples>`.
 Furthermore, you need to initialize the loader with the `packing_buffer_size` argument set to a non-zero number.
 
@@ -23,6 +23,56 @@ a list of lists of samples. Alternatively it may return {py:class}`PackedSamples
 
 For each group, the second method `pack_selected_samples` will be called. You need to implement how a group of
 samples will be mapped to a single sample. In terms of LLMs for example, this method might concatenate the input tokens.
+
+## Streaming packing
+
+Buffered packing is useful when the selector needs a window of samples, for example to sort or search
+for a good combination. If your algorithm greedily emits one pack at a time and can slice the last
+sample, use streaming packing instead. Streaming packing calls
+{py:meth}`select_next_pack <megatron.energon.TaskEncoder.select_next_pack>` with an iterator and lets
+the task encoder pull only the samples needed for the next pack:
+
+```python
+get_train_dataset(
+    path,
+    batch_size=None,
+    packing_buffer_size="stream",
+    task_encoder=MyTaskEncoder(...),
+)
+```
+
+`select_next_pack` returns the same shapes as buffered packing, but it must return at most one
+non-empty pack. Return a plain list when there is no carryover:
+
+```python
+def select_next_pack(self, samples):
+    pack = []
+    remaining = self.max_tokens
+    for sample in samples:
+        sample_len = len(sample.tokens)
+        if sample_len <= remaining:
+            pack.append(sample)
+            remaining -= sample_len
+            if remaining == 0:
+                return [pack]
+            continue
+
+        split = remaining
+        pack.append(PartialSample(sample=sample, slice=(0, split)))
+        return PackedSamplesOutput(
+            packs=[pack],
+            pushback=(PartialSample(sample=sample, slice=(split, sample_len)),),
+        )
+    return [pack] if pack else []
+```
+
+As with buffered packing, {py:meth}`postencode_sample <megatron.energon.TaskEncoder.postencode_sample>`
+runs on each selected pack member before
+{py:meth}`pack_selected_samples <megatron.energon.TaskEncoder.pack_selected_samples>` is called.
+
+`packing_buffer_size` may also be a per-group dict when using Metadataset V2 groups. Values may be
+an integer for buffered packing, `"stream"` for streaming packing, or `None` to disable packing for
+that group.
 
 
 ```{admonition} Note
@@ -45,9 +95,10 @@ with the same input and random states.
 ## Carrying over partial samples
 
 Sometimes the next sample only partially fits into the remaining packed context. In that case,
-{py:meth}`select_samples_to_pack <megatron.energon.TaskEncoder.select_samples_to_pack>` can return a
+{py:meth}`select_samples_to_pack <megatron.energon.TaskEncoder.select_samples_to_pack>` or
+{py:meth}`select_next_pack <megatron.energon.TaskEncoder.select_next_pack>` can return a
 {py:class}`PartialSample <megatron.energon.PartialSample>` for the part that fits and push back another
-`PartialSample` for the remainder.
+`PartialSample` for the remainder via {py:class}`PackedSamplesOutput <megatron.energon.PackedSamplesOutput>`.
 
 `PartialSample` stores the original sample and a task-defined slice payload:
 
@@ -117,7 +168,8 @@ def postencode_sample(
 If you do not use `postencode_sample`, then
 {py:meth}`pack_selected_samples <megatron.energon.TaskEncoder.pack_selected_samples>` receives the
 `PartialSample` values directly and must apply the slice there. In that mode, type the final packer
-to accept the same union of full and partial samples returned by `select_samples_to_pack`.
+to accept the same union of full and partial samples returned by `select_samples_to_pack` or
+`select_next_pack`.
 
 Example packing for a large language model extending the example from the [](../basic/task_encoder) section:
 

@@ -14,7 +14,9 @@ from typing import (
     Generator,
     Generic,
     Hashable,
+    Iterator,
     List,
+    Literal,
     Optional,
     Sequence,
     Tuple,
@@ -56,6 +58,7 @@ from megatron.energon.wrappers import (
     PackingDataset,
     PartialSample,
     ShuffleBufferDataset,
+    StreamingPackingDataset,
 )
 from megatron.energon.wrappers.packing_dataset import PackedSamplesOutput
 from megatron.energon.wrappers.repeat_dataset import RepeatDataset
@@ -70,6 +73,9 @@ T_batch = TypeVar("T_batch")
 
 
 FeatureBatcher = Callable[[List[Any]], Any]
+PackingBufferSize = (
+    int | Literal["stream"] | dict[str | None, int | Literal["stream"] | None] | None
+)
 
 
 def generic_batch(batch: List[Any]) -> Any:
@@ -616,6 +622,26 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         """
         raise NotImplementedError("Packing only effective when overridden.")
 
+    def select_next_pack(
+        self, samples: Iterator[T_encoded_sample | PartialSample[T_encoded_sample, Any]]
+    ) -> (
+        list[list[T_encoded_sample | PartialSample[T_encoded_sample, Any]]]
+        | PackedSamplesOutput[T_encoded_sample | PartialSample[T_encoded_sample, Any]]
+    ):
+        """
+        For streaming packing, selects the next pack by pulling samples from an iterator.
+        Streaming packing is active when ``packing_buffer_size="stream"`` is set.
+
+        Args:
+            samples: Iterator of samples to pull from. Carryover returned via
+                :class:`PackedSamplesOutput` will be yielded first on the next call.
+
+        Returns:
+            Either a ``list[list[T]]`` containing at most one pack, or
+            :class:`PackedSamplesOutput` containing at most one pack plus pushback.
+        """
+        raise NotImplementedError("Streaming packing only effective when overridden.")
+
     def pack_selected_samples(
         self, samples: List[T_encoded_sample | PartialSample[T_encoded_sample, Any]]
     ) -> T_encoded_sample:
@@ -638,7 +664,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         dataset: SavableDataset[T_encoded_sample],
         *,
         group: Optional[str],
-        packing_buffer_size: int | dict[str | None, int | None] | None,
+        packing_buffer_size: PackingBufferSize,
         worker_config: WorkerConfig,
     ) -> SavableDataset[T_encoded_sample]:
         """Builds the (packing +) post-encode stage after encoding.
@@ -650,11 +676,50 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         Args:
             dataset: Encoded sample stream for one group.
             group: Key into ``packing_buffer_size`` when it is a dict; ``None`` is the default group.
-            packing_buffer_size: Global buffer size, per-group mapping, or ``None`` to disable packing.
+            packing_buffer_size: Global buffer size, per-group mapping, ``None`` to disable
+                buffered packing, or ``"stream"`` to select pull-based one-pack-at-a-time packing.
             worker_config: Worker configuration for wrapped datasets.
         """
         if isinstance(packing_buffer_size, dict):
             packing_buffer_size = packing_buffer_size[group]
+
+        if packing_buffer_size == "stream":
+            select_next_pack_provided = self._is_overridden(self.select_next_pack)
+            pack_selected_samples_provided = self._is_overridden(self.pack_selected_samples)
+
+            assert select_next_pack_provided and pack_selected_samples_provided, (
+                "Both select_next_pack and pack_selected_samples methods must be provided in the TaskEncoder when using packing_buffer_size='stream'"
+            )
+
+            if self._is_overridden(self.postencode_sample):
+                post_encode_fn = self.postencode_sample
+                post_encode_stateless = get_stateless(self.postencode_sample)
+                post_encode_failure_tolerance = get_failure_tolerance(
+                    self.postencode_sample, self.__default_failure_tolerance__
+                )
+            else:
+                post_encode_fn = None
+                post_encode_stateless = True
+                post_encode_failure_tolerance = 0
+
+            return StreamingPackingDataset(
+                dataset,
+                select_next_pack=self.select_next_pack,
+                final_packer=self.pack_selected_samples,
+                final_packer_stateless=get_stateless(self.pack_selected_samples),
+                final_packer_skip_safe=get_skip_safe(self.pack_selected_samples),
+                sample_encoder=post_encode_fn,
+                sample_encoder_stateless=post_encode_stateless,
+                sample_encoder_skip_safe=post_encode_fn is None or get_skip_safe(post_encode_fn),
+                worker_config=worker_config,
+                select_failure_tolerance=get_failure_tolerance(
+                    self.select_next_pack, self.__default_failure_tolerance__
+                ),
+                final_packer_failure_tolerance=get_failure_tolerance(
+                    self.pack_selected_samples, self.__default_failure_tolerance__
+                ),
+                sample_encoder_failure_tolerance=post_encode_failure_tolerance,
+            )
 
         if packing_buffer_size is None:
             if self._is_overridden(self.postencode_sample):
@@ -668,6 +733,9 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                     ),
                 )
             return dataset
+
+        if not isinstance(packing_buffer_size, int):
+            raise ValueError(f"Unsupported packing_buffer_size: {packing_buffer_size!r}")
 
         select_samples_to_pack_provided = self._is_overridden(self.select_samples_to_pack)
         pack_selected_samples_provided = self._is_overridden(self.pack_selected_samples)
@@ -1006,7 +1074,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
     def _build_train_blend_shuffle_encode_groups(
         self,
         datasets: List[LoadedDataset],
-        packing_buffer_size: Optional[int | dict[str | None, int | None]],
+        packing_buffer_size: PackingBufferSize,
         blend_mode: DatasetBlendMode,
         repeat: bool,
         shuffle_buffer_size: Optional[int | dict[str | None, int | None]],
@@ -1074,7 +1142,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         worker_config: WorkerConfig,
         batch_size: Optional[int],
         batch_drop_last: bool = False,
-        packing_buffer_size: Optional[int | dict[str | None, int | None]] = None,
+        packing_buffer_size: PackingBufferSize = None,
         virtual_epoch_length: int = 0,
         shuffle_buffer_size: Optional[int | dict[str | None, int | None]] = None,
         blend_mode: DatasetBlendMode = DatasetBlendMode.NONE,
@@ -1087,9 +1155,9 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             worker_config: Worker configuration for wrapped datasets.
             batch_size: Batch dimension; ``None`` skips batching.
             batch_drop_last: If true, drop the last batch when smaller than ``batch_size``.
-            packing_buffer_size: Packing buffer size, or a dict mapping dataset group keys
-                (including ``None`` for the default group) to sizes or ``None`` to disable packing
-                per group.
+            packing_buffer_size: Packing buffer size, ``"stream"`` for pull-based packing, or a
+                dict mapping dataset group keys (including ``None`` for the default group) to sizes,
+                ``"stream"``, or ``None`` to disable packing per group.
             virtual_epoch_length: If positive, wraps with epochization at this length.
             shuffle_buffer_size: Shuffle buffer before encoding, or per-group dict like
                 ``packing_buffer_size``.
@@ -1155,7 +1223,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
     def _build_val_concat_encode_groups(
         self,
         datasets: List[LoadedDataset],
-        packing_buffer_size: Optional[int | dict[str | None, int | None]],
+        packing_buffer_size: PackingBufferSize,
         worker_config: WorkerConfig,
     ) -> SavableDataset[T_encoded_sample]:
         """Builds the validation pipeline with optional per-dataset-group isolation.
@@ -1205,7 +1273,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         worker_config: WorkerConfig,
         batch_size: int,
         batch_drop_last: bool = False,
-        packing_buffer_size: Optional[int | dict[str | None, int | None]] = None,
+        packing_buffer_size: PackingBufferSize = None,
         limit: Optional[int] = None,
     ) -> SavableDataset[T_batch]:
         """Combines validation datasets into one batched dataset pipeline.
@@ -1215,8 +1283,8 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             worker_config: Worker configuration for wrapped datasets.
             batch_size: Batch dimension.
             batch_drop_last: If true, drop the last batch when smaller than ``batch_size``.
-            packing_buffer_size: Packing buffer size, or per-group dict (keys include ``None`` for the
-                default group).
+            packing_buffer_size: Packing buffer size, ``"stream"`` for pull-based packing, or
+                per-group dict (keys include ``None`` for the default group).
             limit: If set and positive, caps the number of batches via :class:`~megatron.energon.LimitDataset`.
 
         Returns:
