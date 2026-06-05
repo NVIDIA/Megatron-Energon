@@ -74,20 +74,20 @@ class AuxFilesystemReference:
 
 @edataclass
 class AuxByteRangeStoreReference:
-    root: Union[str, EPath]
+    byterange_fs_path: Union[str, EPath]
 
     def _resolve_path(self, mds_path: Optional[EPath]) -> EPath:
         assert mds_path is not None
-        if not isinstance(self.root, EPath):
-            self.root = mds_path.parent / self.root
-        return self.root
+        if not isinstance(self.byterange_fs_path, EPath):
+            self.byterange_fs_path = mds_path.parent / self.byterange_fs_path
+        return self.byterange_fs_path
 
     def post_initialize(self, mds_path: Optional[EPath] = None) -> None:
         self._resolve_path(mds_path)
 
     def get_file_store(self) -> FileStore:
-        assert isinstance(self.root, EPath), "Missing call to post_initialize"
-        return ByteRangeStore(self.root)
+        assert isinstance(self.byterange_fs_path, EPath), "Missing call to post_initialize"
+        return ByteRangeStore(self.byterange_fs_path)
 
 
 @edataclass
@@ -303,7 +303,7 @@ class DatasetReference(
             if aux_type == "filesystem":
                 return AuxFilesystemReference(fs_path=path)
             if aux_type == "byterange":
-                return AuxByteRangeStoreReference(root=path)
+                return AuxByteRangeStoreReference(byterange_fs_path=path)
             assert aux_type is None, f"Invalid auxiliary type: {aux_type} in path {reference}"
             return AuxDatasetReference(path=path)
         return AuxDatasetReference(path=reference)
@@ -337,8 +337,8 @@ class DatasetReference(
                 traversed_aux[key] = value.fs_path
             else:
                 assert isinstance(value, AuxByteRangeStoreReference)
-                assert isinstance(value.root, EPath)
-                traversed_aux[key] = value.root
+                assert isinstance(value.byterange_fs_path, EPath)
+                traversed_aux[key] = value.byterange_fs_path
         return traversed_aux
 
     def _load_nested_metadataset(self) -> DatasetLoaderInterface:
