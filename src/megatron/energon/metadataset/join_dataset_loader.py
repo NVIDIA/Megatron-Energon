@@ -541,7 +541,6 @@ class JoinDatasetLoader(DatasetLoaderInterface):
         subflavors: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: Optional[int] = 1,
         subset: Optional[DatasetSubset] = None,
-        group: Optional[str] = None,
         **kwargs,
     ) -> LoadedDatasetList:
         return LoadedDatasetList(
@@ -558,7 +557,6 @@ class JoinDatasetLoader(DatasetLoaderInterface):
                         **kwargs,
                     ),
                     weight=None,
-                    group=group,
                 )
             ],
         )

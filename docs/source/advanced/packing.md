@@ -70,9 +70,35 @@ As with buffered packing, {py:meth}`postencode_sample <megatron.energon.TaskEnco
 runs on each selected pack member before
 {py:meth}`pack_selected_samples <megatron.energon.TaskEncoder.pack_selected_samples>` is called.
 
-`packing_buffer_size` may also be a per-group dict when using Metadataset V2 groups. Values may be
-an integer for buffered packing, `"stream"` for streaming packing, or `None` to disable packing for
-that group.
+By default, all loaded datasets share the global `packing_buffer_size`. If a task needs separate
+packing streams for different kinds of datasets, override
+{py:meth}`build_packing_groups <megatron.energon.TaskEncoder.build_packing_groups>` in the task
+encoder and return one {py:class}`PackingGroupConfig <megatron.energon.PackingGroupConfig>` per
+stream:
+
+```python
+from megatron.energon import PackingGroupConfig
+from megatron.energon.metadataset.loader_interface import LoadedDataset
+from megatron.energon.task_encoder.base import PackingBufferSize
+
+
+def build_packing_groups(
+    self,
+    datasets: list[LoadedDataset],
+    packing_buffer_size: PackingBufferSize,
+    shuffle_buffer_size: int | None,
+) -> list[PackingGroupConfig]:
+    text = [dataset for dataset in datasets if dataset.dataset.subflavors["modality"] == "text"]
+    vl = [dataset for dataset in datasets if dataset.dataset.subflavors["modality"] == "vl"]
+    return [
+        PackingGroupConfig(
+            datasets=text,
+            packing_buffer_size=packing_buffer_size,
+            shuffle_buffer_size=shuffle_buffer_size,
+        ),
+        PackingGroupConfig(datasets=vl, packing_buffer_size="stream", shuffle_buffer_size=2_000),
+    ]
+```
 
 
 ```{admonition} Note

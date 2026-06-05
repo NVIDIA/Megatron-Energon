@@ -19,6 +19,7 @@ import torch
 import webdataset as wds
 
 from megatron.energon import (
+    PackingGroupConfig,
     Sample,
     TextSample,
     WorkerConfig,
@@ -31,8 +32,8 @@ from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib.epath import EPath
 from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
 from megatron.energon.metadataset.loader import prepare_metadataset, traverse_metadataset
-from megatron.energon.metadataset.loader_interface import DatasetBlendMode
-from megatron.energon.task_encoder.base import DefaultTaskEncoder, stateless
+from megatron.energon.metadataset.loader_interface import DatasetBlendMode, LoadedDataset
+from megatron.energon.task_encoder.base import DefaultTaskEncoder, PackingBufferSize, stateless
 from megatron.energon.wrappers.blend_dataset import BlendDataset
 from megatron.energon.wrappers.watchdog_dataset import WatchdogDataset
 from tests.epath_s3_emulator import setup_s3_emulator
@@ -312,7 +313,7 @@ class TestDataset(unittest.TestCase):
         assert all(48 <= v <= 52 for v in Counter(train_order1).values())
 
     def test_group(self):
-        """Group-specific shuffle + packing keeps returned samples source-homogeneous."""
+        """Task-defined packing groups keep returned samples source-homogeneous."""
         mds_path = self.dataset_path / "group_blend.yaml"
         with open(mds_path, "w") as f:
             f.write(
@@ -325,12 +326,10 @@ class TestDataset(unittest.TestCase):
                         "    blend:",
                         "      - weight: 1",
                         "        path: ds1",
-                        "        group: alpha",
                         "        subflavors:",
                         "          packing_source: ds1",
                         "      - weight: 1",
                         "        path: ds2",
-                        "        group: beta",
                         "        subflavors:",
                         "          packing_source: ds2",
                     ]
@@ -339,7 +338,7 @@ class TestDataset(unittest.TestCase):
 
         leaves = traverse_metadataset(mds_path, split_part="train")
         assert len(leaves) == 2
-        assert {ref.group for ref in leaves} == {"alpha", "beta"}
+        assert {ref.subflavors["packing_source"] for ref in leaves} == {"ds1", "ds2"}
 
         worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0, seed_offset=0)
         loaded = load_dataset(mds_path).get_datasets(
@@ -348,10 +347,31 @@ class TestDataset(unittest.TestCase):
             worker_config=worker_config,
         )
         assert loaded.blend_mode == DatasetBlendMode.DATASET_WEIGHT
-        assert {d.group for d in loaded.datasets} == {"alpha", "beta"}
+        assert {d.dataset.subflavors["packing_source"] for d in loaded.datasets} == {"ds1", "ds2"}
 
         class GroupIsolationEncoder(DefaultTaskEncoder):
             """Each returned packed sample must come from exactly one packing source."""
+
+            def build_packing_groups(
+                self,
+                datasets: list[LoadedDataset],
+                packing_buffer_size: PackingBufferSize,
+                shuffle_buffer_size: int | None,
+            ) -> list[PackingGroupConfig]:
+                return [
+                    PackingGroupConfig(
+                        datasets=[
+                            dataset
+                            for dataset in datasets
+                            if dataset.dataset.subflavors["packing_source"] == packing_source
+                        ],
+                        packing_buffer_size=packing_buffer_size,
+                        shuffle_buffer_size=shuffle_buffer_size,
+                    )
+                    for packing_source in sorted(
+                        {dataset.dataset.subflavors["packing_source"] for dataset in datasets}
+                    )
+                ]
 
             @stateless
             def encode_sample(self, sample: TextSample) -> TextSample:
@@ -384,7 +404,7 @@ class TestDataset(unittest.TestCase):
             worker_config=worker_config,
             batch_size=2,
             packing_buffer_size=8,
-            shuffle_buffer_size={"alpha": 8, "beta": None},
+            shuffle_buffer_size=8,
             max_samples_per_sequence=None,
             task_encoder=GroupIsolationEncoder(),
             virtual_epoch_length=10,
@@ -516,7 +536,6 @@ class TestDataset(unittest.TestCase):
                     "    aux:",
                     "      labels: missing_aux",
                     "      media: filesystem://media",
-                    "    group: abc",
                     "    shuffle_over_epochs_multiplier: 2",
                 ]
             ),
@@ -537,7 +556,6 @@ class TestDataset(unittest.TestCase):
             "number": 42,
             "mds": "nested_val",
         }
-        assert refs[0].group == "abc"
         assert refs[0].shuffle_over_epochs_multiplier == 2
 
     def test_joined_metadataset(self):
