@@ -536,6 +536,7 @@ class TestDataset(unittest.TestCase):
                     "    aux:",
                     "      labels: missing_aux",
                     "      media: filesystem://media",
+                    "      blobs: byterange://byte_blobs",
                     "    shuffle_over_epochs_multiplier: 2",
                 ]
             ),
@@ -550,6 +551,7 @@ class TestDataset(unittest.TestCase):
         assert refs[0].aux == {
             "labels": EPath(self.dataset_path / "missing_aux"),
             "media": EPath(self.dataset_path / "media"),
+            "blobs": EPath(self.dataset_path / "byte_blobs"),
         }
         assert refs[0].subflavors == {
             "source": "missing_leaf_metadataset_v2.yaml",

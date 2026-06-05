@@ -1,6 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+import re
 import sqlite3
 from typing import Any, Callable, Optional, Union
 
@@ -14,7 +15,7 @@ from megatron.energon.flavors.webdataset.itar_reader import SqliteITarEntryReade
 from megatron.energon.flavors.webdataset.thread_local_sqlite import ThreadLocalSqlite
 from megatron.energon.local_copy import ensure_local_copy
 from megatron.energon.media.metadata import MediaMetadataBase, deserialize_media_metadata
-from megatron.energon.source_info import SourceInfo
+from megatron.energon.source_info import SourceInfo, add_source_info
 
 
 class DecodeFileStore(FileStoreWrapper[Any]):
@@ -141,6 +142,105 @@ class SystemFileStore(FileStore[bytes]):
             self._media_metadata_checked = True
 
         return self._media_metadata_reader
+
+
+class ByteRangeStore(FileStore[bytes]):
+    """A FileStore that reads byte ranges from files under a root path."""
+
+    _KEY_SEPARATOR = "#bytes="
+    _RE_KEY = re.compile(r"^(?P<path>.+)#bytes=(?P<offset>\d+):(?P<size>\d+)$")
+
+    def __init__(self, root: Union[EPath, str]):
+        """
+        Args:
+            root: The base directory used for relative byte-range keys.
+        """
+
+        self.root = EPath(root)
+
+    def __getitem__(self, key: str) -> tuple[bytes, SourceInfo]:
+        path, byte_offset, byte_size = self._parse_key(key)
+        data, source_info = self._read_range_with_source(path, byte_offset, byte_size)
+        return data, source_info
+
+    def read_range(
+        self,
+        path: str,
+        byte_offset: int,
+        byte_size: int,
+        *,
+        sample: object | None = None,
+    ) -> bytes:
+        """Read a byte range from a file under this store's root."""
+
+        data, source_info = self._read_range_with_source(path, byte_offset, byte_size)
+        if sample is not None:
+            add_source_info(sample, source_info)
+        return data
+
+    def get_path(self) -> str:
+        return str(self.root)
+
+    def __str__(self):
+        return f"ByteRangeStore(root={self.root})"
+
+    @classmethod
+    def _make_key(cls, path: str, byte_offset: int, byte_size: int) -> str:
+        return f"{path}{cls._KEY_SEPARATOR}{byte_offset}:{byte_size}"
+
+    @classmethod
+    def _parse_key(cls, key: str) -> tuple[str, int, int]:
+        match = cls._RE_KEY.match(key)
+        if match is None:
+            raise ValueError(f"Invalid byte-range key {key!r}. Expected 'path#bytes=offset:size'.")
+        path = match.group("path")
+        byte_offset = int(match.group("offset"))
+        byte_size = int(match.group("size"))
+        return path, byte_offset, byte_size
+
+    def _read_range_with_source(
+        self,
+        path: str,
+        byte_offset: int,
+        byte_size: int,
+    ) -> tuple[bytes, SourceInfo]:
+        assert byte_offset >= 0, f"byte_offset must be non-negative, got {byte_offset}"
+        assert byte_size >= 0, f"byte_size must be non-negative, got {byte_size}"
+        if byte_size == 0:
+            data = b""
+        else:
+            file_path = self._resolve_path(path)
+            with file_path.open("rb") as f:
+                f.seek(byte_offset)
+                data = f.read(byte_size)
+
+            if len(data) != byte_size:
+                raise IOError(
+                    f"Byte-range read from {file_path} returned {len(data)} bytes, "
+                    f"expected {byte_size} bytes"
+                )
+
+        key = self._make_key(path, byte_offset, byte_size)
+        return data, SourceInfo(
+            dataset_path=self.root,
+            index=key,
+            shard_name=str(file_path),
+            file_names=(key,),
+        )
+
+    def _resolve_path(self, path: str) -> EPath:
+        file_path = self.root / path
+        if file_path.profile != self.root.profile:
+            raise ValueError(
+                f"Byte-range path {path!r} resolves outside root {self.root}: {file_path}"
+            )
+        try:
+            file_path.internal_path.relative_to(self.root.internal_path)
+        except ValueError as exc:
+            raise ValueError(
+                f"Byte-range path {path!r} resolves outside root {self.root}: {file_path}"
+            ) from exc
+        return file_path
 
 
 class WebdatasetFileStore(SqliteITarEntryReader, FileStore[bytes]):

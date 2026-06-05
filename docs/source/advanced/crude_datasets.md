@@ -132,6 +132,7 @@ splits:
       foo_bar_source: ./aux_ds123
       fs_source: filesystem://./images
       fs_source_abs: filesystem:///absolute/path/to/images
+      byte_range_source: byterange+msc://mybucket/path/blobs
       remote_source: msc://mybucket/path/ds
     subflavors:
       crude_type: my_dual_aux_example
@@ -149,8 +150,10 @@ You can specify multiple aux sources each of which can be one of
 
 * Relative or absolute path to a local prepared energon dataset
 * Relative or absolute path to a local folder (use the prefix `filesystem://`)
+* Relative or absolute path to local files that should be read by byte range (use the prefix `byterange://`)
 * Path to a remote prepared energon dataset (use prefix `msc://`)
 * Path to a remote folder (use prefix `filesystem+msc://`)
+* Path to remote files that should be read by byte range (use prefix `byterange+msc://`)
 
 In your code, the cooker will automatically receive a {py:class}`FileStore <megatron.energon.FileStore>` reference to the data source as a keyword argument:
 
@@ -178,6 +181,18 @@ additional_text = foo_bar_source.get(sample['add_txt_fname'], sample)
 ```
 
 This will update the sample-internal `__sources__` list with the aux dataset you used.
+
+For byte-range auxiliary data, use a key of the form `path/to/file#bytes=offset:size`.
+The path is resolved below the `byterange://` root from the metadataset.
+
+```python
+def cook_text(sample: dict, byte_range_source: FileStore) -> TextSample:
+    image_bytes = byte_range_source.get(
+        f"{sample['blob_path']}#bytes={sample['byte_offset']}:{sample['byte_size']}",
+        sample,
+    )
+    ...
+```
 
 If you want, you can even use your primary dataset as an auxiliary dataset and look up files by name, yes! If you want to do that, you specify it in the cooker decorator and add an arg:
 

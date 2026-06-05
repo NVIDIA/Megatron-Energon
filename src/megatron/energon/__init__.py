@@ -10,6 +10,7 @@ except Exception:
     __version__ = "unknown"
 
 from megatron.energon.cache import (
+    ByteRangeStore,
     CachePool,
     DecodeFileStore,
     DirectLazy,
@@ -135,6 +136,7 @@ __all__ = [
     "Batch",
     "BatchDataset",
     "BlendDataset",
+    "ByteRangeStore",
     "CachePool",
     "CaptioningSample",
     "CaptioningWebdataset",

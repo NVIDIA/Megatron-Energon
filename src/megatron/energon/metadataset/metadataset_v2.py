@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Literal, Optional, Sequence, Type, Union
 
 from megatron.energon.cache import FileStore
-from megatron.energon.cache.file_store import SystemFileStore, WebdatasetFileStore
+from megatron.energon.cache.file_store import ByteRangeStore, SystemFileStore, WebdatasetFileStore
 from megatron.energon.dataset_config import load_config
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
@@ -70,6 +70,24 @@ class AuxFilesystemReference:
     def get_file_store(self) -> FileStore:
         assert isinstance(self.fs_path, EPath), "Missing call to post_initialize"
         return SystemFileStore(self.fs_path)
+
+
+@edataclass
+class AuxByteRangeStoreReference:
+    root: Union[str, EPath]
+
+    def _resolve_path(self, mds_path: Optional[EPath]) -> EPath:
+        assert mds_path is not None
+        if not isinstance(self.root, EPath):
+            self.root = mds_path.parent / self.root
+        return self.root
+
+    def post_initialize(self, mds_path: Optional[EPath] = None) -> None:
+        self._resolve_path(mds_path)
+
+    def get_file_store(self) -> FileStore:
+        assert isinstance(self.root, EPath), "Missing call to post_initialize"
+        return ByteRangeStore(self.root)
 
 
 @edataclass
@@ -242,7 +260,11 @@ class DatasetReference(
     #: Auxiliary datasets. May only be specified for crude datasets for cooking. Cooking will get
     # these references to load data from. If specified as string, it will be interpreted as a
     # dataset path.
-    aux: Optional[Dict[str, Union[str, AuxDatasetReference, AuxFilesystemReference]]] = None
+    aux: Optional[
+        Dict[
+            str, Union[str, AuxDatasetReference, AuxFilesystemReference, AuxByteRangeStoreReference]
+        ]
+    ] = None
 
     _dataset: Optional[DatasetLoaderInterface] = None
 
@@ -254,36 +276,44 @@ class DatasetReference(
 
     @staticmethod
     def _normalize_aux_reference(
-        reference: Union[str, AuxDatasetReference, AuxFilesystemReference],
-    ) -> Union[AuxDatasetReference, AuxFilesystemReference]:
-        if isinstance(reference, (AuxDatasetReference, AuxFilesystemReference)):
+        reference: Union[
+            str, AuxDatasetReference, AuxFilesystemReference, AuxByteRangeStoreReference
+        ],
+    ) -> Union[AuxDatasetReference, AuxFilesystemReference, AuxByteRangeStoreReference]:
+        if isinstance(
+            reference, (AuxDatasetReference, AuxFilesystemReference, AuxByteRangeStoreReference)
+        ):
             return reference
         if m := url_regex.match(reference):
             prot = m.group("protocol")
             if prot.count("+") == 1:
-                # filesystem+fs_prot://
-                fs_type, fs_prot = prot.split("+")
-                assert fs_type == "filesystem"
+                # filesystem+fs_prot:// or byterange+fs_prot://
+                aux_type, fs_prot = prot.split("+")
+                assert aux_type in ("filesystem", "byterange")
                 path = f"{fs_prot}://{m.group('path')}"
-            elif prot == "filesystem":
-                # filesystem:// (may be relative or absolute)
-                fs_type = "filesystem"
+            elif prot in ("filesystem", "byterange"):
+                # filesystem:// or byterange:// (may be relative or absolute)
+                aux_type = prot
                 path = m.group("path")
             else:
                 # msc:// or other protocol
-                fs_type = None
+                aux_type = None
                 path = reference
             # With filesystem or without.
-            if fs_type == "filesystem":
+            if aux_type == "filesystem":
                 return AuxFilesystemReference(fs_path=path)
-            assert fs_type is None, f"Invalid filesystem type: {fs_type} in path {reference}"
+            if aux_type == "byterange":
+                return AuxByteRangeStoreReference(root=path)
+            assert aux_type is None, f"Invalid auxiliary type: {aux_type} in path {reference}"
             return AuxDatasetReference(path=path)
         return AuxDatasetReference(path=reference)
 
     def _normalize_aux_references(self, mds_path: Optional[EPath], *, validate: bool) -> None:
         if self.aux is None:
             return
-        new_aux: Dict[str, Union[AuxDatasetReference, AuxFilesystemReference]] = {}
+        new_aux: Dict[
+            str, Union[AuxDatasetReference, AuxFilesystemReference, AuxByteRangeStoreReference]
+        ] = {}
         for key, value in self.aux.items():
             normalized = self._normalize_aux_reference(value)
             if validate:
@@ -301,10 +331,14 @@ class DatasetReference(
             if isinstance(value, AuxDatasetReference):
                 assert isinstance(value.path, EPath)
                 traversed_aux[key] = value.path
-            else:
+            elif isinstance(value, AuxFilesystemReference):
                 assert isinstance(value, AuxFilesystemReference)
                 assert isinstance(value.fs_path, EPath)
                 traversed_aux[key] = value.fs_path
+            else:
+                assert isinstance(value, AuxByteRangeStoreReference)
+                assert isinstance(value.root, EPath)
+                traversed_aux[key] = value.root
         return traversed_aux
 
     def _load_nested_metadataset(self) -> DatasetLoaderInterface:
@@ -353,7 +387,6 @@ class DatasetReference(
         _shuffle_over_epochs_multiplier: Optional[int] = 1,
         _subflavors: Optional[Dict[str, Any]] = None,
     ) -> List[TraversedDatasetReference]:
-
         self._resolve_path(mds_path)
         _subflavors = self._merge_subflavors(_subflavors)
         _shuffle_over_epochs_multiplier = self._merge_shuffle_over_epochs_multiplier(
