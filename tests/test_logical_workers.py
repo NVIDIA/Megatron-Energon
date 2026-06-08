@@ -28,7 +28,7 @@ from megatron.energon import (
 )
 from megatron.energon.edataclass import edataclass
 from megatron.energon.flavors.base_dataset import Sample
-from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
+from megatron.energon.flavors.common.manifest.paths import MAIN_FOLDER_NAME
 from megatron.energon.logical_worker import LogicalWorkerAssignment
 from megatron.energon.wrappers.stride_dataset import _stride_needed
 

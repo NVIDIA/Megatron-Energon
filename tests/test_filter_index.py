@@ -35,9 +35,9 @@ from megatron.energon.flavors.common.filter_index import (
     filter_index_paths,
 )
 from megatron.energon.flavors.common.manifest.io import ShardListMeta
+from megatron.energon.flavors.common.manifest.paths import MAIN_FOLDER_NAME
 from megatron.energon.flavors.common.manifest.types import ShardInfo
 from megatron.energon.flavors.common.manifest.write import write_manifest_dataset_metadata
-from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
 from megatron.energon.tools.prepare import command as prepare_command
 
 

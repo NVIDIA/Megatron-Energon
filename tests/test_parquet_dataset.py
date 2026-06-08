@@ -27,7 +27,7 @@ from megatron.energon import (
 from megatron.energon.cache.file_store import ParquetFileStore
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.common.manifest.types import ShardInfo
-from megatron.energon.flavors.manifest import write_manifest_dataset_metadata
+from megatron.energon.flavors.common.manifest.write import write_manifest_dataset_metadata
 from megatron.energon.flavors.parquet.dataset import (
     DefaultParquetDatasetFactory,
     DefaultParquetShardListDatasetFactory,

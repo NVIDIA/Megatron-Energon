@@ -111,12 +111,6 @@ class BaseWebdatasetFactory(
         if DEBUG_SHARD_PRINT:
             super()._print_shard_slices(slice_offsets, shards)
 
-    def config(self):
-        return dict(
-            **super().config(),
-            filter_name=self.filter_name,
-        )
-
     @abstractmethod
     def load_sample(self, raw_data: SampleRecord) -> T_sample:
         """Loads the sample from the dataset."""

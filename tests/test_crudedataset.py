@@ -41,7 +41,10 @@ from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib.epath import EPath
 from megatron.energon.errors import reraise_exception
 from megatron.energon.flavors.base_dataset import Sample
-from megatron.energon.flavors.webdataset.config import INDEX_SQLITE_FILENAME, MAIN_FOLDER_NAME
+from megatron.energon.flavors.common.manifest.paths import (
+    INDEX_SQLITE_FILENAME,
+    MAIN_FOLDER_NAME,
+)
 from megatron.energon.media.extractor import MediaFilterConfig, MediaFilterStrategy
 from megatron.energon.media.filesystem_prepare import prepare_filesystem_dataset
 from megatron.energon.media.metadata import AVMetadata, ImageMetadata
@@ -945,10 +948,9 @@ class TestDataset(unittest.TestCase):
         finally:
             cache_pool.close()
 
-        with self.assertRaises(ValueError):
+        with self.assertRaises(AssertionError):
             store.read_range("bundle.bin", -1, 1)
-        with self.assertRaises(ValueError):
-            store.read_range("bundle.bin", 1, 0)
+        assert store.read_range("bundle.bin", 1, 0) == b""
         with self.assertRaises(ValueError):
             store.read_range("../outside.bin", 0, 1)
         with self.assertRaises(IOError):

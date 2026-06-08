@@ -27,7 +27,7 @@ from megatron.energon import (
     load_dataset,
 )
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
+from megatron.energon.flavors.common.manifest.paths import MAIN_FOLDER_NAME
 from megatron.energon.metadataset.loader import traverse_metadataset
 from megatron.energon.metadataset.loader_interface import DatasetBlendMode
 from megatron.energon.wrappers.blend_dataset import BlendDataset
@@ -784,7 +784,7 @@ class TestDataset(unittest.TestCase):
                                         "dataset": {
                                             "type": "MapDataset",
                                             "dataset": {
-                                                "type": "WebdatasetSampleLoaderDataset",
+                                                "type": "DatasetSampler",
                                                 "joins": 1,
                                                 "len": 55,
                                                 "slice_offsets": [[0, 10, 20, 30, 40, 50, 55]],
@@ -792,7 +792,7 @@ class TestDataset(unittest.TestCase):
                                                 "shuffle_over_epochs": 6,
                                                 "parallel_slice_iters": 2,
                                             },
-                                            "map_fn": "megatron.energon.flavors.webdataset.base_webdataset.BaseWebdatasetFactory._load_sample_raw",
+                                            "map_fn": "megatron.energon.flavors.base_indexed_dataset.BaseIndexedDatasetFactory._load_sample_raw",
                                             "map_fn_config": {
                                                 "type": "StandardWebdatasetFactory",
                                                 "training": True,
@@ -852,6 +852,7 @@ class TestDataset(unittest.TestCase):
                                                 "parallel_shard_iters": 2,
                                                 "max_samples_per_sequence": None,
                                                 "subset": None,
+                                                "filter_name": None,
                                                 "subflavors": {
                                                     "source": "metadataset.yaml",
                                                     "dataset.yaml": True,
@@ -878,7 +879,7 @@ class TestDataset(unittest.TestCase):
                                         "dataset": {
                                             "type": "MapDataset",
                                             "dataset": {
-                                                "type": "WebdatasetSampleLoaderDataset",
+                                                "type": "DatasetSampler",
                                                 "joins": 1,
                                                 "len": 55,
                                                 "slice_offsets": [[0, 10, 20, 30, 40, 50, 55]],
@@ -886,7 +887,7 @@ class TestDataset(unittest.TestCase):
                                                 "shuffle_over_epochs": 2,
                                                 "parallel_slice_iters": 2,
                                             },
-                                            "map_fn": "megatron.energon.flavors.webdataset.base_webdataset.BaseWebdatasetFactory._load_sample_raw",
+                                            "map_fn": "megatron.energon.flavors.base_indexed_dataset.BaseIndexedDatasetFactory._load_sample_raw",
                                             "map_fn_config": {
                                                 "type": "StandardWebdatasetFactory",
                                                 "training": True,
@@ -946,6 +947,7 @@ class TestDataset(unittest.TestCase):
                                                 "parallel_shard_iters": 2,
                                                 "max_samples_per_sequence": None,
                                                 "subset": None,
+                                                "filter_name": None,
                                                 "subflavors": {
                                                     "source": "metadataset.yaml",
                                                     "dataset.yaml": True,

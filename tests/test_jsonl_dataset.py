@@ -32,8 +32,8 @@ from megatron.energon import (
     stateless,
 )
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.webdataset.metadata import EnergonDatasetType, get_dataset_type
-from megatron.energon.flavors.webdataset.structs import WebdatasetSplits
+from megatron.energon.flavors.common.manifest.types import ManifestSplits as WebdatasetSplits
+from megatron.energon.flavors.dataset_type import EnergonDatasetType, get_dataset_type
 from megatron.energon.tools.prepare import command as prepare_command
 from tests.epath_s3_emulator import setup_s3_emulator
 
