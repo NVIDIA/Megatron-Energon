@@ -1,12 +1,15 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from typing import Callable, Generic, Optional, TypeVar
+from typing import Any, Callable, Generic, Optional, Type, TypeVar
 
 from megatron.energon.epathlib import EPath
+from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory
 from megatron.energon.flavors.base_indexed_dataset import BaseIndexedDatasetFactory
-from megatron.energon.flavors.common.manifest.io import ShardListMeta
+from megatron.energon.flavors.common.manifest.io import ShardListMeta, check_dataset_info_present
+from megatron.energon.flavors.common.manifest.paths import MAIN_FOLDER_NAME
 from megatron.energon.flavors.common.manifest.types import DatasetSubset, ManifestSplits
+from megatron.energon.flavors.dataset_type import EnergonDatasetType
 from megatron.energon.worker import WorkerConfig
 
 T_sample = TypeVar("T_sample", covariant=True)
@@ -17,6 +20,50 @@ class BaseManifestShardListDatasetFactory(
     Generic[T_sample],
 ):
     """Base for datasets whose virtual shards are read from `.nv-meta` manifests."""
+
+    @classmethod
+    def detect_path(cls, path: EPath) -> EnergonDatasetType | None:
+        if check_dataset_info_present(path):
+            return EnergonDatasetType.MANIFEST_DATASET
+        return None
+
+    @classmethod
+    def from_path(
+        cls,
+        path: EPath,
+        *,
+        dataset_config: str | None = None,
+        split_config: str | None = None,
+        split_part: str | None = None,
+        sample_type: Type[T_sample] | None = None,
+        **kwargs: Any,
+    ) -> BaseCoreDatasetFactory:
+        from megatron.energon.dataset_config import load_config
+        from megatron.energon.flavors.webdataset.standard_webdataset import (
+            StandardWebdatasetFactory,
+        )
+
+        if dataset_config is None:
+            dataset_config = "dataset.yaml"
+        if split_config is None:
+            split_config = "split.yaml"
+        if split_part is None:
+            split_part = "train"
+        dataset = load_config(
+            path / MAIN_FOLDER_NAME / dataset_config,
+            default_kwargs=dict(
+                path=path,
+                split_config=split_config,
+                split_part=split_part,
+                **kwargs,
+            ),
+            default_type=StandardWebdatasetFactory,
+        )
+        if sample_type is not None:
+            assert issubclass(dataset.__sample_type__, sample_type), (
+                f"Sample of type {dataset.__sample_type__} is not a subclass of {sample_type}."
+            )
+        return dataset
 
     def __init__(
         self,

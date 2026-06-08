@@ -3,11 +3,9 @@
 
 from megatron.energon.flavors.common.manifest.empty_dataset_error import EmptyDatasetError
 from megatron.energon.flavors.common.manifest.io import (
-    EnergonDatasetType,
     ShardListMeta,
     check_dataset_info_present,
     get_dataset_info,
-    get_dataset_type,
     get_info_shard_files,
 )
 from megatron.energon.flavors.common.manifest.paths import (
@@ -33,6 +31,7 @@ from megatron.energon.flavors.common.manifest.write import (
     build_split_parts,
     write_manifest_dataset_metadata,
 )
+from megatron.energon.flavors.dataset_type import EnergonDatasetType, get_dataset_type
 
 __all__ = [
     "DatasetSubset",

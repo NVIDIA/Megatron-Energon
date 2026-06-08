@@ -21,15 +21,11 @@ from megatron.energon.flavors import (
     CrudeWebdataset,
     Sample,
 )
-from megatron.energon.flavors.common.manifest.io import (
-    EnergonDatasetType,
-    check_dataset_info_present,
-    get_dataset_info,
-    get_dataset_type,
-)
+from megatron.energon.flavors.common.manifest.io import check_dataset_info_present, get_dataset_info
 from megatron.energon.flavors.common.manifest.paths import MAIN_FOLDER_NAME
 from megatron.energon.flavors.common.manifest.types import ShardInfo
 from megatron.energon.flavors.common.manifest.write import write_manifest_dataset_metadata
+from megatron.energon.flavors.dataset_type import EnergonDatasetType, get_dataset_type
 from megatron.energon.flavors.parquet.prepare import scan_parquet_dataset, scan_parquet_file
 from megatron.energon.media.extractor import MediaFilterConfig
 from megatron.energon.metadataset.loader import prepare_metadataset

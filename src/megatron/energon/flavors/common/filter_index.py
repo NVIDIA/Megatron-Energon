@@ -181,11 +181,11 @@ class FilterIndexWriter:
     _shard_ends: list[int]
     _total_original: int
     filtered_shard_counts: dict[str, int]
-    _next_shard_index: int 
-    _global_shard_index: int
+    _next_shard_index: int = 0
+    _global_shard_index: int = 0
     _active_shard: str | None = None
-    _last_original_index: int = -1
-    _last_global_index: int = -1
+    _last_original_index: int | None = None
+    _last_global_index: int | None = None
     _total_filtered: int = 0
     _json_path: EPath
     _index_path: EPath

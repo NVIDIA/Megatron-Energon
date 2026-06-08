@@ -6,16 +6,8 @@ from typing import Any, Dict, Optional, Type, TypeVar, Union
 
 from megatron.energon.epathlib import EPath
 from megatron.energon.eyaml import load_yaml
-from megatron.energon.flavors import (
-    BaseCoreDatasetFactory,
-    CrudeSample,
-    DefaultBinIdxDatasetFactory,
-    DefaultCrudeJsonlDatasetFactory,
-    DefaultParquetDatasetFactory,
-    StandardWebdatasetFactory,
-)
-from megatron.energon.flavors.common.manifest.io import EnergonDatasetType, get_dataset_type
-from megatron.energon.flavors.common.manifest.paths import MAIN_FOLDER_NAME
+from megatron.energon.flavors import BaseCoreDatasetFactory
+from megatron.energon.flavors.dataset_factory_resolver import get_dataset_factory_resolver
 from megatron.energon.typed_converter import JsonParser
 from megatron.energon.worker import WorkerConfig
 
@@ -90,98 +82,18 @@ def get_dataset_from_config(
         The instantiated dataset
     """
     path = EPath(path)
-    dataset: BaseCoreDatasetFactory[T_sample]
-    ds_type = get_dataset_type(path)
-
-    if ds_type == EnergonDatasetType.JSONL and path.is_file():
-        assert sample_type is CrudeSample or sample_type is None, (
-            f"Sample type must be CrudeSample for jsonl datasets, but got {sample_type}"
-        )
-        assert dataset_config is None, (
-            f"Dataset config must be None for jsonl datasets, but got {dataset_config}"
-        )
-        assert split_config is None, (
-            f"Split config must be None for jsonl datasets, but got {split_config}"
-        )
-        # Note: We ignore split_part for jsonl datasets and always return the full dataset.
-
-        dataset = DefaultCrudeJsonlDatasetFactory(
-            path,
-            training=training,
-            subflavors=subflavors,
-            worker_config=worker_config,
-            filter_name=filter_name,
-            **kwargs,
-        )
-    elif ds_type == EnergonDatasetType.BINIDX:
-        assert sample_type is CrudeSample or sample_type is None, (
-            f"Sample type must be CrudeSample for bin-idx datasets, but got {sample_type}"
-        )
-        assert dataset_config is None, (
-            f"Dataset config must be None for bin-idx datasets, but got {dataset_config}"
-        )
-        assert split_config is None, (
-            f"Split config must be None for bin-idx datasets, but got {split_config}"
-        )
-
-        dataset = DefaultBinIdxDatasetFactory(
-            path,
-            training=training,
-            subflavors=subflavors,
-            worker_config=worker_config,
-            filter_name=filter_name,
-            **kwargs,
-        )
-    elif ds_type == EnergonDatasetType.PARQUET:
-        assert sample_type is CrudeSample or sample_type is None, (
-            f"Sample type must be CrudeSample for Parquet datasets, but got {sample_type}"
-        )
-        assert dataset_config is None, (
-            f"Dataset config must be None for Parquet datasets, but got {dataset_config}"
-        )
-        assert split_config is None, (
-            f"Split config must be None for Parquet datasets, but got {split_config}"
-        )
-
-        dataset = DefaultParquetDatasetFactory(
-            path,
-            training=training,
-            subflavors=subflavors,
-            worker_config=worker_config,
-            filter_name=filter_name,
-            **kwargs,
-        )
-    elif ds_type == EnergonDatasetType.MANIFEST_DATASET:
-        if dataset_config is None:
-            dataset_config = "dataset.yaml"
-        if split_config is None:
-            split_config = "split.yaml"
-        if split_part is None:
-            split_part = "train"
-
-        dataset = load_config(
-            path / MAIN_FOLDER_NAME / dataset_config,
-            default_kwargs=dict(
-                path=path,
-                split_config=split_config,
-                split_part=split_part,
-                training=training,
-                worker_config=worker_config,
-                subflavors=subflavors,
-                filter_name=filter_name,
-                **kwargs,
-            ),
-            default_type=StandardWebdatasetFactory,
-        )
-    elif ds_type == EnergonDatasetType.FILESYSTEM:
-        raise ValueError("Filesystem datasets are only supported as auxiliary datasets. ")
-    else:
-        raise ValueError(
-            f"Path {path} does not contain a {MAIN_FOLDER_NAME}/.info.yaml or .info.json file, "
-            f"nor is it a jsonl file, a .bin (bin-idx) file, or a .parquet file. "
-            f"Did you forget to prepare the dataset? Please check the documentation for an introduction to dataset "
-            f"preparation."
-        )
+    dataset = get_dataset_factory_resolver().get(
+        path,
+        dataset_config=dataset_config,
+        split_config=split_config,
+        split_part=split_part,
+        training=training,
+        subflavors=subflavors,
+        worker_config=worker_config,
+        sample_type=sample_type,
+        filter_name=filter_name,
+        **kwargs,
+    )
     if subflavors is not None:
         dataset.subflavors.update(subflavors)
     if sample_type is not None:

@@ -13,6 +13,8 @@ from megatron.energon.flavors.common.manifest.io import ShardListMeta
 from megatron.energon.flavors.common.manifest.types import DatasetSubset, ManifestSplits
 from megatron.energon.flavors.common.sample_record import SampleRecord
 from megatron.energon.flavors.crude import CrudeSample
+from megatron.energon.flavors.dataset_factory_resolver import register_dataset_factory_provider
+from megatron.energon.flavors.dataset_type import EnergonDatasetType
 from megatron.energon.flavors.parquet.prepare import (
     assert_layout_columns_subset,
     scan_parquet_file,
@@ -263,8 +265,40 @@ class _DefaultParquetMixin:
         )
 
 
+@register_dataset_factory_provider
 class DefaultParquetDatasetFactory(_DefaultParquetMixin, ParquetDatasetFactory):
     """Single-file Parquet factory that decodes selected columns and attaches subflavors."""
+
+    @classmethod
+    def detect_path(cls, path: EPath) -> EnergonDatasetType | None:
+        if path.name.endswith(".parquet") and path.is_file():
+            return EnergonDatasetType.PARQUET
+        return None
+
+    @classmethod
+    def from_path(
+        cls,
+        path: EPath,
+        *,
+        dataset_config: str | None = None,
+        split_config: str | None = None,
+        sample_type: type | None = None,
+        **kwargs,
+    ) -> "DefaultParquetDatasetFactory":
+        assert sample_type is CrudeSample or sample_type is None, (
+            f"Sample type must be CrudeSample for Parquet datasets, but got {sample_type}"
+        )
+        assert dataset_config is None, (
+            f"Dataset config must be None for Parquet datasets, but got {dataset_config}"
+        )
+        assert split_config is None, (
+            f"Split config must be None for Parquet datasets, but got {split_config}"
+        )
+        kwargs.pop("split_part", None)
+        return cls(
+            path,
+            **kwargs,
+        )
 
     def __init__(
         self,

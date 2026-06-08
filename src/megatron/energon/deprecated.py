@@ -101,7 +101,7 @@ DEPRECATED_MODULES: DeprecatedModuleMap = {
     },
     "megatron.energon.flavors.webdataset.metadata": {
         "EnergonDatasetType": DeprecatedSymbol(
-            "megatron.energon.flavors.common.manifest.io", "EnergonDatasetType"
+            "megatron.energon.flavors.dataset_type", "EnergonDatasetType"
         ),
         "check_dataset_info_present": DeprecatedSymbol(
             "megatron.energon.flavors.common.manifest.io", "check_dataset_info_present"
@@ -110,7 +110,7 @@ DEPRECATED_MODULES: DeprecatedModuleMap = {
             "megatron.energon.flavors.common.manifest.io", "get_dataset_info"
         ),
         "get_dataset_type": DeprecatedSymbol(
-            "megatron.energon.flavors.common.manifest.io", "get_dataset_type"
+            "megatron.energon.flavors.dataset_type", "get_dataset_type"
         ),
         "get_info_shard_files": DeprecatedSymbol(
             "megatron.energon.flavors.common.manifest.io", "get_info_shard_files"

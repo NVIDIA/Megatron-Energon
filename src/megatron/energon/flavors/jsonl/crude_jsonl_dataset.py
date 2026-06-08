@@ -14,6 +14,8 @@ from megatron.energon.flavors.common.manifest.io import ShardListMeta
 from megatron.energon.flavors.common.manifest.types import DatasetSubset, ManifestSplits
 from megatron.energon.flavors.common.sample_record import SampleRecord
 from megatron.energon.flavors.crude import CrudeSample
+from megatron.energon.flavors.dataset_factory_resolver import register_dataset_factory_provider
+from megatron.energon.flavors.dataset_type import EnergonDatasetType
 from megatron.energon.flavors.jsonl.file_store import MultiJsonlFileStore
 from megatron.energon.flavors.jsonl.ijsonl import IJsonlIndexReader
 from megatron.energon.flavors.jsonl.jsonl_prepare import JsonlPreparator
@@ -241,8 +243,40 @@ class CrudeJsonlShardListDatasetFactory(
         return f"{type(self).__name__}(path={self.path}, shards={len(self.shards)})"
 
 
+@register_dataset_factory_provider
 class DefaultCrudeJsonlDatasetFactory(CrudeJsonlDatasetFactory):
     """Adds subflavors to the sample and loads the JSON payload."""
+
+    @classmethod
+    def detect_path(cls, path: EPath) -> EnergonDatasetType | None:
+        if path.name.endswith(".jsonl") and path.is_file():
+            return EnergonDatasetType.JSONL
+        return None
+
+    @classmethod
+    def from_path(
+        cls,
+        path: EPath,
+        *,
+        dataset_config: str | None = None,
+        split_config: str | None = None,
+        sample_type: type | None = None,
+        **kwargs,
+    ) -> "DefaultCrudeJsonlDatasetFactory":
+        assert sample_type is CrudeSample or sample_type is None, (
+            f"Sample type must be CrudeSample for jsonl datasets, but got {sample_type}"
+        )
+        assert dataset_config is None, (
+            f"Dataset config must be None for jsonl datasets, but got {dataset_config}"
+        )
+        assert split_config is None, (
+            f"Split config must be None for jsonl datasets, but got {split_config}"
+        )
+        kwargs.pop("split_part", None)
+        return cls(
+            path,
+            **kwargs,
+        )
 
     def __init__(self, path: EPath, *, subflavors: Optional[Dict[str, Any]] = None, **kwargs):
         if "decoder" in kwargs:

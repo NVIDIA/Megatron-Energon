@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import json
-from enum import Enum
 from typing import List
 
 import braceexpand
@@ -12,7 +11,6 @@ from megatron.energon.epathlib import EPath
 from megatron.energon.eyaml import load_yaml, load_yaml_json
 from megatron.energon.flavors.common.manifest.empty_dataset_error import EmptyDatasetError
 from megatron.energon.flavors.common.manifest.paths import (
-    INDEX_SQLITE_FILENAME,
     INFO_JSON_FILENAME,
     INFO_YAML_FILENAME,
     MAIN_FOLDER_NAME,
@@ -23,16 +21,6 @@ from megatron.energon.flavors.common.manifest.types import (
     ShardInfo,
 )
 from megatron.energon.typed_converter import JsonParser
-
-
-class EnergonDatasetType(Enum):
-    METADATASET = "metadataset"
-    MANIFEST_DATASET = "manifest_dataset"
-    JSONL = "jsonl"
-    BINIDX = "binidx"
-    PARQUET = "parquet"
-    FILESYSTEM = "filesystem"
-    INVALID = "invalid"
 
 
 @edataclass
@@ -132,25 +120,3 @@ def check_dataset_info_present(path: EPath) -> bool:
     return (path / MAIN_FOLDER_NAME / INFO_JSON_FILENAME).is_file() or (
         path / MAIN_FOLDER_NAME / INFO_YAML_FILENAME
     ).is_file()
-
-
-def get_dataset_type(path: EPath) -> EnergonDatasetType:
-    metadata_db = path / MAIN_FOLDER_NAME / INDEX_SQLITE_FILENAME
-
-    if path.is_file():
-        if path.name.endswith(".yaml"):
-            return EnergonDatasetType.METADATASET
-        elif path.name.endswith(".jsonl"):
-            return EnergonDatasetType.JSONL
-        elif path.name.endswith(".bin"):
-            return EnergonDatasetType.BINIDX
-        elif path.name.endswith(".parquet"):
-            return EnergonDatasetType.PARQUET
-        else:
-            return EnergonDatasetType.INVALID
-    elif check_dataset_info_present(path):
-        return EnergonDatasetType.MANIFEST_DATASET
-    elif metadata_db.is_file():
-        return EnergonDatasetType.FILESYSTEM
-    else:
-        return EnergonDatasetType.INVALID

@@ -14,6 +14,8 @@ from megatron.energon.flavors.common.dataset_sampler import RawSampleData
 from megatron.energon.flavors.common.manifest.types import DatasetSubset
 from megatron.energon.flavors.common.sample_record import SampleRecord
 from megatron.energon.flavors.crude import CrudeSample
+from megatron.energon.flavors.dataset_factory_resolver import register_dataset_factory_provider
+from megatron.energon.flavors.dataset_type import EnergonDatasetType
 from megatron.energon.worker import WorkerConfig
 
 logger = logging.getLogger(__name__)
@@ -108,8 +110,44 @@ class BinIdxDatasetFactory(BaseSingleFileDatasetFactory[CrudeSample]):
         return f"{type(self).__name__}(path={self.path})"
 
 
+@register_dataset_factory_provider
 class DefaultBinIdxDatasetFactory(BinIdxDatasetFactory):
     """Adds subflavors to the sample and decodes token bytes back to a numpy array."""
+
+    @classmethod
+    def detect_path(cls, path: EPath) -> EnergonDatasetType | None:
+        if (
+            path.name.endswith(".bin")
+            and path.is_file()
+            and (path.parent / (path.name.removesuffix(".bin") + ".idx")).is_file()
+        ):
+            return EnergonDatasetType.BINIDX
+        return None
+
+    @classmethod
+    def from_path(
+        cls,
+        path: EPath,
+        *,
+        dataset_config: str | None = None,
+        split_config: str | None = None,
+        sample_type: type | None = None,
+        **kwargs,
+    ) -> "DefaultBinIdxDatasetFactory":
+        assert sample_type is CrudeSample or sample_type is None, (
+            f"Sample type must be CrudeSample for bin-idx datasets, but got {sample_type}"
+        )
+        assert dataset_config is None, (
+            f"Dataset config must be None for bin-idx datasets, but got {dataset_config}"
+        )
+        assert split_config is None, (
+            f"Split config must be None for bin-idx datasets, but got {split_config}"
+        )
+        kwargs.pop("split_part", None)
+        return cls(
+            path,
+            **kwargs,
+        )
 
     def __init__(self, path: EPath, *, subflavors: Optional[Dict[str, Any]] = None, **kwargs):
         if "decoder" in kwargs:

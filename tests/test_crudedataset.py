@@ -36,12 +36,12 @@ from megatron.energon import (
 from megatron.energon.cache import ByteRangeStore, FileStore, FileStoreCachePool, Lazy
 from megatron.energon.cache.base import CachePool
 from megatron.energon.cli.main import prepare_media_command
+from megatron.energon.decoders import SampleDecoder
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib.epath import EPath
 from megatron.energon.errors import reraise_exception
 from megatron.energon.flavors.base_dataset import Sample
 from megatron.energon.flavors.webdataset.config import INDEX_SQLITE_FILENAME, MAIN_FOLDER_NAME
-from megatron.energon.flavors.webdataset.sample_decoder import SampleDecoder
 from megatron.energon.media.extractor import MediaFilterConfig, MediaFilterStrategy
 from megatron.energon.media.filesystem_prepare import prepare_filesystem_dataset
 from megatron.energon.media.metadata import AVMetadata, ImageMetadata
