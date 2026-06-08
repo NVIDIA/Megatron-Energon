@@ -4,6 +4,7 @@ SPDX-License-Identifier: BSD-3-Clause -->
 # Programmatic Data Preparation
 
 Below, we provide an example function that shows how to prepare a dataset programmatically.
+The example uses WebDataset tar shards. Other shard-list formats, such as prepared JSONL or Parquet directories, use the same `.nv-meta` manifest files but have format-specific preparation helpers.
 
 ```python
 from megatron.energon.flavors import BaseWebdatasetFactory
@@ -56,6 +57,11 @@ def prepare_one_dataset(path: Path, num_workers: int, template_dir: Path):
     for file in template_dir.glob("*"):
         shutil.copy(file, path / ".nv-meta" / file.name)
 ```
+
+For non-tar shard lists, use the generic manifest writer
+`megatron.energon.flavors.common.manifest.write.write_manifest_dataset_metadata`
+with `ShardInfo` entries for each shard and a `dataset_definition` that points to the corresponding factory, such as `DefaultCrudeJsonlShardListDatasetFactory` or `DefaultParquetShardListDatasetFactory`.
+Single-file datasets such as `.jsonl`, `.bin`, and `.parquet` are detected directly and do not require a manifest.
 
 Example usage:
 

@@ -9,18 +9,19 @@ running a predicate while training. The filter lives in the dataset metadata dir
 
 For manifest/directory datasets, the sidecars are:
 
-- `filter_<name>.json`: shard order, original sample counts, filtered sample counts, and format metadata.
+- `filter_<name>.json`: filter metadata with the sidecar format version and filtered sample counts per shard.
 - `filter_<name>.idx`: the kept original sample indexes, stored as a raw `uint64` translation table.
 
-For single-file datasets such as `.jsonl` or `.bin`, the sidecars are:
+For single-file datasets such as `.jsonl`, `.bin`, or `.parquet`, the sidecars are:
 
 - `<file-name>.<name>.json`
 - `<file-name>.<name>.idx`
 
-The translation table is shard-preserving. Each shard stores original shard-local sample
-indexes in increasing order, and Energon uses the filtered per-shard counts for worker
-sharding. At read time, the filtered index is translated back to the original sample index
-before delegating to the dataset reader.
+The translation table stores original global sample indexes in increasing order. Energon uses
+the filtered per-shard counts from the JSON sidecar for worker sharding. At read time, the
+filtered index is translated back to the original sample index before delegating to the dataset
+reader. The translation table is opened lazily, so loading filter metadata does not require
+opening the `.idx` file until samples are actually read.
 
 ## Building a Filter
 
@@ -40,7 +41,7 @@ build_filter_index(
 
 Global indexes must be strictly increasing and within the total original sample count.
 For prepared datasets, shard counts are read from `.nv-meta/.info.json`. Pass
-`shard_counts` explicitly only for datasets without that metadata, such as direct file-backed
+`shards` explicitly only for datasets without that metadata, such as direct file-backed
 datasets. If you already have shard-local indexes for a manifest dataset, use
 `build_filter_index_from_shard_indexes` instead:
 
@@ -59,8 +60,8 @@ build_filter_index_from_shard_indexes(
 
 Shard-local indexes must be strictly increasing and within the original count for each
 shard. The same APIs can be used for prepared WebDataset, prepared JSONL shard datasets,
-Parquet datasets, and bin-idx datasets. For single-file datasets such as `.bin` and
-`.jsonl`, the shard name is the file name.
+prepared Parquet shard datasets, single-file Parquet datasets, and bin-idx datasets. For
+single-file datasets such as `.bin`, `.jsonl`, and `.parquet`, the shard name is the file name.
 
 ## Loading a Filter
 

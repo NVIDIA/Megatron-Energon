@@ -5,9 +5,10 @@ SPDX-License-Identifier: BSD-3-Clause -->
 # Data Preparation
 
 The aim of data preparation is to convert your data to a format that the energon loader can understand and iterate.
-Energon's primary data format is [WebDataset](https://github.com/webdataset/webdataset) with some extra information stored in a folder called `.nv-meta`.
+Energon's primary prepared format is a manifest dataset with extra information stored in a folder called `.nv-meta`.
+The most common manifest-backed format is [WebDataset](https://github.com/webdataset/webdataset).
 Below in [](data-on-disk) we explain the details about this format.
-We also support a simpler JSONL format which will always be interpreted as [crude data](crude-data).
+We also support simpler single-file JSONL and Parquet formats which will always be interpreted as [crude data](crude-data).
 
 ## Important Considerations
 
@@ -18,7 +19,7 @@ Depending on what your data looks like and how you are planning to use it, you w
 
 You can include the media (images/video/audio) inside the same webdataset along with the text-based data of each sample (such as labels, captions, etc.).
 Or you can keep the media separate (either in another indexed webdataset or as individual files on disk).
-When using JSONL, the media will always be separate, so JSONL datasets are always polylithic unless they are text-only.
+When using JSONL or single-file Parquet, the media will usually be separate, so those datasets are typically polylithic unless they are text-only/tabular.
 
 The monolithic option is faster to load. However, there are a few reasons why the other option may be preferable:
 
@@ -62,13 +63,13 @@ These are the typical steps to get your data ready:
 (polylithic-dataset)=
 ## Steps to Create a Polylithic Dataset
 
-1. Create the primary [WebDataset](https://github.com/webdataset/webdataset) or JSONL file from your text-based part of the data (meta information, labels etc.)
+1. Create the primary [WebDataset](https://github.com/webdataset/webdataset), JSONL file, or Parquet file from your text/tabular part of the data (meta information, labels etc.)
     * Include the file names (don't use absolute paths) of the media that belongs to each sample (e.g. as strings inside a json entry)
 2. Create the auxiliary dataset(s). Can be multiple datasets, e.g. one per modality.
     * Either as a folder on disk with all the media files inside
     * Or as another WebDataset that contains just the media files (with the exact same names)
-3. Run our preparation tool `energon prepare` **on both datasets** (yes also on the JSONL) to convert to an energon-compatible format
-    * Configure both datasets as `CrudeWebdataset` (JSONL always is by default)
+3. Run our preparation tool `energon prepare` **on both datasets** (yes also on JSONL or Parquet directories) to convert to an energon-compatible format
+    * Configure WebDataset-based crude datasets as `CrudeWebdataset`; JSONL and Parquet datasets are loaded as crude data by default.
     * For the auxiliary datasets, we recommend to enable the [media metadata feature](media-metadata) to store additional information about the media (like image size, resolution, video duration etc.)
 4. Create a [metadataset](../basic/metadataset) that specifies what auxiliary data to load for each primary dataset
     * For more details read about [crude data](crude-data)
@@ -136,6 +137,26 @@ splits:
 
 An auxiliary data source can be a local or remote folder, or other energon-prepared webdatasets. Even multiple auxiliary sources can be used.
 For all the options and to see how to specify a matching cooker, please check out the section on [auxiliary data](aux-data).
+
+(create-parquet-dataset)=
+## Steps to Create a Parquet Dataset
+
+Parquet is supported for crude tabular datasets.
+There are two supported layouts:
+
+* A single `.parquet` file can be loaded directly, similar to a single `.jsonl` file.
+* A directory containing multiple `.parquet` files must be prepared as a manifest dataset.
+
+For a single Parquet file, no `.nv-meta` folder is created. The file is detected directly and all rows are exposed as crude samples.
+
+For a directory of Parquet files, run:
+
+```shell
+energon prepare /path/to/my_parquet_directory
+```
+
+This scans the Parquet footers, writes `.nv-meta/.info.json`, `.nv-meta/split.yaml`, and a default `.nv-meta/dataset.yaml`, and configures the dataset as `DefaultParquetShardListDatasetFactory`.
+The manifest keeps the file order and row counts used for sharding and filtering.
 
 (wds-format)=
 ## Step 1: Creating a WebDataset
@@ -694,8 +715,17 @@ Instead, only an index file with the same base filename will be created.
 
 So if your dataset is named `my_dataset.jsonl`, a new file `my_dataset.jsonl.idx` will appear next to it when preparing it.
 
-That's all. The dataset type will always be `CrudeWebdataset` and the split part is `train` by default. However, when loading the dataset
-you can change the split type to `val` or `test`.
+That's all. The dataset is loaded as crude data. The direct JSONL file has no train/val/test split; callers may pass a split name for API consistency, but the full file is used.
+
+(data-on-disk-parquet)=
+## Dataset Format on Disk for Parquet Datasets
+
+A single `.parquet` file is loaded directly and does not need a `.nv-meta` folder.
+Energon reads the Parquet footer to discover row counts and columns.
+
+A directory of `.parquet` files is represented as a manifest dataset after running `energon prepare`.
+The `.nv-meta/.info.json` file stores row counts per Parquet shard, and `.nv-meta/dataset.yaml` points to `DefaultParquetShardListDatasetFactory`.
+This is the layout to use when you want train/val/test split definitions, shard-list filtering, or multiple Parquet files in one logical dataset.
 
 (data-on-disk-filesystem)=
 ## Dataset Format on Disk for Filesystem Datasets
