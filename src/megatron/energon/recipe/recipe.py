@@ -8,6 +8,7 @@ from typing import Any, Callable, Dict, List, Literal, Optional, Sequence, Type,
 from megatron.energon.cache import FileStore
 from megatron.energon.cache.file_store import ByteRangeStore, SystemFileStore
 from megatron.energon.dataset_config import load_config
+from megatron.energon.deprecation import warn_deprecated
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import Sample
@@ -15,15 +16,14 @@ from megatron.energon.flavors.common.manifest.paths import INDEX_SQLITE_FILENAME
 from megatron.energon.flavors.common.manifest.types import DatasetSubset
 from megatron.energon.flavors.dataset_type import EnergonDatasetType, get_dataset_type
 from megatron.energon.flavors.webdataset.file_store import WebdatasetFileStore
-from megatron.energon.metadataset.dataset_loader import DatasetLoader
-from megatron.energon.metadataset.join_dataset_loader import JoinDatasetLoader, JoinedDatasetInfo
-from megatron.energon.metadataset.loader_interface import (
+from megatron.energon.recipe.dataset_loader import DatasetLoader
+from megatron.energon.recipe.join_dataset_loader import JoinDatasetLoader, JoinedDatasetInfo
+from megatron.energon.recipe.loader_interface import (
     DatasetBlendMode,
     DatasetLoaderInterface,
     LoadedDatasetList,
     TraversedDatasetReference,
 )
-from megatron.energon.metadataset.metadataset import Metadataset
 from megatron.energon.worker import WorkerConfig
 
 # Regex for any URL-like string (any protocol)
@@ -34,16 +34,16 @@ url_regex = re.compile(r"^(?P<protocol>[a-z][a-z0-9+.-]*)://(?P<path>.*)", re.IG
 class AuxDatasetReference:
     path: Union[str, EPath]
 
-    def _resolve_path(self, mds_path: Optional[EPath]) -> EPath:
-        assert mds_path is not None
+    def _resolve_path(self, recipe_path: Optional[EPath]) -> EPath:
+        assert recipe_path is not None
         if not isinstance(self.path, EPath):
-            self.path = mds_path.parent / self.path
+            self.path = recipe_path.parent / self.path
         return self.path
 
-    def post_initialize(self, mds_path: Optional[EPath] = None) -> None:
-        self._resolve_path(mds_path)
+    def post_initialize(self, recipe_path: Optional[EPath] = None) -> None:
+        self._resolve_path(recipe_path)
         assert not self.path.is_file(), (
-            "Auxiliary datasets must not be metadataset, but direct dataset references"
+            "Auxiliary datasets must not be recipe, but direct dataset references"
         )
         assert (self.path / MAIN_FOLDER_NAME / INDEX_SQLITE_FILENAME).is_file(), (
             "Auxiliary datasets must be prepared Energon datasets. This one does not exist or is not prepared: "
@@ -59,14 +59,14 @@ class AuxDatasetReference:
 class AuxFilesystemReference:
     fs_path: Union[str, EPath]
 
-    def _resolve_path(self, mds_path: Optional[EPath]) -> EPath:
-        assert mds_path is not None
+    def _resolve_path(self, recipe_path: Optional[EPath]) -> EPath:
+        assert recipe_path is not None
         if not isinstance(self.fs_path, EPath):
-            self.fs_path = mds_path.parent / self.fs_path
+            self.fs_path = recipe_path.parent / self.fs_path
         return self.fs_path
 
-    def post_initialize(self, mds_path: Optional[EPath] = None) -> None:
-        self._resolve_path(mds_path)
+    def post_initialize(self, recipe_path: Optional[EPath] = None) -> None:
+        self._resolve_path(recipe_path)
 
     def get_file_store(self) -> FileStore:
         assert isinstance(self.fs_path, EPath), "Missing call to post_initialize"
@@ -77,14 +77,14 @@ class AuxFilesystemReference:
 class AuxByteRangeStoreReference:
     byterange_fs_path: Union[str, EPath]
 
-    def _resolve_path(self, mds_path: Optional[EPath]) -> EPath:
-        assert mds_path is not None
+    def _resolve_path(self, recipe_path: Optional[EPath]) -> EPath:
+        assert recipe_path is not None
         if not isinstance(self.byterange_fs_path, EPath):
-            self.byterange_fs_path = mds_path.parent / self.byterange_fs_path
+            self.byterange_fs_path = recipe_path.parent / self.byterange_fs_path
         return self.byterange_fs_path
 
-    def post_initialize(self, mds_path: Optional[EPath] = None) -> None:
-        self._resolve_path(mds_path)
+    def post_initialize(self, recipe_path: Optional[EPath] = None) -> None:
+        self._resolve_path(recipe_path)
 
     def get_file_store(self) -> FileStore:
         assert isinstance(self.byterange_fs_path, EPath), "Missing call to post_initialize"
@@ -233,7 +233,7 @@ class SubflavorsMixin:
 
 
         Args:
-            inherited_subflavors: Effective subflavors accumulated from outer metadataset
+            inherited_subflavors: Effective subflavors accumulated from outer recipe
                 references during traversal.
 
         Returns:
@@ -270,10 +270,10 @@ class DatasetReference(
 
     _dataset: Optional[DatasetLoaderInterface] = None
 
-    def _resolve_path(self, mds_path: Optional[EPath]) -> EPath:
-        assert mds_path is not None
+    def _resolve_path(self, recipe_path: Optional[EPath]) -> EPath:
+        assert recipe_path is not None
         if not isinstance(self.path, EPath):
-            self.path = mds_path.parent / self.path
+            self.path = recipe_path.parent / self.path
         return self.path
 
     @staticmethod
@@ -310,7 +310,7 @@ class DatasetReference(
             return AuxDatasetReference(path=path)
         return AuxDatasetReference(path=reference)
 
-    def _normalize_aux_references(self, mds_path: Optional[EPath], *, validate: bool) -> None:
+    def _normalize_aux_references(self, recipe_path: Optional[EPath], *, validate: bool) -> None:
         if self.aux is None:
             return
         new_aux: Dict[
@@ -319,9 +319,9 @@ class DatasetReference(
         for key, value in self.aux.items():
             normalized = self._normalize_aux_reference(value)
             if validate:
-                normalized.post_initialize(mds_path)
+                normalized.post_initialize(recipe_path)
             else:
-                normalized._resolve_path(mds_path)
+                normalized._resolve_path(recipe_path)
             new_aux[key] = normalized
         self.aux = new_aux
 
@@ -343,24 +343,23 @@ class DatasetReference(
                 traversed_aux[key] = value.byterange_fs_path
         return traversed_aux
 
-    def _load_nested_metadataset(self) -> DatasetLoaderInterface:
+    def _load_nested_recipe(self) -> DatasetLoaderInterface:
         assert isinstance(self.path, EPath)
         assert self.aux is None, "Cannot specify auxiliary datasets for crude datasets"
         assert self.dataset_config is None, "Must not set dataset_config"
         assert self.split_config is None, "Must not set split_config"
         assert self.filter is None, "Must not set filter"
-        # Note: For backwards compatibility, the type must be Metadataset (V1).
         return load_config(
             self.path,
-            default_type=Metadataset,
+            default_type=Recipe,
             default_kwargs=dict(path=self.path),
         )
 
-    def post_initialize(self, mds_path: Optional[EPath] = None) -> None:
-        self._resolve_path(mds_path)
+    def post_initialize(self, recipe_path: Optional[EPath] = None) -> None:
+        self._resolve_path(recipe_path)
         ds_type = get_dataset_type(self.path)
-        if ds_type == EnergonDatasetType.METADATASET:
-            self._dataset = self._load_nested_metadataset()
+        if ds_type == EnergonDatasetType.RECIPE:
+            self._dataset = self._load_nested_recipe()
             self._dataset.post_initialize()
         elif ds_type in (
             EnergonDatasetType.MANIFEST_DATASET,
@@ -375,35 +374,35 @@ class DatasetReference(
                 filter_name=self.filter,
             )
             self._dataset.post_initialize()
-            self._normalize_aux_references(mds_path, validate=True)
+            self._normalize_aux_references(recipe_path, validate=True)
         elif ds_type == EnergonDatasetType.FILESYSTEM:
             raise ValueError(
-                "Filesystem datasets are not supported within metadatasets except as auxiliary datasets."
+                "Filesystem datasets are not supported within recipes except as auxiliary datasets."
             )
         else:
             raise FileNotFoundError(self.path)
 
     def traverse(
         self,
-        mds_path: Optional[EPath] = None,
+        recipe_path: Optional[EPath] = None,
         *,
         split_part: Union[Literal["train", "val", "test"], str],
         _shuffle_over_epochs_multiplier: Optional[int] = 1,
         _subflavors: Optional[Dict[str, Any]] = None,
     ) -> List[TraversedDatasetReference]:
-        self._resolve_path(mds_path)
+        self._resolve_path(recipe_path)
         _subflavors = self._merge_subflavors(_subflavors)
         _shuffle_over_epochs_multiplier = self._merge_shuffle_over_epochs_multiplier(
             _shuffle_over_epochs_multiplier
         )
         ds_type = get_dataset_type(self.path)
-        if ds_type == EnergonDatasetType.METADATASET:
-            return self._load_nested_metadataset().traverse(
+        if ds_type == EnergonDatasetType.RECIPE:
+            return self._load_nested_recipe().traverse(
                 split_part=self.split_part or split_part,
                 _shuffle_over_epochs_multiplier=_shuffle_over_epochs_multiplier,
                 _subflavors=_subflavors,
             )
-        self._normalize_aux_references(mds_path, validate=False)
+        self._normalize_aux_references(recipe_path, validate=False)
         return [
             TraversedDatasetReference(
                 path=self.path,
@@ -456,11 +455,11 @@ class DatasetReference(
 class JoinDatasetReference(DatasetReference):
     nonmatch: Literal["skip", "none", "error"] = "error"
 
-    def post_initialize(self, mds_path: Optional[EPath] = None) -> DatasetLoader:
-        assert mds_path is not None
-        # Override and disable another metadataset reference, only allow direct dataset references.
-        # Do not store the loader, the parent MetadatasetJoin will do that.
-        self._resolve_path(mds_path)
+    def post_initialize(self, recipe_path: Optional[EPath] = None) -> DatasetLoader:
+        assert recipe_path is not None
+        # Override and disable another recipe reference, only allow direct dataset references.
+        # Do not store the loader, the parent RecipeJoin will do that.
+        self._resolve_path(recipe_path)
         ds_type = get_dataset_type(self.path)
         if ds_type == EnergonDatasetType.MANIFEST_DATASET:
             return DatasetLoader(
@@ -477,30 +476,26 @@ class JoinDatasetReference(DatasetReference):
 
     def traverse(
         self,
-        mds_path: Optional[EPath] = None,
+        recipe_path: Optional[EPath] = None,
         *,
         split_part: Union[Literal["train", "val", "test"], str],
         _shuffle_over_epochs_multiplier: Optional[int] = 1,
         _subflavors: Optional[Dict[str, Any]] = None,
     ) -> List[TraversedDatasetReference]:
-        raise NotImplementedError("traverse_metadataset() does not support joined datasets.")
+        raise NotImplementedError("traverse_recipe() does not support joined datasets.")
 
     def prepare(self, split_part: Optional[str] = None):
-        assert False, (
-            "JoinDatasetReference should not be used directly, but only by MetadatasetJoin"
-        )
+        assert False, "JoinDatasetReference should not be used directly, but only by RecipeJoin"
 
     def get_datasets(
         self,
         **kwargs,
     ) -> LoadedDatasetList:
-        assert False, (
-            "JoinDatasetReference should not be used directly, but only by MetadatasetJoin"
-        )
+        assert False, "JoinDatasetReference should not be used directly, but only by RecipeJoin"
 
 
 @edataclass
-class MetadatasetJoin(
+class RecipeJoin(
     SubsetRatioMixin,
     ShuffleOverEpochsMultiplierMixin,
     SubflavorsMixin,
@@ -515,8 +510,8 @@ class MetadatasetJoin(
 
     _dataset: Optional[JoinDatasetLoader] = None
 
-    def post_initialize(self, mds_path: Optional[EPath] = None):
-        assert mds_path is not None
+    def post_initialize(self, recipe_path: Optional[EPath] = None):
+        assert recipe_path is not None
         assert self.join is not None
         assert self.joiner is not None, "Must set joiner for joining datasets"
         assert self.dataset_config is None, "Cannot set dataset_config for joining datasets"
@@ -524,7 +519,7 @@ class MetadatasetJoin(
         if isinstance(self.join, list):
             inner_loaders = [
                 JoinedDatasetInfo(
-                    dataset=join.post_initialize(mds_path),
+                    dataset=join.post_initialize(recipe_path),
                     nonmatch=join.nonmatch,
                 )
                 for join in self.join
@@ -532,7 +527,7 @@ class MetadatasetJoin(
         elif isinstance(self.join, dict):
             inner_loaders = {
                 key: JoinedDatasetInfo(
-                    dataset=join.post_initialize(mds_path),
+                    dataset=join.post_initialize(recipe_path),
                     nonmatch=join.nonmatch,
                 )
                 for key, join in self.join.items()
@@ -548,17 +543,17 @@ class MetadatasetJoin(
             shuffle_over_epochs_multiplier=self.shuffle_over_epochs_multiplier,
             split_config=self.split_config,
         )
-        self._dataset.post_initialize(mds_path)
+        self._dataset.post_initialize(recipe_path)
 
     def traverse(
         self,
-        mds_path: Optional[EPath] = None,
+        recipe_path: Optional[EPath] = None,
         *,
         split_part: Union[Literal["train", "val", "test"], str],
         _shuffle_over_epochs_multiplier: Optional[int] = 1,
         _subflavors: Optional[Dict[str, Any]] = None,
     ) -> List[TraversedDatasetReference]:
-        raise NotImplementedError("traverse_metadataset() does not support joined datasets.")
+        raise NotImplementedError("traverse_recipe() does not support joined datasets.")
 
     def prepare(self, split_part: Optional[str] = None) -> Sequence[EPath]:
         assert self._dataset is not None, "Missing post_initialize call."
@@ -600,12 +595,12 @@ class BlendDatasetReference(BlendWeightMixin, DatasetReference):
 
 
 @edataclass
-class BlendJoinDatasetReference(BlendWeightMixin, MetadatasetJoin):
+class BlendJoinDatasetReference(BlendWeightMixin, RecipeJoin):
     pass
 
 
 @edataclass
-class MetadatasetBlend(
+class RecipeBlend(
     SubsetRatioMixin,
     ShuffleOverEpochsMultiplierMixin,
     SubflavorsMixin,
@@ -613,22 +608,22 @@ class MetadatasetBlend(
 ):
     """Blending of datasets by specifying the sampling weight for the inner datasets."""
 
-    blend: List[Union[BlendDatasetReference, BlendJoinDatasetReference, "MetadatasetBlend"]]
+    blend: List[Union[BlendDatasetReference, BlendJoinDatasetReference, "RecipeBlend"]]
 
-    def post_initialize(self, mds_path: Optional[EPath] = None):
-        assert mds_path is not None
+    def post_initialize(self, recipe_path: Optional[EPath] = None):
+        assert recipe_path is not None
         for dataset in self.blend:
-            dataset.post_initialize(mds_path)
+            dataset.post_initialize(recipe_path)
 
     def traverse(
         self,
-        mds_path: Optional[EPath] = None,
+        recipe_path: Optional[EPath] = None,
         *,
         split_part: Union[Literal["train", "val", "test"], str],
         _shuffle_over_epochs_multiplier: Optional[int] = 1,
         _subflavors: Optional[Dict[str, Any]] = None,
     ) -> List[TraversedDatasetReference]:
-        assert mds_path is not None
+        assert recipe_path is not None
         _shuffle_over_epochs_multiplier = self._merge_shuffle_over_epochs_multiplier(
             _shuffle_over_epochs_multiplier
         )
@@ -637,7 +632,7 @@ class MetadatasetBlend(
         for dataset in self.blend:
             flattened.extend(
                 dataset.traverse(
-                    mds_path,
+                    recipe_path,
                     split_part=split_part,
                     _shuffle_over_epochs_multiplier=_shuffle_over_epochs_multiplier,
                     _subflavors=_subflavors,
@@ -713,12 +708,12 @@ class BlendEpochizedDatasetReference(BlendRepetitionsMixin, DatasetReference):
 
 
 @edataclass
-class BlendEpochizedJoinDatasetReference(BlendRepetitionsMixin, MetadatasetJoin):
+class BlendEpochizedJoinDatasetReference(BlendRepetitionsMixin, RecipeJoin):
     pass
 
 
 @edataclass
-class MetadatasetBlendEpochized(
+class RecipeBlendEpochized(
     SubsetRatioMixin,
     ShuffleOverEpochsMultiplierMixin,
     SubflavorsMixin,
@@ -733,24 +728,24 @@ class MetadatasetBlendEpochized(
         Union[
             BlendEpochizedDatasetReference,
             BlendEpochizedJoinDatasetReference,
-            "MetadatasetBlendEpochized",
+            "RecipeBlendEpochized",
         ]
     ]
 
-    def post_initialize(self, mds_path: Optional[EPath] = None):
-        assert mds_path is not None
+    def post_initialize(self, recipe_path: Optional[EPath] = None):
+        assert recipe_path is not None
         for dataset in self.blend_epochized:
-            dataset.post_initialize(mds_path)
+            dataset.post_initialize(recipe_path)
 
     def traverse(
         self,
-        mds_path: Optional[EPath] = None,
+        recipe_path: Optional[EPath] = None,
         *,
         split_part: Union[Literal["train", "val", "test"], str],
         _shuffle_over_epochs_multiplier: Optional[int] = 1,
         _subflavors: Optional[Dict[str, Any]] = None,
     ) -> List[TraversedDatasetReference]:
-        assert mds_path is not None
+        assert recipe_path is not None
         flattened: List[TraversedDatasetReference] = []
         _shuffle_over_epochs_multiplier = self._merge_shuffle_over_epochs_multiplier(
             _shuffle_over_epochs_multiplier
@@ -759,7 +754,7 @@ class MetadatasetBlendEpochized(
         for dataset in self.blend_epochized:
             flattened.extend(
                 dataset.traverse(
-                    mds_path,
+                    recipe_path,
                     split_part=split_part,
                     _shuffle_over_epochs_multiplier=_shuffle_over_epochs_multiplier,
                     _subflavors=_subflavors,
@@ -823,35 +818,33 @@ class MetadatasetBlendEpochized(
 
 
 @edataclass
-class MetadatasetV2(DatasetLoaderInterface):
+class Recipe(DatasetLoaderInterface):
     path: EPath
-    splits: Dict[
-        str, Union[MetadatasetBlend, MetadatasetBlendEpochized, MetadatasetJoin, DatasetReference]
-    ]
+    splits: Dict[str, Union[RecipeBlend, RecipeBlendEpochized, RecipeJoin, DatasetReference]]
 
-    def post_initialize(self, mds_path: Optional[EPath] = None):
-        assert mds_path is None
+    def post_initialize(self, recipe_path: Optional[EPath] = None):
+        assert recipe_path is None
         for split in self.splits.values():
             split.post_initialize(self.path)
 
     def traverse(
         self,
-        mds_path: Optional[EPath] = None,
+        recipe_path: Optional[EPath] = None,
         *,
         split_part: Union[Literal["train", "val", "test"], str],
         _shuffle_over_epochs_multiplier: Optional[int] = 1,
         _subflavors: Optional[Dict[str, Any]] = None,
     ) -> List[TraversedDatasetReference]:
-        """Traverse the selected V2 split and flatten all reachable leaf references.
+        """Traverse the selected recipe split and flatten all reachable leaf references.
 
         Args:
-            mds_path: Unused for top-level metadatasets. Present to satisfy the shared interface.
+            recipe_path: Unused for top-level recipes. Present to satisfy the shared interface.
             split_part: Split to traverse.
 
         Returns:
             The flattened list of traversed leaf dataset references for `split_part`.
         """
-        assert mds_path is None
+        assert recipe_path is None
         return self.splits[split_part].traverse(
             self.path,
             split_part=split_part,
@@ -860,10 +853,10 @@ class MetadatasetV2(DatasetLoaderInterface):
         )
 
     def prepare(self, split_part: Optional[str] = None) -> Sequence[EPath]:
-        # In the case of prepare for MetadatasetV2, we ignore the passed cache_path
+        # In the case of prepare for Recipe, we ignore the passed cache_path
         # and instead use the own path.
-        # If someone runs energon prepare on a metadataset that refers to another metadataset,
-        # any actions concerning the inner metadataset will be done on the inner metadataset's path.
+        # If someone runs energon prepare on a recipe that refers to another recipe,
+        # any actions concerning the inner recipe will be done on the inner recipe's path.
 
         if split_part is None:
             files = []
@@ -899,4 +892,13 @@ class MetadatasetV2(DatasetLoaderInterface):
             shuffle_over_epochs_multiplier=shuffle_over_epochs_multiplier,
             subset=subset,
             **kwargs,
+        )
+
+
+@edataclass
+class MetadatasetV2(Recipe):
+    def __post_init__(self):
+        warn_deprecated(
+            "MetadatasetV2 is deprecated and will be removed in a future release. Use Recipe instead.",
+            stacklevel=3,
         )

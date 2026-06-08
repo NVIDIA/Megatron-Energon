@@ -1,7 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""This module defines tests for meta datasets."""
+"""This module defines tests for recipes."""
 
 import gc
 import json
@@ -84,13 +84,13 @@ class TestJsonlDataset(unittest.TestCase):
         )
         self.create_text_test_dataset(self.dataset_path / "ds3.jsonl", range(200, 255), range(55))
 
-        self.mds_all_path = self.dataset_path / "metadataset_all.yaml"
+        self.mds_all_path = self.dataset_path / "recipe_all.yaml"
         with open(self.mds_all_path, "w") as f:
             f.write(
                 "\n".join(
                     [
                         "__module__: megatron.energon",
-                        "__class__: MetadatasetV2",
+                        "__class__: Recipe",
                         "splits:",
                         "  train:",
                         "    blend:",
@@ -176,7 +176,7 @@ class TestJsonlDataset(unittest.TestCase):
         assert len(Counter(train_order1)) == 55
         assert all(v == 10 for v in Counter(train_order1).values())
 
-    def test_metadataset_all(self):
+    def test_recipe_all(self):
         torch.manual_seed(42)
         worker_config = WorkerConfig(
             rank=0,
@@ -207,7 +207,7 @@ class TestJsonlDataset(unittest.TestCase):
         assert len(Counter(train_order1)) == 55 * 3
         assert all(2 <= v <= 5 for v in Counter(train_order1).values())
 
-    def test_metadataset_multirank(self):
+    def test_recipe_multirank(self):
         torch.manual_seed(42)
 
         sample_counts = Counter()
@@ -248,16 +248,16 @@ class TestJsonlDataset(unittest.TestCase):
 
     def test_s3(self):
         # Create a joined dataset configuration
-        mixed_mds_path = self.dataset_path / "metadataset_mixed.yaml"
-        with open(mixed_mds_path, "w") as f:
+        mixed_recipe_path = self.dataset_path / "recipe_mixed.yaml"
+        with open(mixed_recipe_path, "w") as f:
             f.write(
                 "\n".join(
                     [
                         "__module__: megatron.energon",
-                        "__class__: MetadatasetV2",
+                        "__class__: Recipe",
                         "splits:",
                         "  train:",
-                        "    path: msc://s3test_jsonl_dataset/test/dataset/metadataset_all.yaml",
+                        "    path: msc://s3test_jsonl_dataset/test/dataset/recipe_all.yaml",
                     ]
                 )
             )
@@ -269,7 +269,7 @@ class TestJsonlDataset(unittest.TestCase):
 
             train_dataset = get_loader(
                 get_train_dataset(
-                    mixed_mds_path,
+                    mixed_recipe_path,
                     worker_config=WorkerConfig(
                         rank=0,
                         world_size=1,
@@ -405,7 +405,7 @@ class TestJsonlDataset(unittest.TestCase):
 
         assert sample_counts == Counter(range(9))
 
-    def test_prepared_jsonl_shard_directory_split_from_metadataset(self):
+    def test_prepared_jsonl_shard_directory_split_from_recipe(self):
         shard_dir = self.dataset_path / "jsonl_shards_split"
         shard_dir.mkdir()
         self.create_text_test_dataset(
@@ -419,12 +419,12 @@ class TestJsonlDataset(unittest.TestCase):
         )
         self.prepare_jsonl_shard_dir(shard_dir, split_ratio="1,1,1")
 
-        mds_path = self.dataset_path / "jsonl_shard_split_mds.yaml"
-        mds_path.write_text(
+        recipe_path = self.dataset_path / "jsonl_shard_split_mds.yaml"
+        recipe_path.write_text(
             "\n".join(
                 [
                     "__module__: megatron.energon",
-                    "__class__: MetadatasetV2",
+                    "__class__: Recipe",
                     "splits:",
                     "  train:",
                     "    path: jsonl_shards_split",
@@ -434,7 +434,7 @@ class TestJsonlDataset(unittest.TestCase):
         )
 
         dataset = get_train_dataset(
-            mds_path,
+            recipe_path,
             worker_config=WorkerConfig(rank=0, world_size=1, num_workers=0, seed_offset=42),
             batch_size=1,
             shuffle_buffer_size=None,

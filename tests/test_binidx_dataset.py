@@ -32,7 +32,7 @@ from megatron.energon import (
 from megatron.energon.dataset_config import load_config
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import Sample
-from megatron.energon.metadataset.metadataset_v2 import MetadatasetV2
+from megatron.energon.recipe.recipe import Recipe
 
 # Speed up tests significantly by reducing the torch status check interval for broken worker shutdown
 try:
@@ -196,7 +196,7 @@ class TestBinIdxDataset(unittest.TestCase):
         self.assertEqual(order, list(range(num_docs)))
         self.assertEqual(len(val_loader), num_docs)
 
-    def test_metadataset_v2_single_dataset_reference(self):
+    def test_recipe_single_dataset_reference(self):
         self.create_binidx_dataset(
             self.dataset_path,
             bin_name="tokens.bin",
@@ -204,13 +204,13 @@ class TestBinIdxDataset(unittest.TestCase):
             doc_len=2,
             token_start=7,
         )
-        mds_path = self.dataset_path / "mds.yaml"
-        with open(mds_path, "w") as f:
+        recipe_path = self.dataset_path / "recipe.yaml"
+        with open(recipe_path, "w") as f:
             f.write(
                 "\n".join(
                     [
                         "__module__: megatron.energon",
-                        "__class__: MetadatasetV2",
+                        "__class__: Recipe",
                         "splits:",
                         "  train:",
                         "    path: tokens.bin",
@@ -218,19 +218,19 @@ class TestBinIdxDataset(unittest.TestCase):
                 )
             )
 
-        mds = load_config(
-            EPath(mds_path),
-            default_type=MetadatasetV2,
-            default_kwargs=dict(path=EPath(mds_path)),
+        recipe = load_config(
+            EPath(recipe_path),
+            default_type=Recipe,
+            default_kwargs=dict(path=EPath(recipe_path)),
         )
-        mds.post_initialize()
+        recipe.post_initialize()
         worker_config = WorkerConfig(
             rank=0,
             world_size=1,
             num_workers=0,
             seed_offset=42,
         )
-        inner = mds.get_datasets(
+        inner = recipe.get_datasets(
             training=False,
             split_part="train",
             worker_config=worker_config,

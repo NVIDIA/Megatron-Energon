@@ -180,6 +180,18 @@ DEPRECATED_MODULES: DeprecatedModuleMap = {
 
 
 DEPRECATED_ATTRS: DeprecatedModuleMap = {
+    "megatron.energon": {
+        "MetadatasetV2": DeprecatedSymbol("megatron.energon.recipe.recipe", "MetadatasetV2"),
+        "prepare_metadataset": DeprecatedSymbol("megatron.energon.recipe", "prepare_recipe"),
+        "traverse_metadataset": DeprecatedSymbol("megatron.energon.recipe", "traverse_recipe"),
+    },
+    "megatron.energon.recipe": {
+        "prepare_metadataset": DeprecatedSymbol("megatron.energon.recipe", "prepare_recipe"),
+        "traverse_metadataset": DeprecatedSymbol("megatron.energon.recipe", "traverse_recipe"),
+    },
+    "megatron.energon.flavors.dataset_type": {
+        "is_metadataset": DeprecatedSymbol("megatron.energon.flavors.dataset_type", "is_recipe"),
+    },
     "megatron.energon.flavors.webdataset.config": {
         "INDEX_BATCH_SIZE": DeprecatedSymbol(
             "megatron.energon.flavors.common.manifest.paths", "INDEX_BATCH_SIZE"
@@ -205,7 +217,7 @@ DEPRECATED_ATTRS: DeprecatedModuleMap = {
         "SPLIT_YAML_FILENAME": DeprecatedSymbol(
             "megatron.energon.flavors.common.manifest.paths", "SPLIT_YAML_FILENAME"
         ),
-    }
+    },
 }
 
 

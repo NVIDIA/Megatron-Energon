@@ -28,7 +28,7 @@ from megatron.energon.flavors.common.manifest.write import write_manifest_datase
 from megatron.energon.flavors.dataset_type import EnergonDatasetType, get_dataset_type
 from megatron.energon.flavors.parquet.prepare import scan_parquet_dataset, scan_parquet_file
 from megatron.energon.media.extractor import MediaFilterConfig
-from megatron.energon.metadataset.loader import prepare_metadataset
+from megatron.energon.recipe.loader import prepare_recipe
 
 
 def type_str(tp: Type) -> str:
@@ -445,13 +445,13 @@ def command(
     )
 
     ds_type = get_dataset_type(path)
-    if ds_type == EnergonDatasetType.METADATASET:
+    if ds_type == EnergonDatasetType.RECIPE:
         if do_media_metadata:
             raise click.ClickException(
-                "Metadatasets cannot store media metadata. Remove --media-metadata-by-... to continue."
+                "Recipes cannot store media metadata. Remove --media-metadata-by-... to continue."
             )
-        print("Preparing metadataset...")
-        prepare_metadataset(path)
+        print("Preparing recipe...")
+        prepare_recipe(path)
         return
     elif ds_type == EnergonDatasetType.JSONL and path.is_file():
         if do_media_metadata:

@@ -8,7 +8,7 @@ from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import BaseCoreDatasetFactory
 from megatron.energon.flavors.common.manifest.types import DatasetSubset
-from megatron.energon.metadataset.loader_interface import (
+from megatron.energon.recipe.loader_interface import (
     DatasetBlendMode,
     DatasetLoaderInterface,
     LoadedDataset,
@@ -29,7 +29,7 @@ class DatasetLoader(DatasetLoaderInterface):
     split_config: Optional[str] = None
     filter_name: Optional[str] = None
 
-    def post_initialize(self, mds_path: Optional[EPath] = None):
+    def post_initialize(self, recipe_path: Optional[EPath] = None):
         pass
 
     def get_dataset(

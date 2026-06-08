@@ -1,13 +1,14 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""This module defines tests for meta datasets."""
+"""This module defines tests for recipes."""
 
 import gc
 import logging
 import random
 import sys
 import tempfile
+import time
 import unittest
 import warnings
 from collections import Counter
@@ -26,13 +27,14 @@ from megatron.energon import (
     get_loader,
     get_savable_loader,
     get_train_dataset,
+    get_val_dataset,
     load_dataset,
 )
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib.epath import EPath
 from megatron.energon.flavors.common.manifest.paths import MAIN_FOLDER_NAME
-from megatron.energon.metadataset.loader import prepare_metadataset, traverse_metadataset
-from megatron.energon.metadataset.loader_interface import DatasetBlendMode, LoadedDataset
+from megatron.energon.recipe.loader import prepare_recipe, traverse_recipe
+from megatron.energon.recipe.loader_interface import DatasetBlendMode, LoadedDataset
 from megatron.energon.task_encoder.base import DefaultTaskEncoder, PackingBufferSize, stateless
 from megatron.energon.wrappers.blend_dataset import BlendDataset
 from megatron.energon.wrappers.watchdog_dataset import WatchdogDataset
@@ -134,29 +136,29 @@ class TestDataset(unittest.TestCase):
             self.dataset_path / "ds1c", shuffled_range_100, shuffled_range_100, prefix="C"
         )
 
-        self.mds_path = self.dataset_path / "metadataset_v2.yaml"
-        with open(self.mds_path, "w") as f:
+        self.recipe_path = self.dataset_path / "recipe.yaml"
+        with open(self.recipe_path, "w") as f:
             f.write(
                 "\n".join(
                     [
                         "__module__: megatron.energon",
-                        "__class__: MetadatasetV2",
+                        "__class__: Recipe",
                         "splits:",
                         "  train:",
                         "    blend:",
                         "      - weight: 1",
                         "        path: ds1",
                         "        subflavors:",
-                        "          source: metadataset_v2.yaml",
+                        "          source: recipe.yaml",
                         "          number: 43",
-                        "          mds: mds",
+                        "          recipe: recipe",
                         "        shuffle_over_epochs_multiplier: 3",
                         "      - weight: 1",
                         "        path: ds2",
                         "        subflavors:",
-                        "          source: metadataset_v2.yaml",
+                        "          source: recipe.yaml",
                         "          number: 44",
-                        "          mds: mds",
+                        "          recipe: recipe",
                         "  val:",
                         "    blend:",
                         "      - weight: 1",
@@ -168,27 +170,27 @@ class TestDataset(unittest.TestCase):
                     ]
                 )
             )
-        self.nested_mds_path = self.dataset_path / "nested_metadataset_v2.yaml"
-        with open(self.nested_mds_path, "w") as f:
+        self.nested_recipe_path = self.dataset_path / "nested_recipe.yaml"
+        with open(self.nested_recipe_path, "w") as f:
             f.write(
                 "\n".join(
                     [
                         "__module__: megatron.energon",
-                        "__class__: MetadatasetV2",
+                        "__class__: Recipe",
                         "splits:",
                         "  train:",
                         "    blend:",
                         "      - weight: 4",
-                        "        path: ./metadataset_v2.yaml",
+                        "        path: ./recipe.yaml",
                         "        split_part: train",
                         "        subflavors:",
-                        "          source: nested_metadataset.yaml",
-                        "          mds: nested_train",
-                        "      - path: ./metadataset_v2.yaml",
+                        "          source: nested_recipe.yaml",
+                        "          recipe: nested_train",
+                        "      - path: ./recipe.yaml",
                         "        split_part: val",
                         "        subflavors:",
-                        "          source: nested_metadataset.yaml",
-                        "          mds: nested_val",
+                        "          source: nested_recipe.yaml",
+                        "          recipe: nested_val",
                     ]
                 )
             )
@@ -282,7 +284,7 @@ class TestDataset(unittest.TestCase):
                 )
             )
 
-    def test_metadataset(self):
+    def test_recipe(self):
         torch.manual_seed(42)
         worker_config = WorkerConfig(
             rank=0,
@@ -293,7 +295,7 @@ class TestDataset(unittest.TestCase):
 
         # Train mode dataset
         train_dataset = get_train_dataset(
-            self.mds_path,
+            self.recipe_path,
             worker_config=worker_config,
             batch_size=10,
             shuffle_buffer_size=None,
@@ -312,15 +314,52 @@ class TestDataset(unittest.TestCase):
         assert len(Counter(train_order1)) == 110
         assert all(48 <= v <= 52 for v in Counter(train_order1).values())
 
+    def test_deprecated_v2_aliases(self):
+        from megatron.energon.recipe.recipe import Recipe
+
+        with self.assertWarns(DeprecationWarning):
+            from megatron.energon import MetadatasetV2
+        with self.assertWarns(DeprecationWarning):
+            from megatron.energon import prepare_metadataset
+        with self.assertWarns(DeprecationWarning):
+            from megatron.energon import traverse_metadataset
+        with self.assertWarns(DeprecationWarning):
+            from megatron.energon.flavors.dataset_type import is_metadataset
+        from megatron.energon.flavors.dataset_type import is_recipe
+
+        legacy_recipe_path = self.dataset_path / "legacy_recipe_alias.yaml"
+        legacy_recipe_path.write_text(
+            "\n".join(
+                [
+                    "__module__: megatron.energon",
+                    "__class__: MetadatasetV2",
+                    "splits:",
+                    "  train:",
+                    "    path: ds1",
+                ]
+            )
+        )
+
+        with self.assertWarns((DeprecationWarning, FutureWarning)):
+            recipe = load_dataset(legacy_recipe_path)
+        assert isinstance(recipe, Recipe)
+        assert isinstance(recipe, MetadatasetV2)
+
+        refs = traverse_metadataset(self.recipe_path, split_part="train")
+        assert [ref.path.name for ref in refs] == ["ds1", "ds2"]
+        assert is_metadataset(EPath(self.recipe_path)) == is_recipe(EPath(self.recipe_path))
+
+        prepare_metadataset(EPath(self.recipe_path))
+
     def test_group(self):
         """Task-defined packing groups keep returned samples source-homogeneous."""
-        mds_path = self.dataset_path / "group_blend.yaml"
-        with open(mds_path, "w") as f:
+        recipe_path = self.dataset_path / "group_blend.yaml"
+        with open(recipe_path, "w") as f:
             f.write(
                 "\n".join(
                     [
                         "__module__: megatron.energon",
-                        "__class__: MetadatasetV2",
+                        "__class__: Recipe",
                         "splits:",
                         "  train:",
                         "    blend:",
@@ -336,12 +375,12 @@ class TestDataset(unittest.TestCase):
                 )
             )
 
-        leaves = traverse_metadataset(mds_path, split_part="train")
+        leaves = traverse_recipe(recipe_path, split_part="train")
         assert len(leaves) == 2
         assert {ref.subflavors["packing_source"] for ref in leaves} == {"ds1", "ds2"}
 
         worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0, seed_offset=0)
-        loaded = load_dataset(mds_path).get_datasets(
+        loaded = load_dataset(recipe_path).get_datasets(
             training=True,
             split_part="train",
             worker_config=worker_config,
@@ -400,7 +439,7 @@ class TestDataset(unittest.TestCase):
 
         torch.manual_seed(42)
         packed_ds = get_train_dataset(
-            mds_path,
+            recipe_path,
             worker_config=worker_config,
             batch_size=2,
             packing_buffer_size=8,
@@ -411,7 +450,7 @@ class TestDataset(unittest.TestCase):
         )
         list(get_loader(packed_ds))
 
-    def test_nested_metadataset(self):
+    def test_nested_recipe(self):
         torch.manual_seed(42)
         worker_config = WorkerConfig(
             rank=0,
@@ -419,7 +458,7 @@ class TestDataset(unittest.TestCase):
             num_workers=0,
         )
 
-        dataset = load_dataset(self.nested_mds_path)
+        dataset = load_dataset(self.nested_recipe_path)
 
         raw_datasets = dataset.get_datasets(
             training=False, split_part="train", worker_config=worker_config
@@ -440,33 +479,33 @@ class TestDataset(unittest.TestCase):
         print([raw_dataset.dataset.subflavors for raw_dataset in raw_datasets.datasets])
         assert [raw_dataset.dataset.subflavors for raw_dataset in raw_datasets.datasets] == [
             {
-                "source": "nested_metadataset.yaml",
+                "source": "nested_recipe.yaml",
                 "dataset.yaml": True,
                 "number": 43,
-                "mds": "nested_train",
+                "recipe": "nested_train",
             },
             {
-                "source": "nested_metadataset.yaml",
+                "source": "nested_recipe.yaml",
                 "dataset.yaml": True,
                 "number": 44,
-                "mds": "nested_train",
+                "recipe": "nested_train",
             },
             {
-                "source": "nested_metadataset.yaml",
+                "source": "nested_recipe.yaml",
                 "dataset.yaml": True,
                 "number": 42,
-                "mds": "nested_val",
+                "recipe": "nested_val",
             },
             {
-                "source": "nested_metadataset.yaml",
+                "source": "nested_recipe.yaml",
                 "dataset.yaml": True,
                 "number": 42,
-                "mds": "nested_val",
+                "recipe": "nested_val",
             },
         ]
 
-    def test_traverse_metadataset_recurses_nested_v2_references(self):
-        """Traversed subflavors only reflect metadataset hierarchy merges.
+    def test_traverse_recipe_recurses_nested_v2_references(self):
+        """Traversed subflavors only reflect recipe hierarchy merges.
 
         They intentionally do not include the leaf dataset's own `dataset.yaml` subflavors, which
         are only applied later when `get_datasets()` loads the concrete dataset factory.
@@ -477,8 +516,8 @@ class TestDataset(unittest.TestCase):
             world_size=1,
             num_workers=0,
         )
-        refs = traverse_metadataset(self.nested_mds_path, split_part="train")
-        dataset = load_dataset(self.nested_mds_path)
+        refs = traverse_recipe(self.nested_recipe_path, split_part="train")
+        dataset = load_dataset(self.nested_recipe_path)
         raw_datasets = dataset.get_datasets(
             training=False,
             split_part="train",
@@ -496,22 +535,22 @@ class TestDataset(unittest.TestCase):
         # Traversal records only hierarchy-derived subflavors, not the loaded leaf dataset.yaml.
         assert [ref.subflavors for ref in refs] == [
             {
-                "source": "nested_metadataset.yaml",
+                "source": "nested_recipe.yaml",
                 "number": 43,
-                "mds": "nested_train",
+                "recipe": "nested_train",
             },
             {
-                "source": "nested_metadataset.yaml",
+                "source": "nested_recipe.yaml",
                 "number": 44,
-                "mds": "nested_train",
+                "recipe": "nested_train",
             },
             {
-                "source": "nested_metadataset.yaml",
-                "mds": "nested_val",
+                "source": "nested_recipe.yaml",
+                "recipe": "nested_val",
             },
             {
-                "source": "nested_metadataset.yaml",
-                "mds": "nested_val",
+                "source": "nested_recipe.yaml",
+                "recipe": "nested_val",
             },
         ]
 
@@ -519,20 +558,20 @@ class TestDataset(unittest.TestCase):
             for key, value in ref.subflavors.items():
                 assert raw_dataset.dataset.subflavors[key] == value
 
-    def test_traverse_metadataset_preserves_missing_v2_leaf_and_aux(self):
-        missing_leaf_mds_path = self.dataset_path / "missing_leaf_metadataset_v2.yaml"
-        missing_leaf_mds_path.write_text(
+    def test_traverse_recipe_preserves_missing_v2_leaf_and_aux(self):
+        missing_leaf_recipe_path = self.dataset_path / "missing_leaf_recipe.yaml"
+        missing_leaf_recipe_path.write_text(
             "\n".join(
                 [
                     "__module__: megatron.energon",
-                    "__class__: MetadatasetV2",
+                    "__class__: Recipe",
                     "splits:",
                     "  train:",
                     "    path: missing_ds",
                     "    subflavors:",
-                    "      source: missing_leaf_metadataset_v2.yaml",
+                    "      source: missing_leaf_recipe.yaml",
                     "      number: 42",
-                    "      mds: nested_val",
+                    "      recipe: nested_val",
                     "    aux:",
                     "      labels: missing_aux",
                     "      media: filesystem://media",
@@ -543,7 +582,7 @@ class TestDataset(unittest.TestCase):
             encoding="utf-8",
         )
 
-        refs = traverse_metadataset(missing_leaf_mds_path, split_part="train")
+        refs = traverse_recipe(missing_leaf_recipe_path, split_part="train")
 
         assert len(refs) == 1
         assert refs[0].path == EPath(self.dataset_path / "missing_ds")
@@ -554,13 +593,13 @@ class TestDataset(unittest.TestCase):
             "blobs": EPath(self.dataset_path / "byte_blobs"),
         }
         assert refs[0].subflavors == {
-            "source": "missing_leaf_metadataset_v2.yaml",
+            "source": "missing_leaf_recipe.yaml",
             "number": 42,
-            "mds": "nested_val",
+            "recipe": "nested_val",
         }
         assert refs[0].shuffle_over_epochs_multiplier == 2
 
-    def test_joined_metadataset(self):
+    def test_joined_recipe(self):
         torch.manual_seed(42)
         worker_config = WorkerConfig(
             rank=0,
@@ -570,13 +609,13 @@ class TestDataset(unittest.TestCase):
         )
 
         # Create a joined dataset configuration
-        joined_mds_path = self.dataset_path / "joined_metadataset_v2.yaml"
-        with open(joined_mds_path, "w") as f:
+        joined_recipe_path = self.dataset_path / "joined_recipe.yaml"
+        with open(joined_recipe_path, "w") as f:
             f.write(
                 "\n".join(
                     [
                         "__module__: megatron.energon",
-                        "__class__: MetadatasetV2",
+                        "__class__: Recipe",
                         "splits:",
                         "  train:",
                         "    join:",
@@ -596,11 +635,11 @@ class TestDataset(unittest.TestCase):
                     ]
                 )
             )
-        prepare_metadataset(EPath(joined_mds_path))
+        prepare_recipe(EPath(joined_recipe_path))
 
         # Train mode dataset
         train_dataset = get_train_dataset(
-            joined_mds_path,
+            joined_recipe_path,
             worker_config=worker_config,
             batch_size=1,
             shuffle_buffer_size=None,
@@ -646,7 +685,7 @@ class TestDataset(unittest.TestCase):
         # Restore state
         train_loader = get_savable_loader(
             get_train_dataset(
-                joined_mds_path,
+                joined_recipe_path,
                 worker_config=worker_config,
                 batch_size=1,
                 shuffle_buffer_size=None,
@@ -669,7 +708,7 @@ class TestDataset(unittest.TestCase):
         assert txt2_order == txt2_order_rest
         assert key_order == key_order_rest
 
-    def test_joined_metadataset_joiner(self):
+    def test_joined_recipe_joiner(self):
         torch.manual_seed(42)
         worker_config = WorkerConfig(
             rank=0,
@@ -679,13 +718,13 @@ class TestDataset(unittest.TestCase):
         )
 
         # Create a joined dataset configuration
-        joined_mds_path = self.dataset_path / "joined_metadataset_joiner.yaml"
-        with open(joined_mds_path, "w") as f:
+        joined_recipe_path = self.dataset_path / "joined_recipe_joiner.yaml"
+        with open(joined_recipe_path, "w") as f:
             f.write(
                 "\n".join(
                     [
                         "__module__: megatron.energon",
-                        "__class__: MetadatasetV2",
+                        "__class__: Recipe",
                         "splits:",
                         "  train:",
                         "    blend:",
@@ -707,11 +746,11 @@ class TestDataset(unittest.TestCase):
                     ]
                 )
             )
-        prepare_metadataset(EPath(joined_mds_path))
+        prepare_recipe(EPath(joined_recipe_path))
 
         # Train mode dataset
         train_dataset = get_train_dataset(
-            joined_mds_path,
+            joined_recipe_path,
             worker_config=worker_config,
             batch_size=1,
             shuffle_buffer_size=None,
@@ -758,13 +797,13 @@ class TestDataset(unittest.TestCase):
         )
 
         # Create a joined dataset configuration
-        joined_mds_path = self.dataset_path / "left_join.yaml"
-        with open(joined_mds_path, "w") as f:
+        joined_recipe_path = self.dataset_path / "left_join.yaml"
+        with open(joined_recipe_path, "w") as f:
             f.write(
                 "\n".join(
                     [
                         "__module__: megatron.energon",
-                        "__class__: MetadatasetV2",
+                        "__class__: Recipe",
                         "splits:",
                         "  train:",
                         "    blend:",
@@ -787,11 +826,11 @@ class TestDataset(unittest.TestCase):
                     ]
                 )
             )
-        prepare_metadataset(EPath(joined_mds_path))
+        prepare_recipe(EPath(joined_recipe_path))
 
         # Train mode dataset
         train_dataset = get_train_dataset(
-            joined_mds_path,
+            joined_recipe_path,
             worker_config=worker_config,
             batch_size=1,
             shuffle_buffer_size=None,
@@ -827,12 +866,12 @@ class TestDataset(unittest.TestCase):
         assert Counter(txt1_order).most_common(1)[0][1] == 2
 
         # Test that changing the file works as expected
-        with open(joined_mds_path, "w") as f:
+        with open(joined_recipe_path, "w") as f:
             f.write(
                 "\n".join(
                     [
                         "__module__: megatron.energon",
-                        "__class__: MetadatasetV2",
+                        "__class__: Recipe",
                         "splits:",
                         "  train:",
                         "    blend:",
@@ -870,7 +909,7 @@ class TestDataset(unittest.TestCase):
         with self.assertRaises(Exception):
             # Train mode dataset
             train_dataset = get_train_dataset(
-                joined_mds_path,
+                joined_recipe_path,
                 worker_config=worker_config,
                 batch_size=1,
                 shuffle_buffer_size=None,
@@ -878,16 +917,16 @@ class TestDataset(unittest.TestCase):
             )
 
         # Shall succeed after preparation
-        prepare_metadataset(EPath(joined_mds_path))
+        prepare_recipe(EPath(joined_recipe_path))
         train_dataset = get_train_dataset(
-            joined_mds_path,
+            joined_recipe_path,
             worker_config=worker_config,
             batch_size=1,
             shuffle_buffer_size=None,
             max_samples_per_sequence=None,
         )
         # Check that there are no remainder files
-        cache_folder = joined_mds_path.with_name(joined_mds_path.name + ".cache")
+        cache_folder = joined_recipe_path.with_name(joined_recipe_path.name + ".cache")
         assert sum(1 for f in cache_folder.iterdir() if f.is_file()) == 2, list(
             cache_folder.iterdir()
         )
@@ -922,13 +961,13 @@ class TestDataset(unittest.TestCase):
             )
 
         # Create a joined dataset configuration
-        joined_mds_path = self.dataset_path / "left_join.yaml"
-        with open(joined_mds_path, "w") as f:
+        joined_recipe_path = self.dataset_path / "left_join.yaml"
+        with open(joined_recipe_path, "w") as f:
             f.write(
                 "\n".join(
                     [
                         "__module__: megatron.energon",
-                        "__class__: MetadatasetV2",
+                        "__class__: Recipe",
                         "splits:",
                         "  train:",
                         "    blend:",
@@ -946,11 +985,11 @@ class TestDataset(unittest.TestCase):
                     ]
                 )
             )
-        prepare_metadataset(EPath(joined_mds_path))
+        prepare_recipe(EPath(joined_recipe_path))
 
         # Train mode dataset
         train_dataset = get_train_dataset(
-            joined_mds_path,
+            joined_recipe_path,
             worker_config=worker_config,
             batch_size=1,
             shuffle_buffer_size=None,
@@ -984,17 +1023,17 @@ class TestDataset(unittest.TestCase):
         assert set(txt1_order) == set(f"j{i}" for i in set_filtered_nums)
         assert set(txt2_order) == set(f"jB{i}" for i in set_filtered_nums)
 
-    def test_joined_metadataset_prepare_mock(self):
+    def test_joined_recipe_prepare_mock(self):
         torch.manual_seed(42)
 
         # Create a joined dataset configuration
-        joined_mds_path = self.dataset_path / "joined_metadataset_prepare_mock.yaml"
-        with open(joined_mds_path, "w") as f:
+        joined_recipe_path = self.dataset_path / "joined_recipe_prepare_mock.yaml"
+        with open(joined_recipe_path, "w") as f:
             f.write(
                 "\n".join(
                     [
                         "__module__: megatron.energon",
-                        "__class__: MetadatasetV2",
+                        "__class__: Recipe",
                         "splits:",
                         "  train:",
                         "    join:",
@@ -1006,16 +1045,16 @@ class TestDataset(unittest.TestCase):
                     ]
                 )
             )
-        prepare_metadataset(EPath(joined_mds_path))
+        prepare_recipe(EPath(joined_recipe_path))
 
         # Create a joined dataset configuration
-        joined_mds_path = self.dataset_path / "joined_metadataset_prepare_mock2.yaml"
-        with open(joined_mds_path, "w") as f:
+        joined_recipe_path = self.dataset_path / "joined_recipe_prepare_mock2.yaml"
+        with open(joined_recipe_path, "w") as f:
             f.write(
                 "\n".join(
                     [
                         "__module__: megatron.energon",
-                        "__class__: MetadatasetV2",
+                        "__class__: Recipe",
                         "splits:",
                         "  train:",
                         "    join:",
@@ -1027,9 +1066,9 @@ class TestDataset(unittest.TestCase):
                     ]
                 )
             )
-        prepare_metadataset(EPath(joined_mds_path))
+        prepare_recipe(EPath(joined_recipe_path))
 
-    def test_metadataset_fixed_epochs(self):
+    def test_recipe_fixed_epochs(self):
         torch.manual_seed(42)
         worker_config = WorkerConfig(
             rank=0,
@@ -1039,13 +1078,13 @@ class TestDataset(unittest.TestCase):
         )
 
         # Create a joined dataset configuration
-        fixed_epochs_mds_path = self.dataset_path / "metadataset_fixed_epochs.yaml"
-        with open(fixed_epochs_mds_path, "w") as f:
+        fixed_epochs_recipe_path = self.dataset_path / "recipe_fixed_epochs.yaml"
+        with open(fixed_epochs_recipe_path, "w") as f:
             f.write(
                 "\n".join(
                     [
                         "__module__: megatron.energon",
-                        "__class__: MetadatasetV2",
+                        "__class__: Recipe",
                         "splits:",
                         "  train:",
                         "    blend_epochized:",
@@ -1065,7 +1104,7 @@ class TestDataset(unittest.TestCase):
 
         # Train mode dataset
         train_dataset = get_train_dataset(
-            fixed_epochs_mds_path,
+            fixed_epochs_recipe_path,
             worker_config=worker_config,
             batch_size=1,
             shuffle_buffer_size=None,
@@ -1131,7 +1170,7 @@ class TestDataset(unittest.TestCase):
         # Restore state
         train_loader = get_savable_loader(
             get_train_dataset(
-                fixed_epochs_mds_path,
+                fixed_epochs_recipe_path,
                 worker_config=worker_config,
                 batch_size=1,
                 shuffle_buffer_size=None,
@@ -1163,7 +1202,7 @@ class TestDataset(unittest.TestCase):
         assert all(ds2_key_cnt_rst[key] == 3 for key in ds2_keys_rst)
         assert all(txt_cnt_rst[key] in (2, 3) for key in txt_order_rst)
 
-    def test_metadataset_fixed_fractional_epochs(self):
+    def test_recipe_fixed_fractional_epochs(self):
         torch.manual_seed(42)
         worker_config = WorkerConfig(
             rank=0,
@@ -1173,13 +1212,13 @@ class TestDataset(unittest.TestCase):
         )
 
         # Create a joined dataset configuration
-        fixed_epochs_mds_path = self.dataset_path / "metadataset_fixed_epochs.yaml"
-        with open(fixed_epochs_mds_path, "w") as f:
+        fixed_epochs_recipe_path = self.dataset_path / "recipe_fixed_epochs.yaml"
+        with open(fixed_epochs_recipe_path, "w") as f:
             f.write(
                 "\n".join(
                     [
                         "__module__: megatron.energon",
-                        "__class__: MetadatasetV2",
+                        "__class__: Recipe",
                         "splits:",
                         "  train:",
                         "    blend_epochized:",
@@ -1201,7 +1240,7 @@ class TestDataset(unittest.TestCase):
 
         # Train mode dataset
         train_dataset = get_train_dataset(
-            fixed_epochs_mds_path,
+            fixed_epochs_recipe_path,
             worker_config=worker_config,
             batch_size=1,
             shuffle_buffer_size=None,
@@ -1242,7 +1281,7 @@ class TestDataset(unittest.TestCase):
 
         train_loader = get_savable_loader(
             get_train_dataset(
-                fixed_epochs_mds_path,
+                fixed_epochs_recipe_path,
                 worker_config=worker_config,
                 batch_size=1,
                 shuffle_buffer_size=None,
@@ -1260,7 +1299,7 @@ class TestDataset(unittest.TestCase):
 
         train_loader = get_savable_loader(
             get_train_dataset(
-                fixed_epochs_mds_path,
+                fixed_epochs_recipe_path,
                 worker_config=worker_config,
                 batch_size=1,
                 shuffle_buffer_size=None,
@@ -1295,7 +1334,7 @@ class TestDataset(unittest.TestCase):
 
         train_loader = get_savable_loader(
             get_train_dataset(
-                fixed_epochs_mds_path,
+                fixed_epochs_recipe_path,
                 worker_config=worker_config,
                 batch_size=1,
                 shuffle_buffer_size=None,
@@ -1322,7 +1361,7 @@ class TestDataset(unittest.TestCase):
 
         train_loader = get_savable_loader(
             get_train_dataset(
-                fixed_epochs_mds_path,
+                fixed_epochs_recipe_path,
                 worker_config=worker_config,
                 batch_size=1,
                 shuffle_buffer_size=None,
@@ -1355,7 +1394,7 @@ class TestDataset(unittest.TestCase):
         # Train mode dataset
         train_loader = get_savable_loader(
             get_train_dataset(
-                fixed_epochs_mds_path,
+                fixed_epochs_recipe_path,
                 worker_config=worker_config,
                 batch_size=1,
                 shuffle_buffer_size=None,
@@ -1386,7 +1425,7 @@ class TestDataset(unittest.TestCase):
         # Train mode dataset
         train_loader = get_savable_loader(
             get_train_dataset(
-                fixed_epochs_mds_path,
+                fixed_epochs_recipe_path,
                 worker_config=worker_config,
                 batch_size=1,
                 shuffle_buffer_size=None,
@@ -1436,7 +1475,7 @@ class TestDataset(unittest.TestCase):
 
         # Train mode dataset
         train_dataset = get_train_dataset(
-            self.mds_path,
+            self.recipe_path,
             worker_config=worker_config,
             batch_size=1,
             shuffle_buffer_size=None,
@@ -1457,6 +1496,721 @@ class TestDataset(unittest.TestCase):
 
         mock_watchdog_trigger.assert_called()
 
+    def test_worker_sample_balance(self):
+        torch.manual_seed(42)
+
+        for num_workers in [6, 30]:
+            samples_per_global_worker = Counter()
+
+            for rank in range(2):
+                wc = WorkerConfig(
+                    rank=rank,
+                    world_size=2,
+                    num_workers=num_workers,
+                )
+
+                train_dataset = get_train_dataset(
+                    self.nested_recipe_path,
+                    worker_config=wc,
+                    batch_size=1,
+                    shuffle_buffer_size=None,
+                    max_samples_per_sequence=None,
+                )
+
+                blend_dataset = get_blend_dataset(train_dataset)
+                assert isinstance(blend_dataset, BlendDataset)
+
+                ds_weights = blend_dataset.dataset_weights
+                assert len(ds_weights) == 4  # 4 datasets
+
+                # We are now going to count the number of samples that was assigned to each
+                # globally unique worker. This corresponds to the shard_ranges that energon
+                # prints out when the dataset is built.
+
+                for ds, w in ds_weights:
+                    worker_slice_offsets = ds.dataset.dataset.workers_slice_offsets
+                    assert len(worker_slice_offsets) == num_workers
+
+                    for worker_idx, slice_offsets in enumerate(worker_slice_offsets):
+                        samples_per_global_worker[(rank, worker_idx)] += (
+                            slice_offsets[-1] - slice_offsets[0]
+                        )
+            print(samples_per_global_worker)
+
+            # Check the sample assignnent is balanced across all global workers
+            if num_workers == 6:
+                assert list(samples_per_global_worker.values()) == [
+                    19,  # rank 0
+                    18,
+                    18,
+                    19,
+                    18,
+                    18,
+                    19,  # rank 1
+                    18,
+                    18,
+                    19,
+                    18,
+                    18,
+                ]
+            elif num_workers == 30:
+                # This should match the pattern of the first 40 items of a generalized bit
+                # reversal sequence of length 60.
+                # Given 4 * 55 = 220 samples modulo 60 workers, is 40 remaining samples
+                assert list(samples_per_global_worker.values()) == [
+                    4,
+                    4,
+                    4,
+                    4,
+                    3,
+                    4,
+                    3,
+                    4,
+                    4,
+                    4,
+                    3,
+                    4,
+                    3,
+                    4,
+                    3,
+                    4,
+                    4,
+                    4,
+                    4,
+                    3,
+                    4,
+                    3,
+                    4,
+                    4,
+                    4,
+                    3,
+                    4,
+                    3,
+                    4,
+                    3,
+                    4,
+                    4,
+                    4,
+                    4,
+                    3,
+                    4,
+                    3,
+                    4,
+                    4,
+                    4,
+                    3,
+                    4,
+                    3,
+                    4,
+                    3,
+                    4,
+                    4,
+                    4,
+                    4,
+                    3,
+                    4,
+                    3,
+                    4,
+                    4,
+                    4,
+                    3,
+                    4,
+                    3,
+                    4,
+                    3,
+                ]
+
+    def test_save_restore_state_train(self):
+        torch.manual_seed(42)
+
+        worker_config = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=0,
+            seed_offset=42,
+        )
+
+        def new_loader():
+            return get_savable_loader(
+                get_train_dataset(
+                    self.recipe_path,
+                    worker_config=worker_config,
+                    batch_size=10,
+                    parallel_shard_iters=2,
+                    shuffle_buffer_size=None,
+                    max_samples_per_sequence=None,
+                    shuffle_over_epochs_multiplier=2,
+                ),
+            )
+
+        # Train mode dataset
+        loader = new_loader()
+        state_0 = loader.save_state_rank()
+        order_0 = [data.text for idx, data in zip(range(10), loader)]
+        state_1 = loader.save_state_rank()
+        # print("save state done")
+        order_1 = [data.text for idx, data in zip(range(20), loader)]
+
+        state_2 = loader.save_state_rank()
+        # print("save state done")
+        # Iterated 30 samples, afterwards 50 samples. Checkpoint should be around that
+        order_2 = [data.text for idx, data in zip(range(20), loader)]
+
+        state_3 = loader.save_state_rank()
+        # print("save state done")
+        # Iterated 50 samples, afterwards 53 samples. Checkpoint should be around that
+        order_3 = [data.text for idx, data in zip(range(3), loader)]
+
+        state_4 = loader.save_state_rank()
+        # print("save state done")
+        # Dataset size is 55, want to save one sample before end of epoch
+        # Iterated 53 samples, afterwards 54 samples. Checkpoint should be around that
+        order_4 = [data.text for idx, data in zip(range(1), loader)]
+
+        state_5 = loader.save_state_rank()
+        # print("save state done")
+        # Dataset size is 55, want to save one sample before end of epoch
+        # Iterated 54 samples, afterwards 55 samples. Checkpoint should be around that
+        order_5 = [data.text for idx, data in zip(range(1), loader)]
+
+        state_6 = loader.save_state_rank()
+        # print("save state done")
+        # Dataset size is 55, want to save one sample before end of epoch
+        # Iterated 55 samples, afterwards 75 samples. Checkpoint should be around that
+        order_6 = [data.text for idx, data in zip(range(70), loader)]
+
+        loader = new_loader()
+        print("state_1:", _norng_state(state_1))
+        loader.restore_state_rank(state_1)
+        order_1_rest = [data.text for idx, data in zip(range(len(order_1)), loader)]
+        assert order_1 == order_1_rest
+
+        loader = new_loader()
+        loader.restore_state_rank(state_0)
+        order_0_rest = [data.text for idx, data in zip(range(len(order_0)), loader)]
+        assert order_0 == order_0_rest
+
+        loader = new_loader()
+        print("state_2:", _norng_state(state_2))
+        loader.restore_state_rank(state_2)
+        order_2_rest = [data.text for idx, data in zip(range(len(order_2)), loader)]
+        print("order_2:", order_2)
+        print("order_2_rest:", order_2_rest)
+        assert order_2 == order_2_rest
+
+        loader = new_loader()
+        print("state_3:", _norng_state(state_3))
+        loader.restore_state_rank(state_3)
+        order_3_rest = [data.text for idx, data in zip(range(len(order_3)), loader)]
+        print("order_3:", order_3)
+        print("order_3_rest:", order_3_rest)
+        assert order_3 == order_3_rest
+
+        loader = new_loader()
+        print("state_4:", _norng_state(state_4))
+        loader.restore_state_rank(state_4)
+        order_4_rest = [data.text for idx, data in zip(range(len(order_4)), loader)]
+        print("order_4:", order_4)
+        print("order_4_rest:", order_4_rest)
+        assert order_4 == order_4_rest
+
+        loader = new_loader()
+        print("state_5:", _norng_state(state_5))
+        loader.restore_state_rank(state_5)
+        order_5_rest = [data.text for idx, data in zip(range(len(order_5)), loader)]
+        print("order_5:", order_5)
+        print("order_5_rest:", order_5_rest)
+        assert order_5 == order_5_rest
+
+        loader = new_loader()
+        print("state_6:", _norng_state(state_6))
+        loader.restore_state_rank(state_6)
+        order_6_rest = [data.text for idx, data in zip(range(len(order_6)), loader)]
+        print("order_6:", order_6)
+        print("order_6_rest:", order_6_rest)
+        assert order_6 == order_6_rest
+
+    def test_save_restore_state_train_workers(self):
+        torch.manual_seed(42)
+
+        worker_config = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=1,
+            seed_offset=42,
+        )
+
+        def new_loader():
+            return get_savable_loader(
+                get_train_dataset(
+                    self.recipe_path,
+                    worker_config=worker_config,
+                    batch_size=10,
+                    parallel_shard_iters=2,
+                    shuffle_buffer_size=None,
+                    max_samples_per_sequence=None,
+                ),
+                checkpoint_every_sec=0.5,
+                checkpoint_every_min_n_samples=1,
+            )
+
+        # Train mode dataset
+        loader = new_loader()
+        state_0 = loader.save_state_rank()
+        order_0 = [data.text for idx, data in zip(range(10), loader)]
+        time.sleep(0.5)
+        state_1 = loader.save_state_rank()
+        # print("save state done")
+        order_1 = [data.text for idx, data in zip(range(20), loader)]
+
+        # Ensure a checkpoint is created on next()
+        time.sleep(1.5)
+
+        state_2 = loader.save_state_rank()
+        # print("save state done")
+        # Iterated 30 samples, afterwards 50 samples. Checkpoint should be around that
+        order_2 = [data.text for idx, data in zip(range(20), loader)]
+
+        state_3 = loader.save_state_rank()
+        # print("save state done")
+        # Iterated 50 samples, afterwards 53 samples. Checkpoint should be around that
+        order_3 = [data.text for idx, data in zip(range(3), loader)]
+
+        # Ensure a checkpoint is created on next()
+        time.sleep(1.5)
+
+        state_4 = loader.save_state_rank()
+        # print("save state done")
+        # Dataset size is 55, want to save one sample before end of epoch
+        # Iterated 1 samples, afterwards 54 samples. Checkpoint should be around that
+        order_4 = [data.text for idx, data in zip(range(1), loader)]
+
+        # Ensure a checkpoint is created on next()
+        time.sleep(1.5)
+
+        state_5 = loader.save_state_rank()
+        # print("save state done")
+        # Dataset size is 55, want to save one sample before end of epoch
+        # Iterated 1 samples, afterwards 55 samples. Checkpoint should be around that
+        order_5 = [data.text for idx, data in zip(range(1), loader)]
+
+        # Ensure a checkpoint is created on next()
+        time.sleep(1.5)
+
+        state_6 = loader.save_state_rank()
+        # print("save state done")
+        # Dataset size is 55, want to save one sample before end of epoch
+        # Iterated 1 samples, afterwards 55 samples. Checkpoint should be around that
+        order_6 = [data.text for idx, data in zip(range(10), loader)]
+
+        loader = new_loader()
+        print("state_1:", _norng_state(state_1))
+        loader.restore_state_rank(state_1)
+        order_1_rest = [data.text for idx, data in zip(range(len(order_1)), loader)]
+        print("order_1:", order_1)
+        print("order_1_rest:", order_1_rest)
+        assert order_1 == order_1_rest
+
+        loader = new_loader()
+        loader.restore_state_rank(state_0)
+        order_0_rest = [data.text for idx, data in zip(range(len(order_0)), loader)]
+        assert order_0 == order_0_rest
+
+        loader = new_loader()
+        print("state_2:", _norng_state(state_2))
+        loader.restore_state_rank(state_2)
+        order_2_rest = [data.text for idx, data in zip(range(len(order_2)), loader)]
+        print("order_2:", order_2)
+        print("order_2_rest:", order_2_rest)
+        assert order_2 == order_2_rest
+
+        loader = new_loader()
+        print("state_3:", _norng_state(state_3))
+        loader.restore_state_rank(state_3)
+        order_3_rest = [data.text for idx, data in zip(range(len(order_3)), loader)]
+        print("order_3:", order_3)
+        print("order_3_rest:", order_3_rest)
+        assert order_3 == order_3_rest
+
+        loader = new_loader()
+        print("state_4:", _norng_state(state_4))
+        loader.restore_state_rank(state_4)
+        order_4_rest = [data.text for idx, data in zip(range(len(order_4)), loader)]
+        print("order_4:", order_4)
+        print("order_4_rest:", order_4_rest)
+        assert order_4 == order_4_rest
+
+        loader = new_loader()
+        print("state_5:", _norng_state(state_5))
+        loader.restore_state_rank(state_5)
+        order_5_rest = [data.text for idx, data in zip(range(len(order_5)), loader)]
+        print("order_5:", order_5)
+        print("order_5_rest:", order_5_rest)
+        assert order_5 == order_5_rest
+
+        loader = new_loader()
+        print("state_6:", _norng_state(state_6))
+        loader.restore_state_rank(state_6)
+        order_6_rest = [data.text for idx, data in zip(range(len(order_6)), loader)]
+        print("order_6:", order_6)
+        print("order_6_rest:", order_6_rest)
+        assert order_6 == order_6_rest
+
+    def test_save_restore_state_train_epochize_workers(self):
+        torch.manual_seed(42)
+        psi = 2
+        vel = 19
+        sbs = 10
+
+        worker_config = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=2,
+            seed_offset=42,
+        )
+
+        # Train mode dataset
+        torch.manual_seed(42)
+        loader = get_savable_loader(
+            get_train_dataset(
+                self.recipe_path,
+                worker_config=worker_config,
+                batch_size=1,
+                parallel_shard_iters=psi,
+                virtual_epoch_length=vel,
+                shuffle_buffer_size=sbs,
+                max_samples_per_sequence=sbs,
+            ),
+        )
+        state_0 = loader.save_state_rank()
+        order_1 = [data.text[0] for data in loader]
+        state_1 = loader.save_state_rank()
+        order_2 = [data.text[0] for data in loader]
+        state_2 = loader.save_state_rank()
+        order_3 = [data.text[0] for idx, data in zip(range(17), loader)]
+
+        torch.manual_seed(42)
+        loader = get_savable_loader(
+            get_train_dataset(
+                self.recipe_path,
+                worker_config=worker_config,
+                batch_size=1,
+                parallel_shard_iters=psi,
+                virtual_epoch_length=vel,
+                shuffle_buffer_size=sbs,
+                max_samples_per_sequence=sbs,
+            ),
+        )
+        print("state_0:", _norng_state(state_0))
+        loader.restore_state_rank(state_0)
+        order_5 = [data.text[0] for data in loader]
+        print("order_1:", order_1)
+        print("order_5:", order_5)
+        assert order_1 == order_5
+
+        torch.manual_seed(42)
+        loader = get_savable_loader(
+            get_train_dataset(
+                self.recipe_path,
+                worker_config=worker_config,
+                batch_size=1,
+                parallel_shard_iters=psi,
+                virtual_epoch_length=vel,
+                shuffle_buffer_size=sbs,
+                max_samples_per_sequence=sbs,
+            ),
+        )
+        print("state_1:", _norng_state(state_1))
+        loader.restore_state_rank(state_1)
+        order_6 = [data.text[0] for data in loader]
+        print("order_2:", order_2)
+        print("order_6:", order_6)
+        assert order_2 == order_6
+
+        torch.manual_seed(42)
+        loader = get_savable_loader(
+            get_train_dataset(
+                self.recipe_path,
+                worker_config=worker_config,
+                batch_size=1,
+                parallel_shard_iters=psi,
+                virtual_epoch_length=vel,
+                shuffle_buffer_size=sbs,
+                max_samples_per_sequence=sbs,
+            ),
+        )
+        print("state_2:", _norng_state(state_2))
+        loader.restore_state_rank(state_2)
+        order_7 = [data.text[0] for idx, data in zip(range(17), loader)]
+        print("order_3:", order_3)
+        print("order_7:", order_7)
+        assert order_3 == order_7
+
+    def test_save_restore_state_val(self):
+        torch.manual_seed(42)
+
+        worker_config = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=0,
+            seed_offset=42,
+        )
+
+        # Train mode dataset
+        loader = get_savable_loader(
+            get_val_dataset(self.recipe_path, worker_config=worker_config, batch_size=10),
+        )
+        state_0 = loader.save_state_rank()
+        order_1 = [data.text for idx, data in zip(range(55 * 20), loader)]
+        state_1 = loader.save_state_rank()
+        # print("save state done")
+        order_2 = [data.text for idx, data in zip(range(55 * 20), loader)]
+
+        loader = get_savable_loader(
+            get_val_dataset(self.recipe_path, worker_config=worker_config, batch_size=10),
+        )
+        loader.restore_state_rank(state_1)
+        order_3 = [data.text for idx, data in zip(range(55 * 20), loader)]
+        assert order_2 == order_3
+
+        loader = get_savable_loader(
+            get_val_dataset(self.recipe_path, worker_config=worker_config, batch_size=10),
+        )
+        loader.restore_state_rank(state_0)
+        order_4 = [data.text for idx, data in zip(range(55 * 20), loader)]
+        assert order_1 == order_4
+
+    def test_blending_randomness(self):
+        import random
+
+        import numpy
+
+        for num_workers in [0, 1, 2]:  # Especially also check the num_workers=0 case
+            world_size = 4
+            micro_batch_size = 1
+            seed = 42
+
+            configs = (
+                WorkerConfig(rank=0, world_size=world_size, num_workers=num_workers),
+                WorkerConfig(rank=1, world_size=world_size, num_workers=num_workers),
+                WorkerConfig(rank=2, world_size=world_size, num_workers=num_workers),
+            )
+
+            all_ranks_subflavors = []
+            for rank_config in configs:
+                torch.manual_seed(seed)
+                numpy.random.seed(seed)
+                random.seed(seed)
+
+                ds = get_train_dataset(
+                    self.recipe_path,
+                    split_part="train",
+                    worker_config=rank_config,
+                    batch_size=micro_batch_size,
+                    shuffle_buffer_size=None,
+                    max_samples_per_sequence=None,
+                )
+                loader = get_loader(ds)
+
+                subflavors = [
+                    data.__subflavors__[0].get("number") for idx, data in zip(range(25), loader)
+                ]
+
+                all_ranks_subflavors.append(subflavors)
+
+                print(f"Subflavors for rank {rank_config.rank}:", subflavors)
+
+            # Assert that all ranks got different data
+            for i in range(len(all_ranks_subflavors)):
+                for j in range(i + 1, len(all_ranks_subflavors)):
+                    assert all_ranks_subflavors[i] != all_ranks_subflavors[j], (
+                        f"Rank {i} and rank {j} got the same subflavors."
+                    )
+
+            # Delete all locals, otherwise loaders might be kept alive
+            locals().clear()
+            gc.collect()
+
+    def test_slice_iter_shuffle_over_epochs(self):
+        torch.manual_seed(42)
+
+        worker_config = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=0,
+            seed_offset=42,
+        )
+
+        def new_loader():
+            return get_savable_loader(
+                get_train_dataset(
+                    self.recipe_path,
+                    worker_config=worker_config,
+                    batch_size=10,
+                    parallel_shard_iters=2,
+                    shuffle_buffer_size=None,
+                    max_samples_per_sequence=None,
+                    shuffle_over_epochs_multiplier=-1,
+                ),
+            )
+
+        # Train mode dataset
+        loader = new_loader()
+        _ = [data.text for idx, data in zip(range(1000), loader)]
+
+    def test_save_restore_next(self):
+        torch.manual_seed(42)
+
+        wc = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=6,
+        )
+
+        initial_loader = get_savable_loader(
+            get_train_dataset(
+                self.nested_recipe_path,
+                worker_config=wc,
+                batch_size=1,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+            ),
+            checkpoint_every_sec=0,
+            checkpoint_every_min_n_samples=0,
+        )
+        skip_initial = 9
+
+        previous_cp = initial_loader.save_state_rank()
+        print("initial_samples:")
+        for i, sample in zip(range(skip_initial), initial_loader):
+            print(f"sample[@{i}]: {sample.text}")
+            print("previous_cp:", previous_cp)
+            rst_loader = get_savable_loader(
+                get_train_dataset(
+                    self.nested_recipe_path,
+                    worker_config=wc,
+                    batch_size=1,
+                    shuffle_buffer_size=None,
+                    max_samples_per_sequence=None,
+                ),
+                checkpoint_every_sec=0,
+                checkpoint_every_min_n_samples=0,
+            )
+            rst_loader.restore_state_rank(previous_cp)
+            for i, rst_sample in zip(range(1), rst_loader):
+                print(f"rst_sample[@{i}]: {rst_sample.text}")
+            assert sample.text == rst_sample.text, f"{sample} != {rst_sample}"
+            assert sample.__key__ == rst_sample.__key__, f"{sample} != {rst_sample}"
+            assert sample.__restore_key__ == rst_sample.__restore_key__, f"{sample} != {rst_sample}"
+            previous_cp = initial_loader.save_state_rank()
+
+        # Iterate 10 samples, the save state and store the next 10 samples for reference.
+        state_initial = initial_loader.save_state_rank()
+        print("state_initial:", str(state_initial))
+        initial_samples = [sample for _, sample in zip(range(20), initial_loader)]
+        print(
+            "initial_samples:"
+            + "".join(
+                f"\n [@{idx}] {sample.text}"
+                for idx, sample in enumerate(initial_samples, start=skip_initial)
+            )
+        )
+
+        del initial_loader
+        gc.collect()
+
+        second_loader = get_savable_loader(
+            get_train_dataset(
+                self.nested_recipe_path,
+                worker_config=wc,
+                batch_size=1,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+            ),
+            checkpoint_every_sec=0,
+            checkpoint_every_min_n_samples=0,
+        )
+        second_loader.restore_state_rank(state_initial)
+
+        # Save the state again, to check that it is the same as the just restored state
+        same_state = second_loader.save_state_rank()
+        print("same_state:", same_state)
+        assert same_state == state_initial
+
+        for offset in range(10):
+            try:
+                # Save state and restore in next loader
+                state_offset = second_loader.save_state_rank()
+                # Get 1 sample from the current loader
+                samples = [sample for _, sample in zip(range(1), second_loader)]
+                assert len(samples) == 1
+                sample = samples[0]
+
+                # Check that the sample is the same as the initial loader's reference sample
+                print(f"sample[@{offset + skip_initial}]: {sample.text}")
+                try:
+                    assert sample.text == initial_samples[offset].text, (
+                        f"{sample} != {initial_samples[offset]}"
+                    )
+                    assert sample.__key__ == initial_samples[offset].__key__, (
+                        f"{sample} != {initial_samples[offset]}"
+                    )
+                    assert sample.__restore_key__ == initial_samples[offset].__restore_key__, (
+                        f"{sample} != {initial_samples[offset]}"
+                    )
+                except Exception as e:
+                    print(
+                        "samples:"
+                        + f"\n [@{offset + skip_initial}] {sample.text}"
+                        + "".join(
+                            f"\n [@{idx}] {sample.text}"
+                            for idx, sample in zip(
+                                range(skip_initial + offset + 1, skip_initial + offset + 6),
+                                second_loader,
+                            )
+                        )
+                    )
+                    raise ValueError(f"Failed to iterate @{offset + skip_initial} samples") from e
+
+                # Restore state in a new loader
+                ref_loader = get_savable_loader(
+                    get_train_dataset(
+                        self.nested_recipe_path,
+                        worker_config=wc,
+                        batch_size=1,
+                        shuffle_buffer_size=None,
+                        max_samples_per_sequence=None,
+                    ),
+                    checkpoint_every_sec=0,
+                    checkpoint_every_min_n_samples=0,
+                )
+                ref_loader.restore_state_rank(state_offset)
+
+                # Get 1 sample from the restored loader
+                next_loader_samples = [sample for _, sample in zip(range(6), ref_loader)]
+                assert len(next_loader_samples) == 6
+                next_loader_sample = next_loader_samples[0]
+                print(
+                    "next_loader_samples:"
+                    + f"\n [@{offset + skip_initial}] {sample.text}"
+                    + "".join(
+                        f"\n [@{idx}] {sample}"
+                        for idx, sample in zip(
+                            range(skip_initial + offset, skip_initial + offset + 6),
+                            next_loader_samples,
+                        )
+                    )
+                )
+                assert next_loader_sample.text == sample.text, f"{next_loader_sample} != {sample}"
+                assert next_loader_sample.__key__ == sample.__key__, (
+                    f"{next_loader_sample} != {sample}"
+                )
+                assert next_loader_sample.__restore_key__ == sample.__restore_key__, (
+                    f"{next_loader_sample} != {sample}"
+                )
+            except Exception as e:
+                raise ValueError(f"Failed to iterate @{skip_initial}+{offset} samples") from e
+
     def test_dataset_absolute_nested_subset_fail(self):
         worker_config = WorkerConfig(
             rank=0,
@@ -1464,13 +2218,13 @@ class TestDataset(unittest.TestCase):
             num_workers=0,
             seed_offset=42,
         )
-        ratio_mds_path = self.dataset_path / "metadataset_ratio.yaml"
-        with open(ratio_mds_path, "w") as f:
+        ratio_recipe_path = self.dataset_path / "recipe_ratio.yaml"
+        with open(ratio_recipe_path, "w") as f:
             f.write(
                 "\n".join(
                     [
                         "__module__: megatron.energon",
-                        "__class__: MetadatasetV2",
+                        "__class__: Recipe",
                         "splits:",
                         "  train:",
                         # Absolute range on outer level should fail
@@ -1492,7 +2246,7 @@ class TestDataset(unittest.TestCase):
         try:
             get_loader(
                 get_train_dataset(
-                    ratio_mds_path,
+                    ratio_recipe_path,
                     worker_config=worker_config,
                     batch_size=1,
                     shuffle_buffer_size=None,
@@ -1516,13 +2270,13 @@ class TestDataset(unittest.TestCase):
             num_workers=0,
             seed_offset=42,
         )
-        ratio_mds_path = self.dataset_path / "metadataset_ratio.yaml"
-        with open(ratio_mds_path, "w") as f:
+        ratio_recipe_path = self.dataset_path / "recipe_ratio.yaml"
+        with open(ratio_recipe_path, "w") as f:
             f.write(
                 "\n".join(
                     [
                         "__module__: megatron.energon",
-                        "__class__: MetadatasetV2",
+                        "__class__: Recipe",
                         "splits:",
                         "  train:",
                         # Absolute range: [50, end]
@@ -1538,7 +2292,7 @@ class TestDataset(unittest.TestCase):
 
         loader = get_loader(
             get_train_dataset(
-                ratio_mds_path,
+                ratio_recipe_path,
                 worker_config=worker_config,
                 batch_size=1,
                 shuffle_buffer_size=None,
@@ -1560,13 +2314,13 @@ class TestDataset(unittest.TestCase):
             num_workers=0,
             seed_offset=42,
         )
-        ratio_mds_path = self.dataset_path / "metadataset_ratio.yaml"
-        with open(ratio_mds_path, "w") as f:
+        ratio_recipe_path = self.dataset_path / "recipe_ratio.yaml"
+        with open(ratio_recipe_path, "w") as f:
             f.write(
                 "\n".join(
                     [
                         "__module__: megatron.energon",
-                        "__class__: MetadatasetV2",
+                        "__class__: Recipe",
                         "splits:",
                         "  train:",
                         # 20% of the dataset will be from ds1, 80% from ds2
@@ -1588,7 +2342,7 @@ class TestDataset(unittest.TestCase):
 
         loader = get_loader(
             get_train_dataset(
-                ratio_mds_path,
+                ratio_recipe_path,
                 worker_config=worker_config,
                 batch_size=1,
                 shuffle_buffer_size=None,
@@ -1613,13 +2367,13 @@ class TestDataset(unittest.TestCase):
 
         # Combine with subset_samples
 
-        ratio2_mds_path = self.dataset_path / "metadataset_ratio2.yaml"
-        with open(ratio2_mds_path, "w") as f:
+        ratio2_recipe_path = self.dataset_path / "recipe_ratio2.yaml"
+        with open(ratio2_recipe_path, "w") as f:
             f.write(
                 "\n".join(
                     [
                         "__module__: megatron.energon",
-                        "__class__: MetadatasetV2",
+                        "__class__: Recipe",
                         "splits:",
                         "  train:",
                         # take [10, 30] from ds1, [20, 40] from ds2 and then only [20%, 80%]
@@ -1643,7 +2397,7 @@ class TestDataset(unittest.TestCase):
 
         loader = get_loader(
             get_train_dataset(
-                ratio2_mds_path,
+                ratio2_recipe_path,
                 worker_config=worker_config,
                 batch_size=1,
                 shuffle_buffer_size=None,
@@ -1666,14 +2420,14 @@ class TestDataset(unittest.TestCase):
         assert all(sample_counts[sample] == 0 for sample in range(136, 155)), sample_counts
         assert sample_counts.total() == 12 + 12 * 2, sample_counts.total()
 
-        # Combine with subset_ratio and subset_samples and nested metadataset
-        nested_mds_path = self.dataset_path / "metadataset_nested_subset.yaml"
-        with open(nested_mds_path, "w") as f:
+        # Combine with subset_ratio and subset_samples and nested recipe
+        nested_recipe_path = self.dataset_path / "recipe_nested_subset.yaml"
+        with open(nested_recipe_path, "w") as f:
             f.write(
                 "\n".join(
                     [
                         "__module__: megatron.energon",
-                        "__class__: MetadatasetV2",
+                        "__class__: Recipe",
                         "splits:",
                         "  train:",
                         "    subset: {range: [0%, 50%]}",
@@ -1690,14 +2444,14 @@ class TestDataset(unittest.TestCase):
                         # Applying outer 50%: [17, 20], 2*[127, 130], total=3*3=9
                         # Applying repetition: 2*[17, 20], 4*[127, 130], total=2*9=18
                         "        subset: {range: [25%, 75%]}",
-                        "        path: metadataset_ratio2.yaml",
+                        "        path: recipe_ratio2.yaml",
                     ]
                 )
             )
 
         loader = get_loader(
             get_train_dataset(
-                nested_mds_path,
+                nested_recipe_path,
                 worker_config=worker_config,
                 batch_size=1,
                 shuffle_buffer_size=None,
@@ -1740,13 +2494,13 @@ class TestDataset(unittest.TestCase):
             self.dataset_path / "ds_long", range(100, 155), text_size=long_size
         )
 
-        size_blend_mds_path = self.dataset_path / "metadataset_size_blend.yaml"
-        with open(size_blend_mds_path, "w") as f:
+        size_blend_recipe_path = self.dataset_path / "recipe_size_blend.yaml"
+        with open(size_blend_recipe_path, "w") as f:
             f.write(
                 "\n".join(
                     [
                         "__module__: megatron.energon",
-                        "__class__: MetadatasetV2",
+                        "__class__: Recipe",
                         "splits:",
                         "  train:",
                         "    blend:",
@@ -1765,7 +2519,7 @@ class TestDataset(unittest.TestCase):
         def load_samples(task_encoder: DefaultTaskEncoder, n_samples: int):
             loader = get_loader(
                 get_train_dataset(
-                    size_blend_mds_path,
+                    size_blend_recipe_path,
                     worker_config=worker_config,
                     batch_size=None,
                     shuffle_buffer_size=None,
@@ -1822,13 +2576,13 @@ class TestDataset(unittest.TestCase):
             self.dataset_path / "ds_long", range(100, 155), text_size=long_size
         )
 
-        size_blend_mds_path = self.dataset_path / "metadataset_size_blend.yaml"
-        with open(size_blend_mds_path, "w") as f:
+        size_blend_recipe_path = self.dataset_path / "recipe_size_blend.yaml"
+        with open(size_blend_recipe_path, "w") as f:
             f.write(
                 "\n".join(
                     [
                         "__module__: megatron.energon",
-                        "__class__: MetadatasetV2",
+                        "__class__: Recipe",
                         "splits:",
                         "  train:",
                         "    blend:",
@@ -1847,7 +2601,7 @@ class TestDataset(unittest.TestCase):
         def new_loader():
             return get_savable_loader(
                 get_train_dataset(
-                    size_blend_mds_path,
+                    size_blend_recipe_path,
                     worker_config=worker_config,
                     batch_size=None,
                     shuffle_buffer_size=None,
@@ -1875,28 +2629,28 @@ class TestDataset(unittest.TestCase):
 
     def test_s3(self):
         # Create a joined dataset configuration
-        mixed_mds_path = self.dataset_path / "metadataset_mixed.yaml"
-        with open(mixed_mds_path, "w") as f:
+        mixed_recipe_path = self.dataset_path / "recipe_mixed.yaml"
+        with open(mixed_recipe_path, "w") as f:
             f.write(
                 "\n".join(
                     [
                         "__module__: megatron.energon",
-                        "__class__: MetadatasetV2",
+                        "__class__: Recipe",
                         "splits:",
                         "  train:",
-                        "    path: msc://s3test_metadataset/test/dataset/nested_metadataset_v2.yaml",
+                        "    path: msc://s3test_recipe/test/dataset/nested_recipe.yaml",
                     ]
                 )
             )
 
-        with setup_s3_emulator(profile_name="s3test_metadataset") as emu:
+        with setup_s3_emulator(profile_name="s3test_recipe") as emu:
             # Upload the dataset to the S3 emulator
             # EPath(self.dataset_path).copy(EPath("msc://s3/test/dataset"))
             emu.add_file(self.dataset_path, "test/dataset")
 
             train_dataset = get_loader(
                 get_train_dataset(
-                    mixed_mds_path,
+                    mixed_recipe_path,
                     worker_config=WorkerConfig(
                         rank=0,
                         world_size=1,

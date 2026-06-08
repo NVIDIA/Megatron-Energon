@@ -50,10 +50,10 @@ When joining, the files from both datasets are joined based on their keys, which
 
 Below is a minimal meta dataset example for joining.
 
- `metadataset_minimal.yaml`:
+ `recipe_minimal.yaml`:
 ```yaml
 __module__: megatron.energon
-__class__: MetadatasetV2
+__class__: Recipe
 splits:
   train:
     join:
@@ -66,8 +66,8 @@ splits:
 Note that the blending is omitted here, as it is optional. Joining is of course also optional.
 
 ```{warning}
-All metadatasets that contain a `join` must be prepared with the `energon prepare` command.
-This will compute the join index and store it next to the metadataset in a folder with a similar name.
+All recipes that contain a `join` must be prepared with the `energon prepare` command.
+This will compute the join index and store it next to the recipe in a folder with a similar name.
 ```
 
 
@@ -85,11 +85,11 @@ With one of the following options, the user can decide what happens, if a sample
 * `skip`: The whole sample is skipped
 * `none`: The column for the current secondary dataset is filled with `None` if there's no match
 
-Example `metadataset_nomatch.yaml`:
+Example `recipe_nomatch.yaml`:
 
 ```yaml
 __module__: megatron.energon
-__class__: MetadatasetV2
+__class__: Recipe
 splits:
   train:
     join:
@@ -136,10 +136,10 @@ Here is a more extensive example that shows multiple things at once:
 * A custom "joiner" can be specified to define how samples are joined and what the resulting type is
 * The `nonmatch` setting is not included here, but would work just like shown above
 
-`metadataset_extended.yaml`:
+`recipe_extended.yaml`:
 ```yaml
 __module__: megatron.energon
-__class__: MetadatasetV2
+__class__: Recipe
 splits:
   train:
     blend:
@@ -158,7 +158,7 @@ splits:
         split_config: split.yaml  # Sets this for all joined datasets
         split_part: train  # Sets this for all joined datasets
         subflavors:  # Sets this for all joined datasets (it will be merged with their individual subflavors)
-          source: metadataset.yaml
+          source: recipe.yaml
           src: ds1
 ```
 

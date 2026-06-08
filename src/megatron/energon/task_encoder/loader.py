@@ -8,7 +8,7 @@ from megatron.energon.decoders import SampleDecoder
 from megatron.energon.deprecation import warn_deprecated
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import BaseCoreDatasetFactory, SavableDataset
-from megatron.energon.metadataset import load_dataset
+from megatron.energon.recipe import load_dataset
 from megatron.energon.task_encoder.base import DefaultTaskEncoder, TaskEncoder, WorkerConfig
 
 T = TypeVar("T", covariant=True)
@@ -150,7 +150,7 @@ def get_train_dataset(
         task_encoder: Task encoder to use.
         repeat: By default, the inner datasets will loop. If set to False, stop iteration after
             one epoch. Must only be set to False in conjunction with blend_epochized in the
-            metadataset if one is used.
+            recipe if one is used.
         cache_pool: If set, the cache pool to use for the dataset.
         **kwargs: Additional arguments to the dataset constructor.
 

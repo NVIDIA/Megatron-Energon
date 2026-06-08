@@ -9,14 +9,14 @@ from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.dataset_type import (
     EnergonDatasetType,
     get_dataset_type,
-    is_metadataset,
+    is_recipe,
 )
-from megatron.energon.metadataset.dataset_loader import DatasetLoader
-from megatron.energon.metadataset.loader_interface import (
+from megatron.energon.recipe.dataset_loader import DatasetLoader
+from megatron.energon.recipe.loader_interface import (
     DatasetLoaderInterface,
     TraversedDatasetReference,
 )
-from megatron.energon.metadataset.metadataset import Metadataset
+from megatron.energon.recipe.recipe import Recipe
 from megatron.energon.typed_converter import JsonParser
 
 
@@ -24,67 +24,67 @@ def load_dataset(
     path: Union[str, EPath, Path],
     **kwargs,
 ) -> DatasetLoaderInterface:
-    """Loads a (meta)dataset."""
+    """Loads a dataset or recipe."""
 
     if isinstance(path, dict):
-        mds = load_config(
+        recipe = load_config(
             path,
-            default_type=Metadataset,
+            default_type=Recipe,
             default_kwargs=dict(path=EPath("/dict"), **kwargs),
         )
-        return mds
+        return recipe
     path = EPath(path)
-    if is_metadataset(path):
-        mds = load_config(
+    if is_recipe(path):
+        recipe = load_config(
             path,
-            default_type=Metadataset,
+            default_type=Recipe,
             default_kwargs=dict(path=path, **kwargs),
         )
-        mds.post_initialize()
-        return mds
+        recipe.post_initialize()
+        return recipe
     ds = DatasetLoader(path=path, **kwargs)
     ds.post_initialize()
     return ds
 
 
-def traverse_metadataset(
+def traverse_recipe(
     path: Union[str, EPath, Path],
     *,
     split_part: str,
     **kwargs,
 ) -> list[TraversedDatasetReference]:
-    """Traverse one metadataset split and return flattened leaf dataset references.
+    """Traverse one recipe split and return flattened leaf dataset references.
 
-    This is the main public entrypoint for traversal-only inspection of a metadataset. It loads
-    the root metadataset configuration, resolves nested metadatasets recursively, and returns the
+    This is the main public entrypoint for traversal-only inspection of a recipe. It loads
+    the root recipe configuration, resolves nested recipes recursively, and returns the
     final leaf dataset references without constructing the intermediate scanned/traversed loader
     tree.
 
     Args:
-        path: Path to the metadataset YAML file to traverse.
+        path: Path to the recipe YAML file to traverse.
         split_part: Split to traverse, such as `\"train\"`, `\"val\"`, or `\"test\"`.
         **kwargs: Additional keyword arguments forwarded to `load_config()` while loading the root
-            metadataset object.
+            recipe object.
 
     Returns:
         A flattened list of `TraversedDatasetReference` values describing the reachable leaf
         datasets for the requested split.
 
     Raises:
-        AssertionError: If `path` does not point to a metadataset.
+        AssertionError: If `path` does not point to a recipe.
     """
 
     path = EPath(path)
     ds_type = get_dataset_type(path)
-    assert ds_type == EnergonDatasetType.METADATASET, (
-        f"traverse_metadataset only supports metadatasets, got {ds_type} at {path}"
+    assert ds_type == EnergonDatasetType.RECIPE, (
+        f"traverse_recipe only supports recipes, got {ds_type} at {path}"
     )
-    mds = load_config(
+    recipe = load_config(
         path,
-        default_type=Metadataset,
+        default_type=Recipe,
         default_kwargs=dict(path=path, **kwargs),
     )
-    return mds.traverse(split_part=split_part)
+    return recipe.traverse(split_part=split_part)
 
 
 class MockJsonParser(JsonParser):
@@ -122,16 +122,16 @@ class MockJsonParser(JsonParser):
                 return MockObject
 
 
-def prepare_metadataset(path: EPath):
+def prepare_recipe(path: EPath):
     from megatron.energon.dataset_config import load_config
-    from megatron.energon.metadataset.metadataset import Metadataset
+    from megatron.energon.recipe.recipe import Recipe
 
-    meta_ds = load_config(
+    recipe = load_config(
         path,
-        default_type=Metadataset,
+        default_type=Recipe,
         default_kwargs=dict(path=path),
         parser=MockJsonParser(strict=True),
     )
-    meta_ds.post_initialize()
+    recipe.post_initialize()
 
-    meta_ds.prepare()
+    recipe.prepare()

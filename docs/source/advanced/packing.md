@@ -78,7 +78,7 @@ stream:
 
 ```python
 from megatron.energon import PackingGroupConfig
-from megatron.energon.metadataset.loader_interface import LoadedDataset
+from megatron.energon.recipe.loader_interface import LoadedDataset
 from megatron.energon.task_encoder.base import PackingBufferSize
 
 

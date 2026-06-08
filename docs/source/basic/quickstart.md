@@ -183,17 +183,17 @@ Hence, we can
 - either use an existing task encoder
 - or define a custom one (see [](task_encoder))
 
-## Tutorial 3: Blending using Metadataset
+## Tutorial 3: Blending using Recipe
 
 A typical use case is to blend multiple datasets of the same (or similar type) together.
 For example, you may want to blend the COCO dataset with the COYO dataset.
-The easiest way to do this, is to use the metadataset pattern. 
+The easiest way to do this, is to use the recipe pattern. 
 For this you need to create a new `yaml` file that defines the meta dataset:
 
 `coyo-coco-dataset.yaml`:
 ```yaml
 __module__: megatron.energon
-__class__: MetadatasetV2
+__class__: Recipe
 splits:
   # Train dataset, the datasets will be blended according to their weights 
   train:
@@ -230,7 +230,7 @@ for batch in loader:
 ```
 
 If you need to handle samples from different datasets differently in your pipeline, you will want to use `subflavors`.
-For these and other details, check out the [](metadataset) section. Energon also supports blending by specifying the number of repetitions for each dataset using [](../advanced/epochized_blending).
+For these and other details, check out the [](recipe) section. Energon also supports blending by specifying the number of repetitions for each dataset using [](../advanced/epochized_blending).
 
 ## Tutorial 4: Distributed Loading
 

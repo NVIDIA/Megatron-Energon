@@ -498,18 +498,18 @@ class TestEPath(unittest.TestCase):
         ):
             EPath("dss://charts1234")
 
-    def test_metadataset_v2_dss_path_parsing_str(self):
-        """Parse a MetadatasetV2 config and ensure DSS URLs stringify correctly as EPath."""
+    def test_recipe_dss_path_parsing_str(self):
+        """Parse a Recipe config and ensure DSS URLs stringify correctly as EPath."""
 
         # Ensure DSS paths are supported even when tests are run without NVDATASET_CACHE_DIR set
         # at process start (EPath reads it at import time).
         import megatron.energon.epathlib.epath as epath_mod
-        from megatron.energon.metadataset.loader import load_dataset
+        from megatron.energon.recipe.loader import load_dataset
 
         yaml_text = "\n".join(
             [
                 "__module__: megatron.energon",
-                "__class__: MetadatasetV2",
+                "__class__: Recipe",
                 "splits:",
                 "  train:",
                 "    blend:",
@@ -548,18 +548,18 @@ class TestEPath(unittest.TestCase):
                 "{}", encoding="utf-8"
             )
 
-            mds_yaml_path = td_path / "metadataset_v2_dss.yaml"
-            mds_yaml_path.write_text(yaml_text, encoding="utf-8")
+            recipe_yaml_path = td_path / "recipe_dss.yaml"
+            recipe_yaml_path.write_text(yaml_text, encoding="utf-8")
 
             try:
                 os.environ["NVDATASET_CACHE_DIR"] = str(cache_dir)
                 epath_mod.NVDATASET_CACHE_DIR = EPath(cache_dir)
 
-                mds_path = EPath(mds_yaml_path)
-                mds = load_dataset(mds_path)
+                recipe_path = EPath(recipe_yaml_path)
+                recipe = load_dataset(recipe_path)
 
-                train = mds.splits["train"]
-                from megatron.energon.metadataset.metadataset_v2 import AuxFilesystemReference
+                train = recipe.splits["train"]
+                from megatron.energon.recipe.recipe import AuxFilesystemReference
 
                 assert isinstance(train.blend[0].path, EPath)
                 ds0 = train.blend[0].path

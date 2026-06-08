@@ -292,7 +292,7 @@ class TestFilterIndex(unittest.TestCase):
         assert [sample["idx"] for sample in samples] == [2, 4]
         assert [sample["__restore_key__"][1] for sample in samples] == [0, 1]
 
-    def test_binidx_filter_and_metadataset_passthrough(self) -> None:
+    def test_binidx_filter_and_recipe_passthrough(self) -> None:
         dataset_path = self.dataset_path / "binidx"
         bin_path = dataset_path / "tokens.bin"
         _write_binidx(bin_path, num_docs=6)
@@ -318,13 +318,13 @@ class TestFilterIndex(unittest.TestCase):
         assert [sample["__key__"] for sample in samples] == ["1", "4"]
         assert [sample["__restore_key__"][1] for sample in samples] == [0, 1]
 
-        mds_path = dataset_path / "mds.yaml"
-        with open(mds_path, "w") as f:
+        recipe_path = dataset_path / "recipe.yaml"
+        with open(recipe_path, "w") as f:
             f.write(
                 "\n".join(
                     [
                         "__module__: megatron.energon",
-                        "__class__: MetadatasetV2",
+                        "__class__: Recipe",
                         "splits:",
                         "  train:",
                         "    path: tokens.bin",
@@ -332,7 +332,7 @@ class TestFilterIndex(unittest.TestCase):
                     ]
                 )
             )
-        loader = load_dataset(EPath(mds_path))
+        loader = load_dataset(EPath(recipe_path))
         loaded = loader.get_datasets(
             training=False,
             split_part="train",

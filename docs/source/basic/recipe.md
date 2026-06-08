@@ -1,17 +1,17 @@
 <!--- Copyright (c) 2025, NVIDIA CORPORATION.
 SPDX-License-Identifier: BSD-3-Clause -->
 
-# Metadataset
+# Recipe
 
-Metadatasets allow combining datasets together in a variety of ways by using a yaml config file.
+Recipes allow combining datasets together in a variety of ways by using a yaml config file.
 This is useful for example if you want to mix multiple datasets together, and especially if you want to reuse that combination.
 
-To create a metadataset, you simply create a yaml file of the following format.
-Example `demo-metadataset.yaml` file:
+To create a recipe, you simply create a yaml file of the following format.
+Example `demo-recipe.yaml` file:
 
 ```yaml
 __module__: megatron.energon
-__class__: MetadatasetV2
+__class__: Recipe
 splits:
   # Split defines the train/val/test subsets composition 
   train:
@@ -33,14 +33,14 @@ splits:
 
 
 In the above example, we create a blend of three datasets. Out of the yielded training samples, 62.5% ({math}`=\frac{5}{8}`) will come from `./coco`, 25% from `./coyo` and 12.5% from `./other`.
-Note that the relative paths in the metadataset are relative to the location of the metadataset file. Absolute paths are allowed but won't work for object storage.
+Note that the relative paths in the recipe are relative to the location of the recipe file. Absolute paths are allowed but won't work for object storage.
 
-To use the metadataset in your loader, simply load it with {py:func}`get_train_dataset <megatron.energon.get_train_dataset>` instead of a normal energon dataset:
+To use the recipe in your loader, simply load it with {py:func}`get_train_dataset <megatron.energon.get_train_dataset>` instead of a normal energon dataset:
 ```python
 from megatron.energon import get_train_dataset
 
 ds = get_train_dataset(
-    'demo-metadataset.yaml',
+    'demo-recipe.yaml',
     batch_size=4,
     shuffle_buffer_size=100,
     max_samples_per_sequence=100,
@@ -56,7 +56,7 @@ Here is another example that takes both the training and the validation set of c
 
 ```yaml
 __module__: megatron.energon
-__class__: MetadatasetV2
+__class__: Recipe
 splits:
   # Split defines the train/val/test subsets composition 
   train:
@@ -90,10 +90,10 @@ Subflavors are a way to *tag* samples that come from different origins so that t
 Even when blending many datasets together, you might want to handle some of them differently in your [Task Encoder](task_encoder).
 For example when doing OCR, you might have one dataset with full pages of text and one with only paragraphs. In your task encoder you could decide to augment the images differently.
 
-Here is a modified example of the above `metadataset.yaml` config file that adds some subflavors:
+Here is a modified example of the above `recipe.yaml` config file that adds some subflavors:
 ```yaml
 __module__: megatron.energon
-__class__: MetadatasetV2
+__class__: Recipe
 splits:
   # Split defines the train/val/test subsets composition 
   train:
@@ -138,14 +138,14 @@ In the code they will be passed around as a dictionary.
 
 ## Auxiliary Data
 
-In the metadataset, you can also specify auxiliary data for each blended dataset.
+In the recipe, you can also specify auxiliary data for each blended dataset.
 Please check out [Auxiliary Data](aux-data), for more information.
 
 ## Classes
 * {py:class}`DatasetLoaderInterface <megatron.energon.DatasetLoaderInterface>`: Common interface for dataset loaders. Provides methods for constructing/loading the actual train- or val-mode dataset.
-  * {py:class}`MetadatasetV2 <megatron.energon.MetadatasetV2>`: The metadataset loader using the yaml example above. Blends datasets for train-mode, and concatenates for val-mode.
+  * {py:class}`Recipe <megatron.energon.Recipe>`: The recipe loader using the yaml example above. Blends datasets for train-mode, and concatenates for val-mode.
   * {py:class}`DatasetLoader <megatron.energon.DatasetLoader>`: The dataset loader using a dataprepped folder (containing `.nv-meta` folder).
 
 ## Functions
-* {py:func}`get_train_dataset <megatron.energon.get_train_dataset>`: Returns the train-mode (meta)dataset.
-* {py:func}`get_val_dataset <megatron.energon.get_val_dataset>`: Returns the val-mode (meta)dataset.
+* {py:func}`get_train_dataset <megatron.energon.get_train_dataset>`: Returns the train-mode dataset or recipe.
+* {py:func}`get_val_dataset <megatron.energon.get_val_dataset>`: Returns the val-mode dataset or recipe.

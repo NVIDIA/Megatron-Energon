@@ -35,7 +35,7 @@ basic/data_prep
 basic/data_decoding
 basic/basics_flow
 basic/task_encoder
-basic/metadataset
+basic/recipe
 basic/save_restore
 basic/glossary
 ```

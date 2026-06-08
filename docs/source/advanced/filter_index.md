@@ -79,7 +79,7 @@ dataset = get_dataset_from_config(
 )
 ```
 
-In a metadataset v2 YAML file, use the `filter` field:
+In a recipe v2 YAML file, use the `filter` field:
 
 ```yaml
 splits:

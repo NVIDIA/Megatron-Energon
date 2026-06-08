@@ -41,7 +41,7 @@ from megatron.energon.flavors import (
     SavableDataset,
 )
 from megatron.energon.flavors.base_dataset import ExtendableDataclassMixin
-from megatron.energon.metadataset.loader_interface import DatasetBlendMode, LoadedDataset
+from megatron.energon.recipe.loader_interface import DatasetBlendMode, LoadedDataset
 from megatron.energon.rng import SystemRng
 from megatron.energon.source_info import SourceInfo
 from megatron.energon.task_encoder.cooking import Cooker
