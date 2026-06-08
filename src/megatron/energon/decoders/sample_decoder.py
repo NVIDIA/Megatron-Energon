@@ -1,18 +1,20 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+import re
 from typing import Any, Callable, Literal
 
 import webdataset
 
 from megatron.energon.av import AVWebdatasetDecoder
 from megatron.energon.cache import FileStoreDecoder
-from megatron.energon.flavors.webdataset.config import split_name_re
 
 try:
     import filetype
 except ImportError:
     filetype = None
+
+split_name_re = re.compile(r"^((?:.*/|)[^.]+)[.]([^/]*)$")
 
 ImageDecoderType = Literal[
     "l8",
@@ -78,7 +80,7 @@ class GuessingHandlerWrapper:
 
 
 class SampleDecoder(FileStoreDecoder):
-    """The default decoder for webdataset samples."""
+    """Default decoder for byte-valued sample parts."""
 
     def __init__(
         self,

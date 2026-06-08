@@ -30,22 +30,21 @@ import braceexpand
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
 from megatron.energon.eyaml import load_yaml
-from megatron.energon.flavors.manifest import write_manifest_dataset_metadata
-from megatron.energon.flavors.webdataset.aggregator_pool import AggregatorPool, BaseAggregator
-from megatron.energon.flavors.webdataset.config import (
+from megatron.energon.flavors.common.aggregator_pool import AggregatorPool, BaseAggregator
+from megatron.energon.flavors.common.manifest.io import get_dataset_info
+from megatron.energon.flavors.common.manifest.paths import (
     INDEX_BATCH_SIZE,
     INDEX_SQLITE_FILENAME,
     INDEX_UUID_FILENAME,
     INFO_JSON_FILENAME,
     INFO_YAML_FILENAME,
     MAIN_FOLDER_NAME,
-    skip_meta_re,
-    split_name_re,
 )
+from megatron.energon.flavors.common.manifest.types import ShardInfo
+from megatron.energon.flavors.common.manifest.write import write_manifest_dataset_metadata
+from megatron.energon.flavors.webdataset.config import skip_meta_re, split_name_re
 from megatron.energon.flavors.webdataset.indexing import DuplicateSampleKeyError, SqliteIndexWriter
 from megatron.energon.flavors.webdataset.itar import TarIndexWriter
-from megatron.energon.flavors.webdataset.metadata import get_dataset_info
-from megatron.energon.flavors.webdataset.structs import ShardInfo
 from megatron.energon.media.extractor import MediaFilterConfig
 from megatron.energon.media.metadata import serialize_media_metadata
 
@@ -532,6 +531,8 @@ class WebdatasetPreparator:
 
         (parent_path / MAIN_FOLDER_NAME).mkdir(exist_ok=True)
 
+        file_perms = None
+        dir_perms = None
         if parent_path.is_local():
             # Copy permissions from parent_path to json_info_config and yaml_info_config, making sure the owner can read and write.
             # Copy permissions from the first shard
@@ -542,7 +543,6 @@ class WebdatasetPreparator:
                 fix_local_permissions = True
             except OSError:
                 # Just ignore the error, it's not a big deal.
-                pass
                 fix_local_permissions = False
         else:
             fix_local_permissions = False

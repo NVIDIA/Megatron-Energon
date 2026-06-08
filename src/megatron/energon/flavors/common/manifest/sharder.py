@@ -6,7 +6,7 @@ from typing import Generator, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
-from megatron.energon.flavors.webdataset.structs import DatasetSubset, ShardInfo
+from megatron.energon.flavors.common.manifest.types import DatasetSubset, ShardInfo
 from megatron.energon.worker import WorkerConfig
 
 

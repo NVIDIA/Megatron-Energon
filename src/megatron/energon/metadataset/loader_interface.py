@@ -10,7 +10,7 @@ from megatron.energon.cache import FileStore
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory
-from megatron.energon.flavors.webdataset.structs import DatasetSubset
+from megatron.energon.flavors.common.manifest.types import DatasetSubset
 from megatron.energon.worker import WorkerConfig
 
 

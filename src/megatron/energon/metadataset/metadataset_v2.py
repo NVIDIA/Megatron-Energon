@@ -6,14 +6,15 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Literal, Optional, Sequence, Type, Union
 
 from megatron.energon.cache import FileStore
-from megatron.energon.cache.file_store import ByteRangeStore, SystemFileStore, WebdatasetFileStore
+from megatron.energon.cache.file_store import ByteRangeStore, SystemFileStore
 from megatron.energon.dataset_config import load_config
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import Sample
-from megatron.energon.flavors.webdataset.config import INDEX_SQLITE_FILENAME, MAIN_FOLDER_NAME
-from megatron.energon.flavors.webdataset.metadata import EnergonDatasetType, get_dataset_type
-from megatron.energon.flavors.webdataset.structs import DatasetSubset
+from megatron.energon.flavors.common.manifest.io import EnergonDatasetType, get_dataset_type
+from megatron.energon.flavors.common.manifest.paths import INDEX_SQLITE_FILENAME, MAIN_FOLDER_NAME
+from megatron.energon.flavors.common.manifest.types import DatasetSubset
+from megatron.energon.flavors.webdataset.file_store import WebdatasetFileStore
 from megatron.energon.metadataset.dataset_loader import DatasetLoader
 from megatron.energon.metadataset.join_dataset_loader import JoinDatasetLoader, JoinedDatasetInfo
 from megatron.energon.metadataset.loader_interface import (
@@ -256,6 +257,7 @@ class DatasetReference(
     split_part: Optional[str] = None
     dataset_config: Optional[str] = None
     split_config: Optional[str] = None
+    filter: Optional[str] = None
 
     #: Auxiliary datasets. May only be specified for crude datasets for cooking. Cooking will get
     # these references to load data from. If specified as string, it will be interpreted as a
@@ -346,6 +348,7 @@ class DatasetReference(
         assert self.aux is None, "Cannot specify auxiliary datasets for crude datasets"
         assert self.dataset_config is None, "Must not set dataset_config"
         assert self.split_config is None, "Must not set split_config"
+        assert self.filter is None, "Must not set filter"
         # Note: For backwards compatibility, the type must be Metadataset (V1).
         return load_config(
             self.path,
@@ -369,6 +372,7 @@ class DatasetReference(
                 path=self.path,
                 split_config=self.split_config,
                 dataset_config=self.dataset_config,
+                filter_name=self.filter,
             )
             self._dataset.post_initialize()
             self._normalize_aux_references(mds_path, validate=True)
@@ -466,6 +470,7 @@ class JoinDatasetReference(DatasetReference):
                 shuffle_over_epochs_multiplier=self.shuffle_over_epochs_multiplier,
                 dataset_config=self.dataset_config,
                 split_config=self.split_config,
+                filter_name=self.filter,
             )
         else:
             raise ValueError(f"Not a joinabledataset at {self.path}")

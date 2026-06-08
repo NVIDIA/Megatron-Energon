@@ -7,12 +7,13 @@ from typing import Any
 
 from megatron.energon.cache import FileStore
 from megatron.energon.epathlib import EPath
+from megatron.energon.flavors.common.reader import IndexedSampleReader
+from megatron.energon.flavors.common.sample_record import FilteredSample
 from megatron.energon.flavors.jsonl.ijsonl import IJsonlIndexReader
-from megatron.energon.flavors.webdataset.structs import FilteredSample
 from megatron.energon.source_info import SourceInfo
 
 
-class MultiJsonlReader:
+class MultiJsonlReader(IndexedSampleReader[FilteredSample]):
     """Random-access reader over a prepared logical dataset of JSONL shards."""
 
     def __init__(

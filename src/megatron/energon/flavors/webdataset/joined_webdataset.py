@@ -25,15 +25,15 @@ from megatron.energon.flavors.base_dataset import (
     SavableDataset,
     set_sample_restore_key,
 )
+from megatron.energon.flavors.common.dataset_sampler import (
+    DatasetSampler,
+    RawSampleData,
+)
+from megatron.energon.flavors.common.manifest.sharder import Sharder
+from megatron.energon.flavors.common.manifest.types import DatasetSubset, ShardInfo
 from megatron.energon.flavors.webdataset.base_webdataset import BaseWebdatasetFactory
 from megatron.energon.flavors.webdataset.indexing import JoinIndexReader
 from megatron.energon.flavors.webdataset.itar_reader import JoinIndexFileITarReader
-from megatron.energon.flavors.webdataset.sample_loader import (
-    RawSampleData,
-    WebdatasetSampleLoaderDataset,
-)
-from megatron.energon.flavors.webdataset.sharder import Sharder
-from megatron.energon.flavors.webdataset.structs import DatasetSubset, ShardInfo
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.map_dataset import MapDataset
 
@@ -188,7 +188,7 @@ class JoinedWebdatasetFactory(BaseCoreDatasetFactory[T_sample], Sharder, Generic
             for col_idx, indexed_dataset in enumerate(self.inner_datasets)
         ]
 
-        dataset = WebdatasetSampleLoaderDataset(
+        dataset = DatasetSampler(
             join_readers=itar_readers,
             workers_sample_slice_offsets=workers_sample_slice_offsets,
             worker_config=self.worker_config,

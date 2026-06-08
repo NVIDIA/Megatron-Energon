@@ -181,13 +181,12 @@ def cook_aux_filesystem_reference(
 
 
 @stateless
-def cook_aux_byterange_reference(sample: dict, byte_source: ByteRangeStore) -> TextSample:
+def cook_aux_byterange_reference(sample: dict, byte_source: FileStore) -> TextSample:
     byte_offset = int(sample["txt"]) % 4
-    range_bytes = byte_source.read_range("bundle.bin", byte_offset, 2, sample=sample)
-    keyed_bytes = byte_source.get(f"bundle.bin#bytes={byte_offset}:2", sample)
+    range_bytes = byte_source.get(f"bundle.bin#bytes={byte_offset}:2", sample)
     return TextSample(
         **basic_sample_keys(sample),
-        text=f"<{sample['txt']}|range|{range_bytes.decode()}|{keyed_bytes.decode()}>",
+        text=f"<{sample['txt']}|range|{range_bytes.decode()}>",
     )
 
 
@@ -931,14 +930,14 @@ class TestDataset(unittest.TestCase):
 
         sample = {}
         assert store.read_range("bundle.bin", 1, 2, sample=sample) == b"12"
-        assert sample["__sources__"] == [
+        assert sample["__sources__"] == (
             SourceInfo(
                 dataset_path=EPath(blob_path),
                 index="bundle.bin#bytes=1:2",
                 shard_name=str(EPath(blob_path / "bundle.bin")),
                 file_names=("bundle.bin#bytes=1:2",),
-            )
-        ]
+            ),
+        )
 
         cache_pool = FileStoreCachePool(parent_cache_dir=self.dataset_path / "cache", num_workers=1)
         try:

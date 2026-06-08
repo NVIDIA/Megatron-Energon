@@ -1,6 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+from megatron.energon.decoders import AVDecoderType, ImageDecoderType, SampleDecoder
 from megatron.energon.flavors.base_dataset import (
     BaseCoreDatasetFactory,
     PinMemoryMixin,
@@ -9,6 +10,14 @@ from megatron.energon.flavors.base_dataset import (
 )
 from megatron.energon.flavors.binidx import BinIdxDatasetFactory, DefaultBinIdxDatasetFactory
 from megatron.energon.flavors.captioning import CaptioningSample, CaptioningWebdataset
+from megatron.energon.flavors.common.filter_index import (
+    FilterIndex,
+    FilterIndexWriter,
+    build_filter_index,
+    build_filter_index_from_global_indexes,
+    build_filter_index_from_shard_indexes,
+)
+from megatron.energon.flavors.common.manifest.io import ShardListMeta
 from megatron.energon.flavors.crude import CrudeSample, CrudeWebdataset
 from megatron.energon.flavors.image import ImageSample, ImageWebdataset
 from megatron.energon.flavors.image_classification import (
@@ -24,7 +33,12 @@ from megatron.energon.flavors.jsonl import (
 )
 from megatron.energon.flavors.multichoice_vqa import MultiChoiceVQASample, MultiChoiceVQAWebdataset
 from megatron.energon.flavors.ocr import OCRSample, OCRWebdataset
-from megatron.energon.flavors.parquet.dataset import DefaultParquetDatasetFactory
+from megatron.energon.flavors.parquet.dataset import (
+    DefaultParquetDatasetFactory,
+    DefaultParquetShardListDatasetFactory,
+    ParquetDatasetFactory,
+    ParquetShardListDatasetFactory,
+)
 from megatron.energon.flavors.similarity_interleaved import (
     SimilarityInterleavedSample,
     SimilarityInterleavedWebdataset,
@@ -36,16 +50,12 @@ from megatron.energon.flavors.vqa_and_ocr import VQAOCRWebdataset
 from megatron.energon.flavors.webdataset import (
     AVData,
     AVDecoder,
-    AVDecoderType,
     BaseWebdatasetFactory,
     DefaultDecoderWebdatasetFactory,
     DefaultGenericWebdatasetFactory,
     EmptyDatasetError,
-    ImageDecoderType,
     JoinedWebdatasetFactory,
-    SampleDecoder,
     StandardWebdatasetFactory,
-    WebdatasetMeta,
 )
 
 __all__ = [
@@ -65,9 +75,12 @@ __all__ = [
     "DefaultCrudeJsonlDatasetFactory",
     "DefaultCrudeJsonlShardListDatasetFactory",
     "DefaultDecoderWebdatasetFactory",
-    "DefaultParquetDatasetFactory",
     "DefaultGenericWebdatasetFactory",
+    "DefaultParquetDatasetFactory",
+    "DefaultParquetShardListDatasetFactory",
     "EmptyDatasetError",
+    "FilterIndex",
+    "FilterIndexWriter",
     "ImageClassificationSample",
     "ImageClassificationWebdataset",
     "ImageDecoderType",
@@ -81,6 +94,8 @@ __all__ = [
     "OCRSample",
     "OCRWebdataset",
     "PinMemoryMixin",
+    "ParquetDatasetFactory",
+    "ParquetShardListDatasetFactory",
     "Sample",
     "SampleDecoder",
     "SavableDataset",
@@ -94,5 +109,8 @@ __all__ = [
     "VQAOCRWebdataset",
     "VQASample",
     "VQAWebdataset",
-    "WebdatasetMeta",
+    "ShardListMeta",
+    "build_filter_index",
+    "build_filter_index_from_global_indexes",
+    "build_filter_index_from_shard_indexes",
 ]

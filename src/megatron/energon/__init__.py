@@ -1,5 +1,6 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
+# ruff: noqa: E402
 
 try:
     from importlib.metadata import version
@@ -8,6 +9,10 @@ try:
 except Exception:
     # Fallback for development mode when package is not installed
     __version__ = "unknown"
+
+from megatron.energon.deprecated import install_deprecated_imports
+
+install_deprecated_imports()
 
 from megatron.energon.cache import (
     ByteRangeStore,
@@ -41,6 +46,8 @@ from megatron.energon.flavors import (
     DefaultCrudeJsonlShardListDatasetFactory,
     DefaultDecoderWebdatasetFactory,
     DefaultGenericWebdatasetFactory,
+    DefaultParquetDatasetFactory,
+    DefaultParquetShardListDatasetFactory,
     ImageClassificationSample,
     ImageClassificationWebdataset,
     ImageSample,
@@ -52,6 +59,8 @@ from megatron.energon.flavors import (
     MultiChoiceVQAWebdataset,
     OCRSample,
     OCRWebdataset,
+    ParquetDatasetFactory,
+    ParquetShardListDatasetFactory,
     Sample,
     SampleDecoder,
     SavableDataset,
@@ -65,6 +74,13 @@ from megatron.energon.flavors import (
     VQAOCRWebdataset,
     VQASample,
     VQAWebdataset,
+)
+from megatron.energon.flavors.common.filter_index import (
+    FilterIndex,
+    FilterIndexWriter,
+    build_filter_index,
+    build_filter_index_from_global_indexes,
+    build_filter_index_from_shard_indexes,
 )
 from megatron.energon.loader import get_loader, get_savable_loader
 from megatron.energon.logical_worker import LogicalWorkerAssignment
@@ -136,6 +152,9 @@ __all__ = [
     "Batch",
     "BatchDataset",
     "BlendDataset",
+    "build_filter_index",
+    "build_filter_index_from_global_indexes",
+    "build_filter_index_from_shard_indexes",
     "ByteRangeStore",
     "CachePool",
     "CaptioningSample",
@@ -156,6 +175,8 @@ __all__ = [
     "DefaultCrudeJsonlShardListDatasetFactory",
     "DefaultDecoderWebdatasetFactory",
     "DefaultGenericWebdatasetFactory",
+    "DefaultParquetDatasetFactory",
+    "DefaultParquetShardListDatasetFactory",
     "DefaultTaskEncoder",
     "DirectLazy",
     "edataclass",
@@ -164,7 +185,9 @@ __all__ = [
     "FileStore",
     "FileStoreCachePool",
     "FileStoreDecoder",
+    "FilterIndex",
     "FilterDataset",
+    "FilterIndexWriter",
     "GcDataset",
     "generic_batch",
     "generic_concat",
@@ -198,6 +221,8 @@ __all__ = [
     "NoCachePool",
     "OCRSample",
     "OCRWebdataset",
+    "ParquetDatasetFactory",
+    "ParquetShardListDatasetFactory",
     "PackingGroupConfig",
     "PartialSample",
     "PackingDataset",

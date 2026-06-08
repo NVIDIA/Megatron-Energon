@@ -5,31 +5,21 @@ import logging
 from typing import Any, Callable, Dict, List, Union
 
 from megatron.energon.cache import FileStore
+from megatron.energon.decoders import DEFAULT_DECODER, SampleDecoder
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.base_dataset import (
-    BaseCoreDatasetFactory,
-    SavableDataset,
-)
+from megatron.energon.flavors.base_manifest_dataset import BaseManifestShardListDatasetFactory
+from megatron.energon.flavors.base_single_file_dataset import BaseSingleFileDatasetFactory
+from megatron.energon.flavors.common.manifest.io import ShardListMeta
+from megatron.energon.flavors.common.manifest.types import DatasetSubset, ManifestSplits
+from megatron.energon.flavors.common.sample_record import SampleRecord
 from megatron.energon.flavors.crude import CrudeSample
 from megatron.energon.flavors.parquet.prepare import (
     assert_layout_columns_subset,
-    scan_parquet_dataset,
+    scan_parquet_file,
+    scan_parquet_shards,
 )
 from megatron.energon.flavors.parquet.reader import IParquetReader
-from megatron.energon.flavors.webdataset.base_webdataset import _print_shard_slices
-from megatron.energon.flavors.webdataset.sample_decoder import DEFAULT_DECODER, SampleDecoder
-from megatron.energon.flavors.webdataset.sample_loader import (
-    RawSampleData,
-    WebdatasetSampleLoaderDataset,
-)
-from megatron.energon.flavors.webdataset.sharder import Sharder
-from megatron.energon.flavors.webdataset.structs import (
-    DatasetSubset,
-    FilteredSample,
-    ShardInfo,
-)
 from megatron.energon.worker import WorkerConfig
-from megatron.energon.wrappers.map_dataset import MapDataset
 
 logger = logging.getLogger(__name__)
 
@@ -38,21 +28,36 @@ _PARQUET_SAMPLE_META = frozenset(
 )
 
 
+def _select_columns(
+    layout_columns: List[str], part_filter: Callable[[str], bool] | None
+) -> list[str]:
+    if part_filter is None:
+        read_columns = layout_columns
+    else:
+        read_columns = [column for column in layout_columns if part_filter(column)]
+    if not read_columns:
+        raise ValueError(
+            "part_filter excluded all Parquet columns; nothing to load. "
+            f"Layout columns: {layout_columns}"
+        )
+    assert_layout_columns_subset(layout_columns, read_columns)
+    return read_columns
+
+
 class ParquetPreparator:
-    """Validates and counts rows for a Parquet dataset directory (like :class:`JsonlPreparator`)."""
+    """Validates and counts rows for a Parquet file or manifest shard list."""
 
     @classmethod
     def prepare_dataset(cls, path: Union[str, EPath]) -> int:
-        layout = scan_parquet_dataset(EPath(path))
+        layout = scan_parquet_file(EPath(path))
         return layout.total_rows
 
 
 class ParquetDatasetFactory(
-    BaseCoreDatasetFactory[CrudeSample],
+    BaseSingleFileDatasetFactory[CrudeSample],
     ParquetPreparator,
-    Sharder,
 ):
-    """Crude dataset over a directory of Parquet files (layout discovered at load time)."""
+    """Crude dataset over one Parquet file."""
 
     __sample_type__ = CrudeSample
 
@@ -71,138 +76,195 @@ class ParquetDatasetFactory(
         max_samples_per_sequence: int | None = None,
         subset: DatasetSubset | None = None,
         part_filter: Callable[[str], bool] | None = None,
+        filter_name: str | None = None,
     ):
-        assert self.__sample_type__ is not None, f"Class {type(self)} must define __sample_type__"
-        self.path = EPath(path)
-        assert self.path.is_dir(), f"Parquet dataset path must be a directory: {self.path}"
-        self.paths = [self.path]
-        self.training = training
-        self.worker_config = worker_config
-        self.shuffle_over_epochs = shuffle_over_epochs
-        self.parallel_shard_iters = parallel_shard_iters
-        self.max_samples_per_sequence = max_samples_per_sequence
-        self.subset = subset
-        self.part_filter = part_filter
-
-        self._layout = scan_parquet_dataset(self.path)
-        layout_cols: List[str] = list(self._layout.columns)
-        if part_filter is None:
-            read_columns = layout_cols
-        else:
-            read_columns = [c for c in layout_cols if part_filter(c)]
-        if not read_columns:
-            raise ValueError(
-                "part_filter excluded all Parquet columns; nothing to load. "
-                f"Layout columns: {layout_cols}"
-            )
-        assert_layout_columns_subset(layout_cols, read_columns)
-        self._read_columns = read_columns
-
-        # part_filter selects which Parquet columns are read into each sample;
-        # it does not remove samples from the dataset (length is always full layout row count).
-        self._len = self._layout.total_rows
-        self._virtual_shards = [
-            ShardInfo(
-                name=fe.rel_path,
-                path=self.path / fe.rel_path,
-                count=fe.num_rows,
-            )
-            for fe in self._layout.files
-        ]
-
-    def __len__(self) -> int:
-        return self._len
-
-    def build(
-        self, worker_rotation_offset: int = 0, part_filter: Callable[[str], bool] | None = None
-    ) -> SavableDataset[CrudeSample]:
-        if self.parallel_shard_iters is None:
-            parallel_shard_iters = 16 if self.training else 1
-        else:
-            parallel_shard_iters = self.parallel_shard_iters
-
-        effective_pf = part_filter
-        if self.part_filter is not None:
-            if effective_pf is not None:
-                inner_pf, outer_pf = effective_pf, self.part_filter
-                effective_pf = lambda p, _i=inner_pf, _o=outer_pf: _o(p) and _i(p)
-            else:
-                effective_pf = self.part_filter
-
-        if effective_pf is not None:
-            columns = [c for c in self._read_columns if effective_pf(c)]
-        else:
-            columns = self._read_columns
-
-        workers_sample_slice_offsets = self.shard_workers(
-            self._virtual_shards,
-            worker_config=self.worker_config,
-            max_samples_per_sequence=self.max_samples_per_sequence,
-            rotation_offset=worker_rotation_offset,
-            subset=self.subset,
+        path = EPath(path)
+        assert path.is_file(), f"Parquet dataset path must be a file: {path}"
+        self._layout = scan_parquet_file(path)
+        self._reader_base_path = path.parent
+        self._read_columns = _select_columns(list(self._layout.columns), part_filter)
+        super().__init__(
+            path,
+            sample_count=self._layout.total_rows,
+            training=training,
+            worker_config=worker_config,
+            shuffle_over_epochs=shuffle_over_epochs,
+            parallel_shard_iters=parallel_shard_iters,
+            max_samples_per_sequence=max_samples_per_sequence,
+            subset=subset,
+            part_filter=part_filter,
+            filter_name=filter_name,
         )
-        _print_shard_slices(self.worker_config, self._virtual_shards, workers_sample_slice_offsets)
 
-        reader = IParquetReader(
-            self.path,
+    def _build_reader(
+        self,
+        *,
+        parallel_shard_iters: int,
+        part_filter: Callable[[str], bool] | None,
+    ):
+        columns = (
+            [column for column in self._read_columns if part_filter(column)]
+            if part_filter is not None
+            else self._read_columns
+        )
+        return IParquetReader(
+            self._reader_base_path,
             self._layout,
             columns,
             parquet_file_cache_size=parallel_shard_iters,
         )
 
-        dataset = WebdatasetSampleLoaderDataset(
-            join_readers=[reader],
-            workers_sample_slice_offsets=workers_sample_slice_offsets,
-            worker_config=self.worker_config,
-            shuffle_over_epochs=self.shuffle_over_epochs if self.training else None,
-            parallel_slice_iters=parallel_shard_iters,
-        )
-        return MapDataset(
-            dataset,
-            self._load_sample_raw,
-            stateless_map_fn=True,
-            map_fn_config=self.config,
-            worker_config=self.worker_config,
-        )
-
     def as_file_store(self) -> FileStore:
-        from megatron.energon.cache.file_store import ParquetFileStore
+        from megatron.energon.flavors.parquet.file_store import ParquetFileStore
 
         return ParquetFileStore(self.path, part_filter=self.part_filter)
 
-    def _load_sample(self, sample: FilteredSample) -> CrudeSample:
+    def load_sample(self, sample: SampleRecord) -> CrudeSample:
         return CrudeSample(sample)
 
-    def _load_sample_raw(self, raw_sample: RawSampleData) -> CrudeSample:
-        assert len(raw_sample.data) == 1 and raw_sample.data[0] is not None
-        return self._load_sample(raw_sample.data[0])
+    def _load_sample(self, sample: SampleRecord) -> CrudeSample:
+        return self.load_sample(sample)
 
     def config(self) -> Dict[str, Any]:
         return dict(
             type=type(self).__qualname__,
             training=self.training,
             _path=str(self.path),
-            count=self._len,
+            parquet_filename=self.path.name,
+            count=len(self),
             shuffle_over_epochs=self.shuffle_over_epochs,
             parallel_shard_iters=self.parallel_shard_iters,
             max_samples_per_sequence=self.max_samples_per_sequence,
             subset=self.subset.config() if self.subset is not None else None,
+            filter_name=self.filter_name,
         )
 
     def __str__(self):
         return f"{type(self).__name__}(path={self.path})"
 
 
-class DefaultParquetDatasetFactory(ParquetDatasetFactory):
-    """
-    Builds a ``row`` dict of Parquet column values, optionally runs :class:`SampleDecoder` on
-    selected columns (binary cells), and attaches subflavors.
+class ParquetShardListDatasetFactory(BaseManifestShardListDatasetFactory[CrudeSample]):
+    """Crude dataset over a manifest-defined list of Parquet shards."""
 
-    ``decode_map`` maps **Parquet column names** to a
-    **synthetic filename extension** (e.g. ``\"png\"`` or ``\"jpg\"``) passed to
-    :meth:`SampleDecoder.decode` so webdataset image/video handlers can run on raw bytes.
-    Non-bytes-like cell values are left unchanged.
-    """
+    __sample_type__ = CrudeSample
+
+    def __init__(
+        self,
+        path: EPath,
+        *,
+        training: bool,
+        worker_config: WorkerConfig,
+        split_config: str | ManifestSplits = "split.yaml",
+        split_part: str = "train",
+        shuffle_over_epochs: int | None = 1,
+        parallel_shard_iters: int | None = None,
+        max_samples_per_sequence: int | None = None,
+        subset: DatasetSubset | None = None,
+        part_filter: Callable[[str], bool] | None = None,
+        filter_name: str | None = None,
+    ):
+        self.split_config = split_config
+        self.split_part = split_part
+        self._read_columns: list[str] = []
+        super().__init__(
+            path,
+            split_part=split_part,
+            split_config=split_config,
+            training=training,
+            worker_config=worker_config,
+            shuffle_over_epochs=shuffle_over_epochs,
+            parallel_shard_iters=parallel_shard_iters,
+            max_samples_per_sequence=max_samples_per_sequence,
+            subset=subset,
+            part_filter=part_filter,
+            filter_name=filter_name,
+        )
+        self._read_columns = _select_columns(list(self._layout.columns), part_filter)
+
+    def _validate_manifest_meta(self, meta: ShardListMeta) -> None:
+        if meta.sample_excludes:
+            raise ValueError("Parquet shard-list datasets do not support sample-level excludes")
+        self._layout = scan_parquet_shards(meta.shards)
+
+    def _build_reader(
+        self,
+        *,
+        parallel_shard_iters: int,
+        part_filter: Callable[[str], bool] | None,
+    ):
+        columns = (
+            [column for column in self._read_columns if part_filter(column)]
+            if part_filter is not None
+            else self._read_columns
+        )
+        return IParquetReader(
+            self.path,
+            self._layout,
+            columns,
+            parquet_file_cache_size=parallel_shard_iters,
+        )
+
+    def as_file_store(self) -> FileStore:
+        from megatron.energon.flavors.parquet.file_store import ParquetFileStore
+
+        return ParquetFileStore(self.path, shards=self.shards, part_filter=self.part_filter)
+
+    def load_sample(self, sample: SampleRecord) -> CrudeSample:
+        return CrudeSample(sample)
+
+    def config(self) -> Dict[str, Any]:
+        return dict(
+            type=type(self).__qualname__,
+            training=self.training,
+            _path=str(self.path),
+            parquet_shard_count=len(self.shards),
+            count=len(self),
+            split_config=self.split_config if isinstance(self.split_config, str) else "<inline>",
+            split_part=self.split_part,
+            shuffle_over_epochs=self.shuffle_over_epochs,
+            parallel_shard_iters=self.parallel_shard_iters,
+            max_samples_per_sequence=self.max_samples_per_sequence,
+            subset=self.subset.config() if self.subset is not None else None,
+            filter_name=self.filter_name,
+        )
+
+    def __str__(self):
+        return f"{type(self).__name__}(path={self.path}, shards={len(self.shards)})"
+
+
+class _DefaultParquetMixin:
+    def _init_default_parquet(
+        self,
+        *,
+        subflavors: dict[str, Any] | None,
+        decoder: SampleDecoder | None,
+        decode_map: dict[str, str] | None,
+    ) -> None:
+        self.subflavors = subflavors or {}
+        self._decoder = decoder
+        self._decode_map = decode_map or {}
+
+    def load_sample(self, sample: SampleRecord) -> CrudeSample:
+        if self._decoder is not None:
+            for key, extension in self._decode_map.items():
+                if key in sample:
+                    sample[key] = self._decoder.decode(
+                        f"{sample['__key__']}.{extension}", sample[key]
+                    )
+        sample["__subflavors__"] = self.subflavors
+        return super().load_sample(sample)
+
+    def config(self) -> Dict[str, Any]:
+        return dict(
+            **super().config(),
+            subflavors=self.subflavors,
+            decode_map=self._decode_map,
+            **(self._decoder.config() if self._decoder is not None else {}),
+        )
+
+
+class DefaultParquetDatasetFactory(_DefaultParquetMixin, ParquetDatasetFactory):
+    """Single-file Parquet factory that decodes selected columns and attaches subflavors."""
 
     def __init__(
         self,
@@ -216,22 +278,30 @@ class DefaultParquetDatasetFactory(ParquetDatasetFactory):
         if "decoder" in kwargs:
             del kwargs["decoder"]
         super().__init__(path, **kwargs)
-        self.subflavors = subflavors or {}
-        self._decoder = decoder
-        self._decode_map = decode_map or {}
+        self._init_default_parquet(
+            subflavors=subflavors,
+            decoder=decoder,
+            decode_map=decode_map,
+        )
 
-    def _load_sample(self, sample: FilteredSample) -> CrudeSample:
-        if self._decoder is not None:
-            for k, v in self._decode_map.items():
-                if k in sample:
-                    sample[k] = self._decoder.decode(f"{sample['__key__']}.{v}", sample[k])
-        sample["__subflavors__"] = self.subflavors
-        return super()._load_sample(sample)
 
-    def config(self) -> Dict[str, Any]:
-        return dict(
-            **super().config(),
-            subflavors=self.subflavors,
-            decode_map=self._decode_map,
-            **(self._decoder.config() if self._decoder is not None else {}),
+class DefaultParquetShardListDatasetFactory(_DefaultParquetMixin, ParquetShardListDatasetFactory):
+    """Manifest Parquet factory that decodes selected columns and attaches subflavors."""
+
+    def __init__(
+        self,
+        path: EPath,
+        *,
+        subflavors: dict[str, Any] | None = None,
+        decoder: SampleDecoder | None = DEFAULT_DECODER,
+        decode_map: dict[str, str] | None = None,
+        **kwargs,
+    ):
+        if "decoder" in kwargs:
+            del kwargs["decoder"]
+        super().__init__(path, **kwargs)
+        self._init_default_parquet(
+            subflavors=subflavors,
+            decoder=decoder,
+            decode_map=decode_map,
         )

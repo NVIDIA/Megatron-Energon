@@ -8,7 +8,7 @@ from typing import Optional
 import click
 
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.webdataset.metadata import EnergonDatasetType, get_dataset_type
+from megatron.energon.flavors.common.manifest.io import EnergonDatasetType, get_dataset_type
 from megatron.energon.flavors.webdataset.prepare import WebdatasetPreparator
 from megatron.energon.media.extractor import MediaFilterConfig
 from megatron.energon.media.filesystem_prepare import prepare_filesystem_dataset

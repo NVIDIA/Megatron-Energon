@@ -21,16 +21,16 @@ from megatron.energon.flavors import (
     CrudeWebdataset,
     Sample,
 )
-from megatron.energon.flavors.manifest import write_manifest_dataset_metadata
-from megatron.energon.flavors.parquet.prepare import scan_parquet_dataset
-from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
-from megatron.energon.flavors.webdataset.metadata import (
+from megatron.energon.flavors.common.manifest.io import (
     EnergonDatasetType,
     check_dataset_info_present,
     get_dataset_info,
     get_dataset_type,
 )
-from megatron.energon.flavors.webdataset.structs import ShardInfo
+from megatron.energon.flavors.common.manifest.paths import MAIN_FOLDER_NAME
+from megatron.energon.flavors.common.manifest.types import ShardInfo
+from megatron.energon.flavors.common.manifest.write import write_manifest_dataset_metadata
+from megatron.energon.flavors.parquet.prepare import scan_parquet_dataset, scan_parquet_file
 from megatron.energon.media.extractor import MediaFilterConfig
 from megatron.energon.metadataset.loader import prepare_metadataset
 
@@ -112,6 +112,20 @@ def _discover_jsonl_shards(path: EPath, exclude: str) -> list[tuple[str, EPath]]
     return shards
 
 
+def _discover_parquet_shards(path: EPath, exclude: str) -> list[tuple[str, EPath]]:
+    shards = []
+    for shard_path in sorted(path.glob("**/*.parquet"), key=lambda candidate: candidate.url):
+        if not shard_path.is_file():
+            continue
+        rel_path = shard_path.relative_to(path)
+        if rel_path.startswith(f"{MAIN_FOLDER_NAME}/"):
+            continue
+        if exclude and re.search(exclude, rel_path):
+            continue
+        shards.append((rel_path, shard_path))
+    return shards
+
+
 def _is_jsonl_shard_manifest(path: EPath) -> bool:
     dataset_yaml = path / MAIN_FOLDER_NAME / "dataset.yaml"
     if not dataset_yaml.is_file():
@@ -121,6 +135,17 @@ def _is_jsonl_shard_manifest(path: EPath) -> bool:
     if not isinstance(dataset_definition, dict):
         return False
     return dataset_definition.get("__class__") == "DefaultCrudeJsonlShardListDatasetFactory"
+
+
+def _is_parquet_shard_manifest(path: EPath) -> bool:
+    dataset_yaml = path / MAIN_FOLDER_NAME / "dataset.yaml"
+    if not dataset_yaml.is_file():
+        return False
+    with dataset_yaml.open("r") as f:
+        dataset_definition = yaml.safe_load(f)
+    if not isinstance(dataset_definition, dict):
+        return False
+    return dataset_definition.get("__class__") == "DefaultParquetShardListDatasetFactory"
 
 
 def _jsonl_split_parts_ratio(
@@ -204,6 +229,70 @@ def _prepare_jsonl_shard_directory(
     write_manifest_dataset_metadata(
         path,
         shards=jsonl_shards,
+        split_config="split.yaml",
+        split_parts_ratio=split_parts_ratio,
+        split_parts_patterns=split_parts_patterns,
+        shuffle_seed=42 if shuffle_shards else None,
+        dataset_definition=dataset_definition,
+    )
+
+    return sum(shard_counts.values())
+
+
+def _prepare_parquet_shard_directory(
+    path: EPath,
+    *,
+    shards: list[tuple[str, EPath]],
+    progress: bool,
+    split_parts: Optional[List[str]],
+    shuffle_shards: bool,
+    non_interactive: bool,
+    split_ratio: Optional[str],
+    force_overwrite: bool,
+) -> int:
+    if check_dataset_info_present(path):
+        info = get_dataset_info(path)
+        if not force_overwrite:
+            if non_interactive:
+                raise click.ClickException(
+                    "Parquet shard dataset has already been prepared. "
+                    "Use --force-overwrite to overwrite."
+                )
+            if not click.confirm(
+                "It seems the Parquet shard dataset had already been prepared. "
+                "Do you want to continue?"
+            ):
+                return int(sum(info.get("shard_counts", {}).values()))
+
+    click.echo(f"Found {len(shards)} Parquet shard files.")
+    shard_counts = {}
+    iterable = shards
+    if progress:
+        iterable = click.progressbar(shards, label="Scanning Parquet shards", show_pos=True)
+    with iterable if progress else nullcontext(iterable) as shard_iter:
+        for rel_path, shard_path in shard_iter:
+            shard_counts[rel_path] = scan_parquet_file(shard_path).total_rows
+
+    dataset_definition = {
+        "__module__": "megatron.energon",
+        "__class__": "DefaultParquetShardListDatasetFactory",
+    }
+    parquet_shards = [
+        ShardInfo(name=rel_path, path=shard_path, count=shard_counts[rel_path])
+        for rel_path, shard_path in shards
+    ]
+    if split_parts:
+        split_parts_patterns = [tuple(item.split(":", 1)) for item in split_parts]
+        split_parts_ratio = None
+    else:
+        split_parts_patterns = None
+        split_parts_ratio = _jsonl_split_parts_ratio(
+            split_ratio=split_ratio,
+            non_interactive=non_interactive,
+        )
+    write_manifest_dataset_metadata(
+        path,
+        shards=parquet_shards,
         split_config="split.yaml",
         split_parts_ratio=split_parts_ratio,
         split_parts_patterns=split_parts_patterns,
@@ -395,6 +484,24 @@ def command(
         )
         print(f"Done. Found {count} samples.")
         return
+    elif ds_type == EnergonDatasetType.MANIFEST_DATASET and _is_parquet_shard_manifest(path):
+        if do_media_metadata:
+            raise click.ClickException(
+                "Parquet datasets do not support media metadata. Remove --media-metadata-by-... to continue."
+            )
+        print("Preparing parquet shard dataset...")
+        count = _prepare_parquet_shard_directory(
+            path,
+            shards=_discover_parquet_shards(path, exclude),
+            progress=progress,
+            split_parts=list(split_parts) if split_parts is not None else None,
+            shuffle_shards=shuffle_tars,
+            non_interactive=non_interactive,
+            split_ratio=split_ratio,
+            force_overwrite=force_overwrite,
+        )
+        print(f"Done. Found {count} samples.")
+        return
     elif ds_type == EnergonDatasetType.PARQUET:
         if do_media_metadata:
             raise click.ClickException(
@@ -414,6 +521,9 @@ def command(
     jsonl_shards = (
         _discover_jsonl_shards(path, exclude) if ds_type == EnergonDatasetType.INVALID else []
     )
+    parquet_shards = (
+        _discover_parquet_shards(path, exclude) if ds_type == EnergonDatasetType.INVALID else []
+    )
     if jsonl_shards:
         if do_media_metadata:
             raise click.ClickException(
@@ -423,6 +533,24 @@ def command(
         count = _prepare_jsonl_shard_directory(
             path,
             shards=jsonl_shards,
+            progress=progress,
+            split_parts=list(split_parts) if split_parts is not None else None,
+            shuffle_shards=shuffle_tars,
+            non_interactive=non_interactive,
+            split_ratio=split_ratio,
+            force_overwrite=force_overwrite,
+        )
+        print(f"Done. Found {count} samples.")
+        return
+    if parquet_shards:
+        if do_media_metadata:
+            raise click.ClickException(
+                "Parquet datasets do not support media metadata. Remove --media-metadata-by-... to continue."
+            )
+        print("Preparing parquet shard dataset...")
+        count = _prepare_parquet_shard_directory(
+            path,
+            shards=parquet_shards,
             progress=progress,
             split_parts=list(split_parts) if split_parts is not None else None,
             shuffle_shards=shuffle_tars,

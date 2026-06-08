@@ -26,7 +26,12 @@ from megatron.energon import (
 )
 from megatron.energon.cache.file_store import ParquetFileStore
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.parquet.dataset import DefaultParquetDatasetFactory
+from megatron.energon.flavors.common.manifest.types import ShardInfo
+from megatron.energon.flavors.manifest import write_manifest_dataset_metadata
+from megatron.energon.flavors.parquet.dataset import (
+    DefaultParquetDatasetFactory,
+    DefaultParquetShardListDatasetFactory,
+)
 from megatron.energon.flavors.parquet.prepare import (
     ParquetFileEntry,
     parse_parquet_layout,
@@ -86,9 +91,10 @@ class TestParquetFileStore(unittest.TestCase):
 
     def test_file_store_getitem_per_column(self):
         t = pa.table({"id": [1, 2], "text": ["a", "b"]})
-        pq.write_table(t, self.root / "part0.parquet")
+        parquet_path = self.root / "part0.parquet"
+        pq.write_table(t, parquet_path)
 
-        store = ParquetFileStore(EPath(self.root))
+        store = ParquetFileStore(EPath(parquet_path))
         id_val, src = store["1.id"]
         text_val, _ = store["1.text"]
         assert id_val == 2
@@ -97,9 +103,10 @@ class TestParquetFileStore(unittest.TestCase):
 
     def test_file_store_part_filter_columns(self):
         t = pa.table({"keep": [1], "drop": [9]})
-        pq.write_table(t, self.root / "one.parquet")
+        parquet_path = self.root / "one.parquet"
+        pq.write_table(t, parquet_path)
 
-        store = ParquetFileStore(EPath(self.root), part_filter=lambda c: c == "keep")
+        store = ParquetFileStore(EPath(parquet_path), part_filter=lambda c: c == "keep")
         keep_val, _ = store["0.keep"]
         assert keep_val == 1
 
@@ -117,10 +124,11 @@ class TestDefaultParquetDatasetFactoryDecoders(unittest.TestCase):
 
     def test_flat_columns_with_decoder_disabled(self):
         t = pa.table({"n": [1, 2], "s": ["a", "b"]})
-        pq.write_table(t, self.root / "p.parquet")
+        parquet_path = self.root / "p.parquet"
+        pq.write_table(t, parquet_path)
         wc = WorkerConfig(rank=0, world_size=1, num_workers=0, seed_offset=0)
         ds = DefaultParquetDatasetFactory(
-            EPath(self.root),
+            EPath(parquet_path),
             training=False,
             worker_config=wc,
             decoder=None,
@@ -150,10 +158,11 @@ class TestParquetCookerPartFilter(unittest.TestCase):
 
     def test_cooker_part_filter_excludes_columns(self):
         t = pa.table({"keep": [10, 20], "drop": [999, 888]})
-        pq.write_table(t, self.root / "data.parquet")
+        parquet_path = self.root / "data.parquet"
+        pq.write_table(t, parquet_path)
         wc = WorkerConfig(rank=0, world_size=1, num_workers=0, seed_offset=0)
         val_ds = get_val_dataset(
-            EPath(self.root),
+            EPath(parquet_path),
             split_part="train",
             worker_config=wc,
             batch_size=1,
@@ -162,6 +171,51 @@ class TestParquetCookerPartFilter(unittest.TestCase):
         loader = get_loader(val_ds)
         seen = [int(batch.keep_val[0]) for batch in loader]
         assert sorted(seen) == [10, 20]
+
+
+class TestParquetManifestDataset(unittest.TestCase):
+    def setUp(self):
+        warnings.simplefilter("ignore", ResourceWarning)
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name) / "ds"
+        self.root.mkdir(parents=True)
+        (self.root / ".nv-meta").mkdir()
+
+    def tearDown(self):
+        gc.collect()
+        self.temp_dir.cleanup()
+
+    def test_manifest_parquet_shards(self):
+        first = self.root / "a.parquet"
+        second = self.root / "b.parquet"
+        pq.write_table(pa.table({"idx": [0, 1]}), first)
+        pq.write_table(pa.table({"idx": [2, 3, 4]}), second)
+        write_manifest_dataset_metadata(
+            EPath(self.root),
+            shards=[
+                ShardInfo(name="a.parquet", path=EPath(first), count=2),
+                ShardInfo(name="b.parquet", path=EPath(second), count=3),
+            ],
+            split_config="split.yaml",
+            split_parts_ratio=[("train", 1.0)],
+            dataset_definition={
+                "__module__": "megatron.energon",
+                "__class__": "DefaultParquetShardListDatasetFactory",
+            },
+        )
+        wc = WorkerConfig(rank=0, world_size=1, num_workers=0, seed_offset=0)
+        ds = DefaultParquetShardListDatasetFactory(
+            EPath(self.root),
+            training=False,
+            worker_config=wc,
+            decoder=None,
+        )
+        wc.worker_activate(0)
+        try:
+            seen = [sample["idx"] for sample in ds.build()]
+        finally:
+            wc.worker_deactivate()
+        assert seen == [0, 1, 2, 3, 4]
 
 
 if __name__ == "__main__":

@@ -7,8 +7,8 @@ import torch
 
 from megatron.energon.edataclass import edataclass
 from megatron.energon.flavors.base_dataset import FlexState, SavableDataset
-from megatron.energon.flavors.webdataset.itar_reader import ITarReader
-from megatron.energon.flavors.webdataset.structs import FilteredSample
+from megatron.energon.flavors.common.reader import IndexedSampleReader
+from megatron.energon.flavors.common.sample_record import SampleRecord
 from megatron.energon.rng import WorkerRng
 from megatron.energon.worker import WorkerConfig
 
@@ -20,7 +20,7 @@ class RawSampleData:
     #: Index of the sample. This is also the restore key
     __restore_key__: Tuple[str, int]
     #: The sample data
-    data: Tuple[Optional[FilteredSample], ...]
+    data: Tuple[Optional[SampleRecord], ...]
 
 
 @edataclass
@@ -33,11 +33,11 @@ class SliceState:
     current: int
 
 
-class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
-    """Internal class for loading samples from webdataset slices"""
+class DatasetSampler(SavableDataset[RawSampleData]):
+    """Samples indexed dataset slices across workers and epochs."""
 
     #: The readers for each joined dataset
-    join_readers: Sequence[ITarReader]
+    join_readers: Sequence[IndexedSampleReader]
 
     #: The offsets of the slice slices to iterate over for the current worker
     slice_offsets: Optional[Sequence[int]]
@@ -85,12 +85,13 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
 
     def __init__(
         self,
-        join_readers: Sequence[ITarReader],
+        join_readers: Sequence[IndexedSampleReader],
         workers_sample_slice_offsets: Sequence[Sequence[int]],
         *,
         worker_config: WorkerConfig,
         shuffle_over_epochs: Optional[int] = None,
         parallel_slice_iters: int = 1,
+        restore_key_kind: str = "Webdataset",
     ):
         """
         The webdataset loader. Iterates over the slice infos and yields the samples.
@@ -114,6 +115,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
         self.join_readers = join_readers
         self.shuffle_over_epochs = shuffle_over_epochs
         self.parallel_slice_iters = parallel_slice_iters
+        self.restore_key_kind = restore_key_kind
 
         # Store the slices for all workers
         # The slices for the current worker, will have to be extracted from this list later
@@ -145,11 +147,11 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
     def _get_sample(self, index: int) -> RawSampleData:
         if self._skip_mode:
             return RawSampleData(
-                __restore_key__=("Webdataset", index),
+                __restore_key__=(self.restore_key_kind, index),
                 data=tuple(None for _ in self.join_readers),
             )
         return RawSampleData(
-            __restore_key__=("Webdataset", index),
+            __restore_key__=(self.restore_key_kind, index),
             data=tuple(reader[index] for reader in self.join_readers),
         )
 
@@ -238,7 +240,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
             if self.worker_config.should_log(level=1):
                 self.worker_config.worker_log(
                     {
-                        "t": "WebdatasetSampleLoaderDataset._slices_iter.resume_epoch",
+                        "t": "DatasetSampler._slices_iter.resume_epoch",
                         "r": self.worker_config.rank,
                         "w": self.worker_config.rank_worker_id(),
                         "pending_slice_indexes": pending_slice_indexes,
@@ -268,7 +270,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
             if self.worker_config.should_log(level=1):
                 self.worker_config.worker_log(
                     {
-                        "t": "WebdatasetSampleLoaderDataset._slices_iter.next_epoch",
+                        "t": "DatasetSampler._slices_iter.next_epoch",
                         "r": self.worker_config.rank,
                         "w": self.worker_config.rank_worker_id(),
                         "pending_slice_indexes": pending_slice_indexes,
@@ -360,7 +362,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
                 if self.worker_config.should_log(level=2):
                     self.worker_config.worker_log(
                         {
-                            "t": "WebdatasetSampleLoaderDataset._slices_iter.exhausted",
+                            "t": "DatasetSampler._slices_iter.exhausted",
                             "r": self.worker_config.rank,
                             "w": self.worker_config.rank_worker_id(),
                             "remaining": len(pending_slice_indexes),
@@ -376,7 +378,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
                     if self._skip_mode:
                         self.worker_config.worker_log(
                             {
-                                "t": "WebdatasetSampleLoaderDataset._slices_iter.skip",
+                                "t": "DatasetSampler._slices_iter.skip",
                                 "r": self.worker_config.rank,
                                 "w": self.worker_config.rank_worker_id(),
                                 "index": sample.__restore_key__[1],
@@ -389,7 +391,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
                         assert sample.data[0] is not None
                         self.worker_config.worker_log(
                             {
-                                "t": "WebdatasetSampleLoaderDataset._slices_iter.yield",
+                                "t": "DatasetSampler._slices_iter.yield",
                                 "r": self.worker_config.rank,
                                 "w": self.worker_config.rank_worker_id(),
                                 "index": sample.__restore_key__[1],
@@ -406,7 +408,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
         if self.worker_config.should_log(level=2):
             self.worker_config.worker_log(
                 {
-                    "t": "WebdatasetSampleLoaderDataset._slices_iter.all_exhausted",
+                    "t": "DatasetSampler._slices_iter.all_exhausted",
                     "r": self.worker_config.rank,
                     "w": self.worker_config.rank_worker_id(),
                     "count": self._sample_count,
@@ -449,7 +451,7 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
         if self.worker_config.should_log(level=1):
             self.worker_config.worker_log(
                 {
-                    "t": "WebdatasetSampleLoaderDataset.__iter__",
+                    "t": "DatasetSampler.__iter__",
                     "r": self.worker_config.rank,
                     "w": self.worker_config.rank_worker_id(),
                     "slice_offsets": self.slice_offsets,
@@ -470,10 +472,10 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
         pass
 
     def restore_sample(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> RawSampleData:
-        # Key is: ("Webdataset", index)
+        # Key is: (self.restore_key_kind, index)
         # The key is joined in the dataset's typed joining (i.e. load_sample of JoinedWebdatasetFactory).
         id, index = restore_key
-        assert id == "Webdataset"
+        assert id == self.restore_key_kind
         assert isinstance(index, int)
         return self._get_sample(index)
 
@@ -491,4 +493,4 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
         }
 
     def __str__(self):
-        return f"WebdatasetSampleLoaderDataset(join_readers={self.join_readers}, shuffle_over_epochs={self.shuffle_over_epochs}, parallel_slice_iters={self.parallel_slice_iters})"
+        return f"DatasetSampler(join_readers={self.join_readers}, shuffle_over_epochs={self.shuffle_over_epochs}, parallel_slice_iters={self.parallel_slice_iters})"

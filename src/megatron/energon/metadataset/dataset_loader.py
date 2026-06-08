@@ -7,7 +7,7 @@ from megatron.energon.dataset_config import get_dataset_from_config
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import BaseCoreDatasetFactory
-from megatron.energon.flavors.webdataset.structs import DatasetSubset
+from megatron.energon.flavors.common.manifest.types import DatasetSubset
 from megatron.energon.metadataset.loader_interface import (
     DatasetBlendMode,
     DatasetLoaderInterface,
@@ -27,6 +27,7 @@ class DatasetLoader(DatasetLoaderInterface):
     shuffle_over_epochs_multiplier: Optional[int] = 1
     dataset_config: Optional[str] = None
     split_config: Optional[str] = None
+    filter_name: Optional[str] = None
 
     def post_initialize(self, mds_path: Optional[EPath] = None):
         pass
@@ -68,6 +69,8 @@ class DatasetLoader(DatasetLoaderInterface):
             split_config = self.split_config
         if dataset_config is None:
             dataset_config = self.dataset_config
+        if self.filter_name is not None:
+            kwargs = {**kwargs, "filter_name": self.filter_name}
         return get_dataset_from_config(
             self.path,
             training=training,

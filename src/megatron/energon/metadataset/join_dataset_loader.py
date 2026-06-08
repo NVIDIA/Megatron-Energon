@@ -2,18 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import hashlib
-from typing import (
-    Any,
-    Callable,
-    Dict,
-    List,
-    Literal,
-    Optional,
-    Sequence,
-    Tuple,
-    Type,
-    Union,
-)
+from typing import Any, Callable, Dict, List, Literal, Optional, Sequence, Tuple, Type, Union
 
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib.epath import EPath
@@ -23,14 +12,14 @@ from megatron.energon.flavors import (
     JoinedWebdatasetFactory,
     Sample,
 )
-from megatron.energon.flavors.webdataset.config import (
+from megatron.energon.flavors.common.manifest.io import ShardListMeta
+from megatron.energon.flavors.common.manifest.paths import (
     INDEX_SQLITE_FILENAME,
     INDEX_UUID_FILENAME,
     MAIN_FOLDER_NAME,
 )
+from megatron.energon.flavors.common.manifest.types import DatasetSubset
 from megatron.energon.flavors.webdataset.indexing import JoinIndexWriter
-from megatron.energon.flavors.webdataset.metadata import WebdatasetMeta
-from megatron.energon.flavors.webdataset.structs import DatasetSubset
 from megatron.energon.metadataset.dataset_loader import DatasetLoader
 from megatron.energon.metadataset.loader_interface import (
     DatasetBlendMode,
@@ -394,7 +383,7 @@ class JoinDatasetLoader(DatasetLoaderInterface):
             cur_split_part = dataset.dataset.split_part or self.split_part or split_part
             assert cur_split_part is not None, "Missing split part"
 
-            wds_meta = WebdatasetMeta.from_config(
+            wds_meta = ShardListMeta.from_config(
                 path=EPath(dataset.dataset.path),
                 split_part=cur_split_part,
                 split_config=dataset.dataset.split_config,

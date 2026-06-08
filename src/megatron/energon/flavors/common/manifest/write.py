@@ -12,12 +12,16 @@ import yaml
 from megatron.energon import __version__
 from megatron.energon.bracecollapse import collapse
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.webdataset.config import (
+from megatron.energon.flavors.common.manifest.paths import (
     INFO_JSON_FILENAME,
     INFO_YAML_FILENAME,
     MAIN_FOLDER_NAME,
 )
-from megatron.energon.flavors.webdataset.structs import ShardInfo, WebdatasetInfo, WebdatasetSplits
+from megatron.energon.flavors.common.manifest.types import (
+    ManifestDatasetInfo,
+    ManifestSplits,
+    ShardInfo,
+)
 from megatron.energon.typed_converter import to_json_object
 
 
@@ -82,7 +86,7 @@ def write_manifest_dataset_metadata(
     json_info_config = meta_dir / INFO_JSON_FILENAME
     yaml_info_config = meta_dir / INFO_YAML_FILENAME
 
-    info = WebdatasetInfo(
+    info = ManifestDatasetInfo(
         energon_version=__version__,
         shard_counts={shard.name: shard.count for shard in shards},
     )
@@ -104,7 +108,7 @@ def write_manifest_dataset_metadata(
         split_parts_patterns=split_parts_patterns,
         shuffle_seed=shuffle_seed,
     )
-    splits_config = WebdatasetSplits(split_parts=split_shards)
+    splits_config = ManifestSplits(split_parts=split_shards)
     with (meta_dir / split_config).open("w") as wf:
         if split_config.endswith(".yaml"):
             yaml.dump(to_json_object(splits_config), wf, sort_keys=False)

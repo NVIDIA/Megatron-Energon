@@ -8,7 +8,8 @@ from typing import BinaryIO, Callable, Generator, Optional, Tuple
 import numpy as np
 
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.webdataset.structs import FilteredSample
+from megatron.energon.flavors.common.reader import SamplePartFileReader
+from megatron.energon.flavors.common.sample_record import FilteredSample
 from megatron.energon.source_info import SourceInfo
 
 _INDEX_HEADER = b"MMIDIDX\x00\x00"
@@ -122,17 +123,13 @@ class MMapIdxReader(IIdxReader):
         try:
             super().__init__(self._idx_file)
 
-            self._sequence_lengths = np.memmap(
-                self._idx_file,
+            self._sequence_lengths = idx_path.map(
                 dtype=np.int32,
-                mode="r",
                 offset=self._length_offset,
                 shape=(self.sequence_count,),
             )
-            self._sequence_pointers = np.memmap(
-                self._idx_file,
+            self._sequence_pointers = idx_path.map(
                 dtype=np.int64,
-                mode="r",
                 offset=self._pointer_offset,
                 shape=(self.sequence_count,),
             )
@@ -147,12 +144,12 @@ class MMapIdxReader(IIdxReader):
         return self._sequence_lengths[idx]
 
     def close(self):
-        del self._sequence_lengths
-        del self._sequence_pointers
+        self._sequence_lengths.close()
+        self._sequence_pointers.close()
         self._idx_file.close()
 
 
-class BinIdxReader:
+class BinIdxReader(SamplePartFileReader[FilteredSample]):
     """
     Reader for Megatron-LM pre-tokenized binary dataset files (.bin + .idx).
     """

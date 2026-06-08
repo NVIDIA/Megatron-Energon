@@ -18,11 +18,12 @@ from typing import (
 )
 
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.webdataset.config import (
-    INDEX_SQLITE_FILENAME,
-    skip_meta_re,
-    split_name_re,
-)
+from megatron.energon.flavors.common.manifest.io import get_info_shard_files
+from megatron.energon.flavors.common.manifest.paths import INDEX_SQLITE_FILENAME
+from megatron.energon.flavors.common.manifest.types import ShardInfo
+from megatron.energon.flavors.common.reader import PartFileReader, SamplePartReader
+from megatron.energon.flavors.common.sample_record import FilteredSample
+from megatron.energon.flavors.webdataset.config import skip_meta_re, split_name_re
 from megatron.energon.flavors.webdataset.indexing import JoinIndexReader, SqliteIndexReader
 from megatron.energon.flavors.webdataset.itar import (
     CachedItarOffsetReader,
@@ -30,8 +31,6 @@ from megatron.energon.flavors.webdataset.itar import (
     ITarRawSamplePartPointer,
     ITarSamplePointer,
 )
-from megatron.energon.flavors.webdataset.metadata import get_info_shard_files
-from megatron.energon.flavors.webdataset.structs import FilteredSample, ShardInfo
 from megatron.energon.source_info import SourceInfo
 
 T_index = TypeVar("T_index", covariant=False)
@@ -378,7 +377,7 @@ class JoinIndexFileITarReader(ITarReader[int]):
         )
 
 
-class ShardInfosITarReader(ITarReader[int]):
+class ShardInfosITarReader(ITarReader[int], SamplePartReader[FilteredSample]):
     """
     A concrete ITarReader that constructs its internal sample list from a list of ShardInfos.
     """
@@ -478,7 +477,7 @@ class ShardInfosITarReader(ITarReader[int]):
         )
 
 
-class SqliteITarEntryReader(ITarReader[str]):
+class SqliteITarEntryReader(ITarReader[str], PartFileReader[bytes]):
     """
     A concrete ITarReader that constructs its internal sample list from a SQLite database.
     """
@@ -495,7 +494,7 @@ class SqliteITarEntryReader(ITarReader[str]):
         key_is_full_entryname: bool = False,
         disable_cache: bool = False,
     ):
-        from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
+        from megatron.energon.flavors.common.manifest.paths import MAIN_FOLDER_NAME
         from megatron.energon.flavors.webdataset.indexing import SqliteIndexReader
 
         # shard_name_to_info_idx = {name: i for i, name in enumerate(wds_meta.info_shard_files)}

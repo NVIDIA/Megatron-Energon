@@ -10,8 +10,9 @@ from collections import OrderedDict
 from typing import Any, Callable, Generator, List, Sequence, Tuple
 
 from megatron.energon.epathlib import EPath
+from megatron.energon.flavors.common.reader import SamplePartFileReader
+from megatron.energon.flavors.common.sample_record import FilteredSample
 from megatron.energon.flavors.parquet.prepare import ParquetLayout
-from megatron.energon.flavors.webdataset.structs import FilteredSample
 from megatron.energon.source_info import SourceInfo
 
 
@@ -36,7 +37,7 @@ def _table_row_to_dict(table: Any, row_idx: int, column_names: Sequence[str]) ->
     return out
 
 
-class IParquetReader:
+class IParquetReader(SamplePartFileReader[FilteredSample]):
     """
     Parquet random access over rows described by a :class:`ParquetLayout`.
     """

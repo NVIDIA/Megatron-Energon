@@ -14,8 +14,8 @@ from megatron.energon.flavors import (
     DefaultParquetDatasetFactory,
     StandardWebdatasetFactory,
 )
-from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
-from megatron.energon.flavors.webdataset.metadata import EnergonDatasetType, get_dataset_type
+from megatron.energon.flavors.common.manifest.io import EnergonDatasetType, get_dataset_type
+from megatron.energon.flavors.common.manifest.paths import MAIN_FOLDER_NAME
 from megatron.energon.typed_converter import JsonParser
 from megatron.energon.worker import WorkerConfig
 
@@ -68,6 +68,7 @@ def get_dataset_from_config(
     subflavors: Optional[Dict[str, Any]] = None,
     worker_config: WorkerConfig,
     sample_type: Optional[Type[T_sample]] = None,
+    filter_name: Optional[str] = None,
     **kwargs,
 ) -> BaseCoreDatasetFactory[T_sample]:
     """
@@ -82,6 +83,7 @@ def get_dataset_from_config(
         subflavors: Merge-Override the __subflavors__ property of each sample.
         worker_config: If set, use this worker config instead of the default one.
         sample_type: Type of the samples to load, only used to ensure typing.
+        filter_name: Name of the filter index sidecar to apply, if any.
         **kwargs: Additional arguments to be passed to the dataset constructor.
 
     Returns:
@@ -108,6 +110,7 @@ def get_dataset_from_config(
             training=training,
             subflavors=subflavors,
             worker_config=worker_config,
+            filter_name=filter_name,
             **kwargs,
         )
     elif ds_type == EnergonDatasetType.BINIDX:
@@ -126,6 +129,7 @@ def get_dataset_from_config(
             training=training,
             subflavors=subflavors,
             worker_config=worker_config,
+            filter_name=filter_name,
             **kwargs,
         )
     elif ds_type == EnergonDatasetType.PARQUET:
@@ -144,6 +148,7 @@ def get_dataset_from_config(
             training=training,
             subflavors=subflavors,
             worker_config=worker_config,
+            filter_name=filter_name,
             **kwargs,
         )
     elif ds_type == EnergonDatasetType.MANIFEST_DATASET:
@@ -163,6 +168,7 @@ def get_dataset_from_config(
                 training=training,
                 worker_config=worker_config,
                 subflavors=subflavors,
+                filter_name=filter_name,
                 **kwargs,
             ),
             default_type=StandardWebdatasetFactory,
@@ -172,7 +178,7 @@ def get_dataset_from_config(
     else:
         raise ValueError(
             f"Path {path} does not contain a {MAIN_FOLDER_NAME}/.info.yaml or .info.json file, "
-            f"nor is it a jsonl file, a .bin (bin-idx) file, or a directory of .parquet files. "
+            f"nor is it a jsonl file, a .bin (bin-idx) file, or a .parquet file. "
             f"Did you forget to prepare the dataset? Please check the documentation for an introduction to dataset "
             f"preparation."
         )

@@ -7,8 +7,8 @@ from megatron.energon.dataset_config import load_config
 from megatron.energon.deprecation import warn_deprecated
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.webdataset.metadata import check_dataset_info_present
-from megatron.energon.flavors.webdataset.structs import DatasetSubset
+from megatron.energon.flavors.common.manifest.io import check_dataset_info_present
+from megatron.energon.flavors.common.manifest.types import DatasetSubset
 from megatron.energon.metadataset.dataset_loader import DatasetLoader
 from megatron.energon.metadataset.loader_interface import (
     DatasetBlendMode,

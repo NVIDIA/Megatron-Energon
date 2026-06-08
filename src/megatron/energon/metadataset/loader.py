@@ -6,7 +6,7 @@ from typing import Any, Union
 
 from megatron.energon.dataset_config import load_config
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.webdataset.metadata import EnergonDatasetType, get_dataset_type
+from megatron.energon.flavors.common.manifest.io import EnergonDatasetType, get_dataset_type
 from megatron.energon.metadataset.dataset_loader import DatasetLoader
 from megatron.energon.metadataset.loader_interface import (
     DatasetLoaderInterface,

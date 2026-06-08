@@ -3,25 +3,37 @@
 
 __all__ = [
     "DefaultParquetDatasetFactory",
+    "DefaultParquetShardListDatasetFactory",
     "IParquetReader",
     "ParquetDatasetFactory",
     "ParquetFileEntry",
     "ParquetFileStore",
     "ParquetLayout",
     "ParquetPreparator",
+    "ParquetShardListDatasetFactory",
     "parse_parquet_layout",
+    "scan_parquet_file",
     "scan_parquet_dataset",
+    "scan_parquet_shards",
 ]
 
 
 def __getattr__(name: str):
-    if name in ("DefaultParquetDatasetFactory", "ParquetDatasetFactory", "ParquetPreparator"):
+    if name in (
+        "DefaultParquetDatasetFactory",
+        "DefaultParquetShardListDatasetFactory",
+        "ParquetDatasetFactory",
+        "ParquetPreparator",
+        "ParquetShardListDatasetFactory",
+    ):
         from megatron.energon.flavors.parquet import dataset as _dataset
 
         return getattr(_dataset, name)
     if name in (
         "parse_parquet_layout",
+        "scan_parquet_file",
         "scan_parquet_dataset",
+        "scan_parquet_shards",
         "ParquetFileEntry",
         "ParquetLayout",
     ):
@@ -33,7 +45,7 @@ def __getattr__(name: str):
 
         return _reader.IParquetReader
     if name == "ParquetFileStore":
-        from megatron.energon.cache.file_store import ParquetFileStore
+        from megatron.energon.flavors.parquet.file_store import ParquetFileStore
 
         return ParquetFileStore
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
