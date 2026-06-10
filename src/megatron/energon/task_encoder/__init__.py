@@ -11,6 +11,7 @@ from megatron.energon.task_encoder.base import (
     batch_pad_stack,
     batch_stack,
     generic_batch,
+    sample_size_metric,
     skip_safe,
     stateless,
 )
@@ -36,6 +37,7 @@ __all__ = [
     "get_val_dataset",
     "get_val_datasets",
     "PackingGroupConfig",
+    "sample_size_metric",
     "skip_safe",
     "stateless",
     "TaskEncoder",

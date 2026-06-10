@@ -114,6 +114,7 @@ from megatron.energon.task_encoder import (
     get_train_dataset,
     get_val_dataset,
     get_val_datasets,
+    sample_size_metric,
     skip_safe,
     stateless,
 )
@@ -237,6 +238,7 @@ __all__ = [
     "reraise_exception",
     "Sample",
     "SampleDecoder",
+    "sample_size_metric",
     "SavableDataLoader",
     "SavableDataset",
     "traverse_metadataset",

@@ -13,7 +13,7 @@ import unittest
 import warnings
 from collections import Counter
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
 from unittest.mock import patch
 
 import torch
@@ -35,7 +35,12 @@ from megatron.energon.epathlib.epath import EPath
 from megatron.energon.flavors.common.manifest.paths import MAIN_FOLDER_NAME
 from megatron.energon.recipe.loader import prepare_recipe, traverse_recipe
 from megatron.energon.recipe.loader_interface import DatasetBlendMode, LoadedDataset
-from megatron.energon.task_encoder.base import DefaultTaskEncoder, PackingBufferSize, stateless
+from megatron.energon.task_encoder.base import (
+    DefaultTaskEncoder,
+    PackingBufferSize,
+    sample_size_metric,
+    stateless,
+)
 from megatron.energon.wrappers.blend_dataset import BlendDataset
 from megatron.energon.wrappers.watchdog_dataset import WatchdogDataset
 from tests.epath_s3_emulator import setup_s3_emulator
@@ -97,8 +102,9 @@ class SizeBlendTaskEncoder(DefaultTaskEncoder):
     blend_sample_size_alpha: float = 0.8
     blend_sample_size_epsilon: float = 0.7
 
+    @sample_size_metric("text_chars")
     @stateless
-    def blend_sample_size(self, sample: TextSample) -> int:
+    def text_chars(self, sample: TextSample) -> int:
         return len(sample.text)
 
 
@@ -2494,44 +2500,69 @@ class TestDataset(unittest.TestCase):
             self.dataset_path / "ds_long", range(100, 155), text_size=long_size
         )
 
-        size_blend_recipe_path = self.dataset_path / "recipe_size_blend.yaml"
-        with open(size_blend_recipe_path, "w") as f:
-            f.write(
-                "\n".join(
-                    [
-                        "__module__: megatron.energon",
-                        "__class__: Recipe",
-                        "splits:",
-                        "  train:",
-                        "    blend:",
-                        "      - weight: 1",
-                        "        path: ds_short",
-                        "        subflavors:",
-                        "          source: ds_short",
-                        "      - weight: 1",
-                        "        path: ds_long",
-                        "        subflavors:",
-                        "          source: ds_long",
-                    ]
-                )
+        def write_blend_recipe(path: Path, *, blend_weight_unit: str | None = None) -> None:
+            lines = [
+                "__module__: megatron.energon",
+                "__class__: Recipe",
+                "splits:",
+                "  train:",
+            ]
+            if blend_weight_unit is not None:
+                lines.append(f"    blend_weight_unit: {blend_weight_unit}")
+            lines.extend(
+                [
+                    "    blend:",
+                    "      - weight: 1",
+                    "        path: ds_short",
+                    "        subflavors:",
+                    "          source: ds_short",
+                    "      - weight: 1",
+                    "        path: ds_long",
+                    "        subflavors:",
+                    "          source: ds_long",
+                ]
             )
+            with open(path, "w") as f:
+                f.write("\n".join(lines))
 
-        def load_samples(task_encoder: DefaultTaskEncoder, n_samples: int):
-            loader = get_loader(
-                get_train_dataset(
-                    size_blend_recipe_path,
-                    worker_config=worker_config,
-                    batch_size=None,
-                    shuffle_buffer_size=None,
-                    max_samples_per_sequence=None,
-                    task_encoder=task_encoder,
-                )
+        sample_blend_recipe_path = self.dataset_path / "recipe_sample_blend.yaml"
+        sample_blend2_recipe_path = self.dataset_path / "recipe_sample_blend2.yaml"
+        size_blend_recipe_path = self.dataset_path / "recipe_size_blend.yaml"
+        write_blend_recipe(sample_blend_recipe_path)
+        write_blend_recipe(sample_blend2_recipe_path, blend_weight_unit="samples")
+        write_blend_recipe(size_blend_recipe_path, blend_weight_unit="text_chars")
+
+        def load_samples(
+            recipe_path: Path,
+            task_encoder: DefaultTaskEncoder,
+            n_samples: int,
+            size_fn: Callable[[TextSample], int] | None,
+        ):
+            dataset = get_train_dataset(
+                recipe_path,
+                worker_config=worker_config,
+                batch_size=None,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                task_encoder=task_encoder,
             )
+            blend_dataset = get_blend_dataset(dataset)
+            assert isinstance(blend_dataset, BlendDataset)
+            assert blend_dataset.sample_size_fn == size_fn
+            loader = get_loader(dataset)
             return list(zip(range(n_samples), loader))
 
         n_samples = 2000
-        default_samples = load_samples(DefaultTaskEncoder(), n_samples)
-        size_samples = load_samples(SizeBlendTaskEncoder(), n_samples)
+        default_samples = load_samples(
+            sample_blend_recipe_path, DefaultTaskEncoder(), n_samples, None
+        )
+        default2_samples = load_samples(
+            sample_blend2_recipe_path, DefaultTaskEncoder(), n_samples, None
+        )
+        sbte = SizeBlendTaskEncoder()
+        size_samples = load_samples(size_blend_recipe_path, sbte, n_samples, sbte.text_chars)
+
+        assert default_samples == default2_samples
 
         def tally(samples):
             sample_counts: Counter[str] = Counter()
@@ -2585,6 +2616,7 @@ class TestDataset(unittest.TestCase):
                         "__class__: Recipe",
                         "splits:",
                         "  train:",
+                        "    blend_weight_unit: text_chars",
                         "    blend:",
                         "      - weight: 1",
                         "        path: ds_short",

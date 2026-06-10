@@ -609,6 +609,7 @@ class RecipeBlend(
     """Blending of datasets by specifying the sampling weight for the inner datasets."""
 
     blend: List[Union[BlendDatasetReference, BlendJoinDatasetReference, "RecipeBlend"]]
+    blend_weight_unit: str = "samples"
 
     def post_initialize(self, recipe_path: Optional[EPath] = None):
         assert recipe_path is not None
@@ -681,6 +682,14 @@ class RecipeBlend(
                 raise ValueError(
                     "Can only blend datasets which are of the same blend mode. Cannot mix blend with blend_epochized."
                 )
+            if (
+                inner_result.blend_mode == DatasetBlendMode.DATASET_WEIGHT
+                and inner_result.blend_weight_unit != self.blend_weight_unit
+            ):
+                raise ValueError(
+                    "Nested dataset-weight blends must use the same blend_weight_unit. "
+                    f"Got {self.blend_weight_unit!r} and {inner_result.blend_weight_unit!r}."
+                )
             for loaded_dataset in inner_result.datasets:
                 if inner_result.blend_mode == DatasetBlendMode.DATASET_WEIGHT:
                     assert isinstance(loaded_dataset.weight, float)
@@ -693,6 +702,7 @@ class RecipeBlend(
                 datasets.append(loaded_dataset)
         return LoadedDatasetList(
             blend_mode=DatasetBlendMode.DATASET_WEIGHT,
+            blend_weight_unit=self.blend_weight_unit,
             datasets=datasets,
         )
 

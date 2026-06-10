@@ -35,6 +35,27 @@ splits:
 In the above example, we create a blend of three datasets. Out of the yielded training samples, 62.5% ({math}`=\frac{5}{8}`) will come from `./coco`, 25% from `./coyo` and 12.5% from `./other`.
 Note that the relative paths in the recipe are relative to the location of the recipe file. Absolute paths are allowed but won't work for object storage.
 
+By default, blend weights target the number of samples yielded from each dataset. To make weights
+target a task-defined unit, set `blend_weight_unit` on the blend and register a matching metric on
+the task encoder with `@sample_size_metric`. For example, `blend_weight_unit: tokens` makes the
+weights target token volume if the task encoder registers a `tokens` sample size metric:
+
+```yaml
+__module__: megatron.energon
+__class__: Recipe
+splits:
+  train:
+    blend_weight_unit: tokens
+    blend:
+      - weight: 5
+        path: ./coco
+      - weight: 2
+        path: ./coyo
+```
+
+The built-in unit `samples` is reserved for sample-count blending and is used when
+`blend_weight_unit` is omitted.
+
 To use the recipe in your loader, simply load it with {py:func}`get_train_dataset <megatron.energon.get_train_dataset>` instead of a normal energon dataset:
 ```python
 from megatron.energon import get_train_dataset

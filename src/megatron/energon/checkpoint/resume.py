@@ -121,7 +121,7 @@ class ResumeDatasetMetadata:
             identities=_normalize_identities(data.get("identities", ())),
             children=tuple(cls.from_dict(child) for child in data.get("children", ())),
         )
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "type": self.type,
@@ -142,7 +142,7 @@ class ResumeMetadata:
             version=data["version"],
             root=ResumeDatasetMetadata.from_dict(data["root"]),
         )
-    
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "version": self.version,
