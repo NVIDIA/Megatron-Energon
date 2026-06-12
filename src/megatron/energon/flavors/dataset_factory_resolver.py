@@ -1,7 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from typing import Any, Callable, Protocol, Type, TypeVar
+from typing import Any, Callable, Protocol, Type, TypeVar, overload
 
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory
@@ -74,6 +74,22 @@ _DATASET_FACTORY_RESOLVER: DatasetFactoryResolver | None = None
 
 
 T_Provider = TypeVar("T_Provider", bound=DatasetFactoryProvider)
+
+
+@overload
+def register_dataset_factory_provider(
+    provider: None = None,
+    *,
+    prepend: bool = False,
+) -> Callable[[Type[T_Provider]], Type[T_Provider]]: ...
+
+
+@overload
+def register_dataset_factory_provider(
+    provider: Type[T_Provider],
+    *,
+    prepend: bool = False,
+) -> Type[T_Provider]: ...
 
 
 def register_dataset_factory_provider(
