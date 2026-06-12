@@ -1,7 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from typing import Any, Protocol, Type, TypeVar
+from typing import Any, Callable, Protocol, Type, TypeVar
 
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory
@@ -28,8 +28,18 @@ class DatasetFactoryResolver:
 
         self._manifest_provider: Type[DatasetFactoryProvider] = BaseManifestShardListDatasetFactory
 
-    def register(self, provider: Type[DatasetFactoryProvider]) -> None:
-        self._providers.append(provider)
+    def register(self, provider: Type[DatasetFactoryProvider], *, prepend: bool = False) -> None:
+        """Register a dataset factory provider for path-based dataset detection.
+
+        Args:
+            provider: Dataset factory provider class to register.
+            prepend: If true, insert the provider before already-registered providers.
+                This lets more specific custom providers take precedence over broad defaults.
+        """
+        if prepend:
+            self._providers.insert(0, provider)
+        else:
+            self._providers.append(provider)
 
     def get_type(
         self, path: EPath
@@ -67,10 +77,26 @@ T_Provider = TypeVar("T_Provider", bound=DatasetFactoryProvider)
 
 
 def register_dataset_factory_provider(
-    provider: Type[T_Provider],
-) -> Type[T_Provider]:
-    get_dataset_factory_resolver().register(provider)
-    return provider
+    provider: Type[T_Provider] | None = None,
+    *,
+    prepend: bool = False,
+) -> Type[T_Provider] | Callable[[Type[T_Provider]], Type[T_Provider]]:
+    """Decorator for registering a dataset factory provider.
+
+    Args:
+        provider: Dataset factory provider class to register. When omitted, returns a
+            decorator so keyword arguments such as ``prepend`` can be supplied.
+        prepend: If true, insert the provider before already-registered providers.
+            This lets more specific custom providers take precedence over broad defaults.
+    """
+
+    def decorator(provider: Type[T_Provider]) -> Type[T_Provider]:
+        get_dataset_factory_resolver().register(provider, prepend=prepend)
+        return provider
+
+    if provider is None:
+        return decorator
+    return decorator(provider)
 
 
 def get_dataset_factory_resolver() -> DatasetFactoryResolver:
