@@ -9,18 +9,21 @@ from megatron.energon.flavors.base_indexed_dataset import BaseIndexedDatasetFact
 from megatron.energon.flavors.common.manifest.io import ShardListMeta, check_dataset_info_present
 from megatron.energon.flavors.common.manifest.paths import MAIN_FOLDER_NAME
 from megatron.energon.flavors.common.manifest.types import DatasetSubset, ManifestSplits
+from megatron.energon.flavors.dataset_factory_resolver import (
+    PRIORITY_MANIFEST,
+    register_dataset_factory_provider,
+)
 from megatron.energon.flavors.dataset_type import EnergonDatasetType
 from megatron.energon.worker import WorkerConfig
 
 T_sample = TypeVar("T_sample", covariant=True)
 
 
-class BaseManifestShardListDatasetFactory(
+@register_dataset_factory_provider(priority=PRIORITY_MANIFEST)
+class BaseManifestDatasetFactory(
     BaseIndexedDatasetFactory[T_sample],
     Generic[T_sample],
 ):
-    """Base for datasets whose virtual shards are read from `.nv-meta` manifests."""
-
     @classmethod
     def detect_path(cls, path: EPath) -> EnergonDatasetType | None:
         if check_dataset_info_present(path):
@@ -64,6 +67,13 @@ class BaseManifestShardListDatasetFactory(
                 f"Sample of type {dataset.__sample_type__} is not a subclass of {sample_type}."
             )
         return dataset
+
+
+class BaseManifestShardListDatasetFactory(
+    BaseManifestDatasetFactory[T_sample],
+    Generic[T_sample],
+):
+    """Base for datasets whose virtual shards are read from `.nv-meta` manifests."""
 
     def __init__(
         self,

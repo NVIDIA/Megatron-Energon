@@ -13,7 +13,10 @@ from megatron.energon.flavors.common.manifest.io import ShardListMeta
 from megatron.energon.flavors.common.manifest.types import DatasetSubset, ManifestSplits
 from megatron.energon.flavors.common.sample_record import SampleRecord
 from megatron.energon.flavors.crude import CrudeSample
-from megatron.energon.flavors.dataset_factory_resolver import register_dataset_factory_provider
+from megatron.energon.flavors.dataset_factory_resolver import (
+    PRIORITY_SINGLE_FILE,
+    register_dataset_factory_provider,
+)
 from megatron.energon.flavors.dataset_type import EnergonDatasetType
 from megatron.energon.flavors.parquet.prepare import (
     assert_layout_columns_subset,
@@ -265,7 +268,7 @@ class _DefaultParquetMixin:
         )
 
 
-@register_dataset_factory_provider
+@register_dataset_factory_provider(priority=PRIORITY_SINGLE_FILE)
 class DefaultParquetDatasetFactory(_DefaultParquetMixin, ParquetDatasetFactory):
     """Single-file Parquet factory that decodes selected columns and attaches subflavors."""
 

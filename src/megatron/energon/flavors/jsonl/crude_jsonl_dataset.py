@@ -14,7 +14,10 @@ from megatron.energon.flavors.common.manifest.io import ShardListMeta
 from megatron.energon.flavors.common.manifest.types import DatasetSubset, ManifestSplits
 from megatron.energon.flavors.common.sample_record import SampleRecord
 from megatron.energon.flavors.crude import CrudeSample
-from megatron.energon.flavors.dataset_factory_resolver import register_dataset_factory_provider
+from megatron.energon.flavors.dataset_factory_resolver import (
+    PRIORITY_SINGLE_FILE,
+    register_dataset_factory_provider,
+)
 from megatron.energon.flavors.dataset_type import EnergonDatasetType
 from megatron.energon.flavors.jsonl.file_store import MultiJsonlFileStore
 from megatron.energon.flavors.jsonl.ijsonl import IJsonlIndexReader
@@ -243,7 +246,7 @@ class CrudeJsonlShardListDatasetFactory(
         return f"{type(self).__name__}(path={self.path}, shards={len(self.shards)})"
 
 
-@register_dataset_factory_provider
+@register_dataset_factory_provider(priority=PRIORITY_SINGLE_FILE)
 class DefaultCrudeJsonlDatasetFactory(CrudeJsonlDatasetFactory):
     """Adds subflavors to the sample and loads the JSON payload."""
 

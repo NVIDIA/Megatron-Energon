@@ -14,7 +14,10 @@ from megatron.energon.flavors.common.dataset_sampler import RawSampleData
 from megatron.energon.flavors.common.manifest.types import DatasetSubset
 from megatron.energon.flavors.common.sample_record import SampleRecord
 from megatron.energon.flavors.crude import CrudeSample
-from megatron.energon.flavors.dataset_factory_resolver import register_dataset_factory_provider
+from megatron.energon.flavors.dataset_factory_resolver import (
+    PRIORITY_SINGLE_FILE,
+    register_dataset_factory_provider,
+)
 from megatron.energon.flavors.dataset_type import EnergonDatasetType
 from megatron.energon.worker import WorkerConfig
 
@@ -110,7 +113,7 @@ class BinIdxDatasetFactory(BaseSingleFileDatasetFactory[CrudeSample]):
         return f"{type(self).__name__}(path={self.path})"
 
 
-@register_dataset_factory_provider
+@register_dataset_factory_provider(priority=PRIORITY_SINGLE_FILE)
 class DefaultBinIdxDatasetFactory(BinIdxDatasetFactory):
     """Adds subflavors to the sample and decodes token bytes back to a numpy array."""
 

@@ -1,6 +1,8 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+from bisect import bisect_right
+from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol, Type, TypeVar, overload
 
 from megatron.energon.epathlib import EPath
@@ -17,41 +19,46 @@ class DatasetFactoryProvider(Protocol):
     def from_path(cls, path: EPath, **kwargs: Any) -> BaseCoreDatasetFactory: ...
 
 
+PRIORITY_FIRST: int = 0
+PRIORITY_SINGLE_FILE: int = 100
+PRIORITY_MANIFEST: int = 200
+
+
+@dataclass(order=True, frozen=True, kw_only=True)
+class _ProviderRegistration:
+    priority: int
+    provider: Type[DatasetFactoryProvider] = field(compare=False)
+
+
 class DatasetFactoryResolver:
     def __init__(self) -> None:
-        self._providers: list[Type[DatasetFactoryProvider]] = []
+        self._providers: list[_ProviderRegistration] = []
 
-        # Manifest datasets are handled manually last.
-        from megatron.energon.flavors.base_manifest_dataset import (
-            BaseManifestShardListDatasetFactory,
-        )
-
-        self._manifest_provider: Type[DatasetFactoryProvider] = BaseManifestShardListDatasetFactory
-
-    def register(self, provider: Type[DatasetFactoryProvider], *, prepend: bool = False) -> None:
+    def register(
+        self,
+        provider: Type[DatasetFactoryProvider],
+        *,
+        priority: int = PRIORITY_FIRST,
+    ) -> None:
         """Register a dataset factory provider for path-based dataset detection.
 
         Args:
             provider: Dataset factory provider class to register.
-            prepend: If true, insert the provider before already-registered providers.
-                This lets more specific custom providers take precedence over broad defaults.
+            priority: Provider resolution priority. Lower values are checked first.
         """
-        if prepend:
-            self._providers.insert(0, provider)
-        else:
-            self._providers.append(provider)
+        registration = _ProviderRegistration(priority=priority, provider=provider)
+        index = bisect_right(self._providers, registration)
+        self._providers.insert(index, registration)
 
     def get_type(
         self, path: EPath
     ) -> tuple[EnergonDatasetType, Type[DatasetFactoryProvider]] | tuple[None, None]:
-        for provider in self._providers:
+        """Get the dataset type and provider for a path."""
+        for registration in self._providers:
+            provider = registration.provider
             dataset_type = provider.detect_path(path)
             if dataset_type is not None:
                 return dataset_type, provider
-        # Manifest datasets are handled manually last.
-        dataset_type = self._manifest_provider.detect_path(path)
-        if dataset_type is not None:
-            return dataset_type, self._manifest_provider
         return None, None
 
     def get(
@@ -60,14 +67,14 @@ class DatasetFactoryResolver:
         **kwargs: Any,
     ) -> BaseCoreDatasetFactory:
         _, provider = self.get_type(path)
-        if provider is not None:
-            return provider.from_path(path, **kwargs)
-        raise ValueError(
-            f"Path {path} does not contain a {MAIN_FOLDER_NAME}/.info.yaml or .info.json file, "
-            f"nor is it a registered dataset type. "
-            f"Did you forget to prepare the dataset? Please check the documentation for an "
-            f"introduction to dataset preparation."
-        )
+        if provider is None:
+            raise ValueError(
+                f"Path {path} does not contain a {MAIN_FOLDER_NAME}/.info.yaml or .info.json file, "
+                f"nor is it a registered dataset type. "
+                f"Did you forget to prepare the dataset? Please check the documentation for an "
+                f"introduction to dataset preparation."
+            )
+        return provider.from_path(path, **kwargs)
 
 
 _DATASET_FACTORY_RESOLVER: DatasetFactoryResolver | None = None
@@ -80,7 +87,7 @@ T_Provider = TypeVar("T_Provider", bound=DatasetFactoryProvider)
 def register_dataset_factory_provider(
     provider: None = None,
     *,
-    prepend: bool = False,
+    priority: int = PRIORITY_FIRST,
 ) -> Callable[[Type[T_Provider]], Type[T_Provider]]: ...
 
 
@@ -88,26 +95,30 @@ def register_dataset_factory_provider(
 def register_dataset_factory_provider(
     provider: Type[T_Provider],
     *,
-    prepend: bool = False,
+    priority: int = PRIORITY_FIRST,
 ) -> Type[T_Provider]: ...
 
 
 def register_dataset_factory_provider(
     provider: Type[T_Provider] | None = None,
     *,
-    prepend: bool = False,
+    priority: int = PRIORITY_FIRST,
 ) -> Type[T_Provider] | Callable[[Type[T_Provider]], Type[T_Provider]]:
     """Decorator for registering a dataset factory provider.
 
     Args:
         provider: Dataset factory provider class to register. When omitted, returns a
-            decorator so keyword arguments such as ``prepend`` can be supplied.
-        prepend: If true, insert the provider before already-registered providers.
-            This lets more specific custom providers take precedence over broad defaults.
+            decorator so keyword arguments such as ``priority`` can be supplied.
+        priority: Provider resolution priority. Defaults to ``PRIORITY_FIRST`` so custom
+            providers take precedence over built-in defaults. Lower values are checked first.
+            Predefined priorities are:
+              ``PRIORITY_FIRST``: First to be checked,
+              ``PRIORITY_SINGLE_FILE``: Loaders for single-file datasets,
+              ``PRIORITY_MANIFEST``: Loader for manifest-based datasets.
     """
 
     def decorator(provider: Type[T_Provider]) -> Type[T_Provider]:
-        get_dataset_factory_resolver().register(provider, prepend=prepend)
+        get_dataset_factory_resolver().register(provider, priority=priority)
         return provider
 
     if provider is None:
@@ -116,6 +127,7 @@ def register_dataset_factory_provider(
 
 
 def get_dataset_factory_resolver() -> DatasetFactoryResolver:
+    """Get the dataset factory resolver singleton."""
     global _DATASET_FACTORY_RESOLVER
     if _DATASET_FACTORY_RESOLVER is None:
         _DATASET_FACTORY_RESOLVER = DatasetFactoryResolver()
