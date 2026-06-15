@@ -34,6 +34,12 @@ from megatron.energon import (
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.common.manifest.types import ManifestSplits as WebdatasetSplits
 from megatron.energon.flavors.dataset_type import EnergonDatasetType, get_dataset_type
+from megatron.energon.flavors.jsonl.ijsonl import (
+    CachedIJsonlOffsetReader,
+    IJsonlFile,
+    IJsonlIndexReader,
+    IJsonlIndexWriter,
+)
 from megatron.energon.tools.prepare import command as prepare_command
 from tests.epath_s3_emulator import setup_s3_emulator
 
@@ -111,6 +117,61 @@ class TestJsonlDataset(unittest.TestCase):
         # Remove all temporary files
         gc.collect()
         self.temp_dir.cleanup()
+
+    def test_jsonl_offset_index_round_trips_custom_metadata_suffix(self):
+        metadata_path = self.dataset_path / "chunks_00000.metadata"
+        metadata_path.write_bytes(
+            b"[]\n"
+            b'[{"img_id_in_doc":0,"pos_in_text":4}]\n'
+            b'[{"img_id_in_doc":1,"pos_in_text":8},{"img_id_in_doc":0,"pos_in_text":8}]\n'
+        )
+
+        count = 0
+        offset = 0
+        with IJsonlIndexWriter(EPath(metadata_path), index_suffix=".metadata.idx") as writer:
+            with EPath(metadata_path).open("rb") as metadata_file:
+                while True:
+                    line = metadata_file.readline()
+                    if not line:
+                        break
+                    writer.append(offset)
+                    offset = metadata_file.tell()
+                    count += 1
+            writer.append(offset)
+
+        offset_reader = CachedIJsonlOffsetReader(
+            EPath(metadata_path),
+            index_suffix=".metadata.idx",
+        )
+        expected_lines = metadata_path.read_bytes().splitlines(keepends=True)
+        try:
+            with IJsonlFile(EPath(metadata_path).open("rb")) as metadata_file:
+                indexed_lines = []
+                for index in range(count):
+                    offset, size = offset_reader.get_ijsonl_byte_offset(index)
+                    indexed_lines.append(metadata_file.next(offset, size))
+
+            assert indexed_lines == expected_lines
+            assert len(offset_reader) == len(expected_lines)
+            assert offset_reader.get_total_size() == metadata_path.stat().st_size
+        finally:
+            offset_reader.close()
+
+        jsonl_path = self.dataset_path / "samples.jsonl"
+        jsonl_path.write_bytes(b'{"idx":0}\n{"idx":1}\n')
+        offset = 0
+        with IJsonlIndexWriter(EPath(jsonl_path)) as writer:
+            with EPath(jsonl_path).open("rb") as jsonl_file:
+                while True:
+                    line = jsonl_file.readline()
+                    if not line:
+                        break
+                    writer.append(offset)
+                    offset = jsonl_file.tell()
+            writer.append(offset)
+
+        assert jsonl_path.with_suffix(".jsonl.idx").is_file()
+        assert IJsonlIndexReader.count_samples(EPath(jsonl_path)) == 2
 
     @staticmethod
     def create_text_test_dataset(

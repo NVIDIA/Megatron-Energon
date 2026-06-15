@@ -26,9 +26,9 @@ class IJsonlSamplePointer:
 
 
 class IJsonlIndexReader:
-    def __init__(self, jsonl_path: Union[EPath, str]):
+    def __init__(self, jsonl_path: Union[EPath, str], index_suffix: str = IJSONL_SUFFIX):
         jsonl_path = EPath(jsonl_path)
-        index_path = jsonl_path.with_suffix(IJSONL_SUFFIX)
+        index_path = jsonl_path.with_suffix(index_suffix)
         self._length = index_path.size() // 8
         self.ijsonl = index_path.open("rb")
 
@@ -63,20 +63,20 @@ class IJsonlIndexReader:
         self.close()
 
     @staticmethod
-    def count_samples(jsonl_path: EPath | str) -> int:
-        return EPath(jsonl_path).with_suffix(IJSONL_SUFFIX).size() // 8 - 1
+    def count_samples(jsonl_path: EPath | str, index_suffix: str = IJSONL_SUFFIX) -> int:
+        return EPath(jsonl_path).with_suffix(index_suffix).size() // 8 - 1
 
     @staticmethod
-    def size(jsonl_path: EPath) -> int:
-        with IJsonlIndexReader(jsonl_path) as reader:
+    def size(jsonl_path: EPath, index_suffix: str = IJSONL_SUFFIX) -> int:
+        with IJsonlIndexReader(jsonl_path, index_suffix=index_suffix) as reader:
             return reader[len(reader) - 1]
 
 
 class IJsonlIndexWriter:
-    def __init__(self, jsonl_path: EPath):
+    def __init__(self, jsonl_path: EPath, index_suffix: str = IJSONL_SUFFIX):
         self.jsonl_path = jsonl_path
-        self.final_name = jsonl_path.with_suffix(IJSONL_SUFFIX)
-        self.tmp_name = jsonl_path.with_suffix(IJSONL_SUFFIX + ".tmp")
+        self.final_name = jsonl_path.with_suffix(index_suffix)
+        self.tmp_name = jsonl_path.with_suffix(index_suffix + ".tmp")
         self.ijsonl = self.tmp_name.open("wb")
 
     def append(self, offset: int):
@@ -123,11 +123,17 @@ class CachedIJsonlOffsetReader:
         cache_size: The number of entries to keep in the cache. By default, we keep 32.
     """
 
-    def __init__(self, jsonl_file: Union[str, EPath], cache_size: int = 32):
+    def __init__(
+        self,
+        jsonl_file: Union[str, EPath],
+        cache_size: int = 32,
+        index_suffix: str = IJSONL_SUFFIX,
+    ):
         # Maps current_offset -> CacheEntry
         self.ijsonl_index_reader_cache: Dict[int, CacheEntry] = {}
         self.cache_size = cache_size
         self.jsonl_file = EPath(jsonl_file)
+        self.index_suffix = index_suffix
 
     def close(self):
         for cache_entry in self.ijsonl_index_reader_cache.values():
@@ -153,7 +159,7 @@ class CachedIJsonlOffsetReader:
             oldest_key = next(iter(self.ijsonl_index_reader_cache))
             cache_entry = self.ijsonl_index_reader_cache.pop(oldest_key)
         else:
-            new_reader = IJsonlIndexReader(self.jsonl_file)
+            new_reader = IJsonlIndexReader(self.jsonl_file, index_suffix=self.index_suffix)
             cache_entry = CacheEntry(ijsonl_index_reader=new_reader)
         self.ijsonl_index_reader_cache[sample_offset] = cache_entry
         return cache_entry
@@ -232,13 +238,19 @@ class CachedIJsonlOffsetReader:
 
     def __len__(self) -> int:
         if len(self.ijsonl_index_reader_cache) == 0:
-            return IJsonlIndexReader.count_samples(self.jsonl_file)
+            return IJsonlIndexReader.count_samples(
+                self.jsonl_file,
+                index_suffix=self.index_suffix,
+            )
         return len(next(iter(self.ijsonl_index_reader_cache.values())).ijsonl_index_reader) - 1
 
     def get_total_size(self) -> int:
         if len(self.ijsonl_index_reader_cache) == 0:
             self.ijsonl_index_reader_cache[0] = CacheEntry(
-                ijsonl_index_reader=IJsonlIndexReader(self.jsonl_file)
+                ijsonl_index_reader=IJsonlIndexReader(
+                    self.jsonl_file,
+                    index_suffix=self.index_suffix,
+                )
             )
         reader = next(iter(self.ijsonl_index_reader_cache.values())).ijsonl_index_reader
         return reader[len(reader) - 1]
