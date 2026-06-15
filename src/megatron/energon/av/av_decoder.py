@@ -689,7 +689,7 @@ class AVWebdatasetDecoder:
         Returns:
             AVData object that can be used to decode the media with custom parameters
         """
-        if self.device != "cpu":
+        if self.device != "cpu" and self.av_decode == "AVDecoder":
           device_id = 0 if self.device == "gpu" else self.device
           return AVDecoderGpu(io.BytesIO(data), device_id=int(device_id))
 
