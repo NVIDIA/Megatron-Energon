@@ -89,6 +89,7 @@ class SampleDecoder(FileStoreDecoder):
         image_decode_device: Literal["cpu", "gpu"] | int = "cpu",
         av_decode: AVDecoderType = "AVDecoder",
         video_decode_audio: bool = False,
+        video_decode_device: Literal["cpu", "gpu"] | int = "cpu",
         guess_content: bool = False,
     ):
         """
@@ -100,12 +101,15 @@ class SampleDecoder(FileStoreDecoder):
             av_decode: If "AVDecoder", returns an AVDecoder instance for flexible decoding. If "torch",
                 returns decoded VideoData.
             video_decode_audio: Whether to decode audio from video files.
+            video_decode_device: The device to use for decoding video. If "gpu" or a numerical device ID
+              the video is decoded using NVDec hardware acceleration on the GPU.
             guess_content: Whether to guess the contents of the file using the `filetype` package.
         """
         self._config = dict(
             image_decode=image_decode,
             av_decode=av_decode,
             video_decode_audio=video_decode_audio,
+            video_decode_device=video_decode_device,
             guess_content=guess_content,
         )
         self._creator_pid = os.getpid()
@@ -132,6 +136,7 @@ class SampleDecoder(FileStoreDecoder):
                     AVWebdatasetDecoder(
                         video_decode_audio=video_decode_audio,
                         av_decode=av_decode,
+                        device=video_decode_device,
                     ),
                 ],
             ),

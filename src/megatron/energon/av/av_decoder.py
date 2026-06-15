@@ -29,6 +29,7 @@ except ImportError as e:
     MISSING_DEPENDENCY = str(e)
 
 from megatron.energon.av.av_data import AVData
+from megatron.energon.av.av_decoder_gpu import AVDecoderGpu
 from megatron.energon.av.av_init import av_open
 from megatron.energon.media import AVMetadata
 
@@ -37,7 +38,6 @@ class AVIndexMode(Enum):
     FRAMES = "frames"
     PTS = "pts"
     PROBE = "probe"
-
 
 class AVDecoder:
     """A class that provides a flexible interface for decoding audio and video data.
@@ -659,6 +659,8 @@ class AVWebdatasetDecoder:
             extracted alongside video frames.
         av_decode: If "AVDecoder", returns an AVDecoder instance for flexible decoding. If "torch",
             returns decoded VideoData.
+        device: If "gpu" or a numerical device ID the video is decoded using NVDec hardware acceleration
+          on the GPU. This option is ignored if using "torch" or "pyav" for the av_decode parameter.
 
     Example:
         >>> decoder = AVWebdatasetDecoder(
@@ -672,9 +674,11 @@ class AVWebdatasetDecoder:
         self,
         video_decode_audio: bool,
         av_decode: Literal["torch", "AVDecoder", "pyav"] = "AVDecoder",
+        device: Literal["cpu", "gpu"] | int = "cpu",
     ) -> None:
         self.video_decode_audio = video_decode_audio
         self.av_decode = av_decode
+        self.device = device
 
     def read_av_data(self, data: bytes) -> AVDecoder:
         """Decoder function that returns an AVData object for flexible decoding.
@@ -685,6 +689,10 @@ class AVWebdatasetDecoder:
         Returns:
             AVData object that can be used to decode the media with custom parameters
         """
+        if self.device != "cpu":
+          device_id = 0 if self.device == "gpu" else self.device
+          return AVDecoderGpu(io.BytesIO(data), device_id=int(device_id))
+
         return AVDecoder(io.BytesIO(data))
 
     def __call__(
