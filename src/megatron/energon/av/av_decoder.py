@@ -39,6 +39,7 @@ class AVIndexMode(Enum):
     PTS = "pts"
     PROBE = "probe"
 
+
 class AVDecoder:
     """A class that provides a flexible interface for decoding audio and video data.
 
@@ -690,8 +691,8 @@ class AVWebdatasetDecoder:
             AVData object that can be used to decode the media with custom parameters
         """
         if self.device != "cpu" and self.av_decode == "AVDecoder":
-          device_id = 0 if self.device == "gpu" else self.device
-          return AVDecoderGpu(io.BytesIO(data), device_id=int(device_id))
+            device_id = 0 if self.device == "gpu" else self.device
+            return AVDecoderGpu(io.BytesIO(data), device_id=int(device_id))
 
         return AVDecoder(io.BytesIO(data))
 
