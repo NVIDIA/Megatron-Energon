@@ -373,9 +373,19 @@ class EPath:
     def size(self) -> int:
         return self.fs.info(self._internal_str_path).content_length
 
-    def with_suffix(self, suffix: str) -> "EPath":
+    def with_suffix(self, suffix: str, replace: bool = True) -> "EPath":
+        """Create a new path with the given suffix.
+
+        Args:
+            suffix: The suffix to add to the path.
+            replace: If True, replace the existing suffixes (default).
+                Otherwise, append the suffix after the existing suffixes.
+        """
         new_path = EPath(self)
-        new_path.internal_path = self.internal_path.with_suffix(suffix)
+        if replace:
+            new_path.internal_path = self.internal_path.with_suffix(suffix)
+        else:
+            new_path.internal_path = self.internal_path.with_name(self.internal_path.name + suffix)
         return new_path
 
     def move(self, target: "EPath") -> None:

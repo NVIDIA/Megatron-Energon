@@ -67,7 +67,7 @@ class CrudeJsonlDatasetFactory(
             part_filter=part_filter,
             filter_name=filter_name,
         )
-        assert self.path.size() == IJsonlIndexReader.size(path), (
+        assert IJsonlIndexReader.is_current(path), (
             "The index of the jsonl file does not match the file. Regenerate the index."
         )
 
@@ -182,7 +182,7 @@ class CrudeJsonlShardListDatasetFactory(
                 f"JSONL shard count mismatch for {shard.path}: "
                 f"metadata={shard.count}, index={actual_count}"
             )
-            assert shard.path.size() == IJsonlIndexReader.size(shard.path), (
+            assert IJsonlIndexReader.is_current(shard.path), (
                 "The index of the jsonl file does not match the file. Regenerate the index: "
                 f"{shard.path}"
             )

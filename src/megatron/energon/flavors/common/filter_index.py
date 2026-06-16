@@ -230,8 +230,8 @@ class FilterIndexWriter:
 
         self._json_path = json_path
         self._index_path = index_path
-        self._tmp_json_path = json_path.with_suffix(f"{FILTER_JSON_SUFFIX}.tmp")
-        self._tmp_index_path = index_path.with_suffix(f"{FILTER_INDEX_SUFFIX}.tmp")
+        self._tmp_json_path = json_path.with_suffix(f"{FILTER_JSON_SUFFIX}.tmp", replace=False)
+        self._tmp_index_path = index_path.with_suffix(f"{FILTER_INDEX_SUFFIX}.tmp", replace=False)
         self._tmp_index_path.parent.mkdir(parents=True, exist_ok=True)
         self._index_file = self._tmp_index_path.open("wb")
 
@@ -453,7 +453,9 @@ def _resolve_shards(dataset_path: EPath) -> list[ShardInfo]:
 
 def _count_single_file_samples(path: EPath) -> int:
     if path.name.endswith(".jsonl"):
-        return int(path.with_suffix(".jsonl.idx").size() // 8 - 1)
+        from megatron.energon.flavors.jsonl.ijsonl import IDX_SUFFIX as JSONL_IDX_SUFFIX
+
+        return int(path.with_suffix(JSONL_IDX_SUFFIX, replace=False).size() // 8 - 1)
     if path.name.endswith(".bin"):
         idx_path = path.parent / (path.name.removesuffix(".bin") + ".idx")
         with idx_path.open("rb") as f:

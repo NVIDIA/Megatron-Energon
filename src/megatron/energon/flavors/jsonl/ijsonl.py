@@ -7,7 +7,7 @@ from typing import BinaryIO, Dict, Generator, Optional, Tuple, Union
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
 
-IJSONL_SUFFIX = ".jsonl.idx"
+IDX_SUFFIX = ".idx"
 
 
 @edataclass
@@ -26,9 +26,9 @@ class IJsonlSamplePointer:
 
 
 class IJsonlIndexReader:
-    def __init__(self, jsonl_path: Union[EPath, str], index_suffix: str = IJSONL_SUFFIX):
+    def __init__(self, jsonl_path: Union[EPath, str]):
         jsonl_path = EPath(jsonl_path)
-        index_path = jsonl_path.with_suffix(index_suffix)
+        index_path = jsonl_path.with_suffix(IDX_SUFFIX, replace=False)
         self._length = index_path.size() // 8
         self.ijsonl = index_path.open("rb")
 
@@ -63,20 +63,32 @@ class IJsonlIndexReader:
         self.close()
 
     @staticmethod
-    def count_samples(jsonl_path: EPath | str, index_suffix: str = IJSONL_SUFFIX) -> int:
-        return EPath(jsonl_path).with_suffix(index_suffix).size() // 8 - 1
+    def count_samples(jsonl_path: EPath | str) -> int:
+        return EPath(jsonl_path).with_suffix(IDX_SUFFIX, replace=False).size() // 8 - 1
 
     @staticmethod
-    def size(jsonl_path: EPath, index_suffix: str = IJSONL_SUFFIX) -> int:
-        with IJsonlIndexReader(jsonl_path, index_suffix=index_suffix) as reader:
+    def size(jsonl_path: EPath) -> int:
+        with IJsonlIndexReader(jsonl_path) as reader:
             return reader[len(reader) - 1]
+
+    @staticmethod
+    def is_current(jsonl_path: EPath) -> bool:
+        index_path = jsonl_path.with_suffix(IDX_SUFFIX, replace=False)
+        if not index_path.is_file():
+            return False
+        if (
+            index_path.stat().last_modified.timestamp()
+            < jsonl_path.stat().last_modified.timestamp()
+        ):
+            return False
+        return jsonl_path.size() == IJsonlIndexReader.size(jsonl_path)
 
 
 class IJsonlIndexWriter:
-    def __init__(self, jsonl_path: EPath, index_suffix: str = IJSONL_SUFFIX):
+    def __init__(self, jsonl_path: EPath):
         self.jsonl_path = jsonl_path
-        self.final_name = jsonl_path.with_suffix(index_suffix)
-        self.tmp_name = jsonl_path.with_suffix(index_suffix + ".tmp")
+        self.final_name = jsonl_path.with_suffix(IDX_SUFFIX, replace=False)
+        self.tmp_name = jsonl_path.with_suffix(IDX_SUFFIX + ".tmp", replace=False)
         self.ijsonl = self.tmp_name.open("wb")
 
     def append(self, offset: int):
@@ -127,7 +139,7 @@ class CachedIJsonlOffsetReader:
         self,
         jsonl_file: Union[str, EPath],
         cache_size: int = 32,
-        index_suffix: str = IJSONL_SUFFIX,
+        index_suffix: str = IDX_SUFFIX,
     ):
         # Maps current_offset -> CacheEntry
         self.ijsonl_index_reader_cache: Dict[int, CacheEntry] = {}
