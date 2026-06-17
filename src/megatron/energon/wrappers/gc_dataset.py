@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import gc
+import sys
 from typing import Any, Dict, Generic, Iterator, TypeVar
 
 import torch
@@ -17,8 +18,8 @@ from megatron.energon.wrappers.base import BaseWrapperDataset
 
 T_sample = TypeVar("T_sample")
 
-_frozen_cuda_tensors = set()
-_frozen_cuda_tensors_initialized = False
+_frozen_gc_objects = []
+_frozen_gc_objects_initialized = False
 
 
 GC_DEFAULT_EVERY_N_ITER = 10
@@ -36,7 +37,21 @@ def gc_init_worker(worker_id: int):
     By keeping a reference to all CUDA tensors in the worker process, we can
     prevent the forked tensors from being garbage collected."""
 
-    global _frozen_cuda_tensors_initialized, _frozen_cuda_tensors
+    global _frozen_gc_objects_initialized, _frozen_gc_objects
+
+    torch_dynamo_output_graph_module = sys.modules.get("torch._dynamo.output_graph")
+    torch_distributed_module = sys.modules.get("torch.distributed.distributed_c10d")
+    frozen_gc_object_types = tuple(
+        object_type
+        for object_type in (
+            getattr(torch_dynamo_output_graph_module, "OutputGraph", None),
+            getattr(torch_distributed_module, "Work", None),
+            getattr(torch, "Event", None),
+            getattr(torch.cuda, "Event", None),
+            getattr(torch.cuda, "MemPool", None),
+        )
+        if object_type is not None
+    )
 
     num_tensors = 0
     for o in gc.get_objects():
@@ -47,8 +62,10 @@ def gc_init_worker(worker_id: int):
                         # Calling .is_cuda or any hasattr on ShardedTensor will raise an error
                         # Hence, o.is_cuda is only called if o is not a ShardedTensor (in the if above)
 
-                        _frozen_cuda_tensors.add(o)
+                        _frozen_gc_objects.append(o)
                         num_tensors += 1
+                elif isinstance(o, frozen_gc_object_types):
+                    _frozen_gc_objects.append(o)
                 elif isinstance(o, torch.utils.data.dataloader._MultiProcessingDataLoaderIter):
                     o._shutdown = True
         except ReferenceError:
@@ -62,7 +79,7 @@ def gc_init_worker(worker_id: int):
             # Can happen if the object is a weakref proxy, or any other exception, don't care
             pass
 
-    _frozen_cuda_tensors_initialized = True
+    _frozen_gc_objects_initialized = True
 
 
 class GcDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
@@ -110,7 +127,7 @@ class GcDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
 
     def __iter__(self) -> Iterator[T_sample]:
         in_worker = torch.utils.data.get_worker_info() is not None
-        if in_worker and not _frozen_cuda_tensors_initialized:
+        if in_worker and not _frozen_gc_objects_initialized:
             raise GcFreezeError(
                 "You are using GcDataset with multiple workers, but forgot to call gc_init_worker() in at least one forked worker process."
             )
