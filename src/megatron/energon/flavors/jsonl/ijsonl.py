@@ -139,13 +139,11 @@ class CachedIJsonlOffsetReader:
         self,
         jsonl_file: Union[str, EPath],
         cache_size: int = 32,
-        index_suffix: str = IDX_SUFFIX,
     ):
         # Maps current_offset -> CacheEntry
         self.ijsonl_index_reader_cache: Dict[int, CacheEntry] = {}
         self.cache_size = cache_size
         self.jsonl_file = EPath(jsonl_file)
-        self.index_suffix = index_suffix
 
     def close(self):
         for cache_entry in self.ijsonl_index_reader_cache.values():
@@ -171,7 +169,7 @@ class CachedIJsonlOffsetReader:
             oldest_key = next(iter(self.ijsonl_index_reader_cache))
             cache_entry = self.ijsonl_index_reader_cache.pop(oldest_key)
         else:
-            new_reader = IJsonlIndexReader(self.jsonl_file, index_suffix=self.index_suffix)
+            new_reader = IJsonlIndexReader(self.jsonl_file)
             cache_entry = CacheEntry(ijsonl_index_reader=new_reader)
         self.ijsonl_index_reader_cache[sample_offset] = cache_entry
         return cache_entry
@@ -250,19 +248,13 @@ class CachedIJsonlOffsetReader:
 
     def __len__(self) -> int:
         if len(self.ijsonl_index_reader_cache) == 0:
-            return IJsonlIndexReader.count_samples(
-                self.jsonl_file,
-                index_suffix=self.index_suffix,
-            )
+            return IJsonlIndexReader.count_samples(self.jsonl_file)
         return len(next(iter(self.ijsonl_index_reader_cache.values())).ijsonl_index_reader) - 1
 
     def get_total_size(self) -> int:
         if len(self.ijsonl_index_reader_cache) == 0:
             self.ijsonl_index_reader_cache[0] = CacheEntry(
-                ijsonl_index_reader=IJsonlIndexReader(
-                    self.jsonl_file,
-                    index_suffix=self.index_suffix,
-                )
+                ijsonl_index_reader=IJsonlIndexReader(self.jsonl_file)
             )
         reader = next(iter(self.ijsonl_index_reader_cache.values())).ijsonl_index_reader
         return reader[len(reader) - 1]
