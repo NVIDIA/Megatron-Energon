@@ -195,16 +195,14 @@ class Sharder:
         worker_config: WorkerConfig,
         *,
         rotation_offset: int = 0,
-    ) -> Sequence[int]:
+    ) -> Sequence[Sequence[int]]:
         # We split the total number of samples into the number of global workers across all ranks.
         # Note that the global number of workers intentionally stays the same if you
         # divide the number of ranks by N, and multiply the number of workers per rank by N.
         # This allows to reproduce the same global batches with a different number of ranks.
         total_samples = end_samples - start_samples
 
-        num_workers = max(1, worker_config.num_workers)
-
-        global_workers = num_workers * worker_config.world_size
+        global_workers = worker_config.logical_worker_count()
 
         min_samples_per_worker = int(total_samples / global_workers)
         num_workers_with_more_samples = total_samples % global_workers
@@ -255,16 +253,26 @@ class Sharder:
             cur_offset += num_samples_per_global_worker[global_worker_idx]
             global_worker_sample_split_offsets.append(cur_offset)
 
-        # 4. Now we extract the local rank's worker ranges
-        local_worker_sample_split_offsets = global_worker_sample_split_offsets[
-            worker_config.rank * num_workers : (worker_config.rank + 1) * num_workers + 1
-        ]
-
-        assert len(local_worker_sample_split_offsets) == num_workers + 1, (
-            "If this fails, there's a bug in the code above."
+        # 4. Now we extract the logical worker range served by each physical
+        # worker on this rank. If multiple physical workers share one logical
+        # worker, they intentionally receive the same logical range; an outer
+        # StrideDataset later selects each physical worker's substream.
+        return tuple(
+            (
+                global_worker_sample_split_offsets[
+                    worker_config.logical_assignment_for_physical(
+                        worker_config.physical_global_worker_id(local_worker_idx)
+                    ).logical_global_worker_id
+                ],
+                global_worker_sample_split_offsets[
+                    worker_config.logical_assignment_for_physical(
+                        worker_config.physical_global_worker_id(local_worker_idx)
+                    ).logical_global_worker_id
+                    + 1
+                ],
+            )
+            for local_worker_idx in range(worker_config.physical_workers_per_rank())
         )
-
-        return local_worker_sample_split_offsets
 
     @staticmethod
     def _clean_offsets(offsets: Sequence[int]) -> Sequence[int]:
@@ -342,7 +350,7 @@ class Sharder:
         else:
             start_samples = 0
 
-        local_worker_sample_split_offsets = cls.split_samples_to_workers(
+        local_workers_sample_split_offsets = cls.split_samples_to_workers(
             start_samples,
             end_samples,
             worker_config,
@@ -354,9 +362,10 @@ class Sharder:
         return tuple(
             # Filter out any empty shards for this worker
             cls._clean_offsets(offsets)
+            for worker_offsets in local_workers_sample_split_offsets
             for offsets in cls._split_shards(
                 shard_cumsums,
-                local_worker_sample_split_offsets,
+                worker_offsets,
                 max_samples_per_sequence=max_samples_per_sequence,
             )
         )
@@ -389,7 +398,7 @@ class Sharder:
         """
         start_samples, end_samples = cls._compute_subset(total_samples, subset)
 
-        local_worker_sample_split_offsets = cls.split_samples_to_workers(
+        local_workers_sample_split_offsets = cls.split_samples_to_workers(
             start_samples,
             end_samples,
             worker_config,
@@ -400,8 +409,9 @@ class Sharder:
         return tuple(
             # Filter out any empty shards for this worker
             cls._clean_offsets(offsets)
+            for worker_offsets in local_workers_sample_split_offsets
             for offsets in cls._split_slices(
-                local_worker_sample_split_offsets,
+                worker_offsets,
                 max_samples_per_sequence=max_samples_per_sequence,
             )
         )

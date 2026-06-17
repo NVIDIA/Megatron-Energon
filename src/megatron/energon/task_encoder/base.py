@@ -57,6 +57,7 @@ from megatron.energon.wrappers import (
     ShuffleBufferDataset,
 )
 from megatron.energon.wrappers.repeat_dataset import RepeatDataset
+from megatron.energon.wrappers.stride_dataset import maybe_wrap_stride_dataset
 
 T = TypeVar("T")
 V = TypeVar("V")
@@ -123,7 +124,10 @@ P = ParamSpec("P")
 
 @overload
 def stateless(
-    *, restore_seeds: bool = False, failure_tolerance: Optional[int] = None
+    *,
+    restore_seeds: bool = False,
+    failure_tolerance: Optional[int] = None,
+    skip_safe: Optional[bool] = None,
 ) -> Callable[[Callable[P, T]], Callable[P, T]]: ...
 
 
@@ -131,11 +135,28 @@ def stateless(
 def stateless(fn: Callable[P, T]) -> Callable[P, T]: ...
 
 
+@overload
+def stateless(
+    fn: Callable[P, T],
+    *,
+    restore_seeds: bool = False,
+    failure_tolerance: Optional[int] = None,
+    skip_safe: Optional[bool] = None,
+) -> Callable[P, T]: ...
+
+
+def skip_safe(fn: Callable[P, T]) -> Callable[P, T]:
+    """Decorator to mark a task encoder function as safe to elide in skip mode."""
+    setattr(fn, "__skip_safe__", True)
+    return fn
+
+
 def stateless(
     fn: Optional[Callable[..., T]] = None,
     *,
     restore_seeds: bool = False,
     failure_tolerance: Optional[int] = None,
+    skip_safe: Optional[bool] = None,
 ) -> Union[Callable[[Callable[..., T]], Callable[..., T]], Callable[..., T]]:
     """Decorator to mark a function of the task encoder as restorable.
 
@@ -146,6 +167,8 @@ def stateless(
             is restored from that function.
         failure_tolerance: The number of consecutive exceptions that are handled, after which a `FatalSampleError` is
             raised for this function. Set to 0 to disable.
+        skip_safe: Whether this function can be elided while advancing skipped outputs.
+            If omitted, preserves any existing @skip_safe marker.
 
     Usage:
 
@@ -164,7 +187,10 @@ def stateless(
 
     if fn is None:
         return lambda f: stateless(
-            f, restore_seeds=restore_seeds, failure_tolerance=failure_tolerance
+            f,
+            restore_seeds=restore_seeds,
+            failure_tolerance=failure_tolerance,
+            skip_safe=skip_safe,
         )
     if restore_seeds:
         worker_seed = None
@@ -235,12 +261,18 @@ def stateless(
 
         if inspect.isgeneratorfunction(fn):
             setattr(seed_wrapper_generator, "__stateless__", True)
+            if skip_safe is not None:
+                setattr(seed_wrapper_generator, "__skip_safe__", skip_safe)
             return seed_wrapper_generator
         else:
             setattr(seed_wrapper, "__stateless__", True)
+            if skip_safe is not None:
+                setattr(seed_wrapper, "__skip_safe__", skip_safe)
             return seed_wrapper
 
     setattr(fn, "__stateless__", True)
+    if skip_safe is not None:
+        setattr(fn, "__skip_safe__", skip_safe)
     if failure_tolerance is not None:
         setattr(fn, "__failure_tolerance__", failure_tolerance)
     return fn
@@ -249,6 +281,11 @@ def stateless(
 def get_stateless(fn: Callable) -> bool:
     """Get whether a function is stateless."""
     return getattr(fn, "__stateless__", False)
+
+
+def get_skip_safe(fn: Callable) -> bool:
+    """Get whether a function can be elided while advancing skipped outputs."""
+    return getattr(fn, "__skip_safe__", False)
 
 
 def get_failure_tolerance(fn: Callable, default_failure_tolerance: Optional[int] = None) -> int:
@@ -401,6 +438,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         return not any(getattr(base, func.__name__) is func for base in bases)
 
     @stateless
+    @skip_safe
     def cook_crude_sample(
         self,
         sample: CrudeSample,
@@ -428,6 +466,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         return cooker.cook(sample, **aux)
 
     @stateless
+    @skip_safe
     def encode_sample(
         self, sample: T_sample
     ) -> Union[T_encoded_sample, Generator[T_encoded_sample, None, None]]:
@@ -438,6 +477,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         return sample
 
     @stateless
+    @skip_safe
     def preencode_sample(
         self, sample: T_sample
     ) -> Union[T_sample, Generator[T_sample, None, None]]:
@@ -449,6 +489,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         return sample
 
     @stateless
+    @skip_safe
     def postencode_sample(self, sample: T_sample) -> T_encoded_sample:
         """Post-encode a single sample. May raise :exc:`megatron.energon.SkipSample` to skip a sample.
         Alternatively, this can be a generator that yields (or ignores) new samples.
@@ -458,6 +499,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         return sample
 
     @stateless
+    @skip_safe
     def batch(self, samples: List[T_encoded_sample]) -> T_raw_batch:
         """Move a batch to a device. May raise :exc:`megatron.energon.SkipSample` to skip a batch."""
         return self._batch(samples, type(samples[0]))
@@ -474,6 +516,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         return None, None
 
     @stateless
+    @skip_safe
     def encode_batch(self, batch: T_raw_batch) -> Union[T_batch, Generator[T_batch, None, None]]:
         """Encode a batch of samples. May raise :exc:`megatron.energon.SkipSample` to skip a batch.
         Alternatively, this can be a generator that yields (or ignores) new batches."""
@@ -594,10 +637,14 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 pre_packer=self.select_samples_to_pack,
                 final_packer=self.pack_selected_samples,
                 final_packer_stateless=get_stateless(self.pack_selected_samples),
+                final_packer_skip_safe=get_skip_safe(self.pack_selected_samples),
                 sample_encoder=post_encode_fn,
                 sample_encoder_stateless=True
                 if post_encode_fn is None
                 else get_stateless(post_encode_fn),
+                sample_encoder_skip_safe=True
+                if post_encode_fn is None
+                else get_skip_safe(post_encode_fn),
                 worker_config=worker_config,
                 pre_packer_failure_tolerance=get_failure_tolerance(
                     self.select_samples_to_pack, self.__default_failure_tolerance__
@@ -615,6 +662,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 self.postencode_sample,
                 worker_config=worker_config,
                 stateless_map_fn=get_stateless(self.postencode_sample),
+                map_fn_skip_safe=get_skip_safe(self.postencode_sample),
                 failure_tolerance=get_failure_tolerance(
                     self.postencode_sample, self.__default_failure_tolerance__
                 ),
@@ -639,6 +687,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                     self.encode_batch,
                     worker_config=worker_config,
                     stateless_map_fn=get_stateless(self.encode_batch),
+                    map_fn_skip_safe=get_skip_safe(self.encode_batch),
                     failure_tolerance=get_failure_tolerance(
                         self.encode_batch, self.__default_failure_tolerance__
                     ),
@@ -652,6 +701,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                     batch_size=batch_size,
                     batcher=self.batch,
                     batcher_stateless=get_stateless(self.batch),
+                    batcher_skip_safe=get_skip_safe(self.batch),
                     drop_last=batch_drop_last,
                     worker_config=worker_config,
                     failure_tolerance=get_failure_tolerance(
@@ -665,6 +715,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                         self.encode_batch,
                         worker_config=worker_config,
                         stateless_map_fn=get_stateless(self.encode_batch),
+                        map_fn_skip_safe=get_skip_safe(self.encode_batch),
                         failure_tolerance=get_failure_tolerance(
                             self.encode_batch, self.__default_failure_tolerance__
                         ),
@@ -715,6 +766,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             cook_fn,
             worker_config=worker_config,
             stateless_map_fn=get_stateless(self.cook_crude_sample),
+            map_fn_skip_safe=get_skip_safe(self.cook_crude_sample),
             map_fn_config=dict(
                 cooker=dict(
                     cook=SavableDataset._function_config(cooker.cook),
@@ -763,6 +815,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 pre_encode_fn,
                 worker_config=worker_config,
                 stateless_map_fn=get_stateless(pre_encode_fn),
+                map_fn_skip_safe=get_skip_safe(pre_encode_fn),
                 failure_tolerance=get_failure_tolerance(
                     pre_encode_fn, self.__default_failure_tolerance__
                 ),
@@ -789,7 +842,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             if isinstance(dataset.dataset, CrudeWebdataset):
                 assert self.cookers, "CrudeWebdataset found, but no cookers registered."
 
-        global_workers = max(1, worker_config.num_workers) * worker_config.world_size
+        global_workers = worker_config.logical_worker_count()
         rotation_lengths = [len(dataset.dataset) for dataset in datasets]
         for i in range(1, len(rotation_lengths)):
             rotation_lengths[i] += rotation_lengths[i - 1]
@@ -882,6 +935,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             packing_buffer_size=packing_buffer_size,
             worker_config=worker_config,
         )
+        dataset = maybe_wrap_stride_dataset(dataset, worker_config=worker_config)
         if virtual_epoch_length > 0:
             dataset = EpochizeDataset(
                 dataset,
@@ -910,7 +964,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             if isinstance(dataset, CrudeWebdataset):
                 assert self.cookers, "CrudeWebdataset found, but no cookers registered."
 
-        global_workers = max(1, worker_config.num_workers) * worker_config.world_size
+        global_workers = worker_config.logical_worker_count()
         rotation_lengths = [len(dataset.dataset) for dataset in datasets]
         for i in range(1, len(rotation_lengths)):
             rotation_lengths[i] += rotation_lengths[i - 1]
@@ -938,6 +992,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             packing_buffer_size=packing_buffer_size,
             worker_config=worker_config,
         )
+        dataset = maybe_wrap_stride_dataset(dataset, worker_config=worker_config)
         if limit is not None and limit > 0:
             dataset = LimitDataset(
                 dataset,
@@ -1034,6 +1089,7 @@ class DefaultTaskEncoder(
         self._batch_type = batch_type
 
     @stateless
+    @skip_safe
     def encode_sample(
         self, sample: T_sample
     ) -> Union[T_encoded_sample, Generator[T_encoded_sample, None, None]]:
@@ -1062,6 +1118,7 @@ class DefaultTaskEncoder(
             raise ValueError("Unrecognized encoded sample type.")
 
     @stateless
+    @skip_safe
     def batch(self, samples: List[T_encoded_sample]) -> T_raw_batch:
         """Batch a list of samples. The default implementation uses default batching to convert
         to _batch_type."""
@@ -1077,6 +1134,7 @@ class DefaultTaskEncoder(
         )
 
     @stateless
+    @skip_safe
     def encode_batch(self, batch: T_raw_batch) -> Union[T_batch, Generator[T_batch, None, None]]:
         """Encode a batch of samples. The default implementation converts to the
         _encoded_batch_type."""
