@@ -3,15 +3,20 @@
 
 import sqlite3
 import struct
-from pathlib import Path
-from typing import BinaryIO, Generator, List, Optional, Tuple, Union
-
-from numpy import int8
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, BinaryIO, Generator, List, Optional, Tuple, Union
 
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.webdataset.itar import ITarRawSamplePartPointer, ITarSamplePointer
 from megatron.energon.flavors.webdataset.thread_local_sqlite import ThreadLocalSqlite
 from megatron.energon.local_copy import ensure_local_copy
+
+if TYPE_CHECKING:
+    from megatron.energon.flavors.webdataset.prepare import (
+        IndexMediaMetadata,
+        IndexSample,
+        IndexSamplePart,
+    )
 
 
 class DuplicateSampleKeyError(RuntimeError):
@@ -50,6 +55,16 @@ class SqliteIndexWriter:
                          part_name TEXT,
                          content_byte_offset INTEGER,
                          content_byte_size INTEGER)
+        if enable_media_metadata is True, it also creates the media_metadata table:
+          - media_metadata(entry_key TEXT PRIMARY KEY,
+                           metadata_type TEXT NOT NULL,
+                           metadata_json TEXT NOT NULL)
+        if enable_media_metadata is True, it also creates the media_filters table:
+          - media_filters(filter_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                          strategy TEXT NOT NULL,
+                          patterns TEXT,
+                          created_at_utc TEXT DEFAULT CURRENT_TIMESTAMP,
+                          UNIQUE(strategy, patterns))
         Also creates indexes:
           - samples(sample_key)
           - samples(tar_file_id, sample_index)
@@ -64,13 +79,9 @@ class SqliteIndexWriter:
         self.reset_tables = reset_tables
 
         # Initialize SQLite connection
-        path = str(self.sqlite_path)
         # Only supporting local file system, because sqlite does not support remote file systems.
-        # TODO: Implement remote file systems. Maybe create locally in tmp then upload?
-        assert path.startswith("/"), (
-            f"SQLite path must be absolute local file system path: {self.sqlite_path}"
-        )
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        path = self.sqlite_path.local_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(path)
         self.db.execute("PRAGMA busy_timeout = 5000;")  # wait up to 5000ms when locked
 
@@ -133,78 +144,90 @@ class SqliteIndexWriter:
                 """
             )
 
-    def append_sample(
+    def append_samples(
         self,
-        tar_file_id: int8,
-        sample_key: str,
-        sample_index: int,
-        byte_offset: Optional[int],
-        byte_size: Optional[int],
-    ):
-        """
-        Adds a new sample row to the samples table.
-
-        Args:
-            tar_file_id: The index of the tar file in the reader.
-            sample_key: The key of the sample.
-            sample_index: The index of the sample in the tar file.
-            byte_offset: The byte offset of the sample in the tar file.
-            byte_size: The size of the sample in the tar file.
-        """
+        rows: Sequence["IndexSample"],
+    ) -> None:
+        """Insert multiple sample rows efficiently."""
 
         assert self.db is not None, "Database is closed"
 
-        # Insert a row in the samples table
+        if len(rows) == 0:
+            return
+
+        savepoint_name = "append_samples_batch"
+        self.db.execute(f"SAVEPOINT {savepoint_name}")
         try:
-            self.db.execute(
+            # One executemany() is substantially cheaper than one execute() per row.
+            self.db.executemany(
                 """
                 INSERT INTO samples (tar_file_id, sample_key, sample_index, byte_offset, byte_size)
                 VALUES (?, ?, ?, ?, ?)
                 """,
-                (tar_file_id, sample_key, sample_index, byte_offset, byte_size),
+                (
+                    (
+                        row.tar_file_id,
+                        row.sample_key,
+                        row.sample_index,
+                        row.byte_offset,
+                        row.byte_size,
+                    )
+                    for row in rows
+                ),
             )
-        except sqlite3.IntegrityError as exc:  # pragma: no cover - defensive programming
-            raise DuplicateSampleKeyError(sample_key) from exc
+            self.db.execute(f"RELEASE SAVEPOINT {savepoint_name}")
+        except sqlite3.IntegrityError as exc:
+            # executemany() may already have inserted earlier rows in the batch
+            self.db.execute(f"ROLLBACK TO SAVEPOINT {savepoint_name}")
+            self.db.execute(f"RELEASE SAVEPOINT {savepoint_name}")
+            raise DuplicateSampleKeyError(self._find_duplicate_sample_key(rows)) from exc
 
-    def append_part(
+    def append_parts(
         self,
-        tar_file_id: int8,
-        sample_index: int,
-        part_name: str,
-        content_byte_offset: int,
-        content_byte_size: int,
-    ):
-        """Adds a new part row to the samples table."""
+        rows: Sequence["IndexSamplePart"],
+    ) -> None:
+        """Insert multiple sample part rows efficiently."""
 
         assert self.db is not None, "Database is closed"
 
-        # Insert a row in the sample parts table
-        self.db.execute(
+        if len(rows) == 0:
+            return
+
+        self.db.executemany(
             """
             INSERT INTO sample_parts (tar_file_id, sample_index, part_name, content_byte_offset, content_byte_size)
             VALUES (?, ?, ?, ?, ?)
             """,
-            (tar_file_id, sample_index, part_name, content_byte_offset, content_byte_size),
+            (
+                (
+                    row.tar_file_id,
+                    row.sample_index,
+                    row.part_name,
+                    row.content_byte_offset,
+                    row.content_byte_size,
+                )
+                for row in rows
+            ),
         )
 
-    def append_media_metadata(
+    def append_media_metadata_batch(
         self,
-        entry_key: str,
-        metadata_type: str,
-        metadata_json: str,
+        rows: Sequence["IndexMediaMetadata"],
     ) -> None:
-        """Insert or update a media metadata record."""
+        """Insert or update multiple media metadata records efficiently."""
 
         assert self.enable_media_metadata, "Adding media metadata, although not enabled"
-
         assert self.db is not None, "Database is closed"
 
-        self.db.execute(
+        if len(rows) == 0:
+            return
+
+        self.db.executemany(
             """
             INSERT OR REPLACE INTO media_metadata (entry_key, metadata_type, metadata_json)
             VALUES (?, ?, ?)
             """,
-            (entry_key, metadata_type, metadata_json),
+            ((row.entry_key, row.metadata_type, row.metadata_json) for row in rows),
         )
 
     def append_media_filter(self, *, strategy: str, patterns: str | None) -> None:
@@ -223,10 +246,7 @@ class SqliteIndexWriter:
 
         if self.enable_sample_tables:
             # Create the index after adding all the samples for better speed
-            # Index on sample_key for fast lookups
-            self.db.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS idx_samples_sample_key ON samples(sample_key)"
-            )
+            # sample_key uniqueness already creates an implicit SQLite index via the table schema.
 
             # Create index on the samples table.  Help the planner if it chooses `samples` as the probe side of the join
             self.db.execute(
@@ -254,6 +274,36 @@ class SqliteIndexWriter:
     def __exit__(self, exc_type, exc_val, exc_tb):
         # If an exception occurred, do not finalize (so you can inspect the temp file)
         self.close()
+
+    def _find_duplicate_sample_key(
+        self,
+        rows: Sequence["IndexSample"],
+    ) -> str:
+        """Resolve the sample key responsible for a uniqueness violation.
+
+        sqlite3 only tells us that *some* row in the batch violated the unique
+        constraint. We do a targeted follow-up lookup so the caller still gets
+        the concrete duplicate key in the raised error.
+        """
+
+        assert self.db is not None, "Database is closed"
+
+        seen_in_batch: set[str] = set()
+        for row in rows:
+            sample_key = row.sample_key
+            if sample_key in seen_in_batch:
+                return sample_key
+
+            existing = self.db.execute(
+                "SELECT 1 FROM samples WHERE sample_key = ?",
+                (sample_key,),
+            ).fetchone()
+            if existing is not None:
+                return sample_key
+
+            seen_in_batch.add(sample_key)
+
+        return rows[0].sample_key
 
 
 class JoinIndexWriter:
@@ -314,6 +364,9 @@ class SqliteIndexReader:
                    part_name TEXT,
                    content_byte_offset INTEGER,
                    content_byte_size INTEGER)
+    - media_metadata(entry_key TEXT PRIMARY KEY,
+                     metadata_type TEXT NOT NULL,
+                     metadata_json TEXT NOT NULL)
     """
 
     sqlite_path: EPath
@@ -328,12 +381,8 @@ class SqliteIndexReader:
         self.sqlite_path = ensure_local_copy(sqlite_path)
 
         # Initialize SQLite connection
-        path = str(self.sqlite_path)
         # Only supporting local file system, because sqlite does not support remote file systems
-        assert path.startswith("/"), (
-            f"SQLite path must be absolute local file system path: {self.sqlite_path}"
-        )
-
+        path = self.sqlite_path.local_path()
         path = f"file:{path}?mode=ro&immutable=1"
 
         self.db = ThreadLocalSqlite(path, is_uri=True)

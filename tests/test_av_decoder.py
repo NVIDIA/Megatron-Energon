@@ -19,12 +19,7 @@ import torch
 import torchvision.transforms as transforms
 
 from megatron.energon.av import AVDecoder, get_clips_uniform, get_single_frames_uniform
-from megatron.energon.av.fastseek.fastseek import Fastseek
-from megatron.energon.av.fastseek.keyframeinfo import KeyframeInfo
-from megatron.energon.av.fastseek.reader import (
-    FastseekReaderByFrames,
-    FastseekReaderByPts,
-)
+from megatron.energon.av.av_reader import AVProbeIndex
 from megatron.energon.media import AVMetadata
 
 # Set multiprocessing start method to 'spawn' on macOS to avoid DataLoader cleanup issues
@@ -107,317 +102,56 @@ def avmetadata_equal(a: AVMetadata, b: AVMetadata, *, ndigits: int = 3) -> bool:
     return True
 
 
-class TestFastseek(unittest.TestCase):
-    """Test fastseek functionality."""
+class TestVideoProbe(unittest.TestCase):
+    """Test video probe indexing functionality."""
 
-    def test_fastseek_mp4(self):
-        """Test fastseek."""
-        fastseek = Fastseek(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes()))
-        assert fastseek.mime == "video/mp4"
-        assert fastseek.frame_index_supported
-        assert fastseek.pts_supported
-        print(fastseek.keyframes)
-        assert list(fastseek.keyframes.keys()) == [1]
-        # There is one stream (id=1). Check that the first stream's keyframes are correct.
-        assert fastseek.keyframes[1].keyframes == [
-            KeyframeInfo(index=0, pts=0),
-            KeyframeInfo(index=250, pts=128000),
-            KeyframeInfo(index=500, pts=256000),
-            KeyframeInfo(index=750, pts=384000),
-            KeyframeInfo(index=1000, pts=512000),
-            KeyframeInfo(index=1250, pts=640000),
-            KeyframeInfo(index=1500, pts=768000),
-            KeyframeInfo(index=1750, pts=896000),
-        ]
-        assert fastseek.keyframes[1].keyframe_pts == [
-            0,
-            128000,
-            256000,
-            384000,
-            512000,
-            640000,
-            768000,
-            896000,
-        ]
+    def test_video_probe_keyframe_data(self) -> None:
+        """Confirm keyframe index and pts values are correct."""
+        with av.open(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes())) as container:
+            index = AVProbeIndex(container, 0)
 
-        # Going forward
-        assert fastseek.should_seek_by_frame(0, 0) is None
-        assert fastseek.should_seek_by_frame(0, 249) is None
-        assert fastseek.should_seek_by_frame(0, 250) == KeyframeInfo(index=250, pts=128000)
-        assert fastseek.should_seek_by_frame(0, 251) == KeyframeInfo(index=250, pts=128000)
-        assert fastseek.should_seek_by_frame(0, 499) == KeyframeInfo(index=250, pts=128000)
-        assert fastseek.should_seek_by_frame(499, 500) == KeyframeInfo(index=500, pts=256000)
-        assert fastseek.should_seek_by_frame(250, 499) is None
-        assert fastseek.should_seek_by_frame(250, 500) == KeyframeInfo(index=500, pts=256000)
+            assert len(index) == container.streams.video[0].frames
+            keyframes = [(i, e.timestamp) for i, e in enumerate(index) if e.is_keyframe]
+            assert keyframes == [
+                (0, 0),
+                (250, 128000),
+                (500, 256000),
+                (750, 384000),
+                (1000, 512000),
+                (1250, 640000),
+                (1500, 768000),
+                (1750, 896000),
+            ]
 
-        # Going backward
-        assert fastseek.should_seek_by_frame(1, 0) == KeyframeInfo(index=0, pts=0)
-        assert fastseek.should_seek_by_frame(249, 0) == KeyframeInfo(index=0, pts=0)
-        assert fastseek.should_seek_by_frame(250, 0) == KeyframeInfo(index=0, pts=0)
+    def test_video_probe_search_timestamps(self) -> None:
+        """Test search_timestamp functionality"""
+        with av.open(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes())) as container:
+            index = AVProbeIndex(container, 0)
 
-        assert fastseek.should_seek_by_pts(0, 0) is None
-        assert fastseek.should_seek_by_pts(0, 1) is None
-        assert fastseek.should_seek_by_pts(0, 127999) is None
-        assert fastseek.should_seek_by_pts(128000, 128000) is None
-        assert fastseek.should_seek_by_pts(128000, 255999) is None
-        assert fastseek.should_seek_by_pts(0, 128000) == 128000
-        assert fastseek.should_seek_by_pts(0, 256000) == 256000
-        assert fastseek.should_seek_by_pts(128000, 256000) == 256000
+            keyframes = [
+                (0, 0),
+                (250, 128000),
+                (500, 256000),
+                (750, 384000),
+                (1000, 512000),
+                (1250, 640000),
+                (1500, 768000),
+                (1750, 896000),
+            ]
 
-    def test_fastseek_mkv(self):
-        """Test fastseek."""
-        fastseek = Fastseek(io.BytesIO(Path("tests/data/sync_test.mkv").read_bytes()))
-        assert fastseek.mime == "video/x-matroska"
-        assert not fastseek.frame_index_supported
-        assert fastseek.pts_supported
-        print(fastseek.keyframes)
-        assert list(fastseek.keyframes.keys()) == [1]
-        assert fastseek.keyframes[1].keyframe_pts == [
-            0,
-            8354,
-            16688,
-            25021,
-            33354,
-            41688,
-            50021,
-            58354,
-        ]
-        assert fastseek.keyframes[1].keyframe_indexes is None
-        assert fastseek.keyframes[1].keyframes == [
-            KeyframeInfo(index=None, pts=0),
-            KeyframeInfo(index=None, pts=8354),
-            KeyframeInfo(index=None, pts=16688),
-            KeyframeInfo(index=None, pts=25021),
-            KeyframeInfo(index=None, pts=33354),
-            KeyframeInfo(index=None, pts=41688),
-            KeyframeInfo(index=None, pts=50021),
-            KeyframeInfo(index=None, pts=58354),
-        ]
+            # searching for a keyframe should match that keyframe
+            for k in keyframes:
+                assert index.search_timestamp(k[1]) == k[0]
 
-        assert fastseek.should_seek_by_pts(0, 0) is None
-        assert fastseek.should_seek_by_pts(0, 8353) is None
-        assert fastseek.should_seek_by_pts(8350, 8353) is None
-        assert fastseek.should_seek_by_pts(8354, 16687) is None
-        assert fastseek.should_seek_by_pts(0, 8354) == 8354
-        assert fastseek.should_seek_by_pts(0, 8355) == 8354
-        assert fastseek.should_seek_by_pts(0, 16688) == 16688
-        assert fastseek.should_seek_by_pts(1, 0) == 0
-        assert fastseek.should_seek_by_pts(10000, 0) == 0
-        assert fastseek.should_seek_by_pts(10000, 8354) == 8354
-        assert fastseek.should_seek_by_pts(10000, 8355) == 8354
+            # searching for a timestamp between keyframes should return the previous keyframe
+            for i in range(1, len(keyframes)):
+                mid = (keyframes[i - 1][1] + keyframes[i][1]) // 2
+                assert index.search_timestamp(mid) == keyframes[i - 1][0]
 
-    def test_fastseek_reader_mp4(self):
-        """Test fastseek reader."""
-        with open("tests/data/sync_test.mp4", "rb") as f:
-            fastseek = Fastseek(f)
-            f.seek(0)
-            with av.open(f, mode="r") as container:
-                reader = FastseekReaderByFrames(fastseek, container)
-
-                frames = list(reader.seek_read(0, 1))
-                assert len(frames) == 2
-                assert frames[0].time == 0
-                assert frames[1].time == 1 / 30
-                assert reader.skipped == 0
-
-                # Read more frames, repeating the previous frame
-                frames = list(reader.seek_read(1, 2))
-                assert len(frames) == 2, len(frames)
-                assert frames[0].time == 1 / 30
-                assert frames[1].time == 2 / 30
-                assert reader.skipped == 0
-
-                # Read next frame
-                frames = list(reader.seek_read(3, 3))
-                assert len(frames) == 1, len(frames)
-                assert frames[0].time == 3 / 30
-                assert reader.skipped == 0
-
-                # Seek to last frame before next keyframe
-                frames = list(reader.seek_read(249, 249))
-                assert len(frames) == 1, len(frames)
-                assert frames[0].time == 249 / 30
-                # Skipped frames 4-248 (inclusive)
-                assert reader.skipped == 245, reader.skipped
-
-                reader.skipped = 0
-
-                # Seek through keyframe, repeating the previous frame
-                frames = list(reader.seek_read(249, 250))
-                assert len(frames) == 2, len(frames)
-                assert frames[0].time == 249 / 30
-                assert frames[1].time == 250 / 30
-                assert reader.skipped == 0, reader.skipped
-
-                reader.skipped = 0
-
-                # Seek to next keyframe
-                frames = list(reader.seek_read(500, 500))
-                assert len(frames) == 1, len(frames)
-                assert frames[0].time == 500 / 30
-                assert reader.skipped == 0, reader.skipped
-
-                # Seek backwards 1 frame, but need previous keyframe
-                frames = list(reader.seek_read(499, 499))
-                assert len(frames) == 1, len(frames)
-                assert frames[0].time == 499 / 30
-                # Skipped frames 250-498 (inclusive)
-                assert reader.skipped == 249, reader.skipped
-
-                reader.skipped = 0
-
-                # Seek to previous keyframe
-                frames = list(reader.seek_read(498, 498))
-                assert len(frames) == 1, len(frames)
-                assert frames[0].time == 498 / 30
-                # Skipped frames 250-497 (inclusive)
-                assert reader.skipped == 248, reader.skipped
-
-            f.seek(0)
-            with av.open(f, mode="r") as container:
-                reader = FastseekReaderByPts(fastseek, container)
-
-                # 512 PTS per frame
-
-                frames = list(reader.seek_read(0, 1023))
-                assert len(frames) == 2, len(frames)
-                assert frames[0].pts == 0
-                assert frames[0].duration == 512
-                assert frames[1].pts == 512
-                assert frames[1].duration == 512
-                assert reader.skipped == 0
-
-                frames = list(reader.seek_read(512, 3 * 512 - 1))
-                assert len(frames) == 2, len(frames)
-                assert frames[0].time == 1 / 30
-                assert frames[1].time == 2 / 30
-                assert frames[0].pts == 512
-                assert frames[1].pts == 1024
-                assert reader.skipped == 0
-
-                frames = list(reader.seek_read(249 * 512, 249 * 512))
-                assert len(frames) == 1, len(frames)
-                assert frames[0].pts == 249 * 512
-                # Skipped frames 2-248 (inclusive)
-                assert reader.skipped == 246
-
-                reader.skipped = 0
-
-                frames = list(reader.seek_read(249 * 512, 250 * 512))
-                assert len(frames) == 2, len(frames)
-                assert frames[0].pts == 249 * 512
-                assert frames[1].pts == 250 * 512
-                assert reader.skipped == 0
-
-    def test_fastseek_reader_mkv(self):
-        """Test fastseek reader."""
-        with open("tests/data/sync_test.mkv", "rb") as f:
-            fastseek = Fastseek(f)
-            f.seek(0)
-            with av.open(f, mode="r") as container:
-                # Note: This video has frames of 33 PTS duration,
-                # But the time for the next frame increases by 54, 34, 12, 54, 34, 33
-                # (afterwards by [33, 33, 34], repeating)
-                # last_pts = 0
-                # for idx, frame in enumerate(container.decode(video=0)):
-                #     print(f"+{frame.pts - last_pts}")
-                #     last_pts = frame.pts
-                #     print(f"{idx}: {frame.pts}+{frame.duration} {'KF' if frame.key_frame else ''}")
-                #     if idx > 500:
-                #         break
-                reader = FastseekReaderByPts(fastseek, container)
-
-                """
-                Frame 1 and 2 actually overlap
-                0: 0+33 KF
-                +54
-                1: 54+33 
-                +34
-                2: 88+33 
-                +12
-                3: 100+33 
-                +54
-                4: 154+33 
-                +34
-                5: 188+33 
-
-                247: 8254+33 
-                +34
-                248: 8288+33 
-                +33
-                249: 8321+33 
-                +33
-                250: 8354+33 KF
-                +34
-                251: 8388+33 
-                +33
-                252: 8421+33 
-                +33
-                253: 8454+33 
-                """
-
-                # Frame 0, 1
-                frames = list(reader.seek_read(0, 85))
-                assert len(frames) == 2, len(frames)
-                assert frames[0].pts == 0
-                assert frames[1].pts == 54
-                assert reader.skipped == 0
-
-                # Frame 1, 2
-                frames = list(reader.seek_read(85, 103))
-                assert len(frames) == 2, len(frames)
-                assert frames[0].pts == 54
-                assert frames[1].pts == 88
-                assert reader.skipped == 0
-
-                # Frame 2
-                frames = list(reader.seek_read(100, 100))
-                assert len(frames) == 1, len(frames)
-                assert frames[0].pts == 88
-                assert reader.skipped == 0
-
-                # Frame 3 (overlaps with frame 2)
-                frames = list(reader.seek_read(132, 132))
-                assert len(frames) == 1, len(frames)
-                assert frames[0].pts == 100
-                assert reader.skipped == 0
-
-                # Frame 249
-                frames = list(reader.seek_read(8321, 8321))
-                assert len(frames) == 1, len(frames)
-                assert frames[0].pts == 8321
-                # Skipped frames 4-248 (inclusive)
-                assert reader.skipped == 245
-
-                reader.skipped = 0
-
-                # Frame 249
-                frames = list(reader.seek_read(8353, 8353))
-                assert len(frames) == 1, len(frames)
-                assert frames[0].pts == 8321
-                assert reader.skipped == 0
-
-                # Frame 249-251
-                frames = list(reader.seek_read(8353, 8388))
-                assert len(frames) == 3, len(frames)
-                assert frames[0].pts == 8321
-                assert frames[1].pts == 8354
-                assert frames[2].pts == 8388
-                assert reader.skipped == 0
-
-                # Frame 0 (go backwards and skip 1 frame)
-                frames = list(reader.seek_read(85, 85))
-                assert len(frames) == 1, len(frames)
-                assert frames[0].pts == 54
-                assert reader.skipped == 1
-
-                reader.skipped = 0
-
-                # Frame 251 (seek to keyframe 250 and skip 1 frame)
-                frames = list(reader.seek_read(8388, 8388))
-                assert len(frames) == 1, len(frames)
-                assert frames[0].pts == 8388
-                assert reader.skipped == 1
+            # searching for a timestamp between keyframes should return the next keyframe when backward=False
+            for i in range(1, len(keyframes)):
+                mid = (keyframes[i - 1][1] + keyframes[i][1]) // 2
+                assert index.search_timestamp(mid, backward=False) == keyframes[i][0]
 
 
 class TestVideoDecode(unittest.TestCase):
@@ -533,9 +267,21 @@ class TestVideoDecode(unittest.TestCase):
                 audio_sample_rate=48000,
                 audio_num_samples=3027968,
             ),
+            AVMetadata(
+                video_duration=63.067,
+                video_num_frames=1891,
+                video_fps=30.0,
+                video_width=192,
+                video_height=108,
+                audio_duration=63.120,
+                audio_channels=2,
+                audio_sample_rate=48000,
+                audio_num_samples=3029760,
+            ),
         ]
         for video_file, expected_metadata in zip(
-            ["tests/data/sync_test.mkv", "tests/data/sync_test.mp4"], expected_metadata
+            ["tests/data/sync_test.mkv", "tests/data/sync_test.mp4", "tests/data/sync_test.avi"],
+            expected_metadata,
         ):
             av_decoder = AVDecoder(io.BytesIO(Path(video_file).read_bytes()))
 
@@ -567,7 +313,11 @@ class TestVideoDecode(unittest.TestCase):
 
     def test_decode_strided_resized(self):
         """Test decoding a subset of frames with resizing."""
-        for video_file in ["tests/data/sync_test.mkv", "tests/data/sync_test.mp4"]:
+        for video_file in [
+            "tests/data/sync_test.mkv",
+            "tests/data/sync_test.mp4",
+            "tests/data/sync_test.avi",
+        ]:
             print(f"================= Testing {video_file} ==================")
             av_decoder = AVDecoder(io.BytesIO(Path(video_file).read_bytes()))
 
@@ -578,7 +328,8 @@ class TestVideoDecode(unittest.TestCase):
             )
 
             # Get strided frames from baseline complete video tensor
-            strided_baseline_tensor = self.complete_video_tensor[
+            complete_baseline = load_video_to_tensor(video_file)
+            strided_baseline_tensor = complete_baseline[
                 np.linspace(0, self.complete_video_tensor.shape[0] - 1, 64, dtype=int).tolist()
             ]
             # Now resize the baseline frames

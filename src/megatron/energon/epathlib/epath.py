@@ -1,11 +1,21 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+import os
 import re
 import shutil
 from pathlib import Path as PathlibPath
 from pathlib import PurePosixPath
-from typing import BinaryIO, Generator, Literal, Optional, TextIO, Tuple, Union, overload
+from typing import (
+    BinaryIO,
+    Generator,
+    Literal,
+    Optional,
+    TextIO,
+    Tuple,
+    Union,
+    overload,
+)
 
 import multistorageclient as msc
 
@@ -31,7 +41,9 @@ class EPath:
     for more information.
     """
 
-    # The path without the protocol. Can also be in S3 for example
+    __slots__ = ("internal_path", "profile", "fs")
+
+    # The path without the protocol/profile. Can also be in S3 for example
     internal_path: PurePosixPath
     # The profile used to access the file system
     profile: str
@@ -52,11 +64,30 @@ class EPath:
                 profile = DEFAULT_PROFILE_NAME
             else:
                 protocol, profile, path = self._split_protocol(initial_path)
-                if protocol is None or protocol == "file":
+                if protocol is None:
+                    # Just a local absolute/relative path
+                    assert profile is None
+                    profile = DEFAULT_PROFILE_NAME
+                    path = str(PathlibPath(path).absolute())
+                elif protocol == "file":
+                    # A file:// path, e.g. file:///home/user/file.txt (absolute) or file://file.txt (relative)
+                    assert profile is not None
+                    path = profile + "/" + path
                     profile = DEFAULT_PROFILE_NAME
                     path = str(PathlibPath(path).absolute())
                 elif protocol == "rclone":
                     warn_deprecated("rclone:// protocol is deprecated. Use msc:// instead.")
+                elif protocol == "dss":
+                    # Profile corresponds to the dataset name and version
+                    assert profile is not None
+                    self._split_dss_name_and_version(profile)
+                    assert NVDATASET_CACHE_DIR is not None, (
+                        "Environment variable NVDATASET_CACHE_DIR is not set"
+                    )
+                    self.fs = NVDATASET_CACHE_DIR.fs
+                    self.profile = "dss"
+                    self.internal_path = self._resolve(f"/{profile}/{path}")
+                    return
                 else:
                     assert protocol == "msc", f"Unknown protocol: {protocol}"
             if not path.startswith("/"):
@@ -77,7 +108,14 @@ class EPath:
     def __setstate__(self, state: dict) -> None:
         self.internal_path = state["internal_path"]
         self.profile = state["profile"]
-        self.fs, _ = msc.resolve_storage_client(f"msc://{self.profile}")
+        if self.profile == "dss":
+            assert NVDATASET_CACHE_DIR is not None, (
+                "Environment variable NVDATASET_CACHE_DIR is not set"
+            )
+            self._split_dss_name_and_version(self.internal_path.parts[1])
+            self.fs = NVDATASET_CACHE_DIR.fs
+        else:
+            self.fs, _ = msc.resolve_storage_client(f"msc://{self.profile}")
 
     @staticmethod
     def _resolve(path: Union[str, PurePosixPath]) -> PurePosixPath:
@@ -103,16 +141,45 @@ class EPath:
 
     @staticmethod
     def _split_protocol(path: str) -> Tuple[Optional[str], Optional[str], str]:
-        regex = re.compile(r"^(?P<protocol>[a-z]+)://(?P<profile>[^/]+?)/(?P<path>.+)$")
+        regex = re.compile(r"^(?P<protocol>[a-z]+)://(?P<profile>[^/]+?)(?:/(?P<path>.*))?$")
         m = regex.match(path)
         if m is None:
             return None, None, path
-        return m.group("protocol"), m.group("profile"), m.group("path")
+        inner_path = m.group("path")
+        if not inner_path:
+            inner_path = ""
+        return m.group("protocol"), m.group("profile"), inner_path
+
+    @staticmethod
+    def _split_dss_name_and_version(dataset: str) -> Tuple[str, str]:
+        assert "@" in dataset, "DSS paths must include a dataset version separated by '@'"
+        dataset_name, dataset_version = dataset.rsplit("@", maxsplit=1)
+        assert dataset_name and dataset_version, (
+            "DSS paths must include non-empty dataset name and version"
+        )
+        return dataset_name, dataset_version
 
     @property
     def _internal_str_path(self) -> str:
-        """Return the path as used inside the file system, without the protocol and fs part."""
-        return str(self.internal_path)
+        """Return the path as used inside the file system, without the protocol and fs part.
+        This is for usage with `self.fs` functions."""
+        if self.profile == "dss":
+            assert NVDATASET_CACHE_DIR is not None, (
+                "Environment variable NVDATASET_CACHE_DIR is not set"
+            )
+            # The internal path is relative to the NVDATASET_CACHE_DIR (i.e. strip the leading /, then concat with /)
+            dss_dataset_name, dss_dataset_version = self._split_dss_name_and_version(
+                self.internal_path.parts[1]
+            )
+            cache_path = PurePosixPath(
+                "/",
+                dss_dataset_name,
+                dss_dataset_version,
+                *self.internal_path.parts[2:],
+            )
+            return NVDATASET_CACHE_DIR._internal_str_path + str(cache_path)
+        else:
+            return str(self.internal_path)
 
     @overload
     def open(
@@ -189,13 +256,25 @@ class EPath:
 
     @property
     def url(self) -> str:
-        if self.is_local():
+        if self.profile == DEFAULT_PROFILE_NAME:
             return self._internal_str_path
         int_path_str = str(self.internal_path)
+        if self.profile == "dss":
+            if int_path_str.startswith("/"):
+                int_path_str = int_path_str[1:]
+            return f"dss://{int_path_str}"
         return f"msc://{self.profile}{int_path_str}"
 
     def is_local(self) -> bool:
-        return self.profile == DEFAULT_PROFILE_NAME
+        # It will return a posix path if the fs is local, otherwise None
+        return self.fs.get_posix_path(self._internal_str_path) is not None
+
+    def local_path(self) -> PathlibPath:
+        # This resolves the path if it exists, probably ok.
+        posix_path = self.fs.get_posix_path(self._internal_str_path)
+        if posix_path is None:
+            raise ValueError(f"Path {self} is not local")
+        return PathlibPath(posix_path)
 
     def is_dir(self) -> bool:
         try:
@@ -209,14 +288,61 @@ class EPath:
     def mkdir(self, exist_ok: bool = True, parents: bool = False):
         pass
 
-    def glob(self, pattern) -> Generator["EPath", None, None]:
+    def walk(self) -> Generator["EPath", None, None]:
+        """Returns all files within this path (no folders)."""
+        # Prefix to be removed from found paths to remap to relative paths
+        root_prefix = self._internal_str_path.lstrip("/")
+
+        if self.is_local():
+            # Optimize for local file system.
+            # DSS would fetch all file attributes as well.
+            local_path = self.local_path()
+            for path, _, files in os.walk(local_path, followlinks=True):
+                rel_path = PathlibPath(path).relative_to(local_path)
+                base_path = self / str(rel_path)
+                for file in files:
+                    yield base_path / file
+            return
+
+        for obj in self.fs.list_recursive(self._internal_str_path):
+            rel = obj.key
+            if root_prefix:
+                if rel.startswith(root_prefix + "/"):
+                    rel = rel[len(root_prefix) + 1 :]
+                elif rel.startswith("/" + root_prefix + "/"):
+                    rel = rel[len(root_prefix) + 2 :]
+                elif rel == root_prefix or rel == "/" + root_prefix:
+                    rel = "."
+
+            path = EPath(self)
+            path.internal_path = self._resolve(self.internal_path / PurePosixPath(rel))
+            yield path
+
+    def glob(self, pattern: str) -> Generator["EPath", None, None]:
+        """Returns all files matching the pattern within this path (no folders)."""
         search_path_pattern = (self / pattern)._internal_str_path
+        # MSC glob matches keys like ``bucket/key``; a leading ``/`` breaks wcmatch (pattern
+        # ``/b/**`` never matches ``b/parts/x``). Returned keys may repeat the bucket prefix; strip
+        # it before joining with ``internal_path`` so we do not get ``/b/b/parts/...``.
+        search_path_pattern = search_path_pattern.lstrip("/")
+
+        # Prefix to be removed from found paths to remap to relative paths
+        root_prefix = self._internal_str_path.lstrip("/")
 
         for path in self.fs.glob(search_path_pattern):
             assert isinstance(path, str)
 
+            rel = path
+            if root_prefix:
+                if rel.startswith(root_prefix + "/"):
+                    rel = rel[len(root_prefix) + 1 :]
+                elif rel.startswith("/" + root_prefix + "/"):
+                    rel = rel[len(root_prefix) + 2 :]
+                elif rel == root_prefix or rel == "/" + root_prefix:
+                    rel = "."
+
             new_path = EPath(self)
-            new_path.internal_path = self._resolve(self.internal_path / PurePosixPath(path))
+            new_path.internal_path = self._resolve(self.internal_path / PurePosixPath(rel))
 
             yield new_path
 
@@ -239,6 +365,18 @@ class EPath:
         assert self.profile == other.profile, "Can only use relative_to within same profile"
 
         return str(self.internal_path.relative_to(other.internal_path))
+
+    def stat(self) -> msc.types.ObjectMetadata:
+        return self.fs.info(self._internal_str_path)
+
+    @property
+    def display_name(self) -> str:
+        if self.profile == "dss":
+            # Use the ds name for DSS paths
+            # E.g. from /charts@v0/something return parts[1] i.e. "charts@v0"
+            return self.internal_path.parts[1]
+        # Use the name for other paths
+        return self.name
 
     def __truediv__(self, other: Union[str, "EPath"]) -> "EPath":
         if isinstance(other, EPath):
@@ -271,3 +409,9 @@ class EPath:
             and self.internal_path == other.internal_path
             and self.profile == other.profile
         )
+
+
+if "NVDATASET_CACHE_DIR" in os.environ:
+    NVDATASET_CACHE_DIR = EPath(os.environ["NVDATASET_CACHE_DIR"])
+else:
+    NVDATASET_CACHE_DIR = None

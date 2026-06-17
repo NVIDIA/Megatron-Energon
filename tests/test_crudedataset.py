@@ -6,6 +6,7 @@
 import gc
 import io
 import logging
+import os
 import pickle
 import re
 import shutil
@@ -18,7 +19,9 @@ from typing import List
 
 import torch
 import webdataset as wds
+from click.testing import CliRunner
 
+import megatron.energon.epathlib.epath as epath_mod
 from megatron.energon import (
     Batch,
     Cooker,
@@ -32,17 +35,19 @@ from megatron.energon import (
 )
 from megatron.energon.cache import FileStore, FileStoreCachePool, Lazy
 from megatron.energon.cache.base import CachePool
+from megatron.energon.cli.main import prepare_media_command
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib.epath import EPath
 from megatron.energon.errors import reraise_exception
 from megatron.energon.flavors.base_dataset import Sample
-from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset.config import INDEX_SQLITE_FILENAME, MAIN_FOLDER_NAME
 from megatron.energon.flavors.webdataset.sample_decoder import SampleDecoder
 from megatron.energon.media.extractor import MediaFilterConfig, MediaFilterStrategy
 from megatron.energon.media.filesystem_prepare import prepare_filesystem_dataset
 from megatron.energon.media.metadata import AVMetadata, ImageMetadata
 from megatron.energon.source_info import SourceInfo
 from megatron.energon.task_encoder.cooking import cooker
+from tests.epath_s3_emulator import setup_s3_emulator
 
 
 def _noise_image_bytes(size: tuple[int, int], fmt: str, seed: int) -> bytes:
@@ -627,6 +632,70 @@ class TestDataset(unittest.TestCase):
 
         assert all([a == b for a, b in zip(samples_after, samples_restored)])
 
+    def test_dss_path(self):
+        dss_dataset_name = "crude_text"
+        dss_dataset_version = "v1"
+        dss_dataset_root = self.dataset_path / dss_dataset_name
+        dss_dataset_root.mkdir(parents=True, exist_ok=True)
+        (dss_dataset_root / dss_dataset_version).symlink_to(
+            self.dataset_path / "ds1",
+            target_is_directory=True,
+        )
+
+        dss_mds_path = self.dataset_path / "metadataset_dss.yaml"
+        dss_mds_path.write_text(
+            "\n".join(
+                [
+                    "__module__: megatron.energon",
+                    "__class__: MetadatasetV2",
+                    "splits:",
+                    "  train:",
+                    f"    path: dss://{dss_dataset_name}@{dss_dataset_version}",
+                    "    subflavors:",
+                    "      crude_type: txtpkl",
+                ]
+            )
+        )
+
+        orig_env_cache_dir = os.environ.get("NVDATASET_CACHE_DIR")
+        orig_mod_cache_dir = epath_mod.NVDATASET_CACHE_DIR
+
+        try:
+            os.environ["NVDATASET_CACHE_DIR"] = str(self.dataset_path)
+            epath_mod.NVDATASET_CACHE_DIR = EPath(self.dataset_path)
+
+            torch.manual_seed(42)
+            worker_config = WorkerConfig(
+                rank=0,
+                world_size=1,
+                num_workers=0,
+            )
+
+            loader = get_savable_loader(
+                get_train_dataset(
+                    dss_mds_path,
+                    batch_size=1,
+                    worker_config=worker_config,
+                    task_encoder=CookingTaskEncoder(),
+                    shuffle_buffer_size=None,
+                    max_samples_per_sequence=None,
+                ),
+                checkpoint_every_sec=0,
+                checkpoint_every_min_n_samples=1,
+            )
+
+            texts = [batch.txts[0] for _, batch in zip(range(3), loader)]
+            assert len(texts) == 3
+            assert len(set(texts)) == 3
+            assert all(re.fullmatch(r"<\d+>", txt) for txt in texts)
+            assert all(0 <= int(txt.removeprefix("<").removesuffix(">")) < 55 for txt in texts)
+        finally:
+            if orig_env_cache_dir is None:
+                os.environ.pop("NVDATASET_CACHE_DIR", None)
+            else:
+                os.environ["NVDATASET_CACHE_DIR"] = orig_env_cache_dir
+            epath_mod.NVDATASET_CACHE_DIR = orig_mod_cache_dir
+
     def test_aux_random_access_with_cache(self):
         torch.manual_seed(42)
         worker_config = WorkerConfig(
@@ -834,6 +903,83 @@ class TestDataset(unittest.TestCase):
 
         assert sample.txts[0].endswith("|aux|__module__: megatron.ener>")
 
+    def test_aux_msc(self):
+        """MetadatasetV2 aux supports msc:// and filesystem+msc:// (issue #211). Same aux keys as aux_metadataset.yaml, ds2 and fs content uploaded to S3."""
+        with setup_s3_emulator(profile_name="s3test_aux_msc") as emu:
+            mds_path = self.dataset_path / "aux_metadataset_msc.yaml"
+            with open(mds_path, "w") as f:
+                f.write(
+                    "\n".join(
+                        [
+                            "__module__: megatron.energon",
+                            "__class__: MetadatasetV2",
+                            "splits:",
+                            "  train:",
+                            "    path: ds1",
+                            "    aux:",
+                            "      pkl_source: msc://s3test_aux_msc/bucket/ds2",
+                            "      fs_source: filesystem+msc://s3test_aux_msc/bucket",
+                            "    subflavors:",
+                            "      crude_type: aux_random_access",
+                        ]
+                    )
+                )
+            mds_rel_path = self.dataset_path / "aux_metadataset_msc_rel.yaml"
+            with open(mds_rel_path, "w") as f:
+                f.write(
+                    "\n".join(
+                        [
+                            "__module__: megatron.energon",
+                            "__class__: MetadatasetV2",
+                            "splits:",
+                            "  train:",
+                            "    path: ds1",
+                            "    aux:",
+                            "      pkl_source: ./ds2",
+                            "      fs_source: filesystem://./",
+                            "    subflavors:",
+                            "      crude_type: aux_random_access",
+                        ]
+                    )
+                )
+            emu.add_file(self.dataset_path, "bucket")
+
+            torch.manual_seed(42)
+            loader = get_savable_loader(
+                get_train_dataset(
+                    mds_path,
+                    batch_size=1,
+                    worker_config=WorkerConfig(
+                        rank=0,
+                        world_size=1,
+                        num_workers=0,
+                    ),
+                    task_encoder=CookingTaskEncoderWithAuxFilesystemReference(),
+                    shuffle_buffer_size=None,
+                    max_samples_per_sequence=None,
+                ),
+            )
+            sample = next(iter(loader))
+            assert sample.txts[0].endswith("|aux|__module__: megatron.ener>")
+
+            torch.manual_seed(42)
+            loader = get_savable_loader(
+                get_train_dataset(
+                    "msc://s3test_aux_msc/bucket/aux_metadataset_msc_rel.yaml",
+                    batch_size=1,
+                    worker_config=WorkerConfig(
+                        rank=0,
+                        world_size=1,
+                        num_workers=0,
+                    ),
+                    task_encoder=CookingTaskEncoderWithAuxFilesystemReference(),
+                    shuffle_buffer_size=None,
+                    max_samples_per_sequence=None,
+                ),
+            )
+            sample = next(iter(loader))
+            assert sample.txts[0].endswith("|aux|__module__: megatron.ener>")
+
     def test_media_metadata_webdataset(self):
         torch.manual_seed(42)
         worker_config = WorkerConfig(
@@ -869,6 +1015,89 @@ class TestDataset(unittest.TestCase):
             "AUDIO-10.0s@32000Hz|AUDIO-10.0s@32000Hz",
             "VIDEO-192x108@30.0fps-63.0s|VIDEO-192x108@30.0fps-63.0s",
         ]
+
+    def test_prepare_dataset_s3_cmdline(self):
+        """Tar shards live on S3 (emulator); `energon prepare` writes `.nv-meta` to the same prefix."""
+        bucket = "energon-prepare-s3-cmdline-media-metadata"
+        profile_name = "s3test_dataset_prepare_cmdline_media_metadata"
+        with setup_s3_emulator(profile_name=profile_name) as state:
+            state.create_bucket(bucket)
+            state.add_file(self.multimedia_fs_path, dst=f"{bucket}/multimedia_fs/")
+            state.add_file(self.multimedia_wds_path, dst=f"{bucket}/multimedia_wds/")
+            s3_root = EPath(f"msc://{profile_name}/{bucket}")
+            info_path = s3_root / "multimedia_fs" / MAIN_FOLDER_NAME / INDEX_SQLITE_FILENAME
+            # assert not info_path.is_file(), f"index.sqlite already exists: {info_path}"
+            print(f"S3 root: {s3_root}")
+            runner = CliRunner()
+            result = runner.invoke(
+                prepare_media_command,
+                [
+                    str(s3_root / "multimedia_fs"),
+                    "--num-workers",
+                    "2",
+                    "--media-metadata-by-extension",
+                ],
+                catch_exceptions=False,
+            )
+            print(result.stdout)
+            assert result.exit_code == 0, result.stdout
+            assert "Done" in result.stdout, result.stdout
+            assert info_path.is_file(), f"missing {info_path}"
+
+            print("Done preparing media metadata, iterating now")
+
+            state.put_object(
+                bucket,
+                "s3_media_metadataset.yaml",
+                "\n".join(
+                    [
+                        "__module__: megatron.energon",
+                        "__class__: MetadatasetV2",
+                        "splits:",
+                        "  train:",
+                        "    path: multimedia_wds",
+                        "    aux:",
+                        f"      media: filesystem+msc://{profile_name}/{bucket}/multimedia_fs",
+                        "    subflavors:",
+                        "      crude_type: media_metadata",
+                    ]
+                ).encode("utf-8"),
+            )
+
+            # Iterate over the new dataset
+            worker_config = WorkerConfig(
+                rank=0,
+                world_size=1,
+                num_workers=0,
+            )
+
+            loader = get_savable_loader(
+                get_train_dataset(
+                    s3_root / "s3_media_metadataset.yaml",
+                    batch_size=1,
+                    worker_config=worker_config,
+                    task_encoder=CookingTaskEncoder(),
+                    shuffle_buffer_size=None,
+                    max_samples_per_sequence=None,
+                )
+            )
+
+            descriptions = []
+            for _, batch in zip(range(4), loader):
+                descriptions.extend(batch.txts)
+
+            # from pprint import pprint
+            # pprint(descriptions, indent=4)
+
+            # The descriptions are like "A|B", where A is the format
+            # in the WebDataset and B is the format in the auxiliary dataset.
+
+            assert descriptions == [
+                "IMG-32x16-JPEG|IMG-32x16-JPEG",
+                "IMG-24x24-PNG|IMG-24x24-PNG",
+                "AUDIO-10.0s@32000Hz|AUDIO-10.0s@32000Hz",
+                "VIDEO-192x108@30.0fps-63.0s|VIDEO-192x108@30.0fps-63.0s",
+            ]
 
     def test_nomds(self):
         torch.manual_seed(42)

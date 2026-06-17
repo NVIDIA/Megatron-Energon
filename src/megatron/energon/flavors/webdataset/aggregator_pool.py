@@ -25,9 +25,9 @@ class BaseAggregator(ABC, Generic[T_aggregation_data, T_result]):
         pass
 
     @abstractmethod
-    def on_item(self, item: T_aggregation_data, aggregator_pool: AggregatorPool) -> None:
+    def on_item(self, items: List[T_aggregation_data], aggregator_pool: AggregatorPool) -> None:
         """
-        Called for each item produced by the workers.
+        Called for each batch of items produced by the workers.
         """
         ...
 
@@ -58,25 +58,33 @@ class AggregatorPool(Generic[T_input_data, T_aggregation_data, T_result]):
     num_workers: int
     user_produce_data: Callable[[T_input_data], Iterable[Any]]
     aggregator: BaseAggregator[T_aggregation_data, T_result]
+    batch_size: int
 
     task_queue: multiprocessing.Queue[Optional[T_input_data]]
-    result_queue: multiprocessing.Queue[Optional[T_aggregation_data]]
+    result_queue: multiprocessing.Queue[Optional[List[T_aggregation_data]]]
 
     def __init__(
         self,
         num_workers: int,
         user_produce_data: Callable[[T_input_data], Iterable[Any]],
         aggregator: BaseAggregator[T_aggregation_data, T_result],
+        *,
+        batch_size: int = 1,
     ) -> None:
         """
         Args:
             num_workers: Number of worker processes.
             user_produce_data: Function that takes a task and yields items (the "large" data stream).
             aggregator: An instance of a user-defined class for handling aggregator logic.
+            batch_size: Maximum number of produced items to send to the aggregator at once.
         """
+        if batch_size <= 0:
+            raise ValueError(f"batch_size must be positive, got {batch_size}")
+
         self.num_workers = num_workers
         self.user_produce_data = user_produce_data
         self.aggregator = aggregator
+        self.batch_size = batch_size
 
         # Queues for tasks and results
         self.task_queue = multiprocessing.Queue()
@@ -90,15 +98,26 @@ class AggregatorPool(Generic[T_input_data, T_aggregation_data, T_result]):
 
     def _worker(self, worker_id: int) -> None:
         """Function that runs inside each worker process."""
+        batch: List[T_aggregation_data] = []
+
         while True:
             task = self.task_queue.get()
             if task is None:
                 # No more tasks, signal aggregator that this worker is done
+                if batch:
+                    self.result_queue.put(batch)
                 break
 
             # Produce data in a streaming fashion
             for item in self.user_produce_data(task):
-                self.result_queue.put(item)
+                batch.append(item)
+                if len(batch) >= self.batch_size:
+                    self.result_queue.put(batch)
+                    batch = []
+
+            if batch:
+                self.result_queue.put(batch)
+                batch = []
 
         # After finishing all tasks, send a sentinel to the aggregator
         self.result_queue.put(None)
@@ -108,7 +127,7 @@ class AggregatorPool(Generic[T_input_data, T_aggregation_data, T_result]):
         Function that runs in the aggregator process.
         Keeps reading items from result_queue.
         - If an item is None, that means a worker finished all of its tasks.
-        - Otherwise, call aggregator.on_item(...) with that item.
+        - Otherwise, call aggregator.on_item(...) with that batch.
         """
         # Let the aggregator do any initialization it needs
         self.aggregator.on_start(self)
@@ -116,13 +135,13 @@ class AggregatorPool(Generic[T_input_data, T_aggregation_data, T_result]):
         finished_workers = 0
 
         while finished_workers < self.num_workers:
-            item = self.result_queue.get()
-            if item is None:
+            item_batch = self.result_queue.get()
+            if item_batch is None:
                 # A worker has finished all of its tasks
                 finished_workers += 1
             else:
                 # Process the item in the aggregator
-                self.aggregator.on_item(item, self)
+                self.aggregator.on_item(item_batch, self)
 
         # All workers done, aggregator can finalize
         self.aggregator.on_finish(self)
