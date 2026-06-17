@@ -35,6 +35,8 @@ from megatron.energon import (
     DefaultTaskEncoder,
     MapDataset,
     MixBatchDataset,
+    PackedSamplesOutput,
+    PartialSample,
     Sample,
     SavableDataLoader,
     TaskEncoder,
@@ -1563,6 +1565,351 @@ class TestDataset(unittest.TestCase):
         restored_sample_1 = loader.restore_sample(samples[1].__restore_key__)
         assert restored_sample_1.__key__ == samples[1].__key__
         assert restored_sample_1.__restore_key__ == samples[1].__restore_key__
+
+    def test_packing_pushback(self):
+        """Pushback must prepend deferred samples ahead of new iterator pulls.
+
+        With ``buffer_size`` 5, the first full buffer follows the dataset iterator order (not
+        necessarily sorted ``__key__``). We pack only the first sample and push the rest back; the
+        next pre-pack must see the four deferred samples first, then one newly drawn sample — i.e.
+        the second buffer's keys must start with the first buffer's keys at indices ``[1:5]``.
+        """
+        torch.manual_seed(42)
+
+        buf = 5
+
+        class TestTaskEncoder(DefaultTaskEncoder):
+            def __init__(self):
+                super().__init__(raw_batch_type=CaptioningBatch)
+                self.buffer_keys_per_call: list[list[str]] = []
+                self.first_fill_keys: list[str] | None = None
+
+            @stateless
+            def encode_sample(self, sample: CaptioningSample) -> EncodedCaptioningSample:
+                return EncodedCaptioningSample.derive_from(
+                    sample,
+                    image=sample.image,
+                    caption=torch.frombuffer(sample.caption.encode(), dtype=torch.uint8),
+                )
+
+            def select_samples_to_pack(
+                self, samples: list[EncodedCaptioningSample]
+            ) -> PackedSamplesOutput[EncodedCaptioningSample]:
+                keys = [s.__key__ for s in samples]
+                self.buffer_keys_per_call.append(keys.copy())
+                call = len(self.buffer_keys_per_call)
+                if call == 1:
+                    assert len(samples) == buf
+                    self.first_fill_keys = keys.copy()
+                    return PackedSamplesOutput(
+                        packs=[samples[:1]],
+                        pushback=tuple(samples[1:]),
+                    )
+                if call == 2:
+                    assert len(samples) == buf
+                    assert self.first_fill_keys is not None
+                    assert keys[: buf - 1] == self.first_fill_keys[1:buf], (
+                        "Pushback did not appear before new samples: "
+                        f"second_fill[:4]={keys[: buf - 1]!r} "
+                        f"expected first_fill[1:5]={self.first_fill_keys[1:buf]!r}"
+                    )
+                    return PackedSamplesOutput(
+                        packs=[[s] for s in samples],
+                        pushback=(),
+                    )
+                return PackedSamplesOutput(
+                    packs=[[s] for s in samples],
+                    pushback=(),
+                )
+
+            @stateless
+            def pack_selected_samples(
+                self, samples: list[EncodedCaptioningSample]
+            ) -> EncodedCaptioningSample:
+                return EncodedCaptioningSample(
+                    __key__=",".join(sample.__key__ for sample in samples),
+                    __restore_key__=(),
+                    image=torch.stack([sample.image for sample in samples]),
+                    caption=torch.cat([sample.caption for sample in samples]),
+                )
+
+        task_encoder = TestTaskEncoder()
+        loader = get_loader(
+            get_train_dataset(
+                self.dataset_path,
+                batch_size=2,
+                packing_buffer_size=buf,
+                worker_config=no_worker_config,
+                virtual_epoch_length=4,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                task_encoder=task_encoder,
+            )
+        )
+
+        out = list(loader)
+        assert len(out) == 4
+        assert task_encoder.first_fill_keys is not None
+        assert (
+            task_encoder.buffer_keys_per_call[1][: buf - 1] == task_encoder.first_fill_keys[1:buf]
+        )
+        restored = loader.restore_sample(out[0].__restore_key__)
+        assert restored.__key__ == out[0].__key__
+
+    def test_packing_partial_sample_carryover(self):
+        """Partial samples carry unconsumed token slices across packing rounds."""
+
+        torch.manual_seed(42)
+        max_tokens = 11
+        buffer_size = 4
+
+        class TestTaskEncoder(DefaultTaskEncoder):
+            def __init__(self):
+                super().__init__(raw_batch_type=CaptioningBatch)
+
+            @staticmethod
+            def _window(
+                sample: EncodedCaptioningSample
+                | PartialSample[EncodedCaptioningSample, tuple[int, int]],
+            ) -> tuple[EncodedCaptioningSample, int, int]:
+                if isinstance(sample, PartialSample):
+                    token_start, token_stop = sample.slice
+                    return sample.sample, token_start, token_stop
+                return sample, 0, len(sample.caption)
+
+            @stateless
+            def encode_sample(self, sample: CaptioningSample) -> EncodedCaptioningSample:
+                return EncodedCaptioningSample.derive_from(
+                    sample,
+                    image=sample.image,
+                    caption=torch.frombuffer(bytearray(sample.caption.encode()), dtype=torch.uint8),
+                )
+
+            def select_samples_to_pack(
+                self,
+                samples: List[
+                    EncodedCaptioningSample
+                    | PartialSample[EncodedCaptioningSample, tuple[int, int]]
+                ],
+            ) -> PackedSamplesOutput[
+                EncodedCaptioningSample
+                | PartialSample[EncodedCaptioningSample, tuple[int, int]]
+            ]:
+                pack: list[
+                    EncodedCaptioningSample
+                    | PartialSample[EncodedCaptioningSample, tuple[int, int]]
+                ] = []
+                pushback: list[
+                    EncodedCaptioningSample
+                    | PartialSample[EncodedCaptioningSample, tuple[int, int]]
+                ] = []
+                remaining = max_tokens
+
+                for sample in samples:
+                    base_sample, token_start, token_stop = self._window(sample)
+                    token_count = token_stop - token_start
+                    if remaining == 0:
+                        pushback.append(sample)
+                    elif token_count <= remaining:
+                        pack.append(sample)
+                        remaining -= token_count
+                    else:
+                        pack.append(
+                            PartialSample(
+                                sample=base_sample,
+                                slice=(token_start, token_start + remaining),
+                            )
+                        )
+                        pushback.append(
+                            PartialSample(
+                                sample=base_sample,
+                                slice=(token_start + remaining, token_stop),
+                            )
+                        )
+                        remaining = 0
+
+                return PackedSamplesOutput(
+                    packs=[pack] if pack else [],
+                    pushback=tuple(pushback),
+                )
+
+            @stateless
+            def postencode_sample(
+                self,
+                sample: EncodedCaptioningSample
+                | PartialSample[EncodedCaptioningSample, tuple[int, int]],
+            ) -> EncodedCaptioningSample:
+                base_sample, token_start, token_stop = self._window(sample)
+                return EncodedCaptioningSample.derive_from(
+                    base_sample,
+                    __key__=f"{base_sample.__key__}:{token_start}:{token_stop}",
+                    image=base_sample.image,
+                    caption=base_sample.caption[token_start:token_stop],
+                )
+
+            @stateless
+            def pack_selected_samples(
+                self, samples: List[EncodedCaptioningSample]
+            ) -> EncodedCaptioningSample:
+                return EncodedCaptioningSample(
+                    __key__="|".join(sample.__key__ for sample in samples),
+                    __restore_key__=(),
+                    image=torch.stack([sample.image for sample in samples]),
+                    caption=torch.cat([sample.caption for sample in samples]),
+                )
+
+        class FinalPackerTaskEncoder(DefaultTaskEncoder):
+            def __init__(self):
+                super().__init__(raw_batch_type=CaptioningBatch)
+
+            @staticmethod
+            def _window(
+                sample: EncodedCaptioningSample
+                | PartialSample[EncodedCaptioningSample, tuple[int, int]],
+            ) -> tuple[EncodedCaptioningSample, int, int]:
+                return TestTaskEncoder._window(sample)
+
+            @stateless
+            def encode_sample(self, sample: CaptioningSample) -> EncodedCaptioningSample:
+                return EncodedCaptioningSample.derive_from(
+                    sample,
+                    image=sample.image,
+                    caption=torch.frombuffer(bytearray(sample.caption.encode()), dtype=torch.uint8),
+                )
+
+            def select_samples_to_pack(
+                self,
+                samples: List[
+                    EncodedCaptioningSample
+                    | PartialSample[EncodedCaptioningSample, tuple[int, int]]
+                ],
+            ) -> PackedSamplesOutput[
+                EncodedCaptioningSample
+                | PartialSample[EncodedCaptioningSample, tuple[int, int]]
+            ]:
+                return TestTaskEncoder.select_samples_to_pack(self, samples)
+
+            @stateless
+            def pack_selected_samples(
+                self,
+                samples: List[
+                    EncodedCaptioningSample
+                    | PartialSample[EncodedCaptioningSample, tuple[int, int]]
+                ],
+            ) -> EncodedCaptioningSample:
+                parts = []
+                images = []
+                captions = []
+                for sample in samples:
+                    base_sample, token_start, token_stop = self._window(sample)
+                    parts.append(f"{base_sample.__key__}:{token_start}:{token_stop}")
+                    images.append(base_sample.image)
+                    captions.append(base_sample.caption[token_start:token_stop])
+                return EncodedCaptioningSample(
+                    __key__="|".join(parts),
+                    __restore_key__=(),
+                    image=torch.stack(images),
+                    caption=torch.cat(captions),
+                )
+
+        def assert_segments(samples: list[EncodedCaptioningSample]) -> None:
+            by_key: dict[str, list[tuple[int, int, bytes]]] = defaultdict(list)
+            for sample in samples:
+                caption_offset = 0
+                for part in sample.__key__.split("|"):
+                    key, raw_token_start, raw_token_stop = part.split(":")
+                    token_start = int(raw_token_start)
+                    token_stop = int(raw_token_stop)
+                    token_count = token_stop - token_start
+                    segment = bytes(
+                        sample.caption[caption_offset : caption_offset + token_count].tolist()
+                    )
+                    expected = self.samples[int(key)]["caption"].encode()[token_start:token_stop]
+                    assert segment == expected
+                    by_key[key].append((token_start, token_stop, segment))
+                    caption_offset += token_count
+                assert caption_offset == len(sample.caption)
+                assert caption_offset == max_tokens
+
+            complete_keys = 0
+            for key, segments in by_key.items():
+                expected = self.samples[int(key)]["caption"].encode()
+                if sum(token_stop - token_start for token_start, token_stop, _ in segments) != len(
+                    expected
+                ):
+                    continue
+                actual = bytearray(len(expected))
+                covered = [False] * len(expected)
+                for token_start, token_stop, segment in segments:
+                    actual[token_start:token_stop] = segment
+                    covered[token_start:token_stop] = [True] * (token_stop - token_start)
+                assert all(covered)
+                assert bytes(actual) == expected
+                complete_keys += 1
+            assert complete_keys > 0
+
+        def build_loader():
+            return get_savable_loader(
+                get_train_dataset(
+                    self.dataset_path,
+                    batch_size=None,
+                    packing_buffer_size=buffer_size,
+                    worker_config=no_worker_config,
+                    virtual_epoch_length=8,
+                    shuffle_buffer_size=None,
+                    max_samples_per_sequence=None,
+                    task_encoder=TestTaskEncoder(),
+                ),
+                checkpoint_every_min_n_samples=1,
+                checkpoint_every_sec=0,
+            )
+
+        loader = build_loader()
+        loader_iter = iter(loader)
+        first_sample = next(loader_iter)
+        rank_state = loader.save_state_rank()
+        cmp_samples = [next(loader_iter) for _ in range(5)]
+
+        restored_loader = build_loader()
+        restored_loader.restore_state_rank(rank_state)
+        restored_samples = [sample for _, sample in zip(range(5), restored_loader)]
+
+        assert loader.can_restore_sample()
+        restored_first_sample = loader.restore_sample(first_sample.__restore_key__)
+        assert restored_first_sample.__key__ == first_sample.__key__
+        assert torch.equal(restored_first_sample.caption, first_sample.caption)
+        assert [sample.__key__ for sample in restored_samples] == [
+            sample.__key__ for sample in cmp_samples
+        ]
+        assert all(
+            torch.equal(restored.caption, cmp.caption)
+            for restored, cmp in zip(restored_samples, cmp_samples)
+        )
+        assert_segments([first_sample, *cmp_samples])
+
+        final_packer_loader = get_loader(
+            get_train_dataset(
+                self.dataset_path,
+                batch_size=None,
+                packing_buffer_size=buffer_size,
+                worker_config=no_worker_config,
+                virtual_epoch_length=4,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                task_encoder=FinalPackerTaskEncoder(),
+            )
+        )
+        final_packer_samples = list(final_packer_loader)
+        assert final_packer_loader.can_restore_sample()
+        restored_final_packer_sample = final_packer_loader.restore_sample(
+            final_packer_samples[0].__restore_key__
+        )
+        assert restored_final_packer_sample.__key__ == final_packer_samples[0].__key__
+        assert torch.equal(
+            restored_final_packer_sample.caption,
+            final_packer_samples[0].caption,
+        )
+        assert_segments(final_packer_samples)
 
     def test_group_batch(self):
         class GroupingTaskEncoder(
