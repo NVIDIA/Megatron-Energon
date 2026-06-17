@@ -28,6 +28,23 @@ from megatron.energon.worker import WorkerConfig
 
 # Regex for any URL-like string (any protocol)
 url_regex = re.compile(r"^(?P<protocol>[a-z][a-z0-9+.-]*)://(?P<path>.*)", re.IGNORECASE)
+aux_filestore_protocol_regex = re.compile(r"^[a-z][a-z0-9.-]*$", re.IGNORECASE)
+
+
+class AuxFileStoreReference:
+    """Base class for auxiliary recipe references that materialize as FileStores."""
+
+    def _resolve_path(self, recipe_path: Optional[EPath]) -> EPath:
+        raise NotImplementedError
+
+    def post_initialize(self, recipe_path: Optional[EPath] = None) -> None:
+        self._resolve_path(recipe_path)
+
+    def get_file_store(self) -> FileStore:
+        raise NotImplementedError
+
+    def get_traversed_path(self) -> EPath:
+        raise NotImplementedError
 
 
 @edataclass
@@ -56,7 +73,7 @@ class AuxDatasetReference:
 
 
 @edataclass
-class AuxFilesystemReference:
+class AuxFilesystemReference(AuxFileStoreReference):
     fs_path: Union[str, EPath]
 
     def _resolve_path(self, recipe_path: Optional[EPath]) -> EPath:
@@ -72,9 +89,13 @@ class AuxFilesystemReference:
         assert isinstance(self.fs_path, EPath), "Missing call to post_initialize"
         return SystemFileStore(self.fs_path)
 
+    def get_traversed_path(self) -> EPath:
+        assert isinstance(self.fs_path, EPath), "Missing call to post_initialize"
+        return self.fs_path
+
 
 @edataclass
-class AuxByteRangeStoreReference:
+class AuxByteRangeStoreReference(AuxFileStoreReference):
     byterange_fs_path: Union[str, EPath]
 
     def _resolve_path(self, recipe_path: Optional[EPath]) -> EPath:
@@ -89,6 +110,50 @@ class AuxByteRangeStoreReference:
     def get_file_store(self) -> FileStore:
         assert isinstance(self.byterange_fs_path, EPath), "Missing call to post_initialize"
         return ByteRangeStore(self.byterange_fs_path)
+
+    def get_traversed_path(self) -> EPath:
+        assert isinstance(self.byterange_fs_path, EPath), "Missing call to post_initialize"
+        return self.byterange_fs_path
+
+
+AuxReference = Union[AuxDatasetReference, AuxFileStoreReference]
+AuxFileStoreProtocolFactory = Callable[[Union[str, EPath]], AuxFileStoreReference]
+
+_AUX_FILESTORE_PROTOCOL_FACTORIES: dict[str, AuxFileStoreProtocolFactory] = {}
+
+
+def _normalize_aux_filestore_protocol(protocol: str) -> str:
+    protocol = protocol.lower()
+    if aux_filestore_protocol_regex.fullmatch(protocol) is None:
+        raise ValueError(
+            f"Invalid auxiliary filestore protocol {protocol!r}. "
+            "Use a URI protocol name without '+', ':', or '/'."
+        )
+    return protocol
+
+
+def register_aux_filestore_protocol(
+    protocol: str,
+    factory: AuxFileStoreProtocolFactory,
+    *,
+    override: bool = False,
+) -> None:
+    """Register a recipe aux URI protocol that materializes as a FileStore reference."""
+
+    protocol = _normalize_aux_filestore_protocol(protocol)
+    if not override and protocol in _AUX_FILESTORE_PROTOCOL_FACTORIES:
+        raise ValueError(f"Auxiliary filestore protocol {protocol!r} is already registered")
+    _AUX_FILESTORE_PROTOCOL_FACTORIES[protocol] = factory
+
+
+def _get_aux_filestore_protocol_factory(
+    protocol: str,
+) -> Optional[AuxFileStoreProtocolFactory]:
+    return _AUX_FILESTORE_PROTOCOL_FACTORIES.get(protocol.lower())
+
+
+register_aux_filestore_protocol("filesystem", lambda path: AuxFilesystemReference(fs_path=path))
+register_aux_filestore_protocol("byterange", lambda path: AuxByteRangeStoreReference(byterange_fs_path=path))
 
 
 @edataclass
@@ -262,11 +327,7 @@ class DatasetReference(
     #: Auxiliary datasets. May only be specified for crude datasets for cooking. Cooking will get
     # these references to load data from. If specified as string, it will be interpreted as a
     # dataset path.
-    aux: Optional[
-        Dict[
-            str, Union[str, AuxDatasetReference, AuxFilesystemReference, AuxByteRangeStoreReference]
-        ]
-    ] = None
+    aux: Optional[Dict[str, Union[str, AuxReference]]] = None
 
     _dataset: Optional[DatasetLoaderInterface] = None
 
@@ -278,44 +339,32 @@ class DatasetReference(
 
     @staticmethod
     def _normalize_aux_reference(
-        reference: Union[
-            str, AuxDatasetReference, AuxFilesystemReference, AuxByteRangeStoreReference
-        ],
-    ) -> Union[AuxDatasetReference, AuxFilesystemReference, AuxByteRangeStoreReference]:
-        if isinstance(
-            reference, (AuxDatasetReference, AuxFilesystemReference, AuxByteRangeStoreReference)
-        ):
+        reference: Union[str, AuxReference],
+    ) -> AuxReference:
+        if isinstance(reference, (AuxDatasetReference, AuxFileStoreReference)):
             return reference
         if m := url_regex.match(reference):
             prot = m.group("protocol")
             if prot.count("+") == 1:
-                # filesystem+fs_prot:// or byterange+fs_prot://
-                aux_type, fs_prot = prot.split("+")
-                assert aux_type in ("filesystem", "byterange")
-                path = f"{fs_prot}://{m.group('path')}"
-            elif prot in ("filesystem", "byterange"):
-                # filesystem:// or byterange:// (may be relative or absolute)
-                aux_type = prot
-                path = m.group("path")
+                # aux_filestore_protocol+fs_prot://...
+                aux_protocol, fs_prot = prot.split("+")
+                factory = _get_aux_filestore_protocol_factory(aux_protocol)
+                if factory is not None:
+                    return factory(f"{fs_prot}://{m.group('path')}")
             else:
-                # msc:// or other protocol
-                aux_type = None
-                path = reference
-            # With filesystem or without.
-            if aux_type == "filesystem":
-                return AuxFilesystemReference(fs_path=path)
-            if aux_type == "byterange":
-                return AuxByteRangeStoreReference(byterange_fs_path=path)
-            assert aux_type is None, f"Invalid auxiliary type: {aux_type} in path {reference}"
-            return AuxDatasetReference(path=path)
+                factory = _get_aux_filestore_protocol_factory(prot)
+                if factory is not None:
+                    # registered_protocol://... may be relative or absolute.
+                    return factory(m.group("path"))
+
+            # msc:// or any other unregistered protocol remains a prepared aux dataset path.
+            return AuxDatasetReference(path=reference)
         return AuxDatasetReference(path=reference)
 
     def _normalize_aux_references(self, recipe_path: Optional[EPath], *, validate: bool) -> None:
         if self.aux is None:
             return
-        new_aux: Dict[
-            str, Union[AuxDatasetReference, AuxFilesystemReference, AuxByteRangeStoreReference]
-        ] = {}
+        new_aux: Dict[str, AuxReference] = {}
         for key, value in self.aux.items():
             normalized = self._normalize_aux_reference(value)
             if validate:
@@ -333,14 +382,9 @@ class DatasetReference(
             if isinstance(value, AuxDatasetReference):
                 assert isinstance(value.path, EPath)
                 traversed_aux[key] = value.path
-            elif isinstance(value, AuxFilesystemReference):
-                assert isinstance(value, AuxFilesystemReference)
-                assert isinstance(value.fs_path, EPath)
-                traversed_aux[key] = value.fs_path
             else:
-                assert isinstance(value, AuxByteRangeStoreReference)
-                assert isinstance(value.byterange_fs_path, EPath)
-                traversed_aux[key] = value.byterange_fs_path
+                assert isinstance(value, AuxFileStoreReference)
+                traversed_aux[key] = value.get_traversed_path()
         return traversed_aux
 
     def _load_nested_recipe(self) -> DatasetLoaderInterface:

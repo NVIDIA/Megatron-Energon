@@ -20,8 +20,10 @@ import torch
 import webdataset as wds
 
 from megatron.energon import (
+    AuxFileStoreReference,
     PackingGroupConfig,
     Sample,
+    SystemFileStore,
     TextSample,
     WorkerConfig,
     get_loader,
@@ -29,12 +31,14 @@ from megatron.energon import (
     get_train_dataset,
     get_val_dataset,
     load_dataset,
+    register_aux_filestore_protocol,
 )
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib.epath import EPath
 from megatron.energon.flavors.common.manifest.paths import MAIN_FOLDER_NAME
 from megatron.energon.recipe.loader import prepare_recipe, traverse_recipe
 from megatron.energon.recipe.loader_interface import DatasetBlendMode, LoadedDataset
+from megatron.energon.recipe.recipe import AuxDatasetReference, DatasetReference
 from megatron.energon.task_encoder.base import (
     DefaultTaskEncoder,
     PackingBufferSize,
@@ -106,6 +110,25 @@ class SizeBlendTaskEncoder(DefaultTaskEncoder):
     @stateless
     def text_chars(self, sample: TextSample) -> int:
         return len(sample.text)
+
+
+@edataclass
+class CustomAuxFileStoreReference(AuxFileStoreReference):
+    path: str | EPath
+
+    def _resolve_path(self, recipe_path: EPath | None) -> EPath:
+        assert recipe_path is not None
+        if not isinstance(self.path, EPath):
+            self.path = recipe_path.parent / self.path
+        return self.path
+
+    def get_file_store(self) -> SystemFileStore:
+        assert isinstance(self.path, EPath), "Missing call to post_initialize"
+        return SystemFileStore(self.path)
+
+    def get_traversed_path(self) -> EPath:
+        assert isinstance(self.path, EPath), "Missing call to post_initialize"
+        return self.path
 
 
 class TestDataset(unittest.TestCase):
@@ -604,6 +627,80 @@ class TestDataset(unittest.TestCase):
             "recipe": "nested_val",
         }
         assert refs[0].shuffle_over_epochs_multiplier == 2
+
+    def test_register_custom_aux_filestore_protocol(self):
+        media_path = self.dataset_path / "media"
+        media_path.mkdir()
+        (media_path / "hello.txt").write_bytes(b"hello custom aux")
+
+        register_aux_filestore_protocol(
+            "test-custom",
+            lambda path: CustomAuxFileStoreReference(path=path),
+            override=True,
+        )
+
+        recipe_path = self.dataset_path / "custom_aux_recipe.yaml"
+        recipe_path.write_text(
+            "\n".join(
+                [
+                    "__module__: megatron.energon",
+                    "__class__: Recipe",
+                    "splits:",
+                    "  train:",
+                    "    path: ds1",
+                    "    aux:",
+                    "      media: test-custom://media",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        recipe = load_dataset(recipe_path)
+        train = recipe.splits["train"]
+        assert train.aux is not None
+        aux_ref = train.aux["media"]
+
+        assert isinstance(aux_ref, CustomAuxFileStoreReference)
+        assert aux_ref.path == EPath(media_path)
+        assert aux_ref.get_file_store().get("hello.txt") == b"hello custom aux"
+
+        refs = traverse_recipe(recipe_path, split_part="train")
+        assert refs[0].aux == {"media": EPath(media_path)}
+
+    def test_custom_aux_filestore_protocol_with_wrapped_epath_protocol(self):
+        captured_paths: list[str | EPath] = []
+
+        def factory(path: str | EPath) -> CustomAuxFileStoreReference:
+            captured_paths.append(path)
+            return CustomAuxFileStoreReference(path=path)
+
+        register_aux_filestore_protocol("test-custom-wrapped", factory, override=True)
+
+        aux_ref = DatasetReference._normalize_aux_reference(
+            "test-custom-wrapped+msc://profile/bucket/media"
+        )
+
+        assert isinstance(aux_ref, CustomAuxFileStoreReference)
+        assert captured_paths == ["msc://profile/bucket/media"]
+
+    def test_unregistered_aux_protocol_remains_dataset_reference(self):
+        aux_ref = DatasetReference._normalize_aux_reference("msc://profile/bucket/ds")
+
+        assert isinstance(aux_ref, AuxDatasetReference)
+        assert aux_ref.path == "msc://profile/bucket/ds"
+
+    def test_register_aux_filestore_protocol_rejects_duplicate_without_override(self):
+        register_aux_filestore_protocol(
+            "test-duplicate",
+            lambda path: CustomAuxFileStoreReference(path=path),
+            override=True,
+        )
+
+        with self.assertRaisesRegex(ValueError, "already registered"):
+            register_aux_filestore_protocol(
+                "test-duplicate",
+                lambda path: CustomAuxFileStoreReference(path=path),
+            )
 
     def test_joined_recipe(self):
         torch.manual_seed(42)

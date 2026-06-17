@@ -9,7 +9,13 @@ from megatron.energon.recipe.loader import (
     traverse_recipe,
 )
 from megatron.energon.recipe.loader_interface import DatasetLoaderInterface
-from megatron.energon.recipe.recipe import MetadatasetV2, Recipe
+from megatron.energon.recipe.recipe import (
+    AuxFileStoreReference,
+    AuxFileStoreProtocolFactory,
+    MetadatasetV2,
+    Recipe,
+    register_aux_filestore_protocol,
+)
 
 __all__ = [
     "DatasetLoader",
@@ -17,6 +23,9 @@ __all__ = [
     "DatasetLoaderInterface",
     "Recipe",
     "MetadatasetV2",
+    "AuxFileStoreReference",
+    "AuxFileStoreProtocolFactory",
+    "register_aux_filestore_protocol",
     "prepare_recipe",
     "prepare_metadataset",
     "traverse_recipe",
