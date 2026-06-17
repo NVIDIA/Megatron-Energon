@@ -11,7 +11,7 @@ This means you can train or validate with your data right from any storage by si
 For using a remote dataset, install energon with one or more of the extras:
 * `s3`
 * `aistore`
-* `azure-blob-storage`
+* `azure-storage-blob`
 * `google-cloud-storage`
 * `oci`
 
@@ -61,7 +61,7 @@ You can use this URL instead of paths to datasets in
 
 * Functions like `get_train_dataset`, `get_val_dataset`
 * Inside [metadataset](../basic/metadataset) specifications
-* As arguments to `energon prepare` or `energon lint`. Note that those may be slow for remote locations.
+* As arguments to `energon prepare`, `energon prepare-media`, or `energon lint`. Note that those may be slow for remote locations.
 * Or as a path to [`energon mount`](energon-mount) to locally inspect your remote dataset 😎
 
 Example usage:
@@ -74,3 +74,13 @@ ds = get_train_dataset(
     max_samples_per_sequence=100,
 )
 ```
+
+## DSS URLs
+
+In environments that provide datasets through the NVIDIA Dataset cache layout, Energon can also resolve DSS paths:
+
+```
+dss://DATASET_NAME@VERSION/path/inside/dataset
+```
+
+The dataset name and version are required. The path is resolved under `NVDATASET_CACHE_DIR`, so that environment variable must point to the local dataset cache root before loading DSS paths.
