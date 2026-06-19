@@ -640,6 +640,7 @@ class TestDataset(unittest.TestCase):
 
             for p in processes:
                 p.join()
+                assert p.exitcode == 0
 
             # Phase 2 (restore state)
             processes = []
@@ -650,6 +651,7 @@ class TestDataset(unittest.TestCase):
 
             for p in processes:
                 p.join()
+                assert p.exitcode == 0
 
     def test_restore_state_workers(self):
         worker_config = WorkerConfig(rank=0, world_size=1, num_workers=2)
