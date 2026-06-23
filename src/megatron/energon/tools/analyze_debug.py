@@ -297,7 +297,7 @@ def command(
 
     modalities = [m.strip() for m in include_modality.split(",")]
 
-    key_index = {}
+    key_index: dict[str, int] = {}
     count = 0
     if not force_loading_order:
         loaders = [LoaderLogIter(log_file, start_idx=skip) for log_file in log_files]

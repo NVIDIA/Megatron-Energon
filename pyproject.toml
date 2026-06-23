@@ -137,6 +137,25 @@ warn_unused_ignores = true
 warn_unused_configs = true
 show_error_codes = true
 
+# Graduated modules: locked to strict so they cannot regress to loose typing.
+# Grow this list as modules reach zero baseline errors (see the type-checking docs).
+[[tool.mypy.overrides]]
+module = [
+  "megatron.energon.av.av_data",
+  "megatron.energon.av.av_init",
+  "megatron.energon.flavors.webdataset.config",
+  "megatron.energon.flavors.webdataset.empty_dataset_error",
+  "megatron.energon.loader",
+  "megatron.energon.local_copy",
+  "megatron.energon.media.filesystem_prepare",
+  "megatron.energon.media.metadata",
+  "megatron.energon.source_info",
+  "megatron.energon.transforms.custom",
+]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_any_generics = true
+
 # Ratchet config for `mypy-baseline`. NOTE: `allow_unsynced` is intentionally left
 # at its default (false) so the baseline can only shrink — see the docs. Do not enable it.
 [tool.mypy-baseline]

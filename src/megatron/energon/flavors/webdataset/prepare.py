@@ -305,7 +305,7 @@ class WebdatasetPreparator:
 
                     # The parts set is used to collect various file endings that are
                     # available in the dataset. This is used for the interactive prepare wizard.
-                    parts = set()
+                    parts: set[str] = set()
 
                     last_base_name = None
 
@@ -459,7 +459,7 @@ class WebdatasetPreparator:
             tar: tarfile.TarFile
             with tarfile.open(fileobj=f, mode="r:*") as tar:
                 last_base_name = None
-                sample = {}
+                sample: dict[str, bytes | None] = {}
                 member: tarfile.TarInfo
                 for member in tar:
                     if not member.isreg():

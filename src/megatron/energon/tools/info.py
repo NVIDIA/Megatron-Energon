@@ -81,7 +81,7 @@ def command(
             return 3
 
     # Brace expand all the split part files
-    expanded_split_parts = {}
+    expanded_split_parts: dict[str, list[str]] = {}
     for split_name, split_parts in split_config_obj["split_parts"].items():
         expanded_split_parts[split_name] = []
         for split_part in split_parts:
