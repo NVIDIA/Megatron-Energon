@@ -7,6 +7,59 @@ This document describes how Megatron Energon adopts and maintains static type
 checking. It is both the **strategy/migration plan** for introducing the type
 checker and the **living contributor guide** for working with it day to day.
 
+## TL;DR — what this means for you
+
+Static type checking now runs in CI, but it is designed to **never get in your way**:
+
+- ✅ **Your PR will not be blocked by old type errors.** The gate fails *only* if your
+  change introduces a **new** error. The pre-existing backlog (currently ~450 errors; run
+  `just typecheck-progress` for the live number) is recorded in `.mypy-baseline.txt` and
+  ignored by the gate.
+- ✅ **You never have to fix code you didn't touch.** Helping shrink the backlog is welcome
+  but always optional.
+- ✅ **No runtime risk.** Turning this on changed *no* runtime code, and the fixes the
+  backlog needs are overwhelmingly just type annotations — which CPython does not execute,
+  so they cannot change behavior. The few fixes that *do* touch behavior require a test
+  (see **Test policy** below).
+- ✅ **It cannot silently get worse.** The backlog only ever goes *down*: CI rejects new
+  errors, and it also rejects "I fixed something but forgot to update the ledger."
+
+In short: **green from day one, no new debt, and nothing you didn't change can break.**
+
+## Using it day to day
+
+**Normal development — do nothing special.** Write code as usual. If you happen to add a
+new type error, `just typecheck` (and CI) tells you the exact file and line; fix it like a
+lint error. That's the whole obligation.
+
+**Helping burn down the backlog (optional, encouraged):**
+
+```bash
+just typecheck-progress    # see where the remaining errors are (files with the most debt)
+# ... pick a file and fix some of its errors ...
+just test                  # only required if your fix changed runtime behavior (see below)
+just typecheck-baseline    # regenerate .mypy-baseline.txt — it shrinks by what you fixed
+just fix                   # format, import order, license headers
+git commit -s              # the baseline diff shows exactly which errors you removed
+```
+
+`just typecheck` is the gate. It is green or red purely on the *delta* your change makes —
+never on the absolute count:
+
+| What your change did | Gate result |
+|---|---|
+| Nothing type-related | ✅ green |
+| Introduced a new type error | ❌ red — fix it (CI prints the line) |
+| Fixed errors **and** ran `just typecheck-baseline` | ✅ green — backlog shrank |
+| Fixed errors but **forgot** to regenerate the baseline | ❌ red — just run `just typecheck-baseline` |
+
+**Finished a file? Lock it in.** When a module reaches zero errors, add its dotted name to
+the strict list in `[[tool.mypy.overrides]]` (`pyproject.toml`) so it can never regress to
+loose typing. Strict may surface a few more errors in that module — fix them in the same PR.
+
+The rest of this document explains *why* it is built this way and the details behind these
+guarantees.
+
 ## Context
 
 Energon is already heavily annotated (generics, `TypeVar`s, `dataclass_transform`,
@@ -27,10 +80,11 @@ The goal is to add static type checking that:
 Explicitly, the goal is **not** to fix every type error at once. That is the
 "rabbit hole" this plan is designed to avoid.
 
-## Current state (measured)
+## Starting baseline (measured at introduction)
 
-The committed baseline (`.mypy-baseline.txt`), generated with the `[tool.mypy]` config
-in the full `dev-sync` environment:
+The snapshot when type checking was first switched on (the live count is lower as burndown
+proceeds — run `just typecheck-progress`). Generated with the `[tool.mypy]` config in the
+full `dev-sync` environment:
 
 | Metric | Value |
 |---|---|
@@ -75,8 +129,8 @@ We use **mypy** with the **`mypy-baseline`** ratchet tool.
   package, so finding errors with mypy directly protects consumers. It is pure
   Python (no Node.js), integrates cleanly with our `uv` + `just` toolchain, and
   supports every typing feature we use (`dataclass_transform`, `ParamSpec`,
-  `Self`). The measured 323-error baseline confirms mypy handles the codebase
-  without pathological false positives.
+  `Self`). The measured 471-error baseline (no pathological false positives) confirms
+  mypy handles the codebase well.
 - **Why `mypy-baseline`**: it records current errors in a committed file and makes
   CI fail only on *new* errors. Unlike all-or-nothing per-module suppression, it is
   **fine-grained** — you can fix 5 errors in a 1400-line file and the ledger shrinks
@@ -107,7 +161,7 @@ When a module reaches zero baseline errors, it is **promoted to strict** via a
 per-module override in `[tool.mypy]` (adding `disallow_untyped_defs`,
 `disallow_any_generics`, etc.), locking in the win so it cannot silently regress to
 loose typing. The strict-module list in config is the complementary ledger of
-"what is ready." The 71 already-clean files are the initial graduation pool.
+"what is ready." The 63 already-clean files are the initial graduation pool.
 
 ```
 new code ──▶ Gate (no new errors) ──▶ merge
@@ -221,8 +275,7 @@ Type fixes fall into three buckets:
 
 The full suite (`just test`, i.e. `uv run -m unittest discover -v -s tests`) must
 pass before each milestone commit. This is why the burndown is mostly safe: the
-large majority of the 323 are annotation-level fixes; only the genuine-bug subset
-needs new tests.
+large majority are annotation-level fixes; only the genuine-bug subset needs new tests.
 
 ## py.typed
 
@@ -239,7 +292,7 @@ Bounded scope, one commit per milestone:
 - **M1 — Foundation (one cohesive commit).** Add mypy + mypy-baseline +
   `types-PyYAML`/`types-tqdm` to the `dev` extra and **regenerate `uv.lock`**; add the
   `[tool.mypy]` config; add the `py.typed` marker and declare it in the wheel build; add
-  the justfile recipes (with `pipefail`); generate and commit `.mypy-baseline.txt`; add
+  the justfile recipes; generate and commit `.mypy-baseline.txt`; add
   `typecheck.yml`; **co-commit this document, its toctree entry in `docs/source/index.md`,
   and a one-line pointer from `CONTRIBUTING.md`** (the doc must not land as an orphan
   page). *Outcome: CI green; no new type debt admitted from here on; the process is
@@ -251,13 +304,13 @@ Bounded scope, one commit per milestone:
   baseline. *Outcome: a real, working ratchet, not just scaffolding.*
 
 Everything else stays as tracked baseline debt, burned down opportunistically using the
-roadmap below. We deliberately do **not** attempt all 323 in this effort.
+roadmap below. We deliberately do **not** attempt all of them in this effort.
 
 ## Burndown roadmap (prioritized)
 
 1. **Public-API surface first** (exported in `__init__.py`) — because `py.typed`
    exposes these to users. Many are already clean; finish the rest.
-2. **Trivial clusters** — `var-annotated` (19) and similar are quick wins that
+2. **Trivial clusters** — `var-annotated` (20) and similar are quick wins that
    shrink the ledger fast and build momentum.
 3. **Core correctness-critical** — `savable_loader.py`, `task_encoder/base.py`,
    `flavors/base_dataset.py` (checkpoint/resume + the pipeline core). Highest payoff
@@ -265,20 +318,6 @@ roadmap below. We deliberately do **not** attempt all 323 in this effort.
 4. **High-count utilities** — `typed_converter.py` (44; pairs naturally with the
    separately-planned refactor of its 1000-line function), `metadataset_v2.py`.
 5. **Long tail** — the remaining files with 1–8 errors each.
-
-## Contributor how-to
-
-```bash
-just typecheck            # what CI runs; passes if you introduced no new errors
-just typecheck-progress   # how much debt is left, and where
-# ... fix some errors in a module ...
-just test                 # ensure nothing broke (required before commit)
-just typecheck-baseline   # regenerate the ledger so it shrinks by what you fixed
-just fix                  # align formatting/imports/license headers
-```
-
-When a module hits zero, add it to the strict-override list in `[tool.mypy]` and
-fix anything strict newly surfaces, in the same PR.
 
 ## Risks & mitigations
 
