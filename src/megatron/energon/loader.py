@@ -23,6 +23,9 @@ def get_savable_loader(
     *,
     worker_config: Optional[WorkerConfig] = None,
     worker_type: Literal["main", "fork", "thread"] | type[DataLoaderWorker] = "fork",
+    checkpoint_every_sec: Optional[float] = None,
+    checkpoint_every_min_n_samples: Optional[int] = None,
+    n_checkpoints: Optional[int] = None,
     gc_freeze_at_start: bool = True,
     gc_collect_every_n_steps: int = GC_DEFAULT_EVERY_N_ITER,
     prefetch_factor: int = 2,
@@ -43,6 +46,9 @@ def get_savable_loader(
           "fork": forked workers (default),
           "thread": threaded workers (should be used with free-threaded python),
           "main": iterate data in the main process without parallelization.
+        checkpoint_every_sec: Deprecated compatibility argument; ignored by the custom loader.
+        checkpoint_every_min_n_samples: Deprecated compatibility argument; ignored by the custom loader.
+        n_checkpoints: Deprecated compatibility argument; ignored by the custom loader.
         gc_freeze_at_start: If True, the garbage collector is frozen at the start of the loader.
         gc_collect_every_n_steps: The number of steps after which the garbage collector is called.
         prefetch_factor: The factor by which to prefetch the dataset.
@@ -81,7 +87,7 @@ def get_savable_loader(
     else:
         pin_memory_arg = "automatic" if pin_memory else None
 
-    return DataLoader(
+    loader = DataLoader(
         dataset,
         prefetch_factor=prefetch_factor,
         worker_type=worker_type,
@@ -93,6 +99,8 @@ def get_savable_loader(
         fail_on_timeout=fail_on_timeout,
         pin_memory=pin_memory_arg,
     )
+    loader._config_pin_memory = pin_memory
+    return loader
 
 
 def get_loader(

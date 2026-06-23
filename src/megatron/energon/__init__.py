@@ -23,6 +23,7 @@ from megatron.energon.cache import (
     PrimaryFileStore,
     SystemFileStore,
 )
+from megatron.energon.dataloader import DataLoader
 from megatron.energon.edataclass import edataclass
 from megatron.energon.errors import SkipSample, log_exception, reraise_exception
 from megatron.energon.flavors import (
@@ -111,6 +112,8 @@ from megatron.energon.wrappers import (
     homogeneous_concat_mix,
 )
 
+SavableDataLoader = DataLoader
+
 __all__ = [
     "__version__",
     "AugmentTaskEncoder",
@@ -133,6 +136,7 @@ __all__ = [
     "CrudeJsonlDatasetFactory",
     "CrudeSample",
     "CrudeWebdataset",
+    "DataLoader",
     "DatasetLoader",
     "DatasetLoaderInterface",
     "DecodeFileStore",
@@ -188,6 +192,7 @@ __all__ = [
     "reraise_exception",
     "Sample",
     "SampleDecoder",
+    "SavableDataLoader",
     "SavableDataset",
     "traverse_metadataset",
     "ShuffleBufferDataset",

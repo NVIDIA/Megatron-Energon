@@ -14,6 +14,8 @@ from megatron.energon.wrappers.base import WrappedRestoreKey, wrap_sample_restor
 
 TSample = TypeVar("TSample", covariant=True)
 
+DEBUG_LEVEL = 0
+
 
 @dataclass(kw_only=True, slots=True, frozen=True)
 class WorkerSampleRestoreKey(WrappedRestoreKey):
@@ -130,15 +132,19 @@ class DataLoaderWorker(Generic[TSample]):
             "Global worker ID mismatch"
         )
         assert self._seed == self.worker_config.worker_seed(self._rank_worker_id), "Seed mismatch"
-        print("dataset_init\n", end="")
+        if DEBUG_LEVEL >= 1:
+            print("dataset_init\n", end="")
         self.dataset.reset_state()
         if state is None:
             self._sample_index = 0
-            print("dataset_init reset_state_deep\n", end="")
+            if DEBUG_LEVEL >= 1:
+                print("dataset_init reset_state_deep\n", end="")
             self.new_iter()
-            print("dataset_init new_iter\n", end="")
+            if DEBUG_LEVEL >= 1:
+                print("dataset_init new_iter\n", end="")
         else:
-            print(f"dataset_init restore_state: {state=}\n", end="")
+            if DEBUG_LEVEL >= 1:
+                print(f"dataset_init restore_state: {state=}\n", end="")
             self._sample_index = state.sample_index
             SystemRng.restore_state(state.rng)
             self.dataset.restore_state(state.dataset)
@@ -154,10 +160,12 @@ class DataLoaderWorker(Generic[TSample]):
         Updates the exhausted flag to False.
         """
         # This is called in the worker context (process/thread).
-        print("new_iter\n", end="")
+        if DEBUG_LEVEL >= 1:
+            print("new_iter\n", end="")
         self._dataset_iter = iter(self.dataset)
         self._exhausted = False
-        print("new_iter done\n", end="")
+        if DEBUG_LEVEL >= 1:
+            print("new_iter done\n", end="")
 
     def prefetch_next(self) -> Future[TSample]:
         """
@@ -219,8 +227,8 @@ class DataLoaderWorker(Generic[TSample]):
         """
         Save the state of the worker.
         """
-        # This is called in the worker context (process/thread).
-        print(f"save_state: {self._sample_index=}, {self._exhausted=}\n", end="")
+        if DEBUG_LEVEL >= 1:
+            print(f"save_state: {self._sample_index=}, {self._exhausted=}\n", end="")
         return WorkerState(
             rng=SystemRng.save_state(),
             dataset=self.dataset.save_state(),

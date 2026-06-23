@@ -37,7 +37,7 @@ from megatron.energon.wrappers.watchdog_dataset import WatchdogDataset
 
 TSample = TypeVar("TSample", covariant=True)
 
-DEBUG_LEVEL = 1
+DEBUG_LEVEL = 0
 
 
 @edataclass
@@ -95,6 +95,7 @@ class DataLoader(Generic[TSample]):
 
     _current_epoch_iter: Generator[TSample, None, None] | None = None
 
+    _config_pin_memory: bool
     _spawning_process: int
 
     _global_sample_idx: int = 0
@@ -193,6 +194,7 @@ class DataLoader(Generic[TSample]):
             assert prefetch_factor == 1, "prefetch_factor must be 1 for num_workers == 0"
         else:
             assert prefetch_factor > 0, "prefetch_factor must be > 0 for num_workers > 0"
+        self._config_pin_memory = pin_memory is not None
 
         self._spawning_process = os.getpid()
 
@@ -377,27 +379,38 @@ class DataLoader(Generic[TSample]):
                 if self._worker_config.should_log(level=1):
                     keys = default_get_batch_keys(sample)
                     restore_key = get_sample_restore_key(sample)
+                    restore_key_payload = (
+                        {} if restore_key is None else {"restore_key": restore_key.as_tuple()}
+                    )
                     self._worker_config.worker_log(
                         {
-                            **{
-                                "t": "DataLoader.epoch_iter.yield",
-                                "r": self._worker_config.rank,
-                                "w": None,
-                                "id": self._id,
-                                "epoch_id": epoch_id,
-                                "worker_id": worker_idx,
-                                "worker_sample_idx": restore_key.sample_idx
-                                if isinstance(restore_key, WorkerSampleRestoreKey)
-                                else None,
-                                "epoch_sample_idx": epoch_sample_idx,
-                                "global_sample_idx": self._global_sample_idx,
-                            },
+                            "t": "DataLoader.epoch_iter.yield",
+                            "r": self._worker_config.rank,
+                            "w": None,
+                            "id": self._id,
+                            "epoch_id": epoch_id,
+                            "worker_id": worker_idx,
+                            "worker_sample_idx": restore_key.sample_idx
+                            if isinstance(restore_key, WorkerSampleRestoreKey)
+                            else None,
+                            "epoch_sample_idx": epoch_sample_idx,
+                            "global_sample_idx": self._global_sample_idx,
                             **({} if keys is None else {"keys": keys}),
-                            **(
-                                {}
-                                if restore_key is None
-                                else {"restore_key": restore_key.as_tuple()}
-                            ),
+                            **restore_key_payload,
+                        }
+                    )
+                    # Compatibility with the previous SavableDataLoader debug schema.
+                    self._worker_config.worker_log(
+                        {
+                            "t": "SavableDataLoader.yield",
+                            "r": self._worker_config.rank,
+                            "w": None,
+                            "id": self._id,
+                            "idx": epoch_sample_idx,
+                            "worker_id": worker_idx,
+                            "global_idx": self._global_sample_idx,
+                            **({} if keys is None else {"keys": keys}),
+                            **restore_key_payload,
                         }
                     )
                 epoch_sample_idx += 1
@@ -662,7 +675,14 @@ class DataLoader(Generic[TSample]):
 
     def config(self) -> dict[str, Any]:
         """Get the configuration of the dataset."""
-        return self._dataset.config()
+        return {
+            "type": "SavableDataLoader",
+            "num_workers": self._worker_config.num_workers,
+            "persistent_workers": False,
+            "pin_memory": self._config_pin_memory,
+            "prefetch_factor": None if self._worker_config.num_workers == 0 else self._prefetch_factor,
+            "dataset": self._dataset.config(),
+        }
 
     def __str__(self) -> str:
         return f"DataLoader(_id={self._id}, prefetch_factor={self._prefetch_factor}, worker_type={self._worker_type.__name__})"

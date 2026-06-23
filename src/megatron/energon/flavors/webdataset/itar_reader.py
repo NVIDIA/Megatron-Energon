@@ -172,9 +172,15 @@ class ITarReader(RawSampleReaderInterface[T_index], Generic[T_index]):
         """
         with self.cache_lock:
             while len(self.itar_files_cache) >= self.itar_cache_size:
-                # Evict the oldest file
-                self.itar_files_cache.pop().close()
+                self._close_itarfile(self.itar_files_cache.pop())
             self.itar_files_cache.add(tar_file_id, reader)
+
+    @staticmethod
+    def _close_itarfile(tar_file: ITarFile) -> None:
+        fileobj = tar_file.fileobj
+        tar_file.close()
+        if fileobj is not None:
+            fileobj.close()
 
     @contextlib.contextmanager
     def _open_itarfile(self, tar_file_id: int) -> Generator[ITarFile, None, None]:
@@ -605,13 +611,17 @@ class SqliteITarEntryReader(ITarReader[str]):
 
     @property
     def _sqlite_reader(self) -> SqliteIndexReader:
-        return self.thread_local._sqlite_reader
+        reader = getattr(self.thread_local, "_sqlite_reader", None)
+        if reader is None:
+            reader = self.thread_local._sqlite_reader = SqliteIndexReader(self.sqlite_path)
+        return reader
 
     @property
     def sqlite_reader(self) -> SqliteIndexReader:
         return self._sqlite_reader
 
     def worker_init(self):
+        self.worker_close()
         self.thread_local._sqlite_reader = SqliteIndexReader(self.sqlite_path)
 
     def worker_close(self):

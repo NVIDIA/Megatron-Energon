@@ -15,7 +15,7 @@ from megatron.energon.dataloader.asynchronous.base import (
     WorkerResult,
 )
 
-DEBUG_LEVEL = 1
+DEBUG_LEVEL = 0
 
 
 class ForkAsynchronous(Asynchronous):

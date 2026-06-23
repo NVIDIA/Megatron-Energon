@@ -40,20 +40,17 @@ class FileStore(ABC, Generic[T]):
         """Returns the path to the dataset."""
         ...
 
-    @abstractmethod
     def worker_init(self) -> None:
         """Initializes the file store for the current worker."""
-        raise NotImplementedError("worker_init is not implemented for this file store")
+        pass
 
-    @abstractmethod
     def worker_close(self) -> None:
         """Closes the file store for the current worker."""
-        raise NotImplementedError("worker_close is not implemented for this file store")
+        pass
 
-    @abstractmethod
     def close(self) -> None:
         """Closes the file store."""
-        raise NotImplementedError("close is not implemented for this file store")
+        pass
 
     def get_media_metadata(self, key: str) -> MediaMetadataBase:
         """Return the media metadata for the given key if available."""
