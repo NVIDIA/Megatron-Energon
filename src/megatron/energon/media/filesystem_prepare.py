@@ -3,14 +3,19 @@
 
 from __future__ import annotations
 
-import os
+import shutil
+import tempfile
 from functools import partial
 from pathlib import Path
 from typing import Callable, Iterator
 
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.webdataset.aggregator_pool import AggregatorPool
-from megatron.energon.flavors.webdataset.config import INDEX_SQLITE_FILENAME, MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset.config import (
+    INDEX_BATCH_SIZE,
+    INDEX_SQLITE_FILENAME,
+    MAIN_FOLDER_NAME,
+)
 from megatron.energon.flavors.webdataset.prepare import (
     IndexAggregatable,
     IndexMediaMetadata,
@@ -27,6 +32,7 @@ def prepare_filesystem_dataset(
     *,
     progress: bool,
     workers: int = 16,
+    index_sqlite_tmp_path: Path | None = None,
 ) -> int:
     """Scan a filesystem dataset and materialize media metadata into SQLite.
 
@@ -34,27 +40,32 @@ def prepare_filesystem_dataset(
         root_path: Dataset root directory.
         media_filter: Media filtering configuration.
         progress: Whether to display a tqdm progress bar.
+        index_sqlite_tmp_path: When ``root_path`` is remote, temp file path used to build
+            ``index.sqlite`` locally before upload. If omitted, a new directory under
+            ``/tmp`` is created and removed after a successful run.
 
     Returns:
         Number of metadata entries written to the database.
     """
 
-    # Only supporting local file system, because sqlite does not support remote file systems.
-    # TODO: Implement remote file systems. Maybe create locally in tmp then upload?
-    assert str(root_path).startswith("/"), (
-        f"SQLite path must be absolute local file system path: {root_path}"
-    )
+    assert not root_path.is_file(), f"Expected directory for filesystem dataset, got {root_path}"
 
-    root = Path(str(root_path))
-    assert root.is_dir(), f"Expected directory for filesystem dataset, got {root}"
-    assert root.is_absolute(), f"Filesystem dataset path must be absolute: {root}"
+    files = _collect_media_files(root=root_path, media_filter=media_filter, progress=progress)
 
-    meta_dir = root / MAIN_FOLDER_NAME
-    meta_dir.mkdir(exist_ok=True, parents=True)
+    if len(files) == 0:
+        raise ValueError("No media files found to process")
 
-    files = _collect_media_files(root=root, media_filter=media_filter, progress=progress)
-
-    sqlite_path = EPath(meta_dir / INDEX_SQLITE_FILENAME)
+    owns_remote_sqlite_tmp = False
+    remote_sqlite_tmp_dir: Path | None = None
+    if not root_path.is_local():
+        if index_sqlite_tmp_path is None:
+            remote_sqlite_tmp_dir = Path(
+                tempfile.mkdtemp(dir="/tmp", prefix="energon-prepare-media-")
+            )
+            index_sqlite_tmp_path = remote_sqlite_tmp_dir / INDEX_SQLITE_FILENAME
+            owns_remote_sqlite_tmp = True
+    else:
+        index_sqlite_tmp_path = None
 
     agg_progress_fn: Callable[[Iterator[int], int], Iterator[int]] | None = None
     if progress:
@@ -64,46 +75,66 @@ def prepare_filesystem_dataset(
             with tqdm(iterator, total=total, unit="file", desc="Processing media files") as bar:
                 yield from bar
 
-    aggregator = SqliteIndexWriterAggregator(
-        sqlite_path,
-        total_tasks=len(files),
-        progress_fn=agg_progress_fn,
-        enable_media_metadata=True,
-        media_filter=media_filter,
-        reset_tables=False,
-        enable_sample_tables=False,
-        progress_on_media=progress,
-    )
+    sqlite_path = root_path / MAIN_FOLDER_NAME / INDEX_SQLITE_FILENAME
 
-    pool = AggregatorPool[
-        Path,
-        IndexAggregatable,
-        tuple[list[ShardInfo], set[str], bool, list[tuple[str, int]]],
-    ](
-        num_workers=min(workers, len(files)) or 1,
-        user_produce_data=partial(
-            _process_filesystem_entry,
-            root=root,
+    try:
+        aggregator = SqliteIndexWriterAggregator(
+            sqlite_path,
+            total_tasks=len(files),
+            progress_fn=agg_progress_fn,
+            enable_media_metadata=True,
             media_filter=media_filter,
-        ),
-        aggregator=aggregator,
-    )
+            reset_tables=False,
+            enable_sample_tables=False,
+            progress_on_media=progress,
+            sqlite_local_build_path=index_sqlite_tmp_path,
+        )
 
-    for file_path in files:
-        pool.submit_task(file_path)
+        pool = AggregatorPool[
+            EPath,
+            IndexAggregatable,
+            tuple[list[ShardInfo], set[str], bool, list[tuple[str, int]]],
+        ](
+            num_workers=min(workers, len(files)) or 1,
+            user_produce_data=partial(
+                _process_filesystem_entry,
+                root=root_path,
+                media_filter=media_filter,
+            ),
+            aggregator=aggregator,
+            batch_size=INDEX_BATCH_SIZE,
+        )
 
-    pool.process()
+        for file_path in files:
+            pool.submit_task(file_path)
 
-    return aggregator.media_metadata_written
+        pool.process()
+
+        if sqlite_path.is_local():
+            try:
+                meta_dir = (root_path / MAIN_FOLDER_NAME).local_path()
+                # Copy group permissions from the parent dir
+                meta_dir.chmod((root_path.local_path().stat().st_mode | 0o700))
+                # Just read/write, no execute
+                sqlite_path.local_path().chmod(
+                    (root_path.local_path().stat().st_mode | 0o600) & 0o666
+                )
+            except OSError:
+                pass
+
+        return aggregator.media_metadata_written
+    finally:
+        if owns_remote_sqlite_tmp and remote_sqlite_tmp_dir is not None:
+            shutil.rmtree(remote_sqlite_tmp_dir, ignore_errors=True)
 
 
 def _collect_media_files(
-    *, root: Path, media_filter: MediaFilterConfig, progress: bool = False
-) -> list[Path]:
+    *, root: EPath, media_filter: MediaFilterConfig, progress: bool = False
+) -> list[EPath]:
     """Return a sorted list of files to process based on the media filter."""
 
     consider_all = media_filter.should_consider_all()
-    files: list[Path] = []
+    files: list[EPath] = []
 
     progress_bar = None
     if progress:
@@ -111,28 +142,26 @@ def _collect_media_files(
 
         progress_bar = tqdm(total=None, unit="file", desc="Collecting media files")
 
-    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
-        current_dir = Path(dirpath)
+    # if root.is_local() and not root.profile == "dss":
+    #     paths = (
+    #         EPath(path) / file
+    #         for path, _dirs, files in os.walk(root.local_path(), followlinks=False)
+    #         for file in files
+    #     )
+    # else:
+    #     paths = root.glob("**/*")
 
-        if current_dir.name == MAIN_FOLDER_NAME:
-            dirnames[:] = []
+    for file in root.walk():
+        if progress_bar is not None:
+            progress_bar.update()
+
+        if ("/" + MAIN_FOLDER_NAME + "/") in file.url:
             continue
 
-        dirnames[:] = [d for d in dirnames if d != MAIN_FOLDER_NAME]
+        if not consider_all and not media_filter.should_consider_media(file.name):
+            continue
 
-        for filename in filenames:
-            if progress_bar is not None:
-                progress_bar.update()
-
-            if not consider_all and not media_filter.should_consider_media(filename):
-                continue
-
-            candidate = current_dir / filename
-            if MAIN_FOLDER_NAME in candidate.parts:
-                continue
-
-            if candidate.is_file():
-                files.append(candidate)
+        files.append(file)
 
     if progress_bar is not None:
         progress_bar.close()
@@ -142,18 +171,17 @@ def _collect_media_files(
 
 
 def _process_filesystem_entry(
-    file_path: Path | str,
+    file_path: EPath,
     *,
-    root: Path,
+    root: EPath,
     media_filter: MediaFilterConfig,
 ) -> Iterator[IndexMediaMetadata]:
-    file_path = Path(file_path)
     extracted_metadata = media_filter.extract_metadata(file_path)
     if extracted_metadata is None:
         return
 
     stored_type, metadata_json = serialize_media_metadata(extracted_metadata)
-    entry_key = file_path.relative_to(root).as_posix()
+    entry_key = file_path.relative_to(root)
 
     yield IndexMediaMetadata(
         entry_key=entry_key,

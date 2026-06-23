@@ -1,6 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+import os
 from abc import ABC
 from typing import (
     Any,
@@ -37,6 +38,8 @@ from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.map_dataset import MapDataset
 
 T_sample = TypeVar("T_sample", covariant=True)
+
+DEBUG_SHARD_PRINT = os.getenv("ENERGON_DEBUG_SHARD_PRINT", "0") == "1"
 
 
 class JoinedWebdatasetFactory(BaseCoreDatasetFactory[T_sample], Sharder, Generic[T_sample], ABC):
@@ -158,19 +161,20 @@ class JoinedWebdatasetFactory(BaseCoreDatasetFactory[T_sample], Sharder, Generic
             subset=self.subset,
         )
 
-        for worker_idx, sample_slice_offsets in enumerate(workers_sample_slice_offsets):
-            start_idx = sample_slice_offsets[0]
-            end_idx = sample_slice_offsets[-1]
+        if DEBUG_SHARD_PRINT:
+            for worker_idx, sample_slice_offsets in enumerate(workers_sample_slice_offsets):
+                start_idx = sample_slice_offsets[0]
+                end_idx = sample_slice_offsets[-1]
 
-            if len(sample_slice_offsets) > 6:
-                offset_str = f"{', '.join(str(o) for o in sample_slice_offsets[:3])} ...<{len(sample_slice_offsets) - 6}> {', '.join(str(o) for o in sample_slice_offsets[-3:])}"
-            else:
-                offset_str = ", ".join(str(o) for o in sample_slice_offsets)
+                if len(sample_slice_offsets) > 6:
+                    offset_str = f"{', '.join(str(o) for o in sample_slice_offsets[:3])} ...<{len(sample_slice_offsets) - 6}> {', '.join(str(o) for o in sample_slice_offsets[-3:])}"
+                else:
+                    offset_str = ", ".join(str(o) for o in sample_slice_offsets)
 
-            print(
-                f"rank={self.worker_config.rank}, worker={worker_idx}: sample_range=[{start_idx}, {end_idx}) in {len(sample_slice_offsets) - 1} slices, "
-                f"sum(count)={end_idx - start_idx}: [{offset_str}]"
-            )
+                print(
+                    f"rank={self.worker_config.rank}, worker={worker_idx}: sample_range=[{start_idx}, {end_idx}) in {len(sample_slice_offsets) - 1} slices, "
+                    f"sum(count)={end_idx - start_idx}: [{offset_str}]"
+                )
 
         itar_readers = [
             JoinIndexFileITarReader(

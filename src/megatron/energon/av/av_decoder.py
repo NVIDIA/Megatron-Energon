@@ -3,14 +3,12 @@
 
 import io
 import warnings
-from collections.abc import Iterator
+from enum import Enum
 from fractions import Fraction
 from typing import BinaryIO, Literal, Optional, Sequence, Union, overload
 
 import numpy as np
 import torch
-
-from megatron.energon.av.av_init import av_open
 
 # Try importing optional dependencies
 try:
@@ -18,7 +16,12 @@ try:
     import av.container
     import filetype
 
-    from megatron.energon.av.fastseek import Fastseek
+    from megatron.energon.av.av_reader import (
+        AVProbeIndex,
+        AVReader,
+        AVReaderByFrames,
+        AVReaderByPts,
+    )
 
     AV_DECODE_AVAILABLE = True
 except ImportError as e:
@@ -26,7 +29,14 @@ except ImportError as e:
     MISSING_DEPENDENCY = str(e)
 
 from megatron.energon.av.av_data import AVData
+from megatron.energon.av.av_init import av_open
 from megatron.energon.media import AVMetadata
+
+
+class AVIndexMode(Enum):
+    FRAMES = "frames"
+    PTS = "pts"
+    PROBE = "probe"
 
 
 class AVDecoder:
@@ -37,7 +47,6 @@ class AVDecoder:
     decoding parameters.
     """
 
-    seeker: "Fastseek"
     stream: BinaryIO
     suppress_warnings: bool
 
@@ -55,14 +64,6 @@ class AVDecoder:
             "Stream must not be opened in text mode"
         )
 
-        try:
-            self.seeker = Fastseek(self.stream)
-        except ValueError:
-            self.stream.seek(0)
-            self.seeker = Fastseek(self.stream, probe=True)
-
-        self.stream.seek(0)
-
     def get_video(self) -> AVData:
         """Get the entire video data from the stream (without audio)."""
 
@@ -74,6 +75,17 @@ class AVDecoder:
             audio_timestamps=[],
         )
 
+    def _inspect_index_mode(self) -> AVIndexMode:
+        extension = self._get_extension()
+
+        if extension is not None:
+            if extension in ("mkv", "webm"):
+                return AVIndexMode.PTS
+            elif extension in ("mp4", "mov", "m4v"):
+                return AVIndexMode.FRAMES
+
+        return AVIndexMode.PROBE
+
     def get_video_clips(
         self,
         video_clip_ranges: Sequence[tuple[float, float]],
@@ -83,7 +95,8 @@ class AVDecoder:
         """Get video clips from the video stream.
 
         Args:
-            video_clip_ranges: List of video clip start and end positions in the given unit (see video_unit)
+            video_clip_ranges: List of video clip start and end positions in the given unit (see video_unit).
+                The end is inclusive! For each range at least one frame is returned.
             video_unit: Unit of the video clip positions ("frames" for frame number, "seconds" for timestamp)
             video_out_frame_size: Output size for video frames (width, height), or None to use the original frame size
 
@@ -95,7 +108,7 @@ class AVDecoder:
 
         assert video_unit in ("frames", "seconds")
 
-        self.stream.seek(0)  # Reset the video stream so that pyav can read the entire container
+        index_mode = self._inspect_index_mode()
 
         with av_open(self.stream) as input_container:
             assert len(input_container.streams.video) > 0, (
@@ -104,115 +117,94 @@ class AVDecoder:
 
             video_stream = input_container.streams.video[0]
 
+            if index_mode == AVIndexMode.PROBE:
+                frame_index = AVProbeIndex(input_container, 0)
+            else:
+                frame_index = video_stream.index_entries
+
             # Pre-calculate timing info for video
-            average_rate: Fraction = video_stream.average_rate  # Frames per second
+            # Frames per second
+            average_rate: Fraction = video_stream.average_rate
             assert average_rate, "Video stream has no FPS."
 
-            time_base: Fraction = video_stream.time_base  # Seconds per PTS unit
+            # Seconds per PTS unit
+            time_base: Fraction = video_stream.time_base
 
-            if video_clip_ranges is not None:
-                # Convert video_clip_ranges to seeker unit
-                if video_unit == "frames" and self.seeker.unit == "pts":
-                    # Convert from frames to pts units
+            reader: AVReader
+            # Select reader and convert video_clip_ranges to the index's native unit
+            match (video_unit, index_mode):
+                case ("frames", AVIndexMode.FRAMES | AVIndexMode.PROBE):
+                    reader = AVReaderByFrames(input_container, 0, frame_index)
+
+                case ("seconds", AVIndexMode.PTS | AVIndexMode.PROBE):
                     video_clip_ranges = [
-                        (
-                            clip[0] / average_rate / time_base,
-                            clip[1] / average_rate / time_base,
-                        )
+                        (clip[0] / time_base, clip[1] / time_base) for clip in video_clip_ranges
+                    ]
+                    reader = AVReaderByPts(input_container, 0, frame_index)
+
+                case ("frames", AVIndexMode.PTS):
+                    video_clip_ranges = [
+                        (clip[0] / average_rate / time_base, clip[1] / average_rate / time_base)
                         for clip in video_clip_ranges
                     ]
-
+                    reader = AVReaderByPts(input_container, 0, frame_index)
+                    video_unit = "seconds"
                     if not self.suppress_warnings:
                         warnings.warn(
                             "Video container unit is frames, but seeking in time units. The resulting frames may be slightly off.",
                             RuntimeWarning,
                         )
-                elif video_unit == "seconds" and self.seeker.unit == "frames":
-                    # Convert from seconds to frames
+
+                case ("seconds", AVIndexMode.FRAMES):
                     video_clip_ranges = [
-                        (
-                            clip[0] * average_rate,
-                            clip[1] * average_rate,
-                        )
+                        (clip[0] * average_rate, clip[1] * average_rate)
                         for clip in video_clip_ranges
                     ]
+                    reader = AVReaderByFrames(input_container, 0, frame_index)
+                    video_unit = "frames"
                     if not self.suppress_warnings:
                         warnings.warn(
-                            "Video container unit is time units, but seeking using frame number. The resulting frames may be slightly off.",
+                            "Video container unit is seconds, but seeking only supports frames. The resulting frames may be slightly off.",
                             RuntimeWarning,
                         )
-                elif video_unit == "seconds" and self.seeker.unit == "pts":
-                    # Convert from seconds to pts units
-                    video_clip_ranges = [
-                        (clip[0] / time_base, clip[1] / time_base) for clip in video_clip_ranges
-                    ]
-
-            frame_iterator: Iterator[av.VideoFrame] = input_container.decode(video=0)
-            previous_frame_index: int = 0
+                case _:
+                    raise ValueError(
+                        f"Unsupported video_unit={video_unit}, index_mode={index_mode}"
+                    )
 
             video_clips_frames: list[list[torch.Tensor]] = []
             video_clips_timestamps: list[tuple[float, float]] = []
 
             for video_clip_range in video_clip_ranges:
-                start_frame_index, end_frame_index = video_clip_range
+                range_start, range_end = video_clip_range
 
                 # Convert to int if possible, set end to None if infinite
-                start_frame_index = int(start_frame_index)
-                end_frame_index = int(end_frame_index) if end_frame_index != float("inf") else None
+                range_start = int(range_start)
+                range_end = int(range_end) if range_end != float("inf") else None
 
                 clip_frames: list[torch.Tensor] = []
                 clip_timestamp_start = None
                 clip_timestamp_end = None
 
-                # Find start frame
-                if (
-                    iframe_info := self.seeker.should_seek(previous_frame_index, start_frame_index)
-                ) is not None:
-                    input_container.seek(iframe_info.pts, stream=input_container.streams.video[0])
-                    previous_frame_index = iframe_info.index
+                frame = None
+                for frame in reader.seek_read(range_start, range_end):
+                    # print(f"Taking frame {frame.pts}+{frame.duration}")
+                    if video_out_frame_size is not None:
+                        frame = frame.reformat(
+                            width=video_out_frame_size[0],
+                            height=video_out_frame_size[1],
+                            format="rgb24",
+                            interpolation="BILINEAR",
+                        )
+                    else:
+                        frame = frame.reformat(format="rgb24")
 
-                for frame in frame_iterator:
-                    take_frame = False
-                    last_frame = False
+                    clip_frames.append(torch.from_numpy(frame.to_ndarray()))
+                    if clip_timestamp_start is None:
+                        clip_timestamp_start = float(frame.pts * frame.time_base)
 
-                    # Container uses frame counts, we can find the exact target frame by counting from the iframe which is at a known offset
-                    if self.seeker.unit == "frames":
-                        if previous_frame_index >= start_frame_index:
-                            take_frame = True
-                        if end_frame_index is not None and previous_frame_index >= end_frame_index:
-                            last_frame = True
-
-                    # Container uses time, the target frame might not correspond exactly to any metadata but the desired timestamp should
-                    # fall within a frames display period
-                    if self.seeker.unit == "pts":
-                        if start_frame_index <= (frame.pts + frame.duration):
-                            take_frame = True
-                        if end_frame_index is not None and end_frame_index <= (
-                            frame.pts + frame.duration
-                        ):
-                            last_frame = True
-
-                    if take_frame:
-                        if video_out_frame_size is not None:
-                            frame = frame.reformat(
-                                width=video_out_frame_size[0],
-                                height=video_out_frame_size[1],
-                                format="rgb24",
-                                interpolation="BILINEAR",
-                            )
-                        else:
-                            frame = frame.reformat(format="rgb24")
-
-                        clip_frames.append(torch.from_numpy(frame.to_ndarray()))
-                        if clip_timestamp_start is None:
-                            clip_timestamp_start = float(frame.pts * frame.time_base)
-
-                        clip_timestamp_end = float((frame.pts + frame.duration) * frame.time_base)
-
-                    previous_frame_index += 1
-
-                    if last_frame:
-                        break
+                if frame is not None:
+                    clip_timestamp_end = float((frame.pts + frame.duration) * frame.time_base)
 
                 if clip_timestamp_start is not None and clip_timestamp_end is not None:
                     video_clips_frames.append(clip_frames)
@@ -551,6 +543,7 @@ class AVDecoder:
         get_video_frame_size: bool = True,
         get_audio: bool = True,
         get_audio_duration: bool = True,
+        get_audio_num_samples: bool = False,
     ) -> "AVMetadata":
         """Get the metadata of the media object.
 
@@ -561,6 +554,7 @@ class AVDecoder:
             get_video_frame_size: Compute video frame size if not found in header.
             get_audio: Compute audio metadata.
             get_audio_duration: Compute audio duration if not found in header.
+            get_audio_num_samples: Compute audio number of samples. This requires decoding the audio stream.
         """
         self.stream.seek(0)
         with av_open(self.stream) as input_container:
@@ -613,6 +607,21 @@ class AVDecoder:
                 audio_stream = input_container.streams.audio[0]
                 metadata.audio_sample_rate = audio_stream.sample_rate
                 metadata.audio_duration = audio_stream.duration
+                if get_audio_num_samples and metadata.audio_num_samples is None:
+                    num_samples = 0
+                    last_packet = None
+                    input_container.seek(0)
+                    for p in input_container.decode(audio=0):
+                        if p.pts is not None:
+                            last_packet = p
+                        num_samples += p.samples
+
+                    metadata.audio_num_samples = num_samples
+
+                    if last_packet is not None and last_packet.duration is not None:
+                        assert last_packet.pts is not None
+                        metadata.audio_duration = last_packet.pts + last_packet.duration
+
                 if get_audio_duration and metadata.audio_duration is None:
                     last_packet = None
                     input_container.seek(0)

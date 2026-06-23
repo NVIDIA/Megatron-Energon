@@ -157,7 +157,11 @@ class WebdatasetFileStore(SqliteITarEntryReader, FileStore[bytes]):
         self,
         dataset_path: EPath,
     ):
-        super().__init__(base_path=dataset_path, key_is_full_entryname=True)
+        super().__init__(
+            base_path=dataset_path,
+            key_is_full_entryname=True,
+            disable_cache=True,
+        )
         self._media_metadata_available: Optional[bool] = None
 
     def get_path(self) -> str:
@@ -166,19 +170,18 @@ class WebdatasetFileStore(SqliteITarEntryReader, FileStore[bytes]):
     def get_media_metadata(self, key: str) -> MediaMetadataBase:
         if self._media_metadata_available is None:
             try:
-                has_metadata = self._sqlite_reader.db_has_media_metadata()
+                self._media_metadata_available = self._sqlite_reader.db_has_media_metadata()
             except sqlite3.Error as exc:  # pragma: no cover - defensive
+                self._media_metadata_available = False
                 raise RuntimeError(
                     "Failed to inspect media metadata table. Re-run `energon prepare --media-metadata-by-...`."
                 ) from exc
 
-            if not has_metadata:
-                raise RuntimeError(
-                    "Media metadata is not available for this dataset. "
-                    "Run `energon prepare --media-metadata-by-...` to generate it."
-                )
-
-            self._media_metadata_available = True
+        if not self._media_metadata_available:
+            raise RuntimeError(
+                "Media metadata is not available for this dataset. "
+                "Run `energon prepare --media-metadata-by-...` to generate it."
+            )
 
         try:
             row = self._sqlite_reader.get_media_metadata(key)

@@ -1,0 +1,26 @@
+---
+description: Python environment and unittest workflow for Megatron-Energon
+alwaysApply: true
+---
+
+# Python Environment
+
+- This project uses `pyproject.toml` as the source of Python package metadata, dependencies, optional extras, build settings, and Ruff configuration.
+- `uv.lock` pins the resolved dependency graph. Do not hand-edit it; update it through `uv` commands.
+- The local environment is the repo-local `.venv` managed by `uv`. Prefer `uv run ...` over activating the venv manually.
+- The `justfile` is the canonical command entry point. Use `just dev-sync` to sync all extras into `.venv` with `.uv_cache`, and `just prod-sync` for a non-dev sync.
+- After making code changes, run `just fix` before checking linter errors so formatting and import ordering are aligned first.
+- For linting and formatting, prefer the project recipes: `just fix` and `just check`.
+
+# Tests
+
+- This repo uses Python's `unittest` runner, not `pytest`, for normal test execution.
+- Run the full suite with `just test`, which calls `uv run -m unittest discover -v -s tests`.
+- For focused tests, use `uv run python -m unittest` with dotted test names, for example:
+
+```bash
+uv run python -m unittest tests.test_epathlib.TestEPath.test_dss_path_requires_version
+uv run python -m unittest tests.test_crudedataset.TestDataset.test_dss_path
+```
+
+- When reporting verification, include the exact `uv run python -m unittest ...` or `just ...` command that was run.

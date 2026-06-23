@@ -14,6 +14,7 @@ from megatron.energon.metadataset.loader_interface import (
     DatasetBlendMode,
     DatasetLoaderInterface,
     LoadedDatasetList,
+    TraversedDatasetReference,
 )
 from megatron.energon.worker import WorkerConfig
 
@@ -44,18 +45,46 @@ class DatasetReference:
                 self.subflavors = {"__subflavor__": self.subflavor, **(self.subflavors or {})}
             self.subflavor = None
 
-    def post_initialize(self, mds_path: Optional[EPath] = None):
+    def _resolve_path(self, mds_path: Optional[EPath]) -> EPath:
         assert mds_path is not None
         if not isinstance(self.path, EPath):
             self.path = mds_path.parent / self.path
+        return self.path
+
+    def _load_nested_metadataset(self) -> DatasetLoaderInterface:
+        assert isinstance(self.path, EPath)
+        assert self.dataset_config is None, "Must not set dataset_config"
+        assert self.split_config is None, "Must not set split_config"
+        return load_config(
+            self.path,
+            default_type=Metadataset,
+            default_kwargs=dict(path=self.path),
+        )
+
+    def _merge_traversed_subflavors(
+        self, inherited_subflavors: Optional[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """Merge this reference's subflavors with the inherited traversal subflavors.
+
+        The merge order mirrors `get_datasets(...)`: this reference contributes the base mapping,
+        and inherited outer-hierarchy subflavors override on key conflicts.
+
+        Args:
+            inherited_subflavors: Effective subflavors accumulated from outer metadataset
+                references during traversal.
+
+        Returns:
+            The effective subflavor mapping for this reference, after applying outer-overrides-inner
+            merge semantics.
+        """
+        if self.subflavors is not None:
+            return {**self.subflavors, **(inherited_subflavors or {})}
+        return dict(inherited_subflavors or {})
+
+    def post_initialize(self, mds_path: Optional[EPath] = None):
+        self._resolve_path(mds_path)
         if self.path.is_file():
-            assert self.dataset_config is None, "Must not set dataset_config"
-            assert self.split_config is None, "Must not set split_config"
-            self._dataset = load_config(
-                self.path,
-                default_type=Metadataset,
-                default_kwargs=dict(path=self.path),
-            )
+            self._dataset = self._load_nested_metadataset()
             self._dataset.post_initialize()
         elif check_dataset_info_present(self.path):
             self._dataset = DatasetLoader(
@@ -66,6 +95,43 @@ class DatasetReference:
             self._dataset.post_initialize()
         else:
             raise FileNotFoundError(self.path)
+
+    def traverse(
+        self,
+        mds_path: Optional[EPath] = None,
+        *,
+        split_part: Union[Literal["train", "val", "test"], str],
+        _subflavors: Optional[Dict[str, Any]] = None,
+    ) -> List[TraversedDatasetReference]:
+        """Traverse this V1 dataset reference into flattened leaf references.
+
+        Args:
+            mds_path: Parent metadataset path used internally to resolve relative dataset and
+                auxiliary paths. Must be set for nested references and inner traversal nodes;
+                use None only for top-level metadatasets.
+            split_part: Split inherited from the parent traversal. If this reference defines its
+                own split override, that split takes precedence for nested traversal and the
+                returned leaf reference.
+
+        Returns:
+            A single leaf `TraversedDatasetReference` for direct dataset references, or the
+            flattened traversal result of the nested metadataset when this reference points to one.
+        """
+        self._resolve_path(mds_path)
+        effective_subflavors = self._merge_traversed_subflavors(_subflavors)
+        if self.path.is_file():
+            return self._load_nested_metadataset().traverse(
+                split_part=self.split_part or split_part,
+                _subflavors=effective_subflavors,
+            )
+        return [
+            TraversedDatasetReference(
+                path=self.path,
+                split_part=self.split_part or split_part,
+                aux={},
+                subflavors=effective_subflavors,
+            )
+        ]
 
     def get_datasets(
         self,
@@ -115,6 +181,25 @@ class MetadatasetBlender:
         assert mds_path is not None
         for dataset in self.datasets:
             dataset.post_initialize(mds_path)
+
+    def traverse(
+        self,
+        mds_path: Optional[EPath] = None,
+        *,
+        split_part: Union[Literal["train", "val", "test"], str],
+        _subflavors: Optional[Dict[str, Any]] = None,
+    ) -> List[TraversedDatasetReference]:
+        assert mds_path is not None
+        flattened: List[TraversedDatasetReference] = []
+        for dataset in self.datasets:
+            flattened.extend(
+                dataset.traverse(
+                    mds_path,
+                    split_part=split_part,
+                    _subflavors=_subflavors,
+                )
+            )
+        return flattened
 
     def get_datasets(
         self,
@@ -179,6 +264,29 @@ class Metadataset(DatasetLoaderInterface):
         assert mds_path is None
         for split in self._splits.values():
             split.post_initialize(self._path)
+
+    def traverse(
+        self,
+        mds_path: Optional[EPath] = None,
+        *,
+        split_part: Union[Literal["train", "val", "test"], str],
+        _subflavors: Optional[Dict[str, Any]] = None,
+    ) -> List[TraversedDatasetReference]:
+        """Traverse the selected V1 split and flatten all reachable leaf references.
+
+        Args:
+            mds_path: Unused for top-level metadatasets. Present to satisfy the shared interface.
+            split_part: Split to traverse.
+
+        Returns:
+            The flattened list of traversed leaf dataset references for `split_part`.
+        """
+        assert mds_path is None
+        return self._splits[split_part].traverse(
+            self._path,
+            split_part=split_part,
+            _subflavors=_subflavors,
+        )
 
     def get_datasets(
         self,

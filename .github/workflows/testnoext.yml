@@ -1,4 +1,7 @@
-name: ruff checks
+name: tests_noextras
+
+permissions:
+  contents: read
 
 on:
   push:
@@ -10,7 +13,7 @@ on:
       - develop
 
 jobs:
-  ruff:
+  unittest:
     runs-on: ubuntu-latest
 
     steps:
@@ -23,10 +26,14 @@ jobs:
     - name: Install just
       uses: extractions/setup-just@v3
 
+    - name: Install minimum supported python version
+      run: |
+        uv python pin 3.10
+
     - name: Install dependencies
       run: |
-        just dev-sync
+        uv sync --no-dev --cache-dir .uv_cache
 
-    - name: Check code
+    - name: Run simple command
       run: |
-        just check
+        uv run energon --version

@@ -69,8 +69,8 @@ The arguments are more or less identical to what can be passed to `SampleDecoder
 ## AV Decoder (Audio and Video)
 
 Energon comes with code to efficiently decode compressed video and audio files such as MP4, MP3 or WAV.
-It integrates a library called `fastseek` that allows to quickly extract sub-clips from longer videos.
-The actual decoding is done by PyAV which in turn relies on ffmpeg.
+It uses PyAV, and through it FFmpeg, to decode the actual media data.
+For efficient video sub-clip extraction, `AVDecoder` uses FFmpeg/PyAV container index entries where available and falls back to probing the file when an index is not available.
 
 When choosing `AVDecoder` as the option for `av_decode` above, an object of the type {py:class}`AVDecoder <megatron.energon.av.AVDecoder>` (click to see methods) will be returned. 
 At this point, the file has not yet been decoded, but in your [custom sample loader](custom-sample-loader) or in your [TaskEncoder](../basic/task_encoder), you can read parts or all of the file using the methods of `AVDecoder`.

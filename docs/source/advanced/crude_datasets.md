@@ -127,12 +127,13 @@ __module__: megatron.energon
 __class__: MetadatasetV2
 splits:
   train:
-    path: ./my_pimary_ds
+    path: ./my_primary_ds
     aux:
       foo_bar_source: ./aux_ds123
       fs_source: filesystem://./images
       fs_source_abs: filesystem:///absolute/path/to/images
-      remote_source: msc://mybucket/path/ds
+      remote_source: msc://coolstore/mainbucket/path/ds
+      remote_fs_source: filesystem+msc://coolstore/mainbucket/path/images
     subflavors:
       crude_type: my_dual_aux_example
 ```
@@ -150,7 +151,7 @@ You can specify multiple aux sources each of which can be one of
 * Relative or absolute path to a local prepared energon dataset
 * Relative or absolute path to a local folder (use the prefix `filesystem://`)
 * Path to a remote prepared energon dataset (use prefix `msc://`)
-* *[Planned future feature]*: Path to a remote folder (use prefix `filesystem+msc://`)
+* Path to a remote folder (use prefix `filesystem+msc://`)
 
 In your code, the cooker will automatically receive a {py:class}`FileStore <megatron.energon.FileStore>` reference to the data source as a keyword argument:
 
