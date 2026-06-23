@@ -6,19 +6,22 @@
 import gc
 import io
 import logging
+import os
 import pickle
 import re
 import shutil
 import sys
 import tempfile
+import unittest
 import warnings
 from pathlib import Path
 from typing import List
 
-import pytest
 import torch
 import webdataset as wds
+from click.testing import CliRunner
 
+import megatron.energon.epathlib.epath as epath_mod
 from megatron.energon import (
     Batch,
     Cooker,
@@ -32,17 +35,19 @@ from megatron.energon import (
 )
 from megatron.energon.cache import FileStore, FileStoreCachePool, Lazy
 from megatron.energon.cache.base import CachePool
+from megatron.energon.cli.main import prepare_media_command
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib.epath import EPath
 from megatron.energon.errors import reraise_exception
 from megatron.energon.flavors.base_dataset import Sample
-from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset.config import INDEX_SQLITE_FILENAME, MAIN_FOLDER_NAME
 from megatron.energon.flavors.webdataset.sample_decoder import SampleDecoder
 from megatron.energon.media.extractor import MediaFilterConfig, MediaFilterStrategy
 from megatron.energon.media.filesystem_prepare import prepare_filesystem_dataset
 from megatron.energon.media.metadata import AVMetadata, ImageMetadata
 from megatron.energon.source_info import SourceInfo
 from megatron.energon.task_encoder.cooking import cooker
+from tests.epath_s3_emulator import setup_s3_emulator
 
 
 def _noise_image_bytes(size: tuple[int, int], fmt: str, seed: int) -> bytes:
@@ -99,7 +104,8 @@ def cook_text(sample: dict) -> TextSample:
 
 @stateless
 def cook_other(sample: dict) -> TextSample:
-    d = pickle.loads(sample["pkl"])
+    pkl_value = sample["pkl"]
+    d = pickle.loads(pkl_value) if isinstance(pkl_value, (bytes, str)) else pkl_value
     return TextSample(
         **basic_sample_keys(sample),
         text=f"<{sample['txt']}|{d['idx']}>",
@@ -149,7 +155,6 @@ class CookingTaskEncoder(DefaultTaskEncoder[TextSample, TextSample, TextBatch, T
         Cooker(cook_media_metadata, has_subflavors={"crude_type": "media_metadata"}),
     ]
 
-    @stateless
     def batch(self, samples: List[TextSample]) -> TextBatch:
         return TextBatch.from_samples(
             samples,
@@ -218,7 +223,6 @@ class LazyCookingTaskEncoder(
             text=samples[0].txt + "|" + next_txt,
         )
 
-    @stateless
     def batch(self, samples: List[TextSample]) -> TextBatch:
         return TextBatch.from_samples(
             samples,
@@ -252,7 +256,6 @@ class LazyCookingTaskEncoderWithPostencode(
         assert len(samples) == 1
         return samples[0]
 
-    @stateless
     def batch(self, samples: List[TextSample]) -> TextBatch:
         return TextBatch.from_samples(
             samples,
@@ -272,234 +275,233 @@ class GenericCookingTaskEncoder(DefaultTaskEncoder[TextSample, TextSample, TextB
         )
 
 
-@pytest.fixture
-def dataset_path():
-    logging.basicConfig(stream=sys.stderr, level=logging.INFO)
-    warnings.simplefilter("ignore", ResourceWarning)
+class TestDataset(unittest.TestCase):
+    # Set up the test fixture
+    def setUp(self):
+        logging.basicConfig(stream=sys.stderr, level=logging.INFO)
+        warnings.simplefilter("ignore", ResourceWarning)
 
-    # Create a temporary directory
-    temp_dir = tempfile.TemporaryDirectory()
-    dataset_path = Path(temp_dir.name)
-    # dataset_path = Path("./test_dataset")
+        # Create a temporary directory
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.dataset_path = Path(self.temp_dir.name)
+        # self.dataset_path = Path("./test_dataset")
 
-    dataset_path.mkdir(exist_ok=True, parents=True)
+        self.dataset_path.mkdir(exist_ok=True, parents=True)
 
-    (dataset_path / "ds1").mkdir(exist_ok=True, parents=True)
-    (dataset_path / "ds2").mkdir(exist_ok=True, parents=True)
+        (self.dataset_path / "ds1").mkdir(exist_ok=True, parents=True)
+        (self.dataset_path / "ds2").mkdir(exist_ok=True, parents=True)
 
-    # Create a small dummy captioning dataset
-    create_crude_text_test_dataset(dataset_path / "ds1", 0)
-    create_crude_text_test_dataset(dataset_path / "ds2", 100)
+        # Create a small dummy captioning dataset
+        self.create_crude_text_test_dataset(self.dataset_path / "ds1", 0)
+        self.create_crude_text_test_dataset(self.dataset_path / "ds2", 100)
 
-    mds_path = dataset_path / "metadataset.yaml"
-    with open(mds_path, "w") as f:
-        f.write(
-            "\n".join(
-                [
-                    "__module__: megatron.energon",
-                    "__class__: Metadataset",
-                    "splits:",
-                    "  train:",
-                    "    datasets:",
-                    "      - weight: 1",
-                    "        path: ds1",
-                    "        subflavors:",
-                    "          source: metadataset.yaml",
-                    "          number: 43",
-                    "          mds: mds",
-                    "          crude_type: txtpkl",
-                    "        shuffle_over_epochs_multiplier: 3",
-                    "      - weight: 1",
-                    "        path: ds2",
-                    "        subflavors:",
-                    "          source: metadataset.yaml",
-                    "          number: 44",
-                    "          mds: mds",
-                    "          crude_type: otherpkl",
-                    "  val:",
-                    "    datasets:",
-                    "      - weight: 1",
-                    "        path: ds1",
-                    "        split_part: train",
-                    "      - weight: 1",
-                    "        path: ds2",
-                    "        split_part: train",
-                ]
+        self.mds_path = self.dataset_path / "metadataset.yaml"
+        with open(self.mds_path, "w") as f:
+            f.write(
+                "\n".join(
+                    [
+                        "__module__: megatron.energon",
+                        "__class__: Metadataset",
+                        "splits:",
+                        "  train:",
+                        "    datasets:",
+                        "      - weight: 1",
+                        "        path: ds1",
+                        "        subflavors:",
+                        "          source: metadataset.yaml",
+                        "          number: 43",
+                        "          mds: mds",
+                        "          crude_type: txtpkl",
+                        "        shuffle_over_epochs_multiplier: 3",
+                        "      - weight: 1",
+                        "        path: ds2",
+                        "        subflavors:",
+                        "          source: metadataset.yaml",
+                        "          number: 44",
+                        "          mds: mds",
+                        "          crude_type: otherpkl",
+                        "  val:",
+                        "    datasets:",
+                        "      - weight: 1",
+                        "        path: ds1",
+                        "        split_part: train",
+                        "      - weight: 1",
+                        "        path: ds2",
+                        "        split_part: train",
+                    ]
+                )
             )
+
+        self.aux_mds_path = self.dataset_path / "aux_metadataset.yaml"
+        with open(self.aux_mds_path, "w") as f:
+            f.write(
+                "\n".join(
+                    [
+                        "__module__: megatron.energon",
+                        "__class__: MetadatasetV2",
+                        "splits:",
+                        "  train:",
+                        "    path: ds1",
+                        "    aux:",
+                        "      pkl_source: ds2",
+                        "      fs_source: filesystem://.",
+                        "    subflavors:",
+                        "      crude_type: aux_random_access",
+                    ]
+                )
+            )
+
+        self.multimedia_wds_path = self.dataset_path / "multimedia_wds"
+        self.create_multimedia_webdataset(self.multimedia_wds_path)
+
+        self.multimedia_fs_path = self.dataset_path / "multimedia_fs"
+        self.create_multimedia_filesystem_dataset(self.multimedia_fs_path)
+
+        self.media_mds_path = self.dataset_path / "media_metadataset.yaml"
+        with open(self.media_mds_path, "w") as f:
+            f.write(
+                "\n".join(
+                    [
+                        "__module__: megatron.energon",
+                        "__class__: MetadatasetV2",
+                        "splits:",
+                        "  train:",
+                        "    path: multimedia_wds",
+                        "    aux:",
+                        "      media: filesystem://multimedia_fs",
+                        "    subflavors:",
+                        "      crude_type: media_metadata",
+                    ]
+                )
+            )
+
+        print(self.dataset_path)
+
+    def tearDown(self):
+        # Remove all temporary files
+        gc.collect()
+        self.temp_dir.cleanup()
+
+    @staticmethod
+    def create_crude_text_test_dataset(path: Path, offset: int):
+        """Creates a small dummy test dataset for testing purposes."""
+
+        # Create num_samples unique captions
+        (path / "parts").mkdir(exist_ok=True, parents=True)
+
+        # Initialize the ShardWriter
+        with wds.ShardWriter(f"{path}/parts/data-%d.tar", maxcount=10) as shard_writer:
+            for idx in range(55):
+                # Write individual files to shards
+                shard_writer.write(
+                    {
+                        "__key__": f"{idx + offset:06d}",
+                        "txt": f"{idx + offset}".encode(),
+                        "pkl": pickle.dumps({"idx": idx + offset}),
+                    },
+                )
+            total_shards = shard_writer.shard
+
+        from megatron.energon.flavors import BaseWebdatasetFactory
+
+        BaseWebdatasetFactory.prepare_dataset(
+            path,
+            [f"parts/data-{{0..{total_shards - 1}}}.tar"],
+            split_parts_ratio=[("train", 1.0)],
+            shuffle_seed=None,
+            workers=1,
+            media_filter=None,
         )
 
-    aux_mds_path = dataset_path / "aux_metadataset.yaml"
-    with open(aux_mds_path, "w") as f:
-        f.write(
-            "\n".join(
-                [
-                    "__module__: megatron.energon",
-                    "__class__: MetadatasetV2",
-                    "splits:",
-                    "  train:",
-                    "    path: ds1",
-                    "    aux:",
-                    "      pkl_source: ds2",
-                    "      fs_source: filesystem://.",
-                    "    subflavors:",
-                    "      crude_type: aux_random_access",
-                ]
+        with open(path / MAIN_FOLDER_NAME / "dataset.yaml", "w") as f:
+            f.write(
+                "\n".join(
+                    [
+                        "__module__: megatron.energon",
+                        "__class__: CrudeWebdataset",
+                        "subflavors:",
+                        "  dataset.yaml: true",
+                        "  number: 42",
+                    ]
+                )
             )
+
+    @staticmethod
+    def create_multimedia_webdataset(path: Path):
+        path.mkdir(exist_ok=True, parents=True)
+        (path / "parts").mkdir(exist_ok=True, parents=True)
+
+        jpg_bytes = _noise_image_bytes((32, 16), "JPEG", seed=0)
+        png_bytes = _noise_image_bytes((24, 24), "PNG", seed=1)
+        video_bytes = Path("tests/data/sync_test.mp4").read_bytes()
+        audio_bytes = Path("tests/data/test_audio.flac").read_bytes()
+
+        with wds.ShardWriter(f"{path}/parts/data-%d.tar", maxcount=10) as shard_writer:
+            shard_writer.write({"__key__": "image000", "jpg": jpg_bytes})
+            shard_writer.write({"__key__": "image001", "png": png_bytes})
+            shard_writer.write({"__key__": "audio001", "flac": audio_bytes})
+            shard_writer.write({"__key__": "video001", "mp4": video_bytes})
+            total_shards = shard_writer.shard
+
+        from megatron.energon.flavors import BaseWebdatasetFactory
+
+        BaseWebdatasetFactory.prepare_dataset(
+            path,
+            [f"parts/data-{{0..{total_shards - 1}}}.tar"],
+            split_parts_ratio=[("train", 1.0)],
+            shuffle_seed=None,
+            workers=1,
+            media_filter=MediaFilterConfig(strategy=MediaFilterStrategy.EXTENSION),
         )
 
-    multimedia_wds_path = dataset_path / "multimedia_wds"
-    create_multimedia_webdataset(multimedia_wds_path)
-
-    multimedia_fs_path = dataset_path / "multimedia_fs"
-    create_multimedia_filesystem_dataset(multimedia_fs_path)
-
-    media_mds_path = dataset_path / "media_metadataset.yaml"
-    with open(media_mds_path, "w") as f:
-        f.write(
-            "\n".join(
-                [
-                    "__module__: megatron.energon",
-                    "__class__: MetadatasetV2",
-                    "splits:",
-                    "  train:",
-                    "    path: multimedia_wds",
-                    "    aux:",
-                    "      media: filesystem://multimedia_fs",
-                    "    subflavors:",
-                    "      crude_type: media_metadata",
-                ]
+        with open(path / MAIN_FOLDER_NAME / "dataset.yaml", "w") as f:
+            f.write(
+                "\n".join(
+                    [
+                        "__module__: megatron.energon",
+                        "__class__: CrudeWebdataset",
+                        "subflavors:",
+                        "  crude_type: media_metadata",
+                    ]
+                )
             )
+
+    @staticmethod
+    def create_multimedia_filesystem_dataset(path: Path):
+        path.mkdir(exist_ok=True, parents=True)
+
+        (path / "image000.jpg").write_bytes(_noise_image_bytes((32, 16), "JPEG", seed=0))
+        (path / "image001.png").write_bytes(_noise_image_bytes((24, 24), "PNG", seed=1))
+        shutil.copyfile("tests/data/sync_test.mp4", path / "video001.mp4")
+        shutil.copyfile("tests/data/test_audio.flac", path / "audio001.flac")
+
+        prepare_filesystem_dataset(
+            EPath(path), MediaFilterConfig(strategy=MediaFilterStrategy.EXTENSION), progress=False
         )
 
-    print(dataset_path)
-
-    yield dataset_path
-
-    # Remove all temporary files
-    gc.collect()
-    temp_dir.cleanup()
-
-
-def create_crude_text_test_dataset(path: Path, offset: int):
-    """Creates a small dummy test dataset for testing purposes."""
-
-    # Create num_samples unique captions
-    (path / "parts").mkdir(exist_ok=True, parents=True)
-
-    # Initialize the ShardWriter
-    with wds.ShardWriter(f"{path}/parts/data-%d.tar", maxcount=10) as shard_writer:
-        for idx in range(55):
-            # Write individual files to shards
-            shard_writer.write(
-                {
-                    "__key__": f"{idx + offset:06d}",
-                    "txt": f"{idx + offset}".encode(),
-                    "pkl": pickle.dumps({"idx": idx + offset}),
-                },
-            )
-        total_shards = shard_writer.shard
-
-    from megatron.energon.flavors import BaseWebdatasetFactory
-
-    BaseWebdatasetFactory.prepare_dataset(
-        path,
-        [f"parts/data-{{0..{total_shards - 1}}}.tar"],
-        split_parts_ratio=[("train", 1.0)],
-        shuffle_seed=None,
-        workers=1,
-        media_filter=None,
-    )
-
-    with open(path / MAIN_FOLDER_NAME / "dataset.yaml", "w") as f:
-        f.write(
-            "\n".join(
-                [
-                    "__module__: megatron.energon",
-                    "__class__: CrudeWebdataset",
-                    "subflavors:",
-                    "  dataset.yaml: true",
-                    "  number: 42",
-                ]
-            )
+    def test_metadataset(self):
+        torch.manual_seed(42)
+        worker_config = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=0,
+            global_error_handler=reraise_exception,
         )
 
-
-def create_multimedia_webdataset(path: Path):
-    path.mkdir(exist_ok=True, parents=True)
-    (path / "parts").mkdir(exist_ok=True, parents=True)
-
-    jpg_bytes = _noise_image_bytes((32, 16), "JPEG", seed=0)
-    png_bytes = _noise_image_bytes((24, 24), "PNG", seed=1)
-    video_bytes = Path("tests/data/sync_test.mp4").read_bytes()
-    audio_bytes = Path("tests/data/test_audio.flac").read_bytes()
-
-    with wds.ShardWriter(f"{path}/parts/data-%d.tar", maxcount=10) as shard_writer:
-        shard_writer.write({"__key__": "image000", "jpg": jpg_bytes})
-        shard_writer.write({"__key__": "image001", "png": png_bytes})
-        shard_writer.write({"__key__": "audio001", "flac": audio_bytes})
-        shard_writer.write({"__key__": "video001", "mp4": video_bytes})
-        total_shards = shard_writer.shard
-
-    from megatron.energon.flavors import BaseWebdatasetFactory
-
-    BaseWebdatasetFactory.prepare_dataset(
-        path,
-        [f"parts/data-{{0..{total_shards - 1}}}.tar"],
-        split_parts_ratio=[("train", 1.0)],
-        shuffle_seed=None,
-        workers=1,
-        media_filter=MediaFilterConfig(strategy=MediaFilterStrategy.EXTENSION),
-    )
-
-    with open(path / MAIN_FOLDER_NAME / "dataset.yaml", "w") as f:
-        f.write(
-            "\n".join(
-                [
-                    "__module__: megatron.energon",
-                    "__class__: CrudeWebdataset",
-                    "subflavors:",
-                    "  crude_type: media_metadata",
-                ]
-            )
+        # Train mode dataset
+        torch.manual_seed(42)
+        train_dataset = get_train_dataset(
+            self.mds_path,
+            worker_config=worker_config,
+            batch_size=3,
+            task_encoder=CookingTaskEncoder(),
+            shuffle_buffer_size=None,
+            max_samples_per_sequence=None,
+        )
+        loader = get_savable_loader(
+            train_dataset,
         )
 
-
-@staticmethod
-def create_multimedia_filesystem_dataset(path: Path):
-    path.mkdir(exist_ok=True, parents=True)
-
-    (path / "image000.jpg").write_bytes(_noise_image_bytes((32, 16), "JPEG", seed=0))
-    (path / "image001.png").write_bytes(_noise_image_bytes((24, 24), "PNG", seed=1))
-    shutil.copyfile("tests/data/sync_test.mp4", path / "video001.mp4")
-    shutil.copyfile("tests/data/test_audio.flac", path / "audio001.flac")
-
-    prepare_filesystem_dataset(
-        EPath(path), MediaFilterConfig(strategy=MediaFilterStrategy.EXTENSION), progress=False
-    )
-
-
-def test_metadataset(dataset_path):
-    torch.manual_seed(42)
-    worker_config = WorkerConfig(
-        rank=0,
-        world_size=1,
-        num_workers=0,
-        global_error_handler=reraise_exception,
-    )
-
-    # Train mode dataset
-    torch.manual_seed(42)
-    train_dataset = get_train_dataset(
-        dataset_path / "metadataset.yaml",
-        worker_config=worker_config,
-        batch_size=3,
-        task_encoder=CookingTaskEncoder(),
-        shuffle_buffer_size=None,
-        max_samples_per_sequence=None,
-    )
-    with get_savable_loader(
-        train_dataset,
-    ) as loader:
         print(len(train_dataset))
         # assert len(train_dataset) == 11
 
@@ -519,26 +521,27 @@ def test_metadataset(dataset_path):
 
                 print(key, txt)
 
+    def test_loader(self):
+        torch.manual_seed(42)
+        worker_config = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=2,
+        )
 
-def test_loader(dataset_path):
-    torch.manual_seed(42)
-    worker_config = WorkerConfig(
-        rank=0,
-        world_size=1,
-        num_workers=2,
-    )
-
-    with get_savable_loader(
-        get_train_dataset(
-            dataset_path / "metadataset.yaml",
-            batch_size=2,
-            worker_config=worker_config,
-            task_encoder=CookingTaskEncoder(),
-            shuffle_buffer_size=None,
-            max_samples_per_sequence=None,
-            packing_buffer_size=2,
-        ),
-    ) as loader:
+        loader = get_savable_loader(
+            get_train_dataset(
+                self.mds_path,
+                batch_size=2,
+                worker_config=worker_config,
+                task_encoder=CookingTaskEncoder(),
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                packing_buffer_size=2,
+            ),
+            checkpoint_every_sec=0,
+            checkpoint_every_min_n_samples=1,
+        )
         samples = [s.__key__ for idx, s in zip(range(100), loader)]
 
         print(samples)
@@ -548,44 +551,51 @@ def test_loader(dataset_path):
         samples_after = [s.__key__ for idx, s in zip(range(100, 200), loader)]
         print(samples_after)
 
-    with get_savable_loader(
-        get_train_dataset(
-            dataset_path / "metadataset.yaml",
-            batch_size=2,
-            worker_config=worker_config,
-            task_encoder=CookingTaskEncoder(),
-            shuffle_buffer_size=None,
-            max_samples_per_sequence=None,
-            packing_buffer_size=2,
-        ),
-    ).with_restored_state_rank(state) as loader:
+        loader = get_savable_loader(
+            get_train_dataset(
+                self.mds_path,
+                batch_size=2,
+                worker_config=worker_config,
+                task_encoder=CookingTaskEncoder(),
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                packing_buffer_size=2,
+            ),
+            checkpoint_every_sec=0,
+            checkpoint_every_min_n_samples=1,
+        )
+
+        loader.restore_state_rank(state)
+
         samples_restored = [s.__key__ for idx, s in zip(range(100, 200), loader)]
         print(samples_restored)
 
         assert all([a == b for a, b in zip(samples_after, samples_restored)])
 
+    def test_aux_random_access(self):
+        torch.manual_seed(42)
+        worker_config = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=2,
+        )
 
-def test_aux_random_access(dataset_path):
-    torch.manual_seed(42)
-    worker_config = WorkerConfig(
-        rank=0,
-        world_size=1,
-        num_workers=2,
-    )
+        print("Initializing dataset")
 
-    print("Initializing dataset")
+        loader = get_savable_loader(
+            get_train_dataset(
+                self.aux_mds_path,
+                batch_size=2,
+                worker_config=worker_config,
+                task_encoder=CookingTaskEncoder(),
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                packing_buffer_size=2,
+            ),
+            checkpoint_every_sec=0,
+            checkpoint_every_min_n_samples=1,
+        )
 
-    with get_savable_loader(
-        get_train_dataset(
-            dataset_path / "aux_metadataset.yaml",
-            batch_size=2,
-            worker_config=worker_config,
-            task_encoder=CookingTaskEncoder(),
-            shuffle_buffer_size=None,
-            max_samples_per_sequence=None,
-            packing_buffer_size=2,
-        ),
-    ) as loader:
         print("Iterating from dataset")
         samples = [s.txts for idx, s in zip(range(100), loader)]
         for idx, txts in enumerate(samples):
@@ -601,48 +611,119 @@ def test_aux_random_access(dataset_path):
         samples_after = [s.__key__ for idx, s in zip(range(100, 200), loader)]
         print(samples_after)
 
-    with get_savable_loader(
-        get_train_dataset(
-            dataset_path / "aux_metadataset.yaml",
-            batch_size=2,
-            worker_config=worker_config,
-            task_encoder=CookingTaskEncoder(),
-            shuffle_buffer_size=None,
-            max_samples_per_sequence=None,
-            packing_buffer_size=2,
-        ),
-    ).with_restored_state_rank(state) as loader:
+        loader = get_savable_loader(
+            get_train_dataset(
+                self.aux_mds_path,
+                batch_size=2,
+                worker_config=worker_config,
+                task_encoder=CookingTaskEncoder(),
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                packing_buffer_size=2,
+            ),
+            checkpoint_every_sec=0,
+            checkpoint_every_min_n_samples=1,
+        )
+
+        loader.restore_state_rank(state)
+
         samples_restored = [s.__key__ for idx, s in zip(range(100, 200), loader)]
         print(samples_restored)
 
         assert all([a == b for a, b in zip(samples_after, samples_restored)])
 
+    def test_dss_path(self):
+        dss_dataset_name = "crude_text"
+        dss_dataset_version = "v1"
+        dss_dataset_root = self.dataset_path / dss_dataset_name
+        dss_dataset_root.mkdir(parents=True, exist_ok=True)
+        (dss_dataset_root / dss_dataset_version).symlink_to(
+            self.dataset_path / "ds1",
+            target_is_directory=True,
+        )
 
-def test_aux_random_access_with_cache(dataset_path):
-    torch.manual_seed(42)
-    worker_config = WorkerConfig(
-        rank=0,
-        world_size=1,
-        num_workers=2,
-    )
+        dss_mds_path = self.dataset_path / "metadataset_dss.yaml"
+        dss_mds_path.write_text(
+            "\n".join(
+                [
+                    "__module__: megatron.energon",
+                    "__class__: MetadatasetV2",
+                    "splits:",
+                    "  train:",
+                    f"    path: dss://{dss_dataset_name}@{dss_dataset_version}",
+                    "    subflavors:",
+                    "      crude_type: txtpkl",
+                ]
+            )
+        )
 
-    print("Initializing dataset")
+        orig_env_cache_dir = os.environ.get("NVDATASET_CACHE_DIR")
+        orig_mod_cache_dir = epath_mod.NVDATASET_CACHE_DIR
 
-    with get_savable_loader(
-        get_train_dataset(
-            dataset_path / "aux_metadataset.yaml",
-            batch_size=2,
-            worker_config=worker_config,
-            task_encoder=LazyCookingTaskEncoder(),
-            shuffle_buffer_size=None,
-            max_samples_per_sequence=None,
-            packing_buffer_size=2,
-        ),
-        cache_pool=FileStoreCachePool(
-            parent_cache_dir=dataset_path / "cache",
-            num_workers=1,
-        ),
-    ) as loader:
+        try:
+            os.environ["NVDATASET_CACHE_DIR"] = str(self.dataset_path)
+            epath_mod.NVDATASET_CACHE_DIR = EPath(self.dataset_path)
+
+            torch.manual_seed(42)
+            worker_config = WorkerConfig(
+                rank=0,
+                world_size=1,
+                num_workers=0,
+            )
+
+            loader = get_savable_loader(
+                get_train_dataset(
+                    dss_mds_path,
+                    batch_size=1,
+                    worker_config=worker_config,
+                    task_encoder=CookingTaskEncoder(),
+                    shuffle_buffer_size=None,
+                    max_samples_per_sequence=None,
+                ),
+                checkpoint_every_sec=0,
+                checkpoint_every_min_n_samples=1,
+            )
+
+            texts = [batch.txts[0] for _, batch in zip(range(3), loader)]
+            assert len(texts) == 3
+            assert len(set(texts)) == 3
+            assert all(re.fullmatch(r"<\d+>", txt) for txt in texts)
+            assert all(0 <= int(txt.removeprefix("<").removesuffix(">")) < 55 for txt in texts)
+        finally:
+            if orig_env_cache_dir is None:
+                os.environ.pop("NVDATASET_CACHE_DIR", None)
+            else:
+                os.environ["NVDATASET_CACHE_DIR"] = orig_env_cache_dir
+            epath_mod.NVDATASET_CACHE_DIR = orig_mod_cache_dir
+
+    def test_aux_random_access_with_cache(self):
+        torch.manual_seed(42)
+        worker_config = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=2,
+        )
+
+        print("Initializing dataset")
+
+        loader = get_savable_loader(
+            get_train_dataset(
+                self.aux_mds_path,
+                batch_size=2,
+                worker_config=worker_config,
+                task_encoder=LazyCookingTaskEncoder(),
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                packing_buffer_size=2,
+            ),
+            checkpoint_every_sec=0,
+            checkpoint_every_min_n_samples=1,
+            cache_pool=FileStoreCachePool(
+                parent_cache_dir=self.dataset_path / "cache",
+                num_workers=1,
+            ),
+        )
+
         print("Iterating from dataset")
         samples = [s.txts for idx, s in zip(range(100), loader)]
         for idx, txts in enumerate(samples):
@@ -659,52 +740,59 @@ def test_aux_random_access_with_cache(dataset_path):
         samples_after = [s.__key__ for idx, s in zip(range(100, 200), loader)]
         print(samples_after)
 
-    with get_savable_loader(
-        get_train_dataset(
-            dataset_path / "aux_metadataset.yaml",
-            batch_size=2,
-            worker_config=worker_config,
-            task_encoder=CookingTaskEncoder(),
-            shuffle_buffer_size=None,
-            max_samples_per_sequence=None,
-            packing_buffer_size=2,
-        ),
-        cache_pool=FileStoreCachePool(
-            parent_cache_dir=dataset_path / "cache",
-            num_workers=1,
-        ),
-    ).with_restored_state_rank(state) as loader:
+        loader = get_savable_loader(
+            get_train_dataset(
+                self.aux_mds_path,
+                batch_size=2,
+                worker_config=worker_config,
+                task_encoder=CookingTaskEncoder(),
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                packing_buffer_size=2,
+            ),
+            checkpoint_every_sec=0,
+            checkpoint_every_min_n_samples=1,
+            cache_pool=FileStoreCachePool(
+                parent_cache_dir=self.dataset_path / "cache",
+                num_workers=1,
+            ),
+        )
+
+        loader.restore_state_rank(state)
+
         samples_restored = [s.__key__ for idx, s in zip(range(100, 200), loader)]
         print(samples_restored)
 
         assert all([a == b for a, b in zip(samples_after, samples_restored)])
 
+    def test_aux_random_access_with_cache_and_postencode(self):
+        torch.manual_seed(42)
+        worker_config = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=2,
+        )
 
-def test_aux_random_access_with_cache_and_postencode(dataset_path):
-    torch.manual_seed(42)
-    worker_config = WorkerConfig(
-        rank=0,
-        world_size=1,
-        num_workers=2,
-    )
+        print("Initializing dataset")
 
-    print("Initializing dataset")
+        loader = get_savable_loader(
+            get_train_dataset(
+                self.aux_mds_path,
+                batch_size=2,
+                worker_config=worker_config,
+                task_encoder=LazyCookingTaskEncoderWithPostencode(),
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                packing_buffer_size=2,
+            ),
+            checkpoint_every_sec=0,
+            checkpoint_every_min_n_samples=1,
+            cache_pool=FileStoreCachePool(
+                parent_cache_dir=self.dataset_path / "cache",
+                num_workers=1,
+            ),
+        )
 
-    with get_savable_loader(
-        get_train_dataset(
-            dataset_path / "aux_metadataset.yaml",
-            batch_size=2,
-            worker_config=worker_config,
-            task_encoder=LazyCookingTaskEncoderWithPostencode(),
-            shuffle_buffer_size=None,
-            max_samples_per_sequence=None,
-            packing_buffer_size=2,
-        ),
-        cache_pool=FileStoreCachePool(
-            parent_cache_dir=dataset_path / "cache",
-            num_workers=1,
-        ),
-    ) as loader:
         print("Iterating from dataset")
         samples = [s.txts for idx, s in zip(range(100), loader)]
         for idx, txts in enumerate(samples):
@@ -721,21 +809,26 @@ def test_aux_random_access_with_cache_and_postencode(dataset_path):
         samples_after = [s.__key__ for idx, s in zip(range(100, 200), loader)]
         print(samples_after)
 
-    with get_savable_loader(
-        get_train_dataset(
-            dataset_path / "aux_metadataset.yaml",
-            batch_size=2,
-            worker_config=worker_config,
-            task_encoder=LazyCookingTaskEncoderWithPostencode(),
-            shuffle_buffer_size=None,
-            max_samples_per_sequence=None,
-            packing_buffer_size=2,
-        ),
-        cache_pool=FileStoreCachePool(
-            parent_cache_dir=dataset_path / "cache",
-            num_workers=1,
-        ),
-    ).with_restored_state_rank(state) as loader:
+        loader = get_savable_loader(
+            get_train_dataset(
+                self.aux_mds_path,
+                batch_size=2,
+                worker_config=worker_config,
+                task_encoder=LazyCookingTaskEncoderWithPostencode(),
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                packing_buffer_size=2,
+            ),
+            checkpoint_every_sec=0,
+            checkpoint_every_min_n_samples=1,
+            cache_pool=FileStoreCachePool(
+                parent_cache_dir=self.dataset_path / "cache",
+                num_workers=1,
+            ),
+        )
+
+        loader.restore_state_rank(state)
+
         samples_restored = [s.__key__ for idx, s in zip(range(100, 200), loader)]
         print(samples_restored)
 
@@ -748,125 +841,289 @@ def test_aux_random_access_with_cache_and_postencode(dataset_path):
         assert sample_src_check == (
             # Primary source for the sample, reading all source files
             SourceInfo(
-                dataset_path=EPath(dataset_path / "ds1"),
+                dataset_path=EPath(self.dataset_path / "ds1"),
                 index=2,
                 shard_name="parts/data-0.tar",
                 file_names=("000002.pkl", "000002.txt"),
             ),
             # Auxiliary source for the sample, reading from ds2
             SourceInfo(
-                dataset_path=EPath(dataset_path / "ds2"),
+                dataset_path=EPath(self.dataset_path / "ds2"),
                 index="000102.txt",
                 shard_name="parts/data-0.tar",
                 file_names=("000102.txt",),
             ),
             # Auxiliary source for the sample, reading from ds1, but next sample
             SourceInfo(
-                dataset_path=EPath(dataset_path / "ds1"),
+                dataset_path=EPath(self.dataset_path / "ds1"),
                 index="000003.txt",
                 shard_name="parts/data-0.tar",
                 file_names=("000003.txt",),
             ),
             SourceInfo(
-                dataset_path=EPath(dataset_path / "ds1"),
+                dataset_path=EPath(self.dataset_path / "ds1"),
                 index=21,
                 shard_name="parts/data-2.tar",
                 file_names=("000021.pkl", "000021.txt"),
             ),
             SourceInfo(
-                dataset_path=EPath(dataset_path / "ds2"),
+                dataset_path=EPath(self.dataset_path / "ds2"),
                 index="000121.txt",
                 shard_name="parts/data-2.tar",
                 file_names=("000121.txt",),
             ),
             SourceInfo(
-                dataset_path=EPath(dataset_path / "ds1"),
+                dataset_path=EPath(self.dataset_path / "ds1"),
                 index="000022.txt",
                 shard_name="parts/data-2.tar",
                 file_names=("000022.txt",),
             ),
         )
 
+    def test_aux_filesystem_reference(self):
+        torch.manual_seed(42)
+        worker_config = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=0,
+        )
 
-def test_aux_filesystem_reference(dataset_path):
-    torch.manual_seed(42)
-    worker_config = WorkerConfig(
-        rank=0,
-        world_size=1,
-        num_workers=0,
-    )
+        loader = get_savable_loader(
+            get_train_dataset(
+                self.aux_mds_path,
+                batch_size=1,
+                worker_config=worker_config,
+                task_encoder=CookingTaskEncoderWithAuxFilesystemReference(),
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+            ),
+        )
 
-    with get_savable_loader(
-        get_train_dataset(
-            dataset_path / "aux_metadataset.yaml",
-            batch_size=1,
-            worker_config=worker_config,
-            task_encoder=CookingTaskEncoderWithAuxFilesystemReference(),
-            shuffle_buffer_size=None,
-            max_samples_per_sequence=None,
-        ),
-    ) as loader:
         sample = next(iter(loader))
 
         assert sample.txts[0].endswith("|aux|__module__: megatron.ener>")
 
+    def test_aux_msc(self):
+        """MetadatasetV2 aux supports msc:// and filesystem+msc:// (issue #211). Same aux keys as aux_metadataset.yaml, ds2 and fs content uploaded to S3."""
+        with setup_s3_emulator(profile_name="s3test_aux_msc") as emu:
+            mds_path = self.dataset_path / "aux_metadataset_msc.yaml"
+            with open(mds_path, "w") as f:
+                f.write(
+                    "\n".join(
+                        [
+                            "__module__: megatron.energon",
+                            "__class__: MetadatasetV2",
+                            "splits:",
+                            "  train:",
+                            "    path: ds1",
+                            "    aux:",
+                            "      pkl_source: msc://s3test_aux_msc/bucket/ds2",
+                            "      fs_source: filesystem+msc://s3test_aux_msc/bucket",
+                            "    subflavors:",
+                            "      crude_type: aux_random_access",
+                        ]
+                    )
+                )
+            mds_rel_path = self.dataset_path / "aux_metadataset_msc_rel.yaml"
+            with open(mds_rel_path, "w") as f:
+                f.write(
+                    "\n".join(
+                        [
+                            "__module__: megatron.energon",
+                            "__class__: MetadatasetV2",
+                            "splits:",
+                            "  train:",
+                            "    path: ds1",
+                            "    aux:",
+                            "      pkl_source: ./ds2",
+                            "      fs_source: filesystem://./",
+                            "    subflavors:",
+                            "      crude_type: aux_random_access",
+                        ]
+                    )
+                )
+            emu.add_file(self.dataset_path, "bucket")
 
-def test_media_metadata_webdataset(dataset_path):
-    torch.manual_seed(42)
-    worker_config = WorkerConfig(
-        rank=0,
-        world_size=1,
-        num_workers=0,
-    )
+            torch.manual_seed(42)
+            loader = get_savable_loader(
+                get_train_dataset(
+                    mds_path,
+                    batch_size=1,
+                    worker_config=WorkerConfig(
+                        rank=0,
+                        world_size=1,
+                        num_workers=0,
+                    ),
+                    task_encoder=CookingTaskEncoderWithAuxFilesystemReference(),
+                    shuffle_buffer_size=None,
+                    max_samples_per_sequence=None,
+                ),
+            )
+            sample = next(iter(loader))
+            assert sample.txts[0].endswith("|aux|__module__: megatron.ener>")
 
-    loader = get_savable_loader(
-        get_train_dataset(
-            dataset_path / "media_metadataset.yaml",
-            batch_size=1,
-            worker_config=worker_config,
-            task_encoder=CookingTaskEncoder(),
-            shuffle_buffer_size=None,
-            max_samples_per_sequence=None,
+            torch.manual_seed(42)
+            loader = get_savable_loader(
+                get_train_dataset(
+                    "msc://s3test_aux_msc/bucket/aux_metadataset_msc_rel.yaml",
+                    batch_size=1,
+                    worker_config=WorkerConfig(
+                        rank=0,
+                        world_size=1,
+                        num_workers=0,
+                    ),
+                    task_encoder=CookingTaskEncoderWithAuxFilesystemReference(),
+                    shuffle_buffer_size=None,
+                    max_samples_per_sequence=None,
+                ),
+            )
+            sample = next(iter(loader))
+            assert sample.txts[0].endswith("|aux|__module__: megatron.ener>")
+
+    def test_media_metadata_webdataset(self):
+        torch.manual_seed(42)
+        worker_config = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=0,
         )
-    )
 
-    descriptions = []
-    for _, batch in zip(range(4), loader):
-        descriptions.extend(batch.txts)
+        loader = get_savable_loader(
+            get_train_dataset(
+                self.media_mds_path,
+                batch_size=1,
+                worker_config=worker_config,
+                task_encoder=CookingTaskEncoder(),
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+            )
+        )
 
-    # from pprint import pprint
-    # pprint(descriptions, indent=4)
+        descriptions = []
+        for _, batch in zip(range(4), loader):
+            descriptions.extend(batch.txts)
 
-    # The descriptions are like "A|B", where A is the format
-    # in the WebDataset and B is the format in the auxiliary dataset.
+        # from pprint import pprint
+        # pprint(descriptions, indent=4)
 
-    assert descriptions == [
-        "IMG-32x16-JPEG|IMG-32x16-JPEG",
-        "IMG-24x24-PNG|IMG-24x24-PNG",
-        "AUDIO-10.0s@32000Hz|AUDIO-10.0s@32000Hz",
-        "VIDEO-192x108@30.0fps-63.0s|VIDEO-192x108@30.0fps-63.0s",
-    ]
+        # The descriptions are like "A|B", where A is the format
+        # in the WebDataset and B is the format in the auxiliary dataset.
 
+        assert descriptions == [
+            "IMG-32x16-JPEG|IMG-32x16-JPEG",
+            "IMG-24x24-PNG|IMG-24x24-PNG",
+            "AUDIO-10.0s@32000Hz|AUDIO-10.0s@32000Hz",
+            "VIDEO-192x108@30.0fps-63.0s|VIDEO-192x108@30.0fps-63.0s",
+        ]
 
-def test_nomds(dataset_path):
-    torch.manual_seed(42)
-    worker_config = WorkerConfig(
-        rank=0,
-        world_size=1,
-        num_workers=2,
-    )
+    def test_prepare_dataset_s3_cmdline(self):
+        """Tar shards live on S3 (emulator); `energon prepare` writes `.nv-meta` to the same prefix."""
+        bucket = "energon-prepare-s3-cmdline-media-metadata"
+        profile_name = "s3test_dataset_prepare_cmdline_media_metadata"
+        with setup_s3_emulator(profile_name=profile_name) as state:
+            state.create_bucket(bucket)
+            state.add_file(self.multimedia_fs_path, dst=f"{bucket}/multimedia_fs/")
+            state.add_file(self.multimedia_wds_path, dst=f"{bucket}/multimedia_wds/")
+            s3_root = EPath(f"msc://{profile_name}/{bucket}")
+            info_path = s3_root / "multimedia_fs" / MAIN_FOLDER_NAME / INDEX_SQLITE_FILENAME
+            # assert not info_path.is_file(), f"index.sqlite already exists: {info_path}"
+            print(f"S3 root: {s3_root}")
+            runner = CliRunner()
+            result = runner.invoke(
+                prepare_media_command,
+                [
+                    str(s3_root / "multimedia_fs"),
+                    "--num-workers",
+                    "2",
+                    "--media-metadata-by-extension",
+                ],
+                catch_exceptions=False,
+            )
+            print(result.stdout)
+            assert result.exit_code == 0, result.stdout
+            assert "Done" in result.stdout, result.stdout
+            assert info_path.is_file(), f"missing {info_path}"
 
-    with get_savable_loader(
-        get_train_dataset(
-            dataset_path / "ds1",
-            batch_size=2,
-            worker_config=worker_config,
-            task_encoder=GenericCookingTaskEncoder(),
-            shuffle_buffer_size=None,
-            max_samples_per_sequence=None,
-        ),
-    ) as loader:
+            print("Done preparing media metadata, iterating now")
+
+            state.put_object(
+                bucket,
+                "s3_media_metadataset.yaml",
+                "\n".join(
+                    [
+                        "__module__: megatron.energon",
+                        "__class__: MetadatasetV2",
+                        "splits:",
+                        "  train:",
+                        "    path: multimedia_wds",
+                        "    aux:",
+                        f"      media: filesystem+msc://{profile_name}/{bucket}/multimedia_fs",
+                        "    subflavors:",
+                        "      crude_type: media_metadata",
+                    ]
+                ).encode("utf-8"),
+            )
+
+            # Iterate over the new dataset
+            worker_config = WorkerConfig(
+                rank=0,
+                world_size=1,
+                num_workers=0,
+            )
+
+            loader = get_savable_loader(
+                get_train_dataset(
+                    s3_root / "s3_media_metadataset.yaml",
+                    batch_size=1,
+                    worker_config=worker_config,
+                    task_encoder=CookingTaskEncoder(),
+                    shuffle_buffer_size=None,
+                    max_samples_per_sequence=None,
+                )
+            )
+
+            descriptions = []
+            for _, batch in zip(range(4), loader):
+                descriptions.extend(batch.txts)
+
+            # from pprint import pprint
+            # pprint(descriptions, indent=4)
+
+            # The descriptions are like "A|B", where A is the format
+            # in the WebDataset and B is the format in the auxiliary dataset.
+
+            assert descriptions == [
+                "IMG-32x16-JPEG|IMG-32x16-JPEG",
+                "IMG-24x24-PNG|IMG-24x24-PNG",
+                "AUDIO-10.0s@32000Hz|AUDIO-10.0s@32000Hz",
+                "VIDEO-192x108@30.0fps-63.0s|VIDEO-192x108@30.0fps-63.0s",
+            ]
+
+    def test_nomds(self):
+        torch.manual_seed(42)
+        worker_config = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=2,
+        )
+
+        loader = get_savable_loader(
+            get_train_dataset(
+                self.dataset_path / "ds1",
+                batch_size=2,
+                worker_config=worker_config,
+                task_encoder=GenericCookingTaskEncoder(),
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+            ),
+            checkpoint_every_sec=0,
+            checkpoint_every_min_n_samples=1,
+        )
         samples = [s.__key__ for idx, s in zip(range(100), loader)]
 
         print(samples)
         assert len(samples) == 100
+
+
+if __name__ == "__main__":
+    unittest.main()

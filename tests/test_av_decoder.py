@@ -9,15 +9,17 @@ import os
 import pickle
 import sys
 import time
+import unittest
+from dataclasses import fields
 from pathlib import Path
 
 import av
 import numpy as np
-import pytest
 import torch
 import torchvision.transforms as transforms
 
 from megatron.energon.av import AVDecoder, get_clips_uniform, get_single_frames_uniform
+from megatron.energon.av.av_reader import AVProbeIndex
 from megatron.energon.media import AVMetadata
 
 # Set multiprocessing start method to 'spawn' on macOS to avoid DataLoader cleanup issues
@@ -73,168 +75,392 @@ def tensors_close(tensor1: torch.Tensor, tensor2: torch.Tensor, tolerance: float
     return mae <= tolerance
 
 
-@pytest.fixture
-def video_test_setup():
-    """Set up test fixtures for video tests."""
-    logging.basicConfig(stream=sys.stderr, level=logging.INFO)
-    complete_video_tensor = load_video_to_tensor("tests/data/sync_test.mp4")
-    yield complete_video_tensor
+def avmetadata_equal(a: AVMetadata, b: AVMetadata, *, ndigits: int = 3) -> bool:
+    """Compare two AVMetadata instances.
+
+    Float fields are compared after rounding to ``ndigits`` decimals.
+    """
+
+    if a is b:
+        return True
+    if type(a) is not type(b):
+        return False
+
+    for f in fields(a):
+        av = getattr(a, f.name)
+        bv = getattr(b, f.name)
+        if isinstance(av, (float, np.floating)) or isinstance(bv, (float, np.floating)):
+            if av is None or bv is None:
+                if av != bv:
+                    return False
+            else:
+                if round(float(av), ndigits) != round(float(bv), ndigits):
+                    return False
+        else:
+            if av != bv:
+                return False
+    return True
 
 
-def test_decode_all_frames(video_test_setup):
-    """Test decoding all frames from a video file."""
-    av_decoder = AVDecoder(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes()))
-    av_data = av_decoder.get_frames()
-    video_tensor = av_data.video_clips[0]
+class TestVideoProbe(unittest.TestCase):
+    """Test video probe indexing functionality."""
 
-    print(video_tensor.shape)
-    assert (video_tensor == video_test_setup).all(), "Energon decoded video does not match baseline"
+    def test_video_probe_keyframe_data(self) -> None:
+        """Confirm keyframe index and pts values are correct."""
+        with av.open(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes())) as container:
+            index = AVProbeIndex(container, 0)
 
+            assert len(index) == container.streams.video[0].frames
+            keyframes = [(i, e.timestamp) for i, e in enumerate(index) if e.is_keyframe]
+            assert keyframes == [
+                (0, 0),
+                (250, 128000),
+                (500, 256000),
+                (750, 384000),
+                (1000, 512000),
+                (1250, 640000),
+                (1500, 768000),
+                (1750, 896000),
+            ]
 
-def test_decode_video_metadata(video_test_setup):
-    """Test decoding metadata."""
-    expected_metadata = [
-        AVMetadata(
-            video_duration=63.054,
-            video_num_frames=1891,
-            video_fps=30.0,
-            video_width=192,
-            video_height=108,
-            audio_duration=63.103,
-            audio_channels=2,
-            audio_sample_rate=48000,
-        ),
-        AVMetadata(
-            video_duration=63.03333333333333,
-            video_num_frames=1891,
-            video_fps=30.0,
-            video_width=192,
-            video_height=108,
-            audio_duration=63.068,
-            audio_channels=2,
-            audio_sample_rate=48000,
-        ),
-    ]
-    for video_file, expected_metadata in zip(
-        ["tests/data/sync_test.mkv", "tests/data/sync_test.mp4"], expected_metadata
-    ):
-        av_decoder = AVDecoder(io.BytesIO(Path(video_file).read_bytes()))
-        assert av_decoder.get_metadata() == expected_metadata, (
-            f"Metadata does not match expected metadata for {video_file}"
-        )
+    def test_video_probe_search_timestamps(self) -> None:
+        """Test search_timestamp functionality"""
+        with av.open(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes())) as container:
+            index = AVProbeIndex(container, 0)
 
-        assert av_decoder.get_video_duration(get_frame_count=False) in (
-            (expected_metadata.video_duration, None),
-            (expected_metadata.video_duration, expected_metadata.video_num_frames),
-        )
-        assert av_decoder.get_video_duration(get_frame_count=True) == (
-            expected_metadata.video_duration,
-            expected_metadata.video_num_frames,
-        )
+            keyframes = [
+                (0, 0),
+                (250, 128000),
+                (500, 256000),
+                (750, 384000),
+                (1000, 512000),
+                (1250, 640000),
+                (1500, 768000),
+                (1750, 896000),
+            ]
 
-        assert av_decoder.get_audio_duration() == expected_metadata.audio_duration
-        assert av_decoder.get_video_fps() == expected_metadata.video_fps
-        assert av_decoder.get_audio_samples_per_second() == expected_metadata.audio_sample_rate
+            # searching for a keyframe should match that keyframe
+            for k in keyframes:
+                assert index.search_timestamp(k[1]) == k[0]
+
+            # searching for a timestamp between keyframes should return the previous keyframe
+            for i in range(1, len(keyframes)):
+                mid = (keyframes[i - 1][1] + keyframes[i][1]) // 2
+                assert index.search_timestamp(mid) == keyframes[i - 1][0]
+
+            # searching for a timestamp between keyframes should return the next keyframe when backward=False
+            for i in range(1, len(keyframes)):
+                mid = (keyframes[i - 1][1] + keyframes[i][1]) // 2
+                assert index.search_timestamp(mid, backward=False) == keyframes[i][0]
 
 
-def test_decode_strided_resized(video_test_setup):
-    """Test decoding a subset of frames with resizing."""
-    for video_file in ["tests/data/sync_test.mkv", "tests/data/sync_test.mp4"]:
-        print(f"================= Testing {video_file} ==================")
-        av_decoder = AVDecoder(io.BytesIO(Path(video_file).read_bytes()))
+class TestVideoDecode(unittest.TestCase):
+    """Test video decoding functionality."""
 
-        video_tensor = get_single_frames_uniform(
-            av_decoder=av_decoder,
-            num_frames=64,
-            video_out_frame_size=(224, 224),
-        )
+    def setUp(self):
+        """Set up test fixtures."""
+        logging.basicConfig(stream=sys.stderr, level=logging.INFO)
+        self.decode_baseline_video_pyav()
+        self.loaders = []  # Keep track of loaders for cleanup
 
-        # Get strided frames from baseline complete video tensor
-        strided_baseline_tensor = video_test_setup[
-            np.linspace(0, video_test_setup.shape[0] - 1, 64, dtype=int).tolist()
-        ]
-        # Now resize the baseline frames
-        resize = transforms.Resize((224, 224))
-        strided_resized_baseline_tensor = resize(strided_baseline_tensor)
+    def tearDown(self):
+        """Clean up test fixtures."""
+        # Clean up any loaders
+        for loader in self.loaders:
+            if hasattr(loader, "_iterator"):
+                loader._iterator = None
+            if hasattr(loader, "_shutdown_workers"):
+                try:
+                    loader._shutdown_workers()
+                except Exception:
+                    pass
 
-        # We allow small numerical differences due to different resize implementations
-        assert tensors_close(video_tensor, strided_resized_baseline_tensor, tolerance=0.01), (
+    def decode_baseline_video_pyav(self):
+        """Load the baseline video using PyAV directly."""
+        self.complete_video_tensor = load_video_to_tensor("tests/data/sync_test.mp4")
+
+    def test_decode_all_frames(self):
+        """Test decoding all frames from a video file."""
+        av_decoder = AVDecoder(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes()))
+        av_data = av_decoder.get_frames()
+        video_tensor = av_data.video_clips[0]
+
+        print(video_tensor.shape)
+        assert (video_tensor == self.complete_video_tensor).all(), (
             "Energon decoded video does not match baseline"
         )
 
+    def test_verify_video_decode(self):
+        """Verify the video decode matches the baseline."""
+        av_decoder = AVDecoder(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes()))
+        all_timestamps = []
+        for frame in [*range(5), *range(245, 255), *range(1881, 1891)]:
+            # print(f"Loading frame {frame}")
+            video_data, timestamps = av_decoder.get_video_clips(
+                video_clip_ranges=[(frame, frame)], video_unit="frames"
+            )
+            assert len(video_data) == 1
+            assert video_data[0].shape == (1, 3, 108, 192), (
+                f"Shape of frame {frame} is {video_data[0].shape}"
+            )
+            assert (video_data[0] == self.complete_video_tensor[frame : frame + 1]).all()
+            # print(f"Timestamp for frame {frame}: {timestamps[0]}")
+            all_timestamps.append(0.5 * (timestamps[0][0] + timestamps[0][1]))
 
-def test_video_audio_sync(video_test_setup):
-    """Test decoding video frames and audio clips together."""
-    av_decoder = AVDecoder(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes()))
+        for frame, timestamp1, timestamp2 in zip(
+            [*range(5), *range(245, 255), *range(1881, 1891)],
+            all_timestamps,
+            all_timestamps[1:] + [float("inf")],
+        ):
+            if frame in (4, 254):
+                continue
+            # print(f"Loading frame {frame}")
+            video_data, timestamps = av_decoder.get_video_clips(
+                video_clip_ranges=[(timestamp1, timestamp1)], video_unit="seconds"
+            )
+            assert len(video_data) == 1
+            assert video_data[0].shape == (1, 3, 108, 192), (
+                f"Shape of frame {frame} is {video_data[0].shape}"
+            )
+            assert (video_data[0] == self.complete_video_tensor[frame : frame + 1]).all()
+            assert 0.5 * (timestamps[0][0] + timestamps[0][1]) == timestamp1, (
+                f"Timestamp for frame {frame} is {timestamps[0][0]} + {timestamps[0][1]}"
+            )
 
-    # Extract a single frame every 2 seconds and an audio clip (0.05 seconds long) at the same time.
-    # We extract the frames from the sync video that shows the full white circle on the left,
-    # when the click sound occurs.
-    # Note that the click sound is actually off by 0.022 secs in the original video,
-    # I verified this in Davinci Resolve.
-    av_data = av_decoder.get_clips(
-        video_clip_ranges=[(a * 2 + 1 / 30, a * 2 + 1 / 30) for a in range(65)],
-        audio_clip_ranges=[(a * 2 + 1 / 30, a * 2 + 1 / 30 + 0.05) for a in range(65)],
-        video_unit="seconds",
-        audio_unit="seconds",
-        video_out_frame_size=None,
-    )
+            video_data, timestamps = av_decoder.get_video_clips(
+                video_clip_ranges=[(timestamp1, timestamp2)], video_unit="seconds"
+            )
+            assert len(video_data) == 1
+            if frame == 1890:
+                assert video_data[0].shape == (1, 3, 108, 192), (
+                    f"Shape of frame {frame} is {video_data[0].shape}"
+                )
+                assert (video_data[0] == self.complete_video_tensor[frame : frame + 1]).all()
+            else:
+                assert video_data[0].shape == (2, 3, 108, 192), (
+                    f"Shape of frame {frame} is {video_data[0].shape}"
+                )
+                assert (video_data[0] == self.complete_video_tensor[frame : frame + 2]).all()
 
-    # We drop the first two extracted frames because the click sequence hasn't started yet
-    video_clips = av_data.video_clips[2:]
-    audio_clips = av_data.audio_clips[2:]
-    # Then we check that the first extracted frame is all white in the area (18, 18, 55, 55)
-    # Image.fromarray(video_clips[0][0, :, 18:55, 18:55].numpy().transpose(1,2,0)).save('circ.png')
-    assert (video_clips[0][0, :, 18:55, 18:55] > 250).all(), (
-        "First extracted frame is not all white in the area (18, 18, 55, 55)"
-    )
+    def test_decode_metadata(self):
+        """Test decoding metadata."""
+        expected_metadata = [
+            AVMetadata(
+                video_duration=63.054,
+                video_num_frames=1891,
+                video_fps=30.0,
+                video_width=192,
+                video_height=108,
+                audio_duration=63.103,
+                audio_channels=2,
+                audio_sample_rate=48000,
+                audio_num_samples=3028992,
+            ),
+            AVMetadata(
+                video_duration=63.033,
+                video_num_frames=1891,
+                video_fps=30.0,
+                video_width=192,
+                video_height=108,
+                audio_duration=63.068,
+                audio_channels=2,
+                audio_sample_rate=48000,
+                audio_num_samples=3027968,
+            ),
+            AVMetadata(
+                video_duration=63.067,
+                video_num_frames=1891,
+                video_fps=30.0,
+                video_width=192,
+                video_height=108,
+                audio_duration=63.120,
+                audio_channels=2,
+                audio_sample_rate=48000,
+                audio_num_samples=3029760,
+            ),
+        ]
+        for video_file, expected_metadata in zip(
+            ["tests/data/sync_test.mkv", "tests/data/sync_test.mp4", "tests/data/sync_test.avi"],
+            expected_metadata,
+        ):
+            av_decoder = AVDecoder(io.BytesIO(Path(video_file).read_bytes()))
 
-    # Check that all the video frames are the same (close value)
-    for video_clip in video_clips:
-        assert tensors_close(video_clip, video_clips[0], tolerance=0.01), (
-            "All video frames are not the same"
+            actual_metadata = av_decoder.get_metadata(get_audio_num_samples=True)
+            assert avmetadata_equal(actual_metadata, expected_metadata), (
+                f"Metadata does not match expected metadata for {video_file}: "
+                f"{actual_metadata} != {expected_metadata}"
+            )
+
+            getvid_duration, getvid_frame_count = av_decoder.get_video_duration(
+                get_frame_count=False
+            )
+            self.assertAlmostEqual(getvid_duration, expected_metadata.video_duration, places=3)
+
+            if getvid_frame_count is not None:
+                self.assertEqual(getvid_frame_count, expected_metadata.video_num_frames)
+
+            getvid_duration, getvid_frame_count = av_decoder.get_video_duration(
+                get_frame_count=True
+            )
+            self.assertAlmostEqual(getvid_duration, expected_metadata.video_duration, places=3)
+            self.assertEqual(getvid_frame_count, expected_metadata.video_num_frames)
+
+            self.assertAlmostEqual(
+                av_decoder.get_audio_duration(), expected_metadata.audio_duration, places=3
+            )
+            assert av_decoder.get_video_fps() == expected_metadata.video_fps
+            assert av_decoder.get_audio_samples_per_second() == expected_metadata.audio_sample_rate
+
+    def test_decode_strided_resized(self):
+        """Test decoding a subset of frames with resizing."""
+        for video_file in [
+            "tests/data/sync_test.mkv",
+            "tests/data/sync_test.mp4",
+            "tests/data/sync_test.avi",
+        ]:
+            print(f"================= Testing {video_file} ==================")
+            av_decoder = AVDecoder(io.BytesIO(Path(video_file).read_bytes()))
+
+            video_tensor = get_single_frames_uniform(
+                av_decoder=av_decoder,
+                num_frames=64,
+                video_out_frame_size=(224, 224),
+            )
+
+            # Get strided frames from baseline complete video tensor
+            complete_baseline = load_video_to_tensor(video_file)
+            strided_baseline_tensor = complete_baseline[
+                np.linspace(0, self.complete_video_tensor.shape[0] - 1, 64, dtype=int).tolist()
+            ]
+            # Now resize the baseline frames
+            resize = transforms.Resize((224, 224))
+            strided_resized_baseline_tensor = resize(strided_baseline_tensor)
+
+            # We allow small numerical differences due to different resize implementations
+            assert tensors_close(video_tensor, strided_resized_baseline_tensor, tolerance=0.01), (
+                "Energon decoded video does not match baseline"
+            )
+
+    def test_time_precision(self):
+        """Test decoding video frames with time precision."""
+        av_decoder = AVDecoder(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes()))
+        video_data, timestamps = av_decoder.get_video_clips(
+            video_clip_ranges=[
+                (4 + 1 / 30, 4 + 1 / 30),
+                (4 + 1 / 30 + 1 / 60, 4 + 1 / 30 + 1 / 60),
+            ],
+            video_unit="seconds",
+        )
+        assert (timestamps[0][0] == 4 + 1 / 30) and (timestamps[0][1] == 4 + 2 / 30), (
+            f"Timestamp for frame 0 is {timestamps[0][0]} and {timestamps[0][1]}"
+        )
+        assert (timestamps[1][0] == 4 + 1 / 30) and (timestamps[1][1] == 4 + 2 / 30), (
+            f"Timestamp for frame 0 is {timestamps[1][0]} and {timestamps[1][1]}"
+        )
+        # from PIL import Image
+
+        # Image.fromarray(video_data[0][0, :, 18:55, 18:55].numpy().transpose(1, 2, 0)).save(
+        #     "circ.png"
+        # )
+        assert (video_data[0][0, :, 18:55, 18:55] > 250).all(), (
+            "First extracted frame is not all white in the area (18, 18, 55, 55)"
         )
 
-    # Check that the first audio clip has the click sound
-    assert (audio_clips[0] > 0.5).any(), "Audio click not found"
+        av_decoder = AVDecoder(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes()))
+        video_data, timestamps = av_decoder.get_video_clips(
+            video_clip_ranges=[(4 * 30 + 1, 4 * 30 + 1), (4 * 30 + 1, 4 * 30 + 1)],
+            video_unit="frames",
+        )
+        assert (timestamps[0][0] == 4 + 1 / 30) and (timestamps[0][1] == 4 + 2 / 30), (
+            f"Timestamp for frame 0 is {timestamps[0][0]} and {timestamps[0][1]}"
+        )
+        assert (timestamps[1][0] == 4 + 1 / 30) and (timestamps[1][1] == 4 + 2 / 30), (
+            f"Timestamp for frame 0 is {timestamps[1][0]} and {timestamps[1][1]}"
+        )
+        from PIL import Image
 
-    # Check that all the audio clips are the same (close value)
-    for audio_clip in audio_clips:
-        assert tensors_close(audio_clip, audio_clips[0], tolerance=0.01), (
-            "All audio clips are not the same"
+        Image.fromarray(video_data[0][0, :, 18:55, 18:55].numpy().transpose(1, 2, 0)).save(
+            "circ.png"
+        )
+        assert (video_data[0][0, :, 18:55, 18:55] > 250).all(), (
+            "First extracted frame is not all white in the area (18, 18, 55, 55)"
         )
 
+    def test_video_audio_sync(self):
+        """Test decoding video frames and audio clips together."""
+        av_decoder = AVDecoder(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes()))
 
-def test_pickle_decoder(video_test_setup):
-    """Test AVDecoder on a video file can be pickled and unpickled."""
-    av_decoder = AVDecoder(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes()))
+        # Extract a single frame every 2 seconds and an audio clip (0.05 seconds long) at the same time.
+        # We extract the frames from the sync video that shows the full white circle on the left,
+        # when the click sound occurs.
+        # Note that the click sound is actually off by 0.022 secs in the original video,
+        # I verified this in Davinci Resolve.
+        av_data = av_decoder.get_clips(
+            video_clip_ranges=[(a * 2 + 1 / 30, a * 2 + 1 / 30) for a in range(65)],
+            audio_clip_ranges=[(a * 2 + 1 / 30, a * 2 + 1 / 30 + 0.05) for a in range(65)],
+            video_unit="seconds",
+            audio_unit="seconds",
+            video_out_frame_size=None,
+        )
 
-    # Get metadata from original decoder
-    original_metadata = av_decoder.get_metadata()
+        # We drop the first two extracted frames because the click sequence hasn't started yet
+        video_clips = av_data.video_clips[2:]
+        audio_clips = av_data.audio_clips[2:]
+        # Then we check that the first extracted frame is all white in the area (18, 18, 55, 55)
+        # from PIL import Image
 
-    # Pickle the decoder
-    pickled_data = pickle.dumps(av_decoder)
+        # Image.fromarray(video_clips[0][0, :, 18:55, 18:55].numpy().transpose(1, 2, 0)).save(
+        #     "circ.png"
+        # )
+        assert (video_clips[0][0, :, 18:55, 18:55] > 250).all(), (
+            "First extracted frame is not all white in the area (18, 18, 55, 55)"
+        )
 
-    # Unpickle the decoder
-    unpickled_decoder = pickle.loads(pickled_data)
+        # Check that all the video frames are the same (close value)
+        for video_clip in video_clips:
+            assert tensors_close(video_clip, video_clips[0], tolerance=0.01), (
+                "All video frames are not the same"
+            )
 
-    # Verify metadata matches
-    unpickled_metadata = unpickled_decoder.get_metadata()
-    assert unpickled_metadata == original_metadata, (
-        f"Unpickled metadata {unpickled_metadata} does not match original {original_metadata}"
-    )
+        # Check that the first audio clip has the click sound
+        assert (audio_clips[0] > 0.5).any(), "Audio click not found"
 
-    # Verify we can still decode frames from the unpickled decoder
-    video_tensor = get_single_frames_uniform(
-        av_decoder=unpickled_decoder,
-        num_frames=16,
-        video_out_frame_size=(64, 64),
-    )
+        # Check that all the audio clips are the same (close value)
+        for audio_clip in audio_clips:
+            assert tensors_close(audio_clip, audio_clips[0], tolerance=0.01), (
+                "All audio clips are not the same"
+            )
 
-    # Check that we got the expected shape
-    assert video_tensor.shape == (16, 3, 64, 64), (
-        f"Expected shape (16, 3, 64, 64), got {video_tensor.shape}"
-    )
+    def test_pickle_decoder(self):
+        """Test AVDecoder on a video file can be pickled and unpickled."""
+        av_decoder = AVDecoder(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes()))
+
+        # Get metadata from original decoder
+        original_metadata = av_decoder.get_metadata()
+
+        # Pickle the decoder
+        pickled_data = pickle.dumps(av_decoder)
+
+        # Unpickle the decoder
+        unpickled_decoder = pickle.loads(pickled_data)
+
+        # Verify metadata matches
+        unpickled_metadata = unpickled_decoder.get_metadata()
+        assert avmetadata_equal(unpickled_metadata, original_metadata), (
+            f"Unpickled metadata {unpickled_metadata} does not match original {original_metadata}"
+        )
+
+        # Verify we can still decode frames from the unpickled decoder
+        video_tensor = get_single_frames_uniform(
+            av_decoder=unpickled_decoder,
+            num_frames=16,
+            video_out_frame_size=(64, 64),
+        )
+
+        # Check that we got the expected shape
+        assert video_tensor.shape == (16, 3, 64, 64), (
+            f"Expected shape (16, 3, 64, 64), got {video_tensor.shape}"
+        )
 
 
 def load_audio_to_tensor(audio_path: str) -> torch.Tensor:
@@ -256,195 +482,222 @@ def load_audio_to_tensor(audio_path: str) -> torch.Tensor:
     return audio_tensor
 
 
-@pytest.fixture
-def audio_test_setup():
-    """Set up test fixtures for audio tests."""
-    logging.basicConfig(stream=sys.stderr, level=logging.INFO)
-    complete_audio_tensor = load_audio_to_tensor("tests/data/test_audio.flac")
-    yield complete_audio_tensor
+class TestAudioDecode(unittest.TestCase):
+    """Test audio decoding functionality."""
 
+    def setUp(self):
+        """Set up test fixtures."""
+        logging.basicConfig(stream=sys.stderr, level=logging.INFO)
+        self.decode_baseline_audio_pyav()
+        self.loaders = []  # Keep track of loaders for cleanup
 
-def test_decode_all_samples(audio_test_setup):
-    """Test decoding all samples from an audio file."""
-    with open("tests/data/test_audio.flac", "rb") as f:
-        raw_bytes = f.read()
-        stream = io.BytesIO(raw_bytes)
+    def tearDown(self):
+        """Clean up test fixtures."""
+        # Clean up any loaders
+        for loader in self.loaders:
+            if hasattr(loader, "_iterator"):
+                loader._iterator = None
+            if hasattr(loader, "_shutdown_workers"):
+                try:
+                    loader._shutdown_workers()
+                except Exception:
+                    pass
 
-    av_decoder = AVDecoder(stream)
-    av_data = av_decoder.get_audio()
-    audio_tensor = av_data.audio_clips[0]
+    def decode_baseline_audio_pyav(self):
+        """Load the baseline audio using PyAV directly."""
+        self.complete_audio_tensor = load_audio_to_tensor("tests/data/test_audio.flac")
 
-    assert (audio_tensor == audio_test_setup).all(), "Energon decoded audio does not match baseline"
+    def test_decode_all_samples(self):
+        """Test decoding all samples from an audio file."""
+        with open("tests/data/test_audio.flac", "rb") as f:
+            raw_bytes = f.read()
+            stream = io.BytesIO(raw_bytes)
 
-
-def test_decode_clips(audio_test_setup):
-    """Test decoding multiple clips from an audio file."""
-    with open("tests/data/test_audio.flac", "rb") as f:
-        raw_bytes = f.read()
-        stream = io.BytesIO(raw_bytes)
-
-    av_decoder = AVDecoder(stream)
-    av_data = get_clips_uniform(
-        av_decoder=av_decoder, num_clips=5, clip_duration_seconds=3, request_audio=True
-    )
-    audio_tensor = av_data.audio_clips[0]
-    audio_sps = av_decoder.get_audio_samples_per_second()
-
-    # Check audio tensor shape (5 clips, channels, 3 seconds at original sample rate)
-    assert len(av_data.audio_clips) == 5
-    assert len(av_data.audio_timestamps) == 5
-    assert audio_tensor.shape[1] >= int(3 * audio_sps)
-    assert audio_tensor.shape[1] <= int(4 * audio_sps)
-
-
-def test_decode_wav(audio_test_setup):
-    """Test decoding a WAV file."""
-    # Skip WAV test if file doesn't exist
-    if not os.path.exists("tests/data/test_audio.wav"):
-        pytest.skip("WAV test file not found")
-        return
-
-    with open("tests/data/test_audio.wav", "rb") as f:
-        raw_bytes = f.read()
-        stream = io.BytesIO(raw_bytes)
-
-    av_decoder = AVDecoder(stream)
-    av_data = get_clips_uniform(
-        av_decoder=av_decoder, num_clips=3, clip_duration_seconds=3, request_audio=True
-    )
-    audio_sps = av_decoder.get_audio_samples_per_second()
-
-    # Check audio tensor shape (3 clips, 2 channels, samples)
-    expected_samples = int(3 * audio_sps)  # 3 seconds at original sample rate
-    assert all(
-        audio_tensor.shape == torch.Size([2, expected_samples])
-        for audio_tensor in av_data.audio_clips
-    ), "Energon decoded WAV file has wrong shape."
-
-
-def test_decode_wav_same_shape(audio_test_setup):
-    """Test decoding a WAV file."""
-    # Skip WAV test if file doesn't exist
-    if not os.path.exists("tests/data/test_audio.wav"):
-        pytest.skip("WAV test file not found")
-        return
-
-    with open("tests/data/test_audio.wav", "rb") as f:
-        raw_bytes = f.read()
-        stream = io.BytesIO(raw_bytes)
-
-    av_decoder = AVDecoder(stream)
-    av_data = get_clips_uniform(
-        av_decoder=av_decoder,
-        num_clips=10,
-        clip_duration_seconds=0.9954783485892385,
-        request_audio=True,
-    )
-    audio_sps = av_decoder.get_audio_samples_per_second()
-
-    print(f"SPS: {audio_sps}")
-    for audio_tensor in av_data.audio_clips:
-        print(audio_tensor.shape)
-
-    assert all(
-        audio_tensor.shape == av_data.audio_clips[0].shape for audio_tensor in av_data.audio_clips
-    ), "Audio clips have different shapes"
-
-
-def test_wav_decode_against_soundfile(audio_test_setup):
-    """Test decoding a WAV file against the soundfile library."""
-
-    try:
-        import soundfile
-    except ImportError:
-        pytest.skip("soundfile library not found")
-
-    with open("tests/data/test_audio.wav", "rb") as f:
-        raw_bytes = f.read()
-        stream = io.BytesIO(raw_bytes)
-
-    av_decoder = AVDecoder(stream)
-    av_data = av_decoder.get_clips(audio_clip_ranges=[(0, float("inf"))], audio_unit="samples")
-    audio_tensor = av_data.audio_clips[0]
-
-    # Load the same audio file using soundfile
-
-    audio_data, _ = soundfile.read("tests/data/test_audio.wav", dtype="int16")
-    audio_tensor_soundfile = torch.from_numpy(audio_data).transpose(0, 1)
-
-    # Check that the two tensors are close
-    assert tensors_close(audio_tensor, audio_tensor_soundfile, tolerance=0.01), (
-        "Energon decoded audio does not match baseline"
-    )
-
-    # Now check partial extraction in the middle of the audio
-    av_data = av_decoder.get_clips(audio_clip_ranges=[(0.5, 1.0)], audio_unit="seconds")
-    audio_tensor = av_data.audio_clips[0]
-    audio_sps = av_decoder.get_audio_samples_per_second()
-    audio_tensor_soundfile = torch.from_numpy(
-        audio_data[int(0.5 * audio_sps) : int(1.0 * audio_sps)]
-    ).transpose(0, 1)
-
-    # Check that the two tensors are close
-    assert tensors_close(audio_tensor, audio_tensor_soundfile, tolerance=0.01), (
-        "Energon decoded audio does not match baseline"
-    )
-
-    # Now compare the speed of the two implementations by repeatedly decoding the same audio
-    num_trials = 100
-
-    start_time = time.perf_counter()
-    for _ in range(num_trials):
-        av_data = av_decoder.get_clips(audio_clip_ranges=[(0, float("inf"))], audio_unit="samples")
+        av_decoder = AVDecoder(stream)
+        av_data = av_decoder.get_audio()
         audio_tensor = av_data.audio_clips[0]
-    end_time = time.perf_counter()
-    print(f"AVDecoder time: {end_time - start_time} seconds")
 
-    # Now do the same with soundfile
-    start_time = time.perf_counter()
-    for _ in range(num_trials):
-        audio_data, _ = soundfile.read("tests/data/test_audio.wav", dtype="int16")
-        audio_tensor_soundfile = torch.from_numpy(audio_data).transpose(0, 1)
-    end_time = time.perf_counter()
-    print(f"Soundfile time: {end_time - start_time} seconds")
-
-    start_time = time.perf_counter()
-    for _ in range(num_trials):
-        av_data = av_decoder.get_clips(audio_clip_ranges=[(0, float("inf"))], audio_unit="samples")
-        audio_tensor = av_data.audio_clips[0]
-    end_time = time.perf_counter()
-    print(f"AVDecoder time: {end_time - start_time} seconds")
-
-    # Now do the same with soundfile
-    start_time = time.perf_counter()
-    for _ in range(num_trials):
-        audio_data, _ = soundfile.read("tests/data/test_audio.wav", dtype="int16")
-        audio_tensor_soundfile = torch.from_numpy(audio_data).transpose(0, 1)
-    end_time = time.perf_counter()
-    print(f"Soundfile time: {end_time - start_time} seconds")
-
-
-def test_decode_audio_metadata(audio_test_setup):
-    """Test decoding metadata."""
-    expected_metadata = [
-        AVMetadata(
-            audio_duration=10.0,
-            audio_channels=1,
-            audio_sample_rate=32000,
-        ),
-        AVMetadata(
-            audio_duration=12.782585034013605,
-            audio_channels=2,
-            audio_sample_rate=44100,
-        ),
-    ]
-    for audio_file, expected_metadata in zip(
-        ["tests/data/test_audio.flac", "tests/data/test_audio.wav"], expected_metadata
-    ):
-        av_decoder = AVDecoder(io.BytesIO(Path(audio_file).read_bytes()))
-        assert av_decoder.get_metadata() == expected_metadata, (
-            f"Metadata does not match expected metadata for {audio_file}: {av_decoder.get_metadata()}"
+        assert (audio_tensor == self.complete_audio_tensor).all(), (
+            "Energon decoded audio does not match baseline"
         )
 
-        assert av_decoder.get_audio_duration() == expected_metadata.audio_duration
-        assert av_decoder.get_audio_samples_per_second() == expected_metadata.audio_sample_rate
+    def test_decode_clips(self):
+        """Test decoding multiple clips from an audio file."""
+        with open("tests/data/test_audio.flac", "rb") as f:
+            raw_bytes = f.read()
+            stream = io.BytesIO(raw_bytes)
+
+        av_decoder = AVDecoder(stream)
+        av_data = get_clips_uniform(
+            av_decoder=av_decoder, num_clips=5, clip_duration_seconds=3, request_audio=True
+        )
+        audio_tensor = av_data.audio_clips[0]
+        audio_sps = av_decoder.get_audio_samples_per_second()
+
+        # Check audio tensor shape (5 clips, channels, 3 seconds at original sample rate)
+        assert len(av_data.audio_clips) == 5
+        assert len(av_data.audio_timestamps) == 5
+        assert audio_tensor.shape[1] >= int(3 * audio_sps)
+        assert audio_tensor.shape[1] <= int(4 * audio_sps)
+
+    def test_decode_wav(self):
+        """Test decoding a WAV file."""
+        # Skip WAV test if file doesn't exist
+        if not os.path.exists("tests/data/test_audio.wav"):
+            self.skipTest("WAV test file not found")
+            return
+
+        with open("tests/data/test_audio.wav", "rb") as f:
+            raw_bytes = f.read()
+            stream = io.BytesIO(raw_bytes)
+
+        av_decoder = AVDecoder(stream)
+        av_data = get_clips_uniform(
+            av_decoder=av_decoder, num_clips=3, clip_duration_seconds=3, request_audio=True
+        )
+        audio_sps = av_decoder.get_audio_samples_per_second()
+
+        # Check audio tensor shape (3 clips, 2 channels, samples)
+        expected_samples = int(3 * audio_sps)  # 3 seconds at original sample rate
+        assert all(
+            audio_tensor.shape == torch.Size([2, expected_samples])
+            for audio_tensor in av_data.audio_clips
+        ), "Energon decoded WAV file has wrong shape."
+
+    def test_decode_wav_same_shape(self):
+        """Test decoding a WAV file."""
+        # Skip WAV test if file doesn't exist
+        if not os.path.exists("tests/data/test_audio.wav"):
+            self.skipTest("WAV test file not found")
+            return
+
+        with open("tests/data/test_audio.wav", "rb") as f:
+            raw_bytes = f.read()
+            stream = io.BytesIO(raw_bytes)
+
+        av_decoder = AVDecoder(stream)
+        av_data = get_clips_uniform(
+            av_decoder=av_decoder,
+            num_clips=10,
+            clip_duration_seconds=0.9954783485892385,
+            request_audio=True,
+        )
+        audio_sps = av_decoder.get_audio_samples_per_second()
+
+        print(f"SPS: {audio_sps}")
+        for audio_tensor in av_data.audio_clips:
+            print(audio_tensor.shape)
+
+        assert all(
+            audio_tensor.shape == av_data.audio_clips[0].shape
+            for audio_tensor in av_data.audio_clips
+        ), "Audio clips have different shapes"
+
+    def test_wav_decode_against_soundfile(self):
+        """Test decoding a WAV file against the soundfile library."""
+
+        try:
+            import soundfile
+        except ImportError:
+            self.skipTest("soundfile library not found")
+
+        with open("tests/data/test_audio.wav", "rb") as f:
+            raw_bytes = f.read()
+            stream = io.BytesIO(raw_bytes)
+
+        av_decoder = AVDecoder(stream)
+        av_data = av_decoder.get_clips(audio_clip_ranges=[(0, float("inf"))], audio_unit="samples")
+        audio_tensor = av_data.audio_clips[0]
+
+        # Load the same audio file using soundfile
+
+        audio_data, _ = soundfile.read("tests/data/test_audio.wav", dtype="int16")
+        audio_tensor_soundfile = torch.from_numpy(audio_data).transpose(0, 1)
+
+        # Check that the two tensors are close
+        assert tensors_close(audio_tensor, audio_tensor_soundfile, tolerance=0.01), (
+            "Energon decoded audio does not match baseline"
+        )
+
+        # Now check partial extraction in the middle of the audio
+        av_data = av_decoder.get_clips(audio_clip_ranges=[(0.5, 1.0)], audio_unit="seconds")
+        audio_tensor = av_data.audio_clips[0]
+        audio_sps = av_decoder.get_audio_samples_per_second()
+        audio_tensor_soundfile = torch.from_numpy(
+            audio_data[int(0.5 * audio_sps) : int(1.0 * audio_sps)]
+        ).transpose(0, 1)
+
+        # Check that the two tensors are close
+        assert tensors_close(audio_tensor, audio_tensor_soundfile, tolerance=0.01), (
+            "Energon decoded audio does not match baseline"
+        )
+
+        # Now compare the speed of the two implementations by repeatedly decoding the same audio
+        num_trials = 100
+
+        start_time = time.perf_counter()
+        for _ in range(num_trials):
+            av_data = av_decoder.get_clips(
+                audio_clip_ranges=[(0, float("inf"))], audio_unit="samples"
+            )
+            audio_tensor = av_data.audio_clips[0]
+        end_time = time.perf_counter()
+        print(f"AVDecoder time: {end_time - start_time} seconds")
+
+        # Now do the same with soundfile
+        start_time = time.perf_counter()
+        for _ in range(num_trials):
+            audio_data, _ = soundfile.read("tests/data/test_audio.wav", dtype="int16")
+            audio_tensor_soundfile = torch.from_numpy(audio_data).transpose(0, 1)
+        end_time = time.perf_counter()
+        print(f"Soundfile time: {end_time - start_time} seconds")
+
+        start_time = time.perf_counter()
+        for _ in range(num_trials):
+            av_data = av_decoder.get_clips(
+                audio_clip_ranges=[(0, float("inf"))], audio_unit="samples"
+            )
+            audio_tensor = av_data.audio_clips[0]
+        end_time = time.perf_counter()
+        print(f"AVDecoder time: {end_time - start_time} seconds")
+
+        # Now do the same with soundfile
+        start_time = time.perf_counter()
+        for _ in range(num_trials):
+            audio_data, _ = soundfile.read("tests/data/test_audio.wav", dtype="int16")
+            audio_tensor_soundfile = torch.from_numpy(audio_data).transpose(0, 1)
+        end_time = time.perf_counter()
+        print(f"Soundfile time: {end_time - start_time} seconds")
+
+    def test_decode_metadata(self):
+        """Test decoding metadata."""
+        expected_metadata = [
+            AVMetadata(
+                audio_duration=10.0,
+                audio_channels=1,
+                audio_sample_rate=32000,
+                audio_num_samples=320000,
+            ),
+            AVMetadata(
+                audio_duration=12.782585034013605,
+                audio_channels=2,
+                audio_sample_rate=44100,
+                audio_num_samples=563712,
+            ),
+        ]
+        for audio_file, expected_metadata in zip(
+            ["tests/data/test_audio.flac", "tests/data/test_audio.wav"], expected_metadata
+        ):
+            av_decoder = AVDecoder(io.BytesIO(Path(audio_file).read_bytes()))
+            actual_metadata = av_decoder.get_metadata(get_audio_num_samples=True)
+            assert avmetadata_equal(actual_metadata, expected_metadata), (
+                f"Metadata does not match expected metadata for {audio_file}: "
+                f"{actual_metadata} != {expected_metadata}"
+            )
+
+            assert av_decoder.get_audio_duration() == expected_metadata.audio_duration
+            assert av_decoder.get_audio_samples_per_second() == expected_metadata.audio_sample_rate
+
+
+if __name__ == "__main__":
+    unittest.main()
