@@ -144,7 +144,9 @@ class IterMapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sampl
         super().assert_can_restore()
 
     def restore_sample(self, restore_key: RestoreKey) -> T_sample:
-        self.assert_can_restore()
+        assert self.stateless_iter_fn, (
+            "IterMapDataset can only restore samples if iter_map_fn is stateless."
+        )
         assert isinstance(restore_key, IterMapRestoreKey)
         to_be_mapped = tuple(
             self.dataset.restore_sample(inner_index) for inner_index in restore_key.inner

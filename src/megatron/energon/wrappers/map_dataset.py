@@ -22,6 +22,7 @@ from megatron.energon.errors import (
 from megatron.energon.flavors.base_dataset import (
     RestoreKey,
     SavableDataset,
+    coerce_restore_key,
     set_sample_restore_key,
 )
 from megatron.energon.worker import WorkerConfig
@@ -183,7 +184,10 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
         super().assert_can_restore()
 
     def restore_sample(self, restore_key: RestoreKey) -> T_sample_out:
-        self.assert_can_restore()
+        assert self.stateless_map_fn, (
+            f"MapDataset can only restore samples if map_fn {self.map_fn} is stateless."
+        )
+        restore_key = coerce_restore_key(restore_key, MapRestoreKey)
         assert isinstance(restore_key, MapRestoreKey), (
             f"Expected MapRestoreKey, got {type(restore_key)}"
         )

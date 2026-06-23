@@ -510,6 +510,19 @@ class RestoreKey(ABC):
         return cls(**kwargs)
 
 
+T_restore_key = TypeVar("T_restore_key", bound=RestoreKey)
+
+
+def coerce_restore_key(
+    restore_key: RestoreKey | dict[str, Any], cls: Type[T_restore_key]
+) -> T_restore_key:
+    if isinstance(restore_key, cls):
+        return restore_key
+    if isinstance(restore_key, dict):
+        return cls(**restore_key)
+    return restore_key
+
+
 def set_sample_restore_key(
     sample: T_sample, restore_key: RestoreKey, fail_otherwise: bool = False
 ) -> T_sample:

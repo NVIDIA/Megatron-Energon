@@ -1,5 +1,6 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
+import dataclasses
 import os
 import sys
 import warnings
@@ -30,7 +31,7 @@ from megatron.energon.edataclass import edataclass
 from megatron.energon.flavors.base_dataset import RestoreKey, SavableDataset
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset, get_sample_restore_key
-from megatron.energon.wrappers.batch_dataset import BatchDataset
+from megatron.energon.wrappers.batch_dataset import BatchDataset, BatchRestoreKey
 from megatron.energon.wrappers.gc_dataset import GC_DEFAULT_EVERY_N_ITER, GcDataset
 from megatron.energon.wrappers.log_sample_dataset import default_get_batch_keys
 from megatron.energon.wrappers.watchdog_dataset import WatchdogDataset
@@ -55,6 +56,49 @@ class RankState:
     next_worker_id: int
     #: The micro batch size of the dataset, or `None` if not known. Needed for redistributing the state.
     micro_batch_size: int | None
+
+
+def _split_batch_restore_key(
+    restore_key: RestoreKey | dict[str, Any] | None, batch_split_factor: int
+) -> list[RestoreKey | dict[str, Any] | None]:
+    if batch_split_factor == 1:
+        return [restore_key]
+    if restore_key is None:
+        raise ValueError("Cannot split None restore key")
+    if isinstance(restore_key, BatchRestoreKey):
+        assert len(restore_key.inner) % batch_split_factor == 0, (
+            "Batch size must be a multiple of the batch split factor"
+        )
+        split_size = len(restore_key.inner) // batch_split_factor
+        return [
+            BatchRestoreKey(
+                inner=tuple(restore_key.inner[i : i + split_size]),
+                sample_idx=restore_key.sample_idx,
+            )
+            for i in range(0, len(restore_key.inner), split_size)
+        ]
+    if isinstance(restore_key, dict):
+        inner = restore_key.get("inner")
+        if isinstance(inner, (list, tuple)):
+            assert len(inner) % batch_split_factor == 0, (
+                "Batch size must be a multiple of the batch split factor"
+            )
+            split_size = len(inner) // batch_split_factor
+            return [
+                {**restore_key, "inner": tuple(inner[i : i + split_size])}
+                for i in range(0, len(inner), split_size)
+            ]
+        return [
+            {**restore_key, "inner": inner_restore_key}
+            for inner_restore_key in _split_batch_restore_key(inner, batch_split_factor)
+        ]
+    if isinstance(restore_key, RestoreKey) and hasattr(restore_key, "inner"):
+        kwargs = {field.name: getattr(restore_key, field.name) for field in dataclasses.fields(restore_key)}
+        return [
+            type(restore_key)(**{**kwargs, "inner": inner_restore_key})
+            for inner_restore_key in _split_batch_restore_key(restore_key.inner, batch_split_factor)
+        ]
+    raise ValueError(f"Unsupported restore key type for splitting batch: {type(restore_key)}")
 
 
 class WorkerType(Protocol[TSample]):
@@ -143,12 +187,6 @@ class DataLoader(Generic[TSample]):
         """
         self._id = DataLoader._next_id
         DataLoader._next_id += 1
-
-        if getattr(dataset, "__dataloader_id", None) is not None:
-            raise ValueError(
-                f"Dataset {dataset} is already associated with dataloader {getattr(dataset, '__dataloader_id')}. Initialize one dataset per dataloader."
-            )
-        setattr(dataset, "__dataloader_id", self._id)
 
         if dataset.worker_config.num_workers == 0 and worker_type == ForkDataLoaderWorker:
             worker_type = DataLoaderNoWorker
@@ -546,7 +584,28 @@ class DataLoader(Generic[TSample]):
             return
 
         assert isinstance(state, RankState)
-        assert state.micro_batch_size == self._get_batch_size(), "Micro batch size mismatch"
+        micro_batch_size = self._get_batch_size()
+        if state.micro_batch_size != micro_batch_size:
+            assert (
+                state.micro_batch_size is not None
+                and micro_batch_size is not None
+                and state.micro_batch_size > micro_batch_size
+                and state.micro_batch_size % micro_batch_size == 0
+            ), "Micro batch size mismatch"
+            batch_split_factor = state.micro_batch_size // micro_batch_size
+            state = RankState(
+                prefetched_restore_keys=[
+                    [
+                        new_restore_key
+                        for restore_key in prefetched_restore_keys
+                        for new_restore_key in _split_batch_restore_key(restore_key, batch_split_factor)
+                    ]
+                    for prefetched_restore_keys in state.prefetched_restore_keys
+                ],
+                worker_states=state.worker_states,
+                next_worker_id=state.next_worker_id,
+                micro_batch_size=micro_batch_size,
+            )
 
         self._restore_state = state
 

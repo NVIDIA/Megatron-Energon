@@ -342,6 +342,8 @@ def command_redist(
 
     # Check batch sizes (before and after)
     old_micro_batch_size = rsi.get_micro_batch_size()
+    if new_micro_batch_size is None:
+        new_micro_batch_size = old_micro_batch_size
     if old_micro_batch_size is not None and new_micro_batch_size != old_micro_batch_size:
         assert new_micro_batch_size is not None and old_micro_batch_size is not None, (
             "Cannot resume with different batching mode (batching to non-batching or vice versa)"
