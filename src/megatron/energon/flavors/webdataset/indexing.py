@@ -1,6 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+import os
 import sqlite3
 import struct
 import time
@@ -18,6 +19,13 @@ if TYPE_CHECKING:
         IndexSample,
         IndexSamplePart,
     )
+
+
+DEBUG_SQLITE_LOG = os.getenv("ENERGON_DEBUG_SQLITE_LOG", "")
+DEBUG_SQLITE_LOG_FILE = None
+if DEBUG_SQLITE_LOG:
+    DEBUG_SQLITE_LOG_FILE = open(DEBUG_SQLITE_LOG, "w")
+    DEBUG_SQLITE_LOG_FILE.write("table,len(rows),time(s),time(s)/len(rows)\n")
 
 
 class DuplicateSampleKeyError(RuntimeError):
@@ -50,6 +58,7 @@ class SqliteIndexWriter:
     enable_sample_tables: bool
     enable_media_metadata: bool
     reset_tables: bool
+    in_memory: bool
 
     def __init__(
         self,
@@ -58,6 +67,7 @@ class SqliteIndexWriter:
         enable_sample_tables: bool = True,
         enable_media_metadata: bool = False,
         reset_tables: bool = True,
+        in_memory: bool = False,
     ):
         """
         Initializes an SQLite database and sets up the samples table:
@@ -83,14 +93,16 @@ class SqliteIndexWriter:
         self.enable_sample_tables = enable_sample_tables
         self.enable_media_metadata = enable_media_metadata
         self.reset_tables = reset_tables
+        self.in_memory = in_memory
 
         # Initialize SQLite connection
         # Only supporting local file system, because sqlite does not support remote file systems.
         # TODO: Implement remote file systems. Maybe create locally in tmp then upload?
         path = self.sqlite_path.local_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(path)
-        # self.db = sqlite3.connect(":memory:")
+        if DEBUG_SQLITE_LOG_FILE:
+            start = time.perf_counter()
+        self.db = sqlite3.connect(":memory:" if self.in_memory else path)
         self.db.execute("PRAGMA busy_timeout = 5000;")  # wait up to 5000ms when locked
         _apply_sqlite_bulk_load_pragmas(self.db)
 
@@ -127,16 +139,6 @@ class SqliteIndexWriter:
                 """
             )
 
-            # Create index on the samples table.  Help the planner if it chooses `samples` as the probe side of the join
-            self.db.execute(
-                "CREATE INDEX IF NOT EXISTS idx_samples_by_tar_and_idx ON samples(tar_file_id, sample_index)"
-            )
-
-            # Create index on the sample_parts table for fast sequential access
-            self.db.execute(
-                "CREATE INDEX IF NOT EXISTS idx_sample_parts_seq ON sample_parts(tar_file_id, sample_index, content_byte_offset)"
-            )
-
         if self.enable_media_metadata:
             if self.reset_tables:
                 self.db.execute("DROP TABLE IF EXISTS media_metadata")
@@ -164,6 +166,12 @@ class SqliteIndexWriter:
 
         self.db.execute("BEGIN IMMEDIATE")
 
+        if DEBUG_SQLITE_LOG_FILE:
+            print(f"Writing SQLite log to {DEBUG_SQLITE_LOG}")
+            end = time.perf_counter()
+            DEBUG_SQLITE_LOG_FILE.write(f"init,1,{end - start},{end - start}\n")  #
+            DEBUG_SQLITE_LOG_FILE.flush()
+
     def append_samples(
         self,
         rows: Sequence["IndexSample"],
@@ -174,6 +182,9 @@ class SqliteIndexWriter:
 
         if len(rows) == 0:
             return
+
+        if DEBUG_SQLITE_LOG_FILE:
+            start = time.perf_counter()
 
         try:
             # One executemany() is substantially cheaper than one execute() per row.
@@ -196,6 +207,12 @@ class SqliteIndexWriter:
         except sqlite3.IntegrityError as exc:
             self.db.rollback()
             raise DuplicateSampleKeyError(self._find_duplicate_sample_key(rows)) from exc
+        finally:
+            if DEBUG_SQLITE_LOG_FILE:
+                end = time.perf_counter()
+                DEBUG_SQLITE_LOG_FILE.write(
+                    f"samples,{len(rows)},{end - start},{(end - start) / len(rows)}\n"
+                )
 
     def append_parts(
         self,
@@ -207,6 +224,9 @@ class SqliteIndexWriter:
 
         if len(rows) == 0:
             return
+
+        if DEBUG_SQLITE_LOG_FILE:
+            start = time.perf_counter()
 
         self.db.executemany(
             """
@@ -225,6 +245,12 @@ class SqliteIndexWriter:
             ),
         )
 
+        if DEBUG_SQLITE_LOG_FILE:
+            end = time.perf_counter()
+            DEBUG_SQLITE_LOG_FILE.write(
+                f"sample_parts,{len(rows)},{end - start},{(end - start) / len(rows)}\n"
+            )
+
     def append_media_metadata_batch(
         self,
         rows: Sequence["IndexMediaMetadata"],
@@ -237,6 +263,9 @@ class SqliteIndexWriter:
         if len(rows) == 0:
             return
 
+        if DEBUG_SQLITE_LOG_FILE:
+            start = time.perf_counter()
+
         self.db.executemany(
             """
             INSERT OR REPLACE INTO media_metadata (entry_key, metadata_type, metadata_json)
@@ -245,12 +274,26 @@ class SqliteIndexWriter:
             ((row.entry_key, row.metadata_type, row.metadata_json) for row in rows),
         )
 
+        if DEBUG_SQLITE_LOG_FILE:
+            end = time.perf_counter()
+            DEBUG_SQLITE_LOG_FILE.write(
+                f"media_metadata,{len(rows)},{end - start},{(end - start) / len(rows)}\n"
+            )
+
     def append_media_filter(self, *, strategy: str, patterns: str | None) -> None:
         assert self.db is not None, "Database is closed"
+
+        if DEBUG_SQLITE_LOG_FILE:
+            start = time.perf_counter()
+
         self.db.execute(
             "INSERT OR IGNORE INTO media_filters (strategy, patterns) VALUES (?, ?)",
             (strategy, patterns),
         )
+
+        if DEBUG_SQLITE_LOG_FILE:
+            end = time.perf_counter()
+            DEBUG_SQLITE_LOG_FILE.write(f"media_filters,{strategy},{patterns},{end - start}\n")
 
     def close(self):
         """
@@ -262,12 +305,48 @@ class SqliteIndexWriter:
         if self.enable_sample_tables:
             # Create the index after adding all the samples for better speed
             # sample_key uniqueness already creates an implicit SQLite index via the table schema.
-            pass
+            if DEBUG_SQLITE_LOG_FILE:
+                start = time.perf_counter()
+
+            # Create index on the samples table.  Help the planner if it chooses `samples` as the probe side of the join
+            self.db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_samples_by_tar_and_idx ON samples(tar_file_id, sample_index)"
+            )
+
+            # Create index on the sample_parts table for fast sequential access
+            self.db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_sample_parts_seq ON sample_parts(tar_file_id, sample_index, content_byte_offset)"
+            )
+
+            if DEBUG_SQLITE_LOG_FILE:
+                end = time.perf_counter()
+                DEBUG_SQLITE_LOG_FILE.write(f"create_indexes,1,{end - start},{end - start}\n")
+
+        if DEBUG_SQLITE_LOG_FILE:
+            start = time.perf_counter()
 
         self.db.commit()
         _restore_sqlite_production_pragmas(self.db)
+        if self.in_memory:
+            backup_start = time.perf_counter()
+            path = self.sqlite_path.local_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if path.exists():
+                path.unlink()
+            with sqlite3.connect(path) as disk_db:
+                self.db.backup(disk_db)
+            if DEBUG_SQLITE_LOG_FILE:
+                backup_end = time.perf_counter()
+                DEBUG_SQLITE_LOG_FILE.write(
+                    f"save_in_memory,1,{backup_end - backup_start},{backup_end - backup_start}\n"
+                )
         self.db.close()
         self.db = None
+
+        if DEBUG_SQLITE_LOG_FILE:
+            end = time.perf_counter()
+            DEBUG_SQLITE_LOG_FILE.write(f"commit,1,{end - start},{end - start}\n")
+            DEBUG_SQLITE_LOG_FILE.flush()
 
     def _abort(self) -> None:
         if self.db is not None:

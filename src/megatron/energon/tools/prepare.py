@@ -119,6 +119,11 @@ def printify_json(data: Any) -> Any:
     help="Number of workers to use to index tar files",
 )
 @click.option(
+    "--sqlite-in-memory",
+    is_flag=True,
+    help="Build the SQLite index in memory, then write it to disk when preparation finishes. Uses ~200mb per 1M samples.",
+)
+@click.option(
     "--tar-index-only",
     help="Only (re)generate the tar-index",
     is_flag=True,
@@ -190,6 +195,7 @@ def command(
     split_parts: Optional[List[str]],
     exclude: str,
     num_workers: int,
+    sqlite_in_memory: bool,
     tar_index_only: bool,
     shuffle_tars: bool,
     media_metadata_by_glob: str | None,
@@ -348,6 +354,7 @@ def command(
         workers=num_workers,
         media_filter=media_filter_config,
         fix_duplicates=fix_duplicates,
+        sqlite_in_memory=sqlite_in_memory,
     )
 
     found_types = list(found_types)

@@ -16,6 +16,7 @@ import click
 
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.webdataset.config import INDEX_BATCH_SIZE
+import megatron.energon.flavors.webdataset.indexing as indexing
 from megatron.energon.flavors.webdataset.indexing import SqliteIndexReader, SqliteIndexWriter
 from megatron.energon.flavors.webdataset.itar import ITarRawSamplePartPointer, ITarSamplePointer
 from megatron.energon.flavors.webdataset.lmdb_index import LmdbIndexReader, LmdbIndexWriter
@@ -28,6 +29,7 @@ class BenchmarkResult:
     sample_count: int
     parts_per_sample: int
     batch_size: int
+    sqlite_in_memory: bool
     read_lookups: int
     insert_seconds: float
     close_seconds: float
@@ -39,35 +41,49 @@ class BenchmarkResult:
     total_seconds: float
     db_size_bytes: int
     db_path: str
+    sqlite_log_path: str
 
 
 class NoopReader:
     """No-op index reader for benchmarking read-only performance."""
+
     def get_sample_pointer_by_key(self, key: str) -> ITarSamplePointer:
         return ITarSamplePointer(tar_file_id=0, byte_offset=0, byte_size=0)
+
     def get_sample_part(self, key: str, part_name: str) -> ITarRawSamplePartPointer:
         return ITarRawSamplePartPointer(tar_file_id=0, raw_byte_offset=0, raw_byte_size=0)
+
     def list_sample_parts(self, key: str) -> list[ITarRawSamplePartPointer]:
         return []
+
     def close(self) -> None:
         pass
+
     def __enter__(self) -> NoopReader:
         return self
+
     def __exit__(self, exc_type, exc_value, traceback) -> None:
         pass
 
+
 class NoopWriter:
     """No-op index writer for benchmarking write-only performance."""
+
     def append_samples(self, samples: list[IndexSample]) -> None:
         pass
+
     def append_parts(self, parts: list[IndexSamplePart]) -> None:
         pass
+
     def close(self) -> None:
         pass
+
     def __enter__(self) -> NoopWriter:
         return self
+
     def __exit__(self, exc_type, exc_value, traceback) -> None:
         pass
+
 
 def parse_count(raw_count: str) -> int:
     raw_count = raw_count.strip().replace("_", "")
@@ -93,6 +109,10 @@ def parse_counts(raw_counts: str) -> tuple[int, ...]:
     if not counts:
         raise click.BadParameter("At least one count is required.")
     return counts
+
+
+def timestamp() -> str:
+    return datetime.now().strftime("%Y%m%d-%H%M%S-%f")
 
 
 def part_name(part_idx: int) -> str:
@@ -193,12 +213,21 @@ def open_index_reader(db_path: Path, idx_type: str) -> SqliteIndexReader | LmdbI
     raise click.BadParameter(f"Unknown index type: {idx_type!r}")
 
 
-def open_index_writer(db_path: Path, idx_type: str) -> SqliteIndexWriter | LmdbIndexWriter:
+def open_index_writer(
+    db_path: Path,
+    idx_type: str,
+    *,
+    sqlite_in_memory: bool,
+) -> SqliteIndexWriter | LmdbIndexWriter:
     if idx_type == "sqlite":
-        return SqliteIndexWriter(EPath(db_path))
+        return SqliteIndexWriter(EPath(db_path), in_memory=sqlite_in_memory)
     if idx_type == "lmdb":
+        if sqlite_in_memory:
+            raise click.BadParameter("--sqlite-in-memory can only be used with --idx-type sqlite.")
         return LmdbIndexWriter(EPath(db_path))
     if idx_type == "noop":
+        if sqlite_in_memory:
+            raise click.BadParameter("--sqlite-in-memory can only be used with --idx-type sqlite.")
         return NoopWriter()
     raise click.BadParameter(f"Unknown index type: {idx_type!r}")
 
@@ -287,65 +316,79 @@ def run_benchmark(
     read_lookups: int,
     skip_read: bool,
     drop_read_cache: bool,
+    sqlite_in_memory: bool,
+    sqlite_log_path: Path | None,
     rng: random.Random,
 ) -> BenchmarkResult:
-    writer = open_index_writer(db_path, idx_type)
-    insert_seconds, close_seconds = run_write_benchmark(
-        writer=writer,
-        sample_count=sample_count,
-        parts_per_sample=parts_per_sample,
-        batch_size=batch_size,
-        samples_per_shard=samples_per_shard,
-        sample_byte_size=sample_byte_size,
-    )
-    write_total_seconds = insert_seconds + close_seconds
+    if sqlite_log_path is not None:
+        indexing.DEBUG_SQLITE_LOG = str(sqlite_log_path)
+        indexing.DEBUG_SQLITE_LOG_FILE = open(sqlite_log_path, "w")
+        indexing.DEBUG_SQLITE_LOG_FILE.write("table,len(rows),time(s),time(s)/len(rows)\n")
 
-    read_sample_pointer_seconds = 0.0
-    read_sample_part_seconds = 0.0
-    read_list_sample_parts_seconds = 0.0
-    if not skip_read:
-        effective_lookups = min(read_lookups, sample_count)
-        if drop_read_cache:
-            drop_filesystem_cache(db_path, idx_type)
-        reader = open_index_reader(db_path, idx_type)
-        try:
-            (
-                read_sample_pointer_seconds,
-                read_sample_part_seconds,
-                read_list_sample_parts_seconds,
-            ) = run_read_benchmark(
-                reader=reader,
-                sample_count=sample_count,
-                parts_per_sample=parts_per_sample,
-                read_lookups=effective_lookups,
-                rng=rng,
-            )
-        finally:
-            reader.close()
+    try:
+        writer = open_index_writer(db_path, idx_type, sqlite_in_memory=sqlite_in_memory)
+        insert_seconds, close_seconds = run_write_benchmark(
+            writer=writer,
+            sample_count=sample_count,
+            parts_per_sample=parts_per_sample,
+            batch_size=batch_size,
+            samples_per_shard=samples_per_shard,
+            sample_byte_size=sample_byte_size,
+        )
+        write_total_seconds = insert_seconds + close_seconds
 
-    read_total_seconds = (
-        read_sample_pointer_seconds
-        + read_sample_part_seconds
-        + read_list_sample_parts_seconds
-    )
+        read_sample_pointer_seconds = 0.0
+        read_sample_part_seconds = 0.0
+        read_list_sample_parts_seconds = 0.0
+        if not skip_read:
+            effective_lookups = min(read_lookups, sample_count)
+            if drop_read_cache:
+                drop_filesystem_cache(db_path, idx_type)
+            reader = open_index_reader(db_path, idx_type)
+            try:
+                (
+                    read_sample_pointer_seconds,
+                    read_sample_part_seconds,
+                    read_list_sample_parts_seconds,
+                ) = run_read_benchmark(
+                    reader=reader,
+                    sample_count=sample_count,
+                    parts_per_sample=parts_per_sample,
+                    read_lookups=effective_lookups,
+                    rng=rng,
+                )
+            finally:
+                reader.close()
 
-    return BenchmarkResult(
-        idx_type=idx_type,
-        sample_count=sample_count,
-        parts_per_sample=parts_per_sample,
-        batch_size=batch_size,
-        read_lookups=min(read_lookups, sample_count) if not skip_read else 0,
-        insert_seconds=insert_seconds,
-        close_seconds=close_seconds,
-        write_total_seconds=write_total_seconds,
-        read_sample_pointer_seconds=read_sample_pointer_seconds,
-        read_sample_part_seconds=read_sample_part_seconds,
-        read_list_sample_parts_seconds=read_list_sample_parts_seconds,
-        read_total_seconds=read_total_seconds,
-        total_seconds=write_total_seconds + read_total_seconds,
-        db_size_bytes=path_size(db_path),
-        db_path=str(db_path),
-    )
+        read_total_seconds = (
+            read_sample_pointer_seconds
+            + read_sample_part_seconds
+            + read_list_sample_parts_seconds
+        )
+
+        return BenchmarkResult(
+            idx_type=idx_type,
+            sample_count=sample_count,
+            parts_per_sample=parts_per_sample,
+            batch_size=batch_size,
+            sqlite_in_memory=sqlite_in_memory,
+            read_lookups=min(read_lookups, sample_count) if not skip_read else 0,
+            insert_seconds=insert_seconds,
+            close_seconds=close_seconds,
+            write_total_seconds=write_total_seconds,
+            read_sample_pointer_seconds=read_sample_pointer_seconds,
+            read_sample_part_seconds=read_sample_part_seconds,
+            read_list_sample_parts_seconds=read_list_sample_parts_seconds,
+            read_total_seconds=read_total_seconds,
+            total_seconds=write_total_seconds + read_total_seconds,
+            db_size_bytes=path_size(db_path),
+            db_path=str(db_path),
+            sqlite_log_path=str(sqlite_log_path) if sqlite_log_path is not None else "",
+        )
+    finally:
+        if sqlite_log_path is not None and indexing.DEBUG_SQLITE_LOG_FILE is not None:
+            indexing.DEBUG_SQLITE_LOG_FILE.close()
+            indexing.DEBUG_SQLITE_LOG_FILE = None
 
 
 def write_result(csv_path: Path, result: BenchmarkResult) -> None:
@@ -356,20 +399,6 @@ def write_result(csv_path: Path, result: BenchmarkResult) -> None:
         if not file_exists:
             writer.writeheader()
         writer.writerow(asdict(result))
-
-
-class NoopWriter:
-    """No-op index writer for benchmarking write-only performance."""
-    def append_samples(self, samples: list[IndexSample]) -> None:
-        pass
-    def append_parts(self, parts: list[IndexSamplePart]) -> None:
-        pass
-    def close(self) -> None:
-        pass
-    def __enter__(self) -> NoopWriter:
-        return self
-    def __exit__(self, exc_type, exc_value, traceback) -> None:
-        pass
 
 
 @click.command()
@@ -388,6 +417,12 @@ class NoopWriter:
     default="sqlite",
     show_default=True,
     type=click.Choice(["sqlite", "lmdb", "noop"]),
+)
+@click.option(
+    "--sqlite-in-memory/--sqlite-on-disk",
+    default=False,
+    show_default=True,
+    help="Build SQLite indexes in :memory: and save them to disk on close.",
 )
 @click.option(
     "--read-lookups",
@@ -432,6 +467,7 @@ def main(
     batch_size: int,
     samples_per_shard: int,
     sample_byte_size: int,
+    sqlite_in_memory: bool,
     read_lookups: int,
     skip_read: bool,
     drop_read_cache: bool,
@@ -450,12 +486,16 @@ def main(
         raise click.BadParameter("--samples-per-shard must be > 0.")
     if sample_byte_size <= 0:
         raise click.BadParameter("--sample-byte-size must be > 0.")
+    if sqlite_in_memory and idx_type != "sqlite":
+        raise click.BadParameter("--sqlite-in-memory can only be used with --idx-type sqlite.")
     if read_lookups <= 0 and not skip_read:
         raise click.BadParameter("--read-lookups must be > 0 unless --skip-read is set.")
 
     rng = random.Random(seed)
-    run_dir = output_dir / datetime.now().strftime("%Y%m%d-%H%M%S")
+    run_dir = output_dir / timestamp()
+    sqlite_log_dir = run_dir / "sqlite_logs"
     run_dir.mkdir(parents=True, exist_ok=False)
+    sqlite_log_dir.mkdir()
     results_path = run_dir / "results.csv"
 
     click.echo(f"Writing benchmark output to {run_dir}")
@@ -481,6 +521,13 @@ def main(
         else:
             db_path = run_dir / f"index-{idx_type}-{sample_count}-samples"
             db_path.mkdir(parents=True, exist_ok=True)
+        sqlite_log_path = (
+            sqlite_log_dir / f"sqlite-{sample_count}-samples-{timestamp()}.csv"
+            if idx_type == "sqlite"
+            else None
+        )
+        if sqlite_log_path is not None:
+            click.echo(f"Writing SQLite log to {sqlite_log_path}")
 
         result = run_benchmark(
             db_path=db_path,
@@ -493,6 +540,8 @@ def main(
             read_lookups=read_lookups,
             skip_read=skip_read,
             drop_read_cache=drop_read_cache,
+            sqlite_in_memory=sqlite_in_memory,
+            sqlite_log_path=sqlite_log_path,
             rng=rng,
         )
         write_result(results_path, result)

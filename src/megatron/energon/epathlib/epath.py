@@ -181,6 +181,17 @@ class EPath:
         else:
             return str(self.internal_path)
 
+    def _internal_open_path(self) -> str:
+        """Return the path to pass to open(), resolving local symlinks first.
+
+        This is intentionally limited to local/POSIX-backed paths. Remote MSC profiles
+        may use path strings that look absolute but are not local filesystem paths.
+        """
+        path = self._internal_str_path
+        if self.profile == "dss" or self.profile == DEFAULT_PROFILE_NAME:
+            return str(PathlibPath(path).resolve(strict=False))
+        return path
+
     @overload
     def open(
         self,
@@ -203,7 +214,7 @@ class EPath:
         block_size: Optional[int] = None,
         prefetch_file: bool = False,
     ) -> Union[TextIO, BinaryIO]:
-        return self.fs.open(self._internal_str_path, mode, prefetch_file=prefetch_file)
+        return self.fs.open(self._internal_open_path(), mode, prefetch_file=prefetch_file)
 
     def read_text(self) -> str:
         with self.open(prefetch_file=True) as f:

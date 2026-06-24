@@ -3,7 +3,7 @@
 
 import shutil
 from collections.abc import Generator, Sequence
-from typing import Protocol, Tuple, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, Tuple, runtime_checkable
 
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.webdataset.config import (
@@ -11,12 +11,16 @@ from megatron.energon.flavors.webdataset.config import (
     INDEX_SQLITE_FILENAME,
     MAIN_FOLDER_NAME,
 )
-from megatron.energon.flavors.webdataset.itar import ITarRawSamplePartPointer, ITarSamplePointer
-from megatron.energon.flavors.webdataset.lmdb_index import LmdbIndexReader, LmdbIndexWriter
 from megatron.energon.flavors.webdataset.indexing import SqliteIndexReader, SqliteIndexWriter
+from megatron.energon.flavors.webdataset.itar import ITarRawSamplePartPointer, ITarSamplePointer
+from megatron.energon.flavors.webdataset.lmdb_index import LmdbIndexReader
 
-if False:  # TYPE_CHECKING
-    from megatron.energon.flavors.webdataset.prepare import IndexMediaMetadata, IndexSample, IndexSamplePart
+if TYPE_CHECKING:
+    from megatron.energon.flavors.webdataset.prepare import (
+        IndexMediaMetadata,
+        IndexSample,
+        IndexSamplePart,
+    )
 
 
 @runtime_checkable
@@ -75,9 +79,7 @@ def meta_dir_path(dataset_or_meta_path: EPath) -> EPath:
 
 
 def has_prepared_index(meta_dir: EPath) -> bool:
-    return (meta_dir / INDEX_LMDB_DIRNAME).is_dir() or (
-        meta_dir / INDEX_SQLITE_FILENAME
-    ).is_file()
+    return (meta_dir / INDEX_LMDB_DIRNAME).is_dir() or (meta_dir / INDEX_SQLITE_FILENAME).is_file()
 
 
 def index_lmdb_path(meta_dir: EPath) -> EPath:
@@ -107,13 +109,15 @@ def open_index_writer(
     enable_sample_tables: bool = True,
     enable_media_metadata: bool = False,
     reset_tables: bool = True,
+    sqlite_in_memory: bool = False,
 ) -> IndexWriter:
     """Create a new LMDB index under ``meta_dir/index.lmdb``."""
-    return LmdbIndexWriter(
-        index_lmdb_path(meta_dir),
+    return SqliteIndexWriter(
+        index_sqlite_path(meta_dir),
         enable_sample_tables=enable_sample_tables,
         enable_media_metadata=enable_media_metadata,
         reset_tables=reset_tables,
+        in_memory=sqlite_in_memory,
     )
 
 

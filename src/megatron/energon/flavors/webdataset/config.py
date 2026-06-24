@@ -8,7 +8,7 @@ split_name_re = re.compile(r"^((?:.*/|)[^.]+)[.]([^/]*)$")
 skip_meta_re = re.compile(r"__[^/]*__($|/)")
 MAIN_FOLDER_NAME = ".nv-meta"
 JOIN_INDEX_FILENAME = "join_index.bin"
-INDEX_BATCH_SIZE = 4096
+INDEX_BATCH_SIZE = 128
 INDEX_SQLITE_FILENAME = "index.sqlite"
 INDEX_LMDB_DIRNAME = "index.lmdb"
 # Default map size for prepare (1 TiB); override via ENERGON_INDEX_LMDB_MAP_SIZE bytes.

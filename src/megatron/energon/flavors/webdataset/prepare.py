@@ -4,7 +4,6 @@
 import functools
 import json
 import logging
-import shutil
 import random
 import re
 import sys
@@ -37,8 +36,6 @@ from megatron.energon.eyaml import load_yaml
 from megatron.energon.flavors.webdataset.aggregator_pool import AggregatorPool, BaseAggregator
 from megatron.energon.flavors.webdataset.config import (
     INDEX_BATCH_SIZE,
-    INDEX_LMDB_DIRNAME,
-    INDEX_SQLITE_FILENAME,
     INDEX_UUID_FILENAME,
     INFO_JSON_FILENAME,
     INFO_YAML_FILENAME,
@@ -123,6 +120,7 @@ class IndexWriterAggregator(
     reset_tables: bool
     media_metadata_written: int
     progress_on_media: bool
+    sqlite_in_memory: bool
 
     def __init__(
         self,
@@ -135,6 +133,7 @@ class IndexWriterAggregator(
         media_filter: Optional[MediaFilterConfig] = None,
         reset_tables: bool = True,
         progress_on_media: bool = False,
+        sqlite_in_memory: bool = False,
     ):
         self.meta_dir = meta_dir
         self.total_tasks = total_tasks
@@ -148,6 +147,7 @@ class IndexWriterAggregator(
         self.reset_tables = reset_tables
         self.media_metadata_written = 0
         self.progress_on_media = progress_on_media
+        self.sqlite_in_memory = sqlite_in_memory
 
         if progress_fn is not None:
             self.prog_iter = progress_fn(iter(range(self.total_tasks)), self.total_tasks)
@@ -160,6 +160,7 @@ class IndexWriterAggregator(
             enable_sample_tables=self.enable_sample_tables,
             enable_media_metadata=self.enable_media_metadata,
             reset_tables=self.reset_tables,
+            sqlite_in_memory=self.sqlite_in_memory,
         )
 
     def on_item(
@@ -500,6 +501,7 @@ class WebdatasetPreparator:
         tar_index_only: bool = False,
         media_filter: Optional[MediaFilterConfig] = None,
         fix_duplicates: bool = False,
+        sqlite_in_memory: bool = False,
     ) -> Tuple[Set[str], List[Tuple[str, int]]]:
         """
         Preprocess the shards and write the split config. Preprocessing is done in parallel.
@@ -518,6 +520,7 @@ class WebdatasetPreparator:
             tar_index_only: Only create tar-index, then exit
             media_filter: Media filter configuration
             fix_duplicates: If True, fix duplicate keys in the dataset by renaming the files in the shards.
+            sqlite_in_memory: Build the SQLite index in memory, then write it to disk at close.
 
         Returns:
             The set of all parts found in the shards. But at most 50.
@@ -580,6 +583,7 @@ class WebdatasetPreparator:
             progress_fn=progress_fn,
             enable_media_metadata=media_filter is not None,
             media_filter=media_filter,
+            sqlite_in_memory=sqlite_in_memory,
         )
 
         process_tar = functools.partial(
