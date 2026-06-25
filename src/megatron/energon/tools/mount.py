@@ -39,7 +39,7 @@ try:
 
             self._wds_filestore = WebdatasetFileStore(db_path)
 
-            self._all_sample_parts = {}
+            self._all_sample_parts: dict[str, int] = {}
             self._slow_mode = False
             try:
                 for key, size, tar_file_id in self._wds_filestore.list_all_sample_parts():
@@ -58,7 +58,7 @@ try:
                     self._slow_mode = True
 
             self._samples_with_multiple_tar_files = set()
-            self._all_samples = {}
+            self._all_samples: dict[str, int] = {}
             for key, size, tar_file_id in self._wds_filestore.list_all_samples():
                 if key not in self._all_samples:
                     self._all_samples[key] = size
@@ -68,7 +68,7 @@ try:
             self._total_size = None
 
             # When a file is opened, we keep the bytes in memory for now (until it is closed)
-            self._open_files = {}
+            self._open_files: dict[str, bytes] = {}
 
             # Get current uid and gid
             self._uid = os.getuid()

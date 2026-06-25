@@ -23,6 +23,23 @@ fix: dev-sync
 check: dev-sync
     uv run ruff check
 
+# Static type check: gate on NEW errors only, via the committed `.mypy-baseline.txt`.
+# Plain pipe (no pipefail): mypy always exits non-zero while baseline errors remain, so
+# the gate's pass/fail must come from `mypy-baseline filter`. A mypy crash is still caught
+# (empty input -> filter reports all baseline entries resolved -> non-zero). Never add
+# `--allow-unsynced` here: it is the one flag that defeats the ratchet.
+typecheck: dev-sync
+    uv run mypy | uv run mypy-baseline filter
+
+# Regenerate the baseline after fixing (or deliberately accepting) type errors.
+# This is the ONLY sanctioned way to write `.mypy-baseline.txt`; never hand-edit it.
+typecheck-baseline: dev-sync
+    uv run mypy | uv run mypy-baseline sync
+
+# Show remaining type debt (files with the most errors) from the committed baseline.
+typecheck-progress: dev-sync
+    uv run mypy-baseline top-files
+
 # Execute all unit tests
 test: dev-sync
     uv run -m unittest discover -v -s tests

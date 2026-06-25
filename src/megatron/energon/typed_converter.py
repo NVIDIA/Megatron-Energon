@@ -278,7 +278,7 @@ class JsonParser:
                 if raw_data is None:
                     return None
             best_inner_error: Optional[JsonValueError] = None
-            inner_exceptions = []
+            inner_exceptions: list[JsonValueError] = []
             for subtype in union_types:
                 try:
                     return self.raw_to_typed(
@@ -924,7 +924,7 @@ class JsonParser:
             # Tuple[inner_type[0], inner_type[1], ...]
             if inst_type is list:
                 inner_type = Any
-                inner_types = []
+                inner_types: typing.Sequence[Any] = []
                 cls = list
             elif inst_type is tuple:
                 inner_type = Any
@@ -1106,7 +1106,7 @@ float_pattern = re.compile(r"[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?")
 
 def _split_dict_keys(dct: Dict[str, Any]) -> Dict[str, Any]:
     """Splits the given dict keys by first '.' to subdicts."""
-    res = {}
+    res: dict[str, Any] = {}
     for key, value in dct.items():
         if "." in key:
             outer_key, _, inner_key = key.partition(".")

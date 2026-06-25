@@ -45,6 +45,11 @@ dev = [
   "soundfile",
   "sphinx-rtd-theme",
   "sphinx-click",
+  # Static type checking (see docs/source/internals/type_checking.md)
+  "mypy>=1.8",
+  "mypy-baseline>=0.7",
+  "types-PyYAML",
+  "types-tqdm",
 ]
 transforms = [
   "torchvision",  # Needed for megatron.energon.transforms
@@ -110,3 +115,49 @@ exclude = [
   ".idea",
   "docs",
 ]
+
+# Static type checking. Strategy & contributor guide:
+# docs/source/internals/type_checking.md
+# CI gates on *new* errors only, via a committed `.mypy-baseline.txt` ratchet.
+[tool.mypy]
+python_version = "3.10"
+files = ["src/megatron/energon"]
+mypy_path = ["src"]
+namespace_packages = true
+explicit_package_bases = true
+# Third-party stubs are adopted incrementally (see "Stub policy" in the docs);
+# until then, missing imports are treated as `Any`.
+ignore_missing_imports = true
+# Pragmatic floor: catch real bugs without requiring every def to be annotated yet.
+check_untyped_defs = true
+no_implicit_optional = true
+strict_equality = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_unused_configs = true
+show_error_codes = true
+
+# Graduated modules: locked to strict so they cannot regress to loose typing.
+# Grow this list as modules reach zero baseline errors (see the type-checking docs).
+[[tool.mypy.overrides]]
+module = [
+  "megatron.energon.av.av_data",
+  "megatron.energon.av.av_init",
+  "megatron.energon.flavors.webdataset.config",
+  "megatron.energon.flavors.webdataset.empty_dataset_error",
+  "megatron.energon.loader",
+  "megatron.energon.local_copy",
+  "megatron.energon.media.filesystem_prepare",
+  "megatron.energon.media.metadata",
+  "megatron.energon.source_info",
+  "megatron.energon.transforms.custom",
+]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_any_generics = true
+
+# Ratchet config for `mypy-baseline`. NOTE: `allow_unsynced` is intentionally left
+# at its default (false) so the baseline can only shrink — see the docs. Do not enable it.
+[tool.mypy-baseline]
+baseline_path = ".mypy-baseline.txt"
+sort_baseline = true
