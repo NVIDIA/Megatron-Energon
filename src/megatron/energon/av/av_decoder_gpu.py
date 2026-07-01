@@ -71,18 +71,17 @@ class AVDecoderGpu(AVDecoder):
         if video_unit == "seconds":
             video_clip_ranges = [
                 (
-                  range_start * average_fps if range_start != float("inf") else last_frame,
-                  range_end * average_fps if range_end != float("inf") else last_frame
+                    range_start * average_fps if range_start != float("inf") else last_frame,
+                    range_end * average_fps if range_end != float("inf") else last_frame,
                 )
                 for range_start, range_end in video_clip_ranges
             ]
         elif video_unit == "frames":
             video_clip_ranges = [
-              (
-                range_start if range_start != float("inf") else last_frame,
-                range_end if range_end != float("inf") else last_frame,
-
-              )
+                (
+                    range_start if range_start != float("inf") else last_frame,
+                    range_end if range_end != float("inf") else last_frame,
+                )
                 for range_start, range_end in video_clip_ranges
             ]
 
@@ -97,7 +96,7 @@ class AVDecoderGpu(AVDecoder):
         for video_clip_range in video_clip_ranges:
             range_start, range_end = video_clip_range
             decoded_frames = decoder.get_batch_frames_by_index(
-              list(range(int(range_start), int(range_end) + 1))
+                list(range(int(range_start), int(range_end) + 1))
             )
 
             # NOTE PyNVC does not currently timestamp decoded frames reliably, so we assume constant framerate instead
@@ -107,7 +106,9 @@ class AVDecoderGpu(AVDecoder):
             )  # range_end + 1 accounts for last frame duration
 
             video_clips_timestamps.append((clip_timestamp_start, clip_timestamp_end))
-            video_clips_frames.append([torch.from_dlpack(frame).clone() for frame in decoded_frames])
+            video_clips_frames.append(
+                [torch.from_dlpack(frame).clone() for frame in decoded_frames]
+            )
 
         out_video_clips = [
             torch.stack(clip_frames).permute((0, 3, 1, 2)) for clip_frames in video_clips_frames
