@@ -66,48 +66,48 @@ class AVDecoderGpu(AVDecoder):
 
             return super().get_video_clips(video_clip_ranges, video_unit, video_out_frame_size)
 
+        average_fps = decoder.get_stream_metadata().average_fps
+        last_frame = len(decoder) - 1
         if video_unit == "seconds":
-            duration = decoder.get_stream_metadata().duration
-
-            def _clamp_time(time: float) -> float:
-                return min(time, duration)
-
             video_clip_ranges = [
                 (
-                    decoder.get_index_from_time_in_seconds(_clamp_time(range_start)),
-                    decoder.get_index_from_time_in_seconds(_clamp_time(range_end)),
+                  range_start * average_fps if range_start != float("inf") else last_frame,
+                  range_end * average_fps if range_end != float("inf") else last_frame
                 )
                 for range_start, range_end in video_clip_ranges
             ]
         elif video_unit == "frames":
-            last_frame = len(decoder) - 1
-
-            def _clamp_frame(f: float) -> int:
-                return int(min(f, last_frame))
-
             video_clip_ranges = [
-                (_clamp_frame(range_start), _clamp_frame(range_end))
+              (
+                range_start if range_start != float("inf") else last_frame,
+                range_end if range_end != float("inf") else last_frame,
+
+              )
                 for range_start, range_end in video_clip_ranges
             ]
 
-        average_fps = decoder.get_stream_metadata().average_fps
-
+        # NOTE the CPU decode path silently drops out-of-range frames, this filter matches that behavior
+        video_clip_ranges = [
+            (range_start, min(range_end, last_frame))
+            for range_start, range_end in video_clip_ranges
+            if range_start <= last_frame
+        ]
         video_clips_frames: list[list[torch.Tensor]] = []
         video_clips_timestamps: list[tuple[float, float]] = []
         for video_clip_range in video_clip_ranges:
             range_start, range_end = video_clip_range
             decoded_frames = decoder.get_batch_frames_by_index(
-                list(range(range_start, range_end + 1))
+              list(range(int(range_start), int(range_end) + 1))
             )
 
-            # NOTE: PyNVC does not currently timestamp decoded frames reliably, so we assume constant framerate instead
+            # NOTE PyNVC does not currently timestamp decoded frames reliably, so we assume constant framerate instead
             clip_timestamp_start = float(range_start) / float(average_fps)
             clip_timestamp_end = float(range_end + 1) / float(
                 average_fps
             )  # range_end + 1 accounts for last frame duration
 
             video_clips_timestamps.append((clip_timestamp_start, clip_timestamp_end))
-            video_clips_frames.append([torch.from_dlpack(frame) for frame in decoded_frames])
+            video_clips_frames.append([torch.from_dlpack(frame).clone() for frame in decoded_frames])
 
         out_video_clips = [
             torch.stack(clip_frames).permute((0, 3, 1, 2)) for clip_frames in video_clips_frames
