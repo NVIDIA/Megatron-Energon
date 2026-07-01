@@ -188,10 +188,6 @@ class _TestVideoDecodeBase:
         av_data = av_decoder.get_frames()
         video_tensor = av_data.video_clips[0]
 
-        print(f"{len(av_data.video_clips)=}")
-        print(f"{video_tensor.shape=}")
-        print(f"{self.complete_video_tensor.shape=}")
-
         print(video_tensor.shape)
         assert tensors_close(video_tensor.cpu(), self.complete_video_tensor, tolerance=0.001), (
             "Energon decoded video does not match baseline"
