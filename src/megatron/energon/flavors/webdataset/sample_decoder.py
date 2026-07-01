@@ -6,7 +6,7 @@ from typing import Any, Callable, Literal
 
 import webdataset
 
-from megatron.energon.av import AVWebdatasetDecoder
+from megatron.energon.av.av_webdataset_decoder import AVWebdatasetDecoder
 from megatron.energon.cache import FileStoreDecoder
 from megatron.energon.flavors.webdataset.config import split_name_re
 from megatron.energon.flavors.webdataset.nvimagecodec_decoder import NVImageCodecDecoder
