@@ -67,11 +67,26 @@ class AVDecoderGpu(AVDecoder):
             return super().get_video_clips(video_clip_ranges, video_unit, video_out_frame_size)
 
         if video_unit == "seconds":
+            duration = decoder.get_stream_metadata().duration
+
+            def _clamp_time(time: float) -> float:
+                return min(time, duration)
+
             video_clip_ranges = [
                 (
-                    decoder.get_index_from_time_in_seconds(range_start),
-                    decoder.get_index_from_time_in_seconds(range_end),
+                    decoder.get_index_from_time_in_seconds(_clamp_time(range_start)),
+                    decoder.get_index_from_time_in_seconds(_clamp_time(range_end)),
                 )
+                for range_start, range_end in video_clip_ranges
+            ]
+        elif video_unit == "frames":
+            last_frame = len(decoder) - 1
+
+            def _clamp_frame(f: float) -> int:
+                return int(min(f, last_frame))
+
+            video_clip_ranges = [
+                (_clamp_frame(range_start), _clamp_frame(range_end))
                 for range_start, range_end in video_clip_ranges
             ]
 
