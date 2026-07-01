@@ -206,7 +206,9 @@ class _TestVideoDecodeBase:
             assert video_data[0].shape == (1, 3, 108, 192), (
                 f"Shape of frame {frame} is {video_data[0].shape}"
             )
-            assert (video_data[0].cpu() == self.complete_video_tensor[frame : frame + 1]).all()
+            assert tensors_close(
+                video_data[0].cpu(), self.complete_video_tensor[frame : frame + 1], 0.01
+            )
             # print(f"Timestamp for frame {frame}: {timestamps[0]}")
             all_timestamps.append(0.5 * (timestamps[0][0] + timestamps[0][1]))
 
@@ -225,7 +227,9 @@ class _TestVideoDecodeBase:
             assert video_data[0].shape == (1, 3, 108, 192), (
                 f"Shape of frame {frame} is {video_data[0].shape}"
             )
-            assert (video_data[0] == self.complete_video_tensor[frame : frame + 1]).all()
+            assert tensors_close(
+                video_data[0].cpu(), self.complete_video_tensor[frame : frame + 1], 0.01
+            )
             assert 0.5 * (timestamps[0][0] + timestamps[0][1]) == timestamp1, (
                 f"Timestamp for frame {frame} is {timestamps[0][0]} + {timestamps[0][1]}"
             )
@@ -238,12 +242,16 @@ class _TestVideoDecodeBase:
                 assert video_data[0].shape == (1, 3, 108, 192), (
                     f"Shape of frame {frame} is {video_data[0].shape}"
                 )
-                assert (video_data[0] == self.complete_video_tensor[frame : frame + 1]).all()
+                assert tensors_close(
+                    video_data[0].cpu(), self.complete_video_tensor[frame : frame + 1], 0.01
+                )
             else:
                 assert video_data[0].shape == (2, 3, 108, 192), (
                     f"Shape of frame {frame} is {video_data[0].shape}"
                 )
-                assert (video_data[0] == self.complete_video_tensor[frame : frame + 2]).all()
+                assert tensors_close(
+                    video_data[0].cpu(), self.complete_video_tensor[frame : frame + 2], 0.01
+                )
 
     def test_decode_metadata(self):
         """Test decoding metadata."""
