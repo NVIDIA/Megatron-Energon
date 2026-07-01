@@ -390,7 +390,7 @@ class _TestVideoDecodeBase:
         )
         from PIL import Image
 
-        Image.fromarray(video_data[0][0, :, 18:55, 18:55].numpy().transpose(1, 2, 0)).save(
+        Image.fromarray(video_data[0][0, :, 18:55, 18:55].cpu().numpy().transpose(1, 2, 0)).save(
             "circ.png"
         )
         assert (video_data[0][0, :, 18:55, 18:55] > 250).all(), (
@@ -482,9 +482,9 @@ class TestVideoDecodeCPU(_TestVideoDecodeBase, unittest.TestCase):
 class TestVideoDecodeGPU(_TestVideoDecodeBase, unittest.TestCase):
     decoder_class = AVDecoderGpu
 
-    @unittest.expectedFailure
-    def test_time_precision(self):
-        return super().test_time_precision()
+    # @unittest.expectedFailure
+    # def test_time_precision(self):
+    #     return super().test_time_precision()
 
 
 def load_audio_to_tensor(audio_path: str) -> torch.Tensor:
