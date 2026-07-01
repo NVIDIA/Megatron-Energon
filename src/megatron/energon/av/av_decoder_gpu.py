@@ -52,6 +52,7 @@ class AVDecoderGpu(AVDecoder):
         assert video_unit in ("frames", "seconds")
 
         try:
+            self.stream.seek(0)  # FOLLOWUP why do we need another one of these here?
             decoder = nvc.SimpleDecoder(
                 self.stream,
                 gpu_id=self.device_id,
@@ -71,16 +72,16 @@ class AVDecoderGpu(AVDecoder):
         if video_unit == "seconds":
             video_clip_ranges = [
                 (
-                    range_start * average_fps if range_start != float("inf") else last_frame,
-                    range_end * average_fps if range_end != float("inf") else last_frame,
+                    int(range_start * average_fps) if range_start != float("inf") else last_frame,
+                    int(range_end * average_fps) if range_end != float("inf") else last_frame,
                 )
                 for range_start, range_end in video_clip_ranges
             ]
         elif video_unit == "frames":
             video_clip_ranges = [
                 (
-                    range_start if range_start != float("inf") else last_frame,
-                    range_end if range_end != float("inf") else last_frame,
+                    int(range_start) if range_start != float("inf") else last_frame,
+                    int(range_end) if range_end != float("inf") else last_frame,
                 )
                 for range_start, range_end in video_clip_ranges
             ]
@@ -89,14 +90,14 @@ class AVDecoderGpu(AVDecoder):
         video_clip_ranges = [
             (range_start, min(range_end, last_frame))
             for range_start, range_end in video_clip_ranges
-            if range_start <= last_frame
+            if range_start <= last_frame + 1
         ]
         video_clips_frames: list[list[torch.Tensor]] = []
         video_clips_timestamps: list[tuple[float, float]] = []
         for video_clip_range in video_clip_ranges:
             range_start, range_end = video_clip_range
             decoded_frames = decoder.get_batch_frames_by_index(
-                list(range(int(range_start), int(range_end) + 1))
+                list(range(range_start, range_end + 1))
             )
 
             # NOTE PyNVC does not currently timestamp decoded frames reliably, so we assume constant framerate instead
