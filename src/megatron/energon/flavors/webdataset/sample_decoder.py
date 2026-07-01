@@ -8,6 +8,7 @@ import webdataset
 from megatron.energon.av import AVWebdatasetDecoder
 from megatron.energon.cache import FileStoreDecoder
 from megatron.energon.flavors.webdataset.config import split_name_re
+from megatron.energon.flavors.webdataset.nvimagecodec_decoder import NVImageCodecDecoder
 
 try:
     import filetype
@@ -28,6 +29,7 @@ ImageDecoderType = Literal[
     "torchrgb",
     "torch",
     "torchrgba",
+    "nvimagecodec",
     "pill",
     "pil",
     "pilrgb",
@@ -102,11 +104,15 @@ class SampleDecoder(FileStoreDecoder):
             video_decode_audio=video_decode_audio,
             guess_content=guess_content,
         )
+        if image_decode == "nvimagecodec":
+          image_decoder = NVImageCodecDecoder()
+        else:
+          image_decoder = webdataset.autodecode.imagehandler(image_decode)
         self._decoder = webdataset.autodecode.Decoder(
             GuessingHandlerWrapper.wrap(
                 guess_content,
                 [
-                    webdataset.autodecode.imagehandler(image_decode),
+                    image_decoder,
                     AVWebdatasetDecoder(
                         video_decode_audio=video_decode_audio,
                         av_decode=av_decode,
