@@ -9,8 +9,6 @@ from torchvision.transforms.functional import pil_to_tensor
 from megatron.energon.flavors.webdataset.nvimagecodec_decoder import NVImageCodecDecoder
 from megatron.energon.flavors.webdataset.sample_decoder import SampleDecoder
 
-from .test_av_decoder import tensors_close
-
 
 @unittest.skipUnless(torch.cuda.is_available(), "GPU required")
 class TestGPUImageDecode(unittest.TestCase):
@@ -53,4 +51,33 @@ class TestGPUImageDecode(unittest.TestCase):
       with BytesIO(self.image_data) as io:
         cpu_image = pil_to_tensor(Image.open(io)).float().div(255)
 
-      assert tensors_close(cpu_image, gpu_image.cpu(), 0.001)
+      assert torch.allclose(cpu_image, gpu_image.cpu())
+
+    def test_decode_uint8(self) -> None:
+      decoder = NVImageCodecDecoder("nvimgcodec8")
+      gpu_image = decoder("png", self.image_data)
+
+      assert gpu_image.dtype == torch.uint8
+
+    def test_decode_channel_coercion(self) -> None:
+      gray_image_data = Path("tests/data/test_image_l.png").read_bytes()
+      rgba_image_data = Path("tests/data/test_image_rgba.png").read_bytes()
+
+      # Test 1: rgb always returns three
+      decoder = NVImageCodecDecoder("nvimgcodecrgb")
+      gray_image = decoder("png", gray_image_data)
+      rgba_image = decoder("png", rgba_image_data)
+
+      assert gray_image.shape[0] == rgba_image.shape[0] == 3
+
+      decoder = NVImageCodecDecoder("nvimgcodecl")
+      gray_image = decoder("png", gray_image_data)
+      rgba_image = decoder("png", rgba_image_data)
+
+      assert gray_image.shape[0] == rgba_image.shape[0] == 1
+
+      decoder = NVImageCodecDecoder("nvimgcodecrgba")
+      gray_image = decoder("png", gray_image_data)
+      rgba_image = decoder("png", rgba_image_data)
+
+      assert gray_image.shape[0] == rgba_image.shape[0] == 4
