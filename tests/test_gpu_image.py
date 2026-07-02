@@ -74,7 +74,7 @@ class TestGPUImageDecode(unittest.TestCase):
 
     def test_decode_uint8(self) -> None:
         """Tests that 8bit decoding requests work correctly"""
-        decoder = NVImageCodecDecoder("nvimgcodec8")
+        decoder = NVImageCodecDecoder("nvimgcodecrgb8")
         gpu_image = decoder("png", self.image_data)
 
         assert gpu_image.dtype == torch.uint8
