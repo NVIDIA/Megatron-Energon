@@ -1,9 +1,8 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 import dataclasses
-from typing import Any, Callable, Dict, List, Literal, NamedTuple, Optional, Set, Tuple, Type, Union
-
 import unittest
+from typing import Any, Callable, Dict, List, Literal, NamedTuple, Optional, Set, Tuple, Type, Union
 
 from megatron.energon import typed_converter
 
@@ -107,7 +106,6 @@ class TestTypedConverter(unittest.TestCase):
         assert result.x == 42
         assert result.y == "foo"
 
-
     def test_raw_to_typed_dataclass(self):
         parser = typed_converter.JsonParser()
         raw = {"a": 7, "b": "bar"}
@@ -116,14 +114,12 @@ class TestTypedConverter(unittest.TestCase):
         assert result.a == 7
         assert result.b == "bar"
 
-
     def test_raw_to_typed_dataclass_default(self):
         parser = typed_converter.JsonParser()
         raw = {"a": 5}
         result = parser.raw_to_typed(raw, MyDataClass)
         assert result.a == 5
         assert result.b == "default"
-
 
     def test_raw_to_typed_union(self):
         parser = typed_converter.JsonParser()
@@ -132,12 +128,10 @@ class TestTypedConverter(unittest.TestCase):
         with self.assertRaises(typed_converter.JsonValueError):
             parser.raw_to_typed(1.5, Union[int, str])
 
-
     def test_raw_to_typed_optional(self):
         parser = typed_converter.JsonParser()
         assert parser.raw_to_typed(None, Optional[int]) is None
         assert parser.raw_to_typed(10, Optional[int]) == 10
-
 
     def test_raw_to_typed_list(self):
         parser = typed_converter.JsonParser()
@@ -145,13 +139,11 @@ class TestTypedConverter(unittest.TestCase):
         result = parser.raw_to_typed(raw, List[int])
         assert result == [1, 2, 3]
 
-
     def test_raw_to_typed_dict(self):
         parser = typed_converter.JsonParser()
         raw = {"foo": 1, "bar": 2}
         result = parser.raw_to_typed(raw, Dict[str, int])
         assert result == {"foo": 1, "bar": 2}
-
 
     def test_raw_to_typed_set(self):
         parser = typed_converter.JsonParser()
@@ -159,37 +151,31 @@ class TestTypedConverter(unittest.TestCase):
         result = parser.raw_to_typed(raw, Set[int])
         assert result == {1, 2, 3}
 
-
     def test_raw_to_typed_literal(self):
         parser = typed_converter.JsonParser()
         assert parser.raw_to_typed("yes", Literal["yes", "no"]) == "yes"
         with self.assertRaises(typed_converter.JsonValueError):
             parser.raw_to_typed("maybe", Literal["yes", "no"])
 
-
     def test_to_json_object_namedtuple(self):
         obj = MyNamedTuple(x=1, y="abc")
         json_obj = typed_converter.to_json_object(obj)
         assert json_obj == {"x": 1, "y": "abc"}
-
 
     def test_to_json_object_dataclass(self):
         obj = MyDataClass(a=2, b="xyz")
         json_obj = typed_converter.to_json_object(obj)
         assert json_obj == {"a": 2, "b": "xyz"}
 
-
     def test_to_json_object_list(self):
         obj = [1, 2, 3]
         json_obj = typed_converter.to_json_object(obj)
         assert json_obj == [1, 2, 3]
 
-
     def test_to_json_object_dict(self):
         obj = {"foo": 1, "bar": 2}
         json_obj = typed_converter.to_json_object(obj)
         assert json_obj == {"foo": 1, "bar": 2}
-
 
     def test_isinstance_deep(self):
         assert typed_converter._isinstance_deep(1, int)
@@ -202,12 +188,10 @@ class TestTypedConverter(unittest.TestCase):
         assert typed_converter._isinstance_deep({"a": 1}, Dict[str, int])
         assert not typed_converter._isinstance_deep({"a": "b"}, Dict[str, int])
 
-
     def test_missing_value_error(self):
         parser = typed_converter.JsonParser()
         with self.assertRaises(typed_converter.JsonValueError):
             parser.raw_to_typed(typed_converter._missing_value, int)
-
 
     def test_strict_extra_keys(self):
         parser = typed_converter.JsonParser(strict=True)
@@ -215,14 +199,12 @@ class TestTypedConverter(unittest.TestCase):
         with self.assertRaises(typed_converter.JsonValueError):
             parser.raw_to_typed(raw, MyDataClass)
 
-
     def test_non_strict_extra_keys(self):
         parser = typed_converter.JsonParser(strict=False)
         raw = {"a": 1, "b": "foo", "extra": 123}
         result = parser.raw_to_typed(raw, MyDataClass)
         assert result.a == 1
         assert result.b == "foo"
-
 
     def test_comprehensive_dataclass(self):
         """Test a complex dataclass with all supported types."""
@@ -335,13 +317,17 @@ class TestTypedConverter(unittest.TestCase):
         assert json_obj["type_ref"]["__module__"] == NestedDataClass.__module__
         assert json_obj["type_ref"]["__class__"] == NestedDataClass.__name__
 
-
     def test_comprehensive_dataclass_with_defaults(self):
         """Test comprehensive dataclass with minimal data using defaults."""
         parser = typed_converter.JsonParser()
 
         # Minimal raw data - only required fields
-        raw_data = {"string_field": "minimal", "int_field": 1, "float_field": 1.0, "bool_field": False}
+        raw_data = {
+            "string_field": "minimal",
+            "int_field": 1,
+            "float_field": 1.0,
+            "bool_field": False,
+        }
 
         result = parser.raw_to_typed(raw_data, ComprehensiveDataClass)
 
@@ -370,7 +356,6 @@ class TestTypedConverter(unittest.TestCase):
         assert result.nested is None
         assert result.named_tuple is None
         assert result.any_field is None
-
 
     def test_comprehensive_dataclass_error_cases(self):
         """Test error cases for comprehensive dataclass."""
@@ -423,7 +408,6 @@ class TestTypedConverter(unittest.TestCase):
 
         with self.assertRaises(typed_converter.JsonValueError):
             parser.raw_to_typed(raw_data, ComprehensiveDataClass)
-
 
     def test_comprehensive_dataclass_strict_mode(self):
         """Test comprehensive dataclass in strict mode with extra keys."""

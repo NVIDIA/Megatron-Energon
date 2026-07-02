@@ -7,12 +7,12 @@ import gc
 import logging
 import sys
 import tempfile
+import unittest
 import warnings
 from collections import Counter
 from pathlib import Path
 from typing import Iterable
 
-import unittest
 import torch
 import webdataset as wds
 
@@ -21,8 +21,10 @@ from megatron.energon import (
     get_train_dataset,
 )
 from megatron.energon.dataloader import DataLoader, ForkDataLoaderWorker, ThreadDataLoaderWorker
+from megatron.energon.dataloader.dataloader import _split_batch_restore_key
 from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
 from megatron.energon.task_encoder.base import DefaultTaskEncoder, stateless
+from megatron.energon.wrappers.batch_dataset import BatchGenRestoreKey
 
 
 class VerifyWorkerTaskEncoder(DefaultTaskEncoder):
@@ -151,9 +153,51 @@ class TestDataLoader(unittest.TestCase):
                 task_encoder=VerifyWorkerTaskEncoder(expected_num_workers=0),
             ),
         ).with_restored_state_rank(state1) as train_loader:
-            cmp_order2 = [text for idx, data in zip(range(55 * 10), train_loader) for text in data.text]
+            cmp_order2 = [
+                text for idx, data in zip(range(55 * 10), train_loader) for text in data.text
+            ]
             assert train_order2 == cmp_order2, (train_order1, cmp_order2)
 
+    def test_context_manager_keeps_running_workers(self):
+        worker_config = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=0,
+            seed_offset=42,
+        )
+        loader = DataLoader(
+            get_train_dataset(
+                self.ds1_path,
+                worker_config=worker_config,
+                batch_size=10,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                repeat=False,
+            )
+        )
+
+        loader_iter = iter(loader)
+        next(loader_iter)
+        running_workers = loader._workers
+
+        with loader:
+            assert loader._workers is running_workers
+
+        assert loader._workers is None
+
+    def test_split_batch_generator_restore_key_preserves_subtype(self):
+        restore_key = BatchGenRestoreKey(
+            inner=(None, None, None, None),
+            sample_idx=12,
+            gen_idx=3,
+        )
+
+        split_restore_keys = _split_batch_restore_key(restore_key, 2)
+
+        assert split_restore_keys == [
+            BatchGenRestoreKey(inner=(None, None), sample_idx=12, gen_idx=3),
+            BatchGenRestoreKey(inner=(None, None), sample_idx=12, gen_idx=3),
+        ]
 
     def test_dataloader_fork(self):
         torch.manual_seed(42)
@@ -209,7 +253,9 @@ class TestDataLoader(unittest.TestCase):
                 shuffle_buffer_size=None,
                 max_samples_per_sequence=None,
                 repeat=False,
-                task_encoder=VerifyWorkerTaskEncoder(expected_num_workers=worker_config.num_workers),
+                task_encoder=VerifyWorkerTaskEncoder(
+                    expected_num_workers=worker_config.num_workers
+                ),
             ),
             prefetch_factor=2,
             worker_type=ForkDataLoaderWorker,
@@ -218,9 +264,10 @@ class TestDataLoader(unittest.TestCase):
             watchdog_timeout_seconds=60,
             fail_on_timeout=True,
         ).with_restored_state_rank(state1) as train_loader:
-            cmp_order2 = [text for idx, data in zip(range(55 * 10), train_loader) for text in data.text]
+            cmp_order2 = [
+                text for idx, data in zip(range(55 * 10), train_loader) for text in data.text
+            ]
             assert train_order2 == cmp_order2, (train_order1, cmp_order2)
-
 
     def test_dataloader_fork_multi_parallel(self):
         torch.manual_seed(42)
@@ -246,7 +293,9 @@ class TestDataLoader(unittest.TestCase):
                 shuffle_buffer_size=None,
                 max_samples_per_sequence=None,
                 repeat=False,
-                task_encoder=VerifyWorkerTaskEncoder(expected_num_workers=worker_config_r0.num_workers),
+                task_encoder=VerifyWorkerTaskEncoder(
+                    expected_num_workers=worker_config_r0.num_workers
+                ),
             ),
             prefetch_factor=2,
             worker_type=ForkDataLoaderWorker,
@@ -274,7 +323,9 @@ class TestDataLoader(unittest.TestCase):
                 shuffle_buffer_size=None,
                 max_samples_per_sequence=None,
                 repeat=False,
-                task_encoder=VerifyWorkerTaskEncoder(expected_num_workers=worker_config_r1.num_workers),
+                task_encoder=VerifyWorkerTaskEncoder(
+                    expected_num_workers=worker_config_r1.num_workers
+                ),
             ),
             prefetch_factor=2,
             worker_type=ForkDataLoaderWorker,
@@ -311,7 +362,6 @@ class TestDataLoader(unittest.TestCase):
         train_loader_r0.shutdown()
         train_loader_r1.shutdown()
 
-
     def test_dataloader_thread(self):
         torch.manual_seed(42)
         worker_config = WorkerConfig(
@@ -330,7 +380,9 @@ class TestDataLoader(unittest.TestCase):
                 shuffle_buffer_size=None,
                 max_samples_per_sequence=None,
                 repeat=False,
-                task_encoder=VerifyWorkerTaskEncoder(expected_num_workers=worker_config.num_workers),
+                task_encoder=VerifyWorkerTaskEncoder(
+                    expected_num_workers=worker_config.num_workers
+                ),
             ),
             prefetch_factor=2,
             worker_type=ThreadDataLoaderWorker,
@@ -363,7 +415,9 @@ class TestDataLoader(unittest.TestCase):
                 shuffle_buffer_size=None,
                 max_samples_per_sequence=None,
                 repeat=False,
-                task_encoder=VerifyWorkerTaskEncoder(expected_num_workers=worker_config.num_workers),
+                task_encoder=VerifyWorkerTaskEncoder(
+                    expected_num_workers=worker_config.num_workers
+                ),
             ),
             prefetch_factor=2,
             worker_type=ThreadDataLoaderWorker,
@@ -371,7 +425,9 @@ class TestDataLoader(unittest.TestCase):
             watchdog_timeout_seconds=60,
             fail_on_timeout=True,
         ).with_restored_state_rank(state1) as train_loader:
-            cmp_order2 = [text for idx, data in zip(range(55 * 10), train_loader) for text in data.text]
+            cmp_order2 = [
+                text for idx, data in zip(range(55 * 10), train_loader) for text in data.text
+            ]
             assert train_order2 == cmp_order2, (train_order1, cmp_order2)
 
 

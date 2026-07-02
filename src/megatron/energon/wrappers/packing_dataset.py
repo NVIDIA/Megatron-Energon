@@ -21,7 +21,6 @@ from megatron.energon.errors import ErrorContext, handle_restore_errors
 from megatron.energon.flavors.base_dataset import (
     RestoreKey,
     SavableDataset,
-    coerce_restore_key,
     set_sample_restore_key,
 )
 from megatron.energon.worker import WorkerConfig
@@ -393,7 +392,6 @@ class PackingDataset(
     def restore_sample(self, restore_key: RestoreKey) -> T_sample:
         # We need to store multiple indices to restore a batch.
         self.assert_can_restore()
-        restore_key = coerce_restore_key(restore_key, PackingRestoreKey)
         assert isinstance(restore_key, PackingRestoreKey)
         if inspect.isgeneratorfunction(self.final_packer):
             assert isinstance(restore_key, PackingGenRestoreKey)

@@ -23,7 +23,6 @@ from megatron.energon.errors import ErrorContext, handle_restore_errors
 from megatron.energon.flavors.base_dataset import (
     RestoreKey,
     SavableDataset,
-    coerce_restore_key,
     set_sample_restore_key,
 )
 from megatron.energon.savable import Savable
@@ -279,7 +278,6 @@ class GroupBatchDataset(
 
     def restore_sample(self, index: RestoreKey) -> T_batch:
         super().assert_can_restore()
-        index = coerce_restore_key(index, GroupBatchRestoreKey)
         assert isinstance(index, GroupBatchRestoreKey)
         batch = [self.dataset.restore_sample(inner_idx) for inner_idx in index.inner]
 

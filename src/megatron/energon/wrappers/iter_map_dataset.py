@@ -17,7 +17,11 @@ from typing import (
 from torch.utils.data import IterableDataset
 
 from megatron.energon.errors import ErrorContext, handle_restore_errors
-from megatron.energon.flavors.base_dataset import RestoreKey, SavableDataset, set_sample_restore_key
+from megatron.energon.flavors.base_dataset import (
+    RestoreKey,
+    SavableDataset,
+    set_sample_restore_key,
+)
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import (
     BaseWrapperDataset,

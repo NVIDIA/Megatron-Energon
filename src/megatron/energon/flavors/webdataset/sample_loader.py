@@ -10,7 +10,6 @@ from megatron.energon.flavors.base_dataset import (
     FlexState,
     RestoreKey,
     SavableDataset,
-    coerce_restore_key,
 )
 from megatron.energon.flavors.webdataset.itar_reader import RawSampleReaderInterface
 from megatron.energon.flavors.webdataset.structs import FilteredSample, WebdatasetRestoreKey
@@ -447,7 +446,6 @@ class WebdatasetSampleLoaderDataset(SavableDataset[RawSampleData]):
 
     def restore_sample(self, restore_key: RestoreKey) -> RawSampleData:
         # The key is joined in the dataset's typed joining (i.e. load_sample of JoinedWebdatasetFactory).
-        restore_key = coerce_restore_key(restore_key, WebdatasetRestoreKey)
         assert isinstance(restore_key, WebdatasetRestoreKey)
         assert isinstance(restore_key.index, int), (
             "WebdatasetRestoreKey.index must be an integer, cannot restore by sample key"

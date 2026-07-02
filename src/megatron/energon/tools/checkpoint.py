@@ -1,19 +1,16 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-import dataclasses
 import re
 from typing import Callable, Generator, List, Optional
 
 import click
 import torch
 
-from megatron.energon.dataloader.dataloader import RankState
+from megatron.energon.dataloader.dataloader import RankState, _split_batch_restore_key
 from megatron.energon.dataloader.workers.base_worker import WorkerState
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.base_dataset import RestoreKey
-from megatron.energon.wrappers.base import WrappedRestoreKey
-from megatron.energon.wrappers.batch_dataset import BatchRestoreKey
 
 
 def natural_sort_key(s: str) -> List[str | int]:
@@ -223,41 +220,6 @@ class RankStateIterable:
                 yield worker_state, prefetched_samples_keys
 
 
-def split_batch_restore_key(
-    restore_key: RestoreKey | None, batch_split_factor: int
-) -> list[RestoreKey | None]:
-    """Split the given restore_key into multiple restore keys, one for each batch."""
-    if restore_key is None:
-        raise ValueError("Cannot split None restore key")
-    if isinstance(restore_key, BatchRestoreKey):
-        # Split the inner keys into batch_split_factor keys
-        # Duplicate the sample_idx for each batch
-        assert len(restore_key.inner) % batch_split_factor == 0, (
-            "Batch size must be a multiple of the batch split factor"
-        )
-        split_size = len(restore_key.inner) // batch_split_factor
-        return [
-            BatchRestoreKey(
-                inner=tuple(restore_key.inner[i : i + split_size]),
-                sample_idx=restore_key.sample_idx,
-            )
-            for i in range(0, len(restore_key.inner), split_size)
-        ]
-    elif isinstance(restore_key, WrappedRestoreKey):
-        inner_restore_keys = split_batch_restore_key(restore_key.inner, batch_split_factor)
-        inner_kwargs = {
-            field.name: getattr(restore_key, field.name)
-            for field in dataclasses.fields(restore_key)
-        }
-        inner_kwargs.pop("inner")
-        return [
-            type(restore_key)(**inner_kwargs, inner=inner_restore_key)
-            for inner_restore_key in inner_restore_keys
-        ]
-    else:
-        raise ValueError(f"Unsupported restore key type for splitting batch: {type(restore_key)}")
-
-
 def split_batch_restore_keys(
     restore_keys: list[RestoreKey | None], batch_split_factor: int
 ) -> list[RestoreKey | None]:
@@ -266,7 +228,7 @@ def split_batch_restore_keys(
     return [
         new_restore_key
         for restore_key in restore_keys
-        for new_restore_key in split_batch_restore_key(restore_key, batch_split_factor)
+        for new_restore_key in _split_batch_restore_key(restore_key, batch_split_factor)
     ]
 
 

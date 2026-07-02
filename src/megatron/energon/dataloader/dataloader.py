@@ -30,7 +30,11 @@ from megatron.energon.dataloader.workers.fork_worker import ForkDataLoaderWorker
 from megatron.energon.edataclass import edataclass
 from megatron.energon.flavors.base_dataset import RestoreKey, SavableDataset
 from megatron.energon.worker import WorkerConfig
-from megatron.energon.wrappers.base import BaseWrapperDataset, get_sample_restore_key
+from megatron.energon.wrappers.base import (
+    BaseWrapperDataset,
+    WrappedRestoreKey,
+    get_sample_restore_key,
+)
 from megatron.energon.wrappers.batch_dataset import BatchDataset, BatchRestoreKey
 from megatron.energon.wrappers.gc_dataset import GC_DEFAULT_EVERY_N_ITER, GcDataset
 from megatron.energon.wrappers.log_sample_dataset import default_get_batch_keys
@@ -59,10 +63,8 @@ class RankState:
 
 
 def _split_batch_restore_key(
-    restore_key: RestoreKey | dict[str, Any] | None, batch_split_factor: int
-) -> list[RestoreKey | dict[str, Any] | None]:
-    if batch_split_factor == 1:
-        return [restore_key]
+    restore_key: RestoreKey | None, batch_split_factor: int
+) -> list[RestoreKey]:
     if restore_key is None:
         raise ValueError("Cannot split None restore key")
     if isinstance(restore_key, BatchRestoreKey):
@@ -71,31 +73,12 @@ def _split_batch_restore_key(
         )
         split_size = len(restore_key.inner) // batch_split_factor
         return [
-            BatchRestoreKey(
-                inner=tuple(restore_key.inner[i : i + split_size]),
-                sample_idx=restore_key.sample_idx,
-            )
+            dataclasses.replace(restore_key, inner=restore_key.inner[i : i + split_size])
             for i in range(0, len(restore_key.inner), split_size)
         ]
-    if isinstance(restore_key, dict):
-        inner = restore_key.get("inner")
-        if isinstance(inner, (list, tuple)):
-            assert len(inner) % batch_split_factor == 0, (
-                "Batch size must be a multiple of the batch split factor"
-            )
-            split_size = len(inner) // batch_split_factor
-            return [
-                {**restore_key, "inner": tuple(inner[i : i + split_size])}
-                for i in range(0, len(inner), split_size)
-            ]
+    if isinstance(restore_key, WrappedRestoreKey):
         return [
-            {**restore_key, "inner": inner_restore_key}
-            for inner_restore_key in _split_batch_restore_key(inner, batch_split_factor)
-        ]
-    if isinstance(restore_key, RestoreKey) and hasattr(restore_key, "inner"):
-        kwargs = {field.name: getattr(restore_key, field.name) for field in dataclasses.fields(restore_key)}
-        return [
-            type(restore_key)(**{**kwargs, "inner": inner_restore_key})
+            dataclasses.replace(restore_key, inner=inner_restore_key)
             for inner_restore_key in _split_batch_restore_key(restore_key.inner, batch_split_factor)
         ]
     raise ValueError(f"Unsupported restore key type for splitting batch: {type(restore_key)}")
@@ -249,6 +232,7 @@ class DataLoader(Generic[TSample]):
 
     def start(self) -> None:
         """Start the workers and restore the state if available."""
+        assert self._workers is None, "DataLoader workers are already running"
         self._workers = [
             self._worker_type(self._dataset, self._worker_config, local_worker_id, self._cache_pool)
             for local_worker_id in range(self._worker_config.safe_num_workers)
@@ -598,7 +582,9 @@ class DataLoader(Generic[TSample]):
                     [
                         new_restore_key
                         for restore_key in prefetched_restore_keys
-                        for new_restore_key in _split_batch_restore_key(restore_key, batch_split_factor)
+                        for new_restore_key in _split_batch_restore_key(
+                            restore_key, batch_split_factor
+                        )
                     ]
                     for prefetched_restore_keys in state.prefetched_restore_keys
                 ],
@@ -739,7 +725,9 @@ class DataLoader(Generic[TSample]):
             "num_workers": self._worker_config.num_workers,
             "persistent_workers": False,
             "pin_memory": self._config_pin_memory,
-            "prefetch_factor": None if self._worker_config.num_workers == 0 else self._prefetch_factor,
+            "prefetch_factor": None
+            if self._worker_config.num_workers == 0
+            else self._prefetch_factor,
             "dataset": self._dataset.config(),
         }
 

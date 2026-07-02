@@ -524,7 +524,9 @@ class ShardInfosITarReader(ITarReader[int]):
 
     def worker_init(self):
         self.worker_close()
-        self._thread_local._cached_offset_reader = CachedItarOffsetReader(cache_size=self._itar_cache_size)
+        self._thread_local._cached_offset_reader = CachedItarOffsetReader(
+            cache_size=self._itar_cache_size
+        )
 
     def worker_close(self):
         if hasattr(self._thread_local, "_cached_offset_reader"):

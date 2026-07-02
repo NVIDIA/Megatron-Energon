@@ -22,7 +22,6 @@ from megatron.energon.errors import (
 from megatron.energon.flavors.base_dataset import (
     RestoreKey,
     SavableDataset,
-    coerce_restore_key,
     set_sample_restore_key,
 )
 from megatron.energon.worker import WorkerConfig
@@ -31,7 +30,6 @@ from megatron.energon.wrappers.base import (
     SampleIndex,
     WrappedRestoreKey,
     get_sample_restore_key,
-    wrap_sample_restore_key,
 )
 
 T_sample = TypeVar("T_sample")
@@ -131,11 +129,13 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
                 # Skip other samples
                 if idx >= target_offset:
                     self._generator_offset = idx + 1
-                    yield wrap_sample_restore_key(
+                    yield set_sample_restore_key(
                         inner_sample,
-                        MapGenRestoreKey,
-                        sample_idx=sample_idx,
-                        gen_idx=idx,
+                        MapGenRestoreKey(
+                            inner=self._generator_sample_key,
+                            sample_idx=sample_idx,
+                            gen_idx=idx,
+                        ),
                     )
             self._generator_sample_key = None
             self._generator_offset = None
@@ -158,20 +158,24 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
                     ):
                         self._generator_offset = idx + 1
                         self._map_failure_handler.reset()
-                        yield wrap_sample_restore_key(
+                        yield set_sample_restore_key(
                             inner_sample,
-                            MapGenRestoreKey,
-                            sample_idx=sample_idx,
-                            gen_idx=idx,
+                            MapGenRestoreKey(
+                                inner=restore_key,
+                                sample_idx=sample_idx,
+                                gen_idx=idx,
+                            ),
                         )
                     self._generator_sample_key = None
                     self._generator_offset = None
                 else:
                     self._map_failure_handler.reset()
-                    yield wrap_sample_restore_key(
+                    yield set_sample_restore_key(
                         mapped_sample,
-                        MapRestoreKey,
-                        sample_idx=sample_idx,
+                        MapRestoreKey(
+                            inner=restore_key,
+                            sample_idx=sample_idx,
+                        ),
                     )
 
     def can_restore_sample(self) -> bool:
@@ -187,7 +191,6 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
         assert self.stateless_map_fn, (
             f"MapDataset can only restore samples if map_fn {self.map_fn} is stateless."
         )
-        restore_key = coerce_restore_key(restore_key, MapRestoreKey)
         assert isinstance(restore_key, MapRestoreKey), (
             f"Expected MapRestoreKey, got {type(restore_key)}"
         )
