@@ -19,10 +19,9 @@ class NVImageCodecDecoder:
 
     def __init__(
         self,
+        colorspec: str = "nvimagecodec",
         decode_device: int = 0
-
     ) -> None:
-      self.decoder = nvimgcodec.Decoder(device_id = decode_device)
 
       if not NVIMAGECODEC_AVAILABLE:
         raise ImportError(
@@ -30,6 +29,19 @@ class NVImageCodecDecoder:
             f"pip install megatron-energon[gpu_image_decode]\n"
             f"Missing dependency: {MISSING_DEPENDENCY}. Install megatron-energon[gpu_image_decode] to use GPU image decoding."
         )
+
+      self.convert_to_float = not colorspec.endswith("8")
+      colorspec_map = {
+        "nvimagecodecl": nvimgcodec.ColorSpec.GRAY,
+        "nvimagecodecrgb": nvimgcodec.ColorSpec.SRGB,
+        "nvimagecodecrgba": nvimgcodec.ColorSpec.UNCHANGED,
+        "nvimagecodec": nvimgcodec.ColorSpec.SRGB
+      }
+
+      self.color_spec = colorspec_map[colorspec.replace("8", "")]
+      self.decode_params = nvimgcodec.DecodeParams(color_spec = self.color_spec)
+      self.decoder = nvimgcodec.Decoder(device_id = decode_device, )
+
 
     def __call__(
         self, key: str, data: bytes
@@ -43,11 +55,20 @@ class NVImageCodecDecoder:
             for ext in ("jpeg", "jfif", "jpg", "jp2", "jpx", "j2k", "tiff", "tif", "bmp", "png", "pnm", "ppm", "pgm", "pbm")
         ):
             return None
-        nv_img = self.decoder.decode(data)
+        nv_img = self.decoder.decode(data, params=self.decode_params)
 
-        if getattr(nv_img, "to_dlpack", False):
-          tensor = torch.from_dlpack(nv_img.to_dlpack())
-          tensor = tensor.permute(2, 0, 1).float().div(255)
-          return tensor
+        if getattr(nv_img, "__dlpack__", False):
+          tensor_img = torch.from_dlpack(nv_img).permute(2, 0, 1)
+
+          if self.color_spec == nvimgcodec.ColorSpec.UNCHANGED and tensor_img.shape[0] < 4:
+            if tensor_img.shape[0] == 1:
+              tensor_img = tensor_img.expand(3, *tensor_img.shape[1:]).contiguous()
+            alpha = torch.full([1, *tensor_img.shape[1:]], 255, dtype=tensor_img.dtype, device=tensor_img.device)
+            tensor_img = torch.cat([tensor_img, alpha])
+
+          if self.convert_to_float:
+            tensor_img = tensor_img.float().div(255)
+
+          return tensor_img
 
         return None
