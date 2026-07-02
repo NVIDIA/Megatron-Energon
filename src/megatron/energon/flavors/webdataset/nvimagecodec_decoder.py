@@ -1,7 +1,5 @@
 import torch
 
-from megatron.energon.av.av_decoder import MISSING_DEPENDENCY
-
 try:
   from nvidia import nvimgcodec
   NVIMAGECODEC_AVAILABLE = True
