@@ -29,14 +29,14 @@ ImageDecoderType = Literal[
     "torchrgb",
     "torch",
     "torchrgba",
-    "nvimagecodecl8",
-    "nvimagecodecrgb8",
-    "nvimagecodecrgba8",
-    "nvimagecodec8",
-    "nvimagecodecl",
-    "nvimagecodecrgb",
-    "nvimagecodecrgba",
-    "nvimagecodec",
+    "nvimgcodecl8",
+    "nvimgcodecrgb8",
+    "nvimgcodecrgba8",
+    "nvimgcodec8",
+    "nvimgcodecl",
+    "nvimgcodecrgb",
+    "nvimgcodecrgba",
+    "nvimgcodec",
     "pill",
     "pil",
     "pilrgb",
@@ -111,7 +111,7 @@ class SampleDecoder(FileStoreDecoder):
             video_decode_audio=video_decode_audio,
             guess_content=guess_content,
         )
-        if image_decode.startswith("nvimagecodec"):
+        if image_decode.startswith("nvimgcodec"):
           image_decoder = NVImageCodecDecoder(image_decode)
         else:
           image_decoder = webdataset.autodecode.imagehandler(image_decode)
