@@ -46,7 +46,15 @@ class NVImageCodecDecoder:
         )
 
     def __call__(self, key: str, data: bytes) -> torch.Tensor | None:
-        """ """
+        """ Decode image data using the GPU accelerated decoder
+
+        Args:
+            key: image file extension
+            data: raw image bytes
+
+        Returns:
+            A tensor with the image pixels or None if decoding failed or file type is not supported.
+        """
         key = key.lower()
         if not any(
             key == ext or key.endswith("." + ext)
