@@ -72,6 +72,7 @@ class NVImageCodecDecoder:
         )
         self.decoder = nvimgcodec.Decoder(
             device_id=device,
+            max_num_cpu_threads=1,
         )
 
     def __call__(self, key: str, data: bytes) -> torch.Tensor | None:
