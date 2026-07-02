@@ -44,4 +44,10 @@ class NVImageCodecDecoder:
         ):
             return None
         nv_img = self.decoder.decode(data)
-        return torch.from_dlpack(nv_img.to_dlpack())
+
+        if getattr(nv_img, "to_dlpack", False):
+          tensor = torch.from_dlpack(nv_img.to_dlpack())
+          tensor = tensor.permute(2, 0, 1).float().div(255)
+          return tensor
+
+        return None
