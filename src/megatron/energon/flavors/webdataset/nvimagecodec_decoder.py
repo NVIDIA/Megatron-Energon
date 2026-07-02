@@ -104,7 +104,7 @@ class NVImageCodecDecoder:
             return None
         nv_img = self.decoder.decode(data, params=self.decode_params)
 
-        if getattr(nv_img, "__dlpack__", False):
+        if hasattr(nv_img, "__dlpack__"):
             tensor_img = torch.from_dlpack(nv_img).permute(2, 0, 1)
 
             if self.color_space == "nvimgcodecrgba" and tensor_img.shape[0] < 4:
