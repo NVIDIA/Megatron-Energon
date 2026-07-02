@@ -32,7 +32,7 @@ class TestGPUImageDecode(unittest.TestCase):
       assert tensor.device.type == "cuda"
 
     def test_sample_decoder_dispatch(self):
-        sample_decoder = SampleDecoder(image_decode="nvimagecodec")
+        sample_decoder = SampleDecoder(image_decode="nvimgcodec")
         result = sample_decoder.decode("test.png", self.image_data)
 
         assert result is not None and result.device.type == "cuda"

@@ -19,7 +19,7 @@ class NVImageCodecDecoder:
 
     def __init__(
         self,
-        colorspec: str = "nvimagecodec",
+        colorspec: str = "nvimgcodec",
         decode_device: int = 0
     ) -> None:
 
@@ -32,10 +32,10 @@ class NVImageCodecDecoder:
 
       self.convert_to_float = not colorspec.endswith("8")
       colorspec_map = {
-        "nvimagecodecl": nvimgcodec.ColorSpec.GRAY,
-        "nvimagecodecrgb": nvimgcodec.ColorSpec.SRGB,
-        "nvimagecodecrgba": nvimgcodec.ColorSpec.UNCHANGED,
-        "nvimagecodec": nvimgcodec.ColorSpec.SRGB
+        "nvimgcodecl": nvimgcodec.ColorSpec.GRAY,
+        "nvimgcodecrgb": nvimgcodec.ColorSpec.SRGB,
+        "nvimgcodecrgba": nvimgcodec.ColorSpec.UNCHANGED,
+        "nvimgcodec": nvimgcodec.ColorSpec.SRGB
       }
 
       self.color_spec = colorspec_map[colorspec.replace("8", "")]
