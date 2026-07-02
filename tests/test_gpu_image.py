@@ -81,3 +81,20 @@ class TestGPUImageDecode(unittest.TestCase):
       rgba_image = decoder("png", rgba_image_data)
 
       assert gray_image.shape[0] == rgba_image.shape[0] == 4
+
+    def test_decode_non_png(self) -> None:
+      jp2_image_data = Path("tests/data/test_image.jp2").read_bytes()
+
+      decoder = NVImageCodecDecoder("nvimgcodecrgba")
+      gpu_image = decoder("png", jp2_image_data)
+
+      assert gpu_image is not None
+      assert gpu_image.device.type == "cuda"
+      assert gpu_image.dtype == torch.float32
+      assert gpu_image.ndim == 3
+      assert gpu_image.shape == torch.Size([4, 248, 330])
+
+      with Path("tests/data/test_image.jp2").open("rb") as f:
+        cpu_image = pil_to_tensor(Image.open(f)).float().div(255)
+
+      assert torch.allclose(cpu_image, gpu_image.cpu(), atol=0.05)
