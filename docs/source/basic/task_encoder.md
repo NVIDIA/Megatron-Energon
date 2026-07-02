@@ -129,7 +129,7 @@ train_img_transform = transforms.Compose(
     ]
 )
 
-train_loader = get_loader(get_train_dataset(
+with get_loader(get_train_dataset(
     '/my/dataset/path',
     batch_size=32,
     shuffle_buffer_size=100,
@@ -138,10 +138,9 @@ train_loader = get_loader(get_train_dataset(
         tokenizer=AutoTokenizer.from_pretrained('gpt2'),
         image_transform=train_img_transform,
     ),
-))
-
-for data in train_loader:
-    # data is a CaptioningBatch
-    pass
+)) as train_loader:
+    for data in train_loader:
+        # data is a CaptioningBatch
+        pass
 
 ```

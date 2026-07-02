@@ -88,12 +88,11 @@ train_ds = get_train_dataset(
     worker_config=simple_worker_config,
 )
 
-train_loader = get_loader(train_ds)
-
-for batch in train_loader:
-    # Do something with batch
-    # Infer, gradient step, ...
-    pass
+with get_loader(train_ds) as train_loader:
+    for batch in train_loader:
+        # Do something with batch
+        # Infer, gradient step, ...
+        pass
 ```
 
 For more details, read the [documentation](https://nvidia.github.io/Megatron-Energon/).
