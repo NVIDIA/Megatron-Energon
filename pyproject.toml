@@ -78,9 +78,12 @@ av_decode = [
 tar_patcher = [
   "numba",
 ]
+gpu_image_decode = [
+  "nvidia-nvimgcodec-cu13[all]>=0.8.0.22"
+]
 
 all = [
-  "megatron-energon[av_decode,aistore,azure-storage-blob,dev,google-cloud-storage,huggingface,oci,s3,tar_patcher,transforms]",
+  "megatron-energon[av_decode,gpu_image_decode,aistore,azure-storage-blob,dev,google-cloud-storage,huggingface,oci,s3,tar_patcher,transforms]",
 ]
 
 [project.urls]
