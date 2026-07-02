@@ -1,5 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
+import warnings
+
 import torch
 
 try:
@@ -20,8 +22,7 @@ class NVImageCodecDecoder:
 
     """
 
-    def __init__(self, colorspec: str = "nvimgcodec", decode_device: int = 0) -> None:
-
+    def __init__(self, colorspec: str = "nvimgcodec", decode_device: int = 0, suppress_warnings: bool = False) -> None:
         if not NVIMAGECODEC_AVAILABLE:
             raise ImportError(
                 f"GPU image decoding was requested but is not available. Please install the required dependencies with:\n"
@@ -29,6 +30,7 @@ class NVImageCodecDecoder:
                 f"Missing dependency: {MISSING_DEPENDENCY}. Install megatron-energon[gpu_image_decode] to use GPU image decoding."
             )
 
+        self.suppress_warnings = suppress_warnings
         self.convert_to_float = not colorspec.endswith("8")
         colorspec_map = {
             "nvimgcodecl": nvimgcodec.ColorSpec.GRAY,
@@ -86,5 +88,11 @@ class NVImageCodecDecoder:
                 tensor_img = tensor_img.float().div(255)
 
             return tensor_img
+
+        if not self.suppress_warnings:
+            warnings.warn(
+                "GPU Image decoding failed, will attempt fallback",
+                RuntimeWarning,
+            )
 
         return None
