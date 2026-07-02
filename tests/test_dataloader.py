@@ -178,10 +178,17 @@ class TestDataLoader(unittest.TestCase):
 
         loader_iter = iter(loader)
         next(loader_iter)
-        running_workers = loader._workers
+
+        with self.assertRaises(AssertionError, msg="already started"):
+            with loader:
+                raise Exception("should not be reached")
+
+        loader.shutdown()
+
+        assert loader._workers is None
 
         with loader:
-            assert loader._workers is running_workers
+            assert loader._workers is not None
 
         assert loader._workers is None
 

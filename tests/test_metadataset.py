@@ -302,6 +302,7 @@ class TestDataset(unittest.TestCase):
         print(Counter(train_subflavors))
         assert len(Counter(train_subflavors)) == 2
         assert all(250 <= v <= 300 for v in Counter(train_subflavors).values())
+        train_loader1.shutdown()
 
         # Train mode dataset
         train_dataset = get_train_dataset(
@@ -323,6 +324,7 @@ class TestDataset(unittest.TestCase):
         print(Counter(train_order1))
         assert len(Counter(train_order1)) == 110
         assert all(48 <= v <= 52 for v in Counter(train_order1).values())
+        train_loader1.shutdown()
 
         # Val mode dataset
         val_dataset = get_val_dataset(self.mds_path, worker_config=worker_config, batch_size=10)
@@ -335,6 +337,7 @@ class TestDataset(unittest.TestCase):
         assert len(val_order1) == 110
         print(Counter(val_order1))
         assert all(v == 1 for v in Counter(val_order1).values())
+        val_loader1.shutdown()
 
     def test_nested_metadataset(self):
         torch.manual_seed(42)
@@ -468,6 +471,7 @@ class TestDataset(unittest.TestCase):
             ]
             < avg * 1 + 20
         )
+        train_loader1.shutdown()
 
         # Train mode dataset
         train_dataset = get_train_dataset(
@@ -489,6 +493,7 @@ class TestDataset(unittest.TestCase):
         print(Counter(train_order1))
         assert len(Counter(train_order1)) == 110
         assert all(48 <= v <= 52 for v in Counter(train_order1).values())
+        train_loader1.shutdown()
 
         # Val mode dataset
         val_dataset = get_val_dataset(self.mds_path, worker_config=worker_config, batch_size=10)
@@ -501,6 +506,7 @@ class TestDataset(unittest.TestCase):
         assert len(val_order1) == 110
         print(Counter(val_order1))
         assert all(v == 1 for v in Counter(val_order1).values())
+        val_loader1.shutdown()
 
     def test_traverse_metadataset_flattens_nested_v1_references(self):
         refs = traverse_metadataset(self.nested_mds_path, split_part="train")
@@ -697,16 +703,19 @@ class TestDataset(unittest.TestCase):
         # Iterated 55 samples, afterwards 75 samples. Checkpoint should be around that
         order_6 = [data.text for idx, data in zip(range(70), loader)]
 
+        loader.shutdown()
         loader = new_loader()
         print("state_1:", _norng_state(state_1))
         loader.restore_state_rank(state_1)
         order_1_rest = [data.text for idx, data in zip(range(len(order_1)), loader)]
         assert order_1 == order_1_rest
+        loader.shutdown()
 
         loader = new_loader()
         loader.restore_state_rank(state_0)
         order_0_rest = [data.text for idx, data in zip(range(len(order_0)), loader)]
         assert order_0 == order_0_rest
+        loader.shutdown()
 
         loader = new_loader()
         print("state_2:", _norng_state(state_2))
@@ -715,6 +724,7 @@ class TestDataset(unittest.TestCase):
         print("order_2:", order_2)
         print("order_2_rest:", order_2_rest)
         assert order_2 == order_2_rest
+        loader.shutdown()
 
         loader = new_loader()
         print("state_3:", _norng_state(state_3))
@@ -723,6 +733,7 @@ class TestDataset(unittest.TestCase):
         print("order_3:", order_3)
         print("order_3_rest:", order_3_rest)
         assert order_3 == order_3_rest
+        loader.shutdown()
 
         loader = new_loader()
         print("state_4:", _norng_state(state_4))
@@ -731,6 +742,7 @@ class TestDataset(unittest.TestCase):
         print("order_4:", order_4)
         print("order_4_rest:", order_4_rest)
         assert order_4 == order_4_rest
+        loader.shutdown()
 
         loader = new_loader()
         print("state_5:", _norng_state(state_5))
@@ -739,6 +751,7 @@ class TestDataset(unittest.TestCase):
         print("order_5:", order_5)
         print("order_5_rest:", order_5_rest)
         assert order_5 == order_5_rest
+        loader.shutdown()
 
         loader = new_loader()
         print("state_6:", _norng_state(state_6))
@@ -979,6 +992,7 @@ class TestDataset(unittest.TestCase):
         }
         print("Comparing dataset configs in test_save_restore_state_train.")
         assert_nested_equal(loader.config(), reference_config)
+        loader.shutdown()
 
     def test_save_restore_state_train_workers(self):
         torch.manual_seed(42)
@@ -1053,6 +1067,7 @@ class TestDataset(unittest.TestCase):
         # Iterated 1 samples, afterwards 55 samples. Checkpoint should be around that
         order_6 = [data.text for idx, data in zip(range(10), loader)]
 
+        loader.shutdown()
         loader = new_loader()
         print("state_1:", _norng_state(state_1))
         loader.restore_state_rank(state_1)
@@ -1060,11 +1075,13 @@ class TestDataset(unittest.TestCase):
         print("order_1:", order_1)
         print("order_1_rest:", order_1_rest)
         assert order_1 == order_1_rest
+        loader.shutdown()
 
         loader = new_loader()
         loader.restore_state_rank(state_0)
         order_0_rest = [data.text for idx, data in zip(range(len(order_0)), loader)]
         assert order_0 == order_0_rest
+        loader.shutdown()
 
         loader = new_loader()
         print("state_2:", _norng_state(state_2))
@@ -1073,6 +1090,7 @@ class TestDataset(unittest.TestCase):
         print("order_2:", order_2)
         print("order_2_rest:", order_2_rest)
         assert order_2 == order_2_rest
+        loader.shutdown()
 
         loader = new_loader()
         print("state_3:", _norng_state(state_3))
@@ -1081,6 +1099,7 @@ class TestDataset(unittest.TestCase):
         print("order_3:", order_3)
         print("order_3_rest:", order_3_rest)
         assert order_3 == order_3_rest
+        loader.shutdown()
 
         loader = new_loader()
         print("state_4:", _norng_state(state_4))
@@ -1089,6 +1108,7 @@ class TestDataset(unittest.TestCase):
         print("order_4:", order_4)
         print("order_4_rest:", order_4_rest)
         assert order_4 == order_4_rest
+        loader.shutdown()
 
         loader = new_loader()
         print("state_5:", _norng_state(state_5))
@@ -1097,6 +1117,7 @@ class TestDataset(unittest.TestCase):
         print("order_5:", order_5)
         print("order_5_rest:", order_5_rest)
         assert order_5 == order_5_rest
+        loader.shutdown()
 
         loader = new_loader()
         print("state_6:", _norng_state(state_6))
@@ -1105,6 +1126,7 @@ class TestDataset(unittest.TestCase):
         print("order_6:", order_6)
         print("order_6_rest:", order_6_rest)
         assert order_6 == order_6_rest
+        loader.shutdown()
 
     def test_save_restore_state_train_epochize_workers(self):
         torch.manual_seed(42)
@@ -1139,6 +1161,7 @@ class TestDataset(unittest.TestCase):
         state_2 = loader.save_state_rank()
         order_3 = [data.text[0] for idx, data in zip(range(17), loader)]
 
+        loader.shutdown()
         torch.manual_seed(42)
         loader = get_savable_loader(
             get_train_dataset(
@@ -1157,6 +1180,7 @@ class TestDataset(unittest.TestCase):
         print("order_1:", order_1)
         print("order_5:", order_5)
         assert order_1 == order_5
+        loader.shutdown()
 
         torch.manual_seed(42)
         loader = get_savable_loader(
@@ -1176,6 +1200,7 @@ class TestDataset(unittest.TestCase):
         print("order_2:", order_2)
         print("order_6:", order_6)
         assert order_2 == order_6
+        loader.shutdown()
 
         torch.manual_seed(42)
         loader = get_savable_loader(
@@ -1195,6 +1220,7 @@ class TestDataset(unittest.TestCase):
         print("order_3:", order_3)
         print("order_7:", order_7)
         assert order_3 == order_7
+        loader.shutdown()
 
     def test_save_restore_state_val(self):
         torch.manual_seed(42)
@@ -1216,12 +1242,14 @@ class TestDataset(unittest.TestCase):
         # print("save state done")
         order_2 = [data.text for idx, data in zip(range(55 * 20), loader)]
 
+        loader.shutdown()
         loader = get_savable_loader(
             get_val_dataset(self.mds_path, worker_config=worker_config, batch_size=10),
         )
         loader.restore_state_rank(state_1)
         order_3 = [data.text for idx, data in zip(range(55 * 20), loader)]
         assert order_2 == order_3
+        loader.shutdown()
 
         loader = get_savable_loader(
             get_val_dataset(self.mds_path, worker_config=worker_config, batch_size=10),
@@ -1229,6 +1257,7 @@ class TestDataset(unittest.TestCase):
         loader.restore_state_rank(state_0)
         order_4 = [data.text for idx, data in zip(range(55 * 20), loader)]
         assert order_1 == order_4
+        loader.shutdown()
 
     def test_blending_randomness(self):
         import random
@@ -1260,12 +1289,11 @@ class TestDataset(unittest.TestCase):
                     shuffle_buffer_size=None,
                     max_samples_per_sequence=None,
                 )
-                loader = get_loader(ds)
-
-                subflavors = [
-                    data.__subflavors__[0].get("__subflavor__")
-                    for idx, data in zip(range(25), loader)
-                ]
+                with get_loader(ds) as loader:
+                    subflavors = [
+                        data.__subflavors__[0].get("__subflavor__")
+                        for idx, data in zip(range(25), loader)
+                    ]
 
                 all_ranks_subflavors.append(subflavors)
 
@@ -1308,6 +1336,7 @@ class TestDataset(unittest.TestCase):
         # Train mode dataset
         loader = new_loader()
         _ = [data.text for idx, data in zip(range(1000), loader)]
+        loader.shutdown()
 
     def test_save_restore_next(self):
         torch.manual_seed(42)
