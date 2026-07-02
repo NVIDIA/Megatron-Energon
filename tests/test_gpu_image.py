@@ -66,7 +66,13 @@ class TestGPUImageDecode(unittest.TestCase):
         gray_image_data = Path("tests/data/test_image_l.png").read_bytes()
         rgba_image_data = Path("tests/data/test_image_rgba.png").read_bytes()
 
-        # Test 1: rgb always returns three
+        decoder = NVImageCodecDecoder("nvimgcodec")
+        gray_image = decoder("png", gray_image_data)
+        rgba_image = decoder("png", rgba_image_data)
+
+        assert gray_image.shape[0] == 1
+        assert rgba_image.shape[0] == 4
+
         decoder = NVImageCodecDecoder("nvimgcodecrgb")
         gray_image = decoder("png", gray_image_data)
         rgba_image = decoder("png", rgba_image_data)
@@ -88,7 +94,7 @@ class TestGPUImageDecode(unittest.TestCase):
     def test_decode_non_png(self) -> None:
         jp2_image_data = Path("tests/data/test_image.jp2").read_bytes()
 
-        decoder = NVImageCodecDecoder("nvimgcodecrgba")
+        decoder = NVImageCodecDecoder()
         gpu_image = decoder("png", jp2_image_data)
 
         assert gpu_image is not None

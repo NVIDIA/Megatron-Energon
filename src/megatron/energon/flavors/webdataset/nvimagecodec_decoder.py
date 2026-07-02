@@ -34,11 +34,11 @@ class NVImageCodecDecoder:
             "nvimgcodecl": nvimgcodec.ColorSpec.GRAY,
             "nvimgcodecrgb": nvimgcodec.ColorSpec.SRGB,
             "nvimgcodecrgba": nvimgcodec.ColorSpec.UNCHANGED,
-            "nvimgcodec": nvimgcodec.ColorSpec.SRGB,
+            "nvimgcodec": nvimgcodec.ColorSpec.UNCHANGED,
         }
 
-        self.color_spec = colorspec_map[colorspec.replace("8", "")]
-        self.decode_params = nvimgcodec.DecodeParams(color_spec=self.color_spec)
+        self.color_spec = colorspec
+        self.decode_params = nvimgcodec.DecodeParams(color_spec=colorspec_map[colorspec.replace("8", "")])
         self.decoder = nvimgcodec.Decoder(
             device_id=decode_device,
         )
@@ -71,7 +71,7 @@ class NVImageCodecDecoder:
         if getattr(nv_img, "__dlpack__", False):
             tensor_img = torch.from_dlpack(nv_img).permute(2, 0, 1)
 
-            if self.color_spec == nvimgcodec.ColorSpec.UNCHANGED and tensor_img.shape[0] < 4:
+            if self.color_spec == "nvimgcodecrgba" and tensor_img.shape[0] < 4:
                 if tensor_img.shape[0] == 1:
                     tensor_img = tensor_img.expand(3, *tensor_img.shape[1:]).contiguous()
                 alpha = torch.full(
