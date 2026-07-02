@@ -4,7 +4,9 @@ import unittest
 from io import BytesIO
 from pathlib import Path
 
+import PIL
 import torch
+import webdataset
 from PIL import Image
 from torchvision.transforms.functional import pil_to_tensor
 
@@ -42,6 +44,14 @@ class TestGPUImageDecode(unittest.TestCase):
         result = sample_decoder.decode("test.png", self.image_data)
 
         assert result is not None and result.device.type == "cpu"
+
+    def test_cpu_fallback(self):
+        sample_decoder = SampleDecoder(image_decode="nvimgcodec")
+
+        with self.assertRaises(webdataset.autodecode.DecodingError) as ctx:
+          sample_decoder.decode("test.png", b"")
+
+        assert isinstance(ctx.exception.__cause__, PIL.UnidentifiedImageError)
 
     def test_decode_matches_baseline(self) -> None:
         gpu_image = self.decoder("png", self.image_data)
