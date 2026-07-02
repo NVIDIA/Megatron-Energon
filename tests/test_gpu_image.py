@@ -52,6 +52,5 @@ class TestGPUImageDecode(unittest.TestCase):
 
       with BytesIO(self.image_data) as io:
         cpu_image = pil_to_tensor(Image.open(io)).float().div(255)
-        print(cpu_image.shape, gpu_image.shape)
 
       assert tensors_close(cpu_image, gpu_image.cpu(), 0.001)
