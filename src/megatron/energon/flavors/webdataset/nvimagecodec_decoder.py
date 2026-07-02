@@ -45,7 +45,10 @@ class NVImageCodecDecoder:
     """
 
     def __init__(
-        self, color_space: ColorSpaces = "nvimgcodec", device: int = 0, suppress_warnings: bool = False
+        self,
+        color_space: ColorSpaces = "nvimgcodec",
+        device: int = 0,
+        suppress_warnings: bool = False,
     ) -> None:
         if not NVIMAGECODEC_AVAILABLE:
             raise ImportError(

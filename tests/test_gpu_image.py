@@ -23,18 +23,22 @@ class TestGPUImageDecode(unittest.TestCase):
         self.image_data = Path("tests/data/test_image.png").read_bytes()
 
     def test_non_image_returns_none(self):
+        """Tests that non-image types are correctly skipped"""
         assert self.decoder("pdf", b"") is None
 
     def test_invalid_image_returns_none(self):
+        """Tests that invalid images are correctly skipped"""
         assert self.decoder("png", b"") is None
 
     def test_decode_to_gpu(self) -> None:
+        """Tests that valid images are decoded to GPU"""
         tensor = self.decoder("png", self.image_data)
 
         assert tensor is not None
         assert tensor.device.type == "cuda"
 
     def test_sample_decoder_dispatch(self):
+        """Tests that the SampleDecoder correctly dispatches to CPU or GPU decoder depending on user choice"""
         sample_decoder = SampleDecoder(image_decode="nvimgcodec")
         result = sample_decoder.decode("test.png", self.image_data)
 
@@ -46,14 +50,16 @@ class TestGPUImageDecode(unittest.TestCase):
         assert result is not None and result.device.type == "cpu"
 
     def test_cpu_fallback(self):
+        """Tests that failed GPU decoding falls back to CPU decoding"""
         sample_decoder = SampleDecoder(image_decode="nvimgcodec")
 
         with self.assertRaises(webdataset.autodecode.DecodingError) as ctx:
-          sample_decoder.decode("test.png", b"")
+            sample_decoder.decode("test.png", b"")
 
         assert isinstance(ctx.exception.__cause__, PIL.UnidentifiedImageError)
 
     def test_decode_matches_baseline(self) -> None:
+        """Tests that GPU decoded images are correctly decoded"""
         gpu_image = self.decoder("png", self.image_data)
 
         assert gpu_image is not None
@@ -67,12 +73,14 @@ class TestGPUImageDecode(unittest.TestCase):
         assert torch.allclose(cpu_image, gpu_image.cpu())
 
     def test_decode_uint8(self) -> None:
+        """Tests that 8bit decoding requests work correctly"""
         decoder = NVImageCodecDecoder("nvimgcodec8")
         gpu_image = decoder("png", self.image_data)
 
         assert gpu_image.dtype == torch.uint8
 
     def test_decode_channel_coercion(self) -> None:
+        """Tests that channel counts (1/3/4) are forced correctly if requested"""
         gray_image_data = Path("tests/data/test_image_l.png").read_bytes()
         rgba_image_data = Path("tests/data/test_image_rgba.png").read_bytes()
 
@@ -102,6 +110,7 @@ class TestGPUImageDecode(unittest.TestCase):
         assert gray_image.shape[0] == rgba_image.shape[0] == 4
 
     def test_decode_non_png(self) -> None:
+        """Tests that a non-png is decodable correctly"""
         jp2_image_data = Path("tests/data/test_image.jp2").read_bytes()
 
         decoder = NVImageCodecDecoder()
