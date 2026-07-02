@@ -79,6 +79,7 @@ maxdepth: 2
 ---
 internals/contrib_guidelines
 internals/code_structure
+internals/dataloader
 ```
 
 # Indices and tables
