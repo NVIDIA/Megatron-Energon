@@ -95,7 +95,7 @@ class TestGPUImageDecode(unittest.TestCase):
         jp2_image_data = Path("tests/data/test_image.jp2").read_bytes()
 
         decoder = NVImageCodecDecoder()
-        gpu_image = decoder("png", jp2_image_data)
+        gpu_image = decoder("jp2", jp2_image_data)
 
         assert gpu_image is not None
         assert gpu_image.device.type == "cuda"
