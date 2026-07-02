@@ -19,10 +19,11 @@ class NVImageCodecDecoder:
     Abstracts NVImageCodec so that image in webdataset can be transparently decoded on GPU.
     This can significantly accelerate image decoding via the optimized CUDA implementations
     of the decoders as well as the hardware JPEG decoders present on modern NVIDIA GPUs.
-
     """
 
-    def __init__(self, colorspec: str = "nvimgcodec", decode_device: int = 0, suppress_warnings: bool = False) -> None:
+    def __init__(
+        self, colorspec: str = "nvimgcodec", decode_device: int = 0, suppress_warnings: bool = False
+    ) -> None:
         if not NVIMAGECODEC_AVAILABLE:
             raise ImportError(
                 f"GPU image decoding was requested but is not available. Please install the required dependencies with:\n"
@@ -40,13 +41,15 @@ class NVImageCodecDecoder:
         }
 
         self.color_spec = colorspec
-        self.decode_params = nvimgcodec.DecodeParams(color_spec=colorspec_map[colorspec.replace("8", "")])
+        self.decode_params = nvimgcodec.DecodeParams(
+            color_spec=colorspec_map[colorspec.replace("8", "")]
+        )
         self.decoder = nvimgcodec.Decoder(
             device_id=decode_device,
         )
 
     def __call__(self, key: str, data: bytes) -> torch.Tensor | None:
-        """ Decode image data using the GPU accelerated decoder
+        """Decode image data using the GPU accelerated decoder
 
         Args:
             key: image file extension
