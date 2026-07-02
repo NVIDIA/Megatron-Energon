@@ -93,6 +93,7 @@ class SampleDecoder(FileStoreDecoder):
         self,
         *,
         image_decode: ImageDecoderType = "torchrgb",
+        image_decode_device: int = 0,
         av_decode: AVDecoderType = "AVDecoder",
         video_decode_audio: bool = False,
         guess_content: bool = False,
@@ -100,6 +101,8 @@ class SampleDecoder(FileStoreDecoder):
         """
         Args:
             image_decode: This defines the decoding results.
+            image_decode_device: If GPU image decoding is enabled (one of the nvimgcodec values is
+              used for the image_decode param), then select which CUDA device to use for decoding.
             av_decode: If "AVDecoder", returns an AVDecoder instance for flexible decoding. If "torch",
                 returns decoded VideoData.
             video_decode_audio: Whether to decode audio from video files.
@@ -112,14 +115,17 @@ class SampleDecoder(FileStoreDecoder):
             guess_content=guess_content,
         )
         if image_decode.startswith("nvimgcodec"):
-          image_decoder = NVImageCodecDecoder(image_decode)
+            image_decoders = [
+                NVImageCodecDecoder(image_decode, image_decode_device),
+                webdataset.autodecode.imagehandler(image_decode.replace("nvimgcodec", "torch")),
+            ]
         else:
-          image_decoder = webdataset.autodecode.imagehandler(image_decode)
+            image_decoders = [webdataset.autodecode.imagehandler(image_decode)]
         self._decoder = webdataset.autodecode.Decoder(
             GuessingHandlerWrapper.wrap(
                 guess_content,
                 [
-                    image_decoder,
+                    *image_decoders,
                     AVWebdatasetDecoder(
                         video_decode_audio=video_decode_audio,
                         av_decode=av_decode,
