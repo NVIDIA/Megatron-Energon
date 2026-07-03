@@ -348,6 +348,36 @@ class TestDataset(unittest.TestCase):
 
             assert order1a == order1b
 
+    def test_taskencoder_local_rng_restore(self):
+        class TestTaskEncoder(DefaultTaskEncoder):
+            @stateless(restore_task_encoder_seeds=True)
+            def draw(self):
+                return (
+                    torch.randint(0, 1000, (), generator=self.rng.torch).item(),
+                    int(self.rng.numpy.integers(0, 1000)),
+                    self.rng.random.randint(0, 1000),
+                )
+
+            @stateless(restore_task_encoder_seeds=True)
+            def draw_generator(self):
+                yield self.rng.random.getstate()
+                self.rng.random.random()
+                yield self.rng.random.getstate()
+
+        worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0)
+        task_encoder = TestTaskEncoder()
+
+        worker_config.worker_activate(sample_index=7)
+        try:
+            assert task_encoder.draw() == task_encoder.draw()
+
+            first = list(task_encoder.draw_generator())
+            second = list(task_encoder.draw_generator())
+            assert first == second
+            assert first[0] != first[1]
+        finally:
+            worker_config.worker_deactivate()
+
     def test_determinism_taskencoder_save_restore(self):
         class TestTaskEncoder(DefaultTaskEncoder):
             @stateless(restore_seeds=True)

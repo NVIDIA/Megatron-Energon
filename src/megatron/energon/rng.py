@@ -150,9 +150,9 @@ class UserRng:
         return state
 
     def restore_state(self, state: FlexState):
-        self.torch.set_state(torch.as_tensor(state["torch"]))
+        self.torch.set_state(torch.as_tensor(state["torch"], dtype=torch.uint8))
         if torch.cuda.is_available():
-            self.torch_cuda.set_state(torch.as_tensor(state["torch_cuda"], device="cuda"))
+            self.torch_cuda.set_state(torch.as_tensor(state["torch_cuda"], dtype=torch.uint8))
         self.numpy.bit_generator.state = state["numpy"]
         self.random.setstate(state["random"])
 

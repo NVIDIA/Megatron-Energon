@@ -125,7 +125,10 @@ P = ParamSpec("P")
 
 @overload
 def stateless(
-    *, restore_seeds: bool = False, failure_tolerance: Optional[int] = None
+    *,
+    restore_seeds: bool = False,
+    restore_task_encoder_seeds: bool = False,
+    failure_tolerance: Optional[int] = None,
 ) -> Callable[[Callable[P, T]], Callable[P, T]]: ...
 
 
@@ -144,12 +147,13 @@ def stateless(
 
     Args:
         fn: The function to decorate.
-        restore_seeds: Whether to restore the seeds for the function. I.e. the seeds are set
-            from the sample index and the worker seed, such that they can be restored when a sample
-            is restored from that function.
-        restore_task_encoder_seeds: Whether to restore the seeds for the task encoder. I.e. the seeds are set
-            from the sample index and the worker seed, such that they can be restored when a sample
-            is restored from that function.
+        restore_seeds: Whether to seed and restore the process-global RNGs around the function.
+            The seed is derived from the sample index and worker seed. This mode is supported by
+            fork workers and the main-process worker, but not by thread workers, because threads
+            share process-global RNG state.
+        restore_task_encoder_seeds: Whether to seed and restore the task encoder's worker-local
+            RNGs around the function. The seed is derived from the sample index and worker seed.
+            Use this mode with ``self.rng`` for code that must support thread workers.
         failure_tolerance: The number of consecutive exceptions that are handled, after which a `FatalSampleError` is
             raised for this function. Set to 0 to disable.
 
@@ -161,8 +165,8 @@ def stateless(
         def encode_sample(self, sample: T_sample) -> T_encoded_sample:
             ...
 
-        # Or if randomness is used (e.g. for augmentations):
-        @stateless(restore_seeds=True)
+        # Or if randomness is used (e.g. for augmentations), use self.rng in the method:
+        @stateless(restore_task_encoder_seeds=True)
         def encode_sample(self, sample: T_sample) -> T_encoded_sample:
             ...
 
@@ -170,7 +174,10 @@ def stateless(
 
     if fn is None:
         return lambda f: stateless(
-            f, restore_seeds=restore_seeds, failure_tolerance=failure_tolerance
+            f,
+            restore_seeds=restore_seeds,
+            restore_task_encoder_seeds=restore_task_encoder_seeds,
+            failure_tolerance=failure_tolerance,
         )
     if restore_seeds:
         worker_seed = None
@@ -280,6 +287,8 @@ def stateless(
                     yield sample
 
                     te_outer_rng_state = self.rng.save_state()
+
+            fn = seed_wrapper_generator
         else:
 
             @functools.wraps(te_orig_fn)
@@ -1119,6 +1128,7 @@ class DefaultTaskEncoder(
             batch_type: Type of the encoded batched samples
             cache: Cache pool to use for caching. If not provided, a no-op cache pool will be used.
         """
+        super().__init__()
         self._encoded_sample_type = encoded_sample_type
         self._raw_batch_type = raw_batch_type
         self._batch_type = batch_type

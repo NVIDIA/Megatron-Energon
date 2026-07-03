@@ -74,6 +74,15 @@ api/cli
 
 ```{toctree}
 ---
+caption: Migration Guides
+maxdepth: 2
+---
+migration/energon_7_to_8
+```
+
+
+```{toctree}
+---
 caption: Internals
 maxdepth: 2
 ---
