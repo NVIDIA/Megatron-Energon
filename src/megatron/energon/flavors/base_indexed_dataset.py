@@ -189,7 +189,8 @@ class BaseIndexedDatasetFactory(
     def _print_shard_slices(
         self, slice_offsets: Sequence[Sequence[int]], shards: list[ShardInfo]
     ) -> None:
-        _print_shard_slices(self.worker_config, shards, slice_offsets)
+        if DEBUG_SHARD_PRINT:
+            _print_shard_slices(self.worker_config, shards, slice_offsets)
 
     def _load_fn(
         self, part_filter: Callable[[str], bool] | None

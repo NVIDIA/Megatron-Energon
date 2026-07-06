@@ -3,7 +3,7 @@
 
 import hashlib
 import random
-from typing import Any, List, Mapping, Optional, Sequence, TypeVar
+from typing import Any, List, Mapping, Optional, Sequence, TypeVar, overload
 
 import numpy
 import torch
@@ -15,6 +15,88 @@ from megatron.energon.savable import FlexState, Savable
 from megatron.energon.worker import WorkerConfig
 
 T = TypeVar("T")
+
+_MASK64 = (1 << 64) - 1
+_GOLDEN_RATIO64 = 0x9E3779B97F4A7C15
+
+
+def _mix64(value: int) -> int:
+    """SplitMix64 finalizer used as the keyed Feistel round function."""
+    value = (value + _GOLDEN_RATIO64) & _MASK64
+    value = ((value ^ (value >> 30)) * 0xBF58476D1CE4E5B9) & _MASK64
+    value = ((value ^ (value >> 27)) * 0x94D049BB133111EB) & _MASK64
+    return value ^ (value >> 31)
+
+
+class FeistelPermutation(Sequence[int]):
+    """Memory-constant pseudorandom permutation over ``range(size)``.
+
+    The Feistel network permutes the next power-of-two domain. Cycle walking maps values outside
+    ``range(size)`` back into the requested domain without losing bijectivity.
+    """
+
+    __slots__ = ("_keys", "_left_bits", "_right_bits", "_size")
+    _keys: tuple[int, ...]
+    _left_bits: int
+    _right_bits: int
+    _size: int
+
+    def __init__(self, size: int, seed: int, *, rounds: int = 4):
+        if size < 0:
+            raise ValueError("Permutation size must be non-negative")
+        if rounds < 4 or rounds % 2 != 0:
+            raise ValueError("Feistel rounds must be an even number greater than or equal to four")
+
+        block_bits = max(2, max(size - 1, 0).bit_length())
+        self._size = size
+        self._left_bits = block_bits // 2
+        self._right_bits = block_bits - self._left_bits
+        self._keys = tuple(
+            _mix64(seed + round_idx * _GOLDEN_RATIO64) for round_idx in range(rounds)
+        )
+
+    def __len__(self) -> int:
+        return self._size
+
+    @overload
+    def __getitem__(self, index: int) -> int: ...
+
+    @overload
+    def __getitem__(self, index: slice) -> list[int]: ...
+
+    def __getitem__(self, index: int | slice) -> int | list[int]:
+        if isinstance(index, slice):
+            return [self[item] for item in range(*index.indices(self._size))]
+        if index < 0:
+            index += self._size
+        if index < 0 or index >= self._size:
+            raise IndexError("Feistel permutation index out of range")
+        if self._size <= 1:
+            return index
+
+        value = index
+        while True:
+            value = self._permute_block(value)
+            if value < self._size:
+                return value
+
+    def _permute_block(self, value: int) -> int:
+        left_bits = self._left_bits
+        right_bits = self._right_bits
+        left = value >> right_bits
+        right = value & ((1 << right_bits) - 1)
+
+        for key in self._keys:
+            left, right = right, left ^ (_mix64(right ^ key) & ((1 << left_bits) - 1))
+            left_bits, right_bits = right_bits, left_bits
+
+        return (left << right_bits) | right
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> "FeistelPermutation":
+        return self
+
+    def __repr__(self) -> str:
+        return f"FeistelPermutation(size={self._size}, rounds={len(self._keys)})"
 
 
 class WorkerRng(Savable):
@@ -75,6 +157,17 @@ class WorkerRng(Savable):
         """Returns a new list with shuffled entries"""
         p = torch.randperm(len(l), generator=self.rng)
         return [l[p[i]] for i in range(len(l))]
+
+    def permutation(self, n: int) -> FeistelPermutation:
+        """Returns a memory-constant pseudorandom permutation over ``range(n)``."""
+        seed = torch.randint(
+            0,
+            torch.iinfo(torch.int64).max,
+            (),
+            generator=self.rng,
+            dtype=torch.int64,
+        ).item()
+        return FeistelPermutation(n, seed)
 
     def rand_pop(self, l: List[T]) -> T:
         return l.pop(self.randbelow(len(l)))

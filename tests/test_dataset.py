@@ -52,6 +52,7 @@ from megatron.energon.dataset_config import get_dataset_from_config
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import BaseWebdatasetFactory
+from megatron.energon.flavors.common.dataset_sampler import DatasetSampler
 from megatron.energon.flavors.common.manifest.paths import INFO_JSON_FILENAME, MAIN_FOLDER_NAME
 from megatron.energon.task_encoder.base import stateless
 from megatron.energon.tools.analyze_debug import command as analyze_debug_command
@@ -556,6 +557,40 @@ class TestDataset(unittest.TestCase):
             assert sample.image.shape == (10, 3, 100, 100)
             n_samples += sample.image.shape[0]
         assert n_samples == 50
+
+    def test_max_samples_per_sequence_one_uses_compact_indexes(self):
+        def new_dataset():
+            return get_train_dataset(
+                self.dataset_path,
+                batch_size=1,
+                worker_config=WorkerConfig(rank=0, world_size=1, num_workers=2),
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=1,
+            )
+
+        train_dataset = new_dataset()
+
+        sampler = train_dataset._find_wrapped_dataset(DatasetSampler)
+        assert isinstance(sampler, DatasetSampler)
+        assert all(isinstance(offsets, range) for offsets in sampler.workers_slice_offsets)
+
+        train_loader = get_savable_loader(train_dataset)
+        train_iterator = iter(train_loader)
+        first_batches = [next(train_iterator) for _ in range(10)]
+
+        state = train_loader.save_state_rank()
+        remaining_batches = [next(train_iterator) for _ in range(DATASET_SIZE - 10)]
+        all_batches = first_batches + remaining_batches
+        assert len({batch.__key__[0] for batch in all_batches}) == DATASET_SIZE
+        assert all(batch.image.shape == (1, 3, 100, 100) for batch in all_batches)
+
+        restored_loader = get_savable_loader(new_dataset())
+        restored_loader.restore_state_rank(state)
+        restored_iterator = iter(restored_loader)
+        restored_batches = [next(restored_iterator) for _ in range(10)]
+        assert [batch.__key__ for batch in restored_batches] == [
+            batch.__key__ for batch in remaining_batches[:10]
+        ]
 
     def test_no_batching(self):
         train_loader = get_loader(
