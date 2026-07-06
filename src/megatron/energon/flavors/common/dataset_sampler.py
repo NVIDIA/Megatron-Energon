@@ -212,12 +212,7 @@ class DatasetSampler(SavableDataset[RawSampleData]):
                 )
             elif self.shuffle_over_epochs >= 1:
                 # Shuffle without replacement (potentially over multiple epochs)
-                if isinstance(self.slice_offsets, range):
-                    res_list = rng.permutation(num_slices * self.shuffle_over_epochs)
-                else:
-                    res_list = rng.shuffle(
-                        list(range(num_slices)) * self.shuffle_over_epochs
-                    )
+                res_list = rng.permutation(num_slices * self.shuffle_over_epochs)
             else:
                 raise ValueError(f"Invalid shuffle_over_epochs: {self.shuffle_over_epochs}")
         self._pending_slice_index = SliceIndex(res_list, modulus=num_slices)

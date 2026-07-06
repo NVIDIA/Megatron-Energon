@@ -577,19 +577,41 @@ class TestDataset(unittest.TestCase):
         train_loader = get_savable_loader(train_dataset)
         train_iterator = iter(train_loader)
         first_batches = [next(train_iterator) for _ in range(10)]
+        assert [batch.__key__[0] for batch in first_batches[:5]] == [
+            "000004",
+            "000008",
+            "000049",
+            "000018",
+            "000039",
+        ]
 
         state = train_loader.save_state_rank()
         remaining_batches = [next(train_iterator) for _ in range(DATASET_SIZE - 10)]
         all_batches = first_batches + remaining_batches
-        assert len({batch.__key__[0] for batch in all_batches}) == DATASET_SIZE
+        assert sorted(batch.__key__[0] for batch in all_batches) == [
+            f"{sample_idx:06d}" for sample_idx in range(DATASET_SIZE)
+        ]
         assert all(batch.image.shape == (1, 3, 100, 100) for batch in all_batches)
+
+        next_epoch_batches = [next(train_iterator) for _ in range(DATASET_SIZE)]
+        assert sorted(batch.__key__[0] for batch in next_epoch_batches) == [
+            f"{sample_idx:06d}" for sample_idx in range(DATASET_SIZE)
+        ]
+        assert [batch.__key__ for batch in next_epoch_batches] != [
+            batch.__key__ for batch in all_batches
+        ]
 
         restored_loader = get_savable_loader(new_dataset())
         restored_loader.restore_state_rank(state)
         restored_iterator = iter(restored_loader)
-        restored_batches = [next(restored_iterator) for _ in range(10)]
-        assert [batch.__key__ for batch in restored_batches] == [
-            batch.__key__ for batch in remaining_batches[:10]
+        restored_batches = [
+            next(restored_iterator) for _ in range(len(remaining_batches) + DATASET_SIZE)
+        ]
+        assert [batch.__key__ for batch in restored_batches[: len(remaining_batches)]] == [
+            batch.__key__ for batch in remaining_batches
+        ]
+        assert [batch.__key__ for batch in restored_batches[len(remaining_batches) :]] == [
+            batch.__key__ for batch in next_epoch_batches
         ]
 
     def test_no_batching(self):
