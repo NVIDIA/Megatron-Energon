@@ -1,6 +1,5 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
-import os
 import threading
 import warnings
 from typing import Literal
@@ -76,7 +75,6 @@ class NVImageCodecDecoder:
         self.device = device
 
         self._thread_local = threading.local()
-        self._creator_pid = os.getpid()
 
     def __call__(self, key: str, data: bytes) -> torch.Tensor | None:
         """Decode image data using the GPU accelerated decoder
@@ -109,11 +107,6 @@ class NVImageCodecDecoder:
             )
         ):
             return None
-
-        if os.getpid() != self._creator_pid:
-            raise RuntimeError(
-                "GPU image decoding requires thread-based dataloader workers, set worker_type='thread' or worker_type='main'."
-            )
 
         decoder = getattr(self._thread_local, "decoder", None)
         if decoder is None:

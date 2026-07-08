@@ -1,6 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+import os
 from typing import Any, Callable, Literal
 
 import webdataset
@@ -107,6 +108,8 @@ class SampleDecoder(FileStoreDecoder):
             video_decode_audio=video_decode_audio,
             guess_content=guess_content,
         )
+        self._creator_pid = os.getpid()
+        self._requires_threading = image_decode_device != "cpu"
         if image_decode_device != "cpu":
             if not image_decode.startswith("torch"):
                 raise ValueError(
@@ -152,6 +155,12 @@ class SampleDecoder(FileStoreDecoder):
         )[ext]
 
     def __call__(self, sample: dict) -> dict:
+        if os.getpid() != self._creator_pid and self._requires_threading:
+            raise SystemError(
+                "GPU acceleated media decoding is incompatible with forking dataloader workers"
+                "pass `worker_type='thread'` or `worker_type='main'`."
+            )
+
         return self._decoder(sample)
 
     def config(self) -> dict:
