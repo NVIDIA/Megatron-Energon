@@ -1,5 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
+import os
+import threading
 import warnings
 from typing import Literal
 
@@ -70,10 +72,10 @@ class NVImageCodecDecoder:
         self.decode_params = nvimgcodec.DecodeParams(
             color_spec=color_space_map[color_space.replace("8", "")]
         )
-        self.decoder = nvimgcodec.Decoder(
-            device_id=device,
-            max_num_cpu_threads=1,
-        )
+        self.device = device
+
+        self._thread_local = threading.local()
+        self._creator_pid = os.getpid()
 
     def __call__(self, key: str, data: bytes) -> torch.Tensor | None:
         """Decode image data using the GPU accelerated decoder
@@ -106,7 +108,26 @@ class NVImageCodecDecoder:
             )
         ):
             return None
-        nv_img = self.decoder.decode(data, params=self.decode_params)
+
+        if os.getpid() != self._creator_pid:
+            raise RuntimeError(
+                "GPU image decoding requires thread-based dataloader workers, set worker_type='thread' or worker_type='main'."
+            )
+
+        decoder = getattr(self._thread_local, "decoder", None)
+        if decoder is None:
+            decoder = self._thread_local.decoder = nvimgcodec.Decoder(
+                device_id=self.device,
+                max_num_cpu_threads=1,
+            )
+            self._thread_local.stream = torch.cuda.Stream(self.device)
+
+        stream = self._thread_local.stream
+
+        nv_img = decoder.decode(
+            data, params=self.decode_params, cuda_stream=stream.cuda_stream
+        )
+        stream.synchronize()  # ensure tensor conversions are ordered correctly on the default stream
 
         if hasattr(nv_img, "__dlpack__"):
             tensor_img = torch.from_dlpack(nv_img).permute(2, 0, 1)
