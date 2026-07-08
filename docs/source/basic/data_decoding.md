@@ -38,7 +38,11 @@ Here are the different options you can pass to {py:class}`SampleDecoder <megatro
         * `pil`: Returns the image as a PIL image
         * `torchrgb` Returns the image as a torch tensor with 3 color channels.
         * For more options, check out the [official documentation](https://rom1504.github.io/webdataset/api/webdataset/autodecode.html#ImageHandler).
-    * Hardware accelerated image decoding: pass `nvimgcodec` to use [NVImageCodec](https://docs.nvidia.com/cuda/nvimagecodec/index.html). It returns the same format as `torch*` webdataset formats but the tensor will be on a GPU device.
+* `image_decode_device` ("cpu" or "gpu" or int)
+    * Defaults to "cpu" to use webdataset auto decoders (above)
+    * Set to "gpu" or an integer device ordinal to enable hardware accelerated image decoding with [NVImageCodec](https://docs.nvidia.com/cuda/nvimagecodec/index.html).
+    * NOTE: Hardware accelerated decoding is only compatible with `torch*` webdataset formats; the returned tensor will be on GPU device memory
+    * NOTE: Hardware accelerated decoding is only compatible with `thread` or `main` dataloader workers; `fork` is not supported.
 * `av_decode` (str)
     * Can be one of `AVDecoder`, `torch`, `pyav`. The default is `AVDecoder` which is explained [below](av-decoder).
     * The option `torch` would decode video and audio entirely and return them as tensors.

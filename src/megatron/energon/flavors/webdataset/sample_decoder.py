@@ -29,13 +29,6 @@ ImageDecoderType = Literal[
     "torchrgb",
     "torch",
     "torchrgba",
-    "nvimgcodecl8",
-    "nvimgcodecrgb8",
-    "nvimgcodecrgba8",
-    "nvimgcodecl",
-    "nvimgcodecrgb",
-    "nvimgcodec",
-    "nvimgcodecrgba",
     "pill",
     "pil",
     "pilrgb",
@@ -92,7 +85,7 @@ class SampleDecoder(FileStoreDecoder):
         self,
         *,
         image_decode: ImageDecoderType = "torchrgb",
-        image_decode_device: int = 0,
+        image_decode_device: Literal["cpu", "gpu"] | int = "cpu",
         av_decode: AVDecoderType = "AVDecoder",
         video_decode_audio: bool = False,
         guess_content: bool = False,
@@ -100,8 +93,9 @@ class SampleDecoder(FileStoreDecoder):
         """
         Args:
             image_decode: This defines the decoding results.
-            image_decode_device: If GPU image decoding is enabled (one of the nvimgcodec values is
-              used for the image_decode param), then select which CUDA device to use for decoding.
+            image_decode_device: device to use for decoding images, use `gpu` or an integer device
+              ordinal to enable hardware accelerated image decoding.
+              NOTE: GPU accelerated decoding is only compatible with `torch*` settings for `image_decode`
             av_decode: If "AVDecoder", returns an AVDecoder instance for flexible decoding. If "torch",
                 returns decoded VideoData.
             video_decode_audio: Whether to decode audio from video files.
@@ -113,10 +107,17 @@ class SampleDecoder(FileStoreDecoder):
             video_decode_audio=video_decode_audio,
             guess_content=guess_content,
         )
-        if image_decode.startswith("nvimgcodec"):
+        if image_decode_device != "cpu":
+            if not image_decode.startswith("torch"):
+                raise ValueError(
+                    f"GPU accelerated image decoding is only compatible with torch result formats (got {image_decode=})"
+                )
+
             image_decoders = [
-                NVImageCodecDecoder(image_decode, image_decode_device),
-                webdataset.autodecode.imagehandler(image_decode.replace("nvimgcodec", "torch")),
+                NVImageCodecDecoder(
+                    image_decode, 0 if image_decode_device == "gpu" else image_decode_device
+                ),
+                webdataset.autodecode.imagehandler(image_decode),
             ]
         else:
             image_decoders = [webdataset.autodecode.imagehandler(image_decode)]

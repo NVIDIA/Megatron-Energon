@@ -16,14 +16,14 @@ except ImportError as e:
     MISSING_DEPENDENCY = str(e)
 
 
-ColorSpaces = Literal[
-    "nvimgcodecl8",
-    "nvimgcodecrgb8",
-    "nvimgcodecrgba8",
-    "nvimgcodecl",
-    "nvimgcodecrgb",
-    "nvimgcodec",
-    "nvimgcodecrgba",
+SupportedFormats = Literal[
+    "torchl8",
+    "torchrgb8",
+    "torchrgba8",
+    "torchl",
+    "torchrgb",
+    "torch",
+    "torchrgba",
 ]
 
 
@@ -35,11 +35,12 @@ class NVImageCodecDecoder:
     of the decoders as well as the hardware JPEG decoders present on modern NVIDIA GPUs.
 
     Args:
-      color_space: The color space to use for decoding, prefixed with nvimgcodec. Can be one of
-        nvimgcodecl: force grayscale
-        nvimgcodecrgb: force 3 channel RGB (expands grayscale or drops alpha)
-        nvimgcodec: don't change source color space (default)
-        nvimgcodecrgba: force 4 channel alpha
+      format: The color space and result format to use for decoding. Only compatible with
+        "torch" result formats, can be one of:
+          torchl: force grayscale
+          torchrgb: force 3 channel RGB (expands grayscale or drops alpha)
+          torch: don't change source color space (default)
+          torchrgba: force 4 channel alpha
 
         Suffix with "8" to load in uint8, otherwise returned tensors will be converted to float in [0, 1]
       device: The CUDA device ordinal to use for decoding (0 by default)
@@ -48,7 +49,7 @@ class NVImageCodecDecoder:
 
     def __init__(
         self,
-        color_space: ColorSpaces = "nvimgcodec",
+        format: SupportedFormats = "torch",
         device: int = 0,
         suppress_warnings: bool = False,
     ) -> None:
@@ -60,17 +61,17 @@ class NVImageCodecDecoder:
             )
 
         self.suppress_warnings = suppress_warnings
-        self.convert_to_float = not color_space.endswith("8")
+        self.convert_to_float = not format.endswith("8")
         color_space_map = {
-            "nvimgcodecl": nvimgcodec.ColorSpec.GRAY,
-            "nvimgcodecrgb": nvimgcodec.ColorSpec.SRGB,
-            "nvimgcodecrgba": nvimgcodec.ColorSpec.UNCHANGED,
-            "nvimgcodec": nvimgcodec.ColorSpec.UNCHANGED,
+            "torchl": nvimgcodec.ColorSpec.GRAY,
+            "torchrgb": nvimgcodec.ColorSpec.SRGB,
+            "torchrgba": nvimgcodec.ColorSpec.UNCHANGED,
+            "torch": nvimgcodec.ColorSpec.UNCHANGED,
         }
 
-        self.color_space = color_space
+        self.format = format
         self.decode_params = nvimgcodec.DecodeParams(
-            color_spec=color_space_map[color_space.replace("8", "")]
+            color_spec=color_space_map[format.replace("8", "")]
         )
         self.device = device
 
@@ -124,15 +125,13 @@ class NVImageCodecDecoder:
 
         stream = self._thread_local.stream
 
-        nv_img = decoder.decode(
-            data, params=self.decode_params, cuda_stream=stream.cuda_stream
-        )
+        nv_img = decoder.decode(data, params=self.decode_params, cuda_stream=stream.cuda_stream)
         stream.synchronize()  # ensure tensor conversions are ordered correctly on the default stream
 
         if hasattr(nv_img, "__dlpack__"):
             tensor_img = torch.from_dlpack(nv_img).permute(2, 0, 1)
 
-            if self.color_space == "nvimgcodecrgba" and tensor_img.shape[0] < 4:
+            if self.format == "torchrgba" and tensor_img.shape[0] < 4:
                 if tensor_img.shape[0] == 1:
                     tensor_img = tensor_img.expand(3, *tensor_img.shape[1:]).contiguous()
                 alpha = torch.full(
