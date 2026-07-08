@@ -109,7 +109,6 @@ class SampleDecoder(FileStoreDecoder):
             image_decode=image_decode,
             av_decode=av_decode,
             video_decode_audio=video_decode_audio,
-            video_decode_device=video_decode_device,
             guess_content=guess_content,
         )
         self._creator_pid = os.getpid()
