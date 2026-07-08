@@ -1,5 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
+import multiprocessing
+import queue
 import unittest
 from io import BytesIO
 from pathlib import Path
@@ -131,3 +133,30 @@ class TestGPUImageDecode(unittest.TestCase):
             cpu_image = pil_to_tensor(Image.open(f)).float().div(255)
 
         assert torch.allclose(cpu_image, gpu_image.cpu(), atol=0.05)
+
+    def test_gpu_decode_fails_on_fork(self) -> None:
+      sample_decoder = SampleDecoder(image_decode="torch", image_decode_device="gpu")
+
+      ctx = multiprocessing.get_context("fork")
+      result = ctx.Queue()
+
+      def decode_in_fork() -> None:
+        try:
+          sample_decoder.decode("test.png", self.image_data)
+          result.put(None)
+        except Exception as e:
+          result.put(e)
+
+      proc = ctx.Process(target=decode_in_fork)
+      proc.start()
+      proc.join(30)
+
+      try:
+        maybeError = result.get(timeout=30)
+      except queue.Empty:
+        self.fail("No result from forked child")
+      finally:
+        if proc.is_alive():
+          proc.kill()
+
+      self.assertIsInstance(maybeError, SystemError)
