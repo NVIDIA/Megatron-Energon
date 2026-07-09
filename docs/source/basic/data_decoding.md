@@ -85,6 +85,8 @@ For efficient video sub-clip extraction, `AVDecoder` uses FFmpeg/PyAV container 
 When choosing `AVDecoder` as the option for `av_decode` above, an object of the type {py:class}`AVDecoder <megatron.energon.av.AVDecoder>` (click to see methods) will be returned. 
 At this point, the file has not yet been decoded, but in your [custom sample loader](custom-sample-loader) or in your [TaskEncoder](../basic/task_encoder), you can read parts or all of the file using the methods of `AVDecoder`.
 
+You can also use hardware accelerated video decoding by setting `video_decoding_device` to `gpu` (or a specific CUDA device ID). The returned `AVDecoder` object will manage GPU decoding for you and the returned tensors will already be on the GPU device. This both accelerates the decoding process *and* avoids a copy of the raw video tensor into GPU memory. 
+
 For example to extract from a video, the first 2 seconds and the 2 seconds starting after 4 seconds:
 ```py
 dat = av_decoder.get_clips(
