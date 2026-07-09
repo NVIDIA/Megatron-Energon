@@ -485,10 +485,10 @@ class TestVideoDecodeGPU(_TestVideoDecodeBase, unittest.TestCase):
     decoder_class = AVDecoderGpu
 
     def test_gpu_decode_device(self) -> None:
-      av_decoder = self.decoder_class(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes()))
-      result_tensor = av_decoder.get_frames().video_clips[0]
+        av_decoder = self.decoder_class(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes()))
+        result_tensor = av_decoder.get_frames().video_clips[0]
 
-      assert result_tensor.device.type == "cuda"
+        assert result_tensor.device.type == "cuda"
 
     def test_gpu_decode_fails_on_fork(self) -> None:
         sample_decoder = SampleDecoder(av_decode="AVDecoder", video_decode_device="gpu")
