@@ -127,6 +127,12 @@ class SampleDecoder(FileStoreDecoder):
             ]
         else:
             image_decoders = [webdataset.autodecode.imagehandler(image_decode)]
+
+        if video_decode_device != "cpu" and av_decode not in ("AVDecoder", "torch"):
+            raise ValueError(
+                f"GPU accelerated video decoding is only compatible with the 'AVDecoder' or 'torch' methods (got {av_decode=})"
+            )
+
         self._decoder = webdataset.autodecode.Decoder(
             GuessingHandlerWrapper.wrap(
                 guess_content,
