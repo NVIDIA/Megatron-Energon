@@ -5,9 +5,12 @@
 
 import io
 import logging
+import multiprocessing
 import os
 import pickle
+import queue
 import sys
+import threading
 import time
 import unittest
 from dataclasses import fields
@@ -21,12 +24,11 @@ import torchvision.transforms as transforms
 from megatron.energon.av import AVDecoder, get_clips_uniform, get_single_frames_uniform
 from megatron.energon.av.av_decoder_gpu import AVDecoderGpu
 from megatron.energon.av.av_reader import AVProbeIndex
+from megatron.energon.flavors.webdataset.sample_decoder import SampleDecoder
 from megatron.energon.media import AVMetadata
 
 # Set multiprocessing start method to 'spawn' on macOS to avoid DataLoader cleanup issues
 if sys.platform == "darwin":
-    import multiprocessing
-
     multiprocessing.set_start_method("spawn", force=True)
 
 
@@ -482,9 +484,66 @@ class TestVideoDecodeCPU(_TestVideoDecodeBase, unittest.TestCase):
 class TestVideoDecodeGPU(_TestVideoDecodeBase, unittest.TestCase):
     decoder_class = AVDecoderGpu
 
-    # @unittest.expectedFailure
-    # def test_time_precision(self):
-    #     return super().test_time_precision()
+    def test_gpu_decode_device(self) -> None:
+      av_decoder = self.decoder_class(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes()))
+      result_tensor = av_decoder.get_frames().video_clips[0]
+
+      assert result_tensor.device.type == "cuda"
+
+    def test_gpu_decode_fails_on_fork(self) -> None:
+        sample_decoder = SampleDecoder(av_decode="AVDecoder", video_decode_device="gpu")
+
+        ctx = multiprocessing.get_context("fork")
+        result = ctx.Queue()
+        video_bytes = Path("tests/data/sync_test.mp4").read_bytes()
+
+        def decode_in_fork() -> None:
+            try:
+                sample_decoder.decode("test.mp4", video_bytes)
+                result.put(None)
+            except Exception as e:
+                result.put(e)
+
+        proc = ctx.Process(target=decode_in_fork)
+        proc.start()
+        proc.join(30)
+
+        try:
+            maybeError = result.get(timeout=30)
+        except queue.Empty:
+            self.fail("No result from forked child")
+        finally:
+            if proc.is_alive():
+                proc.kill()
+
+        self.assertIsInstance(maybeError, SystemError)
+
+    def test_gpu_decode_succeeds_on_thread(self) -> None:
+        sample_decoder = SampleDecoder(av_decode="AVDecoder", video_decode_device="gpu")
+        results = {}
+        video_bytes = Path("tests/data/sync_test.mp4").read_bytes()
+
+        cpu_video = load_video_to_tensor("tests/data/sync_test.mp4")
+
+        def decode_in_thread(tid) -> None:
+            try:
+                decoder = sample_decoder.decode("test.mp4", video_bytes)
+                results[tid] = decoder.get_frames().video_clips[0]
+            except Exception as e:
+                results[tid] = e
+
+        threads = [threading.Thread(target=decode_in_thread, args=(i,)) for i in range(2)]
+
+        for t in threads:
+            t.start()
+
+        for t in threads:
+            t.join(30)
+
+        assert len(results) == 2
+        assert all([isinstance(r, torch.Tensor) for r in results.values()])
+        assert all([r.device.type == "cuda" for r in results.values()])
+        assert all([tensors_close(r.cpu(), cpu_video, tolerance=0.001) for r in results.values()])
 
 
 def load_audio_to_tensor(audio_path: str) -> torch.Tensor:
