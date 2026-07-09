@@ -112,7 +112,7 @@ class SampleDecoder(FileStoreDecoder):
             guess_content=guess_content,
         )
         self._creator_pid = os.getpid()
-        self._requires_threading = image_decode_device != "cpu"
+        self._requires_threading = image_decode_device != "cpu" or video_decode_device != "cpu"
         if image_decode_device != "cpu":
             if not image_decode.startswith("torch"):
                 raise ValueError(
