@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 import multiprocessing
 import queue
+import threading
 import unittest
 from io import BytesIO
 from pathlib import Path
@@ -160,3 +161,21 @@ class TestGPUImageDecode(unittest.TestCase):
           proc.kill()
 
       self.assertIsInstance(maybeError, SystemError)
+
+    def test_gpu_decode_succeeds_on_thread(self) -> None:
+      sample_decoder = SampleDecoder(image_decode="torch", image_decode_device="gpu")
+      result = None
+
+      def decode_in_thread() -> None:
+        nonlocal result
+        try:
+          result = sample_decoder.decode("test.png", self.image_data)
+        except Exception as e:
+          result = e
+
+      thread = threading.Thread(target=decode_in_thread)
+      thread.start()
+      thread.join(30)
+
+      assert isinstance(result, torch.Tensor)
+      assert result.device.type == "cuda"
