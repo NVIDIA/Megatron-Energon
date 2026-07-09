@@ -157,7 +157,7 @@ class SampleDecoder(FileStoreDecoder):
     def __call__(self, sample: dict) -> dict:
         if self._requires_threading and os.getpid() != self._creator_pid:
             raise SystemError(
-                "GPU acceleated media decoding is incompatible with forking dataloader workers "
+                "GPU accelerated media decoding is incompatible with forking dataloader workers "
                 "pass `worker_type='thread'` or `worker_type='main'`."
             )
 
