@@ -136,46 +136,46 @@ class TestGPUImageDecode(unittest.TestCase):
         assert torch.allclose(cpu_image, gpu_image.cpu(), atol=0.05)
 
     def test_gpu_decode_fails_on_fork(self) -> None:
-      sample_decoder = SampleDecoder(image_decode="torch", image_decode_device="gpu")
+        sample_decoder = SampleDecoder(image_decode="torch", image_decode_device="gpu")
 
-      ctx = multiprocessing.get_context("fork")
-      result = ctx.Queue()
+        ctx = multiprocessing.get_context("fork")
+        result = ctx.Queue()
 
-      def decode_in_fork() -> None:
+        def decode_in_fork() -> None:
+            try:
+                sample_decoder.decode("test.png", self.image_data)
+                result.put(None)
+            except Exception as e:
+                result.put(e)
+
+        proc = ctx.Process(target=decode_in_fork)
+        proc.start()
+        proc.join(30)
+
         try:
-          sample_decoder.decode("test.png", self.image_data)
-          result.put(None)
-        except Exception as e:
-          result.put(e)
+            maybeError = result.get(timeout=30)
+        except queue.Empty:
+            self.fail("No result from forked child")
+        finally:
+            if proc.is_alive():
+                proc.kill()
 
-      proc = ctx.Process(target=decode_in_fork)
-      proc.start()
-      proc.join(30)
-
-      try:
-        maybeError = result.get(timeout=30)
-      except queue.Empty:
-        self.fail("No result from forked child")
-      finally:
-        if proc.is_alive():
-          proc.kill()
-
-      self.assertIsInstance(maybeError, SystemError)
+        self.assertIsInstance(maybeError, SystemError)
 
     def test_gpu_decode_succeeds_on_thread(self) -> None:
-      sample_decoder = SampleDecoder(image_decode="torch", image_decode_device="gpu")
-      result = None
+        sample_decoder = SampleDecoder(image_decode="torch", image_decode_device="gpu")
+        result = None
 
-      def decode_in_thread() -> None:
-        nonlocal result
-        try:
-          result = sample_decoder.decode("test.png", self.image_data)
-        except Exception as e:
-          result = e
+        def decode_in_thread() -> None:
+            nonlocal result
+            try:
+                result = sample_decoder.decode("test.png", self.image_data)
+            except Exception as e:
+                result = e
 
-      thread = threading.Thread(target=decode_in_thread)
-      thread.start()
-      thread.join(30)
+        thread = threading.Thread(target=decode_in_thread)
+        thread.start()
+        thread.join(30)
 
-      assert isinstance(result, torch.Tensor)
-      assert result.device.type == "cuda"
+        assert isinstance(result, torch.Tensor)
+        assert result.device.type == "cuda"
