@@ -164,18 +164,26 @@ class TestGPUImageDecode(unittest.TestCase):
 
     def test_gpu_decode_succeeds_on_thread(self) -> None:
         sample_decoder = SampleDecoder(image_decode="torch", image_decode_device="gpu")
-        result = None
+        results = {}
 
-        def decode_in_thread() -> None:
-            nonlocal result
+        with BytesIO(self.image_data) as io:
+            cpu_image = pil_to_tensor(Image.open(io)).float().div(255)
+
+        def decode_in_thread(tid) -> None:
             try:
-                result = sample_decoder.decode("test.png", self.image_data)
+                results[tid] = sample_decoder.decode("test.png", self.image_data)
             except Exception as e:
-                result = e
+                results[tid] = e
 
-        thread = threading.Thread(target=decode_in_thread)
-        thread.start()
-        thread.join(30)
+        threads = [threading.Thread(target=decode_in_thread, args=(i,)) for i in range(2)]
 
-        assert isinstance(result, torch.Tensor)
-        assert result.device.type == "cuda"
+        for t in threads:
+            t.start()
+
+        for t in threads:
+            t.join(30)
+
+        assert len(results) == 2
+        assert all([isinstance(r, torch.Tensor) for r in results.values()])
+        assert all([r.device.type == "cuda" for r in results.values()])
+        assert all([torch.allclose(r.cpu(), cpu_image) for r in results.values()])
