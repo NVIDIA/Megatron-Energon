@@ -689,6 +689,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
         watchdog_timeout_seconds: Optional[float] = 60,
         watchdog_initial_timeout_seconds: Optional[float] = None,
         fail_on_timeout: bool = False,
+        multiprocessing_context: str = "fork",
     ):
         """
         Create the dataloader supporting saving and restoring the state.
@@ -719,6 +720,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
             fail_on_timeout: If True, stops the whole process upon timeout, after printing a stack trace.
         """
         self.worker_config = dataset.worker_config
+        self._mp_ctx_name = multiprocessing_context
         self.id = self.next_id()
 
         dataset = WatchdogDataset(
@@ -737,9 +739,10 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
                 freeze=gc_freeze_at_start,
             )
 
-        self.cmd_queues = [multiprocessing.Queue() for _ in range(self.worker_config.num_workers)]
+        ctx = torch.multiprocessing.get_context(self._mp_ctx_name)
+        self.cmd_queues = [ctx.Queue() for _ in range(self.worker_config.num_workers)]
         self.result_queues = [
-            multiprocessing.Queue() for _ in range(self.worker_config.num_workers)
+            ctx.Queue() for _ in range(self.worker_config.num_workers)
         ]
 
         num_procs = max(self.worker_config.num_workers, 1)
@@ -772,7 +775,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
         if self.worker_config.num_workers > 0:
             kwargs["persistent_workers"] = True
             kwargs["prefetch_factor"] = prefetch_factor
-            kwargs["multiprocessing_context"] = "fork"
+            kwargs["multiprocessing_context"] = ctx
 
         # Assert that prefetch_factor works well with num_checkpoints.
         # This ensures that the oldest checkpoint is old enough to cover
@@ -1197,6 +1200,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
             "persistent_workers": self.persistent_workers,
             "pin_memory": self.pin_memory,
             "prefetch_factor": None if self.num_workers == 0 else self.prefetch_factor,
+            "multiprocessing_context": self._mp_ctx_name,
             "dataset": self.dataset.config(),
         }
 
@@ -1222,6 +1226,7 @@ class BasicDataLoader(DataLoader[T], Generic[T]):
         watchdog_timeout_seconds: Optional[float] = 60,
         watchdog_initial_timeout_seconds: Optional[float] = None,
         fail_on_timeout: bool = False,
+        multiprocessing_context: str = "fork",
     ):
         """
         Create the dataloader supporting saving and restoring the state.
@@ -1243,6 +1248,7 @@ class BasicDataLoader(DataLoader[T], Generic[T]):
             fail_on_timeout: If True, stops the whole process upon timeout, after printing a stack trace.
         """
         self.worker_config = dataset.worker_config
+        self._mp_ctx_name = multiprocessing_context
 
         self.id = SavableDataLoader.next_id()
 
@@ -1268,12 +1274,13 @@ class BasicDataLoader(DataLoader[T], Generic[T]):
 
         self._worker_sample_counters = [0] * max(self.worker_config.num_workers, 1)
 
+        ctx = torch.multiprocessing.get_context(self._mp_ctx_name)
         kwargs = {}
         if self.worker_config.num_workers > 0:
             # These must not be specified for num_workers =0
             kwargs["persistent_workers"] = True
             kwargs["prefetch_factor"] = prefetch_factor
-            kwargs["multiprocessing_context"] = "fork"
+            kwargs["multiprocessing_context"] = ctx
 
         seed_per_worker = [
             self.worker_config.worker_seed(i) for i in range(self.worker_config.num_workers)
@@ -1369,6 +1376,7 @@ class BasicDataLoader(DataLoader[T], Generic[T]):
             "persistent_workers": self.persistent_workers,
             "pin_memory": self.pin_memory,
             "prefetch_factor": None if self.num_workers == 0 else self.prefetch_factor,
+            "multiprocessing_context": self._mp_ctx_name,
             "dataset": self.dataset.config(),
         }
 
