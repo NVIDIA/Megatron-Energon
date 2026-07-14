@@ -32,7 +32,7 @@ class AVDecoderGpu(AVDecoder):
     suppress_warnings: bool
     device_id: int
 
-    def __init__(self, stream: BinaryIO, suppress_warnings: bool = False, device_id=0) -> None:
+    def __init__(self, stream: BinaryIO, suppress_warnings: bool = False, device_id: int = 0) -> None:
         super().__init__(stream, suppress_warnings)
         if not AV_GPU_DECODE_AVAILABLE:
             raise ImportError(
