@@ -109,14 +109,16 @@ class DefaultGenericWebdatasetFactory(BaseWebdatasetFactory[T_sample], Generic[T
             self._sample_loader = functools.partial(_apply_field_map, fields=fields)
             parts = set(access[0] for options in fields.values() for access in options)
             part_filter = functools.partial(_part_in_set, parts=parts)
+        # Share one dict so later dataset.subflavors.update(...) is visible in samples.
+        resolved_subflavors = subflavors or {}
         inner_sample_loader = self._sample_loader
         self._sample_loader = functools.partial(
             _wrap_sample,
             inner=inner_sample_loader,
-            subflavors=subflavors or {},
+            subflavors=resolved_subflavors,
         )
         super().__init__(path, **kwargs, part_filter=part_filter)
-        self.subflavors = subflavors or {}
+        self.subflavors = resolved_subflavors
 
     def load_sample(self, sample: FilteredSample) -> T_sample:
         return self.__sample_type__(**self._sample_loader(sample))

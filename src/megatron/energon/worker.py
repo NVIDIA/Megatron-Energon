@@ -265,18 +265,26 @@ class WorkerConfig:
     def __getstate__(self):
         """Return a picklable copy of the state.
 
-        ``data_parallel_group`` holds a ``torch.distributed.ProcessGroup`` which is not
-        picklable. It is only needed in the main process (e.g. for ``global_rank()``), so it
-        is dropped here. This is required when the dataloader uses a multiprocessing start
-        method other than ``fork`` (e.g. ``forkserver``/``spawn``), where the dataset is
-        serialized to the worker processes instead of inherited via fork.
+        Non-picklable fields are dropped here. This is required when the dataloader uses a
+        multiprocessing start method other than ``fork`` (e.g. ``forkserver``/``spawn``),
+        where the dataset is serialized to the worker processes instead of inherited via fork.
+
+        - ``data_parallel_group``: a ``torch.distributed.ProcessGroup``, only needed in the
+          main process (e.g. for ``global_rank()``).
+        - ``_worker_debug_file``: an open file handle. It may already be opened in the main
+          process (e.g. ``SavableDataLoader.__init__`` logs at level >= 1). Workers reopen
+          their own file lazily in ``worker_log``.
         """
         state = {name: getattr(self, name) for name in type(self).__slots__}
         state.pop("data_parallel_group", None)
+        state.pop("_worker_debug_file", None)
+        state.pop("_worker_debug_file_worker_id", None)
         return state
 
     def __setstate__(self, state):
         state.setdefault("data_parallel_group", None)
+        state.setdefault("_worker_debug_file", None)
+        state.setdefault("_worker_debug_file_worker_id", None)
         for name, value in state.items():
             setattr(self, name, value)
 
