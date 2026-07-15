@@ -454,6 +454,43 @@ class FileStoreCachePool(CachePool, ForkMixin):
             # Notify waiting threads that space is now available
             self._cache_space_available.notify_all()
 
+    def __getstate__(self):
+        """Return a picklable copy of the configuration.
+
+        Runtime fields (``ThreadPoolExecutor``, locks, pending tasks, per-process
+        ``cache_dir``) are not picklable / not safe to share across processes.
+        They are recreated in ``__setstate__``, mirroring ``__after_fork__``.
+        Required for ``forkserver``/``spawn`` dataloaders that serialize the
+        dataset (including ``cache_pool``) into worker processes.
+        """
+        assert len(self._pending_tasks) == 0, "Pending tasks should be empty before pickle"
+        # Do not mutate the live parent instance; only serialize configuration.
+        return {
+            "parent_cache_dir": self.parent_cache_dir,
+            "num_workers": self.num_workers,
+            "method": self.method,
+            "max_cache_size": self.max_cache_size,
+            "max_cache_count": self.max_cache_count,
+        }
+
+    def __setstate__(self, state):
+        self.parent_cache_dir = state["parent_cache_dir"]
+        self.num_workers = state["num_workers"]
+        self.method = state["method"]
+        self.max_cache_size = state["max_cache_size"]
+        self.max_cache_count = state["max_cache_count"]
+        self._pending_tasks = {}
+        self.current_cache_size = 0
+        self.current_cache_count = 0
+        self._shutting_down = False
+        self._worker_pool = None
+        self._lock = threading.RLock()
+        self._cache_space_available = threading.Condition(self._lock)
+        # Recreate process-local runtime state (pool + unique cache_dir).
+        self.__after_fork__(initial=True)
+        # Re-register fork hooks for this instance in the new process.
+        ForkMixin.__post_init__(self)
+
     def __before_fork__(self):
         # Ensure the worker pool is shutdown before the fork
         assert len(self._pending_tasks) == 0, "Pending tasks should be empty before fork"

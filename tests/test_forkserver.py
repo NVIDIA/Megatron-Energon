@@ -23,6 +23,7 @@ from megatron.energon import (
     get_savable_loader,
     get_train_dataset,
 )
+from megatron.energon.cache import FileStoreCachePool
 from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
 
 # Speed up tests significantly by reducing the torch status check interval for broken worker shutdown
@@ -128,6 +129,39 @@ class TestForkserver(unittest.TestCase):
         ]
 
         self.assertEqual(fork_order, forkserver_order)
+
+    def test_forkserver_with_file_cache_pool(self):
+        # FileStoreCachePool embeds a ThreadPoolExecutor / locks that are not picklable.
+        # forkserver must serialize the pool into workers via __getstate__/__setstate__.
+        num_workers = 2
+        worker_config = WorkerConfig(rank=0, world_size=1, num_workers=num_workers)
+        ds = get_train_dataset(
+            self.dataset_path,
+            split_part="train",
+            sample_type=TextSample,
+            worker_config=worker_config,
+            batch_size=1,
+            shuffle_buffer_size=42,
+            max_samples_per_sequence=2,
+            task_encoder=DefaultTaskEncoder(),
+        )
+        cache_pool = FileStoreCachePool(
+            parent_cache_dir=self.dataset_path / "cache",
+            num_workers=1,
+        )
+        try:
+            loader = get_savable_loader(
+                ds,
+                multiprocessing_context="forkserver",
+                cache_pool=cache_pool,
+            )
+            data = [sample.text[0] for _, sample in zip(range(20), loader)]
+            self.assertEqual(len(data), 20)
+            # Parent pool must remain usable after workers were spawned from a pickled copy.
+            self.assertIsNotNone(cache_pool._worker_pool)
+            self.assertTrue(cache_pool.cache_dir.exists())
+        finally:
+            cache_pool.close()
 
 
 if __name__ == "__main__":

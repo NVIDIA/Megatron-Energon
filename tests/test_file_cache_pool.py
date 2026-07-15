@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import gc
+import pickle
 import tempfile
 import threading
 import time
@@ -683,6 +684,34 @@ class TestFileStoreCachePool(unittest.TestCase):
             del result2
             gc.collect()
             assert not cache_path.is_file()
+        finally:
+            pool.close()
+
+    def test_pickle_roundtrip(self):
+        """forkserver/spawn serialize the cache pool; runtime state must be rebuilt."""
+        pool = FileStoreCachePool(parent_cache_dir=self.temp_path, num_workers=2, method="pickle")
+        try:
+            parent_cache_dir = pool.cache_dir
+            restored = pickle.loads(pickle.dumps(pool))
+            try:
+                self.assertEqual(restored.parent_cache_dir, pool.parent_cache_dir)
+                self.assertEqual(restored.num_workers, 2)
+                self.assertEqual(restored.method, "pickle")
+                self.assertEqual(restored.max_cache_size, pool.max_cache_size)
+                self.assertEqual(restored.max_cache_count, pool.max_cache_count)
+                self.assertIsNotNone(restored._worker_pool)
+                self.assertTrue(restored.cache_dir.exists())
+                # Each process/instance gets its own cache subdirectory.
+                self.assertNotEqual(restored.cache_dir, parent_cache_dir)
+                # Parent instance must remain intact after pickling.
+                self.assertIsNotNone(pool._worker_pool)
+                self.assertTrue(parent_cache_dir.exists())
+
+                mock_store = MockFileStore({"file1": b"test data 1"})
+                lazy = restored.get_lazy(mock_store, "file1")
+                self.assertEqual(lazy.get(), b"test data 1")
+            finally:
+                restored.close()
         finally:
             pool.close()
 
