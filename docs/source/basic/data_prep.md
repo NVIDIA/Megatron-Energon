@@ -222,6 +222,7 @@ This means adding additional meta data files next to the data.
 This step does *not* change or copy the contents of your tar files.
 
 Just run the `energon prepare /path/to/dataset` command, which will interactively walk you through the process.
+The path may also be an MSC URL such as `msc://profile/bucket/dataset`. For remote datasets, Energon builds `index.sqlite` in a local temporary directory and uploads it to the dataset's `.nv-meta` folder when preparation finishes. Use `--tmp-path` to choose that local directory explicitly.
 
 The command will
 
@@ -253,6 +254,7 @@ Later, inside the [cooker](crude-data), you can access this information using th
 ```{admonition} Good to know
 :class: tip
 That also works for filesystem datasets. I.e. you can run `energon prepare-media` on a normal folder with media files and it will create the media metadata database file next to the dataset.
+Works also for remote WebDatasets or filesystem paths.
 ```
 
 #### Customizing the selection of media files
@@ -733,5 +735,5 @@ This is the layout to use when you want train/val/test split definitions, shard-
 Filesystem datasets are datasets that are stored on disk as individual files in a folder.
 They are not indexed and cannot be accessed randomly. They are only used as auxiliary datasets.
 
-They can be used without an `.nv-meta` folder, but if you run `energon prepare-media` on them, an sqlite database file will be created inside an `.nv-meta` folder.
+They can be used without an `.nv-meta` folder, but if you run `energon prepare-media` on them, an sqlite database file will be created inside an `.nv-meta` folder. This also works for remote filesystem paths such as `msc://profile/bucket/images`.
 The database will contain just the `media_filters` and `media_metadata` tables as explained above.

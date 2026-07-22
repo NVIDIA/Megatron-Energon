@@ -32,6 +32,7 @@ def load_dataset(
             default_type=Recipe,
             default_kwargs=dict(path=EPath("/dict"), **kwargs),
         )
+        recipe.post_initialize()
         return recipe
     path = EPath(path)
     if is_recipe(path):

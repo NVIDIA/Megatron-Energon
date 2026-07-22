@@ -127,13 +127,14 @@ __module__: megatron.energon
 __class__: Recipe
 splits:
   train:
-    path: ./my_pimary_ds
+    path: ./my_primary_ds
     aux:
       foo_bar_source: ./aux_ds123
       fs_source: filesystem://./images
       fs_source_abs: filesystem:///absolute/path/to/images
-      byte_range_source: byterange+msc://mybucket/path/blobs
-      remote_source: msc://mybucket/path/ds
+      byte_range_source: byterange+msc://coolstore/mainbucket/path/blobs
+      remote_source: msc://coolstore/mainbucket/path/ds
+      remote_fs_source: filesystem+msc://coolstore/mainbucket/path/images
     subflavors:
       crude_type: my_dual_aux_example
 ```
