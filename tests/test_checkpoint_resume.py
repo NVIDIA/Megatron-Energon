@@ -10,7 +10,10 @@ import webdataset as wds
 
 from megatron.energon import get_train_dataset
 from megatron.energon.checkpoint import (
+    ResumeIdentity,
+    ResumeSubset,
     collect_resume_metadata,
+    make_resume_identity,
     migrate_dataloader_state,
 )
 from megatron.energon.flavors import BaseWebdatasetFactory
@@ -159,6 +162,43 @@ class TestCheckpointResume(unittest.TestCase):
 
         assert seen_before_checkpoint["a"].isdisjoint(seen_after_resume["a"])
         assert seen_before_checkpoint["b"].isdisjoint(seen_after_resume["b"])
+
+    def test_subset_round_trip_is_typed_and_hashable(self):
+        identity = ResumeIdentity.from_dict(
+            {
+                "path": "/dataset",
+                "split_part": "train",
+                "subset": {
+                    "range": [0.25, 0.75],
+                    "absolute_range": None,
+                },
+            }
+        )
+
+        assert identity.subset == ResumeSubset(range=(0.25, 0.75))
+        assert identity.to_dict()["subset"] == {
+            "range": (0.25, 0.75),
+            "absolute_range": None,
+        }
+
+        restored_identity = ResumeIdentity.from_dict(identity.to_dict())
+        assert restored_identity == identity
+        assert {identity, restored_identity} == {identity}
+
+    def test_make_identity_normalizes_absolute_subset(self):
+        identity = make_resume_identity(
+            path="/dataset",
+            split_part="train",
+            subset=ResumeSubset(
+                range=(0.0, 1.0),
+                absolute_range=(100, None),
+            ),
+        )
+
+        assert identity.subset == ResumeSubset(
+            range=(0.0, 1.0),
+            absolute_range=(100, None),
+        )
 
 
 if __name__ == "__main__":

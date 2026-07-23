@@ -187,7 +187,7 @@ Hence, we can
 
 A typical use case is to blend multiple datasets of the same (or similar type) together.
 For example, you may want to blend the COCO dataset with the COYO dataset.
-The easiest way to do this, is to use the recipe pattern. 
+The easiest way to do this, is to use the recipe pattern.
 For this you need to create a new `yaml` file that defines the meta dataset:
 
 `coyo-coco-dataset.yaml`:

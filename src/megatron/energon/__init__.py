@@ -89,8 +89,8 @@ from megatron.energon.flavors.common.filter_index import (
 from megatron.energon.loader import get_loader, get_savable_loader
 from megatron.energon.logical_worker import LogicalWorkerAssignment
 from megatron.energon.recipe import (
-    AuxFileStoreReference,
     AuxFileStoreProtocolFactory,
+    AuxFileStoreReference,
     DatasetLoader,
     DatasetLoaderInterface,
     Recipe,

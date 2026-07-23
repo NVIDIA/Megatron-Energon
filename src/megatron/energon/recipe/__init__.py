@@ -10,8 +10,8 @@ from megatron.energon.recipe.loader import (
 )
 from megatron.energon.recipe.loader_interface import DatasetLoaderInterface
 from megatron.energon.recipe.recipe import (
-    AuxFileStoreReference,
     AuxFileStoreProtocolFactory,
+    AuxFileStoreReference,
     MetadatasetV2,
     Recipe,
     register_aux_filestore_protocol,

@@ -95,8 +95,11 @@ class TestParquetFileStore(unittest.TestCase):
         pq.write_table(t, parquet_path)
 
         store = ParquetFileStore(EPath(parquet_path))
+        full_sample = store["1"]
         id_val, src = store["1.id"]
         text_val, _ = store["1.text"]
+        assert full_sample["id"] == 2
+        assert full_sample["text"] == "b"
         assert id_val == 2
         assert text_val == "b"
         assert "part0.parquet" in src.shard_name

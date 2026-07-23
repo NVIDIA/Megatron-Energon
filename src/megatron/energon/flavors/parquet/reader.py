@@ -142,6 +142,7 @@ class IParquetReader(SamplePartFileReader[FilteredSample]):
 
     def __getitem__(self, idx: int | str) -> FilteredSample | tuple[Any, SourceInfo] | None:
         full_entry_name = False
+        columns: Sequence[str] | None = None
         if isinstance(idx, str):
             num_idx = idx
             if "." in idx:
@@ -152,8 +153,6 @@ class IParquetReader(SamplePartFileReader[FilteredSample]):
                 idx = int(num_idx)
             except ValueError:
                 raise ValueError(f"Invalid parquet sample key: {idx}") from None
-        else:
-            columns = None
 
         assert isinstance(idx, int)
         sample = self._get_item(idx, columns=columns)

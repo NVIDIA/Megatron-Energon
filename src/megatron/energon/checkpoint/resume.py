@@ -6,7 +6,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Sequence, TypeVar
+from typing import Any, Iterable, Mapping, Sequence, TypeVar
 
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.base_dataset import FlexState, SavableDataset
@@ -28,12 +28,66 @@ T = TypeVar("T")
 
 
 @dataclass(frozen=True)
+class ResumeSubset:
+    """Hashable checkpoint representation of a primary dataset subset."""
+
+    range: tuple[float, float] | None = None
+    absolute_range: tuple[int, int | None] | None = None
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "range": self.range,
+            "absolute_range": self.absolute_range,
+        }
+
+    @classmethod
+    def from_dict(
+        cls,
+        data: Mapping[str, object] | None,
+    ) -> "ResumeSubset | None":
+        if data is None:
+            return None
+
+        range_data = data.get("range")
+        if range_data is not None:
+            if not isinstance(range_data, (list, tuple)) or len(range_data) != 2:
+                raise ValueError(f"Resume subset range must contain two values: {range_data!r}")
+            range_start, range_end = range_data
+            if not isinstance(range_start, (int, float)) or not isinstance(range_end, (int, float)):
+                raise ValueError(f"Resume subset range must be numeric: {range_data!r}")
+            subset_range = (float(range_start), float(range_end))
+        else:
+            subset_range = None
+
+        absolute_range_data = data.get("absolute_range")
+        if absolute_range_data is not None:
+            if not isinstance(absolute_range_data, (list, tuple)) or len(absolute_range_data) != 2:
+                raise ValueError(
+                    f"Resume subset absolute_range must contain two values: {absolute_range_data!r}"
+                )
+            absolute_start, absolute_end = absolute_range_data
+            if not isinstance(absolute_start, int):
+                raise ValueError(
+                    f"Resume subset absolute_range start must be an integer: {absolute_start!r}"
+                )
+            if absolute_end is not None and not isinstance(absolute_end, int):
+                raise ValueError(
+                    f"Resume subset absolute_range end must be an integer or None: {absolute_end!r}"
+                )
+            absolute_range = (absolute_start, absolute_end)
+        else:
+            absolute_range = None
+
+        return cls(range=subset_range, absolute_range=absolute_range)
+
+
+@dataclass(frozen=True)
 class ResumeIdentity:
     """Checkpoint-stable identity for reusing dataset progress across recipe edits."""
 
     path: str
     split_part: str | None = None
-    subset: Any | None = None
+    subset: ResumeSubset | None = None
     filter_name: str | None = None
     aux: tuple[tuple[str, str], ...] = ()
 
@@ -41,7 +95,7 @@ class ResumeIdentity:
         return {
             "path": self.path,
             "split_part": self.split_part,
-            "subset": self.subset,
+            "subset": None if self.subset is None else self.subset.to_dict(),
             "filter_name": self.filter_name,
             "aux": list(self.aux),
         }
@@ -51,7 +105,7 @@ class ResumeIdentity:
         return cls(
             path=data["path"],
             split_part=data.get("split_part"),
-            subset=data.get("subset"),
+            subset=ResumeSubset.from_dict(data.get("subset")),
             filter_name=data.get("filter_name"),
             aux=tuple((str(key), str(value)) for key, value in data.get("aux", ())),
         )
@@ -61,7 +115,7 @@ def make_resume_identity(
     *,
     path: str | Path | EPath,
     split_part: str | None,
-    subset: str | None = None,
+    subset: ResumeSubset | None = None,
     filter_name: str | None = None,
     aux: dict[str, Any] | None = None,
 ) -> ResumeIdentity:
@@ -167,12 +221,17 @@ def resume_children(dataset: SavableDataset[Any]) -> tuple[SavableDataset[Any], 
 def _identity_from_config_value(value: Any) -> tuple[ResumeIdentity, ...]:
     if isinstance(value, dict):
         if "_path" in value:
+            subset_data = value.get("subset")
+            if subset_data is not None and not isinstance(subset_data, Mapping):
+                raise ValueError(f"Resume subset must be a mapping or None: {subset_data!r}")
+            split_part = value.get("split_part")
+            filter_name = value.get("filter_name")
             return (
                 make_resume_identity(
-                    path=value.get("_path"),
-                    split_part=value.get("split_part"),
-                    subset=value.get("subset"),
-                    filter_name=value.get("filter_name"),
+                    path=str(value["_path"]),
+                    split_part=None if split_part is None else str(split_part),
+                    subset=ResumeSubset.from_dict(subset_data),
+                    filter_name=None if filter_name is None else str(filter_name),
                 ),
             )
 

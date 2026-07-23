@@ -88,16 +88,25 @@ class EPathReadMappedArray(_BaseEPathMappedArray):
         self.open()
         if isinstance(index, slice):
             start, stop, step = index.indices(len(self))
-            if stop <= start:
+            selected_indexes = range(start, stop, step)
+            if len(selected_indexes) == 0:
                 return np.empty((0,), dtype=self.dtype)
+
+            first_index = selected_indexes[0]
+            last_index = selected_indexes[-1]
+            low_index = min(first_index, last_index)
+            high_index = max(first_index, last_index)
+            span_count = high_index - low_index + 1
+
             assert self._file is not None
-            self._file.seek(self.offset + start * self.dtype.itemsize)
-            count = stop - start
-            raw = self._file.read(count * self.dtype.itemsize)
-            result = np.frombuffer(raw, dtype=self.dtype, count=count)
-            if step != 1:
-                result = result[::step]
-            return result
+            self._file.seek(self.offset + low_index * self.dtype.itemsize)
+            raw = self._file.read(span_count * self.dtype.itemsize)
+            assert len(raw) == span_count * self.dtype.itemsize, (
+                f"Short read from {self.path}: expected {span_count * self.dtype.itemsize} bytes, "
+                f"got {len(raw)}"
+            )
+            result = np.frombuffer(raw, dtype=self.dtype, count=span_count)
+            return result[::step]
 
         if index < 0:
             index += len(self)

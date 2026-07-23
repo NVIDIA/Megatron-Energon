@@ -601,11 +601,20 @@ class TestEPathMappedArray(unittest.TestCase):
     def test_file_reader_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "values.idx"
-            np.asarray([2, 4, 6, 8], dtype=np.uint64).tofile(path)
+            expected = np.asarray([2, 4, 6, 8], dtype=np.uint64)
+            expected.tofile(path)
 
             values = EPath(path).map(dtype=np.uint64, use_mmap=False)
             assert int(values[2]) == 6
             assert values[1:3].tolist() == [4, 6]
+            for test_slice in (
+                slice(None, None, -1),
+                slice(3, 0, -2),
+                slice(None, None, -2),
+                slice(1, 3, -1),
+                slice(0, 4, 2),
+            ):
+                assert values[test_slice].tolist() == expected[test_slice].tolist()
             assert isinstance(values, EPathReadMappedArray)
             assert values._file is not None
             values.close()

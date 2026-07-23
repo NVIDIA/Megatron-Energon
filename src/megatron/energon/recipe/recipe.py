@@ -153,7 +153,9 @@ def _get_aux_filestore_protocol_factory(
 
 
 register_aux_filestore_protocol("filesystem", lambda path: AuxFilesystemReference(fs_path=path))
-register_aux_filestore_protocol("byterange", lambda path: AuxByteRangeStoreReference(byterange_fs_path=path))
+register_aux_filestore_protocol(
+    "byterange", lambda path: AuxByteRangeStoreReference(byterange_fs_path=path)
+)
 
 
 @edataclass
