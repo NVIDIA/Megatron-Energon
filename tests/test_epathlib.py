@@ -491,6 +491,51 @@ class TestEPath(unittest.TestCase):
         ):
             EPath("dss://charts1234")
 
+    def test_dss_local_path_is_resolved_on_every_access(self):
+        """DSS local paths must resolve in the process that consumes them."""
+
+        import megatron.energon.epathlib.epath as epath_mod
+
+        orig_mod_cache_dir = epath_mod.NVDATASET_CACHE_DIR
+
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            cache_dir = td_path / "nvds_cache"
+            dataset_dir = cache_dir / "dataset" / "v0"
+            target_dir = td_path / "targets"
+            dataset_dir.mkdir(parents=True)
+            target_dir.mkdir()
+
+            first_target = target_dir / "first.sqlite"
+            second_target = target_dir / "second.sqlite"
+            first_target.touch()
+            second_target.touch()
+
+            cached_file = dataset_dir / "index.sqlite"
+            cached_file.symlink_to(first_target)
+
+            try:
+                epath_mod.NVDATASET_CACHE_DIR = EPath(cache_dir)
+                path = EPath("dss://dataset@v0/index.sqlite")
+
+                assert path.local_path() == first_target.resolve()
+
+                # A second access must resolve again rather than reuse the
+                # canonical path computed by the first access.
+                cached_file.unlink()
+                cached_file.symlink_to(second_target)
+
+                assert path.local_path() == second_target.resolve()
+
+                # Serialization must not introduce a resolved-path cache.
+                unpickled_path = pickle.loads(pickle.dumps(path))
+                cached_file.unlink()
+                cached_file.symlink_to(first_target)
+
+                assert unpickled_path.local_path() == first_target.resolve()
+            finally:
+                epath_mod.NVDATASET_CACHE_DIR = orig_mod_cache_dir
+
     def test_metadataset_v2_dss_path_parsing_str(self):
         """Parse a MetadatasetV2 config and ensure DSS URLs stringify correctly as EPath."""
 

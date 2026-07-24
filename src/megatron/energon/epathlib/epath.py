@@ -159,25 +159,46 @@ class EPath:
         )
         return dataset_name, dataset_version
 
+    def _unresolved_local_str(self) -> str:
+        """For a DSS path, compute the underlying local filesystem path under
+        ``NVDATASET_CACHE_DIR`` without resolving any symlinks."""
+        assert self.profile == "dss"
+        assert NVDATASET_CACHE_DIR is not None, (
+            "Environment variable NVDATASET_CACHE_DIR is not set"
+        )
+        dss_dataset_name, dss_dataset_version = self._split_dss_name_and_version(
+            self.internal_path.parts[1]
+        )
+        cache_path = PurePosixPath(
+            "/",
+            dss_dataset_name,
+            dss_dataset_version,
+            *self.internal_path.parts[2:],
+        )
+        return NVDATASET_CACHE_DIR._internal_str_path + str(cache_path)
+
+    @staticmethod
+    def _compute_resolved_local_str(unresolved_local_str: str) -> Optional[str]:
+        """Resolve symlinks in a local filesystem path string.
+
+        Returns the canonical absolute path string if the underlying file or
+        directory exists, or ``None`` otherwise (so callers can degrade to the
+        unresolved path)."""
+        try:
+            return str(PathlibPath(unresolved_local_str).resolve(strict=True))
+        except (FileNotFoundError, OSError):
+            return None
+
     @property
     def _internal_str_path(self) -> str:
         """Return the path as used inside the file system, without the protocol and fs part.
         This is for usage with `self.fs` functions."""
         if self.profile == "dss":
-            assert NVDATASET_CACHE_DIR is not None, (
-                "Environment variable NVDATASET_CACHE_DIR is not set"
-            )
-            # The internal path is relative to the NVDATASET_CACHE_DIR (i.e. strip the leading /, then concat with /)
-            dss_dataset_name, dss_dataset_version = self._split_dss_name_and_version(
-                self.internal_path.parts[1]
-            )
-            cache_path = PurePosixPath(
-                "/",
-                dss_dataset_name,
-                dss_dataset_version,
-                *self.internal_path.parts[2:],
-            )
-            return NVDATASET_CACHE_DIR._internal_str_path + str(cache_path)
+            unresolved_local_str = self._unresolved_local_str()
+            resolved_local_str = self._compute_resolved_local_str(unresolved_local_str)
+            if resolved_local_str is not None:
+                return resolved_local_str
+            return unresolved_local_str
         else:
             return str(self.internal_path)
 
