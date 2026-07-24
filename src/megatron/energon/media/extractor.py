@@ -15,12 +15,13 @@ import filetype
 from PIL import Image, UnidentifiedImageError
 
 from megatron.energon.av import AVDecoder
+from megatron.energon.epathlib import EPath
 from megatron.energon.media.metadata import ImageMetadata, MediaMetadataBase, MediaMetadataType
 
 logger = logging.getLogger(__name__)
 
 
-SourceData = Union[bytes, Path, BinaryIO]
+SourceData = Union[bytes, EPath, BinaryIO]
 
 
 class MediaFilterStrategy(str, Enum):
@@ -210,9 +211,13 @@ def _build_metadata(
 
 
 def _build_image_metadata(source: SourceData) -> ImageMetadata | None:
+    should_close = False
     try:
         if isinstance(source, (bytes, bytearray)):
             source = io.BytesIO(source)
+        elif isinstance(source, EPath):
+            source = source.open("rb")
+            should_close = True
 
         with Image.open(source) as image:
             image.load()
@@ -225,6 +230,9 @@ def _build_image_metadata(source: SourceData) -> ImageMetadata | None:
     except UnidentifiedImageError:
         logger.debug("Failed to parse image metadata", exc_info=True)
         return None
+    finally:
+        if should_close:
+            source.close()
 
 
 def _build_av_metadata(source: SourceData) -> MediaMetadataBase | None:

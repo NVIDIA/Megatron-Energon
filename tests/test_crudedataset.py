@@ -19,6 +19,7 @@ from typing import List
 
 import torch
 import webdataset as wds
+from click.testing import CliRunner
 
 import megatron.energon.epathlib.epath as epath_mod
 from megatron.energon import (
@@ -34,11 +35,12 @@ from megatron.energon import (
 )
 from megatron.energon.cache import FileStore, FileStoreCachePool, Lazy
 from megatron.energon.cache.base import CachePool
+from megatron.energon.cli.main import prepare_media_command
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib.epath import EPath
 from megatron.energon.errors import reraise_exception
 from megatron.energon.flavors.base_dataset import Sample
-from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset.config import INDEX_SQLITE_FILENAME, MAIN_FOLDER_NAME
 from megatron.energon.flavors.webdataset.sample_decoder import SampleDecoder
 from megatron.energon.media.extractor import MediaFilterConfig, MediaFilterStrategy
 from megatron.energon.media.filesystem_prepare import prepare_filesystem_dataset
@@ -1013,6 +1015,89 @@ class TestDataset(unittest.TestCase):
             "AUDIO-10.0s@32000Hz|AUDIO-10.0s@32000Hz",
             "VIDEO-192x108@30.0fps-63.0s|VIDEO-192x108@30.0fps-63.0s",
         ]
+
+    def test_prepare_dataset_s3_cmdline(self):
+        """Tar shards live on S3 (emulator); `energon prepare` writes `.nv-meta` to the same prefix."""
+        bucket = "energon-prepare-s3-cmdline-media-metadata"
+        profile_name = "s3test_dataset_prepare_cmdline_media_metadata"
+        with setup_s3_emulator(profile_name=profile_name) as state:
+            state.create_bucket(bucket)
+            state.add_file(self.multimedia_fs_path, dst=f"{bucket}/multimedia_fs/")
+            state.add_file(self.multimedia_wds_path, dst=f"{bucket}/multimedia_wds/")
+            s3_root = EPath(f"msc://{profile_name}/{bucket}")
+            info_path = s3_root / "multimedia_fs" / MAIN_FOLDER_NAME / INDEX_SQLITE_FILENAME
+            # assert not info_path.is_file(), f"index.sqlite already exists: {info_path}"
+            print(f"S3 root: {s3_root}")
+            runner = CliRunner()
+            result = runner.invoke(
+                prepare_media_command,
+                [
+                    str(s3_root / "multimedia_fs"),
+                    "--num-workers",
+                    "2",
+                    "--media-metadata-by-extension",
+                ],
+                catch_exceptions=False,
+            )
+            print(result.stdout)
+            assert result.exit_code == 0, result.stdout
+            assert "Done" in result.stdout, result.stdout
+            assert info_path.is_file(), f"missing {info_path}"
+
+            print("Done preparing media metadata, iterating now")
+
+            state.put_object(
+                bucket,
+                "s3_media_metadataset.yaml",
+                "\n".join(
+                    [
+                        "__module__: megatron.energon",
+                        "__class__: MetadatasetV2",
+                        "splits:",
+                        "  train:",
+                        "    path: multimedia_wds",
+                        "    aux:",
+                        f"      media: filesystem+msc://{profile_name}/{bucket}/multimedia_fs",
+                        "    subflavors:",
+                        "      crude_type: media_metadata",
+                    ]
+                ).encode("utf-8"),
+            )
+
+            # Iterate over the new dataset
+            worker_config = WorkerConfig(
+                rank=0,
+                world_size=1,
+                num_workers=0,
+            )
+
+            loader = get_savable_loader(
+                get_train_dataset(
+                    s3_root / "s3_media_metadataset.yaml",
+                    batch_size=1,
+                    worker_config=worker_config,
+                    task_encoder=CookingTaskEncoder(),
+                    shuffle_buffer_size=None,
+                    max_samples_per_sequence=None,
+                )
+            )
+
+            descriptions = []
+            for _, batch in zip(range(4), loader):
+                descriptions.extend(batch.txts)
+
+            # from pprint import pprint
+            # pprint(descriptions, indent=4)
+
+            # The descriptions are like "A|B", where A is the format
+            # in the WebDataset and B is the format in the auxiliary dataset.
+
+            assert descriptions == [
+                "IMG-32x16-JPEG|IMG-32x16-JPEG",
+                "IMG-24x24-PNG|IMG-24x24-PNG",
+                "AUDIO-10.0s@32000Hz|AUDIO-10.0s@32000Hz",
+                "VIDEO-192x108@30.0fps-63.0s|VIDEO-192x108@30.0fps-63.0s",
+            ]
 
     def test_nomds(self):
         torch.manual_seed(42)

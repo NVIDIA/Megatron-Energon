@@ -10,6 +10,7 @@ import json
 import logging
 import math
 import random
+import shutil
 import sys
 import tempfile
 import unittest
@@ -47,14 +48,16 @@ from megatron.energon import (
 )
 from megatron.energon.dataset_config import get_dataset_from_config
 from megatron.energon.edataclass import edataclass
+from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import BaseWebdatasetFactory
-from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
+from megatron.energon.flavors.webdataset.config import INFO_JSON_FILENAME, MAIN_FOLDER_NAME
 from megatron.energon.task_encoder.base import stateless
 from megatron.energon.tools.analyze_debug import command as analyze_debug_command
 from megatron.energon.tools.info import command as info_command
 from megatron.energon.tools.lint import command as lint_command
 from megatron.energon.tools.prepare import command as prepare_command
 from megatron.energon.tools.preview import command as preview_command
+from tests.epath_s3_emulator import setup_s3_emulator
 
 # Speed up tests significantly by reducing the torch status check interval for broken worker shutdown
 try:
@@ -1802,6 +1805,57 @@ class TestDataset(unittest.TestCase):
         with open(self.dataset_path / MAIN_FOLDER_NAME / "dataset_crude.yaml", "r") as f:
             content = f.read()
             assert "CrudeWebdataset" in content
+
+    def test_prepare_dataset_s3_cmdline(self):
+        """Tar shards live on S3 (emulator); `energon prepare` writes `.nv-meta` to the same prefix."""
+        bucket = "energon-prepare-s3-cmdline"
+        profile_name = "s3test_dataset_prepare_cmdline"
+        with tempfile.TemporaryDirectory() as staging_dir:
+            staging_path = Path(staging_dir)
+            TestDataset.create_captioning_test_dataset(staging_path, num_samples=20)
+            shutil.rmtree(staging_path / MAIN_FOLDER_NAME)
+            with setup_s3_emulator(profile_name=profile_name) as state:
+                state.create_bucket(bucket)
+                state.add_file(staging_path, dst=bucket)
+                s3_root = EPath(f"msc://{profile_name}/{bucket}")
+                assert s3_root.is_dir()
+                tar_paths = list(s3_root.glob("**/*.tar"))
+                assert len(tar_paths) >= 1, f"expected tar shards on S3, got {tar_paths!r}"
+                runner = CliRunner()
+                result = runner.invoke(
+                    prepare_command,
+                    [
+                        str(s3_root),
+                        "--non-interactive",
+                        "--no-progress",
+                        "--num-workers",
+                        "2",
+                        "--split-ratio=1,0,0",
+                        "--sample-type=CaptioningSample",
+                        '--field-map={"image": "png", "caption": "txt"}',
+                        "--media-metadata-by-extension",
+                    ],
+                    catch_exceptions=False,
+                )
+                assert result.exit_code == 0, result.stdout
+                assert "Done" in result.stdout, result.stdout
+                info_path = s3_root / MAIN_FOLDER_NAME / INFO_JSON_FILENAME
+                assert info_path.is_file(), f"missing {info_path}"
+
+                # Iterate over the new dataset
+                loader = get_loader(
+                    get_train_dataset(
+                        s3_root,
+                        batch_size=5,
+                        worker_config=WorkerConfig(rank=0, world_size=1, num_workers=0),
+                        shuffle_buffer_size=None,
+                        max_samples_per_sequence=None,
+                    )
+                )
+                assert len(loader) == 4, f"len(loader) == {len(loader)}"
+                samples = list(d for _, d in zip(range(4), loader))
+                assert len(samples) == 4, f"len(samples) == {len(samples)}"
+                assert all(isinstance(sample, CaptioningSample) for sample in samples)
 
     def test_preview_captioning_dataset(self):
         runner = CliRunner()
