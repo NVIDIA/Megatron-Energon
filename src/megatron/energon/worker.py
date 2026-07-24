@@ -94,6 +94,8 @@ class WorkerConfig:
     def __post_init__(self) -> None:
         physical = self.physical_worker_count()
         logical = self.logical_worker_count()
+        if logical <= 0:
+            raise ValueError(f"logical_workers ({logical}) must be greater than zero")
         if logical > physical:
             raise ValueError(
                 f"logical_workers ({logical}) must be less than or equal to "
@@ -185,14 +187,6 @@ class WorkerConfig:
             return self.physical_worker_count()
         return self.logical_workers
 
-    def logical_workers_per_rank(self) -> int:
-        """Logical dataset partitions per rank."""
-        logical = self.logical_worker_count()
-        assert logical % self.world_size == 0, (
-            f"logical_workers ({logical}) must be divisible by world_size ({self.world_size})"
-        )
-        return logical // self.world_size
-
     def logical_assignment_for_physical(
         self, physical_global_worker_id: int
     ) -> LogicalWorkerAssignment:
@@ -222,13 +216,6 @@ class WorkerConfig:
         else:
             physical = self.physical_global_worker_id(override_local_worker_id)
         return self.logical_assignment_for_physical(physical).logical_global_worker_id
-
-    def logical_local_worker_index(self, override_local_worker_id: Optional[int] = None) -> int:
-        """Logical worker index within the current rank."""
-        return (
-            self.logical_global_worker_id(override_local_worker_id)
-            - self.rank * self.logical_workers_per_rank()
-        )
 
     def __eq__(self, other):
         """Do not compare everything to check for equal config"""

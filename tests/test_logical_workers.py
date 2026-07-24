@@ -66,7 +66,6 @@ class TestWorkerConfigLogicalWorkers(unittest.TestCase):
         wc = WorkerConfig(rank=0, world_size=2, num_workers=4)
         assert wc.physical_worker_count() == 8
         assert wc.logical_worker_count() == 8
-        assert wc.logical_workers_per_rank() == 4
 
     def test_physical_gt_logical_assignment(self) -> None:
         wc = WorkerConfig(rank=0, world_size=1, num_workers=4, logical_workers=2)
