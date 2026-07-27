@@ -41,6 +41,69 @@ If a sample or batch is to be ignored, any of these methods may raise {py:class}
 
 The types `T_sample`, `T_encoded_sample`, `T_raw_batch` and `T_batch` are generics and depend on your task. You do not necessarily have to specify them, it's only used for proper typing in your IDE.
 
+(skip-safe-functions)=
+## Skipping Work During Logical-Worker Fanout
+
+With [logical-worker fanout](../advanced/parallelism.md), more than one physical
+worker can advance the same logical stream. Each physical worker retains only
+its stride of outputs. Energon must still execute ordinary TaskEncoder functions
+for discarded outputs because those functions may change state or have
+observable behavior. The stride is applied to the final pipeline output, so
+skip mode must propagate inward through packing and batching before it can omit
+sample-level work.
+
+Mark a function with {py:func}`skip_safe <megatron.energon.skip_safe>` only when
+it can be omitted for an output that will be discarded:
+
+```python
+from megatron.energon import DefaultTaskEncoder, skip_safe, stateless
+
+
+class MyTaskEncoder(DefaultTaskEncoder):
+    @skip_safe
+    @stateless
+    def encode_sample(self, sample):
+        # Pure work needed only when the containing output is retained.
+        sample.image = decode_and_transform(sample.image)
+        return sample
+```
+
+The equivalent compact form is `@stateless(skip_safe=True)`. A skip-safe
+function must not:
+
+- update state needed by later retained outputs;
+- advance an RNG whose state is not isolated by `@stateless`;
+- perform required logging, writes, counters, or other side effects;
+- provide validation or error detection that must also run for discarded
+  outputs.
+
+The annotation is honored by the cooking and sample-encoding maps, by `batch`
+and `encode_batch`, and within packing by `postencode_sample` and
+`pack_selected_samples`. Packing selectors (`select_samples_to_pack` and
+`select_next_pack`) are never elided because their boundaries define the
+stream.
+
+Skip mode is a chain. An unsafe outer stage blocks propagation to inner stages:
+
+- without packing, an unsafe `encode_batch` blocks `batch` and
+  `encode_sample`;
+- with packing, selection always runs, and `postencode_sample` can be omitted
+  only when the final packer is also skip-safe;
+- generator functions cannot be elided because skipping them would hide their
+  output cardinality.
+
+A `postencode_sample` hook used without packing is currently executed as an
+ordinary map and is not elided by its marker. Use `encode_sample` for the
+no-packing fast path.
+
+When uncertain, leave the function unmarked. The output stream remains correct;
+only the opportunity to avoid work on discarded fanout outputs is lost. Changing
+skip-safety annotations can change which side effects and failures are observed,
+so keep them stable when exact replay behavior matters.
+
+See {ref}`logical-workers-fanout` for complete packing and non-packing examples
+and for the work fanout cannot avoid.
+
 ```python
 from dataclasses import dataclass
 from typing import Callable, List, Optional

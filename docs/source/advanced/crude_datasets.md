@@ -195,6 +195,124 @@ def cook_text(sample: dict, byte_range_source: FileStore) -> TextSample:
     ...
 ```
 
+(custom-aux-protocols)=
+
+### Registering Custom Auxiliary Protocols
+
+Applications can add an auxiliary URI scheme with
+{py:func}`register_aux_filestore_protocol
+<megatron.energon.register_aux_filestore_protocol>`. The registered factory
+receives the URI path and returns an
+{py:class}`AuxFileStoreReference
+<megatron.energon.AuxFileStoreReference>`. That reference resolves paths
+relative to the Recipe, constructs the {py:class}`FileStore
+<megatron.energon.FileStore>`, and exposes the path used by recipe traversal.
+
+For example, suppose each auxiliary dataset is a ZIP container whose member
+names are stored in the primary samples. The following `FileStore` reads a
+member's bytes directly from the container and records the archive and member
+as provenance:
+
+```python
+from dataclasses import dataclass
+from zipfile import ZipFile
+
+from megatron.energon import (
+    AuxFileStoreReference,
+    FileStore,
+    SourceInfo,
+    register_aux_filestore_protocol,
+)
+from megatron.energon.epathlib import EPath
+
+
+class ZipFileStore(FileStore[bytes]):
+    def __init__(self, archive_path: EPath):
+        self.archive_path = archive_path
+
+    def __getitem__(self, key: str) -> tuple[bytes, SourceInfo]:
+        # Opening per lookup keeps ownership simple and guarantees cleanup.
+        # A production implementation may cache a worker-local ZipFile handle.
+        with self.archive_path.open("rb") as archive_file:
+            with ZipFile(archive_file) as archive:
+                data = archive.read(key)
+
+        return data, SourceInfo(
+            dataset_path=self.archive_path,
+            index=key,
+            shard_name=str(self.archive_path),
+            file_names=(key,),
+        )
+
+    def get_path(self) -> str:
+        return str(self.archive_path)
+
+
+@dataclass
+class ZipReference(AuxFileStoreReference):
+    archive_path: str | EPath
+
+    def _resolve_path(self, recipe_path: EPath | None) -> EPath:
+        assert recipe_path is not None
+        if not isinstance(self.archive_path, EPath):
+            self.archive_path = recipe_path.parent / self.archive_path
+        return self.archive_path
+
+    def get_file_store(self) -> FileStore:
+        assert isinstance(self.archive_path, EPath), "Missing post_initialize call"
+        return ZipFileStore(self.archive_path)
+
+    def get_traversed_path(self) -> EPath:
+        assert isinstance(self.archive_path, EPath), "Missing post_initialize call"
+        return self.archive_path
+
+
+register_aux_filestore_protocol(
+    "zip",
+    lambda path: ZipReference(archive_path=path),
+)
+```
+
+After importing the registration module, a recipe can point at the container:
+
+```yaml
+aux:
+  media_source: zip://./media.zip
+```
+
+The primary sample stores a ZIP member name such as `images/000123.jpg`. The
+cooker retrieves the member contents directly:
+
+```python
+def cook_text(sample: dict, media_source: FileStore) -> TextSample:
+    image_bytes = media_source.get(sample["image_member"], sample)
+    return TextSample(
+        **basic_sample_keys(sample),
+        text=describe_image(image_bytes),
+    )
+```
+
+Passing `sample` to `get` appends the `SourceInfo` returned by `ZipFileStore`,
+so errors and downstream diagnostics retain the exact archive member used.
+
+The example opens the archive for every lookup to make resource ownership
+unambiguous. For higher throughput, keep one archive handle per worker and
+close it at worker teardown, or stage the archive to worker-local storage.
+`ZipFile` requires seekable input; a remote EPath backend must provide seeking,
+otherwise the custom store must create a local copy or implement a
+range-readable container.
+
+A registered protocol can be composed with an EPath storage backend. For
+example, `zip+msc://profile/bucket/media.zip` passes the resolved MSC EPath to
+the `zip` factory. This is valid only when the store handles the backend's
+access requirements described above.
+
+Protocol names are case-insensitive and must be registered without `+`, `:`, or
+`/`. Register the protocol before loading or traversing the Recipe in every
+process that uses it. Re-registering an existing name raises an error unless
+`override=True`; use overrides deliberately because they change the meaning of
+existing recipes.
+
 If you want, you can even use your primary dataset as an auxiliary dataset and look up files by name, yes! If you want to do that, you specify it in the cooker decorator and add an arg:
 
 ```python

@@ -281,7 +281,7 @@ class ShuffleOverEpochsMultiplierMixin:
             inherited_shuffle_over_epochs_multiplier == -1
             or self.shuffle_over_epochs_multiplier == -1
         ):
-            # Next priority is sampling without replacement.
+            # Next priority is sampling with replacement.
             return -1
         else:
             # Otherwise, multiply the shuffle over epochs multiplier.

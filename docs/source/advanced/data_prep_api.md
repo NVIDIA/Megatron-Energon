@@ -74,3 +74,11 @@ Then, run the script:
 if __name__ == "__main__":
     prepare_one_dataset(Path("/path/to/dataset"), 16, Path("/path/to/template_dir"))
 ```
+
+## Custom Dataset Formats
+
+Preparation and runtime path detection are separate extension points. This page
+covers writing prepared metadata; registering a custom or specialized runtime
+dataset factory belongs in [Custom Dataset Factories](custom_dataset_factories.md).
+That page also explains provider priority, import timing, reader contracts, and
+the tests needed for a new format.

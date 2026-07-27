@@ -109,12 +109,9 @@ def register_dataset_factory_provider(
     Args:
         provider: Dataset factory provider class to register. When omitted, returns a
             decorator so keyword arguments such as ``priority`` can be supplied.
-        priority: Provider resolution priority. Defaults to ``PRIORITY_FIRST`` so custom
-            providers take precedence over built-in defaults. Lower values are checked first.
-            Predefined priorities are:
-              ``PRIORITY_FIRST``: First to be checked,
-              ``PRIORITY_SINGLE_FILE``: Loaders for single-file datasets,
-              ``PRIORITY_MANIFEST``: Loader for manifest-based datasets.
+        priority: Provider resolution priority. Lower values are checked first. Defaults
+            to ``PRIORITY_FIRST`` so custom providers take precedence over the built-in
+            ``PRIORITY_SINGLE_FILE`` and ``PRIORITY_MANIFEST`` providers.
     """
 
     def decorator(provider: Type[T_Provider]) -> Type[T_Provider]:

@@ -60,6 +60,7 @@ advanced/custom_blending
 advanced/parallelism
 advanced/error_handling
 advanced/data_prep_api
+advanced/custom_dataset_factories
 ```
 
 
@@ -78,8 +79,15 @@ api/cli
 caption: Internals
 maxdepth: 2
 ---
-internals/contrib_guidelines
 internals/code_structure
+internals/dataset_formats
+internals/savability
+internals/recipe_checkpoint
+internals/logical_workers
+internals/packing_blending
+internals/epath_storage
+internals/compatibility
+internals/contrib_guidelines
 ```
 
 # Indices and tables
