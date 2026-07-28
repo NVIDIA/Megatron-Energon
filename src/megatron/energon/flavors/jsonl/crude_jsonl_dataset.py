@@ -92,8 +92,8 @@ class CrudeJsonlDatasetFactory(
         ):
 
             def load_fn(sample: RawSampleData) -> CrudeSample:
-                assert sample.data[0] is not None
-                sample.data[0].pop("json", None)
+                assert sample.data is not None
+                sample.data.pop("json", None)
                 return self._load_sample_raw(sample)
 
             return load_fn
@@ -208,8 +208,8 @@ class CrudeJsonlShardListDatasetFactory(
         ):
 
             def load_fn(sample: RawSampleData) -> CrudeSample:
-                assert sample.data[0] is not None
-                sample.data[0].pop("json", None)
+                assert sample.data is not None
+                sample.data.pop("json", None)
                 return self._load_sample_raw(sample)
 
             return load_fn

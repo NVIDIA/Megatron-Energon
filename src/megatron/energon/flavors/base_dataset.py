@@ -157,56 +157,6 @@ class Sample(SampleTagsAlias, ABC, PinMemoryMixin, ExtendableDataclassMixin):
             **kwargs,
         )
 
-    @classmethod
-    def from_joined(
-        cls: Type[T_sample], *args: "Optional[Sample]", **kwargs: "Optional[Sample]"
-    ) -> T_sample:
-        """
-        Creates a sample from joined samples. The samples are either passed as positional arguments or as keyword
-        arguments. The first sample is the primary sample, which is used to initialize the key and tags.
-
-        In the default implementation, the joined samples' fields will be joined together, such that latter joined
-        samples will update the fields last (i.e. take precedence), except for the key and tags. The restore key
-        is later set externally.
-
-        Args:
-            args: The samples to join (either this or kwargs is specified).
-            kwargs: The samples to join (either this or args is specified). Not supported for the default
-                implementation. Overwriting implementations may use this.
-
-        Returns:
-            The joined constructed sample.
-        """
-        assert len(kwargs) == 0, (
-            "Please specify joined datasets as list for the default joiner. Keyword arguments are confusing, because keys are ignored."
-        )
-        excluded_fields = set(field.name for field in dataclasses.fields(Sample))
-        init_args = {}
-        if len(args) > 0:
-            primary = args[0]
-            assert primary is not None, "Primary sample must not be None."
-            fields = dataclasses.fields(primary)
-            for field in fields:
-                init_args[field.name] = getattr(primary, field.name)
-            # Merge sources from all joined samples
-            init_args["__sources__"] = (
-                *(primary.__sources__ or ()),
-                *(
-                    src
-                    for arg in args
-                    if arg is not None and arg.__sources__ is not None
-                    for src in arg.__sources__
-                ),
-            )
-            for arg in args:
-                if arg is None:
-                    continue
-                fields = dataclasses.fields(arg)
-                for field in fields:
-                    if field.name not in excluded_fields:
-                        init_args[field.name] = getattr(arg, field.name)
-        return cls(**init_args)
-
 
 @edataclass
 class State(ABC, ExtendableDataclassMixin):
@@ -409,8 +359,7 @@ class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC)
 
 
 class BaseCoreDatasetFactory(TagsAlias, Generic[T_sample], ABC):
-    """Base type for an inner dataset sample loader. This factory can be used to construct a sample loader, or for
-    joining in a joined dataset."""
+    """Base type for an inner dataset sample loader."""
 
     __sample_type__: Type[T_sample] = cast(Type[T_sample], None)
     paths: List[EPath]

@@ -77,8 +77,8 @@ class BinIdxDatasetFactory(BaseSingleFileDatasetFactory[CrudeSample]):
         if part_filter is not None and not part_filter("tokens"):
 
             def load_fn(sample: RawSampleData) -> CrudeSample:
-                assert sample.data[0] is not None
-                sample.data[0].pop("tokens", None)
+                assert sample.data is not None
+                sample.data.pop("tokens", None)
                 return self._load_sample_raw(sample)
 
             return load_fn

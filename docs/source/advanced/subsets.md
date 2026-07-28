@@ -34,8 +34,8 @@ splits:
 
 ## Nested subsets and merging rules
 
-Subsets can appear at any level that ultimately yields samples
-(direct `path` reference to a prepared dataset containing `.nv-meta`, `join`, `blend`, `blend_epochized`).
+Subsets can appear on direct `path` references to prepared datasets and at any `blend` or
+`blend_epochized` level that ultimately yields samples.
 When multiple subsets are nested, the *inner* subset is applied first, then the portion selected by the *outer* subset is applied *within* the already selected range.
 For percentages the ranges are composed multiplicatively.
 

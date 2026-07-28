@@ -14,7 +14,6 @@ The main graph nodes are:
 
 - `DatasetReference`, a leaf path plus split, subset, shuffle, filter, and tag settings;
 - `RecipeBlend` and `RecipeBlendEpochized`, weighted child graphs;
-- `RecipeJoin`, a primary dataset plus joined auxiliary sources;
 - `Subset`, which expresses relative or absolute selection;
 - `Recipe`, which owns named splits and resolves the full graph.
 

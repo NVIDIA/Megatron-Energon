@@ -247,7 +247,7 @@ class TestJsonlDataset(unittest.TestCase):
             )
 
     def test_s3(self):
-        # Create a joined dataset configuration
+        # Create a dataset configuration
         mixed_recipe_path = self.dataset_path / "recipe_mixed.yaml"
         with open(mixed_recipe_path, "w") as f:
             f.write(

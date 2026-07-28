@@ -3,7 +3,7 @@
 
 import re
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Literal, Optional, Sequence, Type, Union
+from typing import Any, Callable, Dict, List, Literal, Optional, Sequence, Union
 
 from megatron.energon.cache import FileStore
 from megatron.energon.cache.file_store import ByteRangeStore, SystemFileStore
@@ -11,13 +11,11 @@ from megatron.energon.dataset_config import load_config
 from megatron.energon.deprecation import warn_deprecated
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors import Sample
 from megatron.energon.flavors.common.manifest.paths import INDEX_SQLITE_FILENAME, MAIN_FOLDER_NAME
 from megatron.energon.flavors.common.manifest.types import DatasetSubset
 from megatron.energon.flavors.dataset_type import EnergonDatasetType, get_dataset_type
 from megatron.energon.flavors.webdataset.file_store import WebdatasetFileStore
 from megatron.energon.recipe.dataset_loader import DatasetLoader
-from megatron.energon.recipe.join_dataset_loader import JoinDatasetLoader, JoinedDatasetInfo
 from megatron.energon.recipe.loader_interface import (
     DatasetBlendMode,
     DatasetLoaderInterface,
@@ -499,140 +497,6 @@ class DatasetReference(
         return result
 
 
-@edataclass
-class JoinDatasetReference(DatasetReference):
-    nonmatch: Literal["skip", "none", "error"] = "error"
-
-    def post_initialize(self, recipe_path: Optional[EPath] = None) -> DatasetLoader:
-        assert recipe_path is not None
-        # Override and disable another recipe reference, only allow direct dataset references.
-        # Do not store the loader, the parent RecipeJoin will do that.
-        self._resolve_path(recipe_path)
-        ds_type = get_dataset_type(self.path)
-        if ds_type == EnergonDatasetType.MANIFEST_DATASET:
-            return DatasetLoader(
-                path=self.path,
-                split_part=self.split_part,
-                tags=self.tags,
-                shuffle_over_epochs_multiplier=self.shuffle_over_epochs_multiplier,
-                dataset_config=self.dataset_config,
-                split_config=self.split_config,
-                filter_name=self.filter,
-            )
-        else:
-            raise ValueError(f"Not a joinabledataset at {self.path}")
-
-    def traverse(
-        self,
-        recipe_path: Optional[EPath] = None,
-        *,
-        split_part: Union[Literal["train", "val", "test"], str],
-        _shuffle_over_epochs_multiplier: Optional[int] = 1,
-        _tags: Optional[Dict[str, Any]] = None,
-    ) -> List[TraversedDatasetReference]:
-        raise NotImplementedError("traverse_recipe() does not support joined datasets.")
-
-    def prepare(self, split_part: Optional[str] = None):
-        assert False, "JoinDatasetReference should not be used directly, but only by RecipeJoin"
-
-    def get_datasets(
-        self,
-        **kwargs,
-    ) -> LoadedDatasetList:
-        assert False, "JoinDatasetReference should not be used directly, but only by RecipeJoin"
-
-
-@edataclass
-class RecipeJoin(
-    SubsetRatioMixin,
-    ShuffleOverEpochsMultiplierMixin,
-    TagsMixin,
-    DatasetLoaderInterface,
-):
-    join: Union[List[JoinDatasetReference], Dict[str, JoinDatasetReference]]
-    joiner: Union[Type[Sample], Callable[..., Sample]]
-
-    split_part: Optional[str] = None
-    dataset_config: Optional[str] = None
-    split_config: Optional[str] = None
-
-    _dataset: Optional[JoinDatasetLoader] = None
-
-    def post_initialize(self, recipe_path: Optional[EPath] = None):
-        assert recipe_path is not None
-        assert self.join is not None
-        assert self.joiner is not None, "Must set joiner for joining datasets"
-        assert self.dataset_config is None, "Cannot set dataset_config for joining datasets"
-        assert self.split_config is None, "Cannot set split_config for joining datasets"
-        if isinstance(self.join, list):
-            inner_loaders = [
-                JoinedDatasetInfo(
-                    dataset=join.post_initialize(recipe_path),
-                    nonmatch=join.nonmatch,
-                )
-                for join in self.join
-            ]
-        elif isinstance(self.join, dict):
-            inner_loaders = {
-                key: JoinedDatasetInfo(
-                    dataset=join.post_initialize(recipe_path),
-                    nonmatch=join.nonmatch,
-                )
-                for key, join in self.join.items()
-            }
-        else:
-            raise ValueError("Invalid join type")
-
-        self._dataset = JoinDatasetLoader(
-            datasets=inner_loaders,
-            joiner=self.joiner,
-            split_part=self.split_part,
-            tags=self.tags,
-            shuffle_over_epochs_multiplier=self.shuffle_over_epochs_multiplier,
-            split_config=self.split_config,
-        )
-        self._dataset.post_initialize(recipe_path)
-
-    def traverse(
-        self,
-        recipe_path: Optional[EPath] = None,
-        *,
-        split_part: Union[Literal["train", "val", "test"], str],
-        _shuffle_over_epochs_multiplier: Optional[int] = 1,
-        _tags: Optional[Dict[str, Any]] = None,
-    ) -> List[TraversedDatasetReference]:
-        raise NotImplementedError("traverse_recipe() does not support joined datasets.")
-
-    def prepare(self, split_part: Optional[str] = None) -> Sequence[EPath]:
-        assert self._dataset is not None, "Missing post_initialize call."
-        return self._dataset.prepare(split_part=split_part)
-
-    def get_datasets(
-        self,
-        *,
-        training: bool,
-        split_part: Union[Literal["train", "val", "test"], str],
-        worker_config: WorkerConfig,
-        tags: Optional[Dict[str, Any]] = None,
-        shuffle_over_epochs_multiplier: Optional[int] = 1,
-        subset: Optional[DatasetSubset] = None,
-        **kwargs,
-    ) -> LoadedDatasetList:
-        tags = resolve_tags(tags, kwargs.pop("subflavors", None))
-        assert self._dataset is not None, "Missing post_initialize call."
-        return self._dataset.get_datasets(
-            training=training,
-            split_part=split_part,
-            worker_config=worker_config,
-            tags=self._merge_tags(tags),
-            shuffle_over_epochs_multiplier=self._merge_shuffle_over_epochs_multiplier(
-                shuffle_over_epochs_multiplier
-            ),
-            subset=self._get_subset(subset),
-            **kwargs,
-        )
-
-
 @dataclass
 class BlendWeightMixin:
     weight: float = 1.0
@@ -640,11 +504,6 @@ class BlendWeightMixin:
 
 @edataclass
 class BlendDatasetReference(BlendWeightMixin, DatasetReference):
-    pass
-
-
-@edataclass
-class BlendJoinDatasetReference(BlendWeightMixin, RecipeJoin):
     pass
 
 
@@ -657,7 +516,7 @@ class RecipeBlend(
 ):
     """Blending of datasets by specifying the sampling weight for the inner datasets."""
 
-    blend: List[Union[BlendDatasetReference, BlendJoinDatasetReference, "RecipeBlend"]]
+    blend: List[Union[BlendDatasetReference, "RecipeBlend"]]
     blend_weight_unit: str = "samples"
 
     def post_initialize(self, recipe_path: Optional[EPath] = None):
@@ -768,11 +627,6 @@ class BlendEpochizedDatasetReference(BlendRepetitionsMixin, DatasetReference):
 
 
 @edataclass
-class BlendEpochizedJoinDatasetReference(BlendRepetitionsMixin, RecipeJoin):
-    pass
-
-
-@edataclass
 class RecipeBlendEpochized(
     SubsetRatioMixin,
     ShuffleOverEpochsMultiplierMixin,
@@ -787,7 +641,6 @@ class RecipeBlendEpochized(
     blend_epochized: List[
         Union[
             BlendEpochizedDatasetReference,
-            BlendEpochizedJoinDatasetReference,
             "RecipeBlendEpochized",
         ]
     ]
@@ -881,7 +734,7 @@ class RecipeBlendEpochized(
 @edataclass
 class Recipe(DatasetLoaderInterface):
     path: EPath
-    splits: Dict[str, Union[RecipeBlend, RecipeBlendEpochized, RecipeJoin, DatasetReference]]
+    splits: Dict[str, Union[RecipeBlend, RecipeBlendEpochized, DatasetReference]]
 
     def post_initialize(self, recipe_path: Optional[EPath] = None):
         assert recipe_path is None

@@ -59,7 +59,7 @@ Every loaded part should retain `SourceInfo` describing where it came from. A `S
 this in `__sources__`, and transformations should propagate it. Provenance is needed for useful error
 messages, debugging filters, and tracing samples whose payload came from auxiliary storage.
 
-For a mounted or joined sample, distinguish:
+For a mounted sample, distinguish:
 
 - the logical sample key;
 - the primary dataset and shard;

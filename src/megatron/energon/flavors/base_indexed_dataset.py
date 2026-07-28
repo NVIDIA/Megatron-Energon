@@ -161,7 +161,7 @@ class BaseIndexedDatasetFactory(
             reader = TranslatedIndexReader(reader, self.filter_index)
 
         dataset = DatasetSampler(
-            join_readers=[reader],
+            reader=reader,
             workers_sample_slice_offsets=workers_sample_slice_offsets,
             worker_config=self.worker_config,
             shuffle_over_epochs=self.shuffle_over_epochs if self.training else None,
@@ -198,8 +198,8 @@ class BaseIndexedDatasetFactory(
         return self._load_sample_raw
 
     def _load_sample_raw(self, raw_sample: RawSampleData) -> T_sample:
-        assert len(raw_sample.data) == 1 and raw_sample.data[0] is not None
-        return self.load_sample(raw_sample.data[0])
+        assert raw_sample.data is not None
+        return self.load_sample(raw_sample.data)
 
     @abstractmethod
     def _build_reader(

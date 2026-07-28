@@ -208,9 +208,6 @@ DEPRECATED_ATTRS: DeprecatedModuleMap = {
         "INFO_YAML_FILENAME": DeprecatedSymbol(
             "megatron.energon.flavors.common.manifest.paths", "INFO_YAML_FILENAME"
         ),
-        "JOIN_INDEX_FILENAME": DeprecatedSymbol(
-            "megatron.energon.flavors.common.manifest.paths", "JOIN_INDEX_FILENAME"
-        ),
         "MAIN_FOLDER_NAME": DeprecatedSymbol(
             "megatron.energon.flavors.common.manifest.paths", "MAIN_FOLDER_NAME"
         ),
