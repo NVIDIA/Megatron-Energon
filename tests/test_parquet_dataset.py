@@ -136,7 +136,7 @@ class TestDefaultParquetDatasetFactoryDecoders(unittest.TestCase):
             worker_config=wc,
             decoder=None,
             decode_map=None,
-            subflavors={"src": "test"},
+            tags={"src": "test"},
         )
         wc.worker_activate(0)
         try:
@@ -145,7 +145,7 @@ class TestDefaultParquetDatasetFactoryDecoders(unittest.TestCase):
             wc.worker_deactivate()
         assert sample["n"] == 1
         assert sample["s"] == "a"
-        assert sample["__subflavors__"] == {"src": "test"}
+        assert sample["__tags__"] == {"src": "test"}
 
 
 class TestParquetCookerPartFilter(unittest.TestCase):

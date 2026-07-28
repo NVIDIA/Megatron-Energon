@@ -32,6 +32,7 @@ from megatron.energon.epathlib import EPath
 from megatron.energon.savable import Savable
 from megatron.energon.source_info import SourceInfo
 from megatron.energon.state import FlexState
+from megatron.energon.tags import SampleTagsAlias, TagsAlias, canonicalize_tag_kwargs
 from megatron.energon.worker import WorkerConfig
 
 T_sample = TypeVar("T_sample", covariant=True)
@@ -98,6 +99,7 @@ class ExtendableDataclassMixin:
         Returns:
             The extended dataclass instance.
         """
+        kwargs = canonicalize_tag_kwargs(kwargs)
         assert is_dataclass(cls), "Must be a dataclass"
         assert issubclass(cls, type(src)), "Cannot extend class of different type"
 
@@ -111,7 +113,7 @@ class ExtendableDataclassMixin:
 
 
 @edataclass
-class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
+class Sample(SampleTagsAlias, ABC, PinMemoryMixin, ExtendableDataclassMixin):
     """An abstract base class for one element of a batch.
     Each task should derive a specific subclass as a `@dataclass`, like
     :class:`megatron.energon.CaptioningBatchSample`, and add the input and output fields as needed for
@@ -124,8 +126,8 @@ class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
     # should be a (nested) tuple of strings and integers, which can be used to index the dataset.
     __restore_key__: Tuple[Union[str, int, tuple], ...]
 
-    #: A dataset may define a subflavors to distinguish between samples of the same sample type.
-    __subflavors__: Optional[Dict[str, Any]] = None
+    #: A dataset may define tags to distinguish between samples of the same sample type.
+    __tags__: Optional[Dict[str, Any]] = None
 
     #: Information about the source of the sample, i.e. where the data was loaded from.
     __sources__: Optional[tuple[SourceInfo, ...]] = None
@@ -133,7 +135,7 @@ class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
     @classmethod
     def derive_from(cls: Type[T_sample], base_sample: "Sample", **kwargs) -> T_sample:
         """
-        Uses the base fields of `Sample` from base_sample (i.e. __key__, __restore_key__, __subflavors__, __sources__)
+        Uses the base fields of `Sample` from base_sample (i.e. __key__, __restore_key__, __tags__, __sources__)
         and creates a new sample with the kwargs as fields. This is useful for creating new samples, while keeping the
         metadata of the base sample.
 
@@ -144,6 +146,7 @@ class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
         Returns:
             The new sample.
         """
+        kwargs = canonicalize_tag_kwargs(kwargs)
         base_kwargs = {
             field.name: getattr(base_sample, field.name)
             for field in dataclasses.fields(Sample)
@@ -160,10 +163,10 @@ class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
     ) -> T_sample:
         """
         Creates a sample from joined samples. The samples are either passed as positional arguments or as keyword
-        arguments. The first sample is the primary sample, which is used to initialize the key and subflavors.
+        arguments. The first sample is the primary sample, which is used to initialize the key and tags.
 
         In the default implementation, the joined samples' fields will be joined together, such that latter joined
-        samples will update the fields last (i.e. take precedence), except for the key and subflavors. The restore key
+        samples will update the fields last (i.e. take precedence), except for the key and tags. The restore key
         is later set externally.
 
         Args:
@@ -405,14 +408,14 @@ class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC)
         )
 
 
-class BaseCoreDatasetFactory(Generic[T_sample], ABC):
+class BaseCoreDatasetFactory(TagsAlias, Generic[T_sample], ABC):
     """Base type for an inner dataset sample loader. This factory can be used to construct a sample loader, or for
     joining in a joined dataset."""
 
     __sample_type__: Type[T_sample] = cast(Type[T_sample], None)
     paths: List[EPath]
 
-    subflavors: Dict[str, Any]
+    tags: Dict[str, Any]
 
     @abstractmethod
     def build(

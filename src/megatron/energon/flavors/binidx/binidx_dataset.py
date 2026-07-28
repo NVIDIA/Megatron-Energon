@@ -115,7 +115,7 @@ class BinIdxDatasetFactory(BaseSingleFileDatasetFactory[CrudeSample]):
 
 @register_dataset_factory_provider(priority=PRIORITY_SINGLE_FILE)
 class DefaultBinIdxDatasetFactory(BinIdxDatasetFactory):
-    """Adds subflavors to the sample and decodes token bytes back to a numpy array."""
+    """Adds tags to the sample and decodes token bytes back to a numpy array."""
 
     @classmethod
     def detect_path(cls, path: EPath) -> EnergonDatasetType | None:
@@ -152,20 +152,20 @@ class DefaultBinIdxDatasetFactory(BinIdxDatasetFactory):
             **kwargs,
         )
 
-    def __init__(self, path: EPath, *, subflavors: Optional[Dict[str, Any]] = None, **kwargs):
+    def __init__(self, path: EPath, *, tags: Optional[Dict[str, Any]] = None, **kwargs):
         if "decoder" in kwargs:
             del kwargs["decoder"]
         super().__init__(path, **kwargs)
-        self.subflavors = subflavors
+        self.tags = tags
         self._dtype = BinIdxReader.read_dtype(self.path)
 
     def load_sample(self, sample: SampleRecord) -> CrudeSample:
-        sample["__subflavors__"] = self.subflavors
+        sample["__tags__"] = self.tags
         sample["tokens"] = numpy.frombuffer(sample["tokens"], dtype=self._dtype)
         return super().load_sample(sample)
 
     def config(self) -> Dict[str, Any]:
         return dict(
             **super().config(),
-            subflavors=self.subflavors,
+            tags=self.tags,
         )

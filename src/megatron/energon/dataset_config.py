@@ -8,6 +8,7 @@ from megatron.energon.epathlib import EPath
 from megatron.energon.eyaml import load_yaml
 from megatron.energon.flavors import BaseCoreDatasetFactory
 from megatron.energon.flavors.dataset_factory_resolver import get_dataset_factory_resolver
+from megatron.energon.tags import resolve_tags
 from megatron.energon.typed_converter import JsonParser
 from megatron.energon.worker import WorkerConfig
 
@@ -39,12 +40,7 @@ def load_config(
         with path.open("rb") as f:
             data: dict = load_yaml(f)
 
-    if default_kwargs is not None:
-        new_data = default_kwargs.copy()
-        new_data.update(data)
-        data = new_data
-
-    return parser.raw_to_instance(data, default_type)
+    return parser.raw_to_instance(data, default_type, default_kwargs=default_kwargs)
 
 
 T_sample = TypeVar("T_sample", covariant=True)
@@ -57,6 +53,7 @@ def get_dataset_from_config(
     split_config: str | None = None,
     split_part: str | None = None,
     training: bool = True,
+    tags: Optional[Dict[str, Any]] = None,
     subflavors: Optional[Dict[str, Any]] = None,
     worker_config: WorkerConfig,
     sample_type: Optional[Type[T_sample]] = None,
@@ -72,7 +69,8 @@ def get_dataset_from_config(
         split_config: Filename of the split config file (`path / '.nv-meta' / split_config`), or None for jsonl datasets.
         split_part: Name of the split to load, or None for jsonl datasets.
         training: If true, apply training randomization and loop the dataset.
-        subflavors: Merge-Override the __subflavors__ property of each sample.
+        tags: Merge-override the :attr:`Sample.__tags__` property of each sample.
+        subflavors: Legacy alias for ``tags``. Specifying both raises an error.
         worker_config: If set, use this worker config instead of the default one.
         sample_type: Type of the samples to load, only used to ensure typing.
         filter_name: Name of the filter index sidecar to apply, if any.
@@ -81,6 +79,7 @@ def get_dataset_from_config(
     Returns:
         The instantiated dataset
     """
+    tags = resolve_tags(tags, subflavors)
     path = EPath(path)
     dataset = get_dataset_factory_resolver().get(
         path,
@@ -88,14 +87,14 @@ def get_dataset_from_config(
         split_config=split_config,
         split_part=split_part,
         training=training,
-        subflavors=subflavors,
+        tags=tags,
         worker_config=worker_config,
         sample_type=sample_type,
         filter_name=filter_name,
         **kwargs,
     )
-    if subflavors is not None:
-        dataset.subflavors.update(subflavors)
+    if tags is not None:
+        dataset.tags.update(tags)
     if sample_type is not None:
         assert issubclass(dataset.__sample_type__, sample_type), (
             f"Sample of type {dataset.__sample_type__} is not a subclass of {sample_type}."

@@ -32,6 +32,7 @@ from megatron.energon import (
     BatchDataset,
     BlendDataset,
     CaptioningSample,
+    Cooker,
     DefaultTaskEncoder,
     MapDataset,
     MixBatchDataset,
@@ -118,6 +119,68 @@ class TestDataset(unittest.TestCase):
 
         # Create a small dummy captioning dataset
         self.samples = self.create_captioning_test_dataset(self.dataset_path, DATASET_SIZE)
+
+    def test_tags_backward_compatibility(self):
+        legacy_tags = {"source": "legacy"}
+        assert {field.name for field in dataclasses.fields(Sample)}.issuperset({"__tags__"})
+        assert "__subflavors__" not in {field.name for field in dataclasses.fields(Sample)}
+        assert isinstance(Sample.__subflavors__, property)
+
+        sample = CaptioningSample(
+            __key__="sample",
+            __restore_key__=(),
+            __subflavors__=legacy_tags,
+            image=torch.empty(0),
+            caption="caption",
+        )
+        assert sample.__tags__ is legacy_tags
+        assert sample.__subflavors__ is legacy_tags
+
+        sample.__subflavors__ = {"source": "updated"}
+        assert sample.__tags__ == {"source": "updated"}
+
+        canonical_sample = CaptioningSample(
+            __key__="sample",
+            __restore_key__=(),
+            __tags__=legacy_tags,
+            image=torch.empty(0),
+            caption="caption",
+        )
+        assert canonical_sample.__subflavors__ is legacy_tags
+
+        with self.assertRaisesRegex(ValueError, "Cannot set both"):
+            CaptioningSample(
+                __key__="sample",
+                __restore_key__=(),
+                __tags__={},
+                __subflavors__={},
+                image=torch.empty(0),
+                caption="caption",
+            )
+
+        cooker = Cooker(lambda value: value, has_subflavors=legacy_tags)
+        assert cooker.has_tags is legacy_tags
+        assert cooker.has_subflavors is legacy_tags
+
+        dataset = get_dataset_from_config(
+            self.dataset_path,
+            split_part="train",
+            training=False,
+            subflavors=legacy_tags,
+            worker_config=no_worker_config,
+        )
+        assert dataset.tags["source"] == "legacy"
+        assert dataset.subflavors is dataset.tags
+
+        with self.assertRaisesRegex(ValueError, "Cannot set both"):
+            get_dataset_from_config(
+                self.dataset_path,
+                split_part="train",
+                training=False,
+                tags={},
+                subflavors={},
+                worker_config=no_worker_config,
+            )
         print(self.dataset_path)
 
     def tearDown(self):
@@ -321,7 +384,7 @@ class TestDataset(unittest.TestCase):
             lambda x: CaptioningSample(
                 __key__=x.__key__,
                 __restore_key__=x.__restore_key__,
-                __subflavors__=x.__subflavors__,
+                __tags__=x.__tags__,
                 image=x.image,
                 caption=torch.tensor(np.frombuffer(x.caption.encode(), dtype=np.uint8)),
             ),

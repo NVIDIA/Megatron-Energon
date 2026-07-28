@@ -51,7 +51,7 @@ def sample_loader_template(fields: dict, parts: list):
 
     fields_str = ""
     for field in fields:
-        if field.name in ("__key__", "__restore_key__", "__subflavors__"):
+        if field.name in ("__key__", "__restore_key__", "__tags__"):
             continue
         line = f"""        {field.name}=raw["TODO"],  # expected type: {type_str(field.type)}"""
         if field.default is not dataclasses.MISSING:
@@ -744,7 +744,7 @@ def command(
                 "CrudeWebdataset does not need a field map. You will need to provide a `Cooker` for your dataset samples in your `TaskEncoder`."
             )
             click.echo(
-                "Furthermore, you might want to add `subflavors` in your meta dataset specification."
+                "Furthermore, you might want to add `tags` in your meta dataset specification."
             )
             dataset_definition = {
                 "__module__": "megatron.energon",
@@ -813,7 +813,7 @@ def command(
                         if field.name in (
                             "__key__",
                             "__restore_key__",
-                            "__subflavors__",
+                            "__tags__",
                             "__sources__",
                         ):
                             continue

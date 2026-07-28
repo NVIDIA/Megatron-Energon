@@ -241,11 +241,11 @@ class _DefaultParquetMixin:
     def _init_default_parquet(
         self,
         *,
-        subflavors: dict[str, Any] | None,
+        tags: dict[str, Any] | None,
         decoder: SampleDecoder | None,
         decode_map: dict[str, str] | None,
     ) -> None:
-        self.subflavors = subflavors or {}
+        self.tags = tags or {}
         self._decoder = decoder
         self._decode_map = decode_map or {}
 
@@ -256,13 +256,13 @@ class _DefaultParquetMixin:
                     sample[key] = self._decoder.decode(
                         f"{sample['__key__']}.{extension}", sample[key]
                     )
-        sample["__subflavors__"] = self.subflavors
+        sample["__tags__"] = self.tags
         return super().load_sample(sample)
 
     def config(self) -> Dict[str, Any]:
         return dict(
             **super().config(),
-            subflavors=self.subflavors,
+            tags=self.tags,
             decode_map=self._decode_map,
             **(self._decoder.config() if self._decoder is not None else {}),
         )
@@ -270,7 +270,7 @@ class _DefaultParquetMixin:
 
 @register_dataset_factory_provider(priority=PRIORITY_SINGLE_FILE)
 class DefaultParquetDatasetFactory(_DefaultParquetMixin, ParquetDatasetFactory):
-    """Single-file Parquet factory that decodes selected columns and attaches subflavors."""
+    """Single-file Parquet factory that decodes selected columns and attaches tags."""
 
     @classmethod
     def detect_path(cls, path: EPath) -> EnergonDatasetType | None:
@@ -307,7 +307,7 @@ class DefaultParquetDatasetFactory(_DefaultParquetMixin, ParquetDatasetFactory):
         self,
         path: EPath,
         *,
-        subflavors: dict[str, Any] | None = None,
+        tags: dict[str, Any] | None = None,
         decoder: SampleDecoder | None = DEFAULT_DECODER,
         decode_map: dict[str, str] | None = None,
         **kwargs,
@@ -316,20 +316,20 @@ class DefaultParquetDatasetFactory(_DefaultParquetMixin, ParquetDatasetFactory):
             del kwargs["decoder"]
         super().__init__(path, **kwargs)
         self._init_default_parquet(
-            subflavors=subflavors,
+            tags=tags,
             decoder=decoder,
             decode_map=decode_map,
         )
 
 
 class DefaultParquetShardListDatasetFactory(_DefaultParquetMixin, ParquetShardListDatasetFactory):
-    """Manifest Parquet factory that decodes selected columns and attaches subflavors."""
+    """Manifest Parquet factory that decodes selected columns and attaches tags."""
 
     def __init__(
         self,
         path: EPath,
         *,
-        subflavors: dict[str, Any] | None = None,
+        tags: dict[str, Any] | None = None,
         decoder: SampleDecoder | None = DEFAULT_DECODER,
         decode_map: dict[str, str] | None = None,
         **kwargs,
@@ -338,7 +338,7 @@ class DefaultParquetShardListDatasetFactory(_DefaultParquetMixin, ParquetShardLi
             del kwargs["decoder"]
         super().__init__(path, **kwargs)
         self._init_default_parquet(
-            subflavors=subflavors,
+            tags=tags,
             decoder=decoder,
             decode_map=decode_map,
         )

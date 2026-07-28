@@ -96,7 +96,7 @@ class TrackingCrudePackingTaskEncoder(
 ):
     """Crude webdataset encoder with pre/post encode, packing (2), and batching (3)."""
 
-    cookers = [Cooker(cook_index_sample, has_subflavors={"crude_type": "index"})]
+    cookers = [Cooker(cook_index_sample, has_tags={"crude_type": "index"})]
 
     def __init__(self) -> None:
         super().__init__(raw_batch_type=IndexTextBatch, batch_type=IndexTextBatch)
@@ -211,7 +211,7 @@ class TestLogicalWorkerCrudeE2E(unittest.TestCase):
                     [
                         "__module__: megatron.energon",
                         "__class__: CrudeWebdataset",
-                        "subflavors:",
+                        "tags:",
                         "  crude_type: index",
                     ]
                 )

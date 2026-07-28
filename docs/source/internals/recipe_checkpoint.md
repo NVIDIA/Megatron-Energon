@@ -12,7 +12,7 @@ by matching stable leaf identities while retaining as much compatible progress a
 
 The main graph nodes are:
 
-- `DatasetReference`, a leaf path plus split, subset, shuffle, filter, and subflavor settings;
+- `DatasetReference`, a leaf path plus split, subset, shuffle, filter, and tag settings;
 - `RecipeBlend` and `RecipeBlendEpochized`, weighted child graphs;
 - `RecipeJoin`, a primary dataset plus joined auxiliary sources;
 - `Subset`, which expresses relative or absolute selection;
@@ -31,7 +31,7 @@ When a reference wraps another recipe or reference, its settings compose with th
 - `None` disables the composed shuffle and therefore dominates all numeric values;
 - relative subsets compose through the nesting;
 - absolute subset bounds belong at the concrete leaf, where the absolute sample space is known;
-- inner subflavors are retained, with outer values overriding the same keys;
+- inner tags are retained, with outer values overriding the same keys;
 - an outer split selection may choose a different split of a nested recipe.
 
 Keep these rules in one graph-resolution layer. Applying a subset a second time in the reader or moving
@@ -95,7 +95,7 @@ producing a different future stream. User-facing behavior and examples are docum
 
 When adding or changing a recipe node:
 
-1. define how it resolves nested paths, splits, subsets, shuffle values, and subflavors;
+1. define how it resolves nested paths, splits, subsets, shuffle values, and tags;
 2. ensure `traverse` and runtime construction find the same leaves;
 3. ensure the resulting leaf factory config contains stable identity fields;
 4. decide whether child order is semantic;

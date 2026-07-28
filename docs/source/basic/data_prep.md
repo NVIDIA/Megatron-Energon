@@ -543,7 +543,7 @@ These are the possible integrated types you can currently choose from:
   * Attributes:
     * {py:attr}`__key__: str <megatron.energon.Sample.__key__>`: Unique identifier of the sample within the dataset. Useful for backtracking the source of a single sample.
     * {py:attr}`__key__: str <megatron.energon.Sample.__restore_key__>`: Structured key of the sample, which can be used to regenerate the sample without storing the whole sample.
-    * {py:attr}`__subflavors__: dict[str, Any] | None <megatron.energon.Sample.__subflavors__>`: Represents the subflavors (i.e. custom dict data) set for the source dataset (typically in the recipe).
+    * {py:attr}`__tags__: dict[str, Any] | None <megatron.energon.Sample.__tags__>`: Represents the tags (i.e. custom dict data) set for the source dataset (typically in the recipe).
   * {py:class}`CaptioningSample <megatron.energon.CaptioningSample>`: Represents a sample for captioning
     * Attributes:
       * {py:attr}`image: torch.Tensor <megatron.energon.CaptioningSample.image>`: The input image tensor

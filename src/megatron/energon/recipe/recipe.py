@@ -24,6 +24,7 @@ from megatron.energon.recipe.loader_interface import (
     LoadedDatasetList,
     TraversedDatasetReference,
 )
+from megatron.energon.tags import TagsAlias, resolve_tags
 from megatron.energon.worker import WorkerConfig
 
 # Regex for any URL-like string (any protocol)
@@ -289,34 +290,34 @@ class ShuffleOverEpochsMultiplierMixin:
 
 
 @dataclass(kw_only=True, eq=False)
-class SubflavorsMixin:
-    subflavors: Optional[Dict[str, Any]] = None
+class TagsMixin(TagsAlias):
+    tags: Optional[Dict[str, Any]] = None
 
-    def _merge_subflavors(self, inherited_subflavors: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-        """Merge this reference's subflavors with the inherited traversal subflavors.
+    def _merge_tags(self, inherited_tags: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Merge this reference's tags with the inherited traversal tags.
 
         The merge order mirrors `get_datasets(...)`: this reference contributes the base mapping,
-        and inherited outer-hierarchy subflavors override on key conflicts.
+        and inherited outer-hierarchy tags override on key conflicts.
 
 
         Args:
-            inherited_subflavors: Effective subflavors accumulated from outer recipe
+            inherited_tags: Effective tags accumulated from outer recipe
                 references during traversal.
 
         Returns:
-            The effective subflavor mapping for this reference, after applying outer-overrides-inner
+            The effective tag mapping for this reference, after applying outer-overrides-inner
             merge semantics.
         """
-        if self.subflavors is not None:
-            return {**self.subflavors, **(inherited_subflavors or {})}
-        return dict(inherited_subflavors or {})
+        if self.tags is not None:
+            return {**self.tags, **(inherited_tags or {})}
+        return dict(inherited_tags or {})
 
 
 @edataclass
 class DatasetReference(
     SubsetRatioMixin,
     ShuffleOverEpochsMultiplierMixin,
-    SubflavorsMixin,
+    TagsMixin,
     DatasetLoaderInterface,
 ):
     path: Union[str, EPath]
@@ -434,10 +435,10 @@ class DatasetReference(
         *,
         split_part: Union[Literal["train", "val", "test"], str],
         _shuffle_over_epochs_multiplier: Optional[int] = 1,
-        _subflavors: Optional[Dict[str, Any]] = None,
+        _tags: Optional[Dict[str, Any]] = None,
     ) -> List[TraversedDatasetReference]:
         self._resolve_path(recipe_path)
-        _subflavors = self._merge_subflavors(_subflavors)
+        _tags = self._merge_tags(_tags)
         _shuffle_over_epochs_multiplier = self._merge_shuffle_over_epochs_multiplier(
             _shuffle_over_epochs_multiplier
         )
@@ -446,7 +447,7 @@ class DatasetReference(
             return self._load_nested_recipe().traverse(
                 split_part=self.split_part or split_part,
                 _shuffle_over_epochs_multiplier=_shuffle_over_epochs_multiplier,
-                _subflavors=_subflavors,
+                _tags=_tags,
             )
         self._normalize_aux_references(recipe_path, validate=False)
         return [
@@ -454,7 +455,7 @@ class DatasetReference(
                 path=self.path,
                 split_part=self.split_part or split_part,
                 aux=self._get_traversed_aux_references(),
-                subflavors=_subflavors,
+                tags=_tags,
                 shuffle_over_epochs_multiplier=_shuffle_over_epochs_multiplier,
             )
         ]
@@ -469,18 +470,19 @@ class DatasetReference(
         training: bool,
         split_part: Union[Literal["train", "val", "test"], str],
         worker_config: WorkerConfig,
-        subflavors: Optional[Dict[str, Any]] = None,
+        tags: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: Optional[int] = 1,
         subset: Optional[DatasetSubset] = None,
         **kwargs,
     ) -> LoadedDatasetList:
+        tags = resolve_tags(tags, kwargs.pop("subflavors", None))
         assert self._dataset is not None
 
         result = self._dataset.get_datasets(
             training=training,
             split_part=self.split_part or split_part,
             worker_config=worker_config,
-            subflavors=self._merge_subflavors(subflavors),
+            tags=self._merge_tags(tags),
             shuffle_over_epochs_multiplier=self._merge_shuffle_over_epochs_multiplier(
                 shuffle_over_epochs_multiplier
             ),
@@ -511,7 +513,7 @@ class JoinDatasetReference(DatasetReference):
             return DatasetLoader(
                 path=self.path,
                 split_part=self.split_part,
-                subflavors=self.subflavors,
+                tags=self.tags,
                 shuffle_over_epochs_multiplier=self.shuffle_over_epochs_multiplier,
                 dataset_config=self.dataset_config,
                 split_config=self.split_config,
@@ -526,7 +528,7 @@ class JoinDatasetReference(DatasetReference):
         *,
         split_part: Union[Literal["train", "val", "test"], str],
         _shuffle_over_epochs_multiplier: Optional[int] = 1,
-        _subflavors: Optional[Dict[str, Any]] = None,
+        _tags: Optional[Dict[str, Any]] = None,
     ) -> List[TraversedDatasetReference]:
         raise NotImplementedError("traverse_recipe() does not support joined datasets.")
 
@@ -544,7 +546,7 @@ class JoinDatasetReference(DatasetReference):
 class RecipeJoin(
     SubsetRatioMixin,
     ShuffleOverEpochsMultiplierMixin,
-    SubflavorsMixin,
+    TagsMixin,
     DatasetLoaderInterface,
 ):
     join: Union[List[JoinDatasetReference], Dict[str, JoinDatasetReference]]
@@ -585,7 +587,7 @@ class RecipeJoin(
             datasets=inner_loaders,
             joiner=self.joiner,
             split_part=self.split_part,
-            subflavors=self.subflavors,
+            tags=self.tags,
             shuffle_over_epochs_multiplier=self.shuffle_over_epochs_multiplier,
             split_config=self.split_config,
         )
@@ -597,7 +599,7 @@ class RecipeJoin(
         *,
         split_part: Union[Literal["train", "val", "test"], str],
         _shuffle_over_epochs_multiplier: Optional[int] = 1,
-        _subflavors: Optional[Dict[str, Any]] = None,
+        _tags: Optional[Dict[str, Any]] = None,
     ) -> List[TraversedDatasetReference]:
         raise NotImplementedError("traverse_recipe() does not support joined datasets.")
 
@@ -611,17 +613,18 @@ class RecipeJoin(
         training: bool,
         split_part: Union[Literal["train", "val", "test"], str],
         worker_config: WorkerConfig,
-        subflavors: Optional[Dict[str, Any]] = None,
+        tags: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: Optional[int] = 1,
         subset: Optional[DatasetSubset] = None,
         **kwargs,
     ) -> LoadedDatasetList:
+        tags = resolve_tags(tags, kwargs.pop("subflavors", None))
         assert self._dataset is not None, "Missing post_initialize call."
         return self._dataset.get_datasets(
             training=training,
             split_part=split_part,
             worker_config=worker_config,
-            subflavors=self._merge_subflavors(subflavors),
+            tags=self._merge_tags(tags),
             shuffle_over_epochs_multiplier=self._merge_shuffle_over_epochs_multiplier(
                 shuffle_over_epochs_multiplier
             ),
@@ -649,7 +652,7 @@ class BlendJoinDatasetReference(BlendWeightMixin, RecipeJoin):
 class RecipeBlend(
     SubsetRatioMixin,
     ShuffleOverEpochsMultiplierMixin,
-    SubflavorsMixin,
+    TagsMixin,
     DatasetLoaderInterface,
 ):
     """Blending of datasets by specifying the sampling weight for the inner datasets."""
@@ -668,13 +671,13 @@ class RecipeBlend(
         *,
         split_part: Union[Literal["train", "val", "test"], str],
         _shuffle_over_epochs_multiplier: Optional[int] = 1,
-        _subflavors: Optional[Dict[str, Any]] = None,
+        _tags: Optional[Dict[str, Any]] = None,
     ) -> List[TraversedDatasetReference]:
         assert recipe_path is not None
         _shuffle_over_epochs_multiplier = self._merge_shuffle_over_epochs_multiplier(
             _shuffle_over_epochs_multiplier
         )
-        _subflavors = self._merge_subflavors(_subflavors)
+        _tags = self._merge_tags(_tags)
         flattened: List[TraversedDatasetReference] = []
         for dataset in self.blend:
             flattened.extend(
@@ -682,7 +685,7 @@ class RecipeBlend(
                     recipe_path,
                     split_part=split_part,
                     _shuffle_over_epochs_multiplier=_shuffle_over_epochs_multiplier,
-                    _subflavors=_subflavors,
+                    _tags=_tags,
                 )
             )
         return flattened
@@ -699,13 +702,14 @@ class RecipeBlend(
         training: bool,
         split_part: Union[Literal["train", "val", "test"], str],
         worker_config: WorkerConfig,
-        subflavors: Optional[Dict[str, Any]] = None,
+        tags: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: Optional[int] = 1,
         subset: Optional[DatasetSubset] = None,
         **kwargs,
     ) -> LoadedDatasetList:
+        tags = resolve_tags(tags, kwargs.pop("subflavors", None))
         subset = self._get_subset(subset)
-        subflavors = self._merge_subflavors(subflavors)
+        tags = self._merge_tags(tags)
         shuffle_over_epochs_multiplier = self._merge_shuffle_over_epochs_multiplier(
             shuffle_over_epochs_multiplier
         )
@@ -716,7 +720,7 @@ class RecipeBlend(
                 training=training,
                 split_part=split_part,
                 worker_config=worker_config,
-                subflavors=subflavors,
+                tags=tags,
                 shuffle_over_epochs_multiplier=shuffle_over_epochs_multiplier,
                 subset=subset,
                 **kwargs,
@@ -772,7 +776,7 @@ class BlendEpochizedJoinDatasetReference(BlendRepetitionsMixin, RecipeJoin):
 class RecipeBlendEpochized(
     SubsetRatioMixin,
     ShuffleOverEpochsMultiplierMixin,
-    SubflavorsMixin,
+    TagsMixin,
     DatasetLoaderInterface,
 ):
     """Blending of datasets, by specifying the number of repetitions for samples from the inner
@@ -799,21 +803,21 @@ class RecipeBlendEpochized(
         *,
         split_part: Union[Literal["train", "val", "test"], str],
         _shuffle_over_epochs_multiplier: Optional[int] = 1,
-        _subflavors: Optional[Dict[str, Any]] = None,
+        _tags: Optional[Dict[str, Any]] = None,
     ) -> List[TraversedDatasetReference]:
         assert recipe_path is not None
         flattened: List[TraversedDatasetReference] = []
         _shuffle_over_epochs_multiplier = self._merge_shuffle_over_epochs_multiplier(
             _shuffle_over_epochs_multiplier
         )
-        _subflavors = self._merge_subflavors(_subflavors)
+        _tags = self._merge_tags(_tags)
         for dataset in self.blend_epochized:
             flattened.extend(
                 dataset.traverse(
                     recipe_path,
                     split_part=split_part,
                     _shuffle_over_epochs_multiplier=_shuffle_over_epochs_multiplier,
-                    _subflavors=_subflavors,
+                    _tags=_tags,
                 )
             )
         return flattened
@@ -830,23 +834,24 @@ class RecipeBlendEpochized(
         training: bool,
         split_part: Union[Literal["train", "val", "test"], str],
         worker_config: WorkerConfig,
-        subflavors: Optional[Dict[str, Any]] = None,
+        tags: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: Optional[int] = 1,
         subset: Optional[DatasetSubset] = None,
         **kwargs,
     ) -> LoadedDatasetList:
+        tags = resolve_tags(tags, kwargs.pop("subflavors", None))
         subset = self._get_subset(subset)
         shuffle_over_epochs_multiplier = self._merge_shuffle_over_epochs_multiplier(
             shuffle_over_epochs_multiplier
         )
-        subflavors = self._merge_subflavors(subflavors)
+        tags = self._merge_tags(tags)
         datasets = []
         for dataset in self.blend_epochized:
             inner_result = dataset.get_datasets(
                 training=training,
                 split_part=split_part,
                 worker_config=worker_config,
-                subflavors=subflavors,
+                tags=tags,
                 shuffle_over_epochs_multiplier=shuffle_over_epochs_multiplier,
                 subset=subset,
                 **kwargs,
@@ -889,7 +894,7 @@ class Recipe(DatasetLoaderInterface):
         *,
         split_part: Union[Literal["train", "val", "test"], str],
         _shuffle_over_epochs_multiplier: Optional[int] = 1,
-        _subflavors: Optional[Dict[str, Any]] = None,
+        _tags: Optional[Dict[str, Any]] = None,
     ) -> List[TraversedDatasetReference]:
         """Traverse the selected recipe split and flatten all reachable leaf references.
 
@@ -905,7 +910,7 @@ class Recipe(DatasetLoaderInterface):
             self.path,
             split_part=split_part,
             _shuffle_over_epochs_multiplier=_shuffle_over_epochs_multiplier,
-            _subflavors=_subflavors,
+            _tags=_tags,
         )
 
     def prepare(self, split_part: Optional[str] = None) -> Sequence[EPath]:
@@ -935,16 +940,17 @@ class Recipe(DatasetLoaderInterface):
         training: bool,
         split_part: Union[Literal["train", "val", "test"], str],
         worker_config: WorkerConfig,
-        subflavors: Optional[Dict[str, Any]] = None,
+        tags: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: Optional[int] = 1,
         subset: Optional[DatasetSubset] = None,
         **kwargs,
     ) -> LoadedDatasetList:
+        tags = resolve_tags(tags, kwargs.pop("subflavors", None))
         return self.splits[split_part].get_datasets(
             training=training,
             split_part=split_part,
             worker_config=worker_config,
-            subflavors=subflavors,
+            tags=tags,
             shuffle_over_epochs_multiplier=shuffle_over_epochs_multiplier,
             subset=subset,
             **kwargs,

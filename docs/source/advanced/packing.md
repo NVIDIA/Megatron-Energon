@@ -88,8 +88,8 @@ def build_packing_groups(
     packing_buffer_size: PackingBufferSize,
     shuffle_buffer_size: int | None,
 ) -> list[PackingGroupConfig]:
-    text = [dataset for dataset in datasets if dataset.dataset.subflavors["modality"] == "text"]
-    vl = [dataset for dataset in datasets if dataset.dataset.subflavors["modality"] == "vl"]
+    text = [dataset for dataset in datasets if dataset.dataset.tags["modality"] == "text"]
+    vl = [dataset for dataset in datasets if dataset.dataset.tags["modality"] == "vl"]
     return [
         PackingGroupConfig(
             datasets=text,

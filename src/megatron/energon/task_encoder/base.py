@@ -44,6 +44,7 @@ from megatron.energon.flavors.base_dataset import ExtendableDataclassMixin
 from megatron.energon.recipe.loader_interface import DatasetBlendMode, LoadedDataset
 from megatron.energon.rng import SystemRng
 from megatron.energon.source_info import SourceInfo
+from megatron.energon.tags import SampleTagsAlias, canonicalize_tag_kwargs
 from megatron.energon.task_encoder.cooking import Cooker
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers import (
@@ -330,7 +331,7 @@ def get_failure_tolerance(fn: Callable, default_failure_tolerance: Optional[int]
 
 
 @edataclass
-class Batch(PinMemoryMixin, ExtendableDataclassMixin):
+class Batch(SampleTagsAlias, PinMemoryMixin, ExtendableDataclassMixin):
     """Base class for a batch dataclass. Provides a default implementation for pinning memory.
     Additionally, it provides a future safe implementation for creating an instance from another
     batch `Batch.derive_from`."""
@@ -341,8 +342,8 @@ class Batch(PinMemoryMixin, ExtendableDataclassMixin):
     # should be a (nested) tuple of strings and integers, which can be used to index the dataset.
     __restore_key__: Tuple[Union[str, int, tuple], ...]
 
-    #: A dataset may define a subflavors to distinguish between samples of the same sample type.
-    __subflavors__: Optional[list[Optional[Dict[str, Any]]]] = None
+    #: A dataset may define tags to distinguish between samples of the same sample type.
+    __tags__: Optional[list[Optional[Dict[str, Any]]]] = None
 
     #: Information about the source of the sample, i.e. where the data was loaded from.
     __sources__: Optional[tuple[SourceInfo, ...]] = None
@@ -350,7 +351,7 @@ class Batch(PinMemoryMixin, ExtendableDataclassMixin):
     @classmethod
     def derive_from(cls: Type[T_batch], base_batch: "Batch", **kwargs) -> T_batch:
         """
-        Uses the base fields of `Batch` from base_batch (i.e. __key__, __restore_key__, __subflavors__, __sources__)
+        Uses the base fields of `Batch` from base_batch (i.e. __key__, __restore_key__, __tags__, __sources__)
         and creates a new batch with the kwargs as fields. This is useful for creating new batches, while keeping the
         metadata of the base batch.
 
@@ -368,6 +369,7 @@ class Batch(PinMemoryMixin, ExtendableDataclassMixin):
         Returns:
             The new batch.
         """
+        kwargs = canonicalize_tag_kwargs(kwargs)
         base_kwargs = {
             field.name: getattr(base_batch, field.name) for field in dataclasses.fields(Batch)
         }
@@ -407,10 +409,10 @@ class Batch(PinMemoryMixin, ExtendableDataclassMixin):
                         if sample.__sources__
                         for source in sample.__sources__
                     )
-            elif field.name == "__subflavors__":
-                if any(sample.__subflavors__ is not None for sample in samples):
+            elif field.name == "__tags__":
+                if any(sample.__tags__ is not None for sample in samples):
                     init_args[field.name] = [
-                        sample.__subflavors__ for sample in samples if sample.__subflavors__
+                        sample.__tags__ for sample in samples if sample.__tags__
                     ]
             else:
                 value = [getattr(sample, field.name) for sample in samples]
@@ -895,18 +897,18 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
 
         return dataset
 
-    def _find_cooker(self, subflavors: dict) -> Cooker[T_sample]:
+    def _find_cooker(self, tags: dict) -> Cooker[T_sample]:
         for cooker in self.cookers:
-            if cooker.is_match(subflavors):
+            if cooker.is_match(tags):
                 return cooker
-        raise ValueError(f"No cooker found for subflavors: {subflavors}")
+        raise ValueError(f"No cooker found for tags: {tags}")
 
     def build_cook_crude_sample(
         self,
         dataset: SavableDataset[Union[T_sample, dict]],
         *,
         worker_config: WorkerConfig,
-        subflavors: Dict[str, Any],
+        tags: Dict[str, Any],
         get_primary_aux: Callable[[], FileStore],
         aux: Optional[Dict[str, FileStore]] = None,
     ) -> SavableDataset[T_sample]:
@@ -920,7 +922,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         if self.decoder is not None:
             aux = {k: DecodeFileStore(v, decoder=self.decoder) for k, v in aux.items()}
 
-        cooker = self._find_cooker(subflavors)
+        cooker = self._find_cooker(tags)
 
         if cooker.need_primary and "primary" not in aux:
             try:
@@ -945,7 +947,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             map_fn_config=dict(
                 cooker=dict(
                     cook=SavableDataset._function_config(cooker.cook),
-                    has_subflavors=cooker.has_subflavors,
+                    has_tags=cooker.has_tags,
                     aux={k: {"_path": str(v.get_path())} for k, v in aux.items()},
                 ),
             ),
@@ -957,13 +959,13 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
     ) -> SavableDataset[T_sample]:
         """Loads a train dataset, optionally cooking the samples."""
         if dataset.dataset.__sample_type__ == CrudeSample:
-            cooker = self._find_cooker(dataset.dataset.subflavors)
+            cooker = self._find_cooker(dataset.dataset.tags)
             return self.build_cook_crude_sample(
                 dataset.dataset.build(
                     worker_rotation_offset=worker_rotation_offset, part_filter=cooker.part_filter
                 ),
                 worker_config=worker_config,
-                subflavors=dataset.dataset.subflavors,
+                tags=dataset.dataset.tags,
                 get_primary_aux=dataset.dataset.as_file_store,
                 aux=dataset.aux,
             )
@@ -1533,7 +1535,7 @@ class DefaultTaskEncoder(
         actions = None
         if isinstance(samples[0], Sample):
             actions = {
-                "__subflavors__": lambda x: x,
+                "__tags__": lambda x: x,
             }
         return self._batch(
             samples,

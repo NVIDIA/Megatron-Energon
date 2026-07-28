@@ -95,13 +95,13 @@ class TestJsonlDataset(unittest.TestCase):
                         "  train:",
                         "    blend:",
                         "      - path: ds1.jsonl",
-                        "        subflavors:",
+                        "        tags:",
                         "          ds: ds1",
                         "      - path: ds2.jsonl",
-                        "        subflavors:",
+                        "        tags:",
                         "          ds: ds2",
                         "      - path: ds3.jsonl",
-                        "        subflavors:",
+                        "        tags:",
                         "          ds: ds3",
                     ]
                 )

@@ -146,7 +146,7 @@ class TestDataset(unittest.TestCase):
                         "__class__: TextWebdataset",
                         "field_map:",
                         "  text: txt",
-                        "subflavors:",
+                        "tags:",
                         "  source: dataset.yaml",
                         "  dataset.yaml: true",
                         "  number: 42",

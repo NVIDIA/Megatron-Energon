@@ -177,14 +177,14 @@ class TestDataset(unittest.TestCase):
                         "    blend:",
                         "      - weight: 1",
                         "        path: ds1",
-                        "        subflavors:",
+                        "        tags:",
                         "          source: recipe.yaml",
                         "          number: 43",
                         "          recipe: recipe",
                         "        shuffle_over_epochs_multiplier: 3",
                         "      - weight: 1",
                         "        path: ds2",
-                        "        subflavors:",
+                        "        tags:",
                         "          source: recipe.yaml",
                         "          number: 44",
                         "          recipe: recipe",
@@ -212,12 +212,12 @@ class TestDataset(unittest.TestCase):
                         "      - weight: 4",
                         "        path: ./recipe.yaml",
                         "        split_part: train",
-                        "        subflavors:",
+                        "        tags:",
                         "          source: nested_recipe.yaml",
                         "          recipe: nested_train",
                         "      - path: ./recipe.yaml",
                         "        split_part: val",
-                        "        subflavors:",
+                        "        tags:",
                         "          source: nested_recipe.yaml",
                         "          recipe: nested_val",
                     ]
@@ -269,7 +269,7 @@ class TestDataset(unittest.TestCase):
                         "  __class__: TextSample",
                         "field_map:",
                         "  text: txt",
-                        "subflavors:",
+                        "tags:",
                         "  source: dataset.yaml",
                         "  dataset.yaml: true",
                         "  number: 42",
@@ -380,6 +380,54 @@ class TestDataset(unittest.TestCase):
 
         prepare_metadataset(EPath(self.recipe_path))
 
+    def test_subflavors_recipe_alias(self):
+        legacy_recipe_path = self.dataset_path / "legacy_tags_recipe.yaml"
+        legacy_recipe_path.write_text(
+            "\n".join(
+                [
+                    "__module__: megatron.energon",
+                    "__class__: Recipe",
+                    "splits:",
+                    "  train:",
+                    "    path: ds1",
+                    "    subflavors:",
+                    "      source: legacy",
+                ]
+            )
+        )
+
+        recipe = load_dataset(legacy_recipe_path)
+        leaves = traverse_recipe(legacy_recipe_path, split_part="train")
+        assert leaves[0].tags == {"source": "legacy"}
+        assert leaves[0].subflavors is leaves[0].tags
+
+        loaded = recipe.get_datasets(
+            training=False,
+            split_part="train",
+            worker_config=WorkerConfig(rank=0, world_size=1, num_workers=0),
+        )
+        assert loaded.datasets[0].dataset.tags["source"] == "legacy"
+        assert loaded.datasets[0].dataset.subflavors is loaded.datasets[0].dataset.tags
+
+        invalid_recipe_path = self.dataset_path / "conflicting_tags_recipe.yaml"
+        invalid_recipe_path.write_text(
+            "\n".join(
+                [
+                    "__module__: megatron.energon",
+                    "__class__: Recipe",
+                    "splits:",
+                    "  train:",
+                    "    path: ds1",
+                    "    tags:",
+                    "      source: canonical",
+                    "    subflavors:",
+                    "      source: legacy",
+                ]
+            )
+        )
+        with self.assertRaisesRegex(ValueError, "Cannot set both"):
+            load_dataset(invalid_recipe_path)
+
     def test_group(self):
         """Task-defined packing groups keep returned samples source-homogeneous."""
         recipe_path = self.dataset_path / "group_blend.yaml"
@@ -394,11 +442,11 @@ class TestDataset(unittest.TestCase):
                         "    blend:",
                         "      - weight: 1",
                         "        path: ds1",
-                        "        subflavors:",
+                        "        tags:",
                         "          packing_source: ds1",
                         "      - weight: 1",
                         "        path: ds2",
-                        "        subflavors:",
+                        "        tags:",
                         "          packing_source: ds2",
                     ]
                 )
@@ -406,7 +454,7 @@ class TestDataset(unittest.TestCase):
 
         leaves = traverse_recipe(recipe_path, split_part="train")
         assert len(leaves) == 2
-        assert {ref.subflavors["packing_source"] for ref in leaves} == {"ds1", "ds2"}
+        assert {ref.tags["packing_source"] for ref in leaves} == {"ds1", "ds2"}
 
         worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0, seed_offset=0)
         loaded = load_dataset(recipe_path).get_datasets(
@@ -415,7 +463,7 @@ class TestDataset(unittest.TestCase):
             worker_config=worker_config,
         )
         assert loaded.blend_mode == DatasetBlendMode.DATASET_WEIGHT
-        assert {d.dataset.subflavors["packing_source"] for d in loaded.datasets} == {"ds1", "ds2"}
+        assert {d.dataset.tags["packing_source"] for d in loaded.datasets} == {"ds1", "ds2"}
 
         class GroupIsolationEncoder(DefaultTaskEncoder):
             """Each returned packed sample must come from exactly one packing source."""
@@ -431,13 +479,13 @@ class TestDataset(unittest.TestCase):
                         datasets=[
                             dataset
                             for dataset in datasets
-                            if dataset.dataset.subflavors["packing_source"] == packing_source
+                            if dataset.dataset.tags["packing_source"] == packing_source
                         ],
                         packing_buffer_size=packing_buffer_size,
                         shuffle_buffer_size=shuffle_buffer_size,
                     )
                     for packing_source in sorted(
-                        {dataset.dataset.subflavors["packing_source"] for dataset in datasets}
+                        {dataset.dataset.tags["packing_source"] for dataset in datasets}
                     )
                 ]
 
@@ -451,9 +499,9 @@ class TestDataset(unittest.TestCase):
             @stateless
             def pack_selected_samples(self, samples: list[TextSample]) -> TextSample:
                 packing_sources = {
-                    sample.__subflavors__.get("packing_source")
+                    sample.__tags__.get("packing_source")
                     for sample in samples
-                    if sample.__subflavors__ is not None
+                    if sample.__tags__ is not None
                 }
                 assert len(packing_sources) == 1, (
                     "Mixed sources in one packed sample: "
@@ -505,8 +553,8 @@ class TestDataset(unittest.TestCase):
             "ds1",
             "ds2",
         ]
-        print([raw_dataset.dataset.subflavors for raw_dataset in raw_datasets.datasets])
-        assert [raw_dataset.dataset.subflavors for raw_dataset in raw_datasets.datasets] == [
+        print([raw_dataset.dataset.tags for raw_dataset in raw_datasets.datasets])
+        assert [raw_dataset.dataset.tags for raw_dataset in raw_datasets.datasets] == [
             {
                 "source": "nested_recipe.yaml",
                 "dataset.yaml": True,
@@ -534,9 +582,9 @@ class TestDataset(unittest.TestCase):
         ]
 
     def test_traverse_recipe_recurses_nested_v2_references(self):
-        """Traversed subflavors only reflect recipe hierarchy merges.
+        """Traversed tags only reflect recipe hierarchy merges.
 
-        They intentionally do not include the leaf dataset's own `dataset.yaml` subflavors, which
+        They intentionally do not include the leaf dataset's own `dataset.yaml` tags, which
         are only applied later when `get_datasets()` loads the concrete dataset factory.
         """
 
@@ -561,8 +609,8 @@ class TestDataset(unittest.TestCase):
         ]
         assert [ref.split_part for ref in refs] == ["train", "train", "train", "train"]
         assert all(ref.aux == {} for ref in refs)
-        # Traversal records only hierarchy-derived subflavors, not the loaded leaf dataset.yaml.
-        assert [ref.subflavors for ref in refs] == [
+        # Traversal records only hierarchy-derived tags, not the loaded leaf dataset.yaml.
+        assert [ref.tags for ref in refs] == [
             {
                 "source": "nested_recipe.yaml",
                 "number": 43,
@@ -584,8 +632,8 @@ class TestDataset(unittest.TestCase):
         ]
 
         for ref, raw_dataset in zip(refs, raw_datasets.datasets):
-            for key, value in ref.subflavors.items():
-                assert raw_dataset.dataset.subflavors[key] == value
+            for key, value in ref.tags.items():
+                assert raw_dataset.dataset.tags[key] == value
 
     def test_traverse_recipe_preserves_missing_v2_leaf_and_aux(self):
         missing_leaf_recipe_path = self.dataset_path / "missing_leaf_recipe.yaml"
@@ -597,7 +645,7 @@ class TestDataset(unittest.TestCase):
                     "splits:",
                     "  train:",
                     "    path: missing_ds",
-                    "    subflavors:",
+                    "    tags:",
                     "      source: missing_leaf_recipe.yaml",
                     "      number: 42",
                     "      recipe: nested_val",
@@ -621,7 +669,7 @@ class TestDataset(unittest.TestCase):
             "media": EPath(self.dataset_path / "media"),
             "blobs": EPath(self.dataset_path / "byte_blobs"),
         }
-        assert refs[0].subflavors == {
+        assert refs[0].tags == {
             "source": "missing_leaf_recipe.yaml",
             "number": 42,
             "recipe": "nested_val",
@@ -724,12 +772,12 @@ class TestDataset(unittest.TestCase):
                         "    join:",
                         "      ds1:",
                         "        path: ds1",
-                        "        subflavors:",
+                        "        tags:",
                         "          source1: ds1",
                         "          number: 43",
                         "      ds2:",
                         "        path: ds3",
-                        "        subflavors:",
+                        "        tags:",
                         "          source2: ds3",
                         "          number: 44",
                         "    joiner:",
@@ -835,12 +883,12 @@ class TestDataset(unittest.TestCase):
                         "        join:",
                         "          text1:",
                         "            path: ds1",
-                        "            subflavors:",
+                        "            tags:",
                         "              source1: ds1",
                         "              number: 43",
                         "          text2:",
                         "            path: ds3",
-                        "            subflavors:",
+                        "            tags:",
                         "              source2: ds3",
                         "              number: 44",
                         "        joiner:",
@@ -914,13 +962,13 @@ class TestDataset(unittest.TestCase):
                         "        join:",
                         "          text1:",
                         "            path: ds1",
-                        "            subflavors:",
+                        "            tags:",
                         "              source1: ds1",
                         "              number: 43",
                         "          text2:",
                         "            path: ds1b",
                         "            nonmatch: skip",
-                        "            subflavors:",
+                        "            tags:",
                         "              source2: ds1b",
                         "              number: 44",
                         "        joiner:",
@@ -982,13 +1030,13 @@ class TestDataset(unittest.TestCase):
                         "        join:",
                         "          text1:",
                         "            path: ds1c",
-                        "            subflavors:",
+                        "            tags:",
                         "              source1: ds1c",
                         "              number: 43",
                         "          text2:",
                         "            path: ds1b",
                         "            nonmatch: skip",
-                        "            subflavors:",
+                        "            tags:",
                         "              source2: ds1b",
                         "              number: 44",
                         "        joiner:",
@@ -1193,12 +1241,12 @@ class TestDataset(unittest.TestCase):
                         "    blend_epochized:",
                         "      - repetitions: 2",
                         "        path: ds1",
-                        "        subflavors:",
+                        "        tags:",
                         "          source: ds1",
                         "          number: 43",
                         "      - repetitions: 3",
                         "        path: ds2",
-                        "        subflavors:",
+                        "        tags:",
                         "          source: ds2",
                         "          number: 42",
                     ]
@@ -1225,7 +1273,7 @@ class TestDataset(unittest.TestCase):
 
         data = list(enumerate(train_loader))
         txt_order = [data.text[0] for idx, data in data]
-        key_order = [data.__subflavors__[0]["source"] + "/" + data.__key__[0] for idx, data in data]
+        key_order = [data.__tags__[0]["source"] + "/" + data.__key__[0] for idx, data in data]
         print("txt1:", txt_order)
         print("key:", key_order)
         assert len(txt_order) == 5 * 55, Counter(txt_order)
@@ -1256,7 +1304,7 @@ class TestDataset(unittest.TestCase):
         assert len(data2) == 2 * 55
         txt_order = [data.text[0] for idx, data in data1 + data2]
         key_order = [
-            data.__subflavors__[0]["source"] + "/" + data.__key__[0] for idx, data in data1 + data2
+            data.__tags__[0]["source"] + "/" + data.__key__[0] for idx, data in data1 + data2
         ]
         assert len(txt_order) == 5 * 55, Counter(txt_order)
         ds1_keys = [key for key in key_order if key.startswith("ds1/")]
@@ -1288,7 +1336,7 @@ class TestDataset(unittest.TestCase):
         assert len(data2_restore) == 2 * 55
         txt_order_rst = [data.text[0] for idx, data in data1 + data2_restore]
         key_order_rst = [
-            data.__subflavors__[0]["source"] + "/" + data.__key__[0]
+            data.__tags__[0]["source"] + "/" + data.__key__[0]
             for idx, data in data1 + data2_restore
         ]
         assert len(txt_order_rst) == 5 * 55, Counter(txt_order_rst)
@@ -1327,12 +1375,12 @@ class TestDataset(unittest.TestCase):
                         "    blend_epochized:",
                         "      - repetitions: 0.7",
                         "        path: ds1",
-                        "        subflavors:",
+                        "        tags:",
                         "          source: ds1",
                         "          number: 43",
                         "      - repetitions: 1.5",
                         "        path: ds2",
-                        "        subflavors:",
+                        "        tags:",
                         "          source: ds2",
                         "          number: 42",
                     ]
@@ -1454,7 +1502,7 @@ class TestDataset(unittest.TestCase):
         data1 = []
         for idx, sample in enumerate(train_loader):
             data1.append((idx, sample))
-            if sample.__subflavors__[0]["source"] == "ds1":
+            if sample.__tags__[0]["source"] == "ds1":
                 ds1_counter += 1
                 if ds1_counter == 38:
                     # Stop right after the last sample from ds1
@@ -2099,7 +2147,7 @@ class TestDataset(unittest.TestCase):
                 WorkerConfig(rank=2, world_size=world_size, num_workers=num_workers),
             )
 
-            all_ranks_subflavors = []
+            all_ranks_tags = []
             for rank_config in configs:
                 torch.manual_seed(seed)
                 numpy.random.seed(seed)
@@ -2115,19 +2163,17 @@ class TestDataset(unittest.TestCase):
                 )
                 loader = get_loader(ds)
 
-                subflavors = [
-                    data.__subflavors__[0].get("number") for idx, data in zip(range(25), loader)
-                ]
+                tags = [data.__tags__[0].get("number") for idx, data in zip(range(25), loader)]
 
-                all_ranks_subflavors.append(subflavors)
+                all_ranks_tags.append(tags)
 
-                print(f"Subflavors for rank {rank_config.rank}:", subflavors)
+                print(f"Tags for rank {rank_config.rank}:", tags)
 
             # Assert that all ranks got different data
-            for i in range(len(all_ranks_subflavors)):
-                for j in range(i + 1, len(all_ranks_subflavors)):
-                    assert all_ranks_subflavors[i] != all_ranks_subflavors[j], (
-                        f"Rank {i} and rank {j} got the same subflavors."
+            for i in range(len(all_ranks_tags)):
+                for j in range(i + 1, len(all_ranks_tags)):
+                    assert all_ranks_tags[i] != all_ranks_tags[j], (
+                        f"Rank {i} and rank {j} got the same tags."
                     )
 
             # Delete all locals, otherwise loaders might be kept alive
@@ -2334,12 +2380,12 @@ class TestDataset(unittest.TestCase):
                         "    subset: {range: [50, 55]}",
                         "    blend_epochized:",
                         "      - path: ds1",
-                        "        subflavors:",
+                        "        tags:",
                         "          source: ds1",
                         "          number: 43",
                         "      - repetitions: 2",
                         "        path: ds2",
-                        "        subflavors:",
+                        "        tags:",
                         "          source: ds2",
                         "          number: 42",
                     ]
@@ -2386,7 +2432,7 @@ class TestDataset(unittest.TestCase):
                         # I.e. corresponds to sample range: [50, 55] (end is not included, so up to 54)
                         "    subset: {range: [50, end]}",
                         "    path: ds1",
-                        "    subflavors:",
+                        "    tags:",
                         "      source: ds1",
                         "      number: 43",
                     ]
@@ -2431,12 +2477,12 @@ class TestDataset(unittest.TestCase):
                         "    subset: {range: [20%, 80%]}",
                         "    blend_epochized:",
                         "      - path: ds1",
-                        "        subflavors:",
+                        "        tags:",
                         "          source: ds1",
                         "          number: 43",
                         "      - repetitions: 2",
                         "        path: ds2",
-                        "        subflavors:",
+                        "        tags:",
                         "          source: ds2",
                         "          number: 42",
                     ]
@@ -2485,13 +2531,13 @@ class TestDataset(unittest.TestCase):
                         "    blend_epochized:",
                         "      - path: ds1",
                         "        subset: {range: [10, 30]}",
-                        "        subflavors:",
+                        "        tags:",
                         "          source: ds1",
                         "          number: 43",
                         "      - repetitions: 2",
                         "        subset: {range: [20, 40]}",
                         "        path: ds2",
-                        "        subflavors:",
+                        "        tags:",
                         "          source: ds2",
                         "          number: 42",
                     ]
@@ -2538,7 +2584,7 @@ class TestDataset(unittest.TestCase):
                         "      - path: ds3",
                         # take [30, 50] from ds3, then first 50%, resulting in samples [230, 240]
                         "        subset: {range: [30, 50]}",
-                        "        subflavors:",
+                        "        tags:",
                         "          source: ds3",
                         "          number: 45",
                         "      - repetitions: 2",
@@ -2611,11 +2657,11 @@ class TestDataset(unittest.TestCase):
                     "    blend:",
                     "      - weight: 1",
                     "        path: ds_short",
-                    "        subflavors:",
+                    "        tags:",
                     "          source: ds_short",
                     "      - weight: 1",
                     "        path: ds_long",
-                    "        subflavors:",
+                    "        tags:",
                     "          source: ds_long",
                 ]
             )
@@ -2665,7 +2711,7 @@ class TestDataset(unittest.TestCase):
             sample_counts: Counter[str] = Counter()
             size_totals: Counter[str] = Counter()
             for _, sample in samples:
-                source = sample.__subflavors__["source"]
+                source = sample.__tags__["source"]
                 sample_counts[source] += 1
                 size_totals[source] += len(sample.text)
             return sample_counts, size_totals
@@ -2717,11 +2763,11 @@ class TestDataset(unittest.TestCase):
                         "    blend:",
                         "      - weight: 1",
                         "        path: ds_short",
-                        "        subflavors:",
+                        "        tags:",
                         "          source: ds_short",
                         "      - weight: 1",
                         "        path: ds_long",
-                        "        subflavors:",
+                        "        tags:",
                         "          source: ds_long",
                     ]
                 )

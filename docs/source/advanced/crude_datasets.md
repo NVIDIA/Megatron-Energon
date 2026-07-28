@@ -29,14 +29,14 @@ New `dataset.yaml` (or `crude.yaml` of you like):
 ```yaml
 __module__: megatron.energon
 __class__: CrudeWebdataset
-subflavors:
+tags:
   example_crude_selector: foobar
 ```
 
-As shown above, [subflavors](sect-subflavors) can be assigned directly in the dataset yaml, however we recommend
+As shown above, [tags](sect-tags) can be assigned directly in the dataset yaml, however we recommend
 to define them in the [Recipe](../basic/recipe) instead.
-Subflavors can be used to differentiate the data origin when you mix different crude datasets or crude with non-crude data using a [Recipe](../basic/recipe).
-You can then use the subflavors to determine how each sample shall be processed, as explained below.
+Tags can be used to differentiate the data origin when you mix different crude datasets or crude with non-crude data using a [Recipe](../basic/recipe).
+You can then use the tags to determine how each sample shall be processed, as explained below.
 
 Let's see how we set up our [Task Encoder](../basic/task_encoder) to cook the crude samples and turn them into real samples like {py:class}`TextSample <megatron.energon.TextSample>`.
 
@@ -58,19 +58,19 @@ def cook_text(sample: dict) -> TextSample:
 
 class MyTaskEncoder(DefaultTaskEncoder[TextSample, TextSample, TextRawBatch, TextBatch]):
     cookers = [
-        Cooker(cook_text, has_subflavors={"example_crude_selector": "foobar"}),
+        Cooker(cook_text, has_tags={"example_crude_selector": "foobar"}),
         Cooker(...)  # other cookers for other crude data if needed
     ]
 
     # ...
 ```
 
-In the example above, the cooker acts on all crude samples that have a subflavor `example_crude_selector` set to `foobar`.
-If you leave out the `has_subflavors` argument, the cooker will apply to any sample.
+In the example above, the cooker acts on all crude samples that have a tag `example_crude_selector` set to `foobar`.
+If you leave out the `has_tags` argument, the cooker will apply to any sample.
 
 The cooker will convert the dictionary to a {py:class}`TextSample <megatron.energon.TextSample>` by decoding the raw bytes and decorating the text with some nice angle brackets.
 Probably you noticed the {py:meth}`basic_sample_keys <megatron.energon.task_encoder.cooking.basic_sample_keys>` helper that we inserted.
-All it does, is to forward the key, restore key and flavors from the dict to the real sample. You will always need to forward these, or your dataset will not be restorable.
+All it does, is to forward the key, restore key and tags from the dict to the real sample. You will always need to forward these, or your dataset will not be restorable.
 
 In a real use-case you will want to do a lot more here and we recommend keeping the cook methods in separate files and importing them where you define your TaskEncoder.
 
@@ -135,7 +135,7 @@ splits:
       byte_range_source: byterange+msc://coolstore/mainbucket/path/blobs
       remote_source: msc://coolstore/mainbucket/path/ds
       remote_fs_source: filesystem+msc://coolstore/mainbucket/path/images
-    subflavors:
+    tags:
       crude_type: my_dual_aux_example
 ```
 
