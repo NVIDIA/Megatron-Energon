@@ -1416,6 +1416,43 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
 
         return dataset
 
+    def build_processing_datasets(
+        self,
+        *,
+        datasets: List[LoadedDataset],
+        worker_config: WorkerConfig,
+    ) -> SavableDataset[T_encoded_sample]:
+        """Combines dataset leaves into one finite, unbatched processing pipeline.
+
+        Each loaded leaf is traversed once in input order. Blend weights and repetitions are
+        intentionally ignored. Cooking, pre-encoding/encoding, and post-encoding are applied,
+        while shuffling, packing, and batching are disabled.
+
+        Args:
+            datasets: Loaded leaf datasets.
+            worker_config: Worker configuration for wrapped datasets.
+
+        Returns:
+            The processing :class:`~megatron.energon.flavors.SavableDataset` pipeline.
+        """
+        rotation_offsets = self._compute_rotation_offsets(datasets, worker_config)
+        dataset = self._build_val_concat_encode_branch(
+            datasets=datasets,
+            worker_rotation_offsets=rotation_offsets,
+            worker_config=worker_config,
+        )
+        dataset = self._build_packing_postencode(
+            dataset,
+            packing_buffer_size=None,
+            worker_config=worker_config,
+        )
+        dataset = maybe_wrap_stride_dataset(dataset, worker_config=worker_config)
+
+        if worker_config.should_log(level=2):
+            dataset = LogSampleDataset(dataset, mode="processing", worker_config=worker_config)
+
+        return dataset
+
     @property
     def current_batch_index(self) -> int:
         """Returns the current index for the next batch yielded from the current worker. Each batch

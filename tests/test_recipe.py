@@ -26,6 +26,8 @@ from megatron.energon import (
     TextSample,
     WorkerConfig,
     get_loader,
+    get_processing_dataset,
+    get_processing_datasets,
     get_savable_loader,
     get_train_dataset,
     get_val_dataset,
@@ -323,6 +325,35 @@ class TestDataset(unittest.TestCase):
         print(Counter(train_order1))
         assert len(Counter(train_order1)) == 110
         assert all(48 <= v <= 52 for v in Counter(train_order1).values())
+
+    def test_processing_dataset_ignores_recipe_blend_weights(self):
+        worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0)
+
+        dataset = get_processing_dataset(
+            self.recipe_path,
+            worker_config=worker_config,
+        )
+        texts = [sample.text for sample in get_loader(dataset)]
+
+        assert texts == [str(idx) for idx in range(55)] + [str(idx) for idx in range(100, 155)]
+
+    def test_processing_datasets_returns_each_recipe_leaf(self):
+        worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0)
+
+        datasets = get_processing_datasets(
+            self.recipe_path,
+            worker_config=worker_config,
+        )
+
+        assert len(datasets) == 2
+        assert [sample.text for sample in get_loader(datasets[0][0])] == [
+            str(idx) for idx in range(55)
+        ]
+        assert [sample.text for sample in get_loader(datasets[1][0])] == [
+            str(idx) for idx in range(100, 155)
+        ]
+        assert datasets[0][1].tags["number"] == 43
+        assert datasets[1][1].tags["number"] == 44
 
     def test_deprecated_v2_aliases(self):
         from megatron.energon.recipe.recipe import Recipe

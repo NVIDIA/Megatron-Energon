@@ -48,6 +48,7 @@ maxdepth: 2
 ---
 advanced/remote_dataset
 advanced/crude_datasets
+advanced/data_processing
 advanced/filter_index
 advanced/custom_sample_loader
 advanced/repro_scaling
