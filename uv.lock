@@ -1537,6 +1537,9 @@ dev = [
 google-cloud-storage = [
     { name = "multi-storage-client", extra = ["google-cloud-storage"] },
 ]
+gpu-av-decode = [
+    { name = "pynvvideocodec" },
+]
 gpu-image-decode = [
     { name = "nvidia-nvimgcodec-cu13", extra = ["all"] },
 ]
@@ -1584,6 +1587,7 @@ requires-dist = [
     { name = "numpy" },
     { name = "nvidia-nvimgcodec-cu13", extras = ["all"], marker = "extra == 'gpu-image-decode'", specifier = ">=0.8.0.22" },
     { name = "pillow", specifier = ">=10.0.1" },
+    { name = "pynvvideocodec", marker = "extra == 'gpu-av-decode'", specifier = ">=2.2.0" },
     { name = "pyyaml" },
     { name = "rapidyaml", specifier = ">=0.10.0" },
     { name = "ruff", marker = "extra == 'all'" },
@@ -1605,7 +1609,7 @@ requires-dist = [
     { name = "tqdm" },
     { name = "webdataset" },
 ]
-provides-extras = ["aistore", "all", "av-decode", "azure-storage-blob", "dev", "google-cloud-storage", "gpu-image-decode", "huggingface", "oci", "s3", "tar-patcher", "transforms"]
+provides-extras = ["aistore", "all", "av-decode", "azure-storage-blob", "dev", "google-cloud-storage", "gpu-av-decode", "gpu-image-decode", "huggingface", "oci", "s3", "tar-patcher", "transforms"]
 
 [[package]]
 name = "mfusepy"
@@ -2905,6 +2909,28 @@ wheels = [
 [package.optional-dependencies]
 crypto = [
     { name = "cryptography" },
+]
+
+[[package]]
+name = "pynvvideocodec"
+version = "2.2.0"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/46/19/6c7998ec6a1f59670b0227bc582cbf2e17c7332048ae05887b169200f841/pynvvideocodec-2.2.0-cp310-cp310-manylinux_2_28_aarch64.whl", hash = "sha256:0e46c4d6e39756f14b337c089940517f8773425fcda72465b62fc1356e9b3066", size = 26358800, upload-time = "2026-07-28T09:37:15.002Z" },
+    { url = "https://files.pythonhosted.org/packages/46/3c/b3c00afb206d2f91faf7b576d18cd2291f1b0b90de0b630f8e3f836716c5/pynvvideocodec-2.2.0-cp310-cp310-manylinux_2_28_x86_64.whl", hash = "sha256:6733feb8a0ea6b41d9c4cab0010559cb3c448f3683938a44a7514d236088e629", size = 26437790, upload-time = "2026-07-28T09:37:35.888Z" },
+    { url = "https://files.pythonhosted.org/packages/66/c8/7728bcbbf0cf5d1764b7f751e401e897751315852e855c920edb4494cbca/pynvvideocodec-2.2.0-cp310-cp310-win_amd64.whl", hash = "sha256:c37860541a40fb2ff70c20c2c2b256022b9d352afc860ebd74308cc924452dc5", size = 20383295, upload-time = "2026-07-28T09:37:57.67Z" },
+    { url = "https://files.pythonhosted.org/packages/ce/19/cfbda7f820dbe13d498fa24fc664fb4fb59ae76f84e33969ce5615e9d9a5/pynvvideocodec-2.2.0-cp311-cp311-manylinux_2_28_aarch64.whl", hash = "sha256:5281bbc02e25661bab2c0c9e47762149a08ced5f1ba58077cb66c86f3b536570", size = 26358065, upload-time = "2026-07-28T09:38:48.519Z" },
+    { url = "https://files.pythonhosted.org/packages/93/42/04619163bb29aafc4a8e8cf54b610443c740213b490e0784ae695d29c2b5/pynvvideocodec-2.2.0-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:5a05f1c8981b3a233cb58016bfb50217cbaba772c75de521013d3f8b86474c71", size = 26437721, upload-time = "2026-07-28T09:39:12.216Z" },
+    { url = "https://files.pythonhosted.org/packages/03/ad/a66dd309dae77a58c3044e2f4a19bf137ffd8e0780f8476b5f8525d68374/pynvvideocodec-2.2.0-cp311-cp311-win_amd64.whl", hash = "sha256:ef4edcb3f245683c0137c71f6ddd6f4a8d0592260232b63e616054684599867d", size = 20383317, upload-time = "2026-07-28T09:39:33.372Z" },
+    { url = "https://files.pythonhosted.org/packages/94/e6/a2fdd37a486335d6b9b0f24bdb8cb328c8a8e6d318952f2f2c3c917f0c56/pynvvideocodec-2.2.0-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:8386b4455b7801a8976dc49775f1e0e61ccc157a365b606a1c9bac6ff61fd4c3", size = 26353923, upload-time = "2026-07-28T09:39:54.243Z" },
+    { url = "https://files.pythonhosted.org/packages/6b/1d/e5601e313855234ae4a8e6d9883e0b99dad2016625cc379f03755f81d0eb/pynvvideocodec-2.2.0-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:9218da028188cbc61ce221e59454712d6a7562e81074626fd02bbcf7ef152f98", size = 26435935, upload-time = "2026-07-28T09:40:16.485Z" },
+    { url = "https://files.pythonhosted.org/packages/e8/02/ce42c399acce0597a4381c4092f90f442da57172ab4a7e7ed2b4b128fb26/pynvvideocodec-2.2.0-cp312-cp312-win_amd64.whl", hash = "sha256:9144a8e6d79fa510bd8240fb8816cf304f044ec103c0c93784d67033c2cdc29e", size = 20387266, upload-time = "2026-07-28T09:40:39.7Z" },
+    { url = "https://files.pythonhosted.org/packages/4c/0e/ebdf5fa81ac1bb216113888e74f0c2ab9782061f9e424c363847e9cf48c5/pynvvideocodec-2.2.0-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:715658ab9ba756215d2ef755009ff4a58da8ae6a32e3a7de7daa66c9b39c7f2b", size = 26435901, upload-time = "2026-07-28T09:41:00.92Z" },
+    { url = "https://files.pythonhosted.org/packages/fe/1b/445fe120031be47b281aa6737d4c61bd2542b387c97b97f2e83c46350bb5/pynvvideocodec-2.2.0-cp313-cp313-manylinux_2_34_aarch64.whl", hash = "sha256:d6c2bd9a1046100e969fc0a682cfb9439d6b0ab5032ae0566f4215c4a47efc05", size = 26333934, upload-time = "2026-07-28T09:41:23.971Z" },
+    { url = "https://files.pythonhosted.org/packages/b1/5e/eaa0085686af5e3df0434d09586dc1407b8d931114e5be19098e12768566/pynvvideocodec-2.2.0-cp313-cp313-win_amd64.whl", hash = "sha256:1c984cced1c3805c6432ebc5c1b0ca7ab7469289d4528df82776435b2954b310", size = 20387189, upload-time = "2026-07-28T09:41:44.467Z" },
+    { url = "https://files.pythonhosted.org/packages/9d/76/2a4b07115b18d9295edb1d525d89d524ca5b484e9f4200a0f92191615d51/pynvvideocodec-2.2.0-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:0e0438dab630476f6fe137b6789b703226a3ca982a2322f9e84f6acc78993362", size = 26433405, upload-time = "2026-07-28T09:42:09.804Z" },
+    { url = "https://files.pythonhosted.org/packages/72/19/9230bc0f1be3aa35e97370d0c67a2b56626991460fddd31b193a0b02af55/pynvvideocodec-2.2.0-cp314-cp314-manylinux_2_34_aarch64.whl", hash = "sha256:f3f7306d4ebfb871d67bd6b54d2144bb6e6e6a4ac5a2d315e9da0d08cb38861b", size = 26334649, upload-time = "2026-07-28T09:42:29.344Z" },
+    { url = "https://files.pythonhosted.org/packages/d7/e9/108f71708e0432c7a116f72dccef81cd550e7b3dfd6869c671dc2f80b1c8/pynvvideocodec-2.2.0-cp314-cp314-win_amd64.whl", hash = "sha256:4e0d7c802457ae70f7183625f893726e318548c035e9d64b6dc296b20937e7a8", size = 20388727, upload-time = "2026-07-28T09:42:56.015Z" },
 ]
 
 [[package]]
