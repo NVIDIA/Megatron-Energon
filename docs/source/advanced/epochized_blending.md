@@ -31,24 +31,23 @@ Now, the call to `get_train_dataset` requires the additional parameter `repeat=F
 from megatron.energon import get_train_dataset, get_loader, WorkerConfig
 
 
-loader = get_loader(get_train_dataset(
+with get_loader(get_train_dataset(
     'metadataset.yaml',
     batch_size=2,
     shuffle_buffer_size=100,
     max_samples_per_sequence=100,
     worker_config=WorkerConfig.default_worker_config(),
     repeat=False,
-))
+)) as loader:
+    # This will now stop iterating after the datasets have been iterated (coco 5 times,
+    # coyo-train 2 times and coyo-val 1 time). Of course, the data is still being
+    # shuffled between all those datasets.
+    for batch in loader:
+        print(batch)
 
-# This will now stop iterating after the datasets have been iterated (coco 5 times, coyo-train 2
-# times and coyo-val 1 times). Of course, the data is still being shuffled between all those
-# datasets.
-for batch in loader:
-    print(batch)
-
-# This will iterate the second epoch
-for batch in loader:
-    print(batch)
+    # This will iterate the second epoch
+    for batch in loader:
+        print(batch)
 
 ```
 

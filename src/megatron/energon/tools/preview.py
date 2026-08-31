@@ -126,9 +126,10 @@ def command(path: EPath, split_parts: str, dataset_config: str):
             continue
 
         try:
-            for idx, sample in enumerate(get_loader(dataset.build())):
-                pprint(idx, sample)
-                click.confirm("Continue?", abort=True)
+            with get_loader(dataset.build()) as loader:
+                for idx, sample in enumerate(loader):
+                    pprint(idx, sample)
+                    click.confirm("Continue?", abort=True)
         except click.Abort:
             click.echo("Exiting Preview")
         except BaseException:

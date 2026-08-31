@@ -79,32 +79,30 @@ if data_parallel_rank is not None:
         data_parallel_group=data_parallel_group,
     )
 
-    # Create the loader with that config
-    loader = get_savable_loader(get_train_dataset(
+    # Create the loader with that config and shut it down after saving
+    with get_savable_loader(get_train_dataset(
         'coyo-coco-dataset.yaml',
         batch_size=4,
         shuffle_buffer_size=100,
         max_samples_per_sequence=100,
         worker_config=worker_config,
-    ))
+    )) as loader:
+        # Iterate the data
+        for i, batch in zip(range(10), loader):
+            # Do forward-backward pass
+            print(batch)
+            break
 
-    # Iterate the data
-    for i, batch in zip(range(10), loader):
-        # Do forward-backward pass
-        print(batch)
-        break
+        if tensor_parallel_rank == 0:
+            # Save the state only for the first TP rank (the other TP ranks have a copy of that state)
+            state = loader.save_state_rank()
+            # E.g. save to disk with torch
+            torch.save(state, f"dataloader_rank{data_parallel_rank}.pt")
 
-    if tensor_parallel_rank == 0:
-        # Save the state only for the first TP rank (the other TP ranks have a copy of that state)
-        # Save the state
-        state = loader.save_state_rank()
-        # E.g. save to disk with torch
-        torch.save(state, f"dataloader_rank{data_parallel_rank}.pt")
-
-        # Alternatively, save once for the whole dp group:
-        # state = loader.save_state_global(global_dst_rank=0)
-        # if state is not None:
-        #     torch.save(state, "dataloader.pt")
+            # Alternatively, save once for the whole dp group:
+            # state = loader.save_state_global(global_dst_rank=0)
+            # if state is not None:
+            #     torch.save(state, "dataloader.pt")
 
 
 # ... when loading:
@@ -136,5 +134,10 @@ if data_parallel_rank is not None:
     # else:
     #     state = None
     # loader.restore_state_global(state, src_rank=0)
+
+    # Restore state before entering the context because entering starts the workers.
+    with loader:
+        # Continue the training loop
+        ...
 
 ```
