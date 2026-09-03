@@ -69,11 +69,6 @@ autodoc_mock_imports = [
 autodoc_typehints = "description"
 autodoc_typehints_format = "short"
 
-# Mock everything here, so that not just autodoc, but also sphinx_click can make use of the mock imports
-from sphinx.ext.autodoc.mock import MockFinder
-
-sys.meta_path.insert(0, MockFinder(autodoc_mock_imports))
-
 # Napoleon
 napoleon_google_docstring = True
 napoleon_numpy_docstring = True
@@ -122,21 +117,26 @@ pygments_style = None
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
 #
-html_theme = "sphinx_rtd_theme"
+html_theme = "nvidia_sphinx_theme"
 
 # Theme options are theme-specific and customize the look and feel of a theme
 # further.  For a list of options available for each theme, see the
 # documentation.
 #
 html_theme_options = {
-    "prev_next_buttons_location": "both",
+    "icon_links": [
+        {
+            "name": "GitHub",
+            "url": "https://github.com/NVIDIA/Megatron-Energon/",
+            "icon": "fa-brands fa-github",
+        }
+    ],
 }
 
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".
 html_static_path = ["_static"]
-html_css_files = ["css/custom.css"]
 
 # Favicon configuration
 html_favicon = "_static/favicon.ico"

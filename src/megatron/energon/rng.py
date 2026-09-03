@@ -145,7 +145,9 @@ class WorkerRng(Savable):
             # 10 even on CPU.
             cdf = torch.cumsum(probs, dim=0)
             val = torch.rand(1, generator=self.rng) * cdf[-1]
-            return torch.searchsorted(cdf, val).item()
+            # Upper bound, such that entries with zero probability are never selected (a lower
+            # bound would return index 0 if val is exactly 0 and probs[0] is 0).
+            return torch.searchsorted(cdf, val, right=True).item()
 
     def choice(self, l: List[T], probs: Optional[torch.Tensor] = None) -> T:
         if probs is None:

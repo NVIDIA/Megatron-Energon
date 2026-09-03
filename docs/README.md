@@ -5,14 +5,14 @@ SPDX-License-Identifier: BSD-3-Clause -->
 
 To build the documentation, you need sphinx and additional packages:
 
-- sphinx-rtd-theme
+- nvidia-sphinx-theme
 - sphinx    
 - sphinxcontrib-napoleon
 - myst-parser
 
 You can install these like
 
-`pip install sphinx-rtd-theme sphinx sphinxcontrib-napoleon myst-parser sphinx-click`
+`pip install nvidia-sphinx-theme sphinx sphinxcontrib-napoleon myst-parser sphinx-click`
 
 Use `make html` to build it.
 

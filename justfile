@@ -31,6 +31,10 @@ test: dev-sync
 docs: dev-sync
     uv run sphinx-build -b html docs/source docs/build
 
+# Serve the built docs locally
+docs-serve:
+    uv run python -m http.server --bind 127.0.0.1 --directory docs/build
+
 # Build the release package
 build:
     rm -rf dist
