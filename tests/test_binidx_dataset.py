@@ -32,6 +32,7 @@ from megatron.energon import (
 from megatron.energon.dataset_config import load_config
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import Sample
+from megatron.energon.flavors.binidx.binidx_reader import BinIdxReader
 from megatron.energon.recipe.recipe import Recipe
 
 # Speed up tests significantly by reducing the torch status check interval for broken worker shutdown
@@ -151,6 +152,31 @@ class TestBinIdxDataset(unittest.TestCase):
             seen.append(int(batch.token_sum[0]))
             self.assertEqual(int(batch.seq_len[0]), 4)
         self.assertEqual(sorted(seen), sorted(expected_sums))
+
+    def test_reader_lists_readable_parts_and_closes_index(self):
+        bin_path = self.create_binidx_dataset(
+            self.dataset_path / "reader_contract",
+            num_docs=2,
+            doc_len=3,
+        )
+        reader = BinIdxReader(EPath(bin_path))
+        idx_reader = reader._idx_reader
+
+        self.assertEqual(
+            [part for part, _, _ in reader.list_all_sample_parts()],
+            ["0.tokens", "1.tokens"],
+        )
+        self.assertEqual(
+            [part for part, _, _ in reader.list_sample_parts("1")],
+            ["1.tokens"],
+        )
+        token_bytes, source_info = reader["1.tokens"]
+        self.assertEqual(source_info.file_names, ("1.tokens",))
+        self.assertEqual(np.frombuffer(token_bytes, dtype=np.int32).tolist(), [4, 5, 6])
+
+        reader.close()
+        self.assertTrue(reader._bin_file.closed)
+        self.assertTrue(idx_reader._idx_file.closed)
 
     def test_get_val_dataset_full_iteration_stable_order(self):
         """Val loader over bin-idx yields every document once in index order (no shuffle)."""

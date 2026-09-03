@@ -46,7 +46,7 @@ dev = [
   "nvidia-sphinx-theme",
   "sphinx-click",
 ]
-# Backwards-compatible alias; pyarrow is a core dependency (Parquet flavor).
+# Optional dependency for the Parquet flavor.
 parquet = [
   "pyarrow>=14.0.0",
 ]
@@ -84,7 +84,7 @@ tar_patcher = [
 ]
 
 all = [
-  "megatron-energon[av_decode,aistore,azure-storage-blob,dev,google-cloud-storage,huggingface,oci,s3,tar_patcher,transforms]",
+  "megatron-energon[av_decode,aistore,azure-storage-blob,dev,google-cloud-storage,huggingface,oci,parquet,s3,tar_patcher,transforms]",
 ]
 
 [project.urls]

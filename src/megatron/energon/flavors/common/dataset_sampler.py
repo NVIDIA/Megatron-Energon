@@ -100,6 +100,9 @@ class DatasetSampler(SavableDataset[RawSampleData]):
     #: Whether to skip heavy computations for discarded outputs
     _skip_mode: bool
 
+    #: Final closed state
+    _reader_closed = False
+
     _savable_fields = (
         "_worker_rng",
         "_pending_slice_index",
@@ -152,6 +155,18 @@ class DatasetSampler(SavableDataset[RawSampleData]):
 
         assert shuffle_over_epochs is None or shuffle_over_epochs == -1 or shuffle_over_epochs >= 1
         assert self.parallel_slice_iters >= 1
+
+    def close(self) -> None:
+        if not self._reader_closed:
+            self.reader.close()
+            self._reader_closed = True
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            # Destructors may run during interpreter shutdown.
+            pass
 
     def reset_state_own(self) -> None:
         self._worker_rng = WorkerRng(self.worker_config)

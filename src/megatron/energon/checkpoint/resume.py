@@ -26,6 +26,8 @@ from megatron.energon.wrappers.group_batch_dataset import GroupBatchDataset
 
 T = TypeVar("T")
 
+RESUME_METADATA_VERSION = 1
+
 
 @dataclass(frozen=True)
 class ResumeSubset:
@@ -205,9 +207,14 @@ class ResumeMetadata:
 
 
 def _normalize_metadata(metadata: ResumeMetadata | dict[str, Any]) -> ResumeMetadata:
-    if isinstance(metadata, ResumeMetadata):
-        return metadata
-    return ResumeMetadata.from_dict(metadata)
+    if not isinstance(metadata, ResumeMetadata):
+        metadata = ResumeMetadata.from_dict(metadata)
+    if metadata.version != RESUME_METADATA_VERSION:
+        raise ValueError(
+            f"Unsupported resume metadata version {metadata.version}; "
+            f"expected {RESUME_METADATA_VERSION}."
+        )
+    return metadata
 
 
 def resume_children(dataset: SavableDataset[Any]) -> tuple[SavableDataset[Any], ...]:
@@ -290,7 +297,7 @@ def collect_resume_metadata(
     """Collect checkpoint resume metadata from a dataloader or runtime dataset tree."""
 
     root = _dataloader_root_dataset(loader_or_dataset)
-    return ResumeMetadata(version=1, root=_metadata_for_dataset(root))
+    return ResumeMetadata(version=RESUME_METADATA_VERSION, root=_metadata_for_dataset(root))
 
 
 def _fresh_savable_state(value: Savable) -> Any:
@@ -345,11 +352,18 @@ def _find_saved_child(
     saved_children_meta: list[ResumeDatasetMetadata],
     used_saved_indexes: set[int],
 ) -> int | None:
-    for idx, saved_child_meta in enumerate(saved_children_meta):
-        if idx not in used_saved_indexes and _same_identity_set(
-            current_child_meta, saved_child_meta
-        ):
-            return idx
+    exact_matches = [
+        idx
+        for idx, saved_child_meta in enumerate(saved_children_meta)
+        if idx not in used_saved_indexes
+        and _same_identity_set(current_child_meta, saved_child_meta)
+    ]
+    if len(exact_matches) == 1:
+        return exact_matches[0]
+    if exact_matches:
+        # Multiple identical identities cannot be matched safely by position because
+        # blend children may have been reordered. Leave the current child fresh.
+        return None
 
     overlaps = [
         (idx, _identity_overlap(current_child_meta, saved_child_meta))

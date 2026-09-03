@@ -10,12 +10,15 @@ import webdataset as wds
 
 from megatron.energon import get_train_dataset
 from megatron.energon.checkpoint import (
+    ResumeDatasetMetadata,
     ResumeIdentity,
+    ResumeMetadata,
     ResumeSubset,
     collect_resume_metadata,
     make_resume_identity,
     migrate_dataloader_state,
 )
+from megatron.energon.checkpoint.resume import _find_saved_child
 from megatron.energon.flavors import BaseWebdatasetFactory
 from megatron.energon.flavors.base_dataset import FlexState
 from megatron.energon.flavors.common.manifest.paths import MAIN_FOLDER_NAME
@@ -98,39 +101,39 @@ class TestCheckpointResume(unittest.TestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
-    def test_recipe_blend_add_reorder_preserves_existing_leaf_progress(self):
-        def _loader(recipe_path: Path, worker_config: WorkerConfig):
-            dataset = get_train_dataset(
-                recipe_path,
-                worker_config=worker_config,
-                batch_size=1,
-                shuffle_buffer_size=None,
-                max_samples_per_sequence=None,
-                repeat=True,
+    def _loader(self, recipe_path: Path):
+        dataset = get_train_dataset(
+            recipe_path,
+            worker_config=WorkerConfig(rank=0, world_size=1, num_workers=0),
+            batch_size=1,
+            shuffle_buffer_size=None,
+            max_samples_per_sequence=None,
+            repeat=True,
+        )
+        return get_savable_loader(dataset)
+
+    @staticmethod
+    def _write_recipe(path: Path, entries: list[tuple[str, float]]) -> None:
+        lines = [
+            "__module__: megatron.energon",
+            "__class__: Recipe",
+            "splits:",
+            "  train:",
+            "    blend:",
+        ]
+        for rel_path, weight in entries:
+            lines.extend(
+                [
+                    f"      - weight: {weight}",
+                    f"        path: {rel_path}",
+                    "        split_part: train",
+                ]
             )
-            return get_savable_loader(dataset)
+        path.write_text("\n".join(lines))
 
-        def _write_recipe(path: Path, entries: list[tuple[str, float]]) -> None:
-            lines = [
-                "__module__: megatron.energon",
-                "__class__: Recipe",
-                "splits:",
-                "  train:",
-                "    blend:",
-            ]
-            for rel_path, weight in entries:
-                lines.extend(
-                    [
-                        f"      - weight: {weight}",
-                        f"        path: {rel_path}",
-                        "        split_part: train",
-                    ]
-                )
-            path.write_text("\n".join(lines))
-
-        worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0)
-        _write_recipe(self.recipe_path, [("a", 1.0), ("b", 1.0)])
-        old_loader = _loader(self.recipe_path, worker_config)
+    def test_recipe_blend_add_reorder_preserves_existing_leaf_progress(self):
+        self._write_recipe(self.recipe_path, [("a", 1.0), ("b", 1.0)])
+        old_loader = self._loader(self.recipe_path)
 
         seen_before_checkpoint: dict[str, set[int]] = {"a": set(), "b": set(), "c": set()}
         old_iter = iter(old_loader)
@@ -143,8 +146,8 @@ class TestCheckpointResume(unittest.TestCase):
         saved_metadata = collect_resume_metadata(old_loader)
         assert saved_state is not None
 
-        _write_recipe(self.recipe_path, [("b", 1.0), ("c", 1.0), ("a", 1.0)])
-        new_loader = _loader(self.recipe_path, worker_config)
+        self._write_recipe(self.recipe_path, [("b", 1.0), ("c", 1.0), ("a", 1.0)])
+        new_loader = self._loader(self.recipe_path)
         migrated_state = migrate_dataloader_state(new_loader, saved_state, saved_metadata)
         migrated_root = migrated_state.worker_states[0]
 
@@ -162,6 +165,111 @@ class TestCheckpointResume(unittest.TestCase):
 
         assert seen_before_checkpoint["a"].isdisjoint(seen_after_resume["a"])
         assert seen_before_checkpoint["b"].isdisjoint(seen_after_resume["b"])
+
+    def test_recipe_blend_remove_preserves_remaining_leaf_progress(self):
+        self._write_recipe(self.recipe_path, [("a", 1.0), ("b", 1.0), ("c", 1.0)])
+        old_loader = self._loader(self.recipe_path)
+        old_iter = iter(old_loader)
+        seen: dict[str, set[int]] = {"a": set(), "b": set(), "c": set()}
+        while not all(seen.values()):
+            _record_seen(seen, next(old_iter))
+
+        saved_state = old_loader.save_state_rank()
+        saved_metadata = collect_resume_metadata(old_loader)
+        assert saved_state is not None
+
+        self._write_recipe(self.recipe_path, [("c", 1.0), ("a", 1.0)])
+        new_loader = self._loader(self.recipe_path)
+        migrated_state = migrate_dataloader_state(new_loader, saved_state, saved_metadata)
+
+        sampler_counts = _sampler_counts(migrated_state.worker_states[0])
+        assert len(sampler_counts) == 2
+        assert all(count > 0 for count in sampler_counts)
+
+    def test_recipe_blend_duplicate_identity_stays_fresh(self):
+        self._write_recipe(self.recipe_path, [("a", 1.0), ("a", 2.0)])
+        old_loader = self._loader(self.recipe_path)
+        old_iter = iter(old_loader)
+        for _ in range(20):
+            next(old_iter)
+
+        saved_state = old_loader.save_state_rank()
+        saved_metadata = collect_resume_metadata(old_loader)
+        assert saved_state is not None
+
+        self._write_recipe(self.recipe_path, [("a", 2.0), ("c", 1.0), ("a", 1.0)])
+        new_loader = self._loader(self.recipe_path)
+        migrated_state = migrate_dataloader_state(new_loader, saved_state, saved_metadata)
+
+        # Neither duplicate a leaf can be matched safely after the reorder.
+        assert _sampler_counts(migrated_state.worker_states[0]) == [0, 0, 0]
+
+    def test_nested_recipe_split_override_migrates_leaf_progress(self):
+        inner_recipe_path = self.dataset_path / "inner.yaml"
+        outer_recipe_path = self.dataset_path / "outer.yaml"
+        self._write_recipe(inner_recipe_path, [("a", 1.0), ("b", 1.0)])
+        outer_recipe_path.write_text(
+            "\n".join(
+                [
+                    "__module__: megatron.energon",
+                    "__class__: Recipe",
+                    "splits:",
+                    "  train:",
+                    "    blend:",
+                    "      - path: inner.yaml",
+                    "        split_part: train",
+                ]
+            )
+        )
+        old_loader = self._loader(outer_recipe_path)
+        old_iter = iter(old_loader)
+        for _ in range(20):
+            next(old_iter)
+
+        saved_state = old_loader.save_state_rank()
+        saved_metadata = collect_resume_metadata(old_loader)
+        assert saved_state is not None
+
+        self._write_recipe(inner_recipe_path, [("b", 1.0), ("c", 1.0), ("a", 1.0)])
+        new_loader = self._loader(outer_recipe_path)
+        migrated_state = migrate_dataloader_state(new_loader, saved_state, saved_metadata)
+
+        sampler_counts = _sampler_counts(migrated_state.worker_states[0])
+        assert len(sampler_counts) == 3
+        assert sampler_counts[0] > 0
+        assert sampler_counts[1] == 0
+        assert sampler_counts[2] > 0
+
+    def test_changed_subset_does_not_reuse_leaf_progress(self):
+        def write_subset_recipe(end: str) -> None:
+            self.recipe_path.write_text(
+                "\n".join(
+                    [
+                        "__module__: megatron.energon",
+                        "__class__: Recipe",
+                        "splits:",
+                        "  train:",
+                        "    path: a",
+                        f"    subset: {{range: [0%, {end}]}}",
+                    ]
+                )
+            )
+
+        write_subset_recipe("50%")
+        old_loader = self._loader(self.recipe_path)
+        old_iter = iter(old_loader)
+        for _ in range(10):
+            next(old_iter)
+
+        saved_state = old_loader.save_state_rank()
+        saved_metadata = collect_resume_metadata(old_loader)
+        assert saved_state is not None
+
+        write_subset_recipe("75%")
+        new_loader = self._loader(self.recipe_path)
+        migrated_state = migrate_dataloader_state(new_loader, saved_state, saved_metadata)
+
+        assert _sampler_counts(migrated_state.worker_states[0]) == [0]
 
     def test_subset_round_trip_is_typed_and_hashable(self):
         identity = ResumeIdentity.from_dict(
@@ -199,6 +307,39 @@ class TestCheckpointResume(unittest.TestCase):
             range=(0.0, 1.0),
             absolute_range=(100, None),
         )
+
+    def test_ambiguous_exact_identity_does_not_pick_by_position(self):
+        identity = make_resume_identity(path="/dataset", split_part="train")
+        child = ResumeDatasetMetadata(
+            type="DatasetSampler",
+            config={},
+            identities=(identity,),
+        )
+
+        assert _find_saved_child(child, [child, child], set()) is None
+
+    def test_unsupported_resume_metadata_version_is_rejected(self):
+        worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0)
+        loader = get_savable_loader(
+            get_train_dataset(
+                self.dataset_path / "a",
+                worker_config=worker_config,
+                batch_size=1,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                repeat=True,
+            )
+        )
+        saved_state = loader.save_state_rank()
+        saved_metadata = collect_resume_metadata(loader)
+        assert saved_state is not None
+
+        with self.assertRaisesRegex(ValueError, "Unsupported resume metadata version 2"):
+            migrate_dataloader_state(
+                loader,
+                saved_state,
+                ResumeMetadata(version=2, root=saved_metadata.root),
+            )
 
 
 if __name__ == "__main__":

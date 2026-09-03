@@ -120,6 +120,38 @@ class TestDataset(unittest.TestCase):
         # Create a small dummy captioning dataset
         self.samples = self.create_captioning_test_dataset(self.dataset_path, DATASET_SIZE)
 
+    def test_loader_close_propagates_to_indexed_reader_once(self):
+        class CloseTrackingReader:
+            def __init__(self):
+                self.close_calls = 0
+
+            def __len__(self):
+                return 0
+
+            def __getitem__(self, index):
+                raise IndexError(index)
+
+            def close(self):
+                self.close_calls += 1
+
+        reader = CloseTrackingReader()
+        sampler = DatasetSampler(
+            reader=reader,
+            workers_sample_slice_offsets=[[]],
+            worker_config=no_worker_config,
+        )
+        dataset = MapDataset(
+            sampler,
+            lambda sample: sample,
+            worker_config=no_worker_config,
+        )
+        loader = get_loader(dataset)
+
+        loader.close()
+        loader.close()
+
+        assert reader.close_calls == 1
+
     def test_tags_backward_compatibility(self):
         legacy_tags = {"source": "legacy"}
         assert {field.name for field in dataclasses.fields(Sample)}.issuperset({"__tags__"})
@@ -2208,6 +2240,62 @@ class TestDataset(unittest.TestCase):
             for restored, cmp in zip(restored_samples, cmp_samples)
         )
         assert_segments([first_sample, *cmp_samples])
+
+    def test_stream_packing_discards_failed_and_empty_selections(self):
+        class RetryTaskEncoder(DefaultTaskEncoder):
+            def __init__(self):
+                super().__init__(raw_batch_type=CaptioningBatch)
+                self.calls = 0
+                self.failed_keys: list[str] | None = None
+                self.empty_keys: list[str] | None = None
+
+            @stateless
+            def encode_sample(self, sample: CaptioningSample) -> CaptioningSample:
+                return sample
+
+            def select_next_pack(
+                self, samples: Iterator[CaptioningSample]
+            ) -> list[list[CaptioningSample]]:
+                selected = [next(samples), next(samples)]
+                keys = [sample.__key__ for sample in selected]
+                self.calls += 1
+                if self.calls == 1:
+                    self.failed_keys = keys
+                    raise ValueError("discard this selection")
+                if self.calls == 2:
+                    self.empty_keys = keys
+                    return []
+                return [selected]
+
+            @stateless
+            def pack_selected_samples(self, samples: list[CaptioningSample]) -> CaptioningSample:
+                return CaptioningSample(
+                    __key__="|".join(sample.__key__ for sample in samples),
+                    __restore_key__=(),
+                    image=samples[0].image,
+                    caption="|".join(sample.caption for sample in samples),
+                )
+
+        task_encoder = RetryTaskEncoder()
+        loader = get_loader(
+            get_train_dataset(
+                self.dataset_path,
+                batch_size=None,
+                packing_buffer_size="stream",
+                worker_config=no_worker_config,
+                virtual_epoch_length=1,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                task_encoder=task_encoder,
+            )
+        )
+
+        sample = next(iter(loader))
+        assert task_encoder.failed_keys is not None
+        assert task_encoder.empty_keys is not None
+        sample_keys = set(sample.__key__.split("|"))
+        assert sample_keys.isdisjoint(task_encoder.failed_keys)
+        assert sample_keys.isdisjoint(task_encoder.empty_keys)
 
     def test_group_batch(self):
         class GroupingTaskEncoder(

@@ -231,20 +231,23 @@ class BinIdxReader(SamplePartFileReader[FilteredSample]):
 
     def list_all_sample_parts(self) -> Generator[Tuple[str, int, int], None, None]:
         for i in range(len(self._idx_reader)):
-            yield f"{i}.bin", self._idx_reader.length(i) * self._idx_reader.dtype_size, 0
+            yield f"{i}.tokens", self._idx_reader.length(i) * self._idx_reader.dtype_size, 0
 
     def list_sample_parts(self, sample_key: str) -> Generator[Tuple[str, int, int], None, None]:
         try:
             idx = int(sample_key)
         except ValueError:
             raise ValueError(f"Invalid bin-idx sample key: {sample_key}")
-        yield f"{sample_key}.bin", self._idx_reader.length(idx) * self._idx_reader.dtype_size, 0
+        yield f"{sample_key}.tokens", self._idx_reader.length(idx) * self._idx_reader.dtype_size, 0
 
     def get_total_size(self) -> int:
         return self._bin_size
 
     def close(self):
-        self._bin_file.close()
+        try:
+            self._bin_file.close()
+        finally:
+            self._idx_reader.close()
 
     @staticmethod
     def count_samples(bin_path: EPath | str) -> int:

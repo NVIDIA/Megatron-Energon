@@ -49,6 +49,28 @@ from megatron.energon.wrappers.watchdog_dataset import WatchdogDataset
 T = TypeVar("T")
 
 
+def _close_data_loader(loader: DataLoader[Any]) -> None:
+    """Shut down worker processes before closing the main-process dataset tree."""
+    epoch_iterator = getattr(loader, "_epoch_iterator", None)
+    if epoch_iterator is not None:
+        close_iterator = getattr(epoch_iterator, "close", None)
+        if close_iterator is not None:
+            close_iterator()
+        loader._epoch_iterator = None
+
+    data_iterator = getattr(loader, "_iterator", None)
+    if data_iterator is not None:
+        shutdown_workers = getattr(data_iterator, "_shutdown_workers", None)
+        if shutdown_workers is not None:
+            shutdown_workers()
+        loader._iterator = None
+
+    dataset = getattr(loader, "dataset", None)
+    close_dataset = getattr(dataset, "close", None)
+    if close_dataset is not None:
+        close_dataset()
+
+
 def _init_worker(seed_per_worker: List[int], worker_id: int):
     """Initializes the the worker process.
 
@@ -133,7 +155,9 @@ class SimpleSavableDatasetWrapper(BaseWrapperDataset[T, Tuple[int, int, T]], Gen
         assert id == type(self).__name__
         restore_key = restore_key[3:]
         self.worker_config.worker_activate(
-            sample_idx, override_global_rank=logical_worker_id, cache_pool=self.cache_pool
+            sample_idx,
+            override_logical_global_rank=logical_worker_id,
+            cache_pool=self.cache_pool,
         )
         try:
             return add_sample_restore_key(
@@ -320,14 +344,23 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
         # Note: This disables hasattr(self, "__len__"), because that attr will
         raise AttributeError("Disabled direct length access to avoid DataLoader warnings.")
 
-    def __del__(self):
+    def close(self) -> None:
         if self._cmd_thread is not None:
             # print(f"{id(self)}:{multiprocessing.current_process().ident} Closing cmd thread")
             self._running = False
-            self._cmd_thread.join()
+            if self._cmd_thread is not threading.current_thread():
+                self._cmd_thread.join()
             self._command_lock = None
             self._cmd_thread = None
             # print(f"{id(self)}:{multiprocessing.current_process().ident} Cmd thread closed")
+        self.dataset.close()
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            # Destructors may run during interpreter shutdown.
+            pass
 
     def __iter__(self):
         # First: Set the worker offset globally for the current worker
@@ -566,7 +599,9 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
         id, logical_worker_id, sample_idx = restore_key[:3]
         assert id == type(self).__name__
         restore_key = restore_key[3:]
-        self.worker_config.worker_activate(sample_idx, override_global_rank=logical_worker_id)
+        self.worker_config.worker_activate(
+            sample_idx, override_logical_global_rank=logical_worker_id
+        )
         try:
             return add_sample_restore_key(
                 self.dataset.restore_sample(restore_key),
@@ -817,6 +852,22 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
     def __len__(self):
         # We override this, because otherwise we'll see warnings
         return self.dataset.len_rank()
+
+    def close(self) -> None:
+        _close_data_loader(self)
+
+    def __enter__(self) -> "SavableDataLoader[T]":
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self.close()
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            # Destructors may run during interpreter shutdown.
+            pass
 
     def _epoch_iter(self):
         """Iterator for one epoch, i.e. until the inner dataset raises StopIteration."""
@@ -1304,6 +1355,22 @@ class BasicDataLoader(DataLoader[T], Generic[T]):
     def __len__(self):
         # We override this, because otherwise we'll see warnings
         return self.dataset.len_rank()
+
+    def close(self) -> None:
+        _close_data_loader(self)
+
+    def __enter__(self) -> "BasicDataLoader[T]":
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self.close()
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            # Destructors may run during interpreter shutdown.
+            pass
 
     def __iter__(self):
         def _inner_generator(iterator):

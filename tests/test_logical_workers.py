@@ -90,6 +90,14 @@ class TestWorkerConfigLogicalWorkers(unittest.TestCase):
         wc2 = WorkerConfig(rank=0, world_size=1, num_workers=2)
         assert not _stride_needed(wc2)
 
+    def test_restore_uses_logical_worker_override_without_remapping(self) -> None:
+        wc = WorkerConfig(rank=0, world_size=6, num_workers=0, logical_workers=2)
+        wc.worker_activate(0, override_logical_global_rank=1)
+        try:
+            assert wc.logical_global_worker_id() == 1
+        finally:
+            wc.worker_deactivate()
+
 
 class TrackingCrudePackingTaskEncoder(
     DefaultTaskEncoder[IndexTextSample, IndexTextSample, IndexTextBatch, IndexTextBatch]
