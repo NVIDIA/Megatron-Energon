@@ -182,7 +182,7 @@ class SampleIndex(Savable):
             self.current_idx = state
 
 
-def get_sample_restore_key(sample: Any) -> Optional[Union[str, int]]:
+def get_sample_restore_key(sample: Any) -> Optional[Union[str, int, tuple]]:
     """Gets the restore key from an arbitrary sample."""
     if isinstance(sample, Sample) or hasattr(sample, "__restore_key__"):
         return sample.__restore_key__
