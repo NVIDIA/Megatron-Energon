@@ -3,6 +3,7 @@
 
 import contextlib
 import inspect
+from dataclasses import dataclass, field
 from typing import (
     Any,
     Callable,
@@ -12,6 +13,7 @@ from typing import (
     Iterator,
     List,
     Optional,
+    Sequence,
     TypeVar,
     Union,
 )
@@ -31,6 +33,19 @@ T_encoded_sample = TypeVar("T_encoded_sample")
 T_batch_sample = TypeVar("T_batch_sample")
 
 
+@dataclass(slots=True, frozen=True)
+class PackedSamplesOutput(Generic[T_sample]):
+    """Return type for :meth:`~megatron.energon.TaskEncoder.select_samples_to_pack` when including
+    samples to push back onto the packing reading buffer."""
+
+    #: The packs of samples to be packed together.
+    # One entry per pack, each containing the samples to be packed together.
+    packs: list[list[T_sample]]
+
+    #: The samples to push back onto the packing reading buffer for the next fill.
+    pushback: Sequence[T_sample] = field(default_factory=tuple)
+
+
 class PackingDataset(
     BaseWrapperDataset[T_sample, T_batch_sample],
     Generic[T_sample, T_encoded_sample, T_batch_sample],
@@ -39,7 +54,7 @@ class PackingDataset(
     then combined into a batch."""
 
     buffer_size: int
-    pre_packer: Callable[[List[T_sample]], List[List[T_sample]]]
+    pre_packer: Callable[[list[T_sample]], list[list[T_sample]] | PackedSamplesOutput[T_sample]]
     sample_encoder: Optional[Callable[[T_sample], T_encoded_sample]]
     sample_encoder_stateless: bool
     final_packer: Callable[[List[T_encoded_sample]], T_batch_sample]
@@ -86,7 +101,9 @@ class PackingDataset(
         self,
         dataset: SavableDataset[T_sample],
         buffer_size: int,
-        pre_packer: Callable[[List[T_sample]], List[List[T_sample]]],
+        pre_packer: Callable[
+            [list[T_sample]], list[list[T_sample]] | PackedSamplesOutput[T_sample]
+        ],
         final_packer: Callable[[List[T_encoded_sample]], T_batch_sample],
         *,
         final_packer_stateless: bool = False,
@@ -108,7 +125,8 @@ class PackingDataset(
             dataset: The input dataset to wrap
             buffer_size: The desired size of the input buffer for pre packing. Last buffer of a dataset may be smaller.
             pre_packer: Function which selects samples from the buffer to be packed together.
-                May raise :exc:`megatron.energon.SkipSample` to skip a buffer.
+                May return :class:`PackedSamplesOutput` to include a ``pushback`` sequence
+                reapplied to the reading buffer. May raise :exc:`megatron.energon.SkipSample` to skip a buffer.
             final_packer: Function which combines the selected samples into a single sample.
             final_packer_stateless: If True, the final_packer is stateless, thus samples can be
                 stored/restored.
@@ -245,26 +263,35 @@ class PackingDataset(
             together."""
 
             assert self._pre_packing_buffer.len_worker() == 0
-            if self._reading_buffer.len_worker() > 0:
-                # Take all samples from the reading buffer and pre_pack them
-                samples = self._reading_buffer.buffer.copy()
-                # Clear buffer and pre_packing_lengths
-                self._reading_buffer.clear()
-                pre_packing_lengths.clear()
-                # Now pre pack the samples
-                pre_packs = []
-                with self._pre_pack_failure_handler.handle_errors(samples):
-                    with self._pre_packing_sample_index.ctx():
-                        pre_packs = self.pre_packer(samples)
+            if self._reading_buffer.len_worker() == 0:
+                return
 
-                # Put the pre-packed samples into the pre_packing_buffer
-                # They will be flattened here to avoid nested buffers
-                # But the lengths of the groups are stored in pre_packing_lengths
-                # so that the groups can be separated later
-                for pre_pack in pre_packs:
-                    if len(pre_pack) > 0:
-                        self._pre_packing_buffer.extend(pre_pack)
-                        pre_packing_lengths.append(len(pre_pack))
+            # Take all samples from the reading buffer and pre_pack them
+            samples = self._reading_buffer.buffer.copy()
+            # Clear buffer and pre_packing_lengths
+            self._reading_buffer.clear()
+            pre_packing_lengths.clear()
+            # Now pre pack the samples
+            pre_packs_result: list[list[T_sample]] | PackedSamplesOutput[T_sample] | None = None
+            with self._pre_pack_failure_handler.handle_errors(samples):
+                with self._pre_packing_sample_index.ctx():
+                    pre_packs_result = self.pre_packer(samples)
+            if pre_packs_result is None:
+                # The error handler may actually catch the error
+                return
+            # Put the pre-packed samples into the pre_packing_buffer
+            # They will be flattened here to avoid nested buffers
+            # But the lengths of the groups are stored in pre_packing_lengths
+            # so that the groups can be separated later
+            if isinstance(pre_packs_result, PackedSamplesOutput):
+                pre_packs = pre_packs_result.packs
+                self._reading_buffer.extend(list(pre_packs_result.pushback))
+            else:
+                pre_packs = pre_packs_result
+            for pre_pack in pre_packs:
+                if len(pre_pack) > 0:
+                    self._pre_packing_buffer.extend(pre_pack)
+                    pre_packing_lengths.append(len(pre_pack))
 
         def next_final_pack() -> Generator[T_batch_sample, None, None]:
             """Yield the next packs from the buffer. The final packer is called on the fly."""
@@ -368,18 +395,14 @@ class PackingDataset(
         self.assert_can_restore()
         if inspect.isgeneratorfunction(self.final_packer):
             id, pack_idx, pack_sub_idx, *pack_restore_keys = restore_key
-            id, pack_idx, pack_sub_idx, *pack_restore_keys = restore_key
             assert id == type(self).__name__
         else:
-            id, pack_idx, *pack_restore_keys = restore_key
             id, pack_idx, *pack_restore_keys = restore_key
             assert id == type(self).__name__
 
         pack = []
         for inner_idx in pack_restore_keys:
             if self.sample_encoder is not None:
-                id, sample_idx, *inner_idx = inner_idx
-                assert id == type(self).__name__
                 id, sample_idx, *inner_idx = inner_idx
                 assert id == type(self).__name__
                 assert isinstance(sample_idx, int)
