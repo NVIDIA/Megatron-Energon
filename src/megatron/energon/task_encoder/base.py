@@ -373,6 +373,9 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
     #: The decoder to use for decoding samples. Set manually as needed to override options.
     decoder: Optional[SampleDecoder] = SampleDecoder()
 
+    blend_sample_size_alpha: float = 1.0
+    blend_sample_size_epsilon: float = 1.0
+
     def _is_overridden(
         self, bound_method: Callable[..., Any], bases: Optional[Sequence[Type[Any]]] = None
     ) -> bool:
@@ -456,6 +459,15 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         If this is defined, :func:`encode_sample` must not be defined.
         """
         return sample
+
+    @stateless
+    def blend_sample_size(self, sample: T_sample) -> int | float:
+        """Return the blend accounting size of a sample.
+
+        When overridden, :class:`BlendDataset` uses soft size-deficit regulation so blend weights
+        target accumulated size rather than sample count. Default is 1 (sample-count blending).
+        """
+        return 1.0
 
     @stateless
     def batch(self, samples: List[T_encoded_sample]) -> T_raw_batch:
@@ -857,9 +869,15 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         if len(inner_datasets) > 1:
             # The worker offset for each dataset is the cumsum of the dataset lengths, but modulo the
             # global number of workers.
+            sample_size_fn = (
+                self.blend_sample_size if self._is_overridden(self.blend_sample_size) else None
+            )
             dataset = BlendDataset(
                 *[inner_dataset[:2] for inner_dataset in inner_datasets],
                 worker_config=worker_config,
+                sample_size_fn=sample_size_fn,
+                sample_size_epsilon=self.blend_sample_size_epsilon,
+                sample_size_alpha=self.blend_sample_size_alpha,
             )
         elif len(datasets) == 1:
             dataset = inner_datasets[0][0]
