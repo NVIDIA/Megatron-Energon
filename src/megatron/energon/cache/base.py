@@ -11,7 +11,7 @@ from megatron.energon.source_info import SourceInfo, add_source_info
 T = TypeVar("T")
 
 
-class FileStore(Generic[T]):
+class FileStore(ABC, Generic[T]):
     """Base type for a dataset that can be accessed randomly by sample key."""
 
     @abstractmethod
@@ -39,6 +39,18 @@ class FileStore(Generic[T]):
     def get_path(self) -> str:
         """Returns the path to the dataset."""
         ...
+
+    def worker_init(self) -> None:
+        """Initializes the file store for the current worker."""
+        pass
+
+    def worker_close(self) -> None:
+        """Closes the file store for the current worker."""
+        pass
+
+    def close(self) -> None:
+        """Closes the file store."""
+        pass
 
     def get_media_metadata(self, key: str) -> MediaMetadataBase:
         """Return the media metadata for the given key if available."""
@@ -72,6 +84,15 @@ class FileStoreWrapper(FileStore[T]):
             The decoded data.
         """
         return self._inner._decode_raw(data, **kwargs)
+
+    def worker_init(self) -> None:
+        self._inner.worker_init()
+
+    def worker_close(self) -> None:
+        self._inner.worker_close()
+
+    def close(self) -> None:
+        self._inner.close()
 
 
 @edataclass
@@ -166,6 +187,20 @@ class CachePool(ABC):
     def get_lazy(self, ds: FileStore, fname: str) -> Lazy:
         """
         Get a lazy reference to the data for a given file.
+        """
+        ...
+
+    @abstractmethod
+    def worker_init(self) -> None:
+        """
+        Initialize the cache pool for the current worker.
+        """
+        ...
+
+    @abstractmethod
+    def worker_close(self) -> None:
+        """
+        Close the cache pool for the current worker.
         """
         ...
 

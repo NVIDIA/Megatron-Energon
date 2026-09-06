@@ -42,13 +42,8 @@ class FilterDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
         self.filter_fn = filter_fn
         self.filter_fn_config = filter_fn_config
 
-        self.reset_state_own()
-
     def reset_state_own(self) -> None:
         self._sample_index = SampleIndex(self.worker_config, src=self)
-
-    def len_worker(self, worker_idx: int | None = None) -> int:
-        return self.dataset.len_worker(worker_idx)
 
     def __iter__(self) -> Iterator[T_sample]:
         for sample in self.dataset:
