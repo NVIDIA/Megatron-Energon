@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import dataclasses
+import functools
 from typing import Any, Callable, Dict, Generic, List, Optional, TypeVar, Union
 
 from megatron.energon.epathlib import EPath
@@ -13,6 +14,27 @@ from megatron.energon.flavors.webdataset.structs import FilteredSample
 from megatron.energon.module_loader import ModuleLoader
 
 T_sample = TypeVar("T_sample", covariant=True)
+
+
+def _part_in_set(part: str, parts) -> bool:
+    """Picklable replacement for ``lambda part: part in parts`` (forkserver/spawn support)."""
+    return part in parts
+
+
+def _apply_field_map(sample: Dict[str, Any], fields) -> Dict[str, Any]:
+    """Picklable replacement for the field_map sample loader lambda."""
+    return {k: field_access(sample, v) for k, v in fields.items()}
+
+
+def _wrap_sample(sample: Dict[str, Any], inner: Callable, subflavors) -> Dict[str, Any]:
+    """Picklable replacement for the sample wrapping lambda."""
+    return {
+        "__key__": sample["__key__"],
+        **inner(sample),
+        "__restore_key__": sample["__restore_key__"],
+        "__subflavors__": subflavors,
+        "__sources__": sample["__sources__"],
+    }
 
 
 class DefaultGenericWebdatasetFactory(BaseWebdatasetFactory[T_sample], Generic[T_sample]):
@@ -61,7 +83,7 @@ class DefaultGenericWebdatasetFactory(BaseWebdatasetFactory[T_sample], Generic[T
                 sample_loader = sample_loader
             if isinstance(part_filter, list):
                 parts = set(part_filter)
-                part_filter = lambda part: part in parts
+                part_filter = functools.partial(_part_in_set, parts=parts)
             elif isinstance(part_filter, str):
                 part_filter = module_loader.get_function(
                     part_filter, "part_filter", relative_path=path / MAIN_FOLDER_NAME
@@ -84,21 +106,19 @@ class DefaultGenericWebdatasetFactory(BaseWebdatasetFactory[T_sample], Generic[T
             ).issubset(field_map.keys()), (
                 f"field_map does not map to type {self.__sample_type__.__name__} fields"
             )
-            self._sample_loader = lambda sample: {
-                k: field_access(sample, v) for k, v in fields.items()
-            }
+            self._sample_loader = functools.partial(_apply_field_map, fields=fields)
             parts = set(access[0] for options in fields.values() for access in options)
-            part_filter = lambda part: part in parts
+            part_filter = functools.partial(_part_in_set, parts=parts)
+        # Share one dict so later dataset.subflavors.update(...) is visible in samples.
+        resolved_subflavors = subflavors or {}
         inner_sample_loader = self._sample_loader
-        self._sample_loader = lambda sample: {
-            "__key__": sample["__key__"],
-            **inner_sample_loader(sample),
-            "__restore_key__": sample["__restore_key__"],
-            "__subflavors__": self.subflavors,
-            "__sources__": sample["__sources__"],
-        }
+        self._sample_loader = functools.partial(
+            _wrap_sample,
+            inner=inner_sample_loader,
+            subflavors=resolved_subflavors,
+        )
         super().__init__(path, **kwargs, part_filter=part_filter)
-        self.subflavors = subflavors or {}
+        self.subflavors = resolved_subflavors
 
     def load_sample(self, sample: FilteredSample) -> T_sample:
         return self.__sample_type__(**self._sample_loader(sample))
