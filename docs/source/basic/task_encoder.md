@@ -39,6 +39,48 @@ If a sample or batch is to be ignored, any of these methods may raise {py:class}
 
 The types `T_sample`, `T_encoded_sample`, `T_raw_batch` and `T_batch` are generics and depend on your task. You do not necessarily have to specify them, it's only used for proper typing in your IDE.
 
+## Deterministic Randomness
+
+Randomized task encoder methods must use reproducible RNG state so that restoring a sample or
+loader checkpoint produces the same output. The recommended API is the worker-local
+{py:attr}`TaskEncoder.rng <megatron.energon.TaskEncoder.rng>`:
+
+```python
+import torch
+
+from megatron.energon import DefaultTaskEncoder, stateless
+
+
+class RandomizedTaskEncoder(DefaultTaskEncoder):
+    @stateless(restore_task_encoder_seeds=True)
+    def encode_sample(self, sample):
+        sample.torch_value = torch.rand((), generator=self.rng.torch)
+        sample.numpy_value = self.rng.numpy.random()
+        sample.python_value = self.rng.random.random()
+        return sample
+```
+
+`TaskEncoder.rng` provides independent PyTorch, NumPy, and Python generators for each worker.
+Its compatibility by loader worker mode is:
+
+| Worker mode | Supported deterministic RNG handling |
+| --- | --- |
+| `worker_type="fork"` | `TaskEncoder.rng` or process-global RNGs |
+| `worker_type="main"` | `TaskEncoder.rng` or process-global RNGs |
+| `worker_type="thread"` | `TaskEncoder.rng` only |
+
+The legacy `@stateless(restore_seeds=True)` mode saves, seeds, and restores the process-global
+`torch`, `numpy.random`, and `random` state. It is not supported with thread workers: all worker
+threads share that state, so concurrent calls can consume or restore another worker's RNG state
+and make results scheduling-dependent. A passing concurrency test cannot establish that this is
+safe.
+
+Do not call process-global random APIs from a method using
+`restore_task_encoder_seeds=True`; pass `self.rng.torch` to PyTorch operations and use
+`self.rng.numpy` or `self.rng.random` directly. Switching an existing pipeline from global RNGs to
+`TaskEncoder.rng` may change its exact random sequence and should be treated as a data-stream
+change.
+
 ```python
 from dataclasses import dataclass
 from typing import Callable, List, Optional
@@ -129,7 +171,7 @@ train_img_transform = transforms.Compose(
     ]
 )
 
-train_loader = get_loader(get_train_dataset(
+with get_loader(get_train_dataset(
     '/my/dataset/path',
     batch_size=32,
     shuffle_buffer_size=100,
@@ -138,10 +180,9 @@ train_loader = get_loader(get_train_dataset(
         tokenizer=AutoTokenizer.from_pretrained('gpt2'),
         image_transform=train_img_transform,
     ),
-))
-
-for data in train_loader:
-    # data is a CaptioningBatch
-    pass
+)) as train_loader:
+    for data in train_loader:
+        # data is a CaptioningBatch
+        pass
 
 ```

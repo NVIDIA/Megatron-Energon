@@ -5,6 +5,7 @@ from megatron.energon.wrappers.batch_dataset import BatchDataset
 from megatron.energon.wrappers.blend_dataset import BlendDataset
 from megatron.energon.wrappers.concat_dataset import ConcatDataset
 from megatron.energon.wrappers.epochize_dataset import EpochizeDataset
+from megatron.energon.wrappers.file_store_init_wrapper import FileStoreInitWrapper
 from megatron.energon.wrappers.filter_dataset import FilterDataset
 from megatron.energon.wrappers.gc_dataset import GcDataset
 from megatron.energon.wrappers.group_batch_dataset import GroupBatchDataset
@@ -24,6 +25,7 @@ from megatron.energon.wrappers.shuffle_buffer_dataset import ShuffleBufferDatase
 from megatron.energon.wrappers.skip import SkipSample
 
 __all__ = [
+    "FileStoreInitWrapper",
     "BatchDataset",
     "BlendDataset",
     "ConcatDataset",

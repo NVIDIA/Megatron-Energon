@@ -5,9 +5,12 @@
 
 import io
 import logging
+import multiprocessing
 import os
 import pickle
+import queue
 import sys
+import threading
 import time
 import unittest
 from dataclasses import fields
@@ -19,13 +22,13 @@ import torch
 import torchvision.transforms as transforms
 
 from megatron.energon.av import AVDecoder, get_clips_uniform, get_single_frames_uniform
+from megatron.energon.av.av_decoder_gpu import AVDecoderGpu
 from megatron.energon.av.av_reader import AVProbeIndex
+from megatron.energon.flavors.webdataset.sample_decoder import SampleDecoder
 from megatron.energon.media import AVMetadata
 
 # Set multiprocessing start method to 'spawn' on macOS to avoid DataLoader cleanup issues
 if sys.platform == "darwin":
-    import multiprocessing
-
     multiprocessing.set_start_method("spawn", force=True)
 
 
@@ -154,8 +157,10 @@ class TestVideoProbe(unittest.TestCase):
                 assert index.search_timestamp(mid, backward=False) == keyframes[i][0]
 
 
-class TestVideoDecode(unittest.TestCase):
+class _TestVideoDecodeBase:
     """Test video decoding functionality."""
+
+    decoder_class: type[AVDecoder]
 
     def setUp(self):
         """Set up test fixtures."""
@@ -181,18 +186,18 @@ class TestVideoDecode(unittest.TestCase):
 
     def test_decode_all_frames(self):
         """Test decoding all frames from a video file."""
-        av_decoder = AVDecoder(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes()))
+        av_decoder = self.decoder_class(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes()))
         av_data = av_decoder.get_frames()
         video_tensor = av_data.video_clips[0]
 
         print(video_tensor.shape)
-        assert (video_tensor == self.complete_video_tensor).all(), (
+        assert tensors_close(video_tensor.cpu(), self.complete_video_tensor, tolerance=0.001), (
             "Energon decoded video does not match baseline"
         )
 
     def test_verify_video_decode(self):
         """Verify the video decode matches the baseline."""
-        av_decoder = AVDecoder(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes()))
+        av_decoder = self.decoder_class(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes()))
         all_timestamps = []
         for frame in [*range(5), *range(245, 255), *range(1881, 1891)]:
             # print(f"Loading frame {frame}")
@@ -203,7 +208,9 @@ class TestVideoDecode(unittest.TestCase):
             assert video_data[0].shape == (1, 3, 108, 192), (
                 f"Shape of frame {frame} is {video_data[0].shape}"
             )
-            assert (video_data[0] == self.complete_video_tensor[frame : frame + 1]).all()
+            assert tensors_close(
+                video_data[0].cpu(), self.complete_video_tensor[frame : frame + 1], 0.01
+            )
             # print(f"Timestamp for frame {frame}: {timestamps[0]}")
             all_timestamps.append(0.5 * (timestamps[0][0] + timestamps[0][1]))
 
@@ -222,7 +229,9 @@ class TestVideoDecode(unittest.TestCase):
             assert video_data[0].shape == (1, 3, 108, 192), (
                 f"Shape of frame {frame} is {video_data[0].shape}"
             )
-            assert (video_data[0] == self.complete_video_tensor[frame : frame + 1]).all()
+            assert tensors_close(
+                video_data[0].cpu(), self.complete_video_tensor[frame : frame + 1], 0.01
+            )
             assert 0.5 * (timestamps[0][0] + timestamps[0][1]) == timestamp1, (
                 f"Timestamp for frame {frame} is {timestamps[0][0]} + {timestamps[0][1]}"
             )
@@ -235,12 +244,16 @@ class TestVideoDecode(unittest.TestCase):
                 assert video_data[0].shape == (1, 3, 108, 192), (
                     f"Shape of frame {frame} is {video_data[0].shape}"
                 )
-                assert (video_data[0] == self.complete_video_tensor[frame : frame + 1]).all()
+                assert tensors_close(
+                    video_data[0].cpu(), self.complete_video_tensor[frame : frame + 1], 0.01
+                )
             else:
                 assert video_data[0].shape == (2, 3, 108, 192), (
                     f"Shape of frame {frame} is {video_data[0].shape}"
                 )
-                assert (video_data[0] == self.complete_video_tensor[frame : frame + 2]).all()
+                assert tensors_close(
+                    video_data[0].cpu(), self.complete_video_tensor[frame : frame + 2], 0.01
+                )
 
     def test_decode_metadata(self):
         """Test decoding metadata."""
@@ -283,7 +296,7 @@ class TestVideoDecode(unittest.TestCase):
             ["tests/data/sync_test.mkv", "tests/data/sync_test.mp4", "tests/data/sync_test.avi"],
             expected_metadata,
         ):
-            av_decoder = AVDecoder(io.BytesIO(Path(video_file).read_bytes()))
+            av_decoder = self.decoder_class(io.BytesIO(Path(video_file).read_bytes()))
 
             actual_metadata = av_decoder.get_metadata(get_audio_num_samples=True)
             assert avmetadata_equal(actual_metadata, expected_metadata), (
@@ -319,7 +332,7 @@ class TestVideoDecode(unittest.TestCase):
             "tests/data/sync_test.avi",
         ]:
             print(f"================= Testing {video_file} ==================")
-            av_decoder = AVDecoder(io.BytesIO(Path(video_file).read_bytes()))
+            av_decoder = self.decoder_class(io.BytesIO(Path(video_file).read_bytes()))
 
             video_tensor = get_single_frames_uniform(
                 av_decoder=av_decoder,
@@ -337,13 +350,13 @@ class TestVideoDecode(unittest.TestCase):
             strided_resized_baseline_tensor = resize(strided_baseline_tensor)
 
             # We allow small numerical differences due to different resize implementations
-            assert tensors_close(video_tensor, strided_resized_baseline_tensor, tolerance=0.01), (
-                "Energon decoded video does not match baseline"
-            )
+            assert tensors_close(
+                video_tensor.cpu(), strided_resized_baseline_tensor, tolerance=0.01
+            ), "Energon decoded video does not match baseline"
 
     def test_time_precision(self):
         """Test decoding video frames with time precision."""
-        av_decoder = AVDecoder(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes()))
+        av_decoder = self.decoder_class(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes()))
         video_data, timestamps = av_decoder.get_video_clips(
             video_clip_ranges=[
                 (4 + 1 / 30, 4 + 1 / 30),
@@ -366,7 +379,7 @@ class TestVideoDecode(unittest.TestCase):
             "First extracted frame is not all white in the area (18, 18, 55, 55)"
         )
 
-        av_decoder = AVDecoder(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes()))
+        av_decoder = self.decoder_class(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes()))
         video_data, timestamps = av_decoder.get_video_clips(
             video_clip_ranges=[(4 * 30 + 1, 4 * 30 + 1), (4 * 30 + 1, 4 * 30 + 1)],
             video_unit="frames",
@@ -379,7 +392,7 @@ class TestVideoDecode(unittest.TestCase):
         )
         from PIL import Image
 
-        Image.fromarray(video_data[0][0, :, 18:55, 18:55].numpy().transpose(1, 2, 0)).save(
+        Image.fromarray(video_data[0][0, :, 18:55, 18:55].cpu().numpy().transpose(1, 2, 0)).save(
             "circ.png"
         )
         assert (video_data[0][0, :, 18:55, 18:55] > 250).all(), (
@@ -388,7 +401,7 @@ class TestVideoDecode(unittest.TestCase):
 
     def test_video_audio_sync(self):
         """Test decoding video frames and audio clips together."""
-        av_decoder = AVDecoder(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes()))
+        av_decoder = self.decoder_class(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes()))
 
         # Extract a single frame every 2 seconds and an audio clip (0.05 seconds long) at the same time.
         # We extract the frames from the sync video that shows the full white circle on the left,
@@ -433,7 +446,7 @@ class TestVideoDecode(unittest.TestCase):
 
     def test_pickle_decoder(self):
         """Test AVDecoder on a video file can be pickled and unpickled."""
-        av_decoder = AVDecoder(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes()))
+        av_decoder = self.decoder_class(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes()))
 
         # Get metadata from original decoder
         original_metadata = av_decoder.get_metadata()
@@ -461,6 +474,76 @@ class TestVideoDecode(unittest.TestCase):
         assert video_tensor.shape == (16, 3, 64, 64), (
             f"Expected shape (16, 3, 64, 64), got {video_tensor.shape}"
         )
+
+
+class TestVideoDecodeCPU(_TestVideoDecodeBase, unittest.TestCase):
+    decoder_class = AVDecoder
+
+
+@unittest.skipUnless(torch.cuda.is_available(), "GPU required")
+class TestVideoDecodeGPU(_TestVideoDecodeBase, unittest.TestCase):
+    decoder_class = AVDecoderGpu
+
+    def test_gpu_decode_device(self) -> None:
+        av_decoder = self.decoder_class(io.BytesIO(Path("tests/data/sync_test.mp4").read_bytes()))
+        result_tensor = av_decoder.get_frames().video_clips[0]
+
+        assert result_tensor.device.type == "cuda"
+
+    def test_gpu_decode_fails_on_fork(self) -> None:
+        sample_decoder = SampleDecoder(av_decode="AVDecoder", video_decode_device="gpu")
+
+        ctx = multiprocessing.get_context("fork")
+        result = ctx.Queue()
+        video_bytes = Path("tests/data/sync_test.mp4").read_bytes()
+
+        def decode_in_fork() -> None:
+            try:
+                sample_decoder.decode("test.mp4", video_bytes)
+                result.put(None)
+            except Exception as e:
+                result.put(e)
+
+        proc = ctx.Process(target=decode_in_fork)
+        proc.start()
+        proc.join(30)
+
+        try:
+            maybeError = result.get(timeout=30)
+        except queue.Empty:
+            self.fail("No result from forked child")
+        finally:
+            if proc.is_alive():
+                proc.kill()
+
+        self.assertIsInstance(maybeError, SystemError)
+
+    def test_gpu_decode_succeeds_on_thread(self) -> None:
+        sample_decoder = SampleDecoder(av_decode="AVDecoder", video_decode_device="gpu")
+        results = {}
+        video_bytes = Path("tests/data/sync_test.mp4").read_bytes()
+
+        cpu_video = load_video_to_tensor("tests/data/sync_test.mp4")
+
+        def decode_in_thread(tid) -> None:
+            try:
+                decoder = sample_decoder.decode("test.mp4", video_bytes)
+                results[tid] = decoder.get_frames().video_clips[0]
+            except Exception as e:
+                results[tid] = e
+
+        threads = [threading.Thread(target=decode_in_thread, args=(i,)) for i in range(2)]
+
+        for t in threads:
+            t.start()
+
+        for t in threads:
+            t.join(30)
+
+        assert len(results) == 2
+        assert all([isinstance(r, torch.Tensor) for r in results.values()])
+        assert all([r.device.type == "cuda" for r in results.values()])
+        assert all([tensors_close(r.cpu(), cpu_video, tolerance=0.001) for r in results.values()])
 
 
 def load_audio_to_tensor(audio_path: str) -> torch.Tensor:
