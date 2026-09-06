@@ -126,7 +126,7 @@ class EPath:
         if parts[0] != "/":
             raise ValueError("Only absolute paths are supported")
         if ".." in parts or "." in parts:
-            new_parts = []
+            new_parts: list[str] = []
             for part in parts[1:]:
                 if part == "..":
                     if len(new_parts) == 0:

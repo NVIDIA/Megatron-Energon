@@ -18,7 +18,7 @@ class ModuleLoader:
         with path.open("r") as rf:
             src_code = rf.read()
         code = compile(src_code, path.url, "exec")
-        mod = {}
+        mod: dict[str, Any] = {}
         eval(code, mod)
         self._modules[path] = mod
 

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import re
-from typing import List, Optional
+from typing import Any, List, Optional
 
 import click
 import torch
@@ -267,7 +267,7 @@ def command_redist(
     # Ensure output directory exists
     output_path.mkdir(exist_ok=True, parents=True)
 
-    new_rank_states = [list() for _ in range(new_world_size)]
+    new_rank_states: list[list[Any]] = [list() for _ in range(new_world_size)]
     rsi_iter = iter(rsi)
     for rank_idx in range(new_world_size):
         for _ in range(new_workers_per_rank):

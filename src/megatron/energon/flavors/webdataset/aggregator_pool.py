@@ -91,7 +91,7 @@ class AggregatorPool(Generic[T_input_data, T_aggregation_data, T_result]):
         self.result_queue = multiprocessing.Queue()
 
         # Queue to pass final aggregator data back to the main process
-        self._final_result_data_queue = multiprocessing.Queue()
+        self._final_result_data_queue: multiprocessing.Queue[Any] = multiprocessing.Queue()
 
         # Will store whatever is pulled from _final_data_queue in close()
         self._aggregator_final_result_data: Optional[Any] = None

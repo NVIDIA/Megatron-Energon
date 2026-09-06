@@ -592,7 +592,7 @@ class MetadatasetBlend(DatasetLoaderInterface, SubsetRatioMixin):
         return flattened
 
     def prepare(self, split_part: Optional[str] = None) -> Sequence[EPath]:
-        files = []
+        files: list[EPath] = []
         for dataset in self.blend:
             files.extend(dataset.prepare(split_part=split_part))
         return files
@@ -693,7 +693,7 @@ class MetadatasetBlendEpochized(SubsetRatioMixin, DatasetLoaderInterface):
         return flattened
 
     def prepare(self, split_part: Optional[str] = None) -> Sequence[EPath]:
-        files = []
+        files: list[EPath] = []
         for dataset in self.blend_epochized:
             files.extend(dataset.prepare(split_part=split_part))
         return files
@@ -785,11 +785,11 @@ class MetadatasetV2(DatasetLoaderInterface):
         # any actions concerning the inner metadataset will be done on the inner metadataset's path.
 
         if split_part is None:
-            files = []
+            files: list[EPath] = []
             for split_part, split in self.splits.items():
                 files.extend(split.prepare(split_part=split_part))
         else:
-            files = self.splits[split_part].prepare(split_part=split_part)
+            files = list(self.splits[split_part].prepare(split_part=split_part))
         # Cleanup paths here
         cache_path = EPath(self.path.parent / f"{self.path.name}.cache")
         remove_files = set(cache_path.glob("*")) - set(files)

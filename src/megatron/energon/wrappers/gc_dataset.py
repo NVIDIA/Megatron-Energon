@@ -18,7 +18,7 @@ from megatron.energon.wrappers.base import BaseWrapperDataset
 
 T_sample = TypeVar("T_sample")
 
-_frozen_gc_objects = []
+_frozen_gc_objects: list[Any] = []
 _frozen_gc_objects_initialized = False
 
 

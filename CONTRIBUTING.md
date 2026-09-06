@@ -11,6 +11,9 @@ SPDX-License-Identifier: BSD-3-Clause -->
 - All source code contributions must strictly adhere to ruff linter and formatter as configured in `pyproject.toml`.
     - You can check those by running `just check`.
 
+- All source code contributions are static-type-checked with mypy. CI gates on *new* type errors only (via a committed baseline), so you do not need to fix pre-existing ones.
+    - Check locally with `just typecheck`. See [`docs/source/internals/type_checking.md`](docs/source/internals/type_checking.md) for the full workflow and how to help burn down existing errors.
+
 - All source code files must include the NVIDIA license header as you can see in `src/megatron/energon/__init__.py`.
 
 - In addition, please follow the existing conventions in the relevant file, submodule, module, and project when you add new code or when you extend/fix existing functionality.

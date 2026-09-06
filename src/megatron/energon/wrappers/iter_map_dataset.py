@@ -101,6 +101,7 @@ class IterMapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sampl
         def reset_idx_iter() -> Generator[T_sample, None, None]:
             # Resets the inner sample index
             nonlocal iter_idx, sample_restore_keys
+            entry: T_sample
             for entry in last_sample_wrapper:
                 iter_idx = 0
                 sample_restore_keys.append(get_sample_restore_key(entry))
