@@ -14,10 +14,12 @@ from typing import (
     Tuple,
     TypeVar,
     Union,
-    overload,
 )
 
+from typing_extensions import Self
+
 from megatron.energon.epathlib import EPath
+from megatron.energon.flavors.base_dataset import DatasetSampleReader, RawSample
 from megatron.energon.flavors.webdataset.config import (
     INDEX_SQLITE_FILENAME,
     skip_meta_re,
@@ -275,7 +277,7 @@ class ITarReader(ABC, Generic[T_index]):
         return self._get_item_by_sample_pointer(sample_pointer, idx)
 
 
-class JoinIndexFileITarReader(ITarReader[int]):
+class JoinIndexFileITarReader(ITarReader[int], DatasetSampleReader):
     """
     A concrete ITarReader that reads samples from a join index file (via JoinIndexReader).
     """
@@ -369,6 +371,16 @@ class JoinIndexFileITarReader(ITarReader[int]):
 
         return len(index_reader)
 
+    def __iter__(self) -> Generator[RawSample | None, None, None]:
+        for idx in range(len(self)):
+            yield self[idx]
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self.close()
+
     def __str__(self) -> str:
         return (
             f"JoinIndexFileITarReader("
@@ -378,7 +390,7 @@ class JoinIndexFileITarReader(ITarReader[int]):
         )
 
 
-class ShardInfosITarReader(ITarReader[int]):
+class ShardInfosITarReader(ITarReader[int], DatasetSampleReader):
     """
     A concrete ITarReader that constructs its internal sample list from a list of ShardInfos.
     """
@@ -469,6 +481,16 @@ class ShardInfosITarReader(ITarReader[int]):
     def __len__(self) -> int:
         return self.shard_count_cumsum[-1]
 
+    def __iter__(self) -> Generator[RawSample | None, None, None]:
+        for idx in range(len(self)):
+            yield self[idx]
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self.close()
+
     def __str__(self) -> str:
         return (
             f"ShardInfosITarReader("
@@ -524,7 +546,6 @@ class SqliteITarEntryReader(ITarReader[str]):
         """
         Get the ITarSample object for the given index.
         """
-
         return self.sqlite_reader.get_sample_pointer_by_key(sample_key)
 
     def list_all_samples(self) -> Generator[Tuple[str, int, int], None, None]:
@@ -577,24 +598,11 @@ class SqliteITarEntryReader(ITarReader[str]):
     def get_total_size(self) -> int:
         return self.sqlite_reader.get_total_size()
 
-    @overload
-    def __getitem__(self, key: str) -> Union[FilteredSample, tuple[bytes, SourceInfo]]: ...
-
-    @overload
-    def __getitem__(self, key: slice) -> "ITarReader": ...
-
-    def __getitem__(
-        self, key: Union[slice, str]
-    ) -> Union[FilteredSample, tuple[bytes, SourceInfo], ITarReader]:
+    def __getitem__(self, key: str) -> Union[FilteredSample, tuple[bytes, SourceInfo]]:
         """
         Either get a sample from the dataset by the sample key including all its entries,
         or get the bytes of a specific entry by the full filename of the entry inside the tar.
         """
-
-        if isinstance(key, slice):
-            # Return a new reader with a sliced samples tensor
-            raise NotImplementedError("Slicing is not yet implemented")
-        assert isinstance(key, str), "Invalid argument type for __getitem__"
 
         if self.key_is_full_entryname:
             m = split_name_re.match(key)
