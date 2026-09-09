@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import pickle
-import threading
 
 
 class SafeUnpickler(pickle.Unpickler):
