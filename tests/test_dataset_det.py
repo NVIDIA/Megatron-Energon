@@ -1022,9 +1022,7 @@ class TestDataset(unittest.TestCase):
                     )
                 )
 
-                state = torch.load(
-                    str(self.redist_dir / f"state_rank{rank_config.rank}.pt"), weights_only=False
-                )
+                state = torch.load(str(self.redist_dir / f"state_rank{rank_config.rank}.pt"))
                 loader.restore_state_rank(state)
 
                 micro_batches = [

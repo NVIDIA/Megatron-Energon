@@ -148,7 +148,7 @@ class RankStateIterable:
         self.num_states = len(state_files)
 
         # First open the first one to figure out if this is a global checkpoint or not
-        first_state = torch.load(str(state_files[0]), weights_only=False)
+        first_state = torch.load(str(state_files[0]))
 
         if isinstance(first_state, dict) and "dataloader_state_dict" in first_state:
             self.megatron_style = True
@@ -159,12 +159,12 @@ class RankStateIterable:
         if isinstance(first_state, SavableDataLoaderState):
             if self.megatron_style:
                 self.rank_states = [first_state] + [
-                    torch.load(str(state_file), weights_only=False)["dataloader_state_dict"]
+                    torch.load(str(state_file))["dataloader_state_dict"]
                     for state_file in state_files[1:]
                 ]
             else:
                 self.rank_states = [first_state] + [
-                    torch.load(str(state_file), weights_only=False)
+                    torch.load(str(state_file))
                     for state_file in state_files[1:]
                 ]
             self.is_global_checkpoint = False
