@@ -3,10 +3,9 @@
 
 import io
 import pickle
-import pytest
-
 from collections import OrderedDict
 
+import pytest
 from megatron.core.safe_globals import SafeUnpickler
 
 
