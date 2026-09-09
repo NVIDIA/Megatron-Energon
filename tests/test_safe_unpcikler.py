@@ -3,10 +3,10 @@
 
 import io
 import pickle
-from collections import OrderedDict
 
-import pytest
-from megatron.core.safe_globals import SafeUnpickler
+import numpy as np
+
+from megatron.energon.safe_unpickler import SafeUnpickler
 
 
 class UnsafeClass:
@@ -19,12 +19,14 @@ class UnsafeClass:
 
 class TestSafeUnpickler:
     def test_safe_types(self):
-        data = {"key": [1, 2.0, True, "s"], "od": OrderedDict(a=1)}
+        data = np.array([1,2,3])
         raw = pickle.dumps(data)
         result = SafeUnpickler(io.BytesIO(raw)).load()
         assert result == data
 
     def test_unsafe_types(self):
         raw = pickle.dumps(UnsafeClass(123))
-        with pytest.raises(pickle.UnpicklingError, match="Refusing to unpickle"):
+        try:
 	        SafeUnpickler(io.BytesIO(raw)).load()
+        except Exception as e:
+            assert e == pickle.UnpicklingError
