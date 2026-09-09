@@ -3,9 +3,6 @@
 
 import pickle
 import threading
-from unittest.mock import patch
-
-import numpy
 
 
 class SafeUnpickler(pickle.Unpickler):
