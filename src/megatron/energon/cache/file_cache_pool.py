@@ -16,7 +16,7 @@ from typing import Any, Dict, Literal, Optional, Tuple, TypeVar
 from megatron.energon.cache.base import CachePool, FileStore, Lazy
 from megatron.energon.edataclass import edataclass
 from megatron.energon.fork_hook import ForkMixin
-from megatron.energon.safe_globals import SafeUnpickler
+from megatron.energon.safe_unpickler import SafeUnpickler
 from megatron.energon.source_info import SourceInfo, add_source_info
 
 T = TypeVar("T")
