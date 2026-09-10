@@ -1,7 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""This module defines tests for meta datasets."""
+"""This module defines tests for recipes."""
 
 import gc
 import json
@@ -21,6 +21,7 @@ from click.testing import CliRunner
 from megatron.energon import (
     Cooker,
     CrudeSample,
+    DefaultCrudeJsonlShardListDatasetFactory,
     DefaultTaskEncoder,
     Sample,
     WorkerConfig,
@@ -30,6 +31,9 @@ from megatron.energon import (
     get_train_dataset,
     stateless,
 )
+from megatron.energon.epathlib import EPath
+from megatron.energon.flavors.common.manifest.types import ManifestSplits as WebdatasetSplits
+from megatron.energon.flavors.dataset_type import EnergonDatasetType, get_dataset_type
 from megatron.energon.tools.prepare import command as prepare_command
 from tests.epath_s3_emulator import setup_s3_emulator
 
@@ -80,24 +84,24 @@ class TestJsonlDataset(unittest.TestCase):
         )
         self.create_text_test_dataset(self.dataset_path / "ds3.jsonl", range(200, 255), range(55))
 
-        self.mds_all_path = self.dataset_path / "metadataset_all.yaml"
+        self.mds_all_path = self.dataset_path / "recipe_all.yaml"
         with open(self.mds_all_path, "w") as f:
             f.write(
                 "\n".join(
                     [
                         "__module__: megatron.energon",
-                        "__class__: MetadatasetV2",
+                        "__class__: Recipe",
                         "splits:",
                         "  train:",
                         "    blend:",
                         "      - path: ds1.jsonl",
-                        "        subflavors:",
+                        "        tags:",
                         "          ds: ds1",
                         "      - path: ds2.jsonl",
-                        "        subflavors:",
+                        "        tags:",
                         "          ds: ds2",
                         "      - path: ds3.jsonl",
-                        "        subflavors:",
+                        "        tags:",
                         "          ds: ds3",
                     ]
                 )
@@ -110,7 +114,12 @@ class TestJsonlDataset(unittest.TestCase):
 
     @staticmethod
     def create_text_test_dataset(
-        path: Path, txt_range: Iterable[int], key_range: Iterable[int], prefix: str = ""
+        path: Path,
+        txt_range: Iterable[int],
+        key_range: Iterable[int],
+        prefix: str = "",
+        *,
+        prepare: bool = True,
     ):
         """Creates a small dummy test dataset for testing purposes."""
 
@@ -120,9 +129,21 @@ class TestJsonlDataset(unittest.TestCase):
                 # Write JSON entries to the file, one per line.
                 wf.write(json.dumps({"idx": key, "txt": f"{prefix}{txt}"}) + "\n")
 
-        from megatron.energon.flavors import CrudeJsonlDatasetFactory
+        if prepare:
+            from megatron.energon.flavors import CrudeJsonlDatasetFactory
 
-        CrudeJsonlDatasetFactory.prepare_dataset(path)
+            CrudeJsonlDatasetFactory.prepare_dataset(path)
+
+    def prepare_jsonl_shard_dir(self, shard_dir: Path, split_ratio: str = "1,0,0"):
+        runner = CliRunner()
+        result = runner.invoke(
+            prepare_command,
+            [str(shard_dir), "--split-ratio", split_ratio, "--non-interactive", "--no-progress"],
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 0, result.stdout
+        assert "Done" in result.stdout, result.stdout
+        return result
 
     def test_dataset(self):
         torch.manual_seed(42)
@@ -155,7 +176,7 @@ class TestJsonlDataset(unittest.TestCase):
         assert len(Counter(train_order1)) == 55
         assert all(v == 10 for v in Counter(train_order1).values())
 
-    def test_metadataset_all(self):
+    def test_recipe_all(self):
         torch.manual_seed(42)
         worker_config = WorkerConfig(
             rank=0,
@@ -186,7 +207,7 @@ class TestJsonlDataset(unittest.TestCase):
         assert len(Counter(train_order1)) == 55 * 3
         assert all(2 <= v <= 5 for v in Counter(train_order1).values())
 
-    def test_metadataset_multirank(self):
+    def test_recipe_multirank(self):
         torch.manual_seed(42)
 
         sample_counts = Counter()
@@ -226,17 +247,17 @@ class TestJsonlDataset(unittest.TestCase):
             )
 
     def test_s3(self):
-        # Create a joined dataset configuration
-        mixed_mds_path = self.dataset_path / "metadataset_mixed.yaml"
-        with open(mixed_mds_path, "w") as f:
+        # Create a dataset configuration
+        mixed_recipe_path = self.dataset_path / "recipe_mixed.yaml"
+        with open(mixed_recipe_path, "w") as f:
             f.write(
                 "\n".join(
                     [
                         "__module__: megatron.energon",
-                        "__class__: MetadatasetV2",
+                        "__class__: Recipe",
                         "splits:",
                         "  train:",
-                        "    path: msc://s3test_jsonl_dataset/test/dataset/metadataset_all.yaml",
+                        "    path: msc://s3test_jsonl_dataset/test/dataset/recipe_all.yaml",
                     ]
                 )
             )
@@ -248,7 +269,7 @@ class TestJsonlDataset(unittest.TestCase):
 
             train_dataset = get_loader(
                 get_train_dataset(
-                    mixed_mds_path,
+                    mixed_recipe_path,
                     worker_config=WorkerConfig(
                         rank=0,
                         world_size=1,
@@ -311,6 +332,186 @@ class TestJsonlDataset(unittest.TestCase):
         print(Counter(train_order1))
         assert len(Counter(train_order1)) == 10
         assert all(v == 5 for v in Counter(train_order1).values())
+
+    def test_prepared_jsonl_shard_directory(self):
+        shard_dir = self.dataset_path / "jsonl_shards"
+        shard_dir.mkdir()
+        self.create_text_test_dataset(
+            shard_dir / "shard_0.jsonl", range(0, 3), range(0, 3), prepare=False
+        )
+        self.create_text_test_dataset(
+            shard_dir / "shard_1.jsonl", range(3, 7), range(3, 7), prepare=False
+        )
+
+        self.prepare_jsonl_shard_dir(shard_dir)
+        assert (shard_dir / ".nv-meta" / ".info.json").exists()
+        with open(shard_dir / ".nv-meta" / ".info.json") as f:
+            assert "dataset_type" not in json.load(f)
+        assert get_dataset_type(EPath(shard_dir)) == EnergonDatasetType.MANIFEST_DATASET
+        assert (shard_dir / ".nv-meta" / "split.yaml").exists()
+        assert (shard_dir / ".nv-meta" / "dataset.yaml").exists()
+        assert (shard_dir / "shard_0.jsonl.idx").exists()
+        assert (shard_dir / "shard_1.jsonl.idx").exists()
+
+        dataset = get_train_dataset(
+            shard_dir,
+            worker_config=WorkerConfig(rank=0, world_size=1, num_workers=0, seed_offset=42),
+            batch_size=1,
+            shuffle_buffer_size=None,
+            max_samples_per_sequence=None,
+            task_encoder=SimpleCookingTaskEncoder(),
+            repeat=False,
+        )
+        assert len(dataset) == 7
+        samples = list(get_loader(dataset))
+        assert sorted(idx for batch in samples for idx in batch.idx) == list(range(7))
+        assert sorted(text for batch in samples for text in batch.text) == [
+            str(i) for i in range(7)
+        ]
+
+    def test_prepared_jsonl_shard_directory_multirank(self):
+        shard_dir = self.dataset_path / "jsonl_shards_multirank"
+        shard_dir.mkdir()
+        self.create_text_test_dataset(
+            shard_dir / "shard_0.jsonl", range(0, 2), range(0, 2), prepare=False
+        )
+        self.create_text_test_dataset(
+            shard_dir / "shard_1.jsonl", range(2, 5), range(2, 5), prepare=False
+        )
+        self.create_text_test_dataset(
+            shard_dir / "shard_2.jsonl", range(5, 9), range(5, 9), prepare=False
+        )
+        self.prepare_jsonl_shard_dir(shard_dir)
+
+        sample_counts = Counter()
+        for cur_rank in range(3):
+            dataset = get_train_dataset(
+                shard_dir,
+                worker_config=WorkerConfig(
+                    rank=cur_rank,
+                    world_size=3,
+                    num_workers=0,
+                    seed_offset=42,
+                ),
+                batch_size=1,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                task_encoder=SimpleCookingTaskEncoder(),
+                repeat=False,
+            )
+            for batch in get_loader(dataset):
+                for idx in batch.idx:
+                    sample_counts[int(idx)] += 1
+
+        assert sample_counts == Counter(range(9))
+
+    def test_prepared_jsonl_shard_directory_split_from_recipe(self):
+        shard_dir = self.dataset_path / "jsonl_shards_split"
+        shard_dir.mkdir()
+        self.create_text_test_dataset(
+            shard_dir / "shard_0.jsonl", range(0, 2), range(0, 2), prepare=False
+        )
+        self.create_text_test_dataset(
+            shard_dir / "shard_1.jsonl", range(10, 12), range(10, 12), prepare=False
+        )
+        self.create_text_test_dataset(
+            shard_dir / "shard_2.jsonl", range(20, 22), range(20, 22), prepare=False
+        )
+        self.prepare_jsonl_shard_dir(shard_dir, split_ratio="1,1,1")
+
+        recipe_path = self.dataset_path / "jsonl_shard_split_mds.yaml"
+        recipe_path.write_text(
+            "\n".join(
+                [
+                    "__module__: megatron.energon",
+                    "__class__: Recipe",
+                    "splits:",
+                    "  train:",
+                    "    path: jsonl_shards_split",
+                    "    split_part: val",
+                ]
+            )
+        )
+
+        dataset = get_train_dataset(
+            recipe_path,
+            worker_config=WorkerConfig(rank=0, world_size=1, num_workers=0, seed_offset=42),
+            batch_size=1,
+            shuffle_buffer_size=None,
+            max_samples_per_sequence=None,
+            task_encoder=SimpleCookingTaskEncoder(),
+            repeat=False,
+        )
+        samples = list(get_loader(dataset))
+        assert [idx for batch in samples for idx in batch.idx] == [10, 11]
+
+    def test_prepared_jsonl_shard_directory_inline_split_config(self):
+        shard_dir = self.dataset_path / "jsonl_shards_inline_split"
+        shard_dir.mkdir()
+        self.create_text_test_dataset(
+            shard_dir / "shard_0.jsonl", range(0, 2), range(0, 2), prepare=False
+        )
+        self.create_text_test_dataset(
+            shard_dir / "shard_1.jsonl", range(10, 12), range(10, 12), prepare=False
+        )
+        self.prepare_jsonl_shard_dir(shard_dir)
+
+        factory = DefaultCrudeJsonlShardListDatasetFactory(
+            EPath(shard_dir),
+            training=False,
+            worker_config=WorkerConfig(rank=0, world_size=1, num_workers=0),
+            split_config=WebdatasetSplits(split_parts={"custom": ["shard_1.jsonl"]}),
+            split_part="custom",
+        )
+        assert len(factory) == 2
+        store = factory.as_file_store()
+        data, _source = store["0"]
+        assert json.loads(data) == {"idx": 10, "txt": "10"}
+        store.close()
+
+    def test_prepared_jsonl_shard_directory_rejects_stale_index(self):
+        shard_dir = self.dataset_path / "jsonl_shards_stale"
+        shard_dir.mkdir()
+        self.create_text_test_dataset(
+            shard_dir / "shard_0.jsonl", range(0, 2), range(0, 2), prepare=False
+        )
+        self.prepare_jsonl_shard_dir(shard_dir)
+        with open(shard_dir / "shard_0.jsonl", "a") as f:
+            f.write(json.dumps({"idx": 2, "txt": "2"}) + "\n")
+
+        with self.assertRaises(AssertionError):
+            get_train_dataset(
+                shard_dir,
+                worker_config=WorkerConfig(rank=0, world_size=1, num_workers=0, seed_offset=42),
+                batch_size=1,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                task_encoder=SimpleCookingTaskEncoder(),
+                repeat=False,
+            )
+
+    def test_prepared_jsonl_shard_directory_file_store(self):
+        shard_dir = self.dataset_path / "jsonl_shards_filestore"
+        shard_dir.mkdir()
+        self.create_text_test_dataset(
+            shard_dir / "shard_0.jsonl", range(0, 2), range(0, 2), prepare=False
+        )
+        self.create_text_test_dataset(
+            shard_dir / "shard_1.jsonl", range(2, 4), range(2, 4), prepare=False
+        )
+        self.prepare_jsonl_shard_dir(shard_dir)
+
+        factory = DefaultCrudeJsonlShardListDatasetFactory(
+            EPath(shard_dir),
+            training=False,
+            worker_config=WorkerConfig(rank=0, world_size=1, num_workers=0),
+            split_part="train",
+        )
+        store = factory.as_file_store()
+        data, source = store["2"]
+        assert json.loads(data) == {"idx": 2, "txt": "2"}
+        assert source.dataset_path == str(EPath(shard_dir))
+        store.close()
 
 
 if __name__ == "__main__":

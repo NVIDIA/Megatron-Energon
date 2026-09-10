@@ -2,69 +2,35 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import logging
-import os
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, Generic, List, Optional, Sequence, TypeVar
-
-import numpy as np
+from typing import Callable, Generic, Optional, TypeVar
 
 from megatron.energon.cache import FileStore
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.base_dataset import (
-    BaseCoreDatasetFactory,
-    SavableDataset,
+from megatron.energon.flavors.base_indexed_dataset import (
+    DEBUG_SHARD_PRINT,
 )
-from megatron.energon.flavors.webdataset.metadata import WebdatasetMeta
+from megatron.energon.flavors.base_manifest_dataset import BaseManifestShardListDatasetFactory
+from megatron.energon.flavors.common.manifest.types import DatasetSubset, ManifestSplits
+from megatron.energon.flavors.common.sample_record import SampleRecord
 from megatron.energon.flavors.webdataset.prepare import WebdatasetPreparator
-from megatron.energon.flavors.webdataset.sample_loader import (
-    RawSampleData,
-    WebdatasetSampleLoaderDataset,
-)
-from megatron.energon.flavors.webdataset.sharder import Sharder
-from megatron.energon.flavors.webdataset.structs import (
-    DatasetSubset,
-    FilteredSample,
-    ShardInfo,
-)
 from megatron.energon.worker import WorkerConfig
-from megatron.energon.wrappers.map_dataset import MapDataset
 
 T_sample = TypeVar("T_sample", covariant=True)
 T = TypeVar("T", covariant=True)
 
 logger = logging.getLogger(__name__)
 
-DEBUG_SHARD_PRINT = os.getenv("ENERGON_DEBUG_SHARD_PRINT", "0") == "1"
-
 
 class BaseWebdatasetFactory(
-    BaseCoreDatasetFactory[T_sample],
+    BaseManifestShardListDatasetFactory[T_sample],
     WebdatasetPreparator,
-    Sharder,
     Generic[T_sample],
     ABC,
 ):
     """
     Base class for all webdataset sample loader factories. Applies proper sharding across workers.
     """
-
-    path: EPath
-    paths: list[EPath]
-
-    shards: List[ShardInfo]
-    sample_excludes: set[str]
-    split_part_files: list[str]
-
-    training: bool
-    worker_config: WorkerConfig
-
-    shuffle_over_epochs: Optional[int]
-    parallel_shard_iters: Optional[int]
-    max_samples_per_sequence: Optional[int]
-
-    subset: Optional[DatasetSubset]
-
-    part_filter: Optional[Callable[[str], bool]]
 
     def __init__(
         self,
@@ -77,8 +43,9 @@ class BaseWebdatasetFactory(
         parallel_shard_iters: Optional[int] = None,
         max_samples_per_sequence: Optional[int] = None,
         subset: Optional[DatasetSubset] = None,
-        split_config: Optional[str] = None,
+        split_config: str | ManifestSplits | None = None,
         part_filter: Optional[Callable[[str], bool]] = None,
+        filter_name: Optional[str] = None,
     ):
         """
         Base factory for the webdataset sample loader.
@@ -102,173 +69,52 @@ class BaseWebdatasetFactory(
             split_config: Config file to use for shard split definitions.
             part_filter: (internal) Function for filtering tar files by dict keys
         """
-        assert self.__sample_type__ is not None, f"Class {type(self)} must define __sample_type__"
-        wds_meta = WebdatasetMeta.from_config(
-            path=path, split_part=split_part, split_config=split_config
+        super().__init__(
+            path,
+            split_part=split_part,
+            split_config=split_config,
+            training=training,
+            worker_config=worker_config,
+            shuffle_over_epochs=shuffle_over_epochs,
+            parallel_shard_iters=parallel_shard_iters,
+            max_samples_per_sequence=max_samples_per_sequence,
+            subset=subset,
+            part_filter=part_filter,
+            filter_name=filter_name,
         )
-        self.path = path
-        self.paths = [path]
-        self.name = path.display_name
-        self.shards = wds_meta.shards
-        self.sample_excludes = wds_meta.sample_excludes
-        self.split_part_files = wds_meta.split_part_files
-        self.training = training
-        self.worker_config = worker_config
-        self.shuffle_over_epochs = shuffle_over_epochs
-        self.parallel_shard_iters = parallel_shard_iters
-        self.max_samples_per_sequence = max_samples_per_sequence
-        self.subset = subset
-        self.part_filter = part_filter
 
-    def __len__(self) -> int:
-        return sum(shard.count for shard in self.shards)
-
-    def build(self, worker_rotation_offset: int = 0) -> SavableDataset[T_sample]:
+    def _build_reader(
+        self,
+        *,
+        parallel_shard_iters: int,
+        part_filter: Callable[[str], bool] | None,
+    ):
         from megatron.energon.flavors.webdataset.itar_reader import ShardInfosITarReader
 
-        if self.parallel_shard_iters is None:
-            if self.training:
-                # 16 seems to be a good choice since we don't want too many file handles open
-                parallel_shard_iters = 16
-            else:
-                parallel_shard_iters = 1
-        else:
-            parallel_shard_iters = self.parallel_shard_iters
-
-        workers_sample_slice_offsets = self.shard_workers(
-            self.shards,
-            worker_config=self.worker_config,
-            max_samples_per_sequence=self.max_samples_per_sequence,
-            rotation_offset=worker_rotation_offset,
-            subset=self.subset,
-        )
-        if DEBUG_SHARD_PRINT:
-            _print_shard_slices(self.worker_config, self.shards, workers_sample_slice_offsets)
-
-        itar_reader = ShardInfosITarReader(
+        return ShardInfosITarReader(
             self.path,
             self.shards,
-            part_filter=self.part_filter,
+            part_filter=part_filter,
             sample_filter=self.sample_filter,
             itar_cache_size=parallel_shard_iters,
         )
 
-        dataset = WebdatasetSampleLoaderDataset(
-            join_readers=[itar_reader],
-            workers_sample_slice_offsets=workers_sample_slice_offsets,
-            worker_config=self.worker_config,
-            shuffle_over_epochs=self.shuffle_over_epochs if self.training else None,
-            parallel_slice_iters=parallel_shard_iters,
-        )
-        return MapDataset(
-            dataset,
-            self._load_sample_raw,
-            stateless_map_fn=True,
-            map_fn_config=self.config,
-            worker_config=self.worker_config,
-        )
-
     def as_file_store(self) -> "FileStore":
-        from megatron.energon.cache.file_store import WebdatasetFileStore
+        from megatron.energon.flavors.webdataset.file_store import WebdatasetFileStore
 
         return WebdatasetFileStore(self.path)
 
     def sample_filter(self, key: str) -> bool:
         return key not in self.sample_excludes
 
-    def _load_sample_raw(self, raw_sample: RawSampleData) -> T_sample:
-        # Just a wrapper for the inner tuple. Tuple should be of length 1.
-        assert len(raw_sample.data) == 1 and raw_sample.data[0] is not None
-        return self.load_sample(raw_sample.data[0])
+    def _print_shard_slices(self, slice_offsets, shards) -> None:
+        if DEBUG_SHARD_PRINT:
+            super()._print_shard_slices(slice_offsets, shards)
 
     @abstractmethod
-    def load_sample(self, raw_data: FilteredSample) -> T_sample:
+    def load_sample(self, raw_data: SampleRecord) -> T_sample:
         """Loads the sample from the dataset."""
         ...
 
-    def config(self) -> Dict[str, Any]:
-        return dict(
-            type=type(self).__qualname__,
-            training=self.training,
-            _path=str(self.path),
-            shards=[
-                dict(
-                    name=shard.name,
-                    count=shard.count,
-                    _path=str(shard.path),
-                )
-                for shard in self.shards
-            ],
-            sample_excludes=list(self.sample_excludes),
-            shuffle_over_epochs=self.shuffle_over_epochs,
-            parallel_shard_iters=self.parallel_shard_iters,
-            max_samples_per_sequence=self.max_samples_per_sequence,
-            subset=self.subset.config() if self.subset is not None else None,
-        )
-
     def __str__(self):
         return f"{type(self).__name__}(path={self.path})"
-
-
-def _print_shard_slices(
-    worker_config: WorkerConfig, shards: List[ShardInfo], slice_offsets: Sequence[Sequence[int]]
-):
-    shard_starts = np.cumsum([0] + [shard.count for shard in shards])
-
-    def shard_range_info(start: int, end: int) -> str:
-        start_shard_idx = np.searchsorted(shard_starts, start, side="right") - 1
-        end_shard_idx = np.searchsorted(shard_starts, end, side="left") - 1
-        if start_shard_idx == end_shard_idx:
-            shard = shards[start_shard_idx]
-            if start - shard_starts[start_shard_idx] == 0:
-                start_str = "(start)"
-            else:
-                start_str = ""
-            if end - shard_starts[start_shard_idx] == shard.count:
-                end_str = "(end)"
-            else:
-                end_str = ""
-            return f"{shard.name}[{start - shard_starts[start_shard_idx]}{start_str}, {end - shard_starts[start_shard_idx]}{end_str}]"
-        else:
-            start_shard = shards[start_shard_idx]
-            end_shard = shards[end_shard_idx]
-            if start - shard_starts[start_shard_idx] == 0:
-                start_str = "(start)"
-            else:
-                start_str = ""
-            if end - shard_starts[end_shard_idx] == end_shard.count:
-                end_str = "(end)"
-            else:
-                end_str = ""
-            return f"{start_shard.name}[{start - shard_starts[start_shard_idx]}{start_str},]-{end_shard.name}[,{end - shard_starts[end_shard_idx]}{end_str}]"
-
-    for worker_idx, sample_slice_offsets in enumerate(slice_offsets):
-        start_idx = sample_slice_offsets[0]
-        end_idx = sample_slice_offsets[-1]
-
-        if len(sample_slice_offsets) > 6:
-            offset_str = f"{', '.join(str(o) for o in sample_slice_offsets[:3])} ...<{len(sample_slice_offsets) - 6}> {', '.join(str(o) for o in sample_slice_offsets[-3:])}"
-        else:
-            offset_str = ", ".join(str(o) for o in sample_slice_offsets)
-        if len(sample_slice_offsets) > 6:
-            slices_str = (
-                ", ".join(
-                    shard_range_info(start, end)
-                    for start, end in zip(sample_slice_offsets[:3], sample_slice_offsets[1:4])
-                )
-                + f" ...<{len(sample_slice_offsets) - 6}> "
-                + ", ".join(
-                    shard_range_info(start, end)
-                    for start, end in zip(sample_slice_offsets[-4:-1], sample_slice_offsets[-3:])
-                )
-            )
-        else:
-            slices_str = ", ".join(
-                shard_range_info(start, end)
-                for start, end in zip(sample_slice_offsets[:-1], sample_slice_offsets[1:])
-            )
-
-        print(
-            f"rank={worker_config.rank}, worker={worker_idx}: sample_range=[{start_idx}, {end_idx}] in {len(sample_slice_offsets) - 1} slices, "
-            f"sum(count)={end_idx - start_idx}: indexes=[{offset_str}] slices=[{slices_str}]"
-        )

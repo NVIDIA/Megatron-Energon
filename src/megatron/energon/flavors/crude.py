@@ -24,7 +24,7 @@ class CrudeWebdataset(DefaultDecoderWebdatasetFactory[CrudeSample]):
         self,
         path: EPath,
         *,
-        subflavors: Optional[Dict[str, Any]] = None,
+        tags: Optional[Dict[str, Any]] = None,
         part_filter: Union[str, List[str], Callable[[str], bool]] = lambda _: True,
         **kwargs,
     ):
@@ -32,8 +32,8 @@ class CrudeWebdataset(DefaultDecoderWebdatasetFactory[CrudeSample]):
         Constructs a crude webdataset.
 
         Args:
-            path: Root path to the joined datasets.
-            subflavors: Subflavors dictionary to set for all loaded samples.
+            path: Root path to the dataset.
+            tags: Tags dictionary to set for all loaded samples.
             part_filter: Function for filtering tar files to load by dict keys.
             **kwargs: Additional arguments to the BaseWebdataset constructor.
         """
@@ -44,7 +44,7 @@ class CrudeWebdataset(DefaultDecoderWebdatasetFactory[CrudeSample]):
 
         super().__init__(
             path,
-            subflavors=subflavors,
+            tags=tags,
             sample_loader=lambda sample: sample,
             part_filter=part_filter,
             **kwargs,

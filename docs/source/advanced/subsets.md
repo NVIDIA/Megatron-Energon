@@ -3,7 +3,7 @@ SPDX-License-Identifier: BSD-3-Clause -->
 
 # Dataset Subsets
 
-Dataset subsets allow restricting a dataset (or parts of a metadataset hierarchy) to a specific portion of the available samples.
+Dataset subsets allow restricting a dataset (or parts of a recipe hierarchy) to a specific portion of the available samples.
 This is useful for rapid prototyping, ablation studies, different training stages, or constructing disjoint train/validation/test splits that differ from the original dataset configuration.
 
 A subset is defined by a two-element `range` list consisting of `[start, end]` (where `start` is inclusive, `end` exclusive).
@@ -21,7 +21,7 @@ evaluating on the remaining 20 % of the `train` split. Note how the `subset` key
 
 ```yaml
 __module__: megatron.energon
-__class__: MetadatasetV2
+__class__: Recipe
 splits:
   train:
     path: ./coyo
@@ -34,8 +34,8 @@ splits:
 
 ## Nested subsets and merging rules
 
-Subsets can appear at any level that ultimately yields samples
-(direct `path` reference to a prepared dataset containing `.nv-meta`, `join`, `blend`, `blend_epochized`).
+Subsets can appear on direct `path` references to prepared datasets and at any `blend` or
+`blend_epochized` level that ultimately yields samples.
 When multiple subsets are nested, the *inner* subset is applied first, then the portion selected by the *outer* subset is applied *within* the already selected range.
 For percentages the ranges are composed multiplicatively.
 
@@ -58,7 +58,7 @@ the first **500** samples of *COCO*, mixed with the first **50%** of the *COYO* 
 
 ```yaml
 __module__: megatron.energon
-__class__: MetadatasetV2
+__class__: Recipe
 splits:
   train:
     # The subset is applied to each blended dataset separately.
@@ -78,7 +78,7 @@ Absolute ranges can also be specified to run up to the end of the dataset using 
 
 ```yaml
 __module__: megatron.energon
-__class__: MetadatasetV2
+__class__: Recipe
 splits:
   train:
     path: ./coyo
