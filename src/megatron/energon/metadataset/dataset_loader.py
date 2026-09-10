@@ -92,20 +92,35 @@ class DatasetLoader(DatasetLoaderInterface):
         subset: Optional[DatasetSubset] = None,
         **kwargs,
     ) -> LoadedDatasetList:
+        dataset = self.get_dataset(
+            training=training,
+            split_part=split_part,
+            worker_config=worker_config,
+            subflavors=subflavors,
+            shuffle_over_epochs=shuffle_over_epochs_multiplier,
+            subset=subset,
+            **kwargs,
+        )
+        # Keep the loading inputs: factory.config() does not retain split names
+        # or alternate dataset configuration files.
+        source_config = dict(
+            path=str(EPath(self.path)),
+            factory=type(dataset),
+            split_part=self.split_part if self.split_part is not None else split_part,
+            dataset_config=kwargs.get("dataset_config") or self.dataset_config or "dataset.yaml",
+            split_config=kwargs.get("split_config") or self.split_config or "split.yaml",
+            subflavors=dataset.subflavors,
+            shuffle_over_epochs=shuffle_over_epochs_multiplier,
+            subset=subset.config() if subset is not None else None,
+            kwargs={k: v for k, v in kwargs.items() if k not in ("dataset_config", "split_config")},
+        )
         return LoadedDatasetList(
             blend_mode=DatasetBlendMode.NONE,
             datasets=[
                 LoadedDataset(
-                    dataset=self.get_dataset(
-                        training=training,
-                        split_part=split_part,
-                        worker_config=worker_config,
-                        subflavors=subflavors,
-                        shuffle_over_epochs=shuffle_over_epochs_multiplier,
-                        subset=subset,
-                        **kwargs,
-                    ),
+                    dataset=dataset,
                     weight=None,
+                    _source_config=source_config if type(self) is DatasetLoader else None,
                 )
             ],
         )
