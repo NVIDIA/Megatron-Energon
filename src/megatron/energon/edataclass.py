@@ -8,7 +8,8 @@ from typing_extensions import dataclass_transform
 
 # We define an alias for `@dataclass(slots=True, kw_only=True)`,
 # because we want to use this combination almost everywhere.
-# dataclass_transform has no standardized slots_default (PEP 681); slots is runtime-only.
+# dataclass_transform has no standardized slots_default (PEP 681)
+# runtime slots remain enforced by dataclass(slots=True) below.
 @dataclass_transform(kw_only_default=True)
 def edataclass(cls):
     """
