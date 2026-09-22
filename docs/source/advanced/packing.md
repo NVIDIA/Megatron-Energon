@@ -18,8 +18,8 @@ and {py:meth}`pack_selected_samples <megatron.energon.TaskEncoder.pack_selected_
 Furthermore, you need to initialize the loader with the `packing_buffer_size` argument set to a non-zero number.
 
 The `select_samples_to_pack` method will receive a list of samples (size according to the selected `packing_buffer_size`),
-and should partition those samples into groups that shall be packed together. Hence the function returns
-a list of lists of samples.
+and should partition those samples into groups that shall be packed together. Hence the function typically returns
+a list of lists of samples. Alternatively it may return {py:class}`PackedSamplesOutput <megatron.energon.PackedSamplesOutput>` with a ``pushback`` sequence: those samples are appended back to the reading buffer before the next fill from the dataset.
 
 For each group, the second method `pack_selected_samples` will be called. You need to implement how a group of
 samples will be mapped to a single sample. In terms of LLMs for example, this method might concatenate the input tokens.

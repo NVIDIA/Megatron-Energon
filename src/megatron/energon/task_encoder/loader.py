@@ -111,8 +111,8 @@ def get_train_dataset(
     worker_config: WorkerConfig,
     batch_size: Optional[int],
     batch_drop_last: bool = False,
-    packing_buffer_size: Optional[int] = None,
-    shuffle_buffer_size: Optional[int],
+    packing_buffer_size: Optional[int | dict[str | None, int | None]] = None,
+    shuffle_buffer_size: Optional[int | dict[str | None, int | None]],
     max_samples_per_sequence: Optional[int],
     virtual_epoch_length: int = 0,
     shuffle_over_epochs_multiplier: Optional[int] = 1,
@@ -137,7 +137,12 @@ def get_train_dataset(
         worker_config: Worker configuration to use.
         batch_size: Size of a batch. If None, do not batch
         batch_drop_last: If true, drop the last batch if it is smaller than `batch_size`.
-        shuffle_buffer_size: Size of the sample shuffle buffer (before task encoding).
+        packing_buffer_size: Size of the packing buffer. If a dict, keys are dataset group names from
+            Metadataset V2 (YAML ``group``, merged along the path; ``None`` is the default group).
+            Values are buffer sizes, or ``None`` to disable packing for that group.
+        shuffle_buffer_size: Sample shuffle buffer size before task encoding. If a dict, keys are the
+            same dataset group names as for ``packing_buffer_size``; values are buffer sizes or ``None``
+            to disable shuffling for that group.
         max_samples_per_sequence: If set, limit the number of samples per sample-sequence to this.
         virtual_epoch_length: If set, the dataset will be epochized to this length (=iterating
             will be suspended and the for-loop returns, next for-loop continues iterating).
@@ -186,7 +191,7 @@ def get_val_dataset(
     worker_config: WorkerConfig,
     batch_size: int,
     batch_drop_last: bool = False,
-    packing_buffer_size: Optional[int] = None,
+    packing_buffer_size: Optional[int | dict[str | None, int | None]] = None,
     limit: Optional[int] = None,
     task_encoder: TaskEncoder[Any, Any, Any, T] = DefaultTaskEncoder(),
     **kwargs,
@@ -208,6 +213,9 @@ def get_val_dataset(
         worker_config: Worker configuration to use.
         batch_size: Size of a batch
         batch_drop_last: If true, drop the last batch if it is smaller than `batch_size`.
+        packing_buffer_size: Size of the packing buffer. If a dict, keys are dataset group names from
+            Metadataset V2 (same as ``get_train_dataset``); values are buffer sizes or ``None`` to
+            disable packing per group.
         limit: If set, limit the number of batches loaded from the dataset to this.
         task_encoder: Task encoder to use.
         **kwargs: Additional arguments to the dataset constructor.
@@ -241,7 +249,7 @@ def get_val_datasets(
     worker_config: WorkerConfig,
     batch_size: int,
     batch_drop_last: bool = False,
-    packing_buffer_size: Optional[int] = None,
+    packing_buffer_size: Optional[int | dict[str | None, int | None]] = None,
     limit: Optional[int] = None,
     task_encoder: TaskEncoder[Any, Any, Any, T] = DefaultTaskEncoder(),
     **kwargs,
@@ -263,6 +271,9 @@ def get_val_datasets(
         worker_config: Worker configuration to use.
         batch_size: Size of a batch
         batch_drop_last: If true, drop the last batch if it is smaller than `batch_size`.
+        packing_buffer_size: Size of the packing buffer. If a dict, keys are dataset group names from
+            Metadataset V2 (same as ``get_train_dataset``); values are buffer sizes or ``None`` to
+            disable packing per group.
         limit: If set, limit the number of batches loaded from the dataset to this.
         task_encoder: Task encoder to use.
         **kwargs: Additional arguments to the dataset constructor.
