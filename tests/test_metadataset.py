@@ -752,6 +752,7 @@ class TestDataset(unittest.TestCase):
             "rank": 0,
             "world_size": 1,
             "num_workers": 0,
+            "logical_workers": None,
             "data_parallel_group": None,
         }
         print("loader.config():")

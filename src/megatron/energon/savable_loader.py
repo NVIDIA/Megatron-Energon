@@ -102,7 +102,7 @@ class SimpleSavableDatasetWrapper(BaseWrapperDataset[T, Tuple[int, int, T]], Gen
     def __iter__(self):
         self._state_restored = True
         worker_id = self.worker_config.rank_worker_id()
-        global_worker_id = self.worker_config.global_worker_id()
+        logical_worker_id = self.worker_config.logical_global_worker_id()
         while self._state_restored:
             self._state_restored = False
             self.worker_config.worker_activate(self._sample_index, cache_pool=self.cache_pool)
@@ -113,7 +113,7 @@ class SimpleSavableDatasetWrapper(BaseWrapperDataset[T, Tuple[int, int, T]], Gen
                     worker_active = False
                     sample_index = self._sample_index
                     src_data = add_sample_restore_key(
-                        src_data, global_worker_id, sample_index, src=self
+                        src_data, logical_worker_id, sample_index, src=self
                     )
                     self._sample_index += 1
                     yield worker_id, sample_index, src_data
@@ -129,16 +129,16 @@ class SimpleSavableDatasetWrapper(BaseWrapperDataset[T, Tuple[int, int, T]], Gen
                     self.worker_config.worker_deactivate()
 
     def restore_sample(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> T:
-        id, global_worker_id, sample_idx = restore_key[:3]
+        id, logical_worker_id, sample_idx = restore_key[:3]
         assert id == type(self).__name__
         restore_key = restore_key[3:]
         self.worker_config.worker_activate(
-            sample_idx, override_global_rank=global_worker_id, cache_pool=self.cache_pool
+            sample_idx, override_global_rank=logical_worker_id, cache_pool=self.cache_pool
         )
         try:
             return add_sample_restore_key(
                 self.dataset.restore_sample(restore_key),
-                global_worker_id,
+                logical_worker_id,
                 sample_idx,
                 src=self,
             )
@@ -333,7 +333,7 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
         # First: Set the worker offset globally for the current worker
         WorkerConfig.worker_id_offset = self._worker_offset
         self._worker_id = self.worker_config.rank_worker_id()
-        global_worker_id = self.worker_config.global_worker_id()
+        logical_worker_id = self.worker_config.logical_global_worker_id()
         if self._cmd_thread is None:
             self._running = True
             self._command_lock = threading.RLock()
@@ -390,7 +390,7 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
                             last_was_skip = False
                             sample_index = self._sample_index
                             add_sample_restore_key(
-                                src_data, global_worker_id, sample_index, src=self
+                                src_data, logical_worker_id, sample_index, src=self
                             )
                             self._sample_index += 1
                             self._store_checkpoint()
@@ -563,14 +563,14 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
         return self.dataset.can_restore_sample()
 
     def restore_sample(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> T:
-        id, global_worker_id, sample_idx = restore_key[:3]
+        id, logical_worker_id, sample_idx = restore_key[:3]
         assert id == type(self).__name__
         restore_key = restore_key[3:]
-        self.worker_config.worker_activate(sample_idx, override_global_rank=global_worker_id)
+        self.worker_config.worker_activate(sample_idx, override_global_rank=logical_worker_id)
         try:
             return add_sample_restore_key(
                 self.dataset.restore_sample(restore_key),
-                global_worker_id,
+                logical_worker_id,
                 sample_idx,
                 src=self,
             )

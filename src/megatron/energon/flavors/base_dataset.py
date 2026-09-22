@@ -285,6 +285,16 @@ class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC)
         """
         return sum(self.len_worker(i) for i in range(self.worker_config.num_workers or 1))
 
+    @abstractmethod
+    def set_skip_mode(self, active: bool) -> None:
+        """Toggle best-effort fast-forward mode for the next iterator outputs on the active worker.
+
+        Wrappers may use this transient flag to avoid expensive work for outputs
+        that an outer wrapper will discard. Implementations must still advance
+        iterator state as if the output had been produced.
+        """
+        ...
+
     def __len__(self) -> int:
         """Returns the length of the dataset for the current rank. Corresponds to `len_rank`."""
         return self.len_rank()

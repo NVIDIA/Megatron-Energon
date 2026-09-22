@@ -14,6 +14,7 @@ from typing import (
     Optional,
     TypeVar,
     Union,
+    cast,
 )
 
 from megatron.energon.errors import ErrorContext, handle_restore_errors
@@ -67,6 +68,7 @@ class PackingDataset(
 
     #: Sample index for the final_packer
     _final_packing_sample_index: SampleIndex
+    _skip_mode: bool
 
     #: Error handlers for tracking failures
     _pre_pack_failure_handler: ErrorContext
@@ -90,8 +92,10 @@ class PackingDataset(
         final_packer: Callable[[List[T_encoded_sample]], T_batch_sample],
         *,
         final_packer_stateless: bool = False,
+        final_packer_skip_safe: bool = False,
         sample_encoder: Optional[Callable[[T_sample], T_encoded_sample]] = None,
         sample_encoder_stateless: bool = False,
+        sample_encoder_skip_safe: bool = False,
         packer_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]] = None,
         pre_packer_failure_tolerance: int = 100,
         final_packer_failure_tolerance: int = 100,
@@ -130,8 +134,10 @@ class PackingDataset(
         self.pre_packer = pre_packer
         self.final_packer = final_packer
         self.final_packer_stateless = final_packer_stateless
+        self.final_packer_skip_safe = final_packer_skip_safe
         self.sample_encoder = sample_encoder
         self.sample_encoder_stateless = True if sample_encoder is None else sample_encoder_stateless
+        self.sample_encoder_skip_safe = True if sample_encoder is None else sample_encoder_skip_safe
         self.packer_config = packer_config
 
         self.pre_packer_failure_tolerance = pre_packer_failure_tolerance
@@ -168,11 +174,16 @@ class PackingDataset(
         self._pre_packing_sample_index = SampleIndex(self.worker_config, src=self)
         self._final_packing_sample_index = SampleIndex(self.worker_config, src=self)
         self._sample_encoder_sample_index = SampleIndex(self.worker_config, src=self)
+        self._skip_mode = False
 
     def len_worker(self, worker_idx: int | None = None) -> int:
         # The real length is unknown, since it depends on the packing function.
         # We approximate it by the length of the source dataset.
         return self.dataset.len_worker(worker_idx)
+
+    def set_skip_mode(self, active: bool) -> None:
+        # Do not pass to inner datasets, because we cannot simplify through the pre_packing step.
+        self._skip_mode = active
 
     def _fill_reading_buffer(self, source_iter: Iterator, log_progress: bool = False) -> bool:
         """
@@ -220,6 +231,9 @@ class PackingDataset(
 
         def encode_pack_samples(pack: List[T_sample]) -> List[T_encoded_sample]:
             """Encode the samples in the pack using the sample encoder."""
+            if self._skip_mode and self.sample_encoder_skip_safe and self.final_packer_skip_safe:
+                self._sample_encoder_sample_index.skip(len(pack))
+                return len(pack) * [None]
 
             # Apply the sample encoder to the pack
             if self.sample_encoder is None:
@@ -276,11 +290,20 @@ class PackingDataset(
 
             del self._pre_packing_buffer[: pre_packing_lengths[0]]
             del pre_packing_lengths[0]
+
+            if self._skip_mode and self.final_packer_skip_safe:
+                self._final_packing_sample_index.skip(1)
+                yield cast(T_batch_sample, None)
+                return
+
             with self._final_pack_failure_handler.handle_errors(pack):
                 pack_restore_keys = tuple(get_sample_restore_key(sample) for sample in pack)
                 with self._final_packing_sample_index.ctx() as pack_idx:
                     final_packed_sample = self.final_packer(pack)
                 if isinstance(final_packed_sample, Generator):
+                    assert not self.final_packer_skip_safe, (
+                        "Generator in final_packer but skip_safe"
+                    )
                     assert inspect.isgeneratorfunction(self.final_packer), (
                         f"Generator in {self.final_packer} but not marked as such."
                     )

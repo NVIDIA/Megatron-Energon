@@ -62,6 +62,7 @@ from megatron.energon.flavors import (
     VQAWebdataset,
 )
 from megatron.energon.loader import get_loader, get_savable_loader
+from megatron.energon.logical_worker import LogicalWorkerAssignment
 from megatron.energon.metadataset import (
     DatasetLoader,
     DatasetLoaderInterface,
@@ -88,6 +89,7 @@ from megatron.energon.task_encoder import (
     get_train_dataset,
     get_val_dataset,
     get_val_datasets,
+    skip_safe,
     stateless,
 )
 from megatron.energon.worker import WorkerConfig
@@ -198,6 +200,7 @@ __all__ = [
     "SkipSample",
     "SourceInfo",
     "StandardWebdatasetFactory",
+    "skip_safe",
     "stateless",
     "SystemFileStore",
     "TaskEncoder",
@@ -209,4 +212,5 @@ __all__ = [
     "VQASample",
     "VQAWebdataset",
     "WorkerConfig",
+    "LogicalWorkerAssignment",
 ]
