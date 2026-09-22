@@ -46,6 +46,10 @@ dev = [
   "nvidia-sphinx-theme",
   "sphinx-click",
 ]
+# Optional dependency for the Parquet flavor.
+parquet = [
+  "pyarrow>=14.0.0",
+]
 transforms = [
   "torchvision",  # Needed for megatron.energon.transforms
 ]
@@ -80,7 +84,7 @@ tar_patcher = [
 ]
 
 all = [
-  "megatron-energon[av_decode,aistore,azure-storage-blob,dev,google-cloud-storage,huggingface,oci,s3,tar_patcher,transforms]",
+  "megatron-energon[av_decode,aistore,azure-storage-blob,dev,google-cloud-storage,huggingface,oci,parquet,s3,tar_patcher,transforms]",
 ]
 
 [project.urls]
@@ -99,7 +103,7 @@ energon = "megatron.energon.cli.main:main"
 source = "vcs"
 
 [tool.ruff.lint]
-extend-select = ["I"]
+select = ["E4", "E7", "E9", "F", "I"]
 ignore = ["E741", "E731"]
 
 [tool.ruff]

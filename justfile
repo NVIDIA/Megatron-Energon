@@ -6,11 +6,11 @@ help:
 
 # Update the environment with the latest version of the dependencies
 dev-sync:
-    uv sync --all-extras --cache-dir .uv_cache
+    uv sync --all-extras
 
 # Update the environment but not with the development dependencies
 prod-sync:
-    uv sync --all-extras --no-dev --cache-dir .uv_cache
+    uv sync --all-extras --no-dev
 
 # Fix the code style and format
 fix: dev-sync

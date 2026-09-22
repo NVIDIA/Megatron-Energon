@@ -8,6 +8,7 @@ from typing import Callable, Generic, Optional, TypeVar, Union, overload
 
 from megatron.energon.flavors.base_dataset import Sample
 from megatron.energon.source_info import SourceInfo
+from megatron.energon.tags import HasTagsAlias, canonicalize_tag_kwargs
 
 T_sample = TypeVar("T_sample", bound=Sample, covariant=True)
 
@@ -66,7 +67,7 @@ def get_cooker_need_primary(fn: Callable[..., T_sample]) -> bool:
 
 
 @dataclass
-class Cooker(Generic[T_sample]):
+class Cooker(HasTagsAlias, Generic[T_sample]):
     """A cooker transforms a crude sample (simple dict) into a specific sample type inheriting
     from `Sample`.
     The `cook` method performs the transformation, the other fields are used to select the
@@ -81,9 +82,12 @@ class Cooker(Generic[T_sample]):
     # `cache` is passed only if want_cache is true.
     cook: Callable[..., T_sample]
 
-    #: The subflavors to be present in the sample to be cooked by this cooker. All keys and values
+    #: The tags to be present in the sample to be cooked by this cooker. All keys and values
     # must match.
-    has_subflavors: Optional[dict] = None
+    has_tags: Optional[dict] = None
+
+    #: Optional ``part_filter(part: str) -> bool`` for dataset (column) filtering.
+    part_filter: Optional[Callable[[str], bool]] = None
 
     @property
     def need_primary(self) -> bool:
@@ -93,12 +97,12 @@ class Cooker(Generic[T_sample]):
     def need_cache(self) -> bool:
         return get_cooker_need_cache(self.cook)
 
-    def is_match(self, subflavors: dict) -> bool:
-        if self.has_subflavors is not None:
+    def is_match(self, tags: dict) -> bool:
+        if self.has_tags is not None:
             # Checks if the dict entries provided as a filter all match
             # the ones in the sample. The sample may have additional entries.
-            for k, v in self.has_subflavors.items():
-                if k not in subflavors or subflavors[k] != v:
+            for k, v in self.has_tags.items():
+                if k not in tags or tags[k] != v:
                     return False
 
         return True
@@ -110,6 +114,7 @@ def basic_sample_keys(
     """A convenience helper to extract the basic keys from a crude sample,
     which you will always need to forward to the cooked sample."""
 
+    crude_sample = canonicalize_tag_kwargs(crude_sample)
     res = {
         field.name: crude_sample[field.name]
         for field in dataclasses.fields(Sample)

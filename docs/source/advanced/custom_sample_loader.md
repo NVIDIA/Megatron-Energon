@@ -50,8 +50,32 @@ Your `sample_loader` method must accept a dictionary as argument and return a di
 the webdataset samples and the resulting dictionary keys should map to the corresponding sample class members.
 In this case an {py:class}`OCRSample <megatron.energon.OCRSample>`.
 
-With the optional `part_filter` method, you can prevent some webdataset fields from being loaded.
-Given a field name, the method should return True if the field is to be kept.
+With the optional `part_filter` method, you can prevent unused payload parts
+from being loaded. Given a logical part name, the method returns `True` when the
+part should be kept. The meaning of the name depends on the dataset format:
+
+| Dataset format | Names passed to `part_filter` |
+| --- | --- |
+| WebDataset | Sample part names/extensions such as `jpg`, `gt.txt`, or `bbox.json` |
+| Parquet | Column names |
+| JSONL | The single logical part `json` |
+| Megatron-LM BinIdx | The single logical part `tokens` |
+
+For example, a Parquet cooker can avoid reading every column:
+
+```python
+Cooker(
+    cook=cook_selected_columns,
+    part_filter=lambda column: column in {"id", "caption"},
+)
+```
+
+A filter configured by the dataset factory and a filter supplied by a cooker
+are combined by intersection: a part is loaded only when both filters keep it.
+Keep at least one Parquet column; a factory-level filter that excludes every
+column raises an error. Filtering out `json` or `tokens` removes the only
+payload part from JSONL or BinIdx samples respectively, leaving only Energon
+metadata.
 
 
 (interleaved-sample-loader)=

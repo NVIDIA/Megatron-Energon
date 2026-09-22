@@ -64,6 +64,18 @@ class BaseWrapperDataset(SavableDataset[T_sample_out], Generic[T_sample_in, T_sa
     def worker_has_samples(self) -> bool:
         return any(ds.worker_has_samples() for ds in self.datasets)
 
+    def set_skip_mode(self, active: bool) -> None:
+        for ds in self.datasets:
+            ds.set_skip_mode(active)
+
+    def close(self) -> None:
+        """Close every owned child dataset once."""
+        closed_ids: set[int] = set()
+        for dataset in self.datasets:
+            if id(dataset) not in closed_ids:
+                dataset.close()
+                closed_ids.add(id(dataset))
+
     def _find_wrapped_dataset(self, cls: Type[SavableDataset]) -> Optional[SavableDataset]:
         """Find the outermost dataset wrapped in this dataset that is of type cls."""
 
@@ -172,6 +184,10 @@ class SampleIndex(Savable):
             if hasattr(it, "close"):
                 it.close()
 
+    def skip(self, n: int = 1) -> None:
+        """Advance the sample index as if ``n`` outputs had been yielded."""
+        self.current_idx += n
+
     def save_state(self) -> int:
         return self.current_idx
 
@@ -182,7 +198,7 @@ class SampleIndex(Savable):
             self.current_idx = state
 
 
-def get_sample_restore_key(sample: Any) -> Optional[Union[str, int]]:
+def get_sample_restore_key(sample: Any) -> Optional[Union[str, int, tuple]]:
     """Gets the restore key from an arbitrary sample."""
     if isinstance(sample, Sample) or hasattr(sample, "__restore_key__"):
         return sample.__restore_key__

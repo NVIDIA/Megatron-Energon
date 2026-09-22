@@ -3,12 +3,12 @@
 
 from typing import Any, Dict, Generic, Optional, TypeVar
 
+from megatron.energon.decoders import DEFAULT_DECODER, SampleDecoder
 from megatron.energon.epathlib import EPath
+from megatron.energon.flavors.common.sample_record import FilteredSample
 from megatron.energon.flavors.webdataset.default_generic_webdataset import (
     DefaultGenericWebdatasetFactory,
 )
-from megatron.energon.flavors.webdataset.sample_decoder import DEFAULT_DECODER, SampleDecoder
-from megatron.energon.flavors.webdataset.structs import FilteredSample
 
 T_sample = TypeVar("T_sample", covariant=True)
 

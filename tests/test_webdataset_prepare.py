@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.webdataset.aggregator_pool import AggregatorPool, BaseAggregator
+from megatron.energon.flavors.common.aggregator_pool import AggregatorPool, BaseAggregator
 from megatron.energon.flavors.webdataset.indexing import DuplicateSampleKeyError, SqliteIndexWriter
 from megatron.energon.flavors.webdataset.prepare import IndexSample
 

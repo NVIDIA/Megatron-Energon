@@ -32,6 +32,7 @@ from megatron.energon.epathlib import EPath
 from megatron.energon.savable import Savable
 from megatron.energon.source_info import SourceInfo
 from megatron.energon.state import FlexState
+from megatron.energon.tags import SampleTagsAlias, TagsAlias, canonicalize_tag_kwargs
 from megatron.energon.worker import WorkerConfig
 
 T_sample = TypeVar("T_sample", covariant=True)
@@ -98,6 +99,7 @@ class ExtendableDataclassMixin:
         Returns:
             The extended dataclass instance.
         """
+        kwargs = canonicalize_tag_kwargs(kwargs)
         assert is_dataclass(cls), "Must be a dataclass"
         assert issubclass(cls, type(src)), "Cannot extend class of different type"
 
@@ -111,7 +113,7 @@ class ExtendableDataclassMixin:
 
 
 @edataclass
-class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
+class Sample(SampleTagsAlias, ABC, PinMemoryMixin, ExtendableDataclassMixin):
     """An abstract base class for one element of a batch.
     Each task should derive a specific subclass as a `@dataclass`, like
     :class:`megatron.energon.CaptioningBatchSample`, and add the input and output fields as needed for
@@ -124,8 +126,8 @@ class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
     # should be a (nested) tuple of strings and integers, which can be used to index the dataset.
     __restore_key__: Tuple[Union[str, int, tuple], ...]
 
-    #: A dataset may define a subflavors to distinguish between samples of the same sample type.
-    __subflavors__: Optional[Dict[str, Any]] = None
+    #: A dataset may define tags to distinguish between samples of the same sample type.
+    __tags__: Optional[Dict[str, Any]] = None
 
     #: Information about the source of the sample, i.e. where the data was loaded from.
     __sources__: Optional[tuple[SourceInfo, ...]] = None
@@ -133,7 +135,7 @@ class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
     @classmethod
     def derive_from(cls: Type[T_sample], base_sample: "Sample", **kwargs) -> T_sample:
         """
-        Uses the base fields of `Sample` from base_sample (i.e. __key__, __restore_key__, __subflavors__, __sources__)
+        Uses the base fields of `Sample` from base_sample (i.e. __key__, __restore_key__, __tags__, __sources__)
         and creates a new sample with the kwargs as fields. This is useful for creating new samples, while keeping the
         metadata of the base sample.
 
@@ -144,6 +146,7 @@ class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
         Returns:
             The new sample.
         """
+        kwargs = canonicalize_tag_kwargs(kwargs)
         base_kwargs = {
             field.name: getattr(base_sample, field.name)
             for field in dataclasses.fields(Sample)
@@ -153,56 +156,6 @@ class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
             **base_kwargs,
             **kwargs,
         )
-
-    @classmethod
-    def from_joined(
-        cls: Type[T_sample], *args: "Optional[Sample]", **kwargs: "Optional[Sample]"
-    ) -> T_sample:
-        """
-        Creates a sample from joined samples. The samples are either passed as positional arguments or as keyword
-        arguments. The first sample is the primary sample, which is used to initialize the key and subflavors.
-
-        In the default implementation, the joined samples' fields will be joined together, such that latter joined
-        samples will update the fields last (i.e. take precedence), except for the key and subflavors. The restore key
-        is later set externally.
-
-        Args:
-            args: The samples to join (either this or kwargs is specified).
-            kwargs: The samples to join (either this or args is specified). Not supported for the default
-                implementation. Overwriting implementations may use this.
-
-        Returns:
-            The joined constructed sample.
-        """
-        assert len(kwargs) == 0, (
-            "Please specify joined datasets as list for the default joiner. Keyword arguments are confusing, because keys are ignored."
-        )
-        excluded_fields = set(field.name for field in dataclasses.fields(Sample))
-        init_args = {}
-        if len(args) > 0:
-            primary = args[0]
-            assert primary is not None, "Primary sample must not be None."
-            fields = dataclasses.fields(primary)
-            for field in fields:
-                init_args[field.name] = getattr(primary, field.name)
-            # Merge sources from all joined samples
-            init_args["__sources__"] = (
-                *(primary.__sources__ or ()),
-                *(
-                    src
-                    for arg in args
-                    if arg is not None and arg.__sources__ is not None
-                    for src in arg.__sources__
-                ),
-            )
-            for arg in args:
-                if arg is None:
-                    continue
-                fields = dataclasses.fields(arg)
-                for field in fields:
-                    if field.name not in excluded_fields:
-                        init_args[field.name] = getattr(arg, field.name)
-        return cls(**init_args)
 
 
 @edataclass
@@ -285,9 +238,32 @@ class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC)
         """
         return sum(self.len_worker(i) for i in range(self.worker_config.num_workers or 1))
 
+    @abstractmethod
+    def set_skip_mode(self, active: bool) -> None:
+        """Toggle best-effort fast-forward mode for the next iterator outputs on the active worker.
+
+        Wrappers may use this transient flag to avoid expensive work for outputs
+        that an outer wrapper will discard. Implementations must still advance
+        iterator state as if the output had been produced.
+        """
+        ...
+
     def __len__(self) -> int:
         """Returns the length of the dataset for the current rank. Corresponds to `len_rank`."""
         return self.len_rank()
+
+    def close(self) -> None:
+        """Release resources owned by this dataset.
+
+        Leaf datasets that own readers should override this method. Dataset wrappers
+        propagate closure to their children.
+        """
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self.close()
 
     def save_state(self) -> FlexState:
         """
@@ -395,18 +371,24 @@ class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC)
         )
 
 
-class BaseCoreDatasetFactory(Generic[T_sample], ABC):
-    """Base type for an inner dataset sample loader. This factory can be used to construct a sample loader, or for
-    joining in a joined dataset."""
+class BaseCoreDatasetFactory(TagsAlias, Generic[T_sample], ABC):
+    """Base type for an inner dataset sample loader."""
 
     __sample_type__: Type[T_sample] = cast(Type[T_sample], None)
     paths: List[EPath]
 
-    subflavors: Dict[str, Any]
+    tags: Dict[str, Any]
 
     @abstractmethod
-    def build(self, worker_rotation_offset: int = 0) -> SavableDataset[T_sample]:
-        """Builds the dataset."""
+    def build(
+        self, worker_rotation_offset: int = 0, part_filter: Callable[[str], bool] | None = None
+    ) -> SavableDataset[T_sample]:
+        """Builds the dataset.
+
+        Args:
+            worker_rotation_offset: The offset of the worker rotation.
+            part_filter: A function to filter the parts of the dataset.
+        """
         ...
 
     @abstractmethod
