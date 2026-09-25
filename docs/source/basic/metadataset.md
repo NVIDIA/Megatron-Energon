@@ -83,6 +83,22 @@ When referring to datasets under `val:` obviously `split_part: val` is the defau
 
 Energon also supports blending by specifying the number of repetitions for each dataset using [Epochized Blending](../advanced/epochized_blending).
 
+## Duplicate Weighted References
+
+If the same leaf dataset is reached more than once in a weighted blend, including
+through nested metadatasets, Energon combines identical references into one sample
+stream and sums their weights. A warning identifies the duplicate dataset.
+This avoids drawing the same shuffle sequence from two independent loaders.
+
+References remain separate when their effective split, subset, subflavors,
+shuffle settings, dataset configuration, split configuration, or auxiliary data
+differ. Joined datasets and `blend_epochized` repetitions are unchanged.
+Traversal-only inspection still reports the original references.
+
+Coalescing changes the loader structure for blends that contained duplicates.
+Do not reuse loader states saved from the previous duplicate structure; restart
+the data iteration when adopting the corrected blend.
+
 (sect-subflavors)=
 ## Subflavors
 
