@@ -42,9 +42,8 @@ class FileCacheLazy(Lazy[T]):
         do a direct read, and remove ourselves from the pool's references.
         Otherwise, we wait for the job to finish, read from cache, and remove ourselves.
         """
-        if self._data is not None:
-            return self._data
-        self._data = self.pool._get_data(self.ds, self.fname, self.entry)
+        if self._data is None:
+            self._data = self.pool._get_data(self.ds, self.fname, self.entry)
         assert self._data is not None
         add_source_info(sample, self._data[1])
         return self._data[0]

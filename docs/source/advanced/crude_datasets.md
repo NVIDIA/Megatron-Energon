@@ -241,6 +241,8 @@ Later, when the packing is computed, we need to retrieve the pixel values.
 In practice, this means the cooker will use a cache pool to queue the data retrieval from an auxiliary data source and obtain a lazy object (a handle to this future data). In a later stage (like {py:meth}`pack_selected_samples <megatron.energon.TaskEncoder.pack_selected_samples>`), the lazy object can be used to retrieve the content.
 Ideally, in the mean-time, the cache pool has already downloaded the data to a local SSD.
 
+Calling `get(sample)` again on the same lazy reference reuses the loaded value and adds its source information to the supplied sample, without reading or releasing the cache entry a second time.
+
 ### Using a Cache Pool
 
 When calling {py:func}`get_savable_loader <megatron.energon.get_savable_loader>`,
