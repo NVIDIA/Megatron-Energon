@@ -251,14 +251,16 @@ from megatron.energon import FileStoreCachePool
 
 # ...
 
-loader = get_savable_loader(
+with get_savable_loader(
     my_ds,
     ...,
     cache_pool=FileStoreCachePool(
         parent_cache_dir="/local_scratch/cache",
         num_workers=1,
     ),
-)
+) as loader:
+    # Consume the loader while the cache pool and workers are active.
+    ...
 ```
 
 Then we tell the cooker decorator that we need access to the cache pool and use it to get a lazy object:

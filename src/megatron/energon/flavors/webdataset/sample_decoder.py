@@ -1,13 +1,15 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+import os
 from typing import Any, Callable, Literal
 
 import webdataset
 
-from megatron.energon.av import AVWebdatasetDecoder
+from megatron.energon.av.av_webdataset_decoder import AVWebdatasetDecoder
 from megatron.energon.cache import FileStoreDecoder
 from megatron.energon.flavors.webdataset.config import split_name_re
+from megatron.energon.flavors.webdataset.nvimagecodec_decoder import NVImageCodecDecoder
 
 try:
     import filetype
@@ -84,16 +86,23 @@ class SampleDecoder(FileStoreDecoder):
         self,
         *,
         image_decode: ImageDecoderType = "torchrgb",
+        image_decode_device: Literal["cpu", "gpu"] | int = "cpu",
         av_decode: AVDecoderType = "AVDecoder",
         video_decode_audio: bool = False,
+        video_decode_device: Literal["cpu", "gpu"] | int = "cpu",
         guess_content: bool = False,
     ):
         """
         Args:
             image_decode: This defines the decoding results.
+            image_decode_device: device to use for decoding images, use `gpu` or an integer device
+              ordinal to enable hardware accelerated image decoding.
+              NOTE: GPU accelerated decoding is only compatible with `torch*` settings for `image_decode`
             av_decode: If "AVDecoder", returns an AVDecoder instance for flexible decoding. If "torch",
                 returns decoded VideoData.
             video_decode_audio: Whether to decode audio from video files.
+            video_decode_device: The device to use for decoding video. If "gpu" or a numerical device ID
+              the video is decoded using NVDec hardware acceleration on the GPU.
             guess_content: Whether to guess the contents of the file using the `filetype` package.
         """
         self._config = dict(
@@ -102,14 +111,37 @@ class SampleDecoder(FileStoreDecoder):
             video_decode_audio=video_decode_audio,
             guess_content=guess_content,
         )
+        self._creator_pid = os.getpid()
+        self._requires_threading = image_decode_device != "cpu" or video_decode_device != "cpu"
+        if image_decode_device != "cpu":
+            if not image_decode.startswith("torch"):
+                raise ValueError(
+                    f"GPU accelerated image decoding is only compatible with torch result formats (got {image_decode=})"
+                )
+
+            image_decoders = [
+                NVImageCodecDecoder(
+                    image_decode, 0 if image_decode_device == "gpu" else image_decode_device
+                ),
+                webdataset.autodecode.imagehandler(image_decode),
+            ]
+        else:
+            image_decoders = [webdataset.autodecode.imagehandler(image_decode)]
+
+        if video_decode_device != "cpu" and av_decode not in ("AVDecoder", "torch"):
+            raise ValueError(
+                f"GPU accelerated video decoding is only compatible with the 'AVDecoder' or 'torch' methods (got {av_decode=})"
+            )
+
         self._decoder = webdataset.autodecode.Decoder(
             GuessingHandlerWrapper.wrap(
                 guess_content,
                 [
-                    webdataset.autodecode.imagehandler(image_decode),
+                    *image_decoders,
                     AVWebdatasetDecoder(
                         video_decode_audio=video_decode_audio,
                         av_decode=av_decode,
+                        device=video_decode_device,
                     ),
                 ],
             ),
@@ -133,6 +165,12 @@ class SampleDecoder(FileStoreDecoder):
         )[ext]
 
     def __call__(self, sample: dict) -> dict:
+        if self._requires_threading and os.getpid() != self._creator_pid:
+            raise SystemError(
+                "GPU accelerated media decoding is incompatible with forking dataloader workers "
+                "pass `worker_type='thread'` or `worker_type='main'`."
+            )
+
         return self._decoder(sample)
 
     def config(self) -> dict:

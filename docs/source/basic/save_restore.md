@@ -30,6 +30,10 @@ def get_my_loader():
 
 ```
 
+Once iteration starts, a loader owns worker resources. Consume it as a context manager so those
+resources are shut down reliably. When restoring, restore the state before entering the context,
+because entering starts the workers.
+
 ### 1. Save/Restore the State per Rank Separately
 
 In this scenario, each rank saves and restores its own state in an independent file.
@@ -37,18 +41,18 @@ This is our recommended way, since it avoids transferring the data across ranks.
 
 ```python
 # Saving the state
-loader = get_my_loader()
+with get_my_loader() as loader:
+    # Iterate for some steps
+    for i, batch in zip(range(10), loader):
+        print(batch)
+        break
 
-# Iterate for some steps
-for i, batch in zip(range(10), loader):
-    print(batch)
-    break
+    # Save the state before shutting down the loader
+    state = loader.save_state_rank()
 
-# Save the state
-state = loader.save_state_rank()
 # Save the state on each rank
 # In this example, save the state using `torch.save`, this can of course be custom
-torch.save(dataloader_state, f'dataloader_state_rank{worker_config.rank}.pth')
+torch.save(state, f'dataloader_state_rank{worker_config.rank}.pth')
 ```
 
 ```python
@@ -60,6 +64,10 @@ state = torch.load(f'dataloader_state_rank{worker_config.rank}.pth')
 
 # Restore the state for the loader on each rank separately
 loader.restore_state_rank(state)
+
+with loader:
+    # Resume training
+    ...
 ```
 
 
@@ -72,19 +80,19 @@ This approach centralizes the state management, which can simplify the process a
 
 ```python
 # Saving the state
-loader = get_my_loader()
+with get_my_loader() as loader:
+    # Iterate for some steps
+    for i, batch in zip(range(10), loader):
+        print(batch)
+        break
 
-# Iterate for some steps
-for i, batch in zip(range(10), loader):
-    print(batch)
-    break
+    # Save the state to primary rank 0 before shutting down the loader
+    state = loader.save_state_global(global_dst_rank=0)
 
-# Save the state to primary rank 0
-state = loader.save_state_global(dst_rank=0)
 if worker_config.rank == 0:
     # Only rank 0 has the state now, for the others, the state is None
     # In this example, save the state using `torch.save`, this can of course be custom
-    torch.save(dataloader_state, 'dataloader_state.pth')
+    torch.save(state, 'dataloader_state.pth')
 ```
 
 ```python
@@ -99,6 +107,10 @@ else:
 
 # Restore the state for the loader, broadcasting from rank 0
 loader.restore_state_global(state, src_rank=0)
+
+with loader:
+    # Resume training
+    ...
 ```
 
 
@@ -115,18 +127,18 @@ Depending on the framework used for training, that framework may already handle 
 
 ```python
 # Saving the state
-loader = get_my_loader()
+with get_my_loader() as loader:
+    # Iterate for some steps
+    for i, batch in zip(range(10), loader):
+        print(batch)
+        break
 
-# Iterate for some steps
-for i, batch in zip(range(10), loader):
-    print(batch)
-    break
+    # Save the state before shutting down the loader
+    state = loader.save_state_global(global_dst_rank=0)
 
-# Save the state
-state = loader.save_state_global(dst_rank=0)
 if worker_config.rank == 0:
     # In this example, save the state using `torch.save`, this can of course be custom
-    torch.save(dataloader_state, 'dataloader_state.pth')
+    torch.save(state, 'dataloader_state.pth')
 ```
 
 ```python
@@ -138,6 +150,10 @@ state = torch.load('dataloader_state.pth')
 
 # Restore the state for the loader on current rank, using all ranks checkpoint
 loader.restore_state_global(state, src_rank=None)
+
+with loader:
+    # Resume training
+    ...
 ```
 
 ## Error Handling During Restore

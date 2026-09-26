@@ -248,6 +248,7 @@ class TestDataset(unittest.TestCase):
         assert len(train_dataset) == 11
 
         train_loader1 = get_loader(train_dataset)
+        self.addCleanup(train_loader1.shutdown)
 
         train_order1 = [
             text for idx, data in zip(range(55 * 10), train_loader1) for text in data.text
@@ -447,6 +448,7 @@ class TestDataset(unittest.TestCase):
             checkpoint_every_sec=0,
             checkpoint_every_min_n_samples=1,
         )
+        self.addCleanup(train_loader.shutdown)
 
         data = list(zip(range(2 * 55), train_loader))
         txt1_order = [data.text1[0] for idx, data in data]
@@ -488,6 +490,7 @@ class TestDataset(unittest.TestCase):
             checkpoint_every_sec=0,
             checkpoint_every_min_n_samples=1,
         )
+        self.addCleanup(train_loader.shutdown)
 
         train_loader.restore_state_rank(state)
 
@@ -558,6 +561,7 @@ class TestDataset(unittest.TestCase):
             checkpoint_every_sec=0,
             checkpoint_every_min_n_samples=1,
         )
+        self.addCleanup(train_loader.shutdown)
 
         data = list(zip(range(2 * 55), train_loader))
         txt1_order = [data.text1[0] for idx, data in data]
@@ -638,6 +642,7 @@ class TestDataset(unittest.TestCase):
             checkpoint_every_sec=0,
             checkpoint_every_min_n_samples=1,
         )
+        self.addCleanup(train_loader.shutdown)
 
         data = list(zip(range(2 * 55), train_loader))
         txt1_order = [data.text1[0] for idx, data in data]
@@ -797,6 +802,7 @@ class TestDataset(unittest.TestCase):
             checkpoint_every_sec=0,
             checkpoint_every_min_n_samples=1,
         )
+        self.addCleanup(train_loader.shutdown)
 
         data = list(zip(range(2 * 55), train_loader))
         txt1_order = [data.text1[0] for idx, data in data]
@@ -960,6 +966,7 @@ class TestDataset(unittest.TestCase):
         assert all(ds1_key_cnt[key] == 2 for key in ds1_keys)
         assert all(ds2_key_cnt[key] == 3 for key in ds2_keys)
         assert all(txt_cnt[key] in (2, 3) for key in txt_order)
+        train_loader.shutdown()
 
         # Restore state
         train_loader = get_savable_loader(
@@ -995,6 +1002,7 @@ class TestDataset(unittest.TestCase):
         assert all(ds1_key_cnt_rst[key] == 2 for key in ds1_keys_rst)
         assert all(ds2_key_cnt_rst[key] == 3 for key in ds2_keys_rst)
         assert all(txt_cnt_rst[key] in (2, 3) for key in txt_order_rst)
+        train_loader.shutdown()
 
     def test_metadataset_fixed_fractional_epochs(self):
         torch.manual_seed(42)
@@ -1068,6 +1076,7 @@ class TestDataset(unittest.TestCase):
 
         # The remaining samples from ds2 (127 to incl. 154) should be repeated only once
         assert all(sample_counts[sample] == 1 for sample in range(127, 155))
+        train_loader.shutdown()
 
         # ===== Part 2: Save and restore state =====
 
@@ -1090,6 +1099,7 @@ class TestDataset(unittest.TestCase):
 
         data1 = list(zip(range(95), train_loader))
         state1 = train_loader.save_state_rank()
+        train_loader.shutdown()
 
         train_loader = get_savable_loader(
             get_train_dataset(
@@ -1121,6 +1131,7 @@ class TestDataset(unittest.TestCase):
         assert sample_counts_save_restore == sample_counts, (
             "Sample counts do not match when using save/restore"
         )
+        train_loader.shutdown()
 
         # ===== Part 3: Check if the state is restored correctly when saving right at the end of a dataset =====
 
@@ -1152,6 +1163,7 @@ class TestDataset(unittest.TestCase):
                     break
 
         state1 = train_loader.save_state_rank()
+        train_loader.shutdown()
 
         train_loader = get_savable_loader(
             get_train_dataset(
@@ -1183,6 +1195,7 @@ class TestDataset(unittest.TestCase):
         assert sample_counts_save_restore == sample_counts, (
             "Sample counts do not match when using save/restore"
         )
+        train_loader.shutdown()
 
         # Try in repeat mode
         # Train mode dataset
@@ -1206,6 +1219,7 @@ class TestDataset(unittest.TestCase):
         # Check the overall number of samples
         # Should be 0.7*len(ds1) + 1.5*len(ds2) = 38 + 55 + 27 (floor rounding)
         assert len(data) == 200, len(data)
+        train_loader.shutdown()
 
         # ===== Part 4: Test count for multiple workers =====
 
@@ -1241,6 +1255,7 @@ class TestDataset(unittest.TestCase):
         # Should be 0.7*len(ds1)55 + 1.5*len(ds2)55 = 38 + 55 + 27 (floor rounding)
         # TODO: This should be exactly 60. There is a corresponding TODO in the repeat_dataset.py
         assert len(data) == 58, len(data)
+        train_loader.shutdown()
 
     @patch.object(WatchdogDataset, "_watchdog_trigger")
     def test_watchdog_dataset(self, mock_watchdog_trigger):
@@ -1282,6 +1297,7 @@ class TestDataset(unittest.TestCase):
             watchdog_timeout_seconds=3,
             fail_on_timeout=False,
         )
+        self.addCleanup(train_loader.shutdown)
 
         for idx, data in enumerate(train_loader):
             print(idx, data.text[0])
@@ -1369,7 +1385,7 @@ class TestDataset(unittest.TestCase):
                 )
             )
 
-        loader = get_loader(
+        with get_loader(
             get_train_dataset(
                 ratio_mds_path,
                 worker_config=worker_config,
@@ -1380,9 +1396,8 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
                 repeat=False,
             )
-        )
-
-        all_numbers = [int(s.text[0]) for s in loader]
+        ) as loader:
+            all_numbers = [int(s.text[0]) for s in loader]
 
         assert all_numbers == [50, 51, 52, 53, 54], "Subset range [50, end] should be [50, 55]"
 
@@ -1443,6 +1458,7 @@ class TestDataset(unittest.TestCase):
         assert all(sample_counts[sample] == 2 for sample in range(111, 144)), sample_counts
         assert all(sample_counts[sample] == 0 for sample in range(144, 155)), sample_counts
         assert sample_counts.total() == 33 + 33 * 2, sample_counts.total()
+        loader.shutdown()
 
         # Combine with subset_samples
 
@@ -1498,6 +1514,7 @@ class TestDataset(unittest.TestCase):
         assert all(sample_counts[sample] == 2 for sample in range(124, 136)), sample_counts
         assert all(sample_counts[sample] == 0 for sample in range(136, 155)), sample_counts
         assert sample_counts.total() == 12 + 12 * 2, sample_counts.total()
+        loader.shutdown()
 
         # Combine with subset_ratio and subset_samples and nested metadataset
         nested_mds_path = self.dataset_path / "metadataset_nested_subset.yaml"
@@ -1554,6 +1571,7 @@ class TestDataset(unittest.TestCase):
         assert all(sample_counts[sample] == 1 for sample in range(230, 240)), sample_counts
         assert all(sample_counts[sample] == 0 for sample in range(240, 255)), sample_counts
         assert sample_counts.total() == 10 + 9 * 2, sample_counts.total()
+        loader.shutdown()
 
     def test_s3(self):
         # Create a joined dataset configuration
@@ -1576,7 +1594,7 @@ class TestDataset(unittest.TestCase):
             # EPath(self.dataset_path).copy(EPath("msc://s3/test/dataset"))
             emu.add_file(self.dataset_path, "test/dataset")
 
-            train_dataset = get_loader(
+            with get_loader(
                 get_train_dataset(
                     mixed_mds_path,
                     worker_config=WorkerConfig(
@@ -1589,10 +1607,9 @@ class TestDataset(unittest.TestCase):
                     max_samples_per_sequence=None,
                     virtual_epoch_length=10,
                 )
-            )
-
-            data = list(enumerate(train_dataset))
-            assert len(data) == 10, len(data)
+            ) as train_dataset:
+                data = list(enumerate(train_dataset))
+                assert len(data) == 10, len(data)
 
 
 if __name__ == "__main__":

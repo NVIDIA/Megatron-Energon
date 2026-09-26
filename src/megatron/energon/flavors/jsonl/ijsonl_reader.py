@@ -1,7 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from abc import ABC
+import threading
 from typing import (
     Callable,
     Generator,
@@ -17,13 +17,15 @@ from megatron.energon.flavors.jsonl.ijsonl import (
     IJsonlIndexReader,
     IJsonlSamplePointer,
 )
-from megatron.energon.flavors.webdataset.structs import FilteredSample
+from megatron.energon.flavors.webdataset.itar_reader import RawSampleReaderInterface
+from megatron.energon.flavors.webdataset.multi_key_cache import MultiKeyCache
+from megatron.energon.flavors.webdataset.structs import FilteredSample, WebdatasetRestoreKey
 from megatron.energon.source_info import SourceInfo
 
 T_index = TypeVar("T_index", covariant=False)
 
 
-class IJsonlReader(ABC):
+class IJsonlReader(RawSampleReaderInterface[int | str]):
     """
     Class for reading indexed jsonl files containing json samples.
 
@@ -40,8 +42,12 @@ class IJsonlReader(ABC):
     jsonl_path: EPath
     sample_filter: Optional[Callable[[str], bool]]
 
-    cached_offset_reader: CachedIJsonlOffsetReader
-    ijsonl_file: IJsonlFile | None = None
+    _length: int
+    _total_size: int
+
+    thread_local: threading.local
+    cache_lock: threading.Lock
+    ijsonl_files_cache: MultiKeyCache[int, IJsonlFile]
 
     def __init__(
         self,
@@ -51,15 +57,61 @@ class IJsonlReader(ABC):
     ):
         self.jsonl_path = jsonl_path
         self.sample_filter = sample_filter
-        self.cached_offset_reader = CachedIJsonlOffsetReader(
-            jsonl_path, cache_size=index_cache_size
-        )
+        self.index_cache_size = index_cache_size
+        self.thread_local = threading.local()
+        self.ijsonl_files_cache = MultiKeyCache()
+        self.cache_lock = threading.Lock()
+
+        with IJsonlIndexReader(jsonl_path) as ijsonl_index_reader:
+            # Number of samples
+            self._length = len(ijsonl_index_reader) - 1
+            # Byte size
+            self._total_size = ijsonl_index_reader[self._length]
 
     def __len__(self) -> int:
-        return len(self.cached_offset_reader)
+        return self._length
 
     def __str__(self) -> str:
         return f"IJsonlReader(jsonl_path={self.jsonl_path})"
+
+    @property
+    def _cached_offset_reader(self) -> CachedIJsonlOffsetReader:
+        return self.thread_local._cached_offset_reader
+
+    def worker_init(self):
+        self.thread_local._cached_offset_reader = CachedIJsonlOffsetReader(
+            self.jsonl_path, cache_size=self.index_cache_size
+        )
+
+    def worker_close(self):
+        if hasattr(self.thread_local, "_cached_offset_reader"):
+            self.thread_local._cached_offset_reader.close()
+            del self.thread_local._cached_offset_reader
+
+    def _get_ijsonl_file_cached(self, sample_idx: int) -> IJsonlFile:
+        """
+        Get the IJsonlFile object for the given sample index.
+        If the file is not already open, open it.
+        """
+        with self.cache_lock:
+            reader = self.ijsonl_files_cache.pop(sample_idx)
+            if reader is None:
+                if len(self.ijsonl_files_cache) < self.index_cache_size:
+                    reader = IJsonlFile(fileobj=self.jsonl_path.open(mode="rb"))
+                else:
+                    # Reuse the oldest file
+                    reader = self.ijsonl_files_cache.pop()
+        return reader
+
+    def _update_ijsonl_file_cache(self, sample_idx: int, reader: IJsonlFile) -> None:
+        """
+        Update the IJsonlFile object for the given sample index.
+        """
+        with self.cache_lock:
+            while len(self.ijsonl_files_cache) >= self.index_cache_size:
+                # Evict the oldest file
+                self.ijsonl_files_cache.pop().close()
+            self.ijsonl_files_cache.add(sample_idx, reader)
 
     def _get_item_by_sample_pointer(
         self,
@@ -69,8 +121,7 @@ class IJsonlReader(ABC):
         Get a sample from the dataset or slice it.
 
         Args:
-            sample_pointer: The sample pointer to get the sample from.
-            sample_index: The global index of the sample in the dataset.
+            sample_pointer: Pointer to the sample in the jsonl file.
 
         Returns:
             The sample or None if the sample is invalid.
@@ -80,20 +131,22 @@ class IJsonlReader(ABC):
         if self.sample_filter is not None and not self.sample_filter(key):
             return None
 
-        if self.ijsonl_file is None:
-            self.ijsonl_file = IJsonlFile(self.jsonl_path.open("rb"))
+        ijsonl_file = self._get_ijsonl_file_cached(sample_pointer.index)
 
-        json_data = self.ijsonl_file.next(sample_pointer.byte_offset, sample_pointer.byte_size)
+        json_data = ijsonl_file.next(sample_pointer.byte_offset, sample_pointer.byte_size)
+
         if json_data is None:
             return None
+
+        self._update_ijsonl_file_cache(sample_pointer.index + 1, ijsonl_file)
 
         return FilteredSample(
             __key__=key,
             __shard__=self.jsonl_path.name,
-            __restore_key__=("Webdataset", sample_pointer.index),
+            __restore_key__=WebdatasetRestoreKey(index=sample_pointer.index),
             __sources__=(
                 SourceInfo(
-                    dataset_path=str(self.jsonl_path),
+                    dataset_path=self.jsonl_path,
                     index=sample_pointer.index,
                     shard_name=self.jsonl_path.name,
                     file_names=(f"{key}.json",),
@@ -118,7 +171,7 @@ class IJsonlReader(ABC):
             except ValueError:
                 raise ValueError(f"Invalid JSONL sample key: {idx}")
 
-        byte_offset, byte_size = self.cached_offset_reader.get_ijsonl_byte_offset(idx)
+        byte_offset, byte_size = self._cached_offset_reader.get_ijsonl_byte_offset(idx)
         sample: FilteredSample | None = self._get_item_by_sample_pointer(
             IJsonlSamplePointer(
                 index=idx,
@@ -178,13 +231,13 @@ class IJsonlReader(ABC):
         except ValueError:
             raise ValueError(f"Invalid JSONL sample key: {sample_key}")
 
-        _, byte_size = self.cached_offset_reader.get_ijsonl_byte_offset(sample_idx)
+        _, byte_size = self._cached_offset_reader.get_ijsonl_byte_offset(sample_idx)
         yield f"{sample_key}.json", byte_size, 0
 
     def get_total_size(self) -> int:
-        return self.cached_offset_reader.get_total_size()
+        return self._total_size
 
     def close(self):
-        if self.ijsonl_file is not None:
-            self.ijsonl_file.close()
-        self.cached_offset_reader.close()
+        with self.cache_lock:
+            for ijsonl_file in self.ijsonl_files_cache.flush():
+                ijsonl_file.close()

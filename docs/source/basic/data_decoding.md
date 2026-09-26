@@ -37,13 +37,23 @@ Here are the different options you can pass to {py:class}`SampleDecoder <megatro
     * Can be set to an image decoder from webdataset. Here are some examples:
         * `pil`: Returns the image as a PIL image
         * `torchrgb` Returns the image as a torch tensor with 3 color channels.
-    * For more options, check out the [official documentation](https://rom1504.github.io/webdataset/api/webdataset/autodecode.html#ImageHandler).
+        * For more options, check out the [official documentation](https://rom1504.github.io/webdataset/api/webdataset/autodecode.html#ImageHandler).
+* `image_decode_device` ("cpu" or "gpu" or int)
+    * Defaults to "cpu" to use webdataset auto decoders (above)
+    * Set to "gpu" or an integer device ordinal to enable hardware accelerated image decoding with [NVImageCodec](https://docs.nvidia.com/cuda/nvimagecodec/index.html).
+    * NOTE: Hardware accelerated decoding is only compatible with `torch*` webdataset formats; the returned tensor will be on GPU device memory
+    * NOTE: Hardware accelerated decoding is only compatible with `thread` or `main` dataloader workers; `fork` is not supported.
 * `av_decode` (str)
     * Can be one of `AVDecoder`, `torch`, `pyav`. The default is `AVDecoder` which is explained [below](av-decoder).
     * The option `torch` would decode video and audio entirely and return them as tensors.
     * The `pyav` option is for advanced use cases where you need direct access to the object returned by `av.open()`
 * `video_decode_audio` (bool)
     * If `True`, videos that have an audio track will decode both the video and the audio. Otherwise, only the video frames are decoded.
+* `video_decode_device` ("cpu" or "gpu" or int)
+    * Defaults to "cpu" to use pyav for software decoding
+    * Set to "gpu" or an integer device ordinal to enable hardware accelerated video decoding with [PyNvVideoCodec](https://developer.nvidia.com/pynvvideocodec).
+    * NOTE: Hardware accelerated decoding is only compatible with the `AVDecoder` or `torch` settings for `av_decode`
+    * NOTE: Hardware accelerated decoding is only compatible with `thread` or `main` dataloader workers; `fork` is not supported.
 * `guess_content` (bool)
     * *New in Energon 7.0.0*
     * Whether to guess the contents of the file using the `filetype` package. Useful if you have files without extensions in your data.
@@ -74,6 +84,8 @@ For efficient video sub-clip extraction, `AVDecoder` uses FFmpeg/PyAV container 
 
 When choosing `AVDecoder` as the option for `av_decode` above, an object of the type {py:class}`AVDecoder <megatron.energon.av.AVDecoder>` (click to see methods) will be returned. 
 At this point, the file has not yet been decoded, but in your [custom sample loader](custom-sample-loader) or in your [TaskEncoder](../basic/task_encoder), you can read parts or all of the file using the methods of `AVDecoder`.
+
+You can also use hardware accelerated video decoding by setting `video_decoding_device` to `gpu` (or a specific CUDA device ID). The returned `AVDecoder` object will manage GPU decoding for you and the returned tensors will already be on the GPU device. This both accelerates the decoding process *and* avoids a copy of the raw video tensor into GPU memory. 
 
 For example to extract from a video, the first 2 seconds and the 2 seconds starting after 4 seconds:
 ```py

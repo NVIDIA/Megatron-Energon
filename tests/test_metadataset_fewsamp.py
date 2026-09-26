@@ -193,6 +193,7 @@ class TestDataset(unittest.TestCase):
 
         # Load 5 samples
         data1b = list(zip(train_loader, range(5)))
+        train_loader.shutdown()
 
         # Restore state
         train_loader = get_savable_loader(
@@ -220,6 +221,7 @@ class TestDataset(unittest.TestCase):
         print(order2)
 
         assert order1b == order2, "The restored state does not match the original state."
+        train_loader.shutdown()
 
     def test_too_few_samples(self):
         # Will only give a single sample, as there are 117 samples in total, and 100 ranks
@@ -248,6 +250,7 @@ class TestDataset(unittest.TestCase):
             assert len(set(txts)) == len(loader), (
                 f"Rank {i_rank} should have exactly {len(loader)} sample, but got {txts}"
             )
+            loader.shutdown()
 
         assert lens == [
             2 if i in [0, 3, 6, 12, 18, 25, 31, 37, 43, 50, 56, 62, 68, 75, 81, 87, 93] else 1

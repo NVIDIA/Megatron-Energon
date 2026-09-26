@@ -38,7 +38,6 @@ class LimitDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
         super().__init__(dataset, worker_config=worker_config)
         self.length = length
         self.reset_after_epoch = reset_after_epoch
-        self.reset_state_own()
 
     def reset_state_own(self) -> None:
         self.current_offset = 0
@@ -104,10 +103,9 @@ class LimitDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
             )
 
         # Reset the inner dataset
-        self.dataset.reset_state_deep()
         self.current_offset = 0
         if self.reset_after_epoch:
-            self.dataset.reset_state_deep()
+            self.dataset.reset_state()
 
     def worker_has_samples(self) -> bool:
         return super().worker_has_samples() and self.length > 0
