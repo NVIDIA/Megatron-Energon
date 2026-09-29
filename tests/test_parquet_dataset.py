@@ -8,6 +8,7 @@ import tempfile
 import unittest
 import warnings
 from pathlib import Path
+from unittest import mock
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -112,6 +113,108 @@ class TestParquetFileStore(unittest.TestCase):
         store = ParquetFileStore(EPath(parquet_path), part_filter=lambda c: c == "keep")
         keep_val, _ = store["0.keep"]
         assert keep_val == 1
+
+
+class TestParquetRowGroups(unittest.TestCase):
+    def setUp(self):
+        warnings.simplefilter("ignore", ResourceWarning)
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name) / "ds"
+        self.root.mkdir(parents=True)
+
+    def tearDown(self):
+        gc.collect()
+        self.temp_dir.cleanup()
+
+    def _write(self, name: str, start: int, count: int, row_group_size: int) -> Path:
+        path = self.root / name
+        t = pa.table(
+            {
+                "idx": list(range(start, start + count)),
+                "text": [f"t{i}" for i in range(start, start + count)],
+            }
+        )
+        pq.write_table(t, path, row_group_size=row_group_size)
+        assert pq.ParquetFile(path).num_row_groups == -(-count // row_group_size)
+        return path
+
+    def test_rows_across_row_group_boundaries(self):
+        path = self._write("rg.parquet", 0, 10, row_group_size=3)
+        store = ParquetFileStore(EPath(path))
+        try:
+            # Sequential, reversed and random-ish access must all return the right rows
+            for order in (range(10), reversed(range(10)), [7, 0, 9, 3, 2, 8, 1, 6, 4, 5]):
+                for i in order:
+                    sample = store[i]
+                    assert sample["idx"] == i
+                    assert sample["text"] == f"t{i}"
+                    assert sample["__key__"] == str(i)
+                    assert store[f"{i}.text"][0] == f"t{i}"
+            with self.assertRaises(IndexError):
+                store[10]
+        finally:
+            store.close()
+
+    def test_sequential_reads_decode_each_row_group_once(self):
+        path = self._write("rg.parquet", 0, 10, row_group_size=4)
+        orig = pq.ParquetFile.read_row_group
+        with mock.patch.object(
+            pq.ParquetFile, "read_row_group", autospec=True, side_effect=orig
+        ) as read_rg:
+            store = ParquetFileStore(EPath(path))
+            try:
+                assert [store[i]["idx"] for i in range(10)] == list(range(10))
+                assert [call.args[1] for call in read_rg.call_args_list] == [0, 1, 2]
+            finally:
+                store.close()
+
+    def test_row_group_cache_is_bounded(self):
+        path = self._write("rg.parquet", 0, 20, row_group_size=2)
+        store = ParquetFileStore(EPath(path), parquet_file_cache_size=3)
+        try:
+            for i in range(20):
+                assert store[i]["idx"] == i
+                assert len(store._row_group_cache) <= 3
+            # Column subsets are cached separately from full rows
+            assert store["19.idx"][0] == 19
+            assert store[19]["text"] == "t19"
+            store.close()
+            assert len(store._row_group_cache) == 0
+        finally:
+            store.close()
+
+    def test_manifest_shards_with_multiple_row_groups(self):
+        (self.root / ".nv-meta").mkdir()
+        first = self._write("a.parquet", 0, 7, row_group_size=3)
+        second = self._write("b.parquet", 7, 5, row_group_size=2)
+        write_manifest_dataset_metadata(
+            EPath(self.root),
+            shards=[
+                ShardInfo(name="a.parquet", path=EPath(first), count=7),
+                ShardInfo(name="b.parquet", path=EPath(second), count=5),
+            ],
+            split_config="split.yaml",
+            split_parts_ratio=[("train", 1.0)],
+            dataset_definition={
+                "__module__": "megatron.energon",
+                "__class__": "DefaultParquetShardListDatasetFactory",
+            },
+        )
+        wc = WorkerConfig(rank=0, world_size=1, num_workers=0, seed_offset=0)
+        ds = DefaultParquetShardListDatasetFactory(
+            EPath(self.root),
+            training=False,
+            worker_config=wc,
+            decoder=None,
+        )
+        wc.worker_activate(0)
+        try:
+            samples = list(ds.build())
+        finally:
+            wc.worker_deactivate()
+        assert [sample["idx"] for sample in samples] == list(range(12))
+        assert [sample["text"] for sample in samples] == [f"t{i}" for i in range(12)]
+        assert [sample["__shard__"] for sample in samples] == ["a.parquet"] * 7 + ["b.parquet"] * 5
 
 
 class TestDefaultParquetDatasetFactoryDecoders(unittest.TestCase):
