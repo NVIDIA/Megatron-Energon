@@ -53,7 +53,8 @@ the runtime leaf factories, while `Recipe.traverse` can inspect the same graph w
 iterable dataset.
 
 `TaskEncoder` owns the standard training pipeline. Some stages are omitted when the corresponding hook is
-not configured. The ordering of these stages is part of reproducibility: moving a random or stateful operation
+not configured, and grouped packing creates a branch per packing group before blending the packed
+branches. The ordering of these stages is part of reproducibility: moving a random or stateful operation
 can change both checkpoint state and sample order.
 
 ## Two forms of dataset access
