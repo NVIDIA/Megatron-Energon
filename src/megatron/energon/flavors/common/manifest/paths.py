@@ -9,7 +9,3 @@ INDEX_UUID_FILENAME = "index.uuid"
 INFO_JSON_FILENAME = ".info.json"
 INFO_YAML_FILENAME = ".info.yaml"
 SPLIT_YAML_FILENAME = "split.yaml"
-
-FILTER_FILENAME_PREFIX = "filter_"
-FILTER_JSON_SUFFIX = ".json"
-FILTER_INDEX_SUFFIX = ".idx"
