@@ -127,6 +127,10 @@ def __getattr__(name: str):
         from megatron.energon.flavors.binidx.file_store import BinIdxFileStore
 
         return BinIdxFileStore
+    if name == "ParquetFileStore":
+        from megatron.energon.flavors.parquet.file_store import ParquetFileStore
+
+        return ParquetFileStore
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
