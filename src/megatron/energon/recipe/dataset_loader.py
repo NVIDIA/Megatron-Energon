@@ -28,6 +28,7 @@ class DatasetLoader(TagsAlias, DatasetLoaderInterface):
     shuffle_over_epochs_multiplier: Optional[int] = 1
     dataset_config: Optional[str] = None
     split_config: Optional[str] = None
+    filter_name: Optional[str] = None
 
     def post_initialize(self, recipe_path: Optional[EPath] = None):
         pass
@@ -70,6 +71,8 @@ class DatasetLoader(TagsAlias, DatasetLoaderInterface):
             split_config = self.split_config
         if dataset_config is None:
             dataset_config = self.dataset_config
+        if self.filter_name is not None:
+            kwargs = {**kwargs, "filter_name": self.filter_name}
         return get_dataset_from_config(
             self.path,
             training=training,
