@@ -33,7 +33,7 @@ from megatron.energon import (
     get_train_dataset,
     stateless,
 )
-from megatron.energon.cache import FileStore, FileStoreCachePool, Lazy
+from megatron.energon.cache import ByteRangeStore, FileStore, FileStoreCachePool, Lazy
 from megatron.energon.cache.base import CachePool
 from megatron.energon.cli.main import prepare_media_command
 from megatron.energon.decoders import SampleDecoder
@@ -189,9 +189,25 @@ def cook_aux_filesystem_reference(
     )
 
 
+@stateless
+def cook_aux_byterange_reference(sample: dict, byte_source: FileStore) -> TextSample:
+    byte_offset = int(sample["txt"]) % 4
+    range_bytes = byte_source.get(f"bundle.bin#bytes={byte_offset}:2", sample)
+    return TextSample(
+        **basic_sample_keys(sample),
+        text=f"<{sample['txt']}|range|{range_bytes.decode()}>",
+    )
+
+
 class CookingTaskEncoderWithAuxFilesystemReference(CookingTaskEncoder):
     cookers = [
         Cooker(cook_aux_filesystem_reference, has_tags={"crude_type": "aux_random_access"}),
+    ]
+
+
+class CookingTaskEncoderWithAuxByteRangeReference(CookingTaskEncoder):
+    cookers = [
+        Cooker(cook_aux_byterange_reference, has_tags={"crude_type": "aux_byte_range"}),
     ]
 
 
@@ -912,6 +928,78 @@ class TestDataset(unittest.TestCase):
         sample = next(iter(loader))
 
         assert sample.txts[0].endswith("|aux|__module__: megatron.ener>")
+
+    def test_byte_range_store(self):
+        blob_path = self.dataset_path / "byte_blobs"
+        blob_path.mkdir()
+        (blob_path / "bundle.bin").write_bytes(b"0123456789abcdef")
+
+        store = ByteRangeStore(blob_path)
+        assert store.get("bundle.bin#bytes=2:4") == b"2345"
+        assert store.read_range("bundle.bin", 6, 3) == b"678"
+
+        sample = {}
+        assert store.read_range("bundle.bin", 1, 2, sample=sample) == b"12"
+        assert sample["__sources__"] == (
+            SourceInfo(
+                dataset_path=EPath(blob_path),
+                index="bundle.bin#bytes=1:2",
+                shard_name=str(EPath(blob_path / "bundle.bin")),
+                file_names=("bundle.bin#bytes=1:2",),
+            ),
+        )
+
+        cache_pool = FileStoreCachePool(parent_cache_dir=self.dataset_path / "cache", num_workers=1)
+        try:
+            assert cache_pool.get_lazy(store, "bundle.bin#bytes=4:4").get() == b"4567"
+        finally:
+            cache_pool.close()
+
+        with self.assertRaises(AssertionError):
+            store.read_range("bundle.bin", -1, 1)
+        assert store.read_range("bundle.bin", 1, 0) == b""
+        with self.assertRaises(ValueError):
+            store.read_range("../outside.bin", 0, 1)
+        with self.assertRaises(IOError):
+            store.read_range("bundle.bin", 15, 2)
+
+    def test_aux_byterange_reference(self):
+        blob_path = self.dataset_path / "byte_blobs"
+        blob_path.mkdir()
+        (blob_path / "bundle.bin").write_bytes(b"abcdef")
+
+        recipe_path = self.dataset_path / "byte_range_recipe.yaml"
+        recipe_path.write_text(
+            "\n".join(
+                [
+                    "__module__: megatron.energon",
+                    "__class__: Recipe",
+                    "splits:",
+                    "  train:",
+                    "    path: ds1",
+                    "    aux:",
+                    "      byte_source: byterange://byte_blobs",
+                    "    tags:",
+                    "      crude_type: aux_byte_range",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        loader = get_savable_loader(
+            get_train_dataset(
+                recipe_path,
+                batch_size=1,
+                worker_config=WorkerConfig(rank=0, world_size=1, num_workers=0),
+                task_encoder=CookingTaskEncoderWithAuxByteRangeReference(),
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+            ),
+        )
+
+        sample = next(iter(loader))
+
+        assert "|range|" in sample.txts[0]
 
     def test_aux_msc(self):
         """Recipe aux supports msc:// and filesystem+msc:// (issue #211). Same aux keys as aux_recipe.yaml, ds2 and fs content uploaded to S3."""
