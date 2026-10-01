@@ -118,7 +118,7 @@ class YieldBatchLogLine(TypedDict):
 class SampleLoaderYieldLogLine(TypedDict):
     # Json example:
     # {
-    #   "t": "WebdatasetSampleLoaderDataset._slices_iter.yield",
+    #   "t": "DatasetSampler._slices_iter.yield",
     #   "r": 1,
     #   "w": 1,
     #   "index": 528800,
@@ -128,7 +128,11 @@ class SampleLoaderYieldLogLine(TypedDict):
     #   "epoch": 0,
     #   "epoch_count": 633
     # }
-    t: Literal["WebdatasetSampleLoaderDataset._slices_iter.yield"]
+    #: Older Energon versions logged this event as "WebdatasetSampleLoaderDataset._slices_iter.yield"
+    t: Literal[
+        "DatasetSampler._slices_iter.yield",
+        "WebdatasetSampleLoaderDataset._slices_iter.yield",
+    ]
     r: int
     w: int
     #: The global index in the underlying dataset (concats of all shards)
@@ -393,8 +397,8 @@ def command(
             "  Shuffle buffer and batching will not be considered, only the loading order from disk"
         )
         log_iters = [
-            _iter_sl_log_line_keys(_iter_sl_log_samples(log_file), start_idx=skip)
-            for log_file in log_files
+            (src_idx, _iter_sl_log_line_keys(_iter_sl_log_samples(log_file), start_idx=skip))
+            for src_idx, log_file in enumerate(log_files)
         ]
         key_index = {}
         count = 0
@@ -402,23 +406,23 @@ def command(
         while len(log_iters) > 0:
             cur_count = 0
             # Iterate over all iterators for this count and put into heatmap
-            for log_iter in tuple(log_iters):
+            for src_idx, log_iter in tuple(log_iters):
                 # Iterate until None (=next count) is encountered
                 while True:
                     try:
                         log_key = next(log_iter)
                     except StopIteration:
-                        log_iters.remove(log_iter)
+                        log_iters.remove((src_idx, log_iter))
                         break
                     except OSError:
                         traceback.print_exc()
-                        log_iters.remove(log_iter)
+                        log_iters.remove((src_idx, log_iter))
                         break
                     else:
                         if log_key is None:
                             break
                         key_id = key_index.setdefault(log_key, len(key_index))
-                        heatmap.add(key_id, count)
+                        heatmap.add(key_id, count, src_idx)
                         cur_count += 1
             if cur_count == 0:
                 print(f"No data for step {count}")
@@ -609,10 +613,17 @@ def _iter_sl_log_line_keys(
         yield log_line["key"]
 
 
+_SL_YIELD_LOG_MARKERS = (
+    '"t": "DatasetSampler._slices_iter.yield"',
+    # Event name used by older Energon versions
+    '"t": "WebdatasetSampleLoaderDataset._slices_iter.yield"',
+)
+
+
 def _iter_sl_log_samples(path: Path) -> Generator[SampleLoaderYieldLogLine, None, None]:
     with path.open("r") as rf:
         for line in rf:
-            if '"t": "WebdatasetSampleLoaderDataset._slices_iter.yield"' in line:
+            if any(marker in line for marker in _SL_YIELD_LOG_MARKERS):
                 try:
                     yield json.loads(line.strip())
                 except json.JSONDecodeError:
