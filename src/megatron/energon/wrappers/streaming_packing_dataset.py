@@ -14,6 +14,7 @@ from typing import (
     Sequence,
     TypeVar,
     Union,
+    cast,
 )
 
 from megatron.energon.errors import ErrorContext, handle_restore_errors
@@ -74,6 +75,7 @@ class StreamingPackingDataset(
     _generator_offset: Optional[int]
     #: Whether the state was restored since the last iteration started (not saved).
     _state_restored: bool
+    _skip_mode: bool
 
     _select_failure_handler: ErrorContext
     _final_pack_failure_handler: ErrorContext
@@ -103,10 +105,12 @@ class StreamingPackingDataset(
         ],
         *,
         final_packer_stateless: bool = False,
+        final_packer_skip_safe: bool = False,
         sample_encoder: Optional[
             Callable[[T_sample | PartialSample[T_sample, T_slice]], T_encoded_sample]
         ] = None,
         sample_encoder_stateless: bool = False,
+        sample_encoder_skip_safe: bool = False,
         packer_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]] = None,
         select_failure_tolerance: int = 100,
         final_packer_failure_tolerance: int = 100,
@@ -121,8 +125,10 @@ class StreamingPackingDataset(
                 one pack, or :class:`PackedSamplesOutput` with at most one pack plus pushback.
             final_packer: Function which combines the selected samples into a single sample.
             final_packer_stateless: If True, the final packer is stateless and restorable.
+            final_packer_skip_safe: If True, the final packer can be elided in skip mode.
             sample_encoder: Optional per-pack-member encoder, usually ``postencode_sample``.
             sample_encoder_stateless: If True, the sample encoder is stateless and restorable.
+            sample_encoder_skip_safe: If True, the sample encoder can be elided in skip mode.
             packer_config: Configuration for packer functions.
             select_failure_tolerance: Maximum selector failures or empty retries before raising.
             final_packer_failure_tolerance: Maximum number of final-packer failures.
@@ -134,8 +140,10 @@ class StreamingPackingDataset(
         self.select_next_pack = select_next_pack
         self.final_packer = final_packer
         self.final_packer_stateless = final_packer_stateless
+        self.final_packer_skip_safe = final_packer_skip_safe
         self.sample_encoder = sample_encoder
         self.sample_encoder_stateless = True if sample_encoder is None else sample_encoder_stateless
+        self.sample_encoder_skip_safe = True if sample_encoder is None else sample_encoder_skip_safe
         self.packer_config = packer_config
 
         self.select_failure_tolerance = select_failure_tolerance
@@ -176,6 +184,7 @@ class StreamingPackingDataset(
         self._generator_sample_keys = None
         self._generator_offset = None
         self._state_restored = False
+        self._skip_mode = False
 
     def restore_state(self, state: FlexState) -> None:
         super().restore_state(state)
@@ -184,6 +193,9 @@ class StreamingPackingDataset(
     def len_worker(self, worker_idx: int | None = None) -> int:
         # The real length depends on pack boundaries and partial carryover.
         return self.dataset.len_worker(worker_idx)
+
+    def set_skip_mode(self, active: bool) -> None:
+        self._skip_mode = active
 
     def _normalize_selection(
         self,
@@ -213,6 +225,10 @@ class StreamingPackingDataset(
         self,
         pack: List[T_sample | PartialSample[T_sample, Any]],
     ) -> List[T_encoded_sample | T_sample | PartialSample[T_sample, Any]]:
+        if self._skip_mode and self.sample_encoder_skip_safe and self.final_packer_skip_safe:
+            self._sample_encoder_sample_index.skip(len(pack))
+            return len(pack) * [None]
+
         if self.sample_encoder is None:
             return pack
 
@@ -287,6 +303,7 @@ class StreamingPackingDataset(
             with self._final_packing_sample_index.ctx(pack_idx) as pack_idx:
                 final_packed_sample = self.final_packer(pack)
             if isinstance(final_packed_sample, Generator):
+                assert not self.final_packer_skip_safe, "Generator in final_packer but skip_safe"
                 assert inspect.isgeneratorfunction(self.final_packer), (
                     f"Generator in {self.final_packer} but not marked as such."
                 )
@@ -359,7 +376,12 @@ class StreamingPackingDataset(
                     # The selector pulled the pushback before any carryover it left unconsumed.
                     self._carryover_buffer.prepend(pushback)
                     empty_rounds = 0
-                    yield from self._finalize_pack(self._encode_pack_samples(pack))
+                    pack = self._encode_pack_samples(pack)
+                    if self._skip_mode and self.final_packer_skip_safe:
+                        self._final_packing_sample_index.skip(1)
+                        yield cast(T_batch_sample, None)
+                    else:
+                        yield from self._finalize_pack(pack)
                     continue
                 empty_rounds += 1
 
