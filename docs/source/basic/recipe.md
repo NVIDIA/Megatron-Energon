@@ -115,7 +115,9 @@ energon lint /path/to/recipe.yaml
 ```
 
 Renaming a YAML file from `metadataset.yaml` is optional; detection uses its
-contents rather than its filename.
+contents rather than its filename. If training resumes after changing the recipe
+composition, follow {ref}`checkpoint-recipe-migration` instead of
+performing an exact restore.
 
 
 In the above example, we create a blend of three datasets. Out of the yielded training samples, 62.5% ({math}`=\frac{5}{8}`) will come from `./coco`, 25% from `./coyo` and 12.5% from `./other`.

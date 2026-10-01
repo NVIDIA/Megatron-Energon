@@ -19,6 +19,7 @@ The implementation lives under `src/megatron/energon`. Its main layers are:
 | `flavors` | Detect prepared dataset formats and construct their readers and runtime datasets. |
 | `wrappers` | Compose iteration behavior such as mapping, batching, blending, packing, epochizing, and striding. |
 | `task_encoder` | Build the user-facing loading pipeline and invoke application-specific encoding hooks. |
+| `checkpoint` | Save exact loader state and migrate saved progress to a changed recipe graph. |
 | `epathlib` | Provide local and remote path access plus mapped-array helpers. |
 | `cache` | Store generated indexes and cache metadata. |
 | `media`, `decoders`, `transforms` | Decode and transform sample payloads. |
@@ -73,8 +74,9 @@ adding a key lookup path does not define the dataset's iteration order.
 ## Construction and runtime objects
 
 Dataset factories are configuration-time objects. Their `build` method creates `SavableDataset` objects
-that execute inside workers. A factory's `config()` output describes how it was constructed. It is not a
-replacement for the mutable state saved by `SavableDataset.save_state()`.
+that execute inside workers. A factory's `config()` output describes how it was constructed; it is also
+used to identify leaves during checkpoint migration. It is not a replacement for the mutable state saved
+by `SavableDataset.save_state()`.
 
 Runtime behavior is assembled from wrappers. `BaseWrapperDataset` records its child datasets and
 propagates common operations such as reset and skip mode. A wrapper that owns mutable progress must also
@@ -108,6 +110,6 @@ matrix in {ref}`compatibility` when modifying the pipeline.
 
 - {ref}`dataset-formats` explains factory detection and the checklist for a new format.
 - {ref}`savability` defines the state and restore contract for runtime datasets.
-- {ref}`recipe-checkpoint` covers recipe graph construction.
+- {ref}`recipe-checkpoint` covers recipe graphs and topology-aware checkpoint migration.
 - {ref}`packing-blending` covers the most stateful composition layers.
 - {ref}`contribution-guidelines` contains the local development workflow.

@@ -99,7 +99,8 @@ Use this checklist:
 5. **Filtering:** verify `part_filter`, exclusions, and prepared `FilterIndex` translation.
 6. **Key access:** implement `FileStore` or part readers if joins, mounts, or auxiliary lookup require it.
 7. **Detection:** register a provider at the least surprising priority and test competing path shapes.
-8. **Configuration:** ensure `config()` contains stable leaf identity fields used by diagnostics.
+8. **Configuration:** ensure `config()` contains stable leaf identity fields used by diagnostics and
+   checkpoint migration.
 9. **Exports and docs:** expose the supported API and document preparation and recipe syntax.
 10. **Tests:** cover preparation, direct reading, worker splitting, filtering, save/restore, detection, and
     stale or corrupt metadata.
@@ -110,8 +111,9 @@ listed in {ref}`compatibility`.
 
 ## Configuration is descriptive
 
-A factory's `config()` result is a recursively serializable description used for logging. Stable fields
-such as `_path`, `split_part`, `subset`, and `filter` are significant.
+A factory's `config()` result is a recursively serializable description used for logging and checkpoint
+identity matching. Stable fields such as `_path`, `split_part`, `subset`, and `filter` are significant.
 
 Configuration should not contain open readers or runtime progress. Runtime progress belongs to
-`SavableDataset` state.
+`SavableDataset` state. If a field is required to reconstruct a factory but should not distinguish two
+logical dataset leaves, document that choice and add a checkpoint-migration test.
