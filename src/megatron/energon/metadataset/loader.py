@@ -32,6 +32,7 @@ def load_dataset(
             default_type=Metadataset,
             default_kwargs=dict(path=EPath("/dict"), **kwargs),
         )
+        mds.post_initialize()
         return mds
     path = EPath(path)
     if is_metadataset(path):

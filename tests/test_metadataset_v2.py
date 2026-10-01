@@ -266,6 +266,43 @@ class TestDataset(unittest.TestCase):
         assert len(Counter(train_order1)) == 110
         assert all(48 <= v <= 52 for v in Counter(train_order1).values())
 
+    def test_metadataset_dict_config(self):
+        torch.manual_seed(42)
+        worker_config = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=0,
+            seed_offset=42,
+        )
+
+        # Same train split as metadataset_v2.yaml, but passed as dict
+        train_dataset = get_train_dataset(
+            {
+                "__module__": "megatron.energon",
+                "__class__": "MetadatasetV2",
+                "splits": {
+                    "train": {
+                        "blend": [
+                            {"weight": 1, "path": str(self.dataset_path / "ds1")},
+                            {"weight": 1, "path": str(self.dataset_path / "ds2")},
+                        ],
+                    },
+                },
+            },
+            worker_config=worker_config,
+            batch_size=10,
+            shuffle_buffer_size=None,
+            max_samples_per_sequence=None,
+        )
+        assert len(train_dataset) == 11
+
+        train_order = [
+            text
+            for idx, data in zip(range(55 * 10), get_loader(train_dataset))
+            for text in data.text
+        ]
+        assert len(Counter(train_order)) == 110
+
     def test_nested_metadataset(self):
         torch.manual_seed(42)
         worker_config = WorkerConfig(
