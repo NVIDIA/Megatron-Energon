@@ -7,6 +7,16 @@ from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.webdataset import DefaultDecoderWebdatasetFactory
 
 
+def _always_true_part(part: str) -> bool:
+    """Picklable default for ``part_filter`` (forkserver/spawn support)."""
+    return True
+
+
+def _identity_sample(sample: Dict[str, Any]) -> Dict[str, Any]:
+    """Picklable default for ``sample_loader`` (forkserver/spawn support)."""
+    return sample
+
+
 class CrudeSample(dict):
     """Generic sample type to be processed later."""
 
@@ -25,7 +35,7 @@ class CrudeWebdataset(DefaultDecoderWebdatasetFactory[CrudeSample]):
         path: EPath,
         *,
         subflavors: Optional[Dict[str, Any]] = None,
-        part_filter: Union[str, List[str], Callable[[str], bool]] = lambda _: True,
+        part_filter: Union[str, List[str], Callable[[str], bool]] = _always_true_part,
         **kwargs,
     ):
         """
@@ -45,7 +55,7 @@ class CrudeWebdataset(DefaultDecoderWebdatasetFactory[CrudeSample]):
         super().__init__(
             path,
             subflavors=subflavors,
-            sample_loader=lambda sample: sample,
+            sample_loader=_identity_sample,
             part_filter=part_filter,
             **kwargs,
         )

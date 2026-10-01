@@ -763,6 +763,7 @@ class TestDataset(unittest.TestCase):
             "persistent_workers": False,
             "pin_memory": True,
             "prefetch_factor": None,
+            "multiprocessing_context": "fork",
             "dataset": {
                 "type": "MapDataset",
                 "dataset": {
@@ -858,7 +859,7 @@ class TestDataset(unittest.TestCase):
                                                     "mds": "mds",
                                                     "__subflavor__": "ds1",
                                                 },
-                                                "sample_loader": "megatron.energon.flavors.webdataset.default_generic_webdataset.DefaultGenericWebdatasetFactory.__init__.<locals>.<lambda>",
+                                                "sample_loader": "functools.partial(megatron.energon.flavors.webdataset.default_generic_webdataset._wrap_sample)",
                                                 "image_decode": "torchrgb",
                                                 "av_decode": "AVDecoder",
                                                 "video_decode_audio": False,
@@ -952,7 +953,7 @@ class TestDataset(unittest.TestCase):
                                                     "mds": "mds",
                                                     "__subflavor__": "ds2",
                                                 },
-                                                "sample_loader": "megatron.energon.flavors.webdataset.default_generic_webdataset.DefaultGenericWebdatasetFactory.__init__.<locals>.<lambda>",
+                                                "sample_loader": "functools.partial(megatron.energon.flavors.webdataset.default_generic_webdataset._wrap_sample)",
                                                 "image_decode": "torchrgb",
                                                 "av_decode": "AVDecoder",
                                                 "video_decode_audio": False,

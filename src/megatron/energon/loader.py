@@ -26,6 +26,7 @@ def get_savable_loader(
     watchdog_timeout_seconds: Optional[float] = 60,
     watchdog_initial_timeout_seconds: Optional[float] = None,
     fail_on_timeout: bool = False,
+    multiprocessing_context: str = "fork",
 ) -> SavableDataLoader[T]:
     """
 
@@ -72,6 +73,7 @@ def get_savable_loader(
         watchdog_timeout_seconds=watchdog_timeout_seconds,
         watchdog_initial_timeout_seconds=watchdog_initial_timeout_seconds,
         fail_on_timeout=fail_on_timeout,
+        multiprocessing_context=multiprocessing_context,
     )
 
 
@@ -84,6 +86,7 @@ def get_loader(
     watchdog_timeout_seconds: Optional[float] = 60,
     watchdog_initial_timeout_seconds: Optional[float] = None,
     fail_on_timeout: bool = False,
+    multiprocessing_context: str = "fork",
 ) -> BasicDataLoader[T]:
     """
     Get a dataloader for the given dataset.
@@ -116,4 +119,5 @@ def get_loader(
         watchdog_timeout_seconds=watchdog_timeout_seconds,
         watchdog_initial_timeout_seconds=watchdog_initial_timeout_seconds,
         fail_on_timeout=fail_on_timeout,
+        multiprocessing_context=multiprocessing_context,
     )

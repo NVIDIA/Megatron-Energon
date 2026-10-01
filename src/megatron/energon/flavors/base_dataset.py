@@ -358,6 +358,11 @@ class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC)
 
     @staticmethod
     def _function_config(fn: Callable) -> str:
+        import functools
+
+        if isinstance(fn, functools.partial):
+            # Render partials with their underlying function for debuggable configs.
+            return f"functools.partial({SavableDataset._function_config(fn.func)})"
         mod = inspect.getmodule(fn)
         if mod is not None:
             mod_name = mod.__name__

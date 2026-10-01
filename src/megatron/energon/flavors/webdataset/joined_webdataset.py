@@ -1,6 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+import functools
 import os
 from abc import ABC
 from typing import (
@@ -16,6 +17,11 @@ from typing import (
     TypeVar,
     Union,
 )
+
+
+def _join_samples(*samples, joiner: Callable, inner_keys) -> Any:
+    """Picklable replacement for the ``lambda *samples: joiner(**dict(...))`` (forkserver/spawn)."""
+    return joiner(**dict(zip(inner_keys, samples)))
 
 from megatron.energon.cache import FileStore
 from megatron.energon.epathlib import EPath
@@ -112,7 +118,9 @@ class JoinedWebdatasetFactory(BaseCoreDatasetFactory[T_sample], Sharder, Generic
             inner_keys = list(inner_datasets.keys())
             self.inner_dataset_keys = inner_keys
             # Wrap the joiner to pass the samples as kwargs
-            self._sample_joiner = lambda *samples: joiner(**dict(zip(inner_keys, samples)))
+            self._sample_joiner = functools.partial(
+                _join_samples, joiner=joiner, inner_keys=tuple(inner_keys)
+            )
             inner_datasets = list(inner_datasets.values())
         else:
             assert isinstance(inner_datasets, Sequence)

@@ -25,6 +25,11 @@ T_sample = TypeVar("T_sample")
 T_sample_out = TypeVar("T_sample_out")
 
 
+def _identity_len(x: int) -> int:
+    """Picklable default for ``len_map_fn`` (forkserver/spawn support)."""
+    return x
+
+
 class IterMapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T_sample_out]):
     """This dataset wrapper applies a custom function to transform the stream of samples and yield
     a new stream of samples.
@@ -46,7 +51,7 @@ class IterMapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sampl
         dataset: SavableDataset[T_sample],
         iter_map_fn: Callable[[Iterator[T_sample]], Iterator[T_sample_out]],
         *,
-        len_map_fn: Callable[[int], int] = lambda x: x,
+        len_map_fn: Callable[[int], int] = _identity_len,
         stateless_iter_fn: bool = False,
         iter_map_fn_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]] = None,
         worker_config: WorkerConfig,

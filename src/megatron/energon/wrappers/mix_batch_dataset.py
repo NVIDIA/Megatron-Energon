@@ -16,6 +16,11 @@ T_batch_in = TypeVar("T_batch_in")
 T_batch = TypeVar("T_batch")
 
 
+def _identity_batch_mix(x: List[Any]) -> Any:
+    """Picklable default for ``batch_mix_fn`` (forkserver/spawn support)."""
+    return x
+
+
 def generic_concat(batch: List[Any]) -> Any:
     """Based on the types/shapes of the batch: Will either pad and stack, or return as list.
     Recurses structures (dict, dataclass, namedtuple) and applies the same logic to each field."""
@@ -85,7 +90,7 @@ class MixBatchDataset(BaseWrapperDataset[T_batch_in, T_batch], Generic[T_batch_i
         batch_size: int,
         batch_mix_fn: Callable[
             [List[T_batch_in]], Union[T_batch, Generator[T_batch, None, None]]
-        ] = lambda x: x,
+        ] = _identity_batch_mix,
         worker_config: WorkerConfig,
     ):
         """Construct a BlendDataset.
