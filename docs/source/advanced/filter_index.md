@@ -59,8 +59,9 @@ build_filter_index_from_shard_indexes(
 ```
 
 Shard-local indexes must be strictly increasing and within the original count for each
-shard. The same APIs can be used for prepared WebDataset, JSONL, and bin-idx datasets. For
-single-file datasets such as `.bin` and `.jsonl`, the shard name is the file name.
+shard. The same APIs can be used for prepared WebDataset, prepared JSONL shard datasets,
+and bin-idx datasets. For single-file datasets such as `.bin` and `.jsonl`, the shard name is the
+file name.
 
 ## Loading a Filter
 
