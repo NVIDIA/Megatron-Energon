@@ -3,7 +3,7 @@ SPDX-License-Identifier: BSD-3-Clause -->
 
 (epath-storage)=
 
-# EPath and Storage
+# EPath, Mapped Arrays, and Storage
 
 Energon uses `EPath` so dataset code can work with local files and supported remote protocols through a
 common path interface. Readers should preserve that abstraction until an operation specifically requires a
@@ -19,10 +19,24 @@ Protocol handlers may also compose an auxiliary path with a primary path, as use
 datasets. Keep the original dataset path in configuration and provenance even when bytes are served from a
 cache or auxiliary location.
 
-## Resource handles
+## Mapped numeric arrays
 
-Readers are context managers and must be closed when the owner is finished. Do not put an open file,
-stream, or memory map into dataset configuration or checkpoint state.
+`map_epath` exposes one-dimensional typed arrays used by indexes. Its backend depends on the path and
+options:
+
+- a local path with memory mapping enabled uses `EPathNumpyMappedArray`;
+- a remote path, or a request without memory mapping, uses seek/read access;
+- `copy_to_local` first creates or reuses a local copy and then memory maps it.
+
+The shape is inferred from file size, byte offset, and dtype. Validate that the remaining byte count is
+divisible by the dtype size. The abstraction is one-dimensional; multidimensional interpretation belongs
+to the caller.
+
+A stepped slice may read the full byte span between its first and last element and apply the step afterward.
+Avoid sparse, extremely wide slices on remote storage when a narrower access pattern is possible.
+
+Mapped arrays and readers are context managers and must be closed when the owner is finished. Do not put an
+open file, stream, or memory map into dataset configuration or checkpoint state.
 
 ## Worker and cache ownership
 
