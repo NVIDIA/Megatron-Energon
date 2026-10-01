@@ -176,7 +176,7 @@ class CookingTaskEncoder(DefaultTaskEncoder[TextSample, TextSample, TextBatch, T
 def cook_aux_filesystem_reference(
     sample: dict, pkl_source: FileStore, fs_source: FileStore
 ) -> TextSample:
-    d = fs_source.get("aux_metadataset.yaml", sample)[:25].decode()
+    d = fs_source.get("aux_recipe.yaml", sample)[:25].decode()
     return TextSample(
         **basic_sample_keys(sample),
         text=f"<{sample['txt']}|aux|{d}>",
@@ -298,33 +298,33 @@ class TestDataset(unittest.TestCase):
         self.create_crude_text_test_dataset(self.dataset_path / "ds1", 0)
         self.create_crude_text_test_dataset(self.dataset_path / "ds2", 100)
 
-        self.mds_path = self.dataset_path / "metadataset.yaml"
-        with open(self.mds_path, "w") as f:
+        self.recipe_path = self.dataset_path / "recipe.yaml"
+        with open(self.recipe_path, "w") as f:
             f.write(
                 "\n".join(
                     [
                         "__module__: megatron.energon",
-                        "__class__: Metadataset",
+                        "__class__: Recipe",
                         "splits:",
                         "  train:",
-                        "    datasets:",
+                        "    blend:",
                         "      - weight: 1",
                         "        path: ds1",
                         "        subflavors:",
-                        "          source: metadataset.yaml",
+                        "          source: recipe.yaml",
                         "          number: 43",
-                        "          mds: mds",
+                        "          recipe: recipe",
                         "          crude_type: txtpkl",
                         "        shuffle_over_epochs_multiplier: 3",
                         "      - weight: 1",
                         "        path: ds2",
                         "        subflavors:",
-                        "          source: metadataset.yaml",
+                        "          source: recipe.yaml",
                         "          number: 44",
-                        "          mds: mds",
+                        "          recipe: recipe",
                         "          crude_type: otherpkl",
                         "  val:",
-                        "    datasets:",
+                        "    blend:",
                         "      - weight: 1",
                         "        path: ds1",
                         "        split_part: train",
@@ -335,13 +335,13 @@ class TestDataset(unittest.TestCase):
                 )
             )
 
-        self.aux_mds_path = self.dataset_path / "aux_metadataset.yaml"
-        with open(self.aux_mds_path, "w") as f:
+        self.aux_recipe_path = self.dataset_path / "aux_recipe.yaml"
+        with open(self.aux_recipe_path, "w") as f:
             f.write(
                 "\n".join(
                     [
                         "__module__: megatron.energon",
-                        "__class__: MetadatasetV2",
+                        "__class__: Recipe",
                         "splits:",
                         "  train:",
                         "    path: ds1",
@@ -360,13 +360,13 @@ class TestDataset(unittest.TestCase):
         self.multimedia_fs_path = self.dataset_path / "multimedia_fs"
         self.create_multimedia_filesystem_dataset(self.multimedia_fs_path)
 
-        self.media_mds_path = self.dataset_path / "media_metadataset.yaml"
-        with open(self.media_mds_path, "w") as f:
+        self.media_recipe_path = self.dataset_path / "media_recipe.yaml"
+        with open(self.media_recipe_path, "w") as f:
             f.write(
                 "\n".join(
                     [
                         "__module__: megatron.energon",
-                        "__class__: MetadatasetV2",
+                        "__class__: Recipe",
                         "splits:",
                         "  train:",
                         "    path: multimedia_wds",
@@ -482,7 +482,7 @@ class TestDataset(unittest.TestCase):
             EPath(path), MediaFilterConfig(strategy=MediaFilterStrategy.EXTENSION), progress=False
         )
 
-    def test_metadataset(self):
+    def test_recipe(self):
         torch.manual_seed(42)
         worker_config = WorkerConfig(
             rank=0,
@@ -494,7 +494,7 @@ class TestDataset(unittest.TestCase):
         # Train mode dataset
         torch.manual_seed(42)
         train_dataset = get_train_dataset(
-            self.mds_path,
+            self.recipe_path,
             worker_config=worker_config,
             batch_size=3,
             task_encoder=CookingTaskEncoder(),
@@ -534,7 +534,7 @@ class TestDataset(unittest.TestCase):
 
         loader = get_savable_loader(
             get_train_dataset(
-                self.mds_path,
+                self.recipe_path,
                 batch_size=2,
                 worker_config=worker_config,
                 task_encoder=CookingTaskEncoder(),
@@ -556,7 +556,7 @@ class TestDataset(unittest.TestCase):
 
         loader = get_savable_loader(
             get_train_dataset(
-                self.mds_path,
+                self.recipe_path,
                 batch_size=2,
                 worker_config=worker_config,
                 task_encoder=CookingTaskEncoder(),
@@ -587,7 +587,7 @@ class TestDataset(unittest.TestCase):
 
         loader = get_savable_loader(
             get_train_dataset(
-                self.aux_mds_path,
+                self.aux_recipe_path,
                 batch_size=2,
                 worker_config=worker_config,
                 task_encoder=CookingTaskEncoder(),
@@ -616,7 +616,7 @@ class TestDataset(unittest.TestCase):
 
         loader = get_savable_loader(
             get_train_dataset(
-                self.aux_mds_path,
+                self.aux_recipe_path,
                 batch_size=2,
                 worker_config=worker_config,
                 task_encoder=CookingTaskEncoder(),
@@ -645,12 +645,12 @@ class TestDataset(unittest.TestCase):
             target_is_directory=True,
         )
 
-        dss_mds_path = self.dataset_path / "metadataset_dss.yaml"
-        dss_mds_path.write_text(
+        dss_recipe_path = self.dataset_path / "recipe_dss.yaml"
+        dss_recipe_path.write_text(
             "\n".join(
                 [
                     "__module__: megatron.energon",
-                    "__class__: MetadatasetV2",
+                    "__class__: Recipe",
                     "splits:",
                     "  train:",
                     f"    path: dss://{dss_dataset_name}@{dss_dataset_version}",
@@ -676,7 +676,7 @@ class TestDataset(unittest.TestCase):
 
             loader = get_savable_loader(
                 get_train_dataset(
-                    dss_mds_path,
+                    dss_recipe_path,
                     batch_size=1,
                     worker_config=worker_config,
                     task_encoder=CookingTaskEncoder(),
@@ -711,7 +711,7 @@ class TestDataset(unittest.TestCase):
 
         loader = get_savable_loader(
             get_train_dataset(
-                self.aux_mds_path,
+                self.aux_recipe_path,
                 batch_size=2,
                 worker_config=worker_config,
                 task_encoder=LazyCookingTaskEncoder(),
@@ -745,7 +745,7 @@ class TestDataset(unittest.TestCase):
 
         loader = get_savable_loader(
             get_train_dataset(
-                self.aux_mds_path,
+                self.aux_recipe_path,
                 batch_size=2,
                 worker_config=worker_config,
                 task_encoder=CookingTaskEncoder(),
@@ -780,7 +780,7 @@ class TestDataset(unittest.TestCase):
 
         loader = get_savable_loader(
             get_train_dataset(
-                self.aux_mds_path,
+                self.aux_recipe_path,
                 batch_size=2,
                 worker_config=worker_config,
                 task_encoder=LazyCookingTaskEncoderWithPostencode(),
@@ -814,7 +814,7 @@ class TestDataset(unittest.TestCase):
 
         loader = get_savable_loader(
             get_train_dataset(
-                self.aux_mds_path,
+                self.aux_recipe_path,
                 batch_size=2,
                 worker_config=worker_config,
                 task_encoder=LazyCookingTaskEncoderWithPostencode(),
@@ -893,7 +893,7 @@ class TestDataset(unittest.TestCase):
 
         loader = get_savable_loader(
             get_train_dataset(
-                self.aux_mds_path,
+                self.aux_recipe_path,
                 batch_size=1,
                 worker_config=worker_config,
                 task_encoder=CookingTaskEncoderWithAuxFilesystemReference(),
@@ -907,15 +907,15 @@ class TestDataset(unittest.TestCase):
         assert sample.txts[0].endswith("|aux|__module__: megatron.ener>")
 
     def test_aux_msc(self):
-        """MetadatasetV2 aux supports msc:// and filesystem+msc:// (issue #211). Same aux keys as aux_metadataset.yaml, ds2 and fs content uploaded to S3."""
+        """Recipe aux supports msc:// and filesystem+msc:// (issue #211). Same aux keys as aux_recipe.yaml, ds2 and fs content uploaded to S3."""
         with setup_s3_emulator(profile_name="s3test_aux_msc") as emu:
-            mds_path = self.dataset_path / "aux_metadataset_msc.yaml"
-            with open(mds_path, "w") as f:
+            recipe_path = self.dataset_path / "aux_recipe_msc.yaml"
+            with open(recipe_path, "w") as f:
                 f.write(
                     "\n".join(
                         [
                             "__module__: megatron.energon",
-                            "__class__: MetadatasetV2",
+                            "__class__: Recipe",
                             "splits:",
                             "  train:",
                             "    path: ds1",
@@ -927,13 +927,13 @@ class TestDataset(unittest.TestCase):
                         ]
                     )
                 )
-            mds_rel_path = self.dataset_path / "aux_metadataset_msc_rel.yaml"
+            mds_rel_path = self.dataset_path / "aux_recipe_msc_rel.yaml"
             with open(mds_rel_path, "w") as f:
                 f.write(
                     "\n".join(
                         [
                             "__module__: megatron.energon",
-                            "__class__: MetadatasetV2",
+                            "__class__: Recipe",
                             "splits:",
                             "  train:",
                             "    path: ds1",
@@ -950,7 +950,7 @@ class TestDataset(unittest.TestCase):
             torch.manual_seed(42)
             loader = get_savable_loader(
                 get_train_dataset(
-                    mds_path,
+                    recipe_path,
                     batch_size=1,
                     worker_config=WorkerConfig(
                         rank=0,
@@ -968,7 +968,7 @@ class TestDataset(unittest.TestCase):
             torch.manual_seed(42)
             loader = get_savable_loader(
                 get_train_dataset(
-                    "msc://s3test_aux_msc/bucket/aux_metadataset_msc_rel.yaml",
+                    "msc://s3test_aux_msc/bucket/aux_recipe_msc_rel.yaml",
                     batch_size=1,
                     worker_config=WorkerConfig(
                         rank=0,
@@ -993,7 +993,7 @@ class TestDataset(unittest.TestCase):
 
         loader = get_savable_loader(
             get_train_dataset(
-                self.media_mds_path,
+                self.media_recipe_path,
                 batch_size=1,
                 worker_config=worker_config,
                 task_encoder=CookingTaskEncoder(),
@@ -1051,11 +1051,11 @@ class TestDataset(unittest.TestCase):
 
             state.put_object(
                 bucket,
-                "s3_media_metadataset.yaml",
+                "s3_media_recipe.yaml",
                 "\n".join(
                     [
                         "__module__: megatron.energon",
-                        "__class__: MetadatasetV2",
+                        "__class__: Recipe",
                         "splits:",
                         "  train:",
                         "    path: multimedia_wds",
@@ -1076,7 +1076,7 @@ class TestDataset(unittest.TestCase):
 
             loader = get_savable_loader(
                 get_train_dataset(
-                    s3_root / "s3_media_metadataset.yaml",
+                    s3_root / "s3_media_recipe.yaml",
                     batch_size=1,
                     worker_config=worker_config,
                     task_encoder=CookingTaskEncoder(),
