@@ -98,6 +98,8 @@ class ErrorContext:
     def handle_errors(
         self,
         sample: Any,
+        *,
+        skip_safe: bool = False,
     ) -> Generator[None, None, None]:
         """Context manager for handling exceptions during sample processing.
 
@@ -119,6 +121,11 @@ class ErrorContext:
                 sample, f"{self.name} failed due to system exception: {e}."
             )
         except Exception as e:
+            if skip_safe:
+                raise FatalSampleError.from_sample(
+                    sample,
+                    f"{self.name} failed due to exception, but was marked as skip-safe: {e}.",
+                ) from e
             print(f"Except {e} in {self.name}")
             # Call the error handler if provided
             if self.handler is not None:
