@@ -3,6 +3,7 @@
 
 from megatron.energon.cache.base import FileStore
 from megatron.energon.flavors.jsonl.ijsonl_reader import IJsonlReader
+from megatron.energon.flavors.jsonl.multi_jsonl_reader import MultiJsonlFileStore
 
 
 class JsonlFileStore(IJsonlReader, FileStore[bytes]):
@@ -12,4 +13,4 @@ class JsonlFileStore(IJsonlReader, FileStore[bytes]):
         return str(self.jsonl_path)
 
 
-__all__ = ["JsonlFileStore"]
+__all__ = ["JsonlFileStore", "MultiJsonlFileStore"]
