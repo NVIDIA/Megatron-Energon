@@ -82,6 +82,7 @@ internals/code_structure
 internals/dataset_formats
 internals/savability
 internals/recipe_checkpoint
+internals/logical_workers
 internals/packing_blending
 internals/epath_storage
 internals/compatibility

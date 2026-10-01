@@ -37,7 +37,7 @@ the old Black/isort workflow.
 Run a focused unittest while developing, for example:
 
 ```shell
-uv run python -m unittest tests.test_dataset
+uv run python -m unittest tests.test_logical_workers
 ```
 
 Then run the full checks appropriate to the change before requesting review.
@@ -89,6 +89,7 @@ Useful regression tests include:
 
 - `test_recipe.TestDataset.test_save_restore_state_train` for exact recipe save/restore;
 - the current-batch-index tests in `test_dataset.py` for stable iteration;
+- `test_logical_workers.py` for physical/logical worker fanout;
 - `test_dataset_factory_resolver.py` and format-specific suites for path detection;
 - `test_filter_index.py` for filtered ordinal translation.
 
