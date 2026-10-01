@@ -588,6 +588,62 @@ class TestDataset(unittest.TestCase):
             n_samples += sample.image.shape[0]
         assert n_samples == 50
 
+    def test_max_samples_per_sequence_one_uses_compact_indexes(self):
+        def new_dataset():
+            return get_train_dataset(
+                self.dataset_path,
+                batch_size=1,
+                worker_config=WorkerConfig(rank=0, world_size=1, num_workers=2),
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=1,
+            )
+
+        train_dataset = new_dataset()
+
+        sampler = train_dataset._find_wrapped_dataset(DatasetSampler)
+        assert isinstance(sampler, DatasetSampler)
+        assert all(isinstance(offsets, range) for offsets in sampler.workers_slice_offsets)
+
+        train_loader = get_savable_loader(train_dataset)
+        train_iterator = iter(train_loader)
+        first_batches = [next(train_iterator) for _ in range(10)]
+        assert [batch.__key__[0] for batch in first_batches[:5]] == [
+            "000004",
+            "000008",
+            "000049",
+            "000018",
+            "000039",
+        ]
+
+        state = train_loader.save_state_rank()
+        remaining_batches = [next(train_iterator) for _ in range(DATASET_SIZE - 10)]
+        all_batches = first_batches + remaining_batches
+        assert sorted(batch.__key__[0] for batch in all_batches) == [
+            f"{sample_idx:06d}" for sample_idx in range(DATASET_SIZE)
+        ]
+        assert all(batch.image.shape == (1, 3, 100, 100) for batch in all_batches)
+
+        next_epoch_batches = [next(train_iterator) for _ in range(DATASET_SIZE)]
+        assert sorted(batch.__key__[0] for batch in next_epoch_batches) == [
+            f"{sample_idx:06d}" for sample_idx in range(DATASET_SIZE)
+        ]
+        assert [batch.__key__ for batch in next_epoch_batches] != [
+            batch.__key__ for batch in all_batches
+        ]
+
+        restored_loader = get_savable_loader(new_dataset())
+        restored_loader.restore_state_rank(state)
+        restored_iterator = iter(restored_loader)
+        restored_batches = [
+            next(restored_iterator) for _ in range(len(remaining_batches) + DATASET_SIZE)
+        ]
+        assert [batch.__key__ for batch in restored_batches[: len(remaining_batches)]] == [
+            batch.__key__ for batch in remaining_batches
+        ]
+        assert [batch.__key__ for batch in restored_batches[len(remaining_batches) :]] == [
+            batch.__key__ for batch in next_epoch_batches
+        ]
+
     def test_no_batching(self):
         train_loader = get_loader(
             get_train_dataset(
