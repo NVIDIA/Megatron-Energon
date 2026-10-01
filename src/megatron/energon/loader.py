@@ -1,11 +1,18 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from typing import Optional, TypeVar
+import re
+from typing import Callable, Optional, TypeVar
 
-from megatron.energon.cache import CachePool
+from megatron.energon.cache import CachePool, FileStore, SystemFileStore
+from megatron.energon.cache.file_store import JsonlFileStore, WebdatasetFileStore
 from megatron.energon.deprecation import warn_deprecated
-from megatron.energon.flavors import SavableDataset
+from megatron.energon.epathlib import EPath
+from megatron.energon.flavors import SavableDataset, WebdatasetMeta
+from megatron.energon.flavors.base_dataset import DatasetSampleReader
+from megatron.energon.flavors.jsonl.ijsonl_reader import IJsonlReader
+from megatron.energon.flavors.webdataset.itar_reader import ShardInfosITarReader
+from megatron.energon.flavors.webdataset.metadata import EnergonDatasetType, get_dataset_type
 from megatron.energon.savable_loader import BasicDataLoader, SavableDataLoader
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.gc_dataset import GC_DEFAULT_EVERY_N_ITER
@@ -117,3 +124,79 @@ def get_loader(
         watchdog_initial_timeout_seconds=watchdog_initial_timeout_seconds,
         fail_on_timeout=fail_on_timeout,
     )
+
+
+# Regex for any URL-like string (any protocol)
+_url_regex = re.compile(r"^(?P<protocol>[a-z][a-z0-9+.-]*)://(?P<path>.*)", re.IGNORECASE)
+
+
+def get_file_store(
+    path: str | EPath,
+) -> FileStore[bytes]:
+    """
+    Get a file store for the given path.
+
+    Args:
+        path: The path to the file store.
+
+    Returns:
+        The instantiated :class:`megatron.energon.FileStore`.
+    """
+    if isinstance(path, str) and (m := _url_regex.match(path)):
+        prot = m.group("protocol")
+        if prot.count("+") == 1:
+            # filesystem+fs_prot://
+            fs_type, fs_prot = prot.split("+")
+            assert fs_type == "filesystem"
+            return SystemFileStore(f"{fs_prot}://{m.group('path')}")
+        elif prot == "filesystem":
+            # filesystem:// (may be relative or absolute)
+            fs_type = "filesystem"
+            return SystemFileStore(m.group("path"))
+    path = EPath(path)
+    ds_type = get_dataset_type(path)
+    if ds_type == EnergonDatasetType.WEBDATASET:
+        return WebdatasetFileStore(path)
+    if ds_type == EnergonDatasetType.JSONL:
+        return JsonlFileStore(path)
+    if ds_type == EnergonDatasetType.FILESYSTEM:
+        return SystemFileStore(path)
+    raise NotImplementedError(f"Unsupported dataset type: {ds_type}")
+
+
+def get_dataset_reader(
+    path: str | EPath,
+    *,
+    split_part: str = "train",
+    split_config: str | None = None,
+    part_filter: Callable[[str], bool] | None = None,
+) -> DatasetSampleReader:
+    """
+    Get a dataset reader for the given (core) dataset path.
+
+    Args:
+        path: The path to the (core) dataset.
+
+    Returns:
+        The instantiated :class:`megatron.energon.DatasetSampleReader`.
+    """
+    path = EPath(path)
+    ds_type = get_dataset_type(path)
+    if ds_type == EnergonDatasetType.WEBDATASET:
+        wds_meta = WebdatasetMeta.from_config(
+            path=path,
+            split_part=split_part,
+            split_config=split_config,
+        )
+        return ShardInfosITarReader(
+            path,
+            shard_infos=wds_meta.shards,
+            part_filter=part_filter,
+            itar_cache_size=1,
+        )
+    if ds_type == EnergonDatasetType.JSONL:
+        return IJsonlReader(
+            path,
+            index_cache_size=1,
+        )
+    raise NotImplementedError(f"Unsupported dataset type for indexed access: {ds_type}")

@@ -33,6 +33,7 @@ from megatron.energon.flavors import (
     CrudeJsonlDatasetFactory,
     CrudeSample,
     CrudeWebdataset,
+    DatasetSampleReader,
     DefaultCrudeJsonlDatasetFactory,
     DefaultDecoderWebdatasetFactory,
     DefaultGenericWebdatasetFactory,
@@ -47,6 +48,7 @@ from megatron.energon.flavors import (
     MultiChoiceVQAWebdataset,
     OCRSample,
     OCRWebdataset,
+    RawSample,
     Sample,
     SampleDecoder,
     SavableDataset,
@@ -61,7 +63,7 @@ from megatron.energon.flavors import (
     VQASample,
     VQAWebdataset,
 )
-from megatron.energon.loader import get_loader, get_savable_loader
+from megatron.energon.loader import get_dataset_reader, get_loader, get_savable_loader
 from megatron.energon.metadataset import (
     DatasetLoader,
     DatasetLoaderInterface,
@@ -136,6 +138,7 @@ __all__ = [
     "CrudeWebdataset",
     "DatasetLoader",
     "DatasetLoaderInterface",
+    "DatasetSampleReader",
     "DecodeFileStore",
     "DefaultCrudeJsonlDatasetFactory",
     "DefaultDecoderWebdatasetFactory",
@@ -152,6 +155,7 @@ __all__ = [
     "GcDataset",
     "generic_batch",
     "generic_concat",
+    "get_dataset_reader",
     "get_loader",
     "get_savable_loader",
     "get_train_dataset",
@@ -187,6 +191,7 @@ __all__ = [
     "prepare_metadataset",
     "RepeatDataset",
     "reraise_exception",
+    "RawSample",
     "Sample",
     "SampleDecoder",
     "SavableDataLoader",

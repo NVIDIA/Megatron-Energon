@@ -3,7 +3,9 @@
 
 from megatron.energon.flavors.base_dataset import (
     BaseCoreDatasetFactory,
+    DatasetSampleReader,
     PinMemoryMixin,
+    RawSample,
     Sample,
     SavableDataset,
 )
@@ -55,6 +57,7 @@ __all__ = [
     "CrudeJsonlDatasetFactory",
     "CrudeSample",
     "CrudeWebdataset",
+    "DatasetSampleReader",
     "DefaultCrudeJsonlDatasetFactory",
     "DefaultDecoderWebdatasetFactory",
     "DefaultGenericWebdatasetFactory",
@@ -72,6 +75,7 @@ __all__ = [
     "OCRSample",
     "OCRWebdataset",
     "PinMemoryMixin",
+    "RawSample",
     "Sample",
     "SampleDecoder",
     "SavableDataset",

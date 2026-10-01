@@ -12,6 +12,7 @@ from typing import (
     Callable,
     ClassVar,
     Dict,
+    Generator,
     Generic,
     List,
     Optional,
@@ -36,6 +37,10 @@ from megatron.energon.worker import WorkerConfig
 
 T_sample = TypeVar("T_sample", covariant=True)
 T = TypeVar("T", covariant=True)
+
+# Must contain at least the fields __key__, __restore_key__, __sources__.
+# Other fields contain the data.
+RawSample = Dict[str, Any]
 
 
 class PinMemoryMixin:
@@ -393,6 +398,30 @@ class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC)
         raise NotImplementedError(
             "This dataset does not support indexing, because it is not safely deterministic."
         )
+
+
+class DatasetSampleReader(ABC):
+    """
+    Interface for dataset readers for random access to samples.
+    """
+
+    @abstractmethod
+    def __getitem__(self, idx: int) -> RawSample | None: ...
+
+    @abstractmethod
+    def __len__(self) -> int: ...
+
+    @abstractmethod
+    def __iter__(self) -> Generator[RawSample | None, None, None]: ...
+
+    @abstractmethod
+    def close(self) -> None: ...
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self.close()
 
 
 class BaseCoreDatasetFactory(Generic[T_sample], ABC):
