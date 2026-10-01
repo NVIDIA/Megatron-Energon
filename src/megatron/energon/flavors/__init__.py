@@ -37,6 +37,12 @@ from megatron.energon.flavors.jsonl import (
 )
 from megatron.energon.flavors.multichoice_vqa import MultiChoiceVQASample, MultiChoiceVQAWebdataset
 from megatron.energon.flavors.ocr import OCRSample, OCRWebdataset
+from megatron.energon.flavors.parquet.dataset import (
+    DefaultParquetDatasetFactory,
+    DefaultParquetShardListDatasetFactory,
+    ParquetDatasetFactory,
+    ParquetShardListDatasetFactory,
+)
 from megatron.energon.flavors.similarity_interleaved import (
     SimilarityInterleavedSample,
     SimilarityInterleavedWebdataset,
@@ -75,6 +81,8 @@ __all__ = [
     "DefaultCrudeJsonlShardListDatasetFactory",
     "DefaultDecoderWebdatasetFactory",
     "DefaultGenericWebdatasetFactory",
+    "DefaultParquetDatasetFactory",
+    "DefaultParquetShardListDatasetFactory",
     "EmptyDatasetError",
     "FilterIndex",
     "FilterIndexWriter",
@@ -90,6 +98,8 @@ __all__ = [
     "OCRSample",
     "OCRWebdataset",
     "PinMemoryMixin",
+    "ParquetDatasetFactory",
+    "ParquetShardListDatasetFactory",
     "Sample",
     "SampleDecoder",
     "SavableDataset",
