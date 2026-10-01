@@ -41,8 +41,6 @@ class RepeatDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
         self.repeats = repeats
         self.restart = restart
 
-        self.reset_state_own()
-
     def reset_state_own(self) -> None:
         self._repetition = 0
         self._index = 0

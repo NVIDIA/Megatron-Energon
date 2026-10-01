@@ -117,10 +117,10 @@ class MyTaskEncoder(DefaultTaskEncoder):
             raise ValueError("Corrupted sample")
         return sample
     
-    @stateless(restore_seeds=True, failure_tolerance=200)
+    @stateless(restore_task_encoder_seeds=True, failure_tolerance=200)
     def pack_selected_samples(self, samples):
-        # Packing with higher tolerance and deterministic randomness
-        return pack_samples(samples)
+        # Packing with higher tolerance and worker-local deterministic randomness
+        return pack_samples(samples, rng=self.rng)
 ```
 
 Set `failure_tolerance=0` to disable tolerance checking for a specific function.

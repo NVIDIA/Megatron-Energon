@@ -1,15 +1,17 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+import dataclasses
+import threading
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from typing import Any, Generator, Generic, Iterable, Optional, Tuple, Type, TypeVar, Union
 
 from megatron.energon.flavors.base_dataset import (
     FlexState,
+    RestoreKey,
     Sample,
     SavableDataset,
-    add_sample_restore_key,
 )
 from megatron.energon.savable import Savable
 from megatron.energon.worker import WorkerConfig
@@ -54,6 +56,9 @@ class BaseWrapperDataset(SavableDataset[T_sample_out], Generic[T_sample_in, T_sa
         assert len(self.datasets) == 1
         return self.datasets[0]
 
+    def len_worker(self, worker_idx: int | None = None) -> int:
+        return sum(ds.len_worker(worker_idx) for ds in self.datasets)
+
     def can_restore_sample(self) -> bool:
         return all(ds.can_restore_sample() for ds in self.datasets)
 
@@ -76,19 +81,19 @@ class BaseWrapperDataset(SavableDataset[T_sample_out], Generic[T_sample_in, T_sa
                     return res
         return None
 
-    def restore_sample(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> T_sample_out:
-        if len(self.datasets) == 1:
-            return self.datasets[0].restore_sample(restore_key)
-        else:
-            id, ds_idx = restore_key[:2]
-            assert id == type(self).__name__
-            restore_key = restore_key[2:]
-            assert isinstance(ds_idx, int)
-            return add_sample_restore_key(
-                self.datasets[ds_idx].restore_sample(restore_key),
-                ds_idx,
-                src=self,
-            )
+    @abstractmethod
+    def reset_state_own(self) -> None:
+        """Resets the state of the dataset, excl. the inner datasets."""
+        ...
+
+    def reset_state(self) -> None:
+        """Resets the state of the inner datasets and then the own state."""
+
+        for ds in self.datasets:
+            ds.reset_state()
+
+        super().reset_state()
+        self.reset_state_own()
 
     def save_state(self) -> FlexState:
         own_state = super().save_state()
@@ -102,21 +107,19 @@ class BaseWrapperDataset(SavableDataset[T_sample_out], Generic[T_sample_in, T_sa
 
         super().restore_state(state)
 
-    def reset_state_deep(self) -> None:
-        """Resets the state of the inner datasets and then the own state."""
+    def restore_sample(self, restore_key: RestoreKey) -> T_sample_out:
+        assert len(self.datasets) == 1, "Must be implemented by subclass"
+        return self.dataset.restore_sample(restore_key)
 
+    def worker_close(self) -> None:
         for ds in self.datasets:
-            if isinstance(ds, BaseWrapperDataset):
-                ds.reset_state_deep()
-            else:
-                ds.reset_state_own()
+            ds.worker_close()
+        super().worker_close()
 
-        self.reset_state_own()
-
-    @abstractmethod
-    def reset_state_own(self) -> None:
-        """Resets the state of the dataset, excl. the inner datasets."""
-        ...
+    def close(self) -> None:
+        for ds in self.datasets:
+            ds.close()
+        super().close()
 
 
 class SampleIndex(Savable):
@@ -141,7 +144,9 @@ class SampleIndex(Savable):
     def ctx(self, sample_idx: Optional[int] = None):
         if sample_idx is None:
             sample_idx = self.get_next()
-        assert WorkerConfig.active_worker_config is not None
+        assert WorkerConfig.active_worker_config is not None, (
+            f"WorkerConfig.active_worker_config is None on thread {threading.get_ident()}"
+        )
         WorkerConfig.active_worker_config.worker_push_sample_index(sample_idx)
         # print("  " * SampleIndex.actives + f"Activated from {type(self.src).__name__}({id(self.src)}) {sample_idx} -> {WorkerConfig.active_worker_config._sample_index_stack}")
         SampleIndex.actives += 1
@@ -182,7 +187,37 @@ class SampleIndex(Savable):
             self.current_idx = state
 
 
-def get_sample_restore_key(sample: Any) -> Optional[Union[str, int]]:
+@dataclasses.dataclass(kw_only=True, slots=True, frozen=True)
+class WrappedRestoreKey(RestoreKey):
+    inner: RestoreKey
+
+
+def wrap_sample_restore_key(
+    sample: T_sample, t: "Type[WrappedRestoreKey]", fail_otherwise: bool = False, **kwargs
+) -> T_sample:
+    """Adds a key to a sample. The sample must be a valid `Sample` or dict containing
+    __restore_key__, which is a tuple of keys that can be used to restore the inner sample.
+    This restore key is prepended with the `key`."""
+    if isinstance(sample, Sample) or hasattr(sample, "__restore_key__"):
+        try:
+            sample.__restore_key__ = t(inner=sample.__restore_key__, **kwargs)
+        except KeyError:
+            pass
+    elif isinstance(sample, dict) and "__restore_key__" in sample:
+        sample["__restore_key__"] = t(inner=sample["__restore_key__"], **kwargs)
+    elif fail_otherwise:
+        raise RuntimeError(
+            "Did not yield a sample with a restore key, but is marked stateless/deterministic."
+        )
+    return sample
+
+
+@dataclasses.dataclass(kw_only=True, slots=True, frozen=True)
+class MultiWrappedRestoreKey(RestoreKey):
+    inner: tuple[RestoreKey | None, ...]
+
+
+def get_sample_restore_key(sample: Any) -> RestoreKey | None:
     """Gets the restore key from an arbitrary sample."""
     if isinstance(sample, Sample) or hasattr(sample, "__restore_key__"):
         return sample.__restore_key__

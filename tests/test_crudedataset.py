@@ -501,6 +501,7 @@ class TestDataset(unittest.TestCase):
         loader = get_savable_loader(
             train_dataset,
         )
+        self.addCleanup(loader.shutdown)
 
         print(len(train_dataset))
         # assert len(train_dataset) == 11
@@ -550,6 +551,7 @@ class TestDataset(unittest.TestCase):
 
         samples_after = [s.__key__ for idx, s in zip(range(100, 200), loader)]
         print(samples_after)
+        loader.shutdown()
 
         loader = get_savable_loader(
             get_train_dataset(
@@ -571,6 +573,7 @@ class TestDataset(unittest.TestCase):
         print(samples_restored)
 
         assert all([a == b for a, b in zip(samples_after, samples_restored)])
+        loader.shutdown()
 
     def test_aux_random_access(self):
         torch.manual_seed(42)
@@ -610,6 +613,7 @@ class TestDataset(unittest.TestCase):
 
         samples_after = [s.__key__ for idx, s in zip(range(100, 200), loader)]
         print(samples_after)
+        loader.shutdown()
 
         loader = get_savable_loader(
             get_train_dataset(
@@ -631,6 +635,7 @@ class TestDataset(unittest.TestCase):
         print(samples_restored)
 
         assert all([a == b for a, b in zip(samples_after, samples_restored)])
+        loader.shutdown()
 
     def test_dss_path(self):
         dss_dataset_name = "crude_text"
@@ -689,6 +694,7 @@ class TestDataset(unittest.TestCase):
             assert len(set(texts)) == 3
             assert all(re.fullmatch(r"<\d+>", txt) for txt in texts)
             assert all(0 <= int(txt.removeprefix("<").removesuffix(">")) < 55 for txt in texts)
+            loader.shutdown()
         finally:
             if orig_env_cache_dir is None:
                 os.environ.pop("NVDATASET_CACHE_DIR", None)
@@ -739,6 +745,7 @@ class TestDataset(unittest.TestCase):
 
         samples_after = [s.__key__ for idx, s in zip(range(100, 200), loader)]
         print(samples_after)
+        loader.shutdown()
 
         loader = get_savable_loader(
             get_train_dataset(
@@ -764,6 +771,7 @@ class TestDataset(unittest.TestCase):
         print(samples_restored)
 
         assert all([a == b for a, b in zip(samples_after, samples_restored)])
+        loader.shutdown()
 
     def test_aux_random_access_with_cache_and_postencode(self):
         torch.manual_seed(42)
@@ -808,6 +816,7 @@ class TestDataset(unittest.TestCase):
 
         samples_after = [s.__key__ for idx, s in zip(range(100, 200), loader)]
         print(samples_after)
+        loader.shutdown()
 
         loader = get_savable_loader(
             get_train_dataset(
@@ -879,6 +888,7 @@ class TestDataset(unittest.TestCase):
                 file_names=("000022.txt",),
             ),
         )
+        loader.shutdown()
 
     def test_aux_filesystem_reference(self):
         torch.manual_seed(42)
@@ -902,6 +912,7 @@ class TestDataset(unittest.TestCase):
         sample = next(iter(loader))
 
         assert sample.txts[0].endswith("|aux|__module__: megatron.ener>")
+        loader.shutdown()
 
     def test_aux_msc(self):
         """MetadatasetV2 aux supports msc:// and filesystem+msc:// (issue #211). Same aux keys as aux_metadataset.yaml, ds2 and fs content uploaded to S3."""
@@ -961,6 +972,7 @@ class TestDataset(unittest.TestCase):
             )
             sample = next(iter(loader))
             assert sample.txts[0].endswith("|aux|__module__: megatron.ener>")
+            loader.shutdown()
 
             torch.manual_seed(42)
             loader = get_savable_loader(
@@ -979,6 +991,7 @@ class TestDataset(unittest.TestCase):
             )
             sample = next(iter(loader))
             assert sample.txts[0].endswith("|aux|__module__: megatron.ener>")
+            loader.shutdown()
 
     def test_media_metadata_webdataset(self):
         torch.manual_seed(42)
@@ -1015,6 +1028,7 @@ class TestDataset(unittest.TestCase):
             "AUDIO-10.0s@32000Hz|AUDIO-10.0s@32000Hz",
             "VIDEO-192x108@30.0fps-63.0s|VIDEO-192x108@30.0fps-63.0s",
         ]
+        loader.shutdown()
 
     def test_prepare_dataset_s3_cmdline(self):
         """Tar shards live on S3 (emulator); `energon prepare` writes `.nv-meta` to the same prefix."""
@@ -1098,6 +1112,7 @@ class TestDataset(unittest.TestCase):
                 "AUDIO-10.0s@32000Hz|AUDIO-10.0s@32000Hz",
                 "VIDEO-192x108@30.0fps-63.0s|VIDEO-192x108@30.0fps-63.0s",
             ]
+            loader.shutdown()
 
     def test_nomds(self):
         torch.manual_seed(42)
@@ -1123,6 +1138,7 @@ class TestDataset(unittest.TestCase):
 
         print(samples)
         assert len(samples) == 100
+        loader.shutdown()
 
 
 if __name__ == "__main__":

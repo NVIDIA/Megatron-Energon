@@ -97,24 +97,6 @@ cpal = np.array(
 )
 
 
-class YieldBatchLogLine(TypedDict):
-    # Json example:
-    # {
-    #   "t": "yield_batch",
-    #   "r": 1,
-    #   "w": 1,
-    #   "m": "train",
-    #   "idx": 1,
-    #   "keys": ["parts/data-train-000051.tar/528866", ...],
-    # }
-    t: Literal["yield_batch"]
-    r: int
-    w: int
-    m: Literal["train", "val"]
-    idx: int
-    keys: List[str]
-
-
 class SampleLoaderYieldLogLine(TypedDict):
     # Json example:
     # {
@@ -442,7 +424,7 @@ def command(
 
 
 class LoaderInitLogLine(TypedDict):
-    t: Literal["SavableLoader.__init__", "BasicDataLoader.__init__"]
+    t: Literal["DataLoader.__init__"]
     r: int
     w: None
     id: int
@@ -450,33 +432,32 @@ class LoaderInitLogLine(TypedDict):
 
 
 class LoaderIterLogLine(TypedDict):
-    t: Literal["SavableDataLoader.iter", "BasicDataLoader.iter"]
+    t: Literal["DataLoader.epoch_iter"]
     r: int
     w: None
     id: int
-    iter_id: int
+    epoch_id: int
 
 
 class LoaderYieldLogLine(TypedDict):
-    t: Literal["SavableDataLoader.yield", "BasicDataLoader.yield"]
+    t: Literal["DataLoader.epoch_iter.yield"]
     r: int
     w: None
     id: int
-    iter_id: int
+    epoch_id: int
     worker_id: int
-    worker_idx: int
-    idx: int
-    iter_idx: int
-    global_idx: int
+    worker_sample_idx: int
+    epoch_sample_idx: int
+    global_sample_idx: int
     keys: Optional[List[str]]
 
 
 class LoaderStopLogLine(TypedDict):
-    t: Literal["SavableDataLoader.StopIteration", "BasicDataLoader.StopIteration"]
+    t: Literal["DataLoader.epoch_iter.StopIteration"]
     r: int
     w: None
     id: int
-    iter_id: int
+    epoch_id: int
 
 
 LoaderLines = Union[
@@ -487,14 +468,10 @@ LoaderLines = Union[
 ]
 
 LOADER_LOG_LINE_TYPES_T = (
-    "SavableLoader.__init__",
-    "BasicDataLoader.__init__",
-    "SavableDataLoader.iter",
-    "BasicDataLoader.iter",
-    "SavableDataLoader.yield",
-    "BasicDataLoader.yield",
-    "SavableDataLoader.StopIteration",
-    "BasicDataLoader.StopIteration",
+    "DataLoader.__init__",
+    "DataLoader.epoch_iter",
+    "DataLoader.epoch_iter.yield",
+    "DataLoader.epoch_iter.StopIteration",
 )
 
 
@@ -553,34 +530,29 @@ class LoaderLogIter:
         loaders = {}
         for log_line in self._iter_log_lines(
             (
-                "SavableLoader.__init__",
-                "BasicDataLoader.__init__",
-                "SavableDataLoader.yield",
-                "BasicDataLoader.yield",
+                "DataLoader.__init__",
+                "DataLoader.epoch_iter.yield",
             )
         ):
-            if log_line["t"] in ("SavableLoader.__init__", "BasicDataLoader.__init__"):
+            if log_line["t"] == "DataLoader.__init__":
                 loaders[log_line["id"]] = LoaderInfo(
                     id=log_line["id"],
                     modality=self._find_config_modality(log_line["config"]),
                     path=self._find_config_path(log_line["config"]),
                     global_count=0,
                 )
-            elif log_line["t"] in ("SavableDataLoader.yield", "BasicDataLoader.yield"):
-                loaders[log_line["id"]].global_count = log_line["global_idx"]
+            elif log_line["t"] == "DataLoader.epoch_iter.yield":
+                loaders[log_line["id"]].global_count = log_line["global_sample_idx"]
         return loaders
 
     def log_entries(self, loader_ids: Container[int]) -> Generator[Optional[List[str]], None, None]:
         idx = self._start_idx
-        for log_line in self._iter_log_lines(("SavableDataLoader.yield", "BasicDataLoader.yield")):
-            if (
-                log_line["t"] in ("SavableDataLoader.yield", "BasicDataLoader.yield")
-                and log_line["id"] in loader_ids
-            ):
-                assert log_line["global_idx"] >= idx, (
+        for log_line in self._iter_log_lines(("DataLoader.epoch_iter.yield",)):
+            if log_line["t"] == "DataLoader.epoch_iter.yield" and log_line["id"] in loader_ids:
+                assert log_line["global_sample_idx"] >= idx, (
                     f"Found entry {log_line} with wrong idx <{idx}"
                 )
-                while log_line["global_idx"] != idx:
+                while log_line["global_sample_idx"] != idx:
                     yield None
                     idx += 1
                 if "keys" in log_line:

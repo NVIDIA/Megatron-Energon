@@ -37,10 +37,15 @@ The `pack_selected_samples` method may return a different sample type that is ex
 ```
 
 It is important, to mark custom functions like `encode_sample` and `pack_selected_samples` as `@stateless` to allow saving
-samples for packing. If augmentations happen, it should be marked with
-`@stateless(restore_seeds=True)`, to deterministically set the seeds based on the `TaskEncoder.current_sample_index`.
-You have to make sure the methods are actually stateless, meaning that they will produce the same output when invoked
-with the same input and random states.
+samples for packing. If augmentations use randomness, mark the function with
+`@stateless(restore_task_encoder_seeds=True)` and draw from `self.rng`. This deterministically
+seeds worker-local generators from `TaskEncoder.current_sample_index` and works with fork, thread,
+and main-process workers. The older `restore_seeds=True` mode manipulates process-global RNGs and
+is not supported with thread workers.
+
+You have to make sure the methods are actually stateless, meaning that they will produce the same
+output when invoked with the same input and random states. See [](../basic/task_encoder) for the RNG
+APIs and worker-mode compatibility.
 
 Example packing for a large language model extending the example from the [](../basic/task_encoder) section:
 
@@ -52,10 +57,10 @@ class PackingCaptioningTaskEncoder(CaptioningTaskEncoder):
     properly sized input sample buffer with good diversity.
     """
 
-    @stateless(restore_seeds=True)
+    @stateless(restore_task_encoder_seeds=True)
     def encode_sample(self, ...):
-        # Added `stateless` decorator to allow saving samples for packing. Will set the seed
-        # deterministically based on the self.current_sample_index.
+        # Draw randomness from self.rng. The decorator restores the same worker-local RNG state
+        # when this sample is reconstructed from its restore key.
         ...
 
     def select_samples_to_pack(self, samples: List[CaptioningSample]) -> List[List[CaptioningSample]]:

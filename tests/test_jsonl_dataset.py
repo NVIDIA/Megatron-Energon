@@ -146,6 +146,7 @@ class TestJsonlDataset(unittest.TestCase):
         assert len(train_dataset) == 55, f"Expected 55 samples, got {len(train_dataset)}"
 
         train_loader1 = get_loader(train_dataset)
+        self.addCleanup(train_loader1.shutdown)
 
         train_order1 = [
             text for idx, data in zip(range(55 * 10), train_loader1) for text in data.text
@@ -177,6 +178,7 @@ class TestJsonlDataset(unittest.TestCase):
         assert len(train_dataset) == 55 * 3, f"Expected 55 * 3 samples, got {len(train_dataset)}"
 
         train_loader1 = get_loader(train_dataset)
+        self.addCleanup(train_loader1.shutdown)
 
         train_order1 = [
             text for idx, data in zip(range(55 * 10), train_loader1) for text in data.text
@@ -215,10 +217,9 @@ class TestJsonlDataset(unittest.TestCase):
                 f"Expected {expected_lens[cur_rank]} samples, got {len(train_dataset)}"
             )
 
-            train_loader1 = get_loader(train_dataset)
-
-            for data in train_loader1:
-                sample_counts[int(data.text[0])] += 1
+            with get_loader(train_dataset) as train_loader1:
+                for data in train_loader1:
+                    sample_counts[int(data.text[0])] += 1
 
         for i in range(55):
             assert sample_counts[i] == 1, (
@@ -246,7 +247,7 @@ class TestJsonlDataset(unittest.TestCase):
             # EPath(self.dataset_path).copy(EPath("msc://s3/test/dataset"))
             emu.add_file(self.dataset_path, "test/dataset")
 
-            train_dataset = get_loader(
+            with get_loader(
                 get_train_dataset(
                     mixed_mds_path,
                     worker_config=WorkerConfig(
@@ -260,13 +261,12 @@ class TestJsonlDataset(unittest.TestCase):
                     virtual_epoch_length=55 * 10,
                     task_encoder=SimpleCookingTaskEncoder(),
                 )
-            )
-
-            data = list(enumerate(train_dataset))
-            assert len(data) == 55 * 10, len(data)
-            cnt = Counter(t for _, entry in data for t in entry.text)
-            assert len(cnt) == 55 * 3
-            assert all(2 <= v <= 5 for v in cnt.values())
+            ) as train_dataset:
+                data = list(enumerate(train_dataset))
+                assert len(data) == 55 * 10, len(data)
+                cnt = Counter(t for _, entry in data for t in entry.text)
+                assert len(cnt) == 55 * 3
+                assert all(2 <= v <= 5 for v in cnt.values())
 
     def test_prepare(self):
         print("Creating new dataset")
@@ -304,6 +304,7 @@ class TestJsonlDataset(unittest.TestCase):
                 task_encoder=SimpleCookingTaskEncoder(),
             )
         )
+        self.addCleanup(train_loader.shutdown)
         assert len(train_loader) == 10, f"Expected 10 samples, got {len(train_loader)}"
 
         train_order1 = [text for _, data in zip(range(50), train_loader) for text in data.text]

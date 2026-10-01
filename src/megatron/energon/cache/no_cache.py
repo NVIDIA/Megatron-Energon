@@ -47,6 +47,12 @@ class NoCachePool(CachePool):
     def get_lazy(self, ds: FileStore, fname: str) -> DirectLazy:
         return DirectLazy(ds=ds, fname=fname, pool=self)
 
+    def worker_init(self) -> None:
+        pass
+
+    def worker_close(self) -> None:
+        pass
+
     def to_cache(self, data: T, name: str) -> DirectLazy:
         return MockLazy(fname=name, get_fn=lambda _: data)
 

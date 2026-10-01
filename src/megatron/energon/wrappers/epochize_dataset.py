@@ -43,8 +43,6 @@ class EpochizeDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample])
         self.length = length
         self._active_iter = None
 
-        self.reset_state_own()
-
     def reset_state_own(self) -> None:
         self._offset = 0
 

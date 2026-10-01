@@ -13,6 +13,7 @@ from torch.distributed.distributed_c10d import reduce_op
 
 from megatron.energon.errors import SYSTEM_EXCEPTIONS
 from megatron.energon.flavors.base_dataset import SavableDataset
+from megatron.energon.state import FlexState
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset
 
@@ -122,9 +123,6 @@ class GcDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
     def reset_state_own(self) -> None:
         return
 
-    def len_worker(self, worker_idx: int | None = None) -> int:
-        return self.dataset.len_worker(worker_idx)
-
     def __iter__(self) -> Iterator[T_sample]:
         in_worker = torch.utils.data.get_worker_info() is not None
         if in_worker and not _frozen_gc_objects_initialized:
@@ -146,6 +144,14 @@ class GcDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
         finally:
             if self.freeze:
                 gc.unfreeze()
+
+    def save_state(self) -> FlexState:
+        # Just delegate, make self transparent
+        return self.dataset.save_state()
+
+    def restore_state(self, state: FlexState):
+        # Just delegate, make self transparent
+        return self.dataset.restore_state(state)
 
     def config(self) -> Dict[str, Any]:
         # This is transparent, no config to be saved (it does not affect the dataset)
