@@ -42,6 +42,7 @@ class LoadedDataset:
 class LoadedDatasetList:
     datasets: List[LoadedDataset]
     blend_mode: DatasetBlendMode = DatasetBlendMode.NONE
+    blend_weight_unit: str = "samples"
 
 
 @dataclass

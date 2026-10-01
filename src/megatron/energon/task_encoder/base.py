@@ -75,6 +75,8 @@ T_batch = TypeVar("T_batch")
 FeatureBatcher = Callable[[List[Any]], Any]
 PackingBufferSize = int | Literal["stream"] | None
 
+DEFAULT_BLEND_WEIGHT_UNIT = "samples"
+
 
 @dataclasses.dataclass(frozen=True)
 class PackingGroupConfig:
@@ -145,6 +147,25 @@ def stateless(
 
 @overload
 def stateless(fn: Callable[P, T]) -> Callable[P, T]: ...
+
+
+def sample_size_metric(name: str) -> Callable[[Callable[P, int | float]], Callable[P, int | float]]:
+    """Decorator to register a named sample size metric for blend weighting."""
+    if not name:
+        raise ValueError("Sample size metric names must not be empty.")
+    if name == DEFAULT_BLEND_WEIGHT_UNIT:
+        raise ValueError(f"{DEFAULT_BLEND_WEIGHT_UNIT!r} is reserved for sample-count blending.")
+
+    def decorator(fn: Callable[P, int | float]) -> Callable[P, int | float]:
+        setattr(fn, "__sample_size_metric__", name)
+        return fn
+
+    return decorator
+
+
+def get_sample_size_metric(fn: Callable) -> str:
+    """Get the sample size metric of a function."""
+    return getattr(fn, "__sample_size_metric__", None)
 
 
 def stateless(
@@ -390,6 +411,9 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
     #: The decoder to use for decoding samples. Set manually as needed to override options.
     decoder: Optional[SampleDecoder] = SampleDecoder()
 
+    blend_sample_size_alpha: float = 1.0
+    blend_sample_size_epsilon: float = 1.0
+
     def _is_overridden(
         self, bound_method: Callable[..., Any], bases: Optional[Sequence[Type[Any]]] = None
     ) -> bool:
@@ -477,6 +501,30 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         If this is defined, :func:`encode_sample` must not be defined.
         """
         return sample
+
+    def _resolve_sample_size_metric(
+        self, blend_weight_unit: str
+    ) -> Callable[[Any], int | float] | None:
+        """Return the registered sample size function for a blend weight unit."""
+        if blend_weight_unit == DEFAULT_BLEND_WEIGHT_UNIT:
+            return None
+
+        matches: list[str] = []
+        for attr_name, attr in inspect.getmembers(type(self), predicate=inspect.isfunction):
+            if get_sample_size_metric(attr) == blend_weight_unit:
+                matches.append(attr_name)
+
+        if not matches:
+            raise ValueError(
+                f"Recipe requested blend_weight_unit={blend_weight_unit!r}, but "
+                f"{type(self).__name__} does not register that sample size metric."
+            )
+        if len(matches) > 1:
+            raise ValueError(
+                f"{type(self).__name__} registers multiple sample size metrics named "
+                f"{blend_weight_unit!r}: {', '.join(sorted(matches))}"
+            )
+        return getattr(self, matches[0])
 
     def build_packing_groups(
         self,
@@ -930,6 +978,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         repeat: bool,
         shuffle_buffer_size: Optional[int],
         worker_config: WorkerConfig,
+        sample_size_fn: Callable[[Any], int | float] | None,
     ) -> SavableDataset[T_encoded_sample]:
         """Builds the (blend) → (repeat/shuffle) → (preencode/encode) pipeline."""
 
@@ -996,6 +1045,9 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             dataset = BlendDataset(
                 *[inner_dataset[:2] for inner_dataset in inner_datasets],
                 worker_config=worker_config,
+                sample_size_fn=sample_size_fn,
+                sample_size_epsilon=self.blend_sample_size_epsilon,
+                sample_size_alpha=self.blend_sample_size_alpha,
             )
         elif len(datasets) == 1:
             dataset = inner_datasets[0][0]
@@ -1062,6 +1114,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         repeat: bool,
         shuffle_buffer_size: Optional[int],
         worker_config: WorkerConfig,
+        sample_size_fn: Callable[[Any], int | float] | None,
     ) -> SavableDataset[T_encoded_sample]:
         """Builds the train pipeline with optional task-defined packing group isolation.
 
@@ -1096,6 +1149,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 repeat=repeat,
                 shuffle_buffer_size=packing_group.shuffle_buffer_size,
                 worker_config=worker_config,
+                sample_size_fn=sample_size_fn,
             )
             # Post-encode is included
             dataset = self._build_packing_postencode(
@@ -1114,6 +1168,9 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             return BlendDataset(
                 *streams,
                 worker_config=worker_config,
+                sample_size_fn=sample_size_fn,
+                sample_size_epsilon=self.blend_sample_size_epsilon,
+                sample_size_alpha=self.blend_sample_size_alpha,
             )
         else:
             return streams[0][0]
@@ -1129,6 +1186,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         virtual_epoch_length: int = 0,
         shuffle_buffer_size: Optional[int] = None,
         blend_mode: DatasetBlendMode = DatasetBlendMode.NONE,
+        blend_weight_unit: str = DEFAULT_BLEND_WEIGHT_UNIT,
         repeat: bool = True,
     ) -> SavableDataset[T_batch]:
         """Combines train datasets into one batched dataset pipeline.
@@ -1144,6 +1202,8 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             shuffle_buffer_size: Shuffle buffer before encoding. Used as the default by
                 :meth:`build_packing_groups`.
             blend_mode: How leaf weights map to the inner :class:`~megatron.energon.BlendDataset`.
+            blend_weight_unit: Unit the blend weights target. ``"samples"`` uses sample-count
+                blending; any other value must be registered with :func:`sample_size_metric`.
             repeat: Whether inner datasets loop indefinitely.
 
         Returns:
@@ -1155,6 +1215,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             if isinstance(dataset.dataset, CrudeWebdataset):
                 assert self.cookers, "CrudeWebdataset found, but no cookers registered."
 
+        sample_size_fn = self._resolve_sample_size_metric(blend_weight_unit)
         dataset = self._build_train_blend_shuffle_encode_packing_groups(
             datasets=datasets,
             packing_buffer_size=packing_buffer_size,
@@ -1162,6 +1223,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             repeat=repeat,
             shuffle_buffer_size=shuffle_buffer_size,
             worker_config=worker_config,
+            sample_size_fn=sample_size_fn,
         )
         dataset = self.build_batch(
             dataset,

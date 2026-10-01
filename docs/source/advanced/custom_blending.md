@@ -3,6 +3,23 @@ SPDX-License-Identifier: BSD-3-Clause -->
 
 # Customized Blending
 
+Recipe `blend` weights target sample counts by default. A task encoder can expose another unit for
+weighted blending by registering a named sample size metric:
+
+```py
+from megatron.energon import DefaultTaskEncoder, TextSample, sample_size_metric, stateless
+
+
+class TextTaskEncoder(DefaultTaskEncoder):
+    @sample_size_metric("tokens")
+    @stateless
+    def token_count(self, sample: TextSample) -> int:
+        return len(sample.text)
+```
+
+The recipe selects that unit with `blend_weight_unit: tokens`. The reserved unit `samples` keeps
+sample-count blending and does not call a sample size metric.
+
 In your Task Encoder you could customize the blend of datasets by overriding the `build_train_datasets` method as shown below.
 
 
