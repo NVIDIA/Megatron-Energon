@@ -10,7 +10,7 @@ from megatron.energon.cache import FileStore
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory
-from megatron.energon.flavors.webdataset.structs import DatasetSubset
+from megatron.energon.flavors.common.manifest.types import DatasetSubset
 from megatron.energon.worker import WorkerConfig
 
 
@@ -27,9 +27,13 @@ class DatasetBlendMode(Enum):
 
 @edataclass
 class LoadedDataset:
+    #: The dataset factory.
     dataset: BaseCoreDatasetFactory
+    #: Sampling weight when using dataset-weight blending.
     weight: Union[float, int, None] = None
+    #: Epochized repetition count when using repetition-based blending.
     repetitions: Union[float, int, None] = None
+    #: Auxiliary datasets for crude cooking.
     aux: Optional[Dict[str, FileStore]] = None
 
 
@@ -48,12 +52,14 @@ class TraversedDatasetReference:
         split_part: Effective split part to use when loading the leaf dataset.
         aux: Resolved auxiliary dataset or filesystem references keyed by auxiliary name.
         subflavors: Effective subflavors implied by the traversed metadataset hierarchy.
+        shuffle_over_epochs_multiplier: Effective shuffle over epochs multiplier from metadataset references.
     """
 
     path: EPath
     split_part: str
     aux: dict[str, EPath]
     subflavors: dict[str, Any]
+    shuffle_over_epochs_multiplier: Optional[int] = 1
 
 
 class DatasetLoaderInterface(ABC):
@@ -69,6 +75,7 @@ class DatasetLoaderInterface(ABC):
         mds_path: Optional[EPath] = None,
         *,
         split_part: Union[Literal["train", "val", "test"], str],
+        _shuffle_over_epochs_multiplier: Optional[int] = 1,
         _subflavors: Optional[Dict[str, Any]] = None,
     ) -> List[TraversedDatasetReference]:
         """Traverse a metadataset subtree and collect flattened leaf dataset references.
@@ -83,6 +90,9 @@ class DatasetLoaderInterface(ABC):
                 use None only for top-level metadatasets.
             split_part: Split to traverse, such as `\"train\"`, `\"val\"`, or `\"test\"`. Nested
                 references may override this with their own configured split.
+            _shuffle_over_epochs_multiplier: Inherited shuffle multiplier (merged per node like
+                ``get_datasets``); default ``1``.
+            _subflavors: Effective subflavors implied by the traversed metadataset hierarchy.
 
         Returns:
             A flattened list of `TraversedDatasetReference` values for all leaf datasets reached

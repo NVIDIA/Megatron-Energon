@@ -3,30 +3,18 @@
 
 import re
 from dataclasses import dataclass
-from typing import (
-    Any,
-    Callable,
-    Dict,
-    List,
-    Literal,
-    Optional,
-    Sequence,
-    Type,
-    Union,
-)
+from typing import Any, Callable, Dict, List, Literal, Optional, Sequence, Type, Union
 
 from megatron.energon.cache import FileStore
-from megatron.energon.cache.file_store import (
-    SystemFileStore,
-    WebdatasetFileStore,
-)
+from megatron.energon.cache.file_store import SystemFileStore
 from megatron.energon.dataset_config import load_config
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import Sample
-from megatron.energon.flavors.webdataset.config import INDEX_SQLITE_FILENAME, MAIN_FOLDER_NAME
-from megatron.energon.flavors.webdataset.metadata import EnergonDatasetType, get_dataset_type
-from megatron.energon.flavors.webdataset.structs import DatasetSubset
+from megatron.energon.flavors.common.manifest.paths import INDEX_SQLITE_FILENAME, MAIN_FOLDER_NAME
+from megatron.energon.flavors.common.manifest.types import DatasetSubset
+from megatron.energon.flavors.dataset_type import EnergonDatasetType, get_dataset_type
+from megatron.energon.flavors.webdataset.file_store import WebdatasetFileStore
 from megatron.energon.metadataset.dataset_loader import DatasetLoader
 from megatron.energon.metadataset.join_dataset_loader import JoinDatasetLoader, JoinedDatasetInfo
 from megatron.energon.metadataset.loader_interface import (
@@ -83,6 +71,9 @@ class AuxFilesystemReference:
     def get_file_store(self) -> FileStore:
         assert isinstance(self.fs_path, EPath), "Missing call to post_initialize"
         return SystemFileStore(self.fs_path)
+
+
+AuxReference = Union[AuxDatasetReference, AuxFilesystemReference]
 
 
 @edataclass
@@ -173,7 +164,7 @@ class Subset:
         )
 
 
-@edataclass
+@dataclass(kw_only=True, eq=False)
 class SubsetRatioMixin:
     subset: Optional[Subset] = None
 
@@ -191,20 +182,71 @@ class SubsetRatioMixin:
         return None
 
 
+@dataclass(kw_only=True, eq=False)
+class ShuffleOverEpochsMultiplierMixin:
+    shuffle_over_epochs_multiplier: Optional[int] = 1
+
+    def _merge_shuffle_over_epochs_multiplier(
+        self, inherited_shuffle_over_epochs_multiplier: Optional[int]
+    ) -> Optional[int]:
+        if (
+            inherited_shuffle_over_epochs_multiplier is None
+            or self.shuffle_over_epochs_multiplier is None
+        ):
+            # If no shuffling is requested, this has override priority.
+            return None
+        elif (
+            inherited_shuffle_over_epochs_multiplier == -1
+            or self.shuffle_over_epochs_multiplier == -1
+        ):
+            # Next priority is sampling with replacement.
+            return -1
+        else:
+            # Otherwise, multiply the shuffle over epochs multiplier.
+            return inherited_shuffle_over_epochs_multiplier * self.shuffle_over_epochs_multiplier
+
+
+@dataclass(kw_only=True, eq=False)
+class SubflavorsMixin:
+    subflavors: Optional[Dict[str, Any]] = None
+
+    def _merge_subflavors(self, inherited_subflavors: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Merge this reference's subflavors with the inherited traversal subflavors.
+
+        The merge order mirrors `get_datasets(...)`: this reference contributes the base mapping,
+        and inherited outer-hierarchy subflavors override on key conflicts.
+
+
+        Args:
+            inherited_subflavors: Effective subflavors accumulated from outer metadataset
+                references during traversal.
+
+        Returns:
+            The effective subflavor mapping for this reference, after applying outer-overrides-inner
+            merge semantics.
+        """
+        if self.subflavors is not None:
+            return {**self.subflavors, **(inherited_subflavors or {})}
+        return dict(inherited_subflavors or {})
+
+
 @edataclass
-class DatasetReference(SubsetRatioMixin, DatasetLoaderInterface):
+class DatasetReference(
+    SubsetRatioMixin,
+    ShuffleOverEpochsMultiplierMixin,
+    SubflavorsMixin,
+    DatasetLoaderInterface,
+):
     path: Union[str, EPath]
 
     split_part: Optional[str] = None
-    subflavors: Optional[Dict[str, Any]] = None
-    shuffle_over_epochs_multiplier: Optional[int] = 1
     dataset_config: Optional[str] = None
     split_config: Optional[str] = None
 
     #: Auxiliary datasets. May only be specified for crude datasets for cooking. Cooking will get
     # these references to load data from. If specified as string, it will be interpreted as a
     # dataset path.
-    aux: Optional[Dict[str, Union[str, AuxDatasetReference, AuxFilesystemReference]]] = None
+    aux: Optional[Dict[str, Union[str, AuxReference]]] = None
 
     _dataset: Optional[DatasetLoaderInterface] = None
 
@@ -216,8 +258,8 @@ class DatasetReference(SubsetRatioMixin, DatasetLoaderInterface):
 
     @staticmethod
     def _normalize_aux_reference(
-        reference: Union[str, AuxDatasetReference, AuxFilesystemReference],
-    ) -> Union[AuxDatasetReference, AuxFilesystemReference]:
+        reference: Union[str, AuxReference],
+    ) -> AuxReference:
         if isinstance(reference, (AuxDatasetReference, AuxFilesystemReference)):
             return reference
         if m := url_regex.match(reference):
@@ -245,7 +287,7 @@ class DatasetReference(SubsetRatioMixin, DatasetLoaderInterface):
     def _normalize_aux_references(self, mds_path: Optional[EPath], *, validate: bool) -> None:
         if self.aux is None:
             return
-        new_aux: Dict[str, Union[AuxDatasetReference, AuxFilesystemReference]] = {}
+        new_aux: Dict[str, AuxReference] = {}
         for key, value in self.aux.items():
             normalized = self._normalize_aux_reference(value)
             if validate:
@@ -269,26 +311,6 @@ class DatasetReference(SubsetRatioMixin, DatasetLoaderInterface):
                 traversed_aux[key] = value.fs_path
         return traversed_aux
 
-    def _merge_traversed_subflavors(
-        self, inherited_subflavors: Optional[Dict[str, Any]]
-    ) -> Dict[str, Any]:
-        """Merge this reference's subflavors with the inherited traversal subflavors.
-
-        The merge order mirrors `get_datasets(...)`: this reference contributes the base mapping,
-        and inherited outer-hierarchy subflavors override on key conflicts.
-
-        Args:
-            inherited_subflavors: Effective subflavors accumulated from outer metadataset
-                references during traversal.
-
-        Returns:
-            The effective subflavor mapping for this reference, after applying outer-overrides-inner
-            merge semantics.
-        """
-        if self.subflavors is not None:
-            return {**self.subflavors, **(inherited_subflavors or {})}
-        return dict(inherited_subflavors or {})
-
     def _load_nested_metadataset(self) -> DatasetLoaderInterface:
         assert isinstance(self.path, EPath)
         assert self.aux is None, "Cannot specify auxiliary datasets for crude datasets"
@@ -307,7 +329,10 @@ class DatasetReference(SubsetRatioMixin, DatasetLoaderInterface):
         if ds_type == EnergonDatasetType.METADATASET:
             self._dataset = self._load_nested_metadataset()
             self._dataset.post_initialize()
-        elif ds_type in (EnergonDatasetType.WEBDATASET, EnergonDatasetType.JSONL):
+        elif ds_type in (
+            EnergonDatasetType.MANIFEST_DATASET,
+            EnergonDatasetType.JSONL,
+        ):
             self._dataset = DatasetLoader(
                 path=self.path,
                 split_config=self.split_config,
@@ -327,33 +352,20 @@ class DatasetReference(SubsetRatioMixin, DatasetLoaderInterface):
         mds_path: Optional[EPath] = None,
         *,
         split_part: Union[Literal["train", "val", "test"], str],
+        _shuffle_over_epochs_multiplier: Optional[int] = 1,
         _subflavors: Optional[Dict[str, Any]] = None,
     ) -> List[TraversedDatasetReference]:
-        """Traverse this V2 dataset reference into flattened leaf references.
-
-        For direct leaf datasets, traversal resolves the dataset path and any auxiliary references
-        into plain `EPath` values. For nested metadatasets, traversal recurses immediately into the
-        referenced split instead of building an intermediate object graph.
-
-        Args:
-            mds_path: Parent metadataset path used internally to resolve relative dataset and
-                auxiliary paths. Must be set for nested references and inner traversal nodes;
-                use None only for top-level metadatasets.
-            split_part: Split inherited from the parent traversal. If this reference defines its
-                own split override, that split takes precedence for nested traversal and the
-                returned leaf reference.
-
-        Returns:
-            A single leaf `TraversedDatasetReference` for direct dataset references, or the
-            flattened traversal result of the nested metadataset when this reference points to one.
-        """
         self._resolve_path(mds_path)
-        effective_subflavors = self._merge_traversed_subflavors(_subflavors)
+        _subflavors = self._merge_subflavors(_subflavors)
+        _shuffle_over_epochs_multiplier = self._merge_shuffle_over_epochs_multiplier(
+            _shuffle_over_epochs_multiplier
+        )
         ds_type = get_dataset_type(self.path)
         if ds_type == EnergonDatasetType.METADATASET:
             return self._load_nested_metadataset().traverse(
                 split_part=self.split_part or split_part,
-                _subflavors=effective_subflavors,
+                _shuffle_over_epochs_multiplier=_shuffle_over_epochs_multiplier,
+                _subflavors=_subflavors,
             )
         self._normalize_aux_references(mds_path, validate=False)
         return [
@@ -361,7 +373,8 @@ class DatasetReference(SubsetRatioMixin, DatasetLoaderInterface):
                 path=self.path,
                 split_part=self.split_part or split_part,
                 aux=self._get_traversed_aux_references(),
-                subflavors=effective_subflavors,
+                subflavors=_subflavors,
+                shuffle_over_epochs_multiplier=_shuffle_over_epochs_multiplier,
             )
         ]
 
@@ -380,30 +393,17 @@ class DatasetReference(SubsetRatioMixin, DatasetLoaderInterface):
         subset: Optional[DatasetSubset] = None,
         **kwargs,
     ) -> LoadedDatasetList:
-        if self.subflavors is not None:
-            subflavors = {**self.subflavors, **(subflavors or {})}
         assert self._dataset is not None
-
-        if shuffle_over_epochs_multiplier is None or self.shuffle_over_epochs_multiplier is None:
-            # If no shuffling is requested, this has override priority.
-            new_shuffle_over_epochs_multiplier = None
-        elif shuffle_over_epochs_multiplier == -1 or self.shuffle_over_epochs_multiplier == -1:
-            # Next priority is sampling without replacement.
-            new_shuffle_over_epochs_multiplier = -1
-        else:
-            # Otherwise, multiply the shuffle over epochs multiplier.
-            new_shuffle_over_epochs_multiplier = (
-                shuffle_over_epochs_multiplier * self.shuffle_over_epochs_multiplier
-            )
-        subset = self._get_subset(subset)
 
         result = self._dataset.get_datasets(
             training=training,
             split_part=self.split_part or split_part,
             worker_config=worker_config,
-            subflavors=subflavors,
-            shuffle_over_epochs_multiplier=new_shuffle_over_epochs_multiplier,
-            subset=subset,
+            subflavors=self._merge_subflavors(subflavors),
+            shuffle_over_epochs_multiplier=self._merge_shuffle_over_epochs_multiplier(
+                shuffle_over_epochs_multiplier
+            ),
+            subset=self._get_subset(subset),
             **kwargs,
         )
         if self.aux is not None:
@@ -426,7 +426,7 @@ class JoinDatasetReference(DatasetReference):
         # Do not store the loader, the parent MetadatasetJoin will do that.
         self._resolve_path(mds_path)
         ds_type = get_dataset_type(self.path)
-        if ds_type == EnergonDatasetType.WEBDATASET:
+        if ds_type == EnergonDatasetType.MANIFEST_DATASET:
             return DatasetLoader(
                 path=self.path,
                 split_part=self.split_part,
@@ -443,6 +443,7 @@ class JoinDatasetReference(DatasetReference):
         mds_path: Optional[EPath] = None,
         *,
         split_part: Union[Literal["train", "val", "test"], str],
+        _shuffle_over_epochs_multiplier: Optional[int] = 1,
         _subflavors: Optional[Dict[str, Any]] = None,
     ) -> List[TraversedDatasetReference]:
         raise NotImplementedError("traverse_metadataset() does not support joined datasets.")
@@ -462,13 +463,16 @@ class JoinDatasetReference(DatasetReference):
 
 
 @edataclass
-class MetadatasetJoin(SubsetRatioMixin, DatasetLoaderInterface):
+class MetadatasetJoin(
+    SubsetRatioMixin,
+    ShuffleOverEpochsMultiplierMixin,
+    SubflavorsMixin,
+    DatasetLoaderInterface,
+):
     join: Union[List[JoinDatasetReference], Dict[str, JoinDatasetReference]]
     joiner: Union[Type[Sample], Callable[..., Sample]]
 
     split_part: Optional[str] = None
-    subflavors: Optional[Dict[str, Any]] = None
-    shuffle_over_epochs_multiplier: Optional[int] = 1
     dataset_config: Optional[str] = None
     split_config: Optional[str] = None
 
@@ -514,6 +518,7 @@ class MetadatasetJoin(SubsetRatioMixin, DatasetLoaderInterface):
         mds_path: Optional[EPath] = None,
         *,
         split_part: Union[Literal["train", "val", "test"], str],
+        _shuffle_over_epochs_multiplier: Optional[int] = 1,
         _subflavors: Optional[Dict[str, Any]] = None,
     ) -> List[TraversedDatasetReference]:
         raise NotImplementedError("traverse_metadataset() does not support joined datasets.")
@@ -534,14 +539,15 @@ class MetadatasetJoin(SubsetRatioMixin, DatasetLoaderInterface):
         **kwargs,
     ) -> LoadedDatasetList:
         assert self._dataset is not None, "Missing post_initialize call."
-        subset = self._get_subset(subset)
         return self._dataset.get_datasets(
             training=training,
             split_part=split_part,
             worker_config=worker_config,
-            subflavors=subflavors,
-            shuffle_over_epochs_multiplier=shuffle_over_epochs_multiplier,
-            subset=subset,
+            subflavors=self._merge_subflavors(subflavors),
+            shuffle_over_epochs_multiplier=self._merge_shuffle_over_epochs_multiplier(
+                shuffle_over_epochs_multiplier
+            ),
+            subset=self._get_subset(subset),
             **kwargs,
         )
 
@@ -562,10 +568,15 @@ class BlendJoinDatasetReference(BlendWeightMixin, MetadatasetJoin):
 
 
 @edataclass
-class MetadatasetBlend(DatasetLoaderInterface, SubsetRatioMixin):
+class MetadatasetBlend(
+    SubsetRatioMixin,
+    ShuffleOverEpochsMultiplierMixin,
+    SubflavorsMixin,
+    DatasetLoaderInterface,
+):
     """Blending of datasets by specifying the sampling weight for the inner datasets."""
 
-    blend: List[Union[BlendDatasetReference, BlendJoinDatasetReference]]
+    blend: List[Union[BlendDatasetReference, BlendJoinDatasetReference, "MetadatasetBlend"]]
 
     def post_initialize(self, mds_path: Optional[EPath] = None):
         assert mds_path is not None
@@ -577,15 +588,21 @@ class MetadatasetBlend(DatasetLoaderInterface, SubsetRatioMixin):
         mds_path: Optional[EPath] = None,
         *,
         split_part: Union[Literal["train", "val", "test"], str],
+        _shuffle_over_epochs_multiplier: Optional[int] = 1,
         _subflavors: Optional[Dict[str, Any]] = None,
     ) -> List[TraversedDatasetReference]:
         assert mds_path is not None
+        _shuffle_over_epochs_multiplier = self._merge_shuffle_over_epochs_multiplier(
+            _shuffle_over_epochs_multiplier
+        )
+        _subflavors = self._merge_subflavors(_subflavors)
         flattened: List[TraversedDatasetReference] = []
         for dataset in self.blend:
             flattened.extend(
                 dataset.traverse(
                     mds_path,
                     split_part=split_part,
+                    _shuffle_over_epochs_multiplier=_shuffle_over_epochs_multiplier,
                     _subflavors=_subflavors,
                 )
             )
@@ -609,6 +626,10 @@ class MetadatasetBlend(DatasetLoaderInterface, SubsetRatioMixin):
         **kwargs,
     ) -> LoadedDatasetList:
         subset = self._get_subset(subset)
+        subflavors = self._merge_subflavors(subflavors)
+        shuffle_over_epochs_multiplier = self._merge_shuffle_over_epochs_multiplier(
+            shuffle_over_epochs_multiplier
+        )
         sum_weight = sum(dataset.weight for dataset in self.blend)
         datasets = []
         for dataset in self.blend:
@@ -660,13 +681,24 @@ class BlendEpochizedJoinDatasetReference(BlendRepetitionsMixin, MetadatasetJoin)
 
 
 @edataclass
-class MetadatasetBlendEpochized(SubsetRatioMixin, DatasetLoaderInterface):
+class MetadatasetBlendEpochized(
+    SubsetRatioMixin,
+    ShuffleOverEpochsMultiplierMixin,
+    SubflavorsMixin,
+    DatasetLoaderInterface,
+):
     """Blending of datasets, by specifying the number of repetitions for samples from the inner
     datasets. Ensures that the constraint, that samples are seen exactly this many times before
     repeating the "epoch" (i.e. one epoch contains the total number of repetitions for each inner
     dataset)."""
 
-    blend_epochized: List[Union[BlendEpochizedDatasetReference, BlendEpochizedJoinDatasetReference]]
+    blend_epochized: List[
+        Union[
+            BlendEpochizedDatasetReference,
+            BlendEpochizedJoinDatasetReference,
+            "MetadatasetBlendEpochized",
+        ]
+    ]
 
     def post_initialize(self, mds_path: Optional[EPath] = None):
         assert mds_path is not None
@@ -678,15 +710,21 @@ class MetadatasetBlendEpochized(SubsetRatioMixin, DatasetLoaderInterface):
         mds_path: Optional[EPath] = None,
         *,
         split_part: Union[Literal["train", "val", "test"], str],
+        _shuffle_over_epochs_multiplier: Optional[int] = 1,
         _subflavors: Optional[Dict[str, Any]] = None,
     ) -> List[TraversedDatasetReference]:
         assert mds_path is not None
         flattened: List[TraversedDatasetReference] = []
+        _shuffle_over_epochs_multiplier = self._merge_shuffle_over_epochs_multiplier(
+            _shuffle_over_epochs_multiplier
+        )
+        _subflavors = self._merge_subflavors(_subflavors)
         for dataset in self.blend_epochized:
             flattened.extend(
                 dataset.traverse(
                     mds_path,
                     split_part=split_part,
+                    _shuffle_over_epochs_multiplier=_shuffle_over_epochs_multiplier,
                     _subflavors=_subflavors,
                 )
             )
@@ -710,6 +748,10 @@ class MetadatasetBlendEpochized(SubsetRatioMixin, DatasetLoaderInterface):
         **kwargs,
     ) -> LoadedDatasetList:
         subset = self._get_subset(subset)
+        shuffle_over_epochs_multiplier = self._merge_shuffle_over_epochs_multiplier(
+            shuffle_over_epochs_multiplier
+        )
+        subflavors = self._merge_subflavors(subflavors)
         datasets = []
         for dataset in self.blend_epochized:
             inner_result = dataset.get_datasets(
@@ -760,6 +802,7 @@ class MetadatasetV2(DatasetLoaderInterface):
         mds_path: Optional[EPath] = None,
         *,
         split_part: Union[Literal["train", "val", "test"], str],
+        _shuffle_over_epochs_multiplier: Optional[int] = 1,
         _subflavors: Optional[Dict[str, Any]] = None,
     ) -> List[TraversedDatasetReference]:
         """Traverse the selected V2 split and flatten all reachable leaf references.
@@ -775,6 +818,7 @@ class MetadatasetV2(DatasetLoaderInterface):
         return self.splits[split_part].traverse(
             self.path,
             split_part=split_part,
+            _shuffle_over_epochs_multiplier=_shuffle_over_epochs_multiplier,
             _subflavors=_subflavors,
         )
 

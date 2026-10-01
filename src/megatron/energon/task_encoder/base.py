@@ -672,6 +672,12 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
 
         return dataset
 
+    def _find_cooker(self, subflavors: dict) -> Cooker[T_sample]:
+        for cooker in self.cookers:
+            if cooker.is_match(subflavors):
+                return cooker
+        raise ValueError(f"No cooker found for subflavors: {subflavors}")
+
     def build_cook_crude_sample(
         self,
         dataset: SavableDataset[Union[T_sample, dict]],
@@ -691,11 +697,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         if self.decoder is not None:
             aux = {k: DecodeFileStore(v, decoder=self.decoder) for k, v in aux.items()}
 
-        for cooker in self.cookers:
-            if cooker.is_match(subflavors):
-                break
-        else:
-            raise ValueError(f"No cooker found for subflavors: {subflavors}")
+        cooker = self._find_cooker(subflavors)
 
         if cooker.need_primary and "primary" not in aux:
             try:
@@ -709,6 +711,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 raise SystemError("Error getting primary auxiliary dataset") from e
 
         cook_fn = functools.partial(self.cook_crude_sample, cooker=cooker, aux=aux)
+        cooker.part_filter
 
         return MapDataset(
             dataset,
@@ -730,8 +733,11 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
     ) -> SavableDataset[T_sample]:
         """Loads a train dataset, optionally cooking the samples."""
         if dataset.dataset.__sample_type__ == CrudeSample:
+            cooker = self._find_cooker(dataset.dataset.subflavors)
             return self.build_cook_crude_sample(
-                dataset.dataset.build(worker_rotation_offset=worker_rotation_offset),
+                dataset.dataset.build(
+                    worker_rotation_offset=worker_rotation_offset, part_filter=cooker.part_filter
+                ),
                 worker_config=worker_config,
                 subflavors=dataset.dataset.subflavors,
                 get_primary_aux=dataset.dataset.as_file_store,

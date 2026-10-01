@@ -11,19 +11,20 @@ from typing import (
 )
 
 from megatron.energon.epathlib import EPath
+from megatron.energon.flavors.common.reader import SamplePartFileReader
+from megatron.energon.flavors.common.sample_record import FilteredSample
 from megatron.energon.flavors.jsonl.ijsonl import (
     CachedIJsonlOffsetReader,
     IJsonlFile,
     IJsonlIndexReader,
     IJsonlSamplePointer,
 )
-from megatron.energon.flavors.webdataset.structs import FilteredSample
 from megatron.energon.source_info import SourceInfo
 
 T_index = TypeVar("T_index", covariant=False)
 
 
-class IJsonlReader(ABC):
+class IJsonlReader(ABC, SamplePartFileReader[FilteredSample]):
     """
     Class for reading indexed jsonl files containing json samples.
 

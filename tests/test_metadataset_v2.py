@@ -29,10 +29,11 @@ from megatron.energon import (
 )
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib.epath import EPath
-from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
+from megatron.energon.flavors.common.manifest.paths import MAIN_FOLDER_NAME
 from megatron.energon.metadataset.loader import prepare_metadataset, traverse_metadataset
 from megatron.energon.metadataset.loader_interface import DatasetBlendMode
 from megatron.energon.task_encoder.base import DefaultTaskEncoder
+from megatron.energon.wrappers.blend_dataset import BlendDataset
 from megatron.energon.wrappers.watchdog_dataset import WatchdogDataset
 from tests.epath_s3_emulator import setup_s3_emulator
 
@@ -79,6 +80,14 @@ class TestJoinedSample(Sample):
 
 def test_joiner(text1: TextSample, text2: TextSample) -> TestJoinedSample:
     return TestJoinedSample.derive_from(text1, text1=f"j{text1.text}", text2=f"j{text2.text}")
+
+
+def get_blend_dataset(ds):
+    if isinstance(ds, BlendDataset):
+        return ds
+    if hasattr(ds, "dataset"):
+        return get_blend_dataset(ds.dataset)
+    raise ValueError("No blend dataset found")
 
 
 class TestDataset(unittest.TestCase):
@@ -257,6 +266,43 @@ class TestDataset(unittest.TestCase):
         assert len(Counter(train_order1)) == 110
         assert all(48 <= v <= 52 for v in Counter(train_order1).values())
 
+    def test_metadataset_dict_config(self):
+        torch.manual_seed(42)
+        worker_config = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=0,
+            seed_offset=42,
+        )
+
+        # Same train split as metadataset_v2.yaml, but passed as dict
+        train_dataset = get_train_dataset(
+            {
+                "__module__": "megatron.energon",
+                "__class__": "MetadatasetV2",
+                "splits": {
+                    "train": {
+                        "blend": [
+                            {"weight": 1, "path": str(self.dataset_path / "ds1")},
+                            {"weight": 1, "path": str(self.dataset_path / "ds2")},
+                        ],
+                    },
+                },
+            },
+            worker_config=worker_config,
+            batch_size=10,
+            shuffle_buffer_size=None,
+            max_samples_per_sequence=None,
+        )
+        assert len(train_dataset) == 11
+
+        train_order = [
+            text
+            for idx, data in zip(range(55 * 10), get_loader(train_dataset))
+            for text in data.text
+        ]
+        assert len(Counter(train_order)) == 110
+
     def test_nested_metadataset(self):
         torch.manual_seed(42)
         worker_config = WorkerConfig(
@@ -375,9 +421,14 @@ class TestDataset(unittest.TestCase):
                     "splits:",
                     "  train:",
                     "    path: missing_ds",
+                    "    subflavors:",
+                    "      source: missing_leaf_metadataset_v2.yaml",
+                    "      number: 42",
+                    "      mds: nested_val",
                     "    aux:",
                     "      labels: missing_aux",
                     "      media: filesystem://media",
+                    "    shuffle_over_epochs_multiplier: 2",
                 ]
             ),
             encoding="utf-8",
@@ -392,6 +443,12 @@ class TestDataset(unittest.TestCase):
             "labels": EPath(self.dataset_path / "missing_aux"),
             "media": EPath(self.dataset_path / "media"),
         }
+        assert refs[0].subflavors == {
+            "source": "missing_leaf_metadataset_v2.yaml",
+            "number": 42,
+            "mds": "nested_val",
+        }
+        assert refs[0].shuffle_over_epochs_multiplier == 2
 
     def test_joined_metadataset(self):
         torch.manual_seed(42)

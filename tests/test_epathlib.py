@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from megatron.energon.epathlib import DEFAULT_PROFILE_NAME, EPath
-from megatron.energon.flavors.webdataset.config import (
+from megatron.energon.flavors.common.manifest.paths import (
     INDEX_SQLITE_FILENAME,
     INFO_JSON_FILENAME,
     MAIN_FOLDER_NAME,
