@@ -132,7 +132,7 @@ Explanation:
 Here is a more extensive example that shows multiple things at once:
 
 * Joining can be used inside blending
-* The datasets to be joined can have custom subflavors or dataset yamls specified
+* The datasets to be joined can have custom tags or dataset yamls specified
 * A custom "joiner" can be specified to define how samples are joined and what the resulting type is
 * The `nonmatch` setting is not included here, but would work just like shown above
 
@@ -149,7 +149,7 @@ splits:
             dataset_config: dataset.yaml  # If override is needed
           - path: ds2
             dataset_config: dataset.yaml
-            subflavors: # If needed, will be merged(overriding) with parent subflavor
+            tags: # If needed, will be merged(overriding) with parent tags
               ds2_extra: 2
             split_config: split.yaml
         joiner:
@@ -157,7 +157,7 @@ splits:
           __class__: JoinedSample # Type should implement from_joined(ds1, ds2)
         split_config: split.yaml  # Sets this for all joined datasets
         split_part: train  # Sets this for all joined datasets
-        subflavors:  # Sets this for all joined datasets (it will be merged with their individual subflavors)
+        tags:  # Sets this for all joined datasets (it will be merged with their individual tags)
           source: recipe.yaml
           src: ds1
 ```
