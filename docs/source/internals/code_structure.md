@@ -17,7 +17,7 @@ The implementation lives under `src/megatron/energon`. Its main layers are:
 | --- | --- |
 | `recipe` | Parse and resolve recipe graphs, references, blends, joins, subsets, and split overrides. |
 | `flavors` | Detect prepared dataset formats and construct their readers and runtime datasets. |
-| `wrappers` | Compose iteration behavior such as mapping, batching, blending, packing, and epochizing. |
+| `wrappers` | Compose iteration behavior such as mapping, batching, blending, packing, epochizing, and striding. |
 | `task_encoder` | Build the user-facing loading pipeline and invoke application-specific encoding hooks. |
 | `epathlib` | Provide local and remote path access plus mapped-array helpers. |
 | `cache` | Store generated indexes and cache metadata. |
@@ -41,7 +41,7 @@ Dataset factory detection and construction
 Indexed reader + DatasetSampler
         |
         v
-cook -> blend -> shuffle -> encode -> pack -> batch -> epochize
+cook -> blend -> shuffle -> encode -> pack -> batch -> stride -> epochize
         |
         v
 SavableDataLoader workers
@@ -77,12 +77,15 @@ that execute inside workers. A factory's `config()` output describes how it was 
 replacement for the mutable state saved by `SavableDataset.save_state()`.
 
 Runtime behavior is assembled from wrappers. `BaseWrapperDataset` records its child datasets and
-propagates common operations such as reset. A wrapper that owns mutable progress must also
+propagates common operations such as reset and skip mode. A wrapper that owns mutable progress must also
 declare and restore that progress. See {ref}`savability` before adding a wrapper.
 
 ## Worker ownership
 
-Dataset partitioning, random number generation, and saved worker state use global worker identities.
+The loader distinguishes physical workers from logical workers. Dataset partitioning, random number
+generation, and saved worker state use logical worker identities. When multiple physical workers share a
+logical worker, a `StrideDataset` assigns different outputs to each physical worker while advancing the
+same logical stream. See {ref}`logical-workers` for the mapping and skip-mode contract.
 
 Readers, open files, and mapped arrays belong to worker processes. Keep resource handles out of serialized
 checkpoint state and close readers that own handles. Path and storage rules are described in

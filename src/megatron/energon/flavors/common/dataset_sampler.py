@@ -97,6 +97,8 @@ class DatasetSampler(SavableDataset[RawSampleData]):
     _epoch_count: int
     #: The number of samples retrieved in current epoch
     _epoch_sample_count: int
+    #: Whether to skip heavy computations for discarded outputs
+    _skip_mode: bool
 
     #: Final closed state
     _reader_closed = False
@@ -173,6 +175,7 @@ class DatasetSampler(SavableDataset[RawSampleData]):
         self._sample_count = 0
         self._epoch_count = 0
         self._epoch_sample_count = 0
+        self._skip_mode = False
 
     def ensure_slice_offsets(self) -> None:
         self.worker_config.assert_worker()
@@ -194,7 +197,7 @@ class DatasetSampler(SavableDataset[RawSampleData]):
     def _get_sample(self, index: int) -> RawSampleData:
         return RawSampleData(
             __restore_key__=(self.restore_key_kind, index),
-            data=self.reader[index],
+            data=None if self._skip_mode else self.reader[index],
         )
 
     def _slices_once(self) -> SliceIndex:
@@ -386,22 +389,36 @@ class DatasetSampler(SavableDataset[RawSampleData]):
                             "probs": active_slice_probs.tolist(),
                         }
                     )
-            if sample.data is not None:
+            if sample.data is not None or self._skip_mode:
                 # Otherwise the sample was skipped.
                 if self.worker_config.should_log(level=1):
-                    self.worker_config.worker_log(
-                        {
-                            "t": "DatasetSampler._slices_iter.yield",
-                            "r": self.worker_config.rank,
-                            "w": self.worker_config.rank_worker_id(),
-                            "index": sample.__restore_key__[1],
-                            "key": sample.data["__key__"],
-                            "shard": sample.data["__shard__"],
-                            "count": self._sample_count,
-                            "epoch": self._epoch_count,
-                            "epoch_count": self._epoch_sample_count,
-                        }
-                    )
+                    if self._skip_mode:
+                        self.worker_config.worker_log(
+                            {
+                                "t": "DatasetSampler._slices_iter.skip",
+                                "r": self.worker_config.rank,
+                                "w": self.worker_config.rank_worker_id(),
+                                "index": sample.__restore_key__[1],
+                                "count": self._sample_count,
+                                "epoch": self._epoch_count,
+                                "epoch_count": self._epoch_sample_count,
+                            }
+                        )
+                    else:
+                        assert sample.data is not None
+                        self.worker_config.worker_log(
+                            {
+                                "t": "DatasetSampler._slices_iter.yield",
+                                "r": self.worker_config.rank,
+                                "w": self.worker_config.rank_worker_id(),
+                                "index": sample.__restore_key__[1],
+                                "key": sample.data["__key__"],
+                                "shard": sample.data["__shard__"],
+                                "count": self._sample_count,
+                                "epoch": self._epoch_count,
+                                "epoch_count": self._epoch_sample_count,
+                            }
+                        )
                 # Now, yield the sample
                 yield sample
                 del sample
@@ -437,6 +454,9 @@ class DatasetSampler(SavableDataset[RawSampleData]):
         self.ensure_slice_offsets()
         assert self.slice_offsets is not None
         return len(self.slice_offsets) > 1
+
+    def set_skip_mode(self, active: bool) -> None:
+        self._skip_mode = active
 
     def __iter__(self) -> Iterator[RawSampleData]:
         self.worker_config.assert_worker()
