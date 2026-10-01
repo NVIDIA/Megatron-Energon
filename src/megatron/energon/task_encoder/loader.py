@@ -302,3 +302,86 @@ def get_val_datasets(
         )
         for dataset in datasets.datasets
     ]
+
+
+def get_processing_dataset(
+    path: Union[str, EPath, Path],
+    *,
+    split_part: Union[Literal["train", "val", "test"], str] = "train",
+    worker_config: WorkerConfig,
+    task_encoder: TaskEncoder[Any, Any, Any, T] = DefaultTaskEncoder(),
+    **kwargs,
+) -> SavableDataset[T]:
+    """Build one finite processing pipeline from a dataset or recipe.
+
+    All resolved recipe leaves are concatenated in recipe order and traversed once. Recipe blend
+    weights and repetitions are ignored. Cooking, task encoding, and post-encoding are applied,
+    but the stream is not shuffled, packed, batched, or repeated.
+
+    Args:
+        path: Path to a prepared dataset or recipe.
+        split_part: Default split part to process.
+        worker_config: Worker configuration to use.
+        task_encoder: Task encoder to use.
+        **kwargs: Additional arguments to the dataset constructor.
+
+    Returns:
+        One processing pipeline containing all resolved recipe leaves.
+    """
+    _split_deprecated_dataset_kwargs(kwargs, task_encoder, worker_config)
+    loader = load_dataset(path, **_split_kwargs(kwargs))
+    datasets = loader.get_datasets(
+        training=False,
+        split_part=split_part,
+        worker_config=worker_config,
+        decoder=task_encoder.decoder,
+        **kwargs,
+    ).datasets
+    return task_encoder.build_processing_datasets(
+        datasets=datasets,
+        worker_config=worker_config,
+    )
+
+
+def get_processing_datasets(
+    path: Union[str, EPath, Path],
+    *,
+    split_part: Union[Literal["train", "val", "test"], str] = "train",
+    worker_config: WorkerConfig,
+    task_encoder: TaskEncoder[Any, Any, Any, T] = DefaultTaskEncoder(),
+    **kwargs,
+) -> List[Tuple[SavableDataset[T], BaseCoreDatasetFactory]]:
+    """Build one finite processing pipeline per resolved dataset or recipe leaf.
+
+    Each returned pipeline traverses one resolved leaf once. Recipe blend weights and repetitions
+    are ignored. The source factory paired with each pipeline identifies the corresponding leaf.
+
+    Args:
+        path: Path to a prepared dataset or recipe.
+        split_part: Default split part to process.
+        worker_config: Worker configuration to use.
+        task_encoder: Task encoder to use.
+        **kwargs: Additional arguments to the dataset constructor.
+
+    Returns:
+        Processing pipelines paired with their source dataset factories.
+    """
+    _split_deprecated_dataset_kwargs(kwargs, task_encoder, worker_config)
+    loader = load_dataset(path, **_split_kwargs(kwargs))
+    datasets = loader.get_datasets(
+        training=False,
+        split_part=split_part,
+        worker_config=worker_config,
+        decoder=task_encoder.decoder,
+        **kwargs,
+    ).datasets
+    return [
+        (
+            task_encoder.build_processing_datasets(
+                datasets=[dataset],
+                worker_config=worker_config,
+            ),
+            dataset.dataset,
+        )
+        for dataset in datasets
+    ]
