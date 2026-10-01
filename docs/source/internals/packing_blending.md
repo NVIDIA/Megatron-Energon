@@ -16,7 +16,14 @@ For an ordinary training branch, the relevant order is:
 leaf -> cook -> blend -> shuffle -> encode/pre-encode -> pack -> post-encode -> batch
 ```
 
-Moving blend or pack across encoding changes what constitutes one emitted item.
+Packing groups create a separate branch per group:
+
+```text
+blend -> shuffle -> encode -> select group -> post-encode -> pack
+```
+
+The already packed group streams are blended afterward. Moving blend or pack across encoding changes what
+constitutes one emitted item.
 
 ## Blend selection
 
@@ -27,6 +34,20 @@ The configured weights directly define target selection proportions. The child i
 worker RNG.
 
 Changing the probability formula or RNG consumption changes iteration order.
+
+## Streaming packing
+
+`StreamingPackingDataset` delegates pack formation to a selector that pulls from an input iterator. For
+each call, the selector returns either:
+
+- a list containing at most one non-empty pack; or
+- `PackedSamplesOutput`, which can additionally push a sample back for the next pack.
+
+Pushback is stored in a `SavablePartialSampleBuffer`. Its sample payload and restore key must survive a
+checkpoint because the input stream has already advanced past it.
+
+The dataset also saves separate `SampleIndex` scopes for selection, per-sample encoding, and final packing.
+These scopes keep random seeding and restore keys aligned.
 
 ## Buffered packing
 
@@ -39,8 +60,19 @@ When changing packing logic, checkpoint at these points:
 - an empty buffer;
 - a partially filled buffer;
 - immediately after a selection;
+- with a pushed-back sample;
 - just before child exhaustion;
 - after reset.
+
+## Grouped packing
+
+A packing-group selector routes encoded samples into group-specific branches. Each branch can have its own
+packing behavior. Since the final blend sees already packed outputs, its weights apply to packed items,
+not directly to original leaf samples.
+
+A selector is state-defining. If selection uses sample fields created by an
+encoding hook, keep that hook before selection and include any relevant random state in the normal
+savability mechanism.
 
 ## Review checklist
 

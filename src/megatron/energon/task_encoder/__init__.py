@@ -5,6 +5,7 @@ from megatron.energon.task_encoder.base import (
     AugmentTaskEncoder,
     Batch,
     DefaultTaskEncoder,
+    PackingGroupConfig,
     TaskEncoder,
     batch_list,
     batch_pad_stack,
@@ -33,6 +34,7 @@ __all__ = [
     "get_train_dataset",
     "get_val_dataset",
     "get_val_datasets",
+    "PackingGroupConfig",
     "stateless",
     "TaskEncoder",
 ]
