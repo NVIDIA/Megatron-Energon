@@ -109,7 +109,8 @@ For a change to blending or packing, verify:
 6. whether child exhaustion changes selection probabilities correctly;
 7. whether skip mode advances all indexes without omitting stateful work;
 8. whether exact restore reproduces the uninterrupted stream;
-9. whether the change is iteration-order or checkpoint breaking.
+9. whether recipe migration should retain or reset wrapper-local buffers;
+10. whether the change is iteration-order or checkpoint breaking.
 
 Public configuration and examples are covered in [Packing](../advanced/packing.md),
 [Grouping](../advanced/grouping.md), and [Custom Blending](../advanced/custom_blending.md).

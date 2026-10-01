@@ -250,7 +250,9 @@ them stable for an exact checkpoint restore.
 A fixed logical worker count keeps dataset partition and RNG identities stable
 when physical fanout changes, provided the new physical worker count remains a
 valid multiple. It does not make arbitrary recipe or task-encoder changes
-equivalent to the old stream.
+equivalent to the old stream. If the recipe changes, use
+{ref}`checkpoint-recipe-migration`
+and account for its weaker ordering guarantees.
 ```
 
 The assignment can be inspected for diagnostics:
