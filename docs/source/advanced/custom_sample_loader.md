@@ -57,21 +57,23 @@ part should be kept. The meaning of the name depends on the dataset format:
 | Dataset format | Names passed to `part_filter` |
 | --- | --- |
 | WebDataset | Sample part names/extensions such as `jpg`, `gt.txt`, or `bbox.json` |
+| Parquet | Column names |
 | JSONL | The single logical part `json` |
 | Megatron-LM BinIdx | The single logical part `tokens` |
 
-For example, a WebDataset cooker can avoid decoding unused parts:
+For example, a Parquet cooker can avoid reading every column:
 
 ```python
 Cooker(
-    cook=cook_selected_parts,
-    part_filter=lambda part: part in {"jpg", "txt"},
+    cook=cook_selected_columns,
+    part_filter=lambda column: column in {"id", "caption"},
 )
 ```
 
 A filter configured by the dataset factory and a filter supplied by a cooker
 are combined by intersection: a part is loaded only when both filters keep it.
-Filtering out `json` or `tokens` removes the only
+Keep at least one Parquet column; a factory-level filter that excludes every
+column raises an error. Filtering out `json` or `tokens` removes the only
 payload part from JSONL or BinIdx samples respectively, leaving only Energon
 metadata.
 
