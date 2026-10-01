@@ -16,7 +16,7 @@ These three concepts serve different purposes:
 | Concept | Purpose |
 | --- | --- |
 | `save_state()` | Mutable per-worker progress needed to continue iteration exactly. |
-| `config()` | Descriptive construction information used for inspection. |
+| `config()` | Descriptive construction information used for inspection and migration identity. |
 | restore key | Structural address used to reconstruct a previously emitted sample. |
 
 Do not derive mutable iteration state from `config()`, and do not assume a restore key is an ordinal index.
@@ -107,8 +107,12 @@ Test at boundary cases:
 
 A test that only checkpoints at an epoch boundary does not exercise this contract.
 
-## Exact restore
+## Exact restore versus migration
 
 The ordinary loader restore path expects the same runtime topology and validates class and field structure.
+Recipe-aware checkpoint migration is a separate operation that constructs a fresh current topology and
+copies compatible saved leaf progress into it. It must not weaken the exact-restore assertions inside
+individual datasets.
 
-See [Saving and Restoring](../basic/save_restore.md) for the user-facing checkpoint API.
+See {ref}`recipe-checkpoint` for the identity and matching rules, and
+[Saving and Restoring](../basic/save_restore.md) for the user-facing checkpoint API.
