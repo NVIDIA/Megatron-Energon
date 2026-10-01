@@ -48,8 +48,13 @@ Important building blocks include:
 
 - `WorkerRng`, whose state is saved and whose discrete choice avoids depending on changing framework
   implementations;
+- `FeistelPermutation`, which creates a memory-constant bijection and uses cycle walking for non-power-of-two
+  ranges;
 - worker-to-shard assignment;
 - the number and position of random calls in wrappers and user hooks.
+
+Changing a Feistel round function, number of rounds, seeding, or cycle-walking behavior changes the
+permutation even if every sample still appears once. Treat such a change as iteration-order breaking.
 
 Avoid incidental RNG calls in logging, validation, or skipped paths. A random decision that affects the
 stream must use saved worker state.
