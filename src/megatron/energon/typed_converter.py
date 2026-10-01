@@ -41,6 +41,24 @@ _missing_value = _MissingValue()
 TType = TypeVar("TType")
 
 
+def _apply_config_aliases(raw_data, inst_type):
+    """Apply explicitly declared legacy-to-canonical configuration field aliases."""
+    if not isinstance(raw_data, dict):
+        return raw_data
+    aliases = getattr(inst_type, "__config_aliases__", None)
+    if not aliases:
+        return raw_data
+
+    raw_data = raw_data.copy()
+    for legacy_name, canonical_name in aliases.items():
+        if legacy_name not in raw_data:
+            continue
+        if canonical_name in raw_data:
+            raise ValueError(f"Cannot set both {canonical_name!r} and {legacy_name!r}.")
+        raw_data[canonical_name] = raw_data.pop(legacy_name)
+    return raw_data
+
+
 def _check_instance_type(cls, inst_type: Type) -> bool:
     """Check if a class is an instance of a type."""
     if inst_type is None:
@@ -94,6 +112,8 @@ class JsonParser:
         inst_type: Type[TType],
         _path: str = "root",
         _stage: Tuple[int, ...] = (),
+        *,
+        default_kwargs: Optional[dict] = None,
     ) -> TType:
         """
         Try to import and instantiate a class from a dict with "__module__" and "__class__"/"__function__" keys.
@@ -105,6 +125,8 @@ class JsonParser:
             _path: (internal for recursive call) The path to the object being converted from the root
             _stage: (internal for recursive call) Numbers representing the position of the current
                 object being converted from the root
+            default_kwargs: Default constructor arguments. Aliases are normalized before the
+                config values override these defaults.
 
         Returns:
             Instantiated class
@@ -184,6 +206,11 @@ class JsonParser:
                     raise JsonValueError(
                         f"Expected {inst_type}, got {cls}", inst_type, cls, _path, _stage
                     )
+        kwargs = _apply_config_aliases(kwargs, cls)
+        if default_kwargs is not None:
+            merged_kwargs = _apply_config_aliases(default_kwargs, cls)
+            merged_kwargs.update(kwargs)
+            kwargs = merged_kwargs
         if is_type or is_callable:
             inst = cls
         else:
@@ -226,6 +253,7 @@ class JsonParser:
         Returns:
             The input data as `inst_type`.
         """
+        raw_data = _apply_config_aliases(raw_data, inst_type)
         type_name = getattr(inst_type, "__name__", repr(inst_type))
         if raw_data is _missing_value:
             raise JsonValueError(
@@ -567,6 +595,8 @@ class JsonParser:
         Returns:
             The return value of `fn`
         """
+        if inspect.isclass(fn):
+            raw_data = _apply_config_aliases(raw_data, fn)
         parameters = list(inspect.signature(fn).parameters.items())
         if inspect.isclass(fn):
             init_sig = getattr(fn, "__init__", None)
