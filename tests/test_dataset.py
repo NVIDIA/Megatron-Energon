@@ -134,7 +134,7 @@ class TestDataset(unittest.TestCase):
 
         reader = CloseTrackingReader()
         sampler = DatasetSampler(
-            join_readers=[reader],
+            reader=reader,
             workers_sample_slice_offsets=[[]],
             worker_config=no_worker_config,
         )

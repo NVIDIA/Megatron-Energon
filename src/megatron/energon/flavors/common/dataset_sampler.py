@@ -21,7 +21,7 @@ class RawSampleData:
     #: Index of the sample. This is also the restore key
     __restore_key__: Tuple[str, int]
     #: The sample data
-    data: Tuple[Optional[SampleRecord], ...]
+    data: Optional[SampleRecord]
 
 
 @edataclass
@@ -69,8 +69,8 @@ class SliceIndex:
 class DatasetSampler(SavableDataset[RawSampleData]):
     """Samples indexed dataset slices across workers and epochs."""
 
-    #: The readers for each joined dataset
-    join_readers: Sequence[IndexedSampleReader]
+    #: The indexed sample reader
+    reader: IndexedSampleReader
 
     #: The offsets of the slice slices to iterate over for the current worker
     slice_offsets: Optional[Sequence[int]]
@@ -112,7 +112,7 @@ class DatasetSampler(SavableDataset[RawSampleData]):
 
     def __init__(
         self,
-        join_readers: Sequence[IndexedSampleReader],
+        reader: IndexedSampleReader,
         workers_sample_slice_offsets: Sequence[Sequence[int]],
         *,
         worker_config: WorkerConfig,
@@ -121,11 +121,11 @@ class DatasetSampler(SavableDataset[RawSampleData]):
         restore_key_kind: str = "Webdataset",
     ):
         """
-        The webdataset loader. Iterates over the slice infos and yields the samples.
+        Samples an indexed dataset. Iterates over the slice infos and yields the samples.
 
         Args:
-            join_readers: A sequence of the joined readers (or just a single reader) to iterate over.
-            worker_slice_offsets: The offsets of the slice slices to iterate over, for each worker.
+            reader: The indexed sample reader to iterate over.
+            workers_sample_slice_offsets: The sample slice offsets to iterate over, for each worker.
             worker_config: The worker configuration.
             shuffle_over_epochs: If None, disable shuffling.
                 If = 1, every sample is seen exactly once per epoch.
@@ -139,7 +139,7 @@ class DatasetSampler(SavableDataset[RawSampleData]):
         """
         super().__init__(worker_config=worker_config)
 
-        self.join_readers = join_readers
+        self.reader = reader
         self.shuffle_over_epochs = shuffle_over_epochs
         self.parallel_slice_iters = parallel_slice_iters
         self.restore_key_kind = restore_key_kind
@@ -156,8 +156,7 @@ class DatasetSampler(SavableDataset[RawSampleData]):
 
     def close(self) -> None:
         if not self._reader_closed:
-            for reader in self.join_readers:
-                reader.close()
+            self.reader.close()
             self._reader_closed = True
 
     def __del__(self) -> None:
@@ -195,7 +194,7 @@ class DatasetSampler(SavableDataset[RawSampleData]):
     def _get_sample(self, index: int) -> RawSampleData:
         return RawSampleData(
             __restore_key__=(self.restore_key_kind, index),
-            data=tuple(reader[index] for reader in self.join_readers),
+            data=self.reader[index],
         )
 
     def _slices_once(self) -> SliceIndex:
@@ -340,7 +339,7 @@ class DatasetSampler(SavableDataset[RawSampleData]):
             slice_state = active_slices[slice_idx]
             assert slice_state is not None
             sample = self._get_sample(slice_state.current)
-            # print(f"Read sample at {slice_state.current} -> {'None' if sample is None or sample.data[0] is None else sample.data[0]['__key__']}")
+            # print(f"Read sample at {slice_state.current} -> {'None' if sample is None or sample.data is None else sample.data['__key__']}")
             slice_state.current += 1
             self._sample_count += 1
             self._epoch_sample_count += 1
@@ -387,7 +386,7 @@ class DatasetSampler(SavableDataset[RawSampleData]):
                             "probs": active_slice_probs.tolist(),
                         }
                     )
-            if sample.data[0] is not None:
+            if sample.data is not None:
                 # Otherwise the sample was skipped.
                 if self.worker_config.should_log(level=1):
                     self.worker_config.worker_log(
@@ -396,8 +395,8 @@ class DatasetSampler(SavableDataset[RawSampleData]):
                             "r": self.worker_config.rank,
                             "w": self.worker_config.rank_worker_id(),
                             "index": sample.__restore_key__[1],
-                            "key": sample.data[0]["__key__"],
-                            "shard": sample.data[0]["__shard__"],
+                            "key": sample.data["__key__"],
+                            "shard": sample.data["__shard__"],
                             "count": self._sample_count,
                             "epoch": self._epoch_count,
                             "epoch_count": self._epoch_sample_count,
@@ -470,7 +469,6 @@ class DatasetSampler(SavableDataset[RawSampleData]):
 
     def restore_sample(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> RawSampleData:
         # Key is: (self.restore_key_kind, index)
-        # The key is joined in the dataset's typed joining (i.e. load_sample of JoinedWebdatasetFactory).
         id, index = restore_key
         assert id == self.restore_key_kind
         assert isinstance(index, int)
@@ -479,7 +477,6 @@ class DatasetSampler(SavableDataset[RawSampleData]):
     def config(self) -> Dict[str, Any]:
         return {
             "type": type(self).__qualname__,
-            "joins": len(self.join_readers),
             "len": len(self),
             "slice_offsets": [
                 self._slice_offsets_config(worker_slice_offsets)
@@ -491,4 +488,4 @@ class DatasetSampler(SavableDataset[RawSampleData]):
         }
 
     def __str__(self):
-        return f"DatasetSampler(join_readers={self.join_readers}, shuffle_over_epochs={self.shuffle_over_epochs}, parallel_slice_iters={self.parallel_slice_iters})"
+        return f"DatasetSampler(reader={self.reader}, shuffle_over_epochs={self.shuffle_over_epochs}, parallel_slice_iters={self.parallel_slice_iters})"
