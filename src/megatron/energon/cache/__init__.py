@@ -10,11 +10,12 @@ from megatron.energon.cache.base import (
     PrimaryFileStore,
 )
 from megatron.energon.cache.file_cache_pool import FileCacheLazy, FileStoreCachePool
-from megatron.energon.cache.file_store import DecodeFileStore, SystemFileStore
+from megatron.energon.cache.file_store import ByteRangeStore, DecodeFileStore, SystemFileStore
 from megatron.energon.cache.no_cache import DirectLazy, NoCachePool
 
 __all__ = [
     "CachePool",
+    "ByteRangeStore",
     "DecodeFileStore",
     "DirectLazy",
     "FileCacheLazy",
