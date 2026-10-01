@@ -101,7 +101,8 @@ data. A new primary format normally needs:
 4. format-specific `_build_reader` and `load_sample` implementations;
 5. `as_file_store()` only if key lookup, joins, mounts, or primary auxiliary
    access are supported;
-6. a stable, serializable `config()` used for diagnostics;
+6. a stable, serializable `config()` used for diagnostics and checkpoint
+   migration identity;
 7. preparation or index-generation code when ordinal access cannot be derived
    cheaply from the source file.
 
