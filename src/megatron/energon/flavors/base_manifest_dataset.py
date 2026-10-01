@@ -88,6 +88,7 @@ class BaseManifestShardListDatasetFactory(
         subset: Optional[DatasetSubset] = None,
         split_config: str | ManifestSplits | None = None,
         part_filter: Optional[Callable[[str], bool]] = None,
+        filter_name: Optional[str] = None,
     ):
         meta = ShardListMeta.from_config(
             path=EPath(path),
@@ -107,6 +108,7 @@ class BaseManifestShardListDatasetFactory(
             max_samples_per_sequence=max_samples_per_sequence,
             subset=subset,
             part_filter=part_filter,
+            filter_name=filter_name,
         )
 
     def _validate_manifest_meta(self, meta: ShardListMeta) -> None:

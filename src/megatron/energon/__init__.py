@@ -69,6 +69,13 @@ from megatron.energon.flavors import (
     VQASample,
     VQAWebdataset,
 )
+from megatron.energon.flavors.common.filter_index import (
+    FilterIndex,
+    FilterIndexWriter,
+    build_filter_index,
+    build_filter_index_from_global_indexes,
+    build_filter_index_from_shard_indexes,
+)
 from megatron.energon.loader import get_loader, get_savable_loader
 from megatron.energon.recipe import (
     DatasetLoader,
@@ -131,6 +138,9 @@ __all__ = [
     "Batch",
     "BatchDataset",
     "BlendDataset",
+    "build_filter_index",
+    "build_filter_index_from_global_indexes",
+    "build_filter_index_from_shard_indexes",
     "CachePool",
     "CaptioningSample",
     "CaptioningWebdataset",
@@ -155,7 +165,9 @@ __all__ = [
     "FileStore",
     "FileStoreCachePool",
     "FileStoreDecoder",
+    "FilterIndex",
     "FilterDataset",
+    "FilterIndexWriter",
     "GcDataset",
     "generic_batch",
     "generic_concat",

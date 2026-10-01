@@ -20,10 +20,11 @@ then supplies worker partitioning, filtering, shuffling, restore keys, and mappi
 `BaseIndexedDatasetFactory` is the usual base for a finite, indexable format. Its `build` implementation:
 
 1. merges the caller's part filter with the factory filter;
-2. assigns virtual shards to workers;
-3. asks the flavor to build an `IndexedSampleReader`;
-4. wraps the reader in `DatasetSampler`;
-5. maps each `SampleRecord` through the configured sample loader.
+2. applies a prepared filter index, if configured;
+3. assigns virtual shards to workers;
+4. asks the flavor to build an `IndexedSampleReader`;
+5. wraps the reader in `DatasetSampler`;
+6. maps each `SampleRecord` through the configured sample loader.
 
 Subclasses normally implement `_build_reader`, `load_sample`, and `as_file_store` rather than recreating
 this pipeline.
@@ -95,7 +96,7 @@ Use this checklist:
    cached index is stale and must be rebuilt.
 3. **Reader:** implement integer ordinal access, length, resource cleanup, and `SampleRecord` provenance.
 4. **Factory:** subclass the appropriate indexed base and implement only the format-specific hooks.
-5. **Filtering:** verify `part_filter` and exclusions.
+5. **Filtering:** verify `part_filter`, exclusions, and prepared `FilterIndex` translation.
 6. **Key access:** implement `FileStore` or part readers if joins, mounts, or auxiliary lookup require it.
 7. **Detection:** register a provider at the least surprising priority and test competing path shapes.
 8. **Configuration:** ensure `config()` contains stable leaf identity fields used by diagnostics.
@@ -103,13 +104,14 @@ Use this checklist:
 10. **Tests:** cover preparation, direct reading, worker splitting, filtering, save/restore, detection, and
     stale or corrupt metadata.
 
-Relevant tests include `test_dataset_factory_resolver.py` and the format-specific dataset tests. A format that changes existing sample order also needs the iteration-order tests
+Relevant tests include `test_dataset_factory_resolver.py`, the format-specific dataset tests, and
+`test_filter_index.py`. A format that changes existing sample order also needs the iteration-order tests
 listed in {ref}`compatibility`.
 
 ## Configuration is descriptive
 
 A factory's `config()` result is a recursively serializable description used for logging. Stable fields
-such as `_path`, `split_part`, and `subset` are significant.
+such as `_path`, `split_part`, `subset`, and `filter` are significant.
 
 Configuration should not contain open readers or runtime progress. Runtime progress belongs to
 `SavableDataset` state.

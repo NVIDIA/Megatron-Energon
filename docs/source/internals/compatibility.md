@@ -76,7 +76,7 @@ Use the rows relevant to the change:
 | Wrapper state or topology | Save/restore tests in `test_recipe.py`; affected wrapper tests | restore keys, reset |
 | Recipe nodes or identities | `test_recipe.py` | nested splits, typed subsets |
 | Worker assignment or RNG | current-batch-index tests in `test_dataset.py` | distributed rank, exact ordering |
-| Dataset factory or format | resolver and format-specific tests | preparation, stale indexes, `FileStore`, provenance |
+| Dataset factory or format | resolver and format-specific tests; `test_filter_index.py` | preparation, stale indexes, `FileStore`, provenance |
 | Prepared metadata | preparation and format reader tests | old metadata fixtures and explicit versioning |
 | Packing or blending | packing, grouping, and blending tests | mid-buffer restore, RNG |
 | Public imports | API and deprecation import tests | `__all__`, docs, typing |

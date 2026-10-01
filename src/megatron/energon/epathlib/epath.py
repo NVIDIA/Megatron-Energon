@@ -7,6 +7,7 @@ import shutil
 from pathlib import Path as PathlibPath
 from pathlib import PurePosixPath
 from typing import (
+    TYPE_CHECKING,
     BinaryIO,
     Generator,
     Literal,
@@ -20,6 +21,9 @@ from typing import (
 import multistorageclient as msc
 
 from megatron.energon.deprecation import warn_deprecated
+
+if TYPE_CHECKING:
+    from megatron.energon.epathlib.mapped_array import EPathMappedArray
 
 try:
     from multistorageclient.config import RESERVED_POSIX_PROFILE_NAME
@@ -204,6 +208,26 @@ class EPath:
         prefetch_file: bool = False,
     ) -> Union[TextIO, BinaryIO]:
         return self.fs.open(self._internal_str_path, mode, prefetch_file=prefetch_file)
+
+    def map(
+        self,
+        *,
+        dtype,
+        shape: int | tuple[int, ...] | None = None,
+        offset: int = 0,
+        copy_to_local: bool = False,
+        use_mmap: bool = True,
+    ) -> "EPathMappedArray":
+        from megatron.energon.epathlib.mapped_array import map_epath
+
+        return map_epath(
+            self,
+            dtype=dtype,
+            shape=shape,
+            offset=offset,
+            copy_to_local=copy_to_local,
+            use_mmap=use_mmap,
+        )
 
     def read_text(self) -> str:
         with self.open(prefetch_file=True) as f:
