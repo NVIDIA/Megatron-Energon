@@ -9,6 +9,8 @@ except Exception:
     # Fallback for development mode when package is not installed
     __version__ = "unknown"
 
+import torch
+
 from megatron.energon.cache import (
     CachePool,
     DecodeFileStore,
@@ -210,3 +212,11 @@ __all__ = [
     "VQAWebdataset",
     "WorkerConfig",
 ]
+
+from .safe_globals import register_safe_globals, safe_load_from_bytes
+
+register_safe_globals()
+
+# Avoid direct usage of unsafe `torch.storage._load_from_bytes` (weights_only=False)
+# Use safe implementation with weights_only=True
+torch.storage._load_from_bytes = safe_load_from_bytes
