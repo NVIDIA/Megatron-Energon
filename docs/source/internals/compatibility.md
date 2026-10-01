@@ -78,7 +78,7 @@ Use the rows relevant to the change:
 | Worker assignment or RNG | current-batch-index tests in `test_dataset.py` | distributed rank, exact ordering |
 | Dataset factory or format | resolver and format-specific tests; `test_filter_index.py` | preparation, stale indexes, `FileStore`, provenance |
 | Prepared metadata | preparation and format reader tests | old metadata fixtures and explicit versioning |
-| Packing or blending | packing, grouping, and blending tests | mid-buffer restore, RNG |
+| Packing or blending | packing, grouping, and blending tests | mid-buffer restore, metrics, RNG |
 | Public imports | API and deprecation import tests | `__all__`, docs, typing |
 | Documentation | `just docs` and a clean Sphinx build | warnings, links, generated API pages |
 

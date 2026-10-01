@@ -179,6 +179,7 @@ def get_train_dataset(
         virtual_epoch_length=virtual_epoch_length,
         shuffle_buffer_size=shuffle_buffer_size,
         blend_mode=datasets.blend_mode,
+        blend_weight_unit=datasets.blend_weight_unit,
         repeat=repeat,
     )
 
