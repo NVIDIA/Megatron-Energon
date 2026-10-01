@@ -34,8 +34,8 @@ subflavors:
 ```
 
 As shown above, [subflavors](sect-subflavors) can be assigned directly in the dataset yaml, however we recommend
-to define them in the [Metadataset](../basic/metadataset) instead.
-Subflavors can be used to differentiate the data origin when you mix different crude datasets or crude with non-crude data using a [Metadataset](../basic/metadataset).
+to define them in the [Recipe](../basic/recipe) instead.
+Subflavors can be used to differentiate the data origin when you mix different crude datasets or crude with non-crude data using a [Recipe](../basic/recipe).
 You can then use the subflavors to determine how each sample shall be processed, as explained below.
 
 Let's see how we set up our [Task Encoder](../basic/task_encoder) to cook the crude samples and turn them into real samples like {py:class}`TextSample <megatron.energon.TextSample>`.
@@ -121,10 +121,10 @@ An auxiliary data source can be either
 * Another energon-prepared WebDataset
 * A folder on the local or a remote file system
 
-You can specify it in your [metadataset](../basic/metadataset) yaml as follows (look at the `aux:` section)
+You can specify it in your [recipe](../basic/recipe) yaml as follows (look at the `aux:` section)
 ```yaml
 __module__: megatron.energon
-__class__: MetadatasetV2
+__class__: Recipe
 splits:
   train:
     path: ./my_primary_ds
@@ -170,7 +170,7 @@ def cook_text(sample: dict, foo_bar_source: FileStore) -> TextSample:
 # ...
 ```
 
-You can use multiple sources. You'll have to specify a cooker argument for each source that was defined in the metadataset.
+You can use multiple sources. You'll have to specify a cooker argument for each source that was defined in the recipe.
 
 For easier debugging, you should always keep track of all the sources you used. The `get` method takes care of this if you pass it the sample like this:
 
