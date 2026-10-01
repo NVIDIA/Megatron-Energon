@@ -12,6 +12,7 @@ from megatron.energon.flavors.base_manifest_dataset import (
     BaseManifestDatasetFactory,
     BaseManifestShardListDatasetFactory,
 )
+from megatron.energon.flavors.binidx import BinIdxDatasetFactory, DefaultBinIdxDatasetFactory
 from megatron.energon.flavors.captioning import CaptioningSample, CaptioningWebdataset
 from megatron.energon.flavors.common.filter_index import (
     FilterIndex,
@@ -60,11 +61,13 @@ __all__ = [
     "BaseManifestDatasetFactory",
     "BaseManifestShardListDatasetFactory",
     "BaseWebdatasetFactory",
+    "BinIdxDatasetFactory",
     "CaptioningSample",
     "CaptioningWebdataset",
     "CrudeJsonlDatasetFactory",
     "CrudeSample",
     "CrudeWebdataset",
+    "DefaultBinIdxDatasetFactory",
     "DefaultCrudeJsonlDatasetFactory",
     "DefaultDecoderWebdatasetFactory",
     "DefaultGenericWebdatasetFactory",
