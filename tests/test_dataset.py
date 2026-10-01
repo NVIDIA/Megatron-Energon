@@ -50,6 +50,7 @@ from megatron.energon.dataset_config import get_dataset_from_config
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import BaseWebdatasetFactory
+from megatron.energon.flavors.common.dataset_sampler import DatasetSampler
 from megatron.energon.flavors.common.manifest.paths import INFO_JSON_FILENAME, MAIN_FOLDER_NAME
 from megatron.energon.task_encoder.base import stateless
 from megatron.energon.tools.analyze_debug import command as analyze_debug_command
@@ -115,6 +116,39 @@ class TestDataset(unittest.TestCase):
 
         # Create a small dummy captioning dataset
         self.samples = self.create_captioning_test_dataset(self.dataset_path, DATASET_SIZE)
+
+    def test_loader_close_propagates_to_indexed_reader_once(self):
+        class CloseTrackingReader:
+            def __init__(self):
+                self.close_calls = 0
+
+            def __len__(self):
+                return 0
+
+            def __getitem__(self, index):
+                raise IndexError(index)
+
+            def close(self):
+                self.close_calls += 1
+
+        reader = CloseTrackingReader()
+        sampler = DatasetSampler(
+            join_readers=[reader],
+            workers_sample_slice_offsets=[[]],
+            worker_config=no_worker_config,
+        )
+        dataset = MapDataset(
+            sampler,
+            lambda sample: sample,
+            worker_config=no_worker_config,
+        )
+        loader = get_loader(dataset)
+
+        loader.close()
+        loader.close()
+
+        assert reader.close_calls == 1
+        print(self.dataset_path)
 
     def tearDown(self):
         # Remove all temporary files

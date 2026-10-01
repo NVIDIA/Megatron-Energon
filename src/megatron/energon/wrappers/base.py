@@ -64,6 +64,14 @@ class BaseWrapperDataset(SavableDataset[T_sample_out], Generic[T_sample_in, T_sa
     def worker_has_samples(self) -> bool:
         return any(ds.worker_has_samples() for ds in self.datasets)
 
+    def close(self) -> None:
+        """Close every owned child dataset once."""
+        closed_ids: set[int] = set()
+        for dataset in self.datasets:
+            if id(dataset) not in closed_ids:
+                dataset.close()
+                closed_ids.add(id(dataset))
+
     def _find_wrapped_dataset(self, cls: Type[SavableDataset]) -> Optional[SavableDataset]:
         """Find the outermost dataset wrapped in this dataset that is of type cls."""
 
