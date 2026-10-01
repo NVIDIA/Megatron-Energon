@@ -8,6 +8,8 @@ Please also take a look at [](basics_flow) to see the pipeline.
 
 If you don't specify any task encoder, a default version, the {py:class}`DefaultTaskEncoder <megatron.energon.DefaultTaskEncoder>` will be used.
 
+The Task Encoder's `decoder` class attribute controls automatic payload decoding before cooking and sample encoding. Set `decoder = None` when code needs the stored bytes—for example, for hashing, copying, validation, custom parsing, or linear offline data processing. See [](data_decoding) for the decoding contract and {ref}`linear-data-processing` for a complete example.
+
 For writing your own task encoder, create a class based on {py:class}`DefaultTaskEncoder <megatron.energon.DefaultTaskEncoder>`
 and override one or more of the following methods. The data flow of {py:func}`get_train_dataset <megatron.energon.get_train_dataset>` or {py:func}`get_val_dataset <megatron.energon.get_val_dataset>` is as follows:
 
