@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import Iterator
 
 import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
 import webdataset as wds
 from click.testing import CliRunner
 
@@ -35,6 +37,7 @@ from megatron.energon.flavors.common.filter_index import (
 from megatron.energon.flavors.common.manifest.io import ShardListMeta
 from megatron.energon.flavors.common.manifest.paths import MAIN_FOLDER_NAME
 from megatron.energon.flavors.common.manifest.types import ShardInfo
+from megatron.energon.flavors.common.manifest.write import write_manifest_dataset_metadata
 from megatron.energon.tools.prepare import command as prepare_command
 
 
@@ -246,6 +249,47 @@ class TestFilterIndex(unittest.TestCase):
         samples = _collect_factory_samples(factory)
         assert len(factory) == 2
         assert [sample["json"]["idx"] for sample in samples] == [2, 4]
+        assert [sample["__restore_key__"][1] for sample in samples] == [0, 1]
+
+    def test_parquet_filter(self) -> None:
+        dataset_path = self.dataset_path / "parquet"
+        dataset_path.mkdir()
+        (dataset_path / MAIN_FOLDER_NAME).mkdir()
+        pq.write_table(pa.table({"idx": [0, 1, 2]}), dataset_path / "a.parquet")
+        pq.write_table(pa.table({"idx": [3, 4, 5]}), dataset_path / "b.parquet")
+        shards = [
+            ShardInfo(name="a.parquet", path=EPath(dataset_path / "a.parquet"), count=3),
+            ShardInfo(name="b.parquet", path=EPath(dataset_path / "b.parquet"), count=3),
+        ]
+        write_manifest_dataset_metadata(
+            EPath(dataset_path),
+            shards=shards,
+            split_config="split.yaml",
+            split_parts_ratio=[("train", 1.0)],
+            dataset_definition={
+                "__module__": "megatron.energon",
+                "__class__": "DefaultParquetShardListDatasetFactory",
+            },
+        )
+
+        build_filter_index(
+            EPath(dataset_path),
+            "keep",
+            (2, 4),
+            shards=shards,
+        )
+        worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0)
+        factory = get_dataset_from_config(
+            EPath(dataset_path),
+            split_part="train",
+            training=False,
+            worker_config=worker_config,
+            filter_name="keep",
+        )
+
+        samples = _collect_factory_samples(factory)
+        assert len(factory) == 2
+        assert [sample["idx"] for sample in samples] == [2, 4]
         assert [sample["__restore_key__"][1] for sample in samples] == [0, 1]
 
     def test_binidx_filter_and_recipe_passthrough(self) -> None:
