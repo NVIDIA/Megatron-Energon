@@ -49,23 +49,29 @@ def _print_shard_slices(
             f"{end_shard.name}[,{end - shard_starts[end_shard_idx]}{end_str}]"
         )
 
+    def join_truncated(items: Sequence[Any], fmt: Callable[[Any], str]) -> str:
+        # Only format the first and last three entries, large datasets have many slices
+        if len(items) > 6:
+            return (
+                f"{', '.join(map(fmt, items[:3]))} ...<{len(items) - 6}> "
+                f"{', '.join(map(fmt, items[-3:]))}"
+            )
+        return ", ".join(map(fmt, items))
+
     for worker_idx, sample_slice_offsets in enumerate(slice_offsets):
         start_idx = sample_slice_offsets[0]
         end_idx = sample_slice_offsets[-1]
 
-        if len(sample_slice_offsets) > 6:
-            indexes_str = (
-                ", ".join(str(i) for i in sample_slice_offsets[:3])
-                + ", ..., "
-                + ", ".join(str(i) for i in sample_slice_offsets[-3:])
-            )
-        else:
-            indexes_str = ", ".join(str(i) for i in sample_slice_offsets)
+        indexes_str = join_truncated(sample_slice_offsets, str)
+        slices_str = join_truncated(
+            list(zip(sample_slice_offsets[:-1], sample_slice_offsets[1:])),
+            lambda s: shard_range_info(*s),
+        )
         print(
             f"rank={worker_config.rank}, worker={worker_idx}: "
             f"sample_range=[{start_idx}, {end_idx}] in {len(sample_slice_offsets) - 1} "
             f"slices, sum(count)={end_idx - start_idx}: indexes=[{indexes_str}] "
-            f"slices=[{', '.join(shard_range_info(start, end) for start, end in zip(sample_slice_offsets, sample_slice_offsets[1:]))}]"
+            f"slices=[{slices_str}]"
         )
 
 
