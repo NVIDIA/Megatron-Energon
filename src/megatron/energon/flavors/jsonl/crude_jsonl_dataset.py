@@ -123,7 +123,7 @@ class CrudeJsonlDatasetFactory(
 
 @register_dataset_factory_provider(priority=PRIORITY_SINGLE_FILE)
 class DefaultCrudeJsonlDatasetFactory(CrudeJsonlDatasetFactory):
-    """Adds subflavors to the sample and loads the JSON payload."""
+    """Adds tags to the sample and loads the JSON payload."""
 
     @classmethod
     def detect_path(cls, path: EPath) -> EnergonDatasetType | None:
@@ -156,14 +156,14 @@ class DefaultCrudeJsonlDatasetFactory(CrudeJsonlDatasetFactory):
             **kwargs,
         )
 
-    def __init__(self, path: EPath, *, subflavors: Optional[Dict[str, Any]] = None, **kwargs):
+    def __init__(self, path: EPath, *, tags: Optional[Dict[str, Any]] = None, **kwargs):
         if "decoder" in kwargs:
             del kwargs["decoder"]
         super().__init__(path, **kwargs)
-        self.subflavors = subflavors
+        self.tags = tags
 
     def load_sample(self, sample: SampleRecord) -> CrudeSample:
-        sample["__subflavors__"] = self.subflavors
+        sample["__tags__"] = self.tags
         if "json" in sample:
             sample["json"] = json.loads(sample["json"])
         return super().load_sample(sample)
@@ -171,5 +171,5 @@ class DefaultCrudeJsonlDatasetFactory(CrudeJsonlDatasetFactory):
     def config(self) -> Dict[str, Any]:
         return dict(
             **super().config(),
-            subflavors=self.subflavors,
+            tags=self.tags,
         )
