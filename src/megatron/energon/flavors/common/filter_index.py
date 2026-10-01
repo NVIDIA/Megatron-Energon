@@ -465,6 +465,10 @@ def _count_single_file_samples(path: EPath) -> int:
             assert version == 1, f"Unsupported version {version} in {idx_path}"
             f.read(1)
             return struct.unpack("<Q", f.read(8))[0]
+    if path.name.endswith(".parquet"):
+        from megatron.energon.flavors.parquet.prepare import scan_parquet_file
+
+        return scan_parquet_file(path).total_rows
     raise ValueError(f"Cannot infer sample count for single-file dataset {path}")
 
 
