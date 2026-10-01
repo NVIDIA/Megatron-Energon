@@ -354,8 +354,9 @@ class EPath:
 
         Args:
             suffix: The suffix to add to the path.
-            replace: If True, replace the existing suffixes (default).
-                Otherwise, append the suffix after the existing suffixes.
+            replace: If True, replace the last suffix like `pathlib.PurePath.with_suffix`
+                (default), e.g. `data.jsonl` -> `data.idx`. Otherwise, append the suffix to the
+                full name, e.g. `data.jsonl` -> `data.jsonl.idx`.
         """
         new_path = EPath(self)
         if replace:
