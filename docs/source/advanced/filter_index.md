@@ -12,7 +12,7 @@ For manifest/directory datasets, the sidecars are:
 - `filter_<name>.json`: filter metadata with the sidecar format version and filtered sample counts per shard.
 - `filter_<name>.idx`: the kept original sample indexes, stored as a raw `uint64` translation table.
 
-For single-file datasets such as `.jsonl`, the sidecars are:
+For single-file datasets such as `.jsonl` or `.bin`, the sidecars are:
 
 - `<file-name>.<name>.json`
 - `<file-name>.<name>.idx`
@@ -59,8 +59,8 @@ build_filter_index_from_shard_indexes(
 ```
 
 Shard-local indexes must be strictly increasing and within the original count for each
-shard. The same APIs can be used for prepared WebDataset and JSONL datasets. For single-file
-datasets such as `.jsonl`, the shard name is the file name.
+shard. The same APIs can be used for prepared WebDataset, JSONL, and bin-idx datasets. For
+single-file datasets such as `.bin` and `.jsonl`, the shard name is the file name.
 
 ## Loading a Filter
 
