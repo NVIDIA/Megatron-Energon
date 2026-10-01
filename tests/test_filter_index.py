@@ -5,6 +5,7 @@
 
 import gc
 import json
+import struct
 import tempfile
 import unittest
 import warnings
@@ -12,6 +13,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
+import numpy as np
 import webdataset as wds
 
 from megatron.energon import (
@@ -19,6 +21,7 @@ from megatron.energon import (
     WorkerConfig,
     build_filter_index,
     build_filter_index_from_shard_indexes,
+    load_dataset,
 )
 from megatron.energon.dataset_config import get_dataset_from_config
 from megatron.energon.epathlib import EPath
@@ -45,6 +48,21 @@ def _active_worker(worker_config: WorkerConfig) -> Iterator[None]:
 def _collect_factory_samples(factory):
     with _active_worker(factory.worker_config):
         return list(factory.build())
+
+
+def _write_binidx(path: Path, *, num_docs: int, doc_len: int = 2) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    values = np.arange(num_docs * doc_len, dtype=np.int32)
+    values.tofile(str(path))
+    with open(path.with_suffix(".idx"), "wb") as f:
+        f.write(b"MMIDIDX\x00\x00")
+        f.write(struct.pack("<Q", 1))
+        f.write(struct.pack("<B", 4))
+        f.write(struct.pack("<Q", num_docs))
+        f.write(struct.pack("<Q", num_docs))
+        f.write(np.full(num_docs, doc_len, dtype=np.int32).tobytes())
+        f.write((np.arange(num_docs, dtype=np.int64) * doc_len * 4).tobytes())
+        f.write(np.arange(num_docs, dtype=np.int64).tobytes())
 
 
 class TestFilterIndex(unittest.TestCase):
@@ -189,3 +207,51 @@ class TestFilterIndex(unittest.TestCase):
         assert len(factory) == 3
         assert [sample.__key__ for sample in samples] == ["000001", "000003", "000005"]
         assert [sample.__restore_key__[1] for sample in samples] == [0, 1, 2]
+
+    def test_binidx_filter_and_recipe_passthrough(self) -> None:
+        dataset_path = self.dataset_path / "binidx"
+        bin_path = dataset_path / "tokens.bin"
+        _write_binidx(bin_path, num_docs=6)
+        build_filter_index(
+            EPath(bin_path),
+            "keep",
+            indexes=(1, 4),
+        )
+        json_path, idx_path = filter_index_paths(EPath(bin_path), "keep")
+        assert json_path.name == "tokens.bin.keep.json"
+        assert idx_path.name == "tokens.bin.keep.idx"
+
+        worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0)
+        factory = get_dataset_from_config(
+            EPath(bin_path),
+            split_part="train",
+            training=False,
+            worker_config=worker_config,
+            filter_name="keep",
+        )
+        samples = _collect_factory_samples(factory)
+        assert len(factory) == 2
+        assert [sample["__key__"] for sample in samples] == ["1", "4"]
+        assert [sample["__restore_key__"][1] for sample in samples] == [0, 1]
+
+        recipe_path = dataset_path / "recipe.yaml"
+        with open(recipe_path, "w") as f:
+            f.write(
+                "\n".join(
+                    [
+                        "__module__: megatron.energon",
+                        "__class__: Recipe",
+                        "splits:",
+                        "  train:",
+                        "    path: tokens.bin",
+                        "    filter: keep",
+                    ]
+                )
+            )
+        loader = load_dataset(EPath(recipe_path))
+        loaded = loader.get_datasets(
+            training=False,
+            split_part="train",
+            worker_config=worker_config,
+        )
+        assert len(loaded.datasets[0].dataset) == 2

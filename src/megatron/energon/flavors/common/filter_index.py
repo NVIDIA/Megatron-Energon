@@ -9,6 +9,7 @@ Sidecars live in ``.nv-meta`` as ``filter_<name>.json`` and ``filter_<name>.idx`
 """
 
 import json
+import struct
 from collections.abc import Iterable, Mapping, Sequence
 from typing import BinaryIO
 
@@ -455,6 +456,15 @@ def _count_single_file_samples(path: EPath) -> int:
         from megatron.energon.flavors.jsonl.ijsonl import IDX_SUFFIX as JSONL_IDX_SUFFIX
 
         return int(path.with_suffix(JSONL_IDX_SUFFIX, replace=False).size() // 8 - 1)
+    if path.name.endswith(".bin"):
+        idx_path = path.parent / (path.name.removesuffix(".bin") + ".idx")
+        with idx_path.open("rb") as f:
+            header = f.read(9)
+            assert header == b"MMIDIDX\x00\x00", f"Bad header in {idx_path}"
+            version = struct.unpack("<Q", f.read(8))[0]
+            assert version == 1, f"Unsupported version {version} in {idx_path}"
+            f.read(1)
+            return struct.unpack("<Q", f.read(8))[0]
     raise ValueError(f"Cannot infer sample count for single-file dataset {path}")
 
 
