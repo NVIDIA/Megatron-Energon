@@ -15,6 +15,7 @@ class EnergonDatasetType(Enum):
     METADATASET = "recipe"
     MANIFEST_DATASET = "manifest_dataset"
     JSONL = "jsonl"
+    BINIDX = "binidx"
     FILESYSTEM = "filesystem"
     INVALID = "invalid"
 
