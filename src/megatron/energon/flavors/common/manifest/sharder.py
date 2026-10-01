@@ -269,6 +269,8 @@ class Sharder:
     @staticmethod
     def _clean_offsets(offsets: Sequence[int]) -> Sequence[int]:
         """Removes empty offset slices, i.e. duplicates from offsets."""
+        if isinstance(offsets, range):
+            return offsets
         return (
             *(int(start) for start, end in zip(offsets, offsets[1:]) if start < end),
             int(offsets[-1]),
@@ -349,6 +351,14 @@ class Sharder:
             rotation_offset=rotation_offset,
         )
 
+        if max_samples_per_sequence == 1:
+            return tuple(
+                range(int(start), int(end) + 1)
+                for start, end in zip(
+                    local_worker_sample_split_offsets[:-1], local_worker_sample_split_offsets[1:]
+                )
+            )
+
         shard_cumsums = np.cumsum([0] + [shard.count for shard in shards])
 
         return tuple(
@@ -395,6 +405,14 @@ class Sharder:
             worker_config,
             rotation_offset=rotation_offset,
         )
+
+        if max_samples_per_sequence == 1:
+            return tuple(
+                range(int(start), int(end) + 1)
+                for start, end in zip(
+                    local_worker_sample_split_offsets[:-1], local_worker_sample_split_offsets[1:]
+                )
+            )
 
         # Split the shards
         return tuple(
