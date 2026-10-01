@@ -1,13 +1,19 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+from megatron.energon.decoders import AVDecoderType, ImageDecoderType, SampleDecoder
 from megatron.energon.flavors.base_dataset import (
     BaseCoreDatasetFactory,
     PinMemoryMixin,
     Sample,
     SavableDataset,
 )
+from megatron.energon.flavors.base_manifest_dataset import (
+    BaseManifestDatasetFactory,
+    BaseManifestShardListDatasetFactory,
+)
 from megatron.energon.flavors.captioning import CaptioningSample, CaptioningWebdataset
+from megatron.energon.flavors.common.manifest.io import ShardListMeta
 from megatron.energon.flavors.crude import CrudeSample, CrudeWebdataset
 from megatron.energon.flavors.image import ImageSample, ImageWebdataset
 from megatron.energon.flavors.image_classification import (
@@ -32,16 +38,12 @@ from megatron.energon.flavors.vqa_and_ocr import VQAOCRWebdataset
 from megatron.energon.flavors.webdataset import (
     AVData,
     AVDecoder,
-    AVDecoderType,
     BaseWebdatasetFactory,
     DefaultDecoderWebdatasetFactory,
     DefaultGenericWebdatasetFactory,
     EmptyDatasetError,
-    ImageDecoderType,
     JoinedWebdatasetFactory,
-    SampleDecoder,
     StandardWebdatasetFactory,
-    WebdatasetMeta,
 )
 
 __all__ = [
@@ -49,6 +51,8 @@ __all__ = [
     "AVDecoder",
     "AVDecoderType",
     "BaseCoreDatasetFactory",
+    "BaseManifestDatasetFactory",
+    "BaseManifestShardListDatasetFactory",
     "BaseWebdatasetFactory",
     "CaptioningSample",
     "CaptioningWebdataset",
@@ -85,5 +89,5 @@ __all__ = [
     "VQAOCRWebdataset",
     "VQASample",
     "VQAWebdataset",
-    "WebdatasetMeta",
+    "ShardListMeta",
 ]

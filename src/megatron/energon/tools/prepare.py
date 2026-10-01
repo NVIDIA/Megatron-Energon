@@ -20,13 +20,9 @@ from megatron.energon.flavors import (
     CrudeWebdataset,
     Sample,
 )
-from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
-from megatron.energon.flavors.webdataset.metadata import (
-    EnergonDatasetType,
-    check_dataset_info_present,
-    get_dataset_info,
-    get_dataset_type,
-)
+from megatron.energon.flavors.common.manifest.io import check_dataset_info_present, get_dataset_info
+from megatron.energon.flavors.common.manifest.paths import MAIN_FOLDER_NAME
+from megatron.energon.flavors.dataset_type import EnergonDatasetType, get_dataset_type
 from megatron.energon.media.extractor import MediaFilterConfig
 from megatron.energon.metadataset.loader import prepare_metadataset
 
@@ -248,7 +244,7 @@ def command(
         print("Preparing metadataset...")
         prepare_metadataset(path)
         return
-    elif ds_type == EnergonDatasetType.JSONL:
+    elif ds_type == EnergonDatasetType.JSONL and path.is_file():
         if do_media_metadata:
             raise click.ClickException(
                 "JSONL datasets do not support media metadata. Remove --media-metadata-by-... to continue."

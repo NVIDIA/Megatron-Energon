@@ -4,10 +4,10 @@
 from pathlib import Path
 from typing import Any, List, Literal, Optional, Tuple, TypeVar, Union
 
+from megatron.energon.decoders import SampleDecoder
 from megatron.energon.deprecation import warn_deprecated
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import BaseCoreDatasetFactory, SavableDataset
-from megatron.energon.flavors.webdataset.sample_decoder import SampleDecoder
 from megatron.energon.metadataset import load_dataset
 from megatron.energon.task_encoder.base import DefaultTaskEncoder, TaskEncoder, WorkerConfig
 

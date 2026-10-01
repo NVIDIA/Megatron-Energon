@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from megatron.energon.cache import DecodeFileStore, FileCacheLazy, FileStore, FileStoreCachePool
-from megatron.energon.flavors.webdataset.sample_decoder import SampleDecoder
+from megatron.energon.decoders import SampleDecoder
 from megatron.energon.source_info import SourceInfo
 
 

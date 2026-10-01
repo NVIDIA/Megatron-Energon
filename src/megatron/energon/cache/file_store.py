@@ -1,35 +1,21 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-import sqlite3
 from typing import Any, Optional, Union
 
 from megatron.energon.cache.base import FileStore, FileStoreDecoder, FileStoreWrapper
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.jsonl.ijsonl_reader import IJsonlReader
-from megatron.energon.flavors.webdataset.config import INDEX_SQLITE_FILENAME, MAIN_FOLDER_NAME
-from megatron.energon.flavors.webdataset.itar_reader import SqliteITarEntryReader
-from megatron.energon.flavors.webdataset.thread_local_sqlite import ThreadLocalSqlite
+from megatron.energon.flavors.common.manifest.paths import INDEX_SQLITE_FILENAME, MAIN_FOLDER_NAME
+from megatron.energon.flavors.common.sqlite import ThreadLocalSqlite
 from megatron.energon.local_copy import ensure_local_copy
 from megatron.energon.media.metadata import MediaMetadataBase, deserialize_media_metadata
 from megatron.energon.source_info import SourceInfo
 
 
 class DecodeFileStore(FileStoreWrapper[Any]):
-    """Used to wrap a FileStore and decode the data on access."""
+    """Wrap a FileStore and decode data on access."""
 
-    def __init__(
-        self,
-        inner: FileStore[bytes],
-        *,
-        decoder: FileStoreDecoder,
-    ):
-        """
-        Args:
-            inner: The FileStore to wrap.
-            decoder: The decoder to apply to every item read from the FileStore.
-        """
-
+    def __init__(self, inner: FileStore[bytes], *, decoder: FileStoreDecoder):
         super().__init__(inner)
         self.decoder = decoder
 
@@ -55,24 +41,12 @@ class SystemFileStore(FileStore[bytes]):
     """A FileStore that reads files directly from the file system."""
 
     def __init__(self, base_dir: Optional[Union[EPath, str]] = None):
-        """
-        Args:
-            base_dir: The base directory to use for relative paths. If None, you should only pass
-                absolute paths to __getitem__.
-        """
-
         self.base_dir = EPath(base_dir) if base_dir is not None else None
         self._media_metadata_reader: Optional[ThreadLocalSqlite] = None
         self._media_metadata_checked = False
 
     def __getitem__(self, key: str) -> tuple[bytes, SourceInfo]:
-        # Construct the full path from the dataset path and the file key
-        if self.base_dir is None:
-            file_path = EPath(key)
-        else:
-            file_path = self.base_dir / key
-
-        # Read and return the file contents as bytes
+        file_path = EPath(key) if self.base_dir is None else self.base_dir / key
         with file_path.open("rb") as f:
             data = f.read()
 
@@ -84,7 +58,6 @@ class SystemFileStore(FileStore[bytes]):
         )
 
     def get_path(self) -> str:
-        """Returns the path to the dataset."""
         return str(self.base_dir)
 
     def __str__(self):
@@ -141,55 +114,19 @@ class SystemFileStore(FileStore[bytes]):
         return self._media_metadata_reader
 
 
-class WebdatasetFileStore(SqliteITarEntryReader, FileStore[bytes]):
-    """This dataset will directly read files from the dataset tar files from a prepared energon dataset."""
+def __getattr__(name: str):
+    if name == "WebdatasetFileStore":
+        from megatron.energon.flavors.webdataset.file_store import WebdatasetFileStore
 
-    def __init__(
-        self,
-        dataset_path: EPath,
-    ):
-        super().__init__(
-            base_path=dataset_path,
-            key_is_full_entryname=True,
-            disable_cache=True,
-        )
-        self._media_metadata_available: Optional[bool] = None
+        return WebdatasetFileStore
+    if name == "JsonlFileStore":
+        from megatron.energon.flavors.jsonl.file_store import JsonlFileStore
 
-    def get_path(self) -> str:
-        return str(self.base_path)
-
-    def get_media_metadata(self, key: str) -> MediaMetadataBase:
-        if self._media_metadata_available is None:
-            try:
-                self._media_metadata_available = self.sqlite_reader.db_has_media_metadata()
-            except sqlite3.Error as exc:  # pragma: no cover - defensive
-                self._media_metadata_available = False
-                raise RuntimeError(
-                    "Failed to inspect media metadata table. Re-run `energon prepare --media-metadata-by-...`."
-                ) from exc
-
-        if not self._media_metadata_available:
-            raise RuntimeError(
-                "Media metadata is not available for this dataset. "
-                "Run `energon prepare --media-metadata-by-...` to generate it."
-            )
-
-        try:
-            row = self.sqlite_reader.get_media_metadata(key)
-        except sqlite3.Error as exc:  # pragma: no cover - defensive
-            raise RuntimeError(
-                "Failed to load media metadata. Re-run `energon prepare --media-metadata-by-...`."
-            ) from exc
-
-        if row is None:
-            raise KeyError(f"Sample {key!r} not found")
-
-        metadata_type, metadata_json = row
-        return deserialize_media_metadata(metadata_type, metadata_json)
+        return JsonlFileStore
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-class JsonlFileStore(IJsonlReader, FileStore[bytes]):
-    """This dataset will directly read entries from a jsonl file."""
-
-    def get_path(self) -> str:
-        return str(self.jsonl_path)
+__all__ = [
+    "DecodeFileStore",
+    "SystemFileStore",
+]

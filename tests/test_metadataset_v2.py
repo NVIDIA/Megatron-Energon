@@ -29,10 +29,11 @@ from megatron.energon import (
 )
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib.epath import EPath
-from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
+from megatron.energon.flavors.common.manifest.paths import MAIN_FOLDER_NAME
 from megatron.energon.metadataset.loader import prepare_metadataset, traverse_metadataset
 from megatron.energon.metadataset.loader_interface import DatasetBlendMode
 from megatron.energon.task_encoder.base import DefaultTaskEncoder
+from megatron.energon.wrappers.blend_dataset import BlendDataset
 from megatron.energon.wrappers.watchdog_dataset import WatchdogDataset
 from tests.epath_s3_emulator import setup_s3_emulator
 
@@ -79,6 +80,14 @@ class TestJoinedSample(Sample):
 
 def test_joiner(text1: TextSample, text2: TextSample) -> TestJoinedSample:
     return TestJoinedSample.derive_from(text1, text1=f"j{text1.text}", text2=f"j{text2.text}")
+
+
+def get_blend_dataset(ds):
+    if isinstance(ds, BlendDataset):
+        return ds
+    if hasattr(ds, "dataset"):
+        return get_blend_dataset(ds.dataset)
+    raise ValueError("No blend dataset found")
 
 
 class TestDataset(unittest.TestCase):
@@ -375,9 +384,14 @@ class TestDataset(unittest.TestCase):
                     "splits:",
                     "  train:",
                     "    path: missing_ds",
+                    "    subflavors:",
+                    "      source: missing_leaf_metadataset_v2.yaml",
+                    "      number: 42",
+                    "      mds: nested_val",
                     "    aux:",
                     "      labels: missing_aux",
                     "      media: filesystem://media",
+                    "    shuffle_over_epochs_multiplier: 2",
                 ]
             ),
             encoding="utf-8",
@@ -392,6 +406,12 @@ class TestDataset(unittest.TestCase):
             "labels": EPath(self.dataset_path / "missing_aux"),
             "media": EPath(self.dataset_path / "media"),
         }
+        assert refs[0].subflavors == {
+            "source": "missing_leaf_metadataset_v2.yaml",
+            "number": 42,
+            "mds": "nested_val",
+        }
+        assert refs[0].shuffle_over_epochs_multiplier == 2
 
     def test_joined_metadataset(self):
         torch.manual_seed(42)

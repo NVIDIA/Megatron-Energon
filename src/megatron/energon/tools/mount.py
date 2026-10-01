@@ -10,8 +10,8 @@ from typing import Generator, Optional
 
 import click
 
-from megatron.energon.cache.file_store import WebdatasetFileStore
 from megatron.energon.epathlib import EPath
+from megatron.energon.flavors.webdataset.file_store import WebdatasetFileStore
 
 MULTI_WARN = "WARNING_SAME_KEY_IN_MULTIPLE_TAR_FILES"
 

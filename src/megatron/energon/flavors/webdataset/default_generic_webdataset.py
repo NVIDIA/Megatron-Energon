@@ -6,10 +6,10 @@ from typing import Any, Callable, Dict, Generic, List, Optional, TypeVar, Union
 
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.base_dataset import SavableDataset
+from megatron.energon.flavors.common.manifest.paths import MAIN_FOLDER_NAME
+from megatron.energon.flavors.common.sample_record import FilteredSample
 from megatron.energon.flavors.webdataset.base_webdataset import BaseWebdatasetFactory
-from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
 from megatron.energon.flavors.webdataset.field_access import field_access, split_field_access
-from megatron.energon.flavors.webdataset.structs import FilteredSample
 from megatron.energon.module_loader import ModuleLoader
 
 T_sample = TypeVar("T_sample", covariant=True)

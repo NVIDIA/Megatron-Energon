@@ -12,8 +12,8 @@ import torch
 from megatron.energon import Sample, StandardWebdatasetFactory
 from megatron.energon.dataset_config import load_config
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
-from megatron.energon.flavors.webdataset.empty_dataset_error import EmptyDatasetError
+from megatron.energon.flavors.common.manifest.empty_dataset_error import EmptyDatasetError
+from megatron.energon.flavors.common.manifest.paths import MAIN_FOLDER_NAME
 from megatron.energon.loader import get_loader
 from megatron.energon.worker import WorkerConfig
 
