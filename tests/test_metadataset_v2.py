@@ -357,6 +357,69 @@ class TestDataset(unittest.TestCase):
             },
         ]
 
+        # Check explicit and default group factors, including their effect on loaded samples.
+        for blend_key, factor_key in (("blend", "weight"), ("blend_epochized", "repetitions")):
+            with self.subTest(blend=blend_key):
+                inline_config = {
+                    "__module__": "megatron.energon",
+                    "__class__": "MetadatasetV2",
+                    "splits": {
+                        "train": {
+                            blend_key: [
+                                {
+                                    factor_key: 3,
+                                    blend_key: [
+                                        {"path": str(self.dataset_path / "ds1")},
+                                        {factor_key: 2, "path": str(self.dataset_path / "ds2")},
+                                    ],
+                                },
+                                {blend_key: [{"path": str(self.dataset_path / "ds3")}]},
+                            ]
+                        }
+                    },
+                }
+                inline_dataset = load_dataset(inline_config)
+                inline_refs = inline_dataset.traverse(split_part="train")
+                assert [ref.path for ref in inline_refs] == [
+                    EPath(self.dataset_path / "ds1"),
+                    EPath(self.dataset_path / "ds2"),
+                    EPath(self.dataset_path / "ds3"),
+                ]
+                assert [ref.split_part for ref in inline_refs] == ["train"] * 3
+                inline_datasets = inline_dataset.get_datasets(
+                    training=True, split_part="train", worker_config=worker_config
+                )
+                if blend_key == "blend":
+                    assert inline_datasets.blend_mode == DatasetBlendMode.DATASET_WEIGHT
+                    assert [ds.weight for ds in inline_datasets.datasets] == [0.25, 0.5, 0.25]
+                else:
+                    assert inline_datasets.blend_mode == DatasetBlendMode.SAMPLE_REPETITIONS
+                    assert [ds.repetitions for ds in inline_datasets.datasets] == [3, 6, 1]
+
+                inline_train_dataset = get_train_dataset(
+                    inline_config,
+                    worker_config=worker_config,
+                    batch_size=1,
+                    shuffle_buffer_size=None,
+                    max_samples_per_sequence=None,
+                    repeat=blend_key == "blend",
+                )
+                inline_loader = get_loader(inline_train_dataset)
+                if blend_key == "blend":
+                    assert get_blend_dataset(inline_train_dataset).weights == (0.25, 0.5, 0.25)
+                    texts = [batch.text[0] for _, batch in zip(range(550), inline_loader)]
+                    assert len(texts) == 550
+                    assert {int(text) // 100 for text in texts} == {0, 1, 2}
+                else:
+                    texts = [batch.text[0] for batch in inline_loader]
+                    assert Counter(texts) == Counter(
+                        {
+                            str(idx): repetitions
+                            for start, repetitions in ((0, 3), (100, 6), (200, 1))
+                            for idx in range(start, start + 55)
+                        }
+                    )
+
     def test_traverse_metadataset_recurses_nested_v2_references(self):
         """Traversed subflavors only reflect metadataset hierarchy merges.
 
