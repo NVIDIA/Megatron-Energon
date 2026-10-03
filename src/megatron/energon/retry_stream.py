@@ -35,30 +35,30 @@ class RetryReadStream(BinaryIO):
             self._file.close()
 
     def read(self, n: int = -1) -> bytes:
-        buf = b""
-        for retry in range(10):
+        """Read up to n bytes, preserving short reads across at most ten I/O failures."""
+        buf = bytearray()
+        failures = 0
+        while True:
             try:
                 if self._file is None:
                     self._file = self._path.open("rb")
                     self._file.seek(self._pos)
-                res = self._file.read(n)
+                remaining = n - len(buf) if n >= 0 else -1
+                res = self._file.read(remaining)
                 self._pos += len(res)
-                buf += res
-                if (
-                    (n == -1 and self._pos >= self._size)
-                    or len(buf) == n
-                    or self._pos >= self._size
-                ):
-                    return res
+                buf.extend(res)
+                if not res or (n >= 0 and len(buf) == n) or self._pos >= self._size:
+                    return bytes(buf)
             except IOError:
-                try:
-                    self._file.close()
-                except IOError:
-                    pass
+                if self._file is not None:
+                    try:
+                        self._file.close()
+                    except IOError:
+                        pass
                 self._file = None
-                if retry == 9:
+                failures += 1
+                if failures == 10:
                     raise
-                continue
 
     def seek(self, offset: int, whence: int = 0) -> int:
         if whence == 0:
