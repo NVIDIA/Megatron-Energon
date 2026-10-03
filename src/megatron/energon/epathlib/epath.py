@@ -354,7 +354,7 @@ class EPath:
 
         Args:
             suffix: The suffix to add to the path.
-            replace: If True, replace the existing suffixes (default).
+            replace: If True, replace the last existing suffix (default).
                 Otherwise, append the suffix after the existing suffixes.
         """
         new_path = EPath(self)

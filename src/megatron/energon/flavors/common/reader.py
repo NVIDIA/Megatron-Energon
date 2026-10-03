@@ -15,35 +15,45 @@ T_part = TypeVar("T_part", covariant=True)
 class IndexedSampleReader(Protocol[T_sample_record]):
     """Random-access reader over the common indexed sample address space."""
 
-    def __len__(self) -> int: ...
+    def __len__(self) -> int:
+        raise NotImplementedError
 
-    def __getitem__(self, index: int) -> T_sample_record | None: ...
+    def __getitem__(self, index: int) -> T_sample_record | None:
+        raise NotImplementedError
 
-    def close(self) -> None: ...
+    def close(self) -> None:
+        raise NotImplementedError
 
 
 @runtime_checkable
 class SamplePartReader(IndexedSampleReader[T_sample_record], Protocol[T_sample_record]):
     """Reader that can enumerate samples and their physical parts for indexing/file-store use."""
 
-    def list_all_samples(self) -> Iterable[tuple[str, int, int]]: ...
+    def list_all_samples(self) -> Iterable[tuple[str, int, int]]:
+        raise NotImplementedError
 
-    def list_all_sample_parts(self) -> Iterable[tuple[str, int, int]]: ...
+    def list_all_sample_parts(self) -> Iterable[tuple[str, int, int]]:
+        raise NotImplementedError
 
-    def list_sample_parts(self, sample_key: str) -> Iterable[tuple[str, int, int]]: ...
+    def list_sample_parts(self, sample_key: str) -> Iterable[tuple[str, int, int]]:
+        raise NotImplementedError
 
-    def get_total_size(self) -> int: ...
+    def get_total_size(self) -> int:
+        raise NotImplementedError
 
 
 @runtime_checkable
 class PartFileReader(Protocol[T_part]):
     """String-key random access to a concrete sample part."""
 
-    def __getitem__(self, key: str) -> tuple[T_part, SourceInfo]: ...
+    def __getitem__(self, key: str) -> tuple[T_part, SourceInfo]:
+        raise NotImplementedError
 
-    def get_path(self) -> str: ...
+    def get_path(self) -> str:
+        raise NotImplementedError
 
-    def close(self) -> None: ...
+    def close(self) -> None:
+        raise NotImplementedError
 
 
 @runtime_checkable

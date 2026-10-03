@@ -1725,6 +1725,24 @@ class TestDataset(unittest.TestCase):
         assert "Analyzing 3 logs" in result.stdout
         assert "Found 50 unique sample keys, 20 steps" in result.stdout
 
+        # The fallback reads the sample loader logs instead of the batch logs
+        result = runner.invoke(
+            analyze_debug_command,
+            [
+                str(debug_log_path),
+                "--include-modality",
+                "train,val",
+                "--force-loading-order",
+                "--heatmap-path",
+                str(self.dataset_path / "heatmap_loading_order.png"),
+            ],
+            catch_exceptions=False,
+        )
+        print(result.stdout)
+        assert result.exit_code == 0, "Debug analysis failed, see output"
+        assert "Forcing to use sample loader logs" in result.stdout
+        assert "Found 50 unique sample keys" in result.stdout
+
     def test_validate_captioning_dataset(self):
         runner = CliRunner()
         result = runner.invoke(
