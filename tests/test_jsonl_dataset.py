@@ -58,6 +58,21 @@ class SimpleCookingTaskEncoder(DefaultTaskEncoder):
     cookers = [Cooker(cook=cook_text)]
 
 
+@stateless()
+def cook_key(sample: CrudeSample) -> TextSample:
+    # The json part is filtered out, so it must not be loaded
+    assert "json" not in sample
+    return TextSample(**basic_sample_keys(sample), idx=-1, text=sample["__key__"])
+
+
+def no_part_filter(part: str) -> bool:
+    return False
+
+
+class PartFilterCookingTaskEncoder(DefaultTaskEncoder):
+    cookers = [Cooker(cook=cook_key, part_filter=no_part_filter)]
+
+
 class TestJsonlDataset(unittest.TestCase):
     # Set up the test fixture
     def setUp(self):
@@ -154,6 +169,20 @@ class TestJsonlDataset(unittest.TestCase):
         print(Counter(train_order1))
         assert len(Counter(train_order1)) == 55
         assert all(v == 10 for v in Counter(train_order1).values())
+
+        # Cooker part filter skips loading the json part
+        filtered_loader = get_loader(
+            get_train_dataset(
+                self.dataset_path / "ds1.jsonl",
+                worker_config=worker_config,
+                batch_size=1,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                task_encoder=PartFilterCookingTaskEncoder(),
+            )
+        )
+        filtered_keys = [key for _, data in zip(range(55), filtered_loader) for key in data.text]
+        assert len(set(filtered_keys)) == 55
 
     def test_metadataset_all(self):
         torch.manual_seed(42)
