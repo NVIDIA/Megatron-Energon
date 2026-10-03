@@ -64,8 +64,8 @@ def _print_shard_slices(
 
         indexes_str = join_truncated(sample_slice_offsets, str)
         slices_str = join_truncated(
-            list(zip(sample_slice_offsets[:-1], sample_slice_offsets[1:])),
-            lambda s: shard_range_info(*s),
+            range(len(sample_slice_offsets) - 1),
+            lambda i: shard_range_info(sample_slice_offsets[i], sample_slice_offsets[i + 1]),
         )
         print(
             f"rank={worker_config.rank}, worker={worker_idx}: "
