@@ -1742,40 +1742,6 @@ class TestDataset(unittest.TestCase):
         assert result.exit_code == 0, "Debug analysis failed, see output"
         assert "Forcing to use sample loader logs" in result.stdout
         assert "Found 50 unique sample keys" in result.stdout
-        loading_order_stdout = result.stdout
-
-        # Logs written by older versions use the previous sample loader event name
-        legacy_log_path = self.dataset_path / "worker_debug_legacy"
-        legacy_log_path.mkdir()
-        for log_file in debug_log_path.glob("*.jsonl"):
-            (legacy_log_path / log_file.name).write_text(
-                log_file.read_text().replace(
-                    '"t": "DatasetSampler._slices_iter.yield"',
-                    '"t": "WebdatasetSampleLoaderDataset._slices_iter.yield"',
-                )
-            )
-        result = runner.invoke(
-            analyze_debug_command,
-            [
-                str(legacy_log_path),
-                "--include-modality",
-                "train,val",
-                "--force-loading-order",
-                "--heatmap-path",
-                str(self.dataset_path / "heatmap_loading_order_legacy.png"),
-            ],
-            catch_exceptions=False,
-        )
-        print(result.stdout)
-        assert result.exit_code == 0, "Debug analysis failed, see output"
-        legacy_logs = "".join(f.read_text() for f in legacy_log_path.glob("*.jsonl"))
-        assert '"t": "WebdatasetSampleLoaderDataset._slices_iter.yield"' in legacy_logs
-        assert '"t": "DatasetSampler._slices_iter.yield"' not in legacy_logs
-        found_lines = [
-            [line for line in stdout.splitlines() if line.startswith("Found ")]
-            for stdout in (loading_order_stdout, result.stdout)
-        ]
-        assert found_lines[0] == found_lines[1] and len(found_lines[0]) == 1, found_lines
 
     def test_validate_captioning_dataset(self):
         runner = CliRunner()

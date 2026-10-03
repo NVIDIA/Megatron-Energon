@@ -128,11 +128,7 @@ class SampleLoaderYieldLogLine(TypedDict):
     #   "epoch": 0,
     #   "epoch_count": 633
     # }
-    #: Older Energon versions logged this event as "WebdatasetSampleLoaderDataset._slices_iter.yield"
-    t: Literal[
-        "DatasetSampler._slices_iter.yield",
-        "WebdatasetSampleLoaderDataset._slices_iter.yield",
-    ]
+    t: Literal["DatasetSampler._slices_iter.yield"]
     r: int
     w: int
     #: The global index in the underlying dataset (concats of all shards)
@@ -613,17 +609,10 @@ def _iter_sl_log_line_keys(
         yield log_line["key"]
 
 
-_SL_YIELD_LOG_MARKERS = (
-    '"t": "DatasetSampler._slices_iter.yield"',
-    # Event name used by older Energon versions
-    '"t": "WebdatasetSampleLoaderDataset._slices_iter.yield"',
-)
-
-
 def _iter_sl_log_samples(path: Path) -> Generator[SampleLoaderYieldLogLine, None, None]:
     with path.open("r") as rf:
         for line in rf:
-            if any(marker in line for marker in _SL_YIELD_LOG_MARKERS):
+            if '"t": "DatasetSampler._slices_iter.yield"' in line:
                 try:
                     yield json.loads(line.strip())
                 except json.JSONDecodeError:
