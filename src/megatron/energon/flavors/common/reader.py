@@ -11,10 +11,6 @@ T_sample_record = TypeVar("T_sample_record", bound=SampleRecord, covariant=True)
 T_part = TypeVar("T_part", covariant=True)
 
 
-# The protocol methods raise NotImplementedError instead of being `...` stubs: readers subclass
-# these protocols explicitly, so a missing method would otherwise silently return None.
-
-
 @runtime_checkable
 class IndexedSampleReader(Protocol[T_sample_record]):
     """Random-access reader over the common indexed sample address space."""
