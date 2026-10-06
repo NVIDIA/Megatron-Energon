@@ -8,7 +8,6 @@ from typing import Any, Callable, Dict, Optional
 from megatron.energon.cache import FileStore
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.base_single_file_dataset import BaseSingleFileDatasetFactory
-from megatron.energon.flavors.common.dataset_sampler import RawSampleData
 from megatron.energon.flavors.common.manifest.types import DatasetSubset
 from megatron.energon.flavors.common.sample_record import SampleRecord
 from megatron.energon.flavors.crude import CrudeSample
@@ -76,22 +75,8 @@ class CrudeJsonlDatasetFactory(
         return IJsonlReader(
             self.path,
             index_cache_size=parallel_shard_iters,
+            part_filter=part_filter,
         )
-
-    def _load_fn(
-        self, part_filter: Callable[[str], bool] | None
-    ) -> Callable[[RawSampleData], CrudeSample]:
-        if (part_filter is not None and not part_filter("json")) or (
-            self.part_filter is not None and not self.part_filter("json")
-        ):
-
-            def load_fn(sample: RawSampleData) -> CrudeSample:
-                assert sample.data[0] is not None
-                sample.data[0].pop("json", None)
-                return self._load_sample_raw(sample)
-
-            return load_fn
-        return self._load_sample_raw
 
     def as_file_store(self) -> FileStore:
         from megatron.energon.flavors.jsonl.file_store import JsonlFileStore

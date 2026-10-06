@@ -569,6 +569,7 @@ class BlendJoinDatasetReference(BlendWeightMixin, MetadatasetJoin):
 
 @edataclass
 class MetadatasetBlend(
+    BlendWeightMixin,
     SubsetRatioMixin,
     ShuffleOverEpochsMultiplierMixin,
     SubflavorsMixin,
@@ -682,6 +683,7 @@ class BlendEpochizedJoinDatasetReference(BlendRepetitionsMixin, MetadatasetJoin)
 
 @edataclass
 class MetadatasetBlendEpochized(
+    BlendRepetitionsMixin,
     SubsetRatioMixin,
     ShuffleOverEpochsMultiplierMixin,
     SubflavorsMixin,
