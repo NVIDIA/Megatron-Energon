@@ -333,6 +333,7 @@ class DatasetReference(
             EnergonDatasetType.MANIFEST_DATASET,
             EnergonDatasetType.JSONL,
             EnergonDatasetType.BINIDX,
+            EnergonDatasetType.PARQUET,
         ):
             self._dataset = DatasetLoader(
                 path=self.path,
