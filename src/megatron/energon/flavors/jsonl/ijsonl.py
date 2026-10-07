@@ -71,6 +71,18 @@ class IJsonlIndexReader:
         with IJsonlIndexReader(jsonl_path) as reader:
             return reader[len(reader) - 1]
 
+    @staticmethod
+    def is_current(jsonl_path: EPath) -> bool:
+        index_path = jsonl_path.with_suffix(IDX_SUFFIX, replace=False)
+        if not index_path.is_file():
+            return False
+        if (
+            index_path.stat().last_modified.timestamp()
+            < jsonl_path.stat().last_modified.timestamp()
+        ):
+            return False
+        return jsonl_path.size() == IJsonlIndexReader.size(jsonl_path)
+
 
 class IJsonlIndexWriter:
     def __init__(self, jsonl_path: EPath):
