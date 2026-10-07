@@ -62,10 +62,11 @@ stream must use saved worker state.
 ## Checkpoint compatibility
 
 Adding a field to `_savable_fields`, changing wrapper child structure, or changing restore-key shape can
-break exact restoration.
+break exact restoration. Recipe migration may still be able to preserve matched leaf progress, but that
+does not make the exact checkpoint format compatible.
 
 If an intentional migration is possible, add it explicitly and test both old-state input and new-state
-round trips.
+round trips. Never silently assign state after an ambiguous leaf match.
 
 ## Review and test matrix
 
@@ -73,8 +74,8 @@ Use the rows relevant to the change:
 
 | Area changed | Required focused tests | Also inspect |
 | --- | --- | --- |
-| Wrapper state or topology | Save/restore tests in `test_recipe.py`; affected wrapper tests | restore keys, reset, skip mode |
-| Recipe nodes or identities | `test_recipe.py` | nested splits, typed subsets |
+| Wrapper state or topology | Save/restore tests in `test_recipe.py`; affected wrapper tests | `test_checkpoint_resume.py`, restore keys, reset, skip mode |
+| Recipe nodes or identities | `test_recipe.py`, `test_checkpoint_resume.py` | nested splits, typed subsets, ambiguous matches |
 | Worker assignment or RNG | current-batch-index tests in `test_dataset.py`; `test_logical_workers.py` | fanout, distributed rank, exact ordering |
 | Dataset factory or format | resolver and format-specific tests; `test_filter_index.py` | preparation, stale indexes, `FileStore`, provenance |
 | Prepared metadata | preparation and format reader tests | old metadata fixtures and explicit versioning |
