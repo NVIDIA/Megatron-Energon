@@ -23,17 +23,33 @@ blend -> shuffle -> encode -> select group -> post-encode -> pack
 ```
 
 The already packed group streams are blended afterward. Moving blend or pack across encoding changes what
-constitutes one emitted item.
+the weighting metric observes and what constitutes one emitted item.
 
 ## Blend selection
 
-`BlendDataset` is designed for repeated, effectively infinite children. It stores child exhaustion and
-`WorkerRng`.
+`BlendDataset` is designed for repeated, effectively infinite children. It stores child exhaustion,
+`WorkerRng`, and the emitted size per child.
 
-The configured weights directly define target selection proportions. The child is sampled with the saved
-worker RNG.
+With the sample-count metric, configured weights directly define target selection proportions. With a
+custom size metric, the selector compensates for the amount already emitted. In simplified form:
 
-Changing the probability formula or RNG consumption changes iteration order.
+```text
+target_i  = normalized configured weight_i
+deficit_i = target_i * total_emitted - emitted_i
+credit_i  = max(deficit_i, 0)
+score_i   = target_i * (epsilon + credit_i) ** alpha
+```
+
+The scores are normalized to probabilities and sampled with the saved worker RNG. The size metric must
+return a nonnegative value.
+
+The metric is evaluated on the loaded or cooked sample at the blend point, before `encode_sample`,
+pre-encoding, padding, or packing. If token count is the desired metric, that count must already be exposed
+by the cooker or source sample metadata. A token count produced only inside `encode_sample` is not visible
+to the blend metric.
+
+Changing the metric, its evaluation point, the probability formula, or RNG consumption changes iteration
+order.
 
 ## Streaming packing
 
@@ -67,8 +83,8 @@ When changing packing logic, checkpoint at these points:
 ## Grouped packing
 
 A packing-group selector routes encoded samples into group-specific branches. Each branch can have its own
-packing behavior. Since the final blend sees already packed outputs, its weights apply to packed items,
-not directly to original leaf samples.
+packing behavior. Since the final blend sees already packed outputs, its weights apply to packed items or
+to the metric reported for those items, not directly to original leaf samples.
 
 A selector is state-defining. If selection uses sample fields created by an
 encoding hook, keep that hook before selection and include any relevant random state in the normal
@@ -78,11 +94,11 @@ savability mechanism.
 
 For a change to blending or packing, verify:
 
-1. the exact stage at which the selector sees a sample;
+1. the exact stage at which the metric or selector sees a sample;
 2. whether the stage consumes random numbers and which `WorkerRng` owns them;
 3. whether input can be consumed without immediate output;
 4. whether all pending samples retain restore keys and provenance;
-5. whether empty packs or multiple packs per call are rejected;
+5. whether empty packs, multiple packs per call, or negative metric values are rejected;
 6. whether child exhaustion changes selection probabilities correctly;
 7. whether exact restore reproduces the uninterrupted stream;
 8. whether the change is iteration-order or checkpoint breaking.

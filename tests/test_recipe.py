@@ -13,7 +13,7 @@ import unittest
 import warnings
 from collections import Counter
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
 from unittest.mock import patch
 
 import torch
@@ -41,6 +41,7 @@ from megatron.energon.recipe.recipe import AuxDatasetReference, DatasetReference
 from megatron.energon.task_encoder.base import (
     DefaultTaskEncoder,
     PackingBufferSize,
+    sample_size_metric,
     stateless,
 )
 from megatron.energon.wrappers.blend_dataset import BlendDataset
@@ -80,6 +81,16 @@ def get_blend_dataset(ds):
     if hasattr(ds, "dataset"):
         return get_blend_dataset(ds.dataset)
     raise ValueError("No blend dataset found")
+
+
+class SizeBlendTaskEncoder(DefaultTaskEncoder):
+    blend_sample_size_alpha: float = 0.8
+    blend_sample_size_epsilon: float = 0.7
+
+    @sample_size_metric("text_chars")
+    @stateless
+    def text_chars(self, sample: TextSample) -> int:
+        return len(sample.text)
 
 
 @edataclass
@@ -243,6 +254,42 @@ class TestDataset(unittest.TestCase):
                         "  source: dataset.yaml",
                         "  dataset.yaml: true",
                         "  number: 42",
+                    ]
+                )
+            )
+
+    @staticmethod
+    def create_fixed_size_text_dataset(path: Path, key_range: Iterable[int], text_size: int):
+        """Creates a text dataset where every sample has the same byte length."""
+        (path / "parts").mkdir(exist_ok=True, parents=True)
+        with wds.ShardWriter(f"{path}/parts/data-%d.tar", maxcount=10) as shard_writer:
+            for key in key_range:
+                shard_writer.write(
+                    {
+                        "__key__": f"{key:06d}",
+                        "txt": ("x" * text_size).encode(),
+                    },
+                )
+            total_shards = shard_writer.shard
+
+        from megatron.energon.flavors import BaseWebdatasetFactory
+
+        BaseWebdatasetFactory.prepare_dataset(
+            path,
+            [f"parts/data-{{0..{total_shards - 1}}}.tar"],
+            split_parts_ratio=[("train", 1.0)],
+            shuffle_seed=None,
+        )
+
+        with open(path / MAIN_FOLDER_NAME / "dataset.yaml", "w") as f:
+            f.write(
+                "\n".join(
+                    [
+                        "sample_type:",
+                        "  __module__: megatron.energon",
+                        "  __class__: TextSample",
+                        "field_map:",
+                        "  text: txt",
                     ]
                 )
             )
@@ -2189,6 +2236,183 @@ class TestDataset(unittest.TestCase):
         assert all(sample_counts[sample] == 1 for sample in range(230, 240)), sample_counts
         assert all(sample_counts[sample] == 0 for sample in range(240, 255)), sample_counts
         assert sample_counts.total() == 10 + 9 * 2, sample_counts.total()
+
+    def test_blend_sample_size_based_distribution(self):
+        torch.manual_seed(42)
+        worker_config = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=0,
+            seed_offset=42,
+        )
+
+        short_size = 2
+        long_size = 50
+        self.create_fixed_size_text_dataset(
+            self.dataset_path / "ds_short", range(55), text_size=short_size
+        )
+        self.create_fixed_size_text_dataset(
+            self.dataset_path / "ds_long", range(100, 155), text_size=long_size
+        )
+
+        def write_blend_recipe(path: Path, *, blend_weight_unit: str | None = None) -> None:
+            lines = [
+                "__module__: megatron.energon",
+                "__class__: Recipe",
+                "splits:",
+                "  train:",
+            ]
+            if blend_weight_unit is not None:
+                lines.append(f"    blend_weight_unit: {blend_weight_unit}")
+            lines.extend(
+                [
+                    "    blend:",
+                    "      - weight: 1",
+                    "        path: ds_short",
+                    "        tags:",
+                    "          source: ds_short",
+                    "      - weight: 1",
+                    "        path: ds_long",
+                    "        tags:",
+                    "          source: ds_long",
+                ]
+            )
+            with open(path, "w") as f:
+                f.write("\n".join(lines))
+
+        sample_blend_recipe_path = self.dataset_path / "recipe_sample_blend.yaml"
+        sample_blend2_recipe_path = self.dataset_path / "recipe_sample_blend2.yaml"
+        size_blend_recipe_path = self.dataset_path / "recipe_size_blend.yaml"
+        write_blend_recipe(sample_blend_recipe_path)
+        write_blend_recipe(sample_blend2_recipe_path, blend_weight_unit="samples")
+        write_blend_recipe(size_blend_recipe_path, blend_weight_unit="text_chars")
+
+        def load_samples(
+            recipe_path: Path,
+            task_encoder: DefaultTaskEncoder,
+            n_samples: int,
+            size_fn: Callable[[TextSample], int] | None,
+        ):
+            dataset = get_train_dataset(
+                recipe_path,
+                worker_config=worker_config,
+                batch_size=None,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                task_encoder=task_encoder,
+            )
+            blend_dataset = get_blend_dataset(dataset)
+            assert isinstance(blend_dataset, BlendDataset)
+            assert blend_dataset.sample_size_fn == size_fn
+            loader = get_loader(dataset)
+            return list(zip(range(n_samples), loader))
+
+        n_samples = 2000
+        default_samples = load_samples(
+            sample_blend_recipe_path, DefaultTaskEncoder(), n_samples, None
+        )
+        default2_samples = load_samples(
+            sample_blend2_recipe_path, DefaultTaskEncoder(), n_samples, None
+        )
+        sbte = SizeBlendTaskEncoder()
+        size_samples = load_samples(size_blend_recipe_path, sbte, n_samples, sbte.text_chars)
+
+        assert default_samples == default2_samples
+
+        def tally(samples):
+            sample_counts: Counter[str] = Counter()
+            size_totals: Counter[str] = Counter()
+            for _, sample in samples:
+                source = sample.__tags__["source"]
+                sample_counts[source] += 1
+                size_totals[source] += len(sample.text)
+            return sample_counts, size_totals
+
+        default_counts, default_sizes = tally(default_samples)
+        size_counts, size_totals = tally(size_samples)
+
+        default_sample_ratio = default_counts["ds_short"] / default_counts.total()
+        size_sample_ratio = size_counts["ds_short"] / size_counts.total()
+        default_size_ratio = default_sizes["ds_short"] / default_sizes.total()
+        size_size_ratio = size_totals["ds_short"] / size_totals.total()
+        assert 0.45 <= default_sample_ratio <= 0.55, default_counts
+        assert default_size_ratio < 0.15, (default_sizes, default_size_ratio)
+        assert 0.45 <= size_size_ratio <= 0.55, size_totals
+        assert size_sample_ratio > 0.85, size_counts
+        assert size_sample_ratio > default_sample_ratio + 0.15, (
+            size_sample_ratio,
+            default_sample_ratio,
+        )
+
+    def test_blend_sample_size_save_restore(self):
+        torch.manual_seed(42)
+        worker_config = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=0,
+            seed_offset=42,
+        )
+
+        short_size = 2
+        long_size = 50
+        self.create_fixed_size_text_dataset(
+            self.dataset_path / "ds_short", range(55), text_size=short_size
+        )
+        self.create_fixed_size_text_dataset(
+            self.dataset_path / "ds_long", range(100, 155), text_size=long_size
+        )
+
+        size_blend_recipe_path = self.dataset_path / "recipe_size_blend.yaml"
+        with open(size_blend_recipe_path, "w") as f:
+            f.write(
+                "\n".join(
+                    [
+                        "__module__: megatron.energon",
+                        "__class__: Recipe",
+                        "splits:",
+                        "  train:",
+                        "    blend_weight_unit: text_chars",
+                        "    blend:",
+                        "      - weight: 1",
+                        "        path: ds_short",
+                        "        tags:",
+                        "          source: ds_short",
+                        "      - weight: 1",
+                        "        path: ds_long",
+                        "        tags:",
+                        "          source: ds_long",
+                    ]
+                )
+            )
+
+        def new_loader():
+            return get_savable_loader(
+                get_train_dataset(
+                    size_blend_recipe_path,
+                    worker_config=worker_config,
+                    batch_size=None,
+                    shuffle_buffer_size=None,
+                    max_samples_per_sequence=None,
+                    task_encoder=SizeBlendTaskEncoder(),
+                ),
+                checkpoint_every_sec=0,
+                checkpoint_every_min_n_samples=1,
+            )
+
+        loader = new_loader()
+        list(zip(range(20), loader))
+        state = loader.save_state_rank()
+        order_1 = [sample.text for _, sample in zip(range(30), loader)]
+
+        loader = new_loader()
+        loader.restore_state_rank(state)
+        order_1_rest = [sample.text for _, sample in zip(range(len(order_1)), loader)]
+        assert order_1 == order_1_rest
+
+        blend_dataset = get_blend_dataset(loader.dataset.dataset)
+        assert isinstance(blend_dataset, BlendDataset)
+        assert blend_dataset.sample_size_fn is not None
+        assert sum(blend_dataset._emitted_sizes) > 0
 
     def test_s3(self):
         # Create a recipe configuration
