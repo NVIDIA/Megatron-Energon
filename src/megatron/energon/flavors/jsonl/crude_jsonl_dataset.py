@@ -46,6 +46,7 @@ class CrudeJsonlDatasetFactory(
         max_samples_per_sequence: Optional[int] = None,
         subset: Optional[DatasetSubset] = None,
         part_filter: Optional[Callable[[str], bool]] = None,
+        filter_name: Optional[str] = None,
     ):
         path = EPath(path)
         original_len = IJsonlIndexReader.count_samples(path)
@@ -59,6 +60,7 @@ class CrudeJsonlDatasetFactory(
             max_samples_per_sequence=max_samples_per_sequence,
             subset=subset,
             part_filter=part_filter,
+            filter_name=filter_name,
         )
         assert self.path.size() == IJsonlIndexReader.size(path), (
             "The index of the jsonl file does not match the file. Regenerate the index."
@@ -100,6 +102,7 @@ class CrudeJsonlDatasetFactory(
             parallel_shard_iters=self.parallel_shard_iters,
             max_samples_per_sequence=self.max_samples_per_sequence,
             subset=self.subset.config() if self.subset is not None else None,
+            filter_name=self.filter_name,
         )
 
     def __str__(self):

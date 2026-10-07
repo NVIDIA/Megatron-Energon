@@ -57,6 +57,7 @@ def get_dataset_from_config(
     subflavors: Optional[Dict[str, Any]] = None,
     worker_config: WorkerConfig,
     sample_type: Optional[Type[T_sample]] = None,
+    filter_name: Optional[str] = None,
     **kwargs,
 ) -> BaseCoreDatasetFactory[T_sample]:
     """
@@ -72,6 +73,7 @@ def get_dataset_from_config(
         subflavors: Legacy alias for ``tags``. Specifying both raises an error.
         worker_config: If set, use this worker config instead of the default one.
         sample_type: Type of the samples to load, only used to ensure typing.
+        filter_name: Name of the filter index sidecar to apply, if any.
         **kwargs: Additional arguments to be passed to the dataset constructor.
 
     Returns:
@@ -88,6 +90,7 @@ def get_dataset_from_config(
         tags=tags,
         worker_config=worker_config,
         sample_type=sample_type,
+        filter_name=filter_name,
         **kwargs,
     )
     if tags is not None:

@@ -41,6 +41,49 @@ DEPRECATED_MODULES: DeprecatedModuleMap = {
             "megatron.energon.flavors.base_indexed_dataset", "_print_shard_slices"
         ),
     },
+    "megatron.energon.flavors.filter_index": {
+        "FILTER_FILENAME_PREFIX": DeprecatedSymbol(
+            "megatron.energon.flavors.common.filter_index", "FILTER_FILENAME_PREFIX"
+        ),
+        "FILTER_INDEX_DTYPE": DeprecatedSymbol(
+            "megatron.energon.flavors.common.filter_index", "FILTER_INDEX_DTYPE"
+        ),
+        "FILTER_INDEX_SUFFIX": DeprecatedSymbol(
+            "megatron.energon.flavors.common.filter_index", "FILTER_INDEX_SUFFIX"
+        ),
+        "FILTER_INDEX_VERSION": DeprecatedSymbol(
+            "megatron.energon.flavors.common.filter_index", "FILTER_INDEX_VERSION"
+        ),
+        "FILTER_JSON_SUFFIX": DeprecatedSymbol(
+            "megatron.energon.flavors.common.filter_index", "FILTER_JSON_SUFFIX"
+        ),
+        "FilterIndex": DeprecatedSymbol(
+            "megatron.energon.flavors.common.filter_index", "FilterIndex"
+        ),
+        "FilterIndexWriter": DeprecatedSymbol(
+            "megatron.energon.flavors.common.filter_index", "FilterIndexWriter"
+        ),
+        "FilterMetadata": DeprecatedSymbol(
+            "megatron.energon.flavors.common.filter_index", "FilterMetadata"
+        ),
+        "TranslatedIndexReader": DeprecatedSymbol(
+            "megatron.energon.flavors.common.filter_index", "TranslatedIndexReader"
+        ),
+        "build_filter_index": DeprecatedSymbol(
+            "megatron.energon.flavors.common.filter_index", "build_filter_index"
+        ),
+        "build_filter_index_from_global_indexes": DeprecatedSymbol(
+            "megatron.energon.flavors.common.filter_index",
+            "build_filter_index_from_global_indexes",
+        ),
+        "build_filter_index_from_shard_indexes": DeprecatedSymbol(
+            "megatron.energon.flavors.common.filter_index",
+            "build_filter_index_from_shard_indexes",
+        ),
+        "filter_index_paths": DeprecatedSymbol(
+            "megatron.energon.flavors.common.filter_index", "filter_index_paths"
+        ),
+    },
     "megatron.energon.flavors.manifest": {
         "build_split_parts": DeprecatedSymbol(
             "megatron.energon.flavors.common.manifest.write", "build_split_parts"

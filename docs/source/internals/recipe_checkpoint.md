@@ -11,7 +11,7 @@ Recipes are declarative graphs. Runtime datasets are wrapper trees built from th
 
 The main graph nodes are:
 
-- `DatasetReference`, a leaf path plus split, subset, shuffle, and tag settings;
+- `DatasetReference`, a leaf path plus split, subset, shuffle, filter, and tag settings;
 - `RecipeBlend` and `RecipeBlendEpochized`, weighted child graphs;
 - `Subset`, which expresses relative or absolute selection;
 - `Recipe`, which owns named splits and resolves the full graph.

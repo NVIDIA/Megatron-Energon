@@ -11,6 +11,7 @@ from megatron.energon.cache import FileStore
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory, SavableDataset
 from megatron.energon.flavors.common.dataset_sampler import DatasetSampler, RawSampleData
+from megatron.energon.flavors.common.filter_index import FilterIndex, TranslatedIndexReader
 from megatron.energon.flavors.common.manifest.sharder import Sharder
 from megatron.energon.flavors.common.manifest.types import DatasetSubset, ShardInfo
 from megatron.energon.flavors.common.reader import IndexedSampleReader
@@ -108,6 +109,7 @@ class BaseIndexedDatasetFactory(
         max_samples_per_sequence: Optional[int] = None,
         subset: Optional[DatasetSubset] = None,
         part_filter: Optional[Callable[[str], bool]] = None,
+        filter_name: Optional[str] = None,
         restore_key_kind: str = "Webdataset",
     ):
         assert self.__sample_type__ is not None, f"Class {type(self)} must define __sample_type__"
@@ -124,9 +126,15 @@ class BaseIndexedDatasetFactory(
         self.max_samples_per_sequence = max_samples_per_sequence
         self.subset = subset
         self.part_filter = part_filter
+        self.filter_name = filter_name
         self.restore_key_kind = restore_key_kind
+        self.filter_index = None
+        if filter_name is not None:
+            self.filter_index = FilterIndex(self.path, filter_name)
 
     def __len__(self) -> int:
+        if self.filter_index:
+            return len(self.filter_index)
         return sum(shard.count for shard in self.shards)
 
     def build(
@@ -137,20 +145,26 @@ class BaseIndexedDatasetFactory(
             parallel_shard_iters = 16 if self.training else 1
 
         part_filter = self._merge_part_filter(part_filter)
+        if self.filter_index is None:
+            active_shards = self.shards
+        else:
+            active_shards = self.filter_index.translate_shards(self.shards)
 
         workers_sample_slice_offsets = self.shard_workers(
-            self.shards,
+            active_shards,
             worker_config=self.worker_config,
             max_samples_per_sequence=self.max_samples_per_sequence,
             rotation_offset=worker_rotation_offset,
             subset=self.subset,
         )
-        self._print_shard_slices(workers_sample_slice_offsets, self.shards)
+        self._print_shard_slices(workers_sample_slice_offsets, active_shards)
 
         reader = self._build_reader(
             parallel_shard_iters=parallel_shard_iters,
             part_filter=part_filter,
         )
+        if self.filter_index is not None:
+            reader = TranslatedIndexReader(reader, self.filter_index)
 
         dataset = DatasetSampler(
             reader=reader,
@@ -227,4 +241,5 @@ class BaseIndexedDatasetFactory(
             parallel_shard_iters=self.parallel_shard_iters,
             max_samples_per_sequence=self.max_samples_per_sequence,
             subset=self.subset.config() if self.subset is not None else None,
+            filter_name=self.filter_name,
         )
