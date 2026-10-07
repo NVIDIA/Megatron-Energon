@@ -15,7 +15,7 @@ then supplies worker partitioning, filtering, shuffling, restore keys, and mappi
 
 - `build(worker_rotation_offset, part_filter)`, returning a `SavableDataset`;
 - `as_file_store()`, when the format supports key-based access;
-- `__len__`, `__sample_type__`, `paths`, and `subflavors`.
+- `__len__`, `__sample_type__`, `paths`, and `tags`.
 
 `BaseIndexedDatasetFactory` is the usual base for a finite, indexable format. Its `build` implementation:
 

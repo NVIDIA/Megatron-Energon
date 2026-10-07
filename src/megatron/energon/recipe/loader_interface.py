@@ -11,6 +11,7 @@ from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory
 from megatron.energon.flavors.common.manifest.types import DatasetSubset
+from megatron.energon.tags import TagsAlias
 from megatron.energon.worker import WorkerConfig
 
 
@@ -44,21 +45,21 @@ class LoadedDatasetList:
 
 
 @dataclass
-class TraversedDatasetReference:
+class TraversedDatasetReference(TagsAlias):
     """Flattened leaf dataset reference produced by recipe traversal.
 
     Attributes:
         path: Resolved path to the referenced leaf dataset.
         split_part: Effective split part to use when loading the leaf dataset.
         aux: Resolved auxiliary dataset or filesystem references keyed by auxiliary name.
-        subflavors: Effective subflavors implied by the traversed recipe hierarchy.
+        tags: Effective tags implied by the traversed recipe hierarchy.
         shuffle_over_epochs_multiplier: Effective shuffle over epochs multiplier from recipe references.
     """
 
     path: EPath
     split_part: str
     aux: dict[str, EPath]
-    subflavors: dict[str, Any]
+    tags: dict[str, Any]
     shuffle_over_epochs_multiplier: Optional[int] = 1
 
 
@@ -76,7 +77,7 @@ class DatasetLoaderInterface(ABC):
         *,
         split_part: Union[Literal["train", "val", "test"], str],
         _shuffle_over_epochs_multiplier: Optional[int] = 1,
-        _subflavors: Optional[Dict[str, Any]] = None,
+        _tags: Optional[Dict[str, Any]] = None,
     ) -> List[TraversedDatasetReference]:
         """Traverse a recipe subtree and collect flattened leaf dataset references.
 
@@ -92,7 +93,7 @@ class DatasetLoaderInterface(ABC):
                 references may override this with their own configured split.
             _shuffle_over_epochs_multiplier: Inherited shuffle multiplier (merged per node like
                 ``get_datasets``); default ``1``.
-            _subflavors: Effective subflavors implied by the traversed recipe hierarchy.
+            _tags: Effective tags implied by the traversed recipe hierarchy.
 
         Returns:
             A flattened list of `TraversedDatasetReference` values for all leaf datasets reached
@@ -107,7 +108,7 @@ class DatasetLoaderInterface(ABC):
         training: bool,
         split_part: Union[Literal["train", "val", "test"], str],
         worker_config: WorkerConfig,
-        subflavors: Optional[Dict[str, Any]] = None,
+        tags: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: Optional[int] = 1,
         subset: Optional[DatasetSubset] = None,
         **kwargs,
@@ -120,7 +121,7 @@ class DatasetLoaderInterface(ABC):
             training: If true, apply training randomization.
             split_part: Default split part to use.
             worker_config: Worker configuration to use.
-            subflavors: Set the default subflavors for all datasets.
+            tags: Set the default tags for all datasets.
             shuffle_over_epochs_multiplier: Multiply the inner datasets
                 `shuffle_over_epochs(_multiplier)` by this factor. E.g. if the inner dataset
                 has `shuffle_over_epochs_multiplier=2` and this function has

@@ -158,10 +158,10 @@ class CookingTaskEncoder(DefaultTaskEncoder[TextSample, TextSample, TextBatch, T
     """A simple task encoder for captioning."""
 
     cookers = [
-        Cooker(cook_text, has_subflavors={"crude_type": "txtpkl"}, part_filter=txt_part_filter),
-        Cooker(cook_other, has_subflavors={"crude_type": "otherpkl"}),
-        Cooker(cook_aux, has_subflavors={"crude_type": "aux_random_access"}),
-        Cooker(cook_media_metadata, has_subflavors={"crude_type": "media_metadata"}),
+        Cooker(cook_text, has_tags={"crude_type": "txtpkl"}, part_filter=txt_part_filter),
+        Cooker(cook_other, has_tags={"crude_type": "otherpkl"}),
+        Cooker(cook_aux, has_tags={"crude_type": "aux_random_access"}),
+        Cooker(cook_media_metadata, has_tags={"crude_type": "media_metadata"}),
     ]
 
     def batch(self, samples: List[TextSample]) -> TextBatch:
@@ -191,7 +191,7 @@ def cook_aux_filesystem_reference(
 
 class CookingTaskEncoderWithAuxFilesystemReference(CookingTaskEncoder):
     cookers = [
-        Cooker(cook_aux_filesystem_reference, has_subflavors={"crude_type": "aux_random_access"}),
+        Cooker(cook_aux_filesystem_reference, has_tags={"crude_type": "aux_random_access"}),
     ]
 
 
@@ -217,7 +217,7 @@ class LazyCookingTaskEncoder(
     decoder = SampleDecoder(image_decode="pilrgb")
 
     cookers = [
-        Cooker(cook_aux_primary_cache, has_subflavors={"crude_type": "aux_random_access"}),
+        Cooker(cook_aux_primary_cache, has_tags={"crude_type": "aux_random_access"}),
     ]
 
     def select_samples_to_pack(self, samples: List[LazyTextSample]) -> List[List[LazyTextSample]]:
@@ -246,7 +246,7 @@ class LazyCookingTaskEncoderWithPostencode(
     decoder = SampleDecoder(image_decode="pilrgb")
 
     cookers = [
-        Cooker(cook_aux_primary_cache, has_subflavors={"crude_type": "aux_random_access"}),
+        Cooker(cook_aux_primary_cache, has_tags={"crude_type": "aux_random_access"}),
     ]
 
     @stateless
@@ -316,7 +316,7 @@ class TestDataset(unittest.TestCase):
                         "    blend:",
                         "      - weight: 1",
                         "        path: ds1",
-                        "        subflavors:",
+                        "        tags:",
                         "          source: recipe.yaml",
                         "          number: 43",
                         "          recipe: recipe",
@@ -324,7 +324,7 @@ class TestDataset(unittest.TestCase):
                         "        shuffle_over_epochs_multiplier: 3",
                         "      - weight: 1",
                         "        path: ds2",
-                        "        subflavors:",
+                        "        tags:",
                         "          source: recipe.yaml",
                         "          number: 44",
                         "          recipe: recipe",
@@ -354,7 +354,7 @@ class TestDataset(unittest.TestCase):
                         "    aux:",
                         "      pkl_source: ds2",
                         "      fs_source: filesystem://.",
-                        "    subflavors:",
+                        "    tags:",
                         "      crude_type: aux_random_access",
                     ]
                 )
@@ -378,7 +378,7 @@ class TestDataset(unittest.TestCase):
                         "    path: multimedia_wds",
                         "    aux:",
                         "      media: filesystem://multimedia_fs",
-                        "    subflavors:",
+                        "    tags:",
                         "      crude_type: media_metadata",
                     ]
                 )
@@ -423,6 +423,7 @@ class TestDataset(unittest.TestCase):
         )
 
         with open(path / MAIN_FOLDER_NAME / "dataset.yaml", "w") as f:
+            # Keep this fixture on the legacy spelling to verify strict config compatibility.
             f.write(
                 "\n".join(
                     [
@@ -469,7 +470,7 @@ class TestDataset(unittest.TestCase):
                     [
                         "__module__: megatron.energon",
                         "__class__: CrudeWebdataset",
-                        "subflavors:",
+                        "tags:",
                         "  crude_type: media_metadata",
                     ]
                 )
@@ -660,7 +661,7 @@ class TestDataset(unittest.TestCase):
                     "splits:",
                     "  train:",
                     f"    path: dss://{dss_dataset_name}@{dss_dataset_version}",
-                    "    subflavors:",
+                    "    tags:",
                     "      crude_type: txtpkl",
                 ]
             )
@@ -928,7 +929,7 @@ class TestDataset(unittest.TestCase):
                             "    aux:",
                             "      pkl_source: msc://s3test_aux_msc/bucket/ds2",
                             "      fs_source: filesystem+msc://s3test_aux_msc/bucket",
-                            "    subflavors:",
+                            "    tags:",
                             "      crude_type: aux_random_access",
                         ]
                     )
@@ -946,7 +947,7 @@ class TestDataset(unittest.TestCase):
                             "    aux:",
                             "      pkl_source: ./ds2",
                             "      fs_source: filesystem://./",
-                            "    subflavors:",
+                            "    tags:",
                             "      crude_type: aux_random_access",
                         ]
                     )
@@ -1067,7 +1068,7 @@ class TestDataset(unittest.TestCase):
                         "    path: multimedia_wds",
                         "    aux:",
                         f"      media: filesystem+msc://{profile_name}/{bucket}/multimedia_fs",
-                        "    subflavors:",
+                        "    tags:",
                         "      crude_type: media_metadata",
                     ]
                 ).encode("utf-8"),
