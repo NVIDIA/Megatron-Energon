@@ -62,7 +62,7 @@ class TestDatasetType(unittest.TestCase):
         for name, expected in (
             ("wds", EnergonDatasetType.MANIFEST_DATASET),
             ("data.jsonl", EnergonDatasetType.JSONL),
-            ("recipe.yaml", EnergonDatasetType.METADATASET),
+            ("recipe.yaml", EnergonDatasetType.RECIPE),
             ("fs_only", EnergonDatasetType.FILESYSTEM),
             ("empty_dir", EnergonDatasetType.INVALID),
             ("missing", EnergonDatasetType.INVALID),
