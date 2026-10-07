@@ -21,6 +21,7 @@ import webdataset as wds
 
 from megatron.energon import (
     AuxFileStoreReference,
+    PackingGroupConfig,
     SystemFileStore,
     TextSample,
     WorkerConfig,
@@ -35,9 +36,13 @@ from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib.epath import EPath
 from megatron.energon.flavors.common.manifest.paths import MAIN_FOLDER_NAME
 from megatron.energon.recipe.loader import traverse_recipe
-from megatron.energon.recipe.loader_interface import DatasetBlendMode
+from megatron.energon.recipe.loader_interface import DatasetBlendMode, LoadedDataset
 from megatron.energon.recipe.recipe import AuxDatasetReference, DatasetReference
-from megatron.energon.task_encoder.base import DefaultTaskEncoder
+from megatron.energon.task_encoder.base import (
+    DefaultTaskEncoder,
+    PackingBufferSize,
+    stateless,
+)
 from megatron.energon.wrappers.blend_dataset import BlendDataset
 from megatron.energon.wrappers.watchdog_dataset import WatchdogDataset
 from tests.epath_s3_emulator import setup_s3_emulator
@@ -393,6 +398,105 @@ class TestDataset(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "Cannot set both"):
             load_dataset(invalid_recipe_path)
+
+    def test_group(self):
+        """Task-defined packing groups keep returned samples source-homogeneous."""
+        recipe_path = self.dataset_path / "group_blend.yaml"
+        with open(recipe_path, "w") as f:
+            f.write(
+                "\n".join(
+                    [
+                        "__module__: megatron.energon",
+                        "__class__: Recipe",
+                        "splits:",
+                        "  train:",
+                        "    blend:",
+                        "      - weight: 1",
+                        "        path: ds1",
+                        "        tags:",
+                        "          packing_source: ds1",
+                        "      - weight: 1",
+                        "        path: ds2",
+                        "        tags:",
+                        "          packing_source: ds2",
+                    ]
+                )
+            )
+
+        leaves = traverse_recipe(recipe_path, split_part="train")
+        assert len(leaves) == 2
+        assert {ref.tags["packing_source"] for ref in leaves} == {"ds1", "ds2"}
+
+        worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0, seed_offset=0)
+        loaded = load_dataset(recipe_path).get_datasets(
+            training=True,
+            split_part="train",
+            worker_config=worker_config,
+        )
+        assert loaded.blend_mode == DatasetBlendMode.DATASET_WEIGHT
+        assert {d.dataset.tags["packing_source"] for d in loaded.datasets} == {"ds1", "ds2"}
+
+        class GroupIsolationEncoder(DefaultTaskEncoder):
+            """Each returned packed sample must come from exactly one packing source."""
+
+            def build_packing_groups(
+                self,
+                datasets: list[LoadedDataset],
+                packing_buffer_size: PackingBufferSize,
+                shuffle_buffer_size: int | None,
+            ) -> list[PackingGroupConfig]:
+                return [
+                    PackingGroupConfig(
+                        datasets=[
+                            dataset
+                            for dataset in datasets
+                            if dataset.dataset.tags["packing_source"] == packing_source
+                        ],
+                        packing_buffer_size=packing_buffer_size,
+                        shuffle_buffer_size=shuffle_buffer_size,
+                    )
+                    for packing_source in sorted(
+                        {dataset.dataset.tags["packing_source"] for dataset in datasets}
+                    )
+                ]
+
+            @stateless
+            def encode_sample(self, sample: TextSample) -> TextSample:
+                return sample
+
+            def select_samples_to_pack(self, samples: list[TextSample]) -> list[list[TextSample]]:
+                return [samples]
+
+            @stateless
+            def pack_selected_samples(self, samples: list[TextSample]) -> TextSample:
+                packing_sources = {
+                    sample.__tags__.get("packing_source")
+                    for sample in samples
+                    if sample.__tags__ is not None
+                }
+                assert len(packing_sources) == 1, (
+                    "Mixed sources in one packed sample: "
+                    f"{packing_sources} for keys {[sample.__key__ for sample in samples]}"
+                )
+                return TextSample.derive_from(
+                    samples[0],
+                    __key__=",".join(s.__key__ for s in samples),
+                    __restore_key__=(),
+                    text=f"{next(iter(packing_sources))}:" + " | ".join(s.text for s in samples),
+                )
+
+        torch.manual_seed(42)
+        packed_ds = get_train_dataset(
+            recipe_path,
+            worker_config=worker_config,
+            batch_size=2,
+            packing_buffer_size=8,
+            shuffle_buffer_size=8,
+            max_samples_per_sequence=None,
+            task_encoder=GroupIsolationEncoder(),
+            virtual_epoch_length=10,
+        )
+        list(get_loader(packed_ds))
 
     def test_nested_recipe(self):
         torch.manual_seed(42)
