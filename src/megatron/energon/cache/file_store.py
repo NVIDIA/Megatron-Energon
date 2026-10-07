@@ -123,6 +123,10 @@ def __getattr__(name: str):
         from megatron.energon.flavors.jsonl.file_store import JsonlFileStore
 
         return JsonlFileStore
+    if name == "BinIdxFileStore":
+        from megatron.energon.flavors.binidx.file_store import BinIdxFileStore
+
+        return BinIdxFileStore
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 

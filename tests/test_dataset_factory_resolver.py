@@ -38,7 +38,7 @@ class _SingleFileProvider:
 class _LateProvider:
     @classmethod
     def detect_path(cls, path: EPath) -> EnergonDatasetType | None:
-        return EnergonDatasetType.MANIFEST_DATASET
+        return EnergonDatasetType.BINIDX
 
     @classmethod
     def from_path(cls, path: EPath, **kwargs: Any) -> BaseCoreDatasetFactory:
