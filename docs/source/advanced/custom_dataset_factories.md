@@ -18,6 +18,11 @@ Use a custom factory when:
 - a new reader should participate in the standard Energon worker, filtering,
   shuffle, and restore pipeline.
 
+A custom auxiliary key-value container is a different extension point. See
+{ref}`custom-aux-protocols` when the data is looked up by key from a cooker
+rather than iterated as the
+primary dataset.
+
 ## Registering a Path Provider
 
 {py:func}`register_dataset_factory_provider
