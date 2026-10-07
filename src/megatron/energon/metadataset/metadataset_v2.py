@@ -23,6 +23,7 @@ from megatron.energon.metadataset.loader_interface import (
     LoadedDatasetList,
     TraversedDatasetReference,
 )
+from megatron.energon.metadataset.merge import merge_weighted_datasets
 from megatron.energon.metadataset.metadataset import Metadataset
 from megatron.energon.worker import WorkerConfig
 
@@ -662,7 +663,7 @@ class MetadatasetBlend(
                 datasets.append(loaded_dataset)
         return LoadedDatasetList(
             blend_mode=DatasetBlendMode.DATASET_WEIGHT,
-            datasets=datasets,
+            datasets=merge_weighted_datasets(datasets),
         )
 
 

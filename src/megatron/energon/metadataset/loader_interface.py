@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Sequence, Union
 
@@ -35,6 +35,7 @@ class LoadedDataset:
     repetitions: Union[float, int, None] = None
     #: Auxiliary datasets for crude cooking.
     aux: Optional[Dict[str, FileStore]] = None
+    _source_config: Optional[Dict[str, Any]] = field(default=None, repr=False, compare=False)
 
 
 @edataclass
