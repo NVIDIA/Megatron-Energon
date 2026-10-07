@@ -7,8 +7,8 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING, BinaryIO, Generator, List, Optional, Tuple, Union
 
 from megatron.energon.epathlib import EPath
+from megatron.energon.flavors.common.sqlite import ThreadLocalSqlite
 from megatron.energon.flavors.webdataset.itar import ITarRawSamplePartPointer, ITarSamplePointer
-from megatron.energon.flavors.webdataset.thread_local_sqlite import ThreadLocalSqlite
 from megatron.energon.local_copy import ensure_local_copy
 
 if TYPE_CHECKING:

@@ -36,12 +36,15 @@ from megatron.energon import (
 from megatron.energon.cache import FileStore, FileStoreCachePool, Lazy
 from megatron.energon.cache.base import CachePool
 from megatron.energon.cli.main import prepare_media_command
+from megatron.energon.decoders import SampleDecoder
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib.epath import EPath
 from megatron.energon.errors import reraise_exception
 from megatron.energon.flavors.base_dataset import Sample
-from megatron.energon.flavors.webdataset.config import INDEX_SQLITE_FILENAME, MAIN_FOLDER_NAME
-from megatron.energon.flavors.webdataset.sample_decoder import SampleDecoder
+from megatron.energon.flavors.common.manifest.paths import (
+    INDEX_SQLITE_FILENAME,
+    MAIN_FOLDER_NAME,
+)
 from megatron.energon.media.extractor import MediaFilterConfig, MediaFilterStrategy
 from megatron.energon.media.filesystem_prepare import prepare_filesystem_dataset
 from megatron.energon.media.metadata import AVMetadata, ImageMetadata
@@ -94,8 +97,14 @@ class TextBatch(Batch):
     txts: List[str]
 
 
+def txt_part_filter(part: str) -> bool:
+    return part == "txt"
+
+
 @stateless
 def cook_text(sample: dict) -> TextSample:
+    # Only used with txt_part_filter, the pkl part must not be loaded
+    assert "pkl" not in sample
     return TextSample(
         **basic_sample_keys(sample),
         text=f"<{sample['txt']}>",
@@ -149,7 +158,7 @@ class CookingTaskEncoder(DefaultTaskEncoder[TextSample, TextSample, TextBatch, T
     """A simple task encoder for captioning."""
 
     cookers = [
-        Cooker(cook_text, has_subflavors={"crude_type": "txtpkl"}),
+        Cooker(cook_text, has_subflavors={"crude_type": "txtpkl"}, part_filter=txt_part_filter),
         Cooker(cook_other, has_subflavors={"crude_type": "otherpkl"}),
         Cooker(cook_aux, has_subflavors={"crude_type": "aux_random_access"}),
         Cooker(cook_media_metadata, has_subflavors={"crude_type": "media_metadata"}),
@@ -266,7 +275,7 @@ class LazyCookingTaskEncoderWithPostencode(
 class GenericCookingTaskEncoder(DefaultTaskEncoder[TextSample, TextSample, TextBatch, TextBatch]):
     """A simple task encoder for captioning."""
 
-    cookers = [Cooker(cook_text)]
+    cookers = [Cooker(cook_text, part_filter=txt_part_filter)]
 
     def batch(self, samples: List[TextSample]) -> TextBatch:
         return TextBatch.from_samples(

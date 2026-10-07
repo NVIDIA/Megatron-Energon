@@ -11,7 +11,7 @@ from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
 from megatron.energon.retry_stream import RetryReadStream
 
-ITAR_SUFFIX = ".tar.idx"
+IDX_SUFFIX = ".idx"
 
 
 @edataclass
@@ -48,7 +48,7 @@ class ITarRawSamplePartPointer:
 class TarIndexReader:
     def __init__(self, tar_path: Union[EPath, str]):
         tar_path = EPath(tar_path)
-        index_path = tar_path.with_suffix(ITAR_SUFFIX)
+        index_path = tar_path.with_suffix(IDX_SUFFIX, replace=False)
         self._length = index_path.size() // 8
         self.itar = index_path.open("rb")
 
@@ -86,8 +86,8 @@ class TarIndexReader:
 class TarIndexWriter:
     def __init__(self, tar_path: EPath):
         self.tar_path = tar_path
-        self.final_name = tar_path.with_suffix(ITAR_SUFFIX)
-        self.tmp_name = tar_path.with_suffix(ITAR_SUFFIX + ".tmp")
+        self.final_name = tar_path.with_suffix(IDX_SUFFIX, replace=False)
+        self.tmp_name = tar_path.with_suffix(IDX_SUFFIX + ".tmp", replace=False)
         self.itar = self.tmp_name.open("wb")
 
     def append(self, offset: int):

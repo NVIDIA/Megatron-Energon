@@ -5,9 +5,10 @@ SPDX-License-Identifier: BSD-3-Clause -->
 # Data Preparation
 
 The aim of data preparation is to convert your data to a format that the energon loader can understand and iterate.
-Energon's primary data format is [WebDataset](https://github.com/webdataset/webdataset) with some extra information stored in a folder called `.nv-meta`.
+Energon's primary prepared format is a manifest dataset with extra information stored in a folder called `.nv-meta`.
+The most common manifest-backed format is [WebDataset](https://github.com/webdataset/webdataset).
 Below in [](data-on-disk) we explain the details about this format.
-We also support a simpler JSONL format which will always be interpreted as [crude data](crude-data).
+We also support direct JSONL datasets, which are interpreted as [crude data](crude-data).
 
 ## Important Considerations
 
@@ -18,7 +19,7 @@ Depending on what your data looks like and how you are planning to use it, you w
 
 You can include the media (images/video/audio) inside the same webdataset along with the text-based data of each sample (such as labels, captions, etc.).
 Or you can keep the media separate (either in another indexed webdataset or as individual files on disk).
-When using JSONL, the media will always be separate, so JSONL datasets are always polylithic unless they are text-only.
+When using JSONL, the media will usually be separate, so those datasets are typically polylithic unless they are text-only.
 
 The monolithic option is faster to load. However, there are a few reasons why the other option may be preferable:
 
@@ -67,8 +68,8 @@ These are the typical steps to get your data ready:
 2. Create the auxiliary dataset(s). Can be multiple datasets, e.g. one per modality.
     * Either as a folder on disk with all the media files inside
     * Or as another WebDataset that contains just the media files (with the exact same names)
-3. Run our preparation tool `energon prepare` **on both datasets** (yes also on the JSONL) to convert to an energon-compatible format
-    * Configure both datasets as `CrudeWebdataset` (JSONL always is by default)
+3. Run our preparation tool `energon prepare` **on both datasets** (yes also on JSONL files) to convert to an energon-compatible format
+    * Configure WebDataset-based crude datasets as `CrudeWebdataset`; JSONL datasets are loaded as crude data by default.
     * For the auxiliary datasets, we recommend to enable the [media metadata feature](media-metadata) to store additional information about the media (like image size, resolution, video duration etc.)
 4. Create a [metadataset](../basic/metadataset) that specifies what auxiliary data to load for each primary dataset
     * For more details read about [crude data](crude-data)
@@ -82,10 +83,12 @@ It has fewer features, but can easily be read using a standard editor.
 ```{admonition} Good to know
 :class: tip
 A JSONL dataset cannot contain media files, but it can reference media files elsewhere (auxiliary data).
-It does not have a train/val/test split.
+A direct JSONL file has no train/val/test split.
 It cannot be used as an auxiliary dataset by other primary datasets.
 It cannot be mounted using `energon mount`.
 ```
+
+### A Single JSONL File
 
 A single JSONL file will contain all of your text-based data, one JSON entry per line. For example:
 
@@ -525,8 +528,9 @@ For more information please also read [](custom-sample-loader).
 (data-on-disk)=
 ## Dataset Format on Disk (WebDataset)
 
-The energon library supports loading large multi-modal datasets from disk.
-To load the dataset, it must comply with the format described in this section unless it's a JSONL dataset.
+The energon library supports loading large multi-modal datasets from disk. A
+manifest-backed WebDataset must comply with the format described in this
+section; direct JSONL datasets use the layout above.
 
 A valid energon dataset must contain an `.nv-meta` folder with certain files as shown below.
 
@@ -691,13 +695,11 @@ The `media_metadata` table is used to store the media metadata for the selected 
 (data-on-disk-jsonl)=
 ## Dataset Format on Disk for JSONL Datasets
 
-For the simpler JSONL option, you will still need to run `energon prepare`, but this will not create a full `.nv-meta` folder.
-Instead, only an index file with the same base filename will be created.
-
-So if your dataset is named `my_dataset.jsonl`, a new file `my_dataset.jsonl.idx` will appear next to it when preparing it.
-
-That's all. The dataset type will always be `CrudeWebdataset` and the split part is `train` by default. However, when loading the dataset
-you can change the split type to `val` or `test`.
+For a direct file, `energon prepare` creates only an index with the same base
+filename. If the dataset is named `my_dataset.jsonl`, the resulting index is
+`my_dataset.jsonl.idx`. The direct file is loaded as crude data and has no
+train/validation/test split; callers may pass a split name for API consistency,
+but the full file is used.
 
 (data-on-disk-filesystem)=
 ## Dataset Format on Disk for Filesystem Datasets

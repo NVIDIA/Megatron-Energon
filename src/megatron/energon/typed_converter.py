@@ -367,6 +367,7 @@ class JsonParser:
                     _path,
                     _stage,
                 )
+            field_types = typing.get_type_hints(inst_type)
             kwargs = {
                 field.name: self.raw_to_typed(
                     raw_data.get(
@@ -381,7 +382,7 @@ class JsonParser:
                             else field.default
                         ),
                     ),
-                    field.type,
+                    field_types[field.name],
                     allow_imports,
                     f"{_path} -> {type_name}:{field.name}",
                     _stage + (idx,),
@@ -568,16 +569,21 @@ class JsonParser:
             The return value of `fn`
         """
         parameters = list(inspect.signature(fn).parameters.items())
+        parameter_types = {}
         if inspect.isclass(fn):
             init_sig = getattr(fn, "__init__", None)
             if init_sig is not None:
                 parameters = list(inspect.signature(init_sig).parameters.items())[1:]
+            if dataclasses.is_dataclass(fn):
+                # Resolve recursive field annotations in the class's module namespace.
+                parameter_types = typing.get_type_hints(fn)
         args = []
         kwargs = {}
         if isinstance(raw_data, dict):
             unused_args = raw_data.copy()
             for idx, (key, param) in enumerate(parameters):
-                t = Any if param.annotation is inspect.Parameter.empty else param.annotation
+                annotation = parameter_types.get(key, param.annotation)
+                t = Any if annotation is inspect.Parameter.empty else annotation
                 if param.kind in (
                     inspect.Parameter.POSITIONAL_OR_KEYWORD,
                     inspect.Parameter.KEYWORD_ONLY,
@@ -610,7 +616,8 @@ class JsonParser:
         elif isinstance(raw_data, list):
             unused_args = raw_data.copy()
             for idx, (key, param) in enumerate(parameters):
-                t = Any if param.annotation is inspect.Parameter.empty else param.annotation
+                annotation = parameter_types.get(key, param.annotation)
+                t = Any if annotation is inspect.Parameter.empty else annotation
                 if param.kind == inspect.Parameter.POSITIONAL_ONLY:
                     if param.default is inspect.Parameter.empty and len(unused_args) == 0:
                         raise ValueError(

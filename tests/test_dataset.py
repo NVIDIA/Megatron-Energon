@@ -50,7 +50,7 @@ from megatron.energon.dataset_config import get_dataset_from_config
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import BaseWebdatasetFactory
-from megatron.energon.flavors.webdataset.config import INFO_JSON_FILENAME, MAIN_FOLDER_NAME
+from megatron.energon.flavors.common.manifest.paths import INFO_JSON_FILENAME, MAIN_FOLDER_NAME
 from megatron.energon.task_encoder.base import stateless
 from megatron.energon.tools.analyze_debug import command as analyze_debug_command
 from megatron.energon.tools.info import command as info_command
@@ -115,7 +115,6 @@ class TestDataset(unittest.TestCase):
 
         # Create a small dummy captioning dataset
         self.samples = self.create_captioning_test_dataset(self.dataset_path, DATASET_SIZE)
-        print(self.dataset_path)
 
     def tearDown(self):
         # Remove all temporary files
@@ -1725,6 +1724,24 @@ class TestDataset(unittest.TestCase):
         assert result.exit_code == 0, "Debug analysis failed, see output"
         assert "Analyzing 3 logs" in result.stdout
         assert "Found 50 unique sample keys, 20 steps" in result.stdout
+
+        # The fallback reads the sample loader logs instead of the batch logs
+        result = runner.invoke(
+            analyze_debug_command,
+            [
+                str(debug_log_path),
+                "--include-modality",
+                "train,val",
+                "--force-loading-order",
+                "--heatmap-path",
+                str(self.dataset_path / "heatmap_loading_order.png"),
+            ],
+            catch_exceptions=False,
+        )
+        print(result.stdout)
+        assert result.exit_code == 0, "Debug analysis failed, see output"
+        assert "Forcing to use sample loader logs" in result.stdout
+        assert "Found 50 unique sample keys" in result.stdout
 
     def test_validate_captioning_dataset(self):
         runner = CliRunner()

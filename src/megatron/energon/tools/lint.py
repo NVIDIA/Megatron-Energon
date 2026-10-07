@@ -11,9 +11,9 @@ import tqdm
 
 from megatron.energon import WorkerConfig, get_loader, get_val_dataset
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.webdataset.empty_dataset_error import EmptyDatasetError
+from megatron.energon.flavors.common.manifest.empty_dataset_error import EmptyDatasetError
+from megatron.energon.flavors.common.manifest.io import get_dataset_info
 from megatron.energon.flavors.webdataset.itar import TarIndexReader
-from megatron.energon.flavors.webdataset.metadata import get_dataset_info
 
 
 def check_index(dataset_path: EPath):
