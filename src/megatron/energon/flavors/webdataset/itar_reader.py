@@ -468,6 +468,10 @@ class ShardInfosITarReader(ITarReader[int], SamplePartReader[FilteredSample]):
     def __len__(self) -> int:
         return self.shard_count_cumsum[-1]
 
+    def close(self):
+        super().close()
+        self.cached_offset_reader.close()
+
     def __str__(self) -> str:
         return (
             f"ShardInfosITarReader("

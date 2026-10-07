@@ -319,6 +319,11 @@ class CachedItarOffsetReader:
 
         return result_byte_offset, length
 
+    def close(self) -> None:
+        for entry in self.tar_index_reader_cache.values():
+            entry.tar_index_reader.close()
+        self.tar_index_reader_cache.clear()
+
 
 class ITarFile(tarfile.TarFile):
     """This class is a subclass of tarfile.TarFile that allows for reading a tarfile,

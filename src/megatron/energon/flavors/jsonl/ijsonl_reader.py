@@ -193,4 +193,5 @@ class IJsonlReader(ABC, SamplePartFileReader[FilteredSample]):
     def close(self):
         if self.ijsonl_file is not None:
             self.ijsonl_file.close()
+            self.ijsonl_file = None
         self.cached_offset_reader.close()
