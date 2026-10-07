@@ -7,8 +7,8 @@ from megatron.energon.dataset_config import load_config
 from megatron.energon.deprecation import warn_deprecated
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.webdataset.metadata import check_dataset_info_present
-from megatron.energon.flavors.webdataset.structs import DatasetSubset
+from megatron.energon.flavors.common.manifest.io import check_dataset_info_present
+from megatron.energon.flavors.common.manifest.types import DatasetSubset
 from megatron.energon.metadataset.dataset_loader import DatasetLoader
 from megatron.energon.metadataset.loader_interface import (
     DatasetBlendMode,
@@ -81,6 +81,22 @@ class DatasetReference:
             return {**self.subflavors, **(inherited_subflavors or {})}
         return dict(inherited_subflavors or {})
 
+    def _merge_shuffle_over_epochs_multiplier(
+        self, inherited_shuffle_over_epochs_multiplier: Optional[int]
+    ) -> Optional[int]:
+        """Same semantics as Metadataset V2 ``ShuffleOverEpochsMultiplierMixin`` / ``get_datasets``."""
+        if (
+            inherited_shuffle_over_epochs_multiplier is None
+            or self.shuffle_over_epochs_multiplier is None
+        ):
+            return None
+        if (
+            inherited_shuffle_over_epochs_multiplier == -1
+            or self.shuffle_over_epochs_multiplier == -1
+        ):
+            return -1
+        return inherited_shuffle_over_epochs_multiplier * self.shuffle_over_epochs_multiplier
+
     def post_initialize(self, mds_path: Optional[EPath] = None):
         self._resolve_path(mds_path)
         if self.path.is_file():
@@ -101,35 +117,27 @@ class DatasetReference:
         mds_path: Optional[EPath] = None,
         *,
         split_part: Union[Literal["train", "val", "test"], str],
+        _shuffle_over_epochs_multiplier: Optional[int] = 1,
         _subflavors: Optional[Dict[str, Any]] = None,
     ) -> List[TraversedDatasetReference]:
-        """Traverse this V1 dataset reference into flattened leaf references.
-
-        Args:
-            mds_path: Parent metadataset path used internally to resolve relative dataset and
-                auxiliary paths. Must be set for nested references and inner traversal nodes;
-                use None only for top-level metadatasets.
-            split_part: Split inherited from the parent traversal. If this reference defines its
-                own split override, that split takes precedence for nested traversal and the
-                returned leaf reference.
-
-        Returns:
-            A single leaf `TraversedDatasetReference` for direct dataset references, or the
-            flattened traversal result of the nested metadataset when this reference points to one.
-        """
         self._resolve_path(mds_path)
-        effective_subflavors = self._merge_traversed_subflavors(_subflavors)
+        _subflavors = self._merge_traversed_subflavors(_subflavors)
+        _shuffle_over_epochs_multiplier = self._merge_shuffle_over_epochs_multiplier(
+            _shuffle_over_epochs_multiplier
+        )
         if self.path.is_file():
             return self._load_nested_metadataset().traverse(
                 split_part=self.split_part or split_part,
-                _subflavors=effective_subflavors,
+                _shuffle_over_epochs_multiplier=_shuffle_over_epochs_multiplier,
+                _subflavors=_subflavors,
             )
         return [
             TraversedDatasetReference(
                 path=self.path,
                 split_part=self.split_part or split_part,
                 aux={},
-                subflavors=effective_subflavors,
+                subflavors=_subflavors,
+                shuffle_over_epochs_multiplier=_shuffle_over_epochs_multiplier,
             )
         ]
 
@@ -187,6 +195,7 @@ class MetadatasetBlender:
         mds_path: Optional[EPath] = None,
         *,
         split_part: Union[Literal["train", "val", "test"], str],
+        _shuffle_over_epochs_multiplier: Optional[int] = 1,
         _subflavors: Optional[Dict[str, Any]] = None,
     ) -> List[TraversedDatasetReference]:
         assert mds_path is not None
@@ -196,6 +205,7 @@ class MetadatasetBlender:
                 dataset.traverse(
                     mds_path,
                     split_part=split_part,
+                    _shuffle_over_epochs_multiplier=_shuffle_over_epochs_multiplier,
                     _subflavors=_subflavors,
                 )
             )
@@ -270,21 +280,14 @@ class Metadataset(DatasetLoaderInterface):
         mds_path: Optional[EPath] = None,
         *,
         split_part: Union[Literal["train", "val", "test"], str],
+        _shuffle_over_epochs_multiplier: Optional[int] = 1,
         _subflavors: Optional[Dict[str, Any]] = None,
     ) -> List[TraversedDatasetReference]:
-        """Traverse the selected V1 split and flatten all reachable leaf references.
-
-        Args:
-            mds_path: Unused for top-level metadatasets. Present to satisfy the shared interface.
-            split_part: Split to traverse.
-
-        Returns:
-            The flattened list of traversed leaf dataset references for `split_part`.
-        """
         assert mds_path is None
         return self._splits[split_part].traverse(
             self._path,
             split_part=split_part,
+            _shuffle_over_epochs_multiplier=_shuffle_over_epochs_multiplier,
             _subflavors=_subflavors,
         )
 

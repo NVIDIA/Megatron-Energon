@@ -6,7 +6,11 @@ from typing import Any, Union
 
 from megatron.energon.dataset_config import load_config
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.webdataset.metadata import EnergonDatasetType, get_dataset_type
+from megatron.energon.flavors.dataset_type import (
+    EnergonDatasetType,
+    get_dataset_type,
+    is_metadataset,
+)
 from megatron.energon.metadataset.dataset_loader import DatasetLoader
 from megatron.energon.metadataset.loader_interface import (
     DatasetLoaderInterface,
@@ -31,8 +35,7 @@ def load_dataset(
         mds.post_initialize()
         return mds
     path = EPath(path)
-    ds_type = get_dataset_type(path)
-    if ds_type == EnergonDatasetType.METADATASET:
+    if is_metadataset(path):
         mds = load_config(
             path,
             default_type=Metadataset,
@@ -40,14 +43,9 @@ def load_dataset(
         )
         mds.post_initialize()
         return mds
-    elif ds_type in (EnergonDatasetType.WEBDATASET, EnergonDatasetType.JSONL):
-        ds = DatasetLoader(path=path, **kwargs)
-        ds.post_initialize()
-        return ds
-    elif ds_type == EnergonDatasetType.FILESYSTEM:
-        raise ValueError("Filesystem datasets can only be used as auxiliary datasets.")
-    else:
-        raise ValueError(f"Invalid dataset at {path}")
+    ds = DatasetLoader(path=path, **kwargs)
+    ds.post_initialize()
+    return ds
 
 
 def traverse_metadataset(

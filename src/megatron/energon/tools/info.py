@@ -11,8 +11,8 @@ import megatron.energon
 from megatron.energon.epathlib import EPath
 from megatron.energon.eyaml import load_yaml, load_yaml_json
 from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory
-from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
-from megatron.energon.flavors.webdataset.metadata import get_dataset_info
+from megatron.energon.flavors.common.manifest.io import get_dataset_info
+from megatron.energon.flavors.common.manifest.paths import MAIN_FOLDER_NAME
 
 fmt = """
 * {dataset_name}: `{path}` ({samples_count:,} samples, {samples_size} in {shards_count} shards)
