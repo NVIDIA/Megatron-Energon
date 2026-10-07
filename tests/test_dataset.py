@@ -56,6 +56,7 @@ from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import BaseWebdatasetFactory, CrudeJsonlDatasetFactory
 from megatron.energon.flavors.common.manifest.paths import INFO_JSON_FILENAME, MAIN_FOLDER_NAME
+from megatron.energon.metadataset.loader import prepare_metadataset
 from megatron.energon.task_encoder.base import stateless
 from megatron.energon.tools.analyze_debug import command as analyze_debug_command
 from megatron.energon.tools.info import command as info_command
@@ -119,6 +120,10 @@ class JsonlTextTaskEncoder(DefaultTaskEncoder):
     cookers = [Cooker(cook_jsonl_text)]
 
 
+def join_captioning(first: CaptioningSample, second: CaptioningSample) -> CaptioningSample:
+    return CaptioningSample.derive_from(first, image=first.image, caption=second.caption)
+
+
 class TestDataset(unittest.TestCase):
     # Set up the test fixture
     def setUp(self):
@@ -144,6 +149,29 @@ class TestDataset(unittest.TestCase):
                 f.write(json.dumps({"txt": f"jsonl-{idx}"}) + "\n")
         CrudeJsonlDatasetFactory.prepare_dataset(jsonl_path)
 
+        # Joins the captioning dataset with itself, reading through the join index
+        joined_path = self.dataset_path / "joined.yaml"
+        with open(joined_path, "w") as f:
+            f.write(
+                "\n".join(
+                    [
+                        "__module__: megatron.energon",
+                        "__class__: MetadatasetV2",
+                        "splits:",
+                        "  train:",
+                        "    join:",
+                        "      first:",
+                        "        path: .",
+                        "      second:",
+                        "        path: .",
+                        "    joiner:",
+                        f"      __module__: {join_captioning.__module__}",
+                        f"      __function__: {join_captioning.__name__}",
+                    ]
+                )
+            )
+        prepare_metadataset(EPath(joined_path))
+
         dataset_root = os.path.realpath(self.dataset_path)
 
         def open_dataset_files():
@@ -163,6 +191,7 @@ class TestDataset(unittest.TestCase):
         for path, task_encoder in (
             (self.dataset_path, DefaultTaskEncoder()),
             (jsonl_path, JsonlTextTaskEncoder()),
+            (joined_path, DefaultTaskEncoder()),
         ):
             for num_workers in (0, 2):
                 with self.subTest(dataset=path.name, num_workers=num_workers):
@@ -206,6 +235,8 @@ class TestDataset(unittest.TestCase):
                         iter(loader)
                     with self.assertRaises(RuntimeError):
                         loader.save_state_rank()
+                    with self.assertRaises(RuntimeError):
+                        loader.restore_state_rank(None)
 
     def tearDown(self):
         # Remove all temporary files

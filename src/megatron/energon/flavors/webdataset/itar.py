@@ -320,9 +320,11 @@ class CachedItarOffsetReader:
         return result_byte_offset, length
 
     def close(self) -> None:
-        for entry in self.tar_index_reader_cache.values():
-            entry.tar_index_reader.close()
-        self.tar_index_reader_cache.clear()
+        """Close all cached index readers, even if closing one of them fails."""
+        entries, self.tar_index_reader_cache = list(self.tar_index_reader_cache.values()), {}
+        with contextlib.ExitStack() as stack:
+            for entry in entries:
+                stack.callback(entry.tar_index_reader.close)
 
 
 class ITarFile(tarfile.TarFile):
