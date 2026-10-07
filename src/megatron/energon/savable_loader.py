@@ -8,11 +8,13 @@ import threading
 import time
 import traceback
 import weakref
+from contextlib import ExitStack
 from functools import partial
 from typing import (
     Any,
     ClassVar,
     Dict,
+    Generator,
     Generic,
     Iterator,
     List,
@@ -28,6 +30,8 @@ import torch
 import torch.distributed
 import torch.multiprocessing
 from torch.utils.data import DataLoader, IterableDataset
+from torch.utils.data.dataloader import _MultiProcessingDataLoaderIter
+from typing_extensions import Self
 
 from megatron.energon.cache import CachePool
 from megatron.energon.deprecation import deprecated
@@ -49,26 +53,51 @@ from megatron.energon.wrappers.watchdog_dataset import WatchdogDataset
 T = TypeVar("T")
 
 
-def _close_data_loader(loader: DataLoader[Any]) -> None:
-    """Shut down worker processes before closing the main-process dataset tree."""
-    epoch_iterator = getattr(loader, "_epoch_iterator", None)
-    if epoch_iterator is not None:
-        close_iterator = getattr(epoch_iterator, "close", None)
-        if close_iterator is not None:
-            close_iterator()
-        loader._epoch_iterator = None
+class _ClosableDataLoader:
+    """Explicit resource cleanup shared by the energon data loaders."""
 
-    data_iterator = getattr(loader, "_iterator", None)
-    if data_iterator is not None:
-        shutdown_workers = getattr(data_iterator, "_shutdown_workers", None)
-        if shutdown_workers is not None:
-            shutdown_workers()
-        loader._iterator = None
+    dataset: Any
+    _iterator: Any
 
-    dataset = getattr(loader, "dataset", None)
-    close_dataset = getattr(dataset, "close", None)
-    if close_dataset is not None:
-        close_dataset()
+    #: Iterators returned by `__iter__`, which are finalized on close
+    _open_iterators: Optional["weakref.WeakSet[Generator[Any, None, None]]"] = None
+    #: Whether `close` was called
+    _closed: bool = False
+
+    def _check_open(self) -> None:
+        if self._closed:
+            raise RuntimeError(f"{type(self).__name__} is closed and cannot be used anymore")
+
+    def _track_iterator(self, iterator: Generator[T, None, None]) -> Generator[T, None, None]:
+        if self._open_iterators is None:
+            self._open_iterators = weakref.WeakSet()
+        self._open_iterators.add(iterator)
+        return iterator
+
+    def close(self) -> None:
+        """Finalize open iterators and stop the worker processes, then close the dataset.
+
+        The loader cannot be used anymore afterwards. The dataset stays usable, e.g. for a new
+        loader, its readers reopen their files on demand.
+        """
+        if self._closed:
+            return
+        self._closed = True
+        open_iterators, self._open_iterators = list(self._open_iterators or ()), None
+        data_iterator, self._iterator = self._iterator, None
+        # Callbacks run in reverse order, even if one of them fails
+        with ExitStack() as stack:
+            stack.callback(self.dataset.close)
+            if isinstance(data_iterator, _MultiProcessingDataLoaderIter):
+                stack.callback(data_iterator._shutdown_workers)
+            for iterator in open_iterators:
+                stack.callback(iterator.close)
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self.close()
 
 
 def _init_worker(seed_per_worker: List[int], worker_id: int):
@@ -342,7 +371,7 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
         # Note: This disables hasattr(self, "__len__"), because that attr will
         raise AttributeError("Disabled direct length access to avoid DataLoader warnings.")
 
-    def close(self) -> None:
+    def _stop_cmd_thread(self) -> None:
         if self._cmd_thread is not None:
             # print(f"{id(self)}:{multiprocessing.current_process().ident} Closing cmd thread")
             self._running = False
@@ -351,14 +380,13 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
             self._command_lock = None
             self._cmd_thread = None
             # print(f"{id(self)}:{multiprocessing.current_process().ident} Cmd thread closed")
+
+    def close(self) -> None:
+        self._stop_cmd_thread()
         self.dataset.close()
 
     def __del__(self):
-        try:
-            self.close()
-        except Exception:
-            # Destructors may run during interpreter shutdown.
-            pass
+        self._stop_cmd_thread()
 
     def __iter__(self):
         # First: Set the worker offset globally for the current worker
@@ -630,7 +658,7 @@ class SavableDataLoaderState(State):
     micro_batch_size: Optional[int]
 
 
-class SavableDataLoader(DataLoader[T], Generic[T]):
+class SavableDataLoader(_ClosableDataLoader, DataLoader[T], Generic[T]):
     """DataLoader that supports saving and restoring the state of the dataset.
     When restoring, the dataloader and dataset must be instantiated with the exactly same
     parameters.
@@ -850,20 +878,14 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
         return self.dataset.len_rank()
 
     def close(self) -> None:
-        _close_data_loader(self)
-
-    def __enter__(self) -> "SavableDataLoader[T]":
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback) -> None:
-        self.close()
-
-    def __del__(self) -> None:
         try:
-            self.close()
-        except Exception:
-            # Destructors may run during interpreter shutdown.
-            pass
+            super().close()
+        finally:
+            self._epoch_iterator = None
+            for checkpoint_queue in (*self.cmd_queues, *self.result_queues):
+                # The workers are gone, do not wait for pending commands to be flushed
+                checkpoint_queue.cancel_join_thread()
+                checkpoint_queue.close()
 
     def _epoch_iter(self):
         """Iterator for one epoch, i.e. until the inner dataset raises StopIteration."""
@@ -926,16 +948,17 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
                 )
 
     def __iter__(self):
+        self._check_open()
         if self.num_workers > 0:
             # Always keep same iterator alive, as long as it yields data
             if self._epoch_iterator is None:
-                self._epoch_iterator = self._epoch_iter()
+                self._epoch_iterator = self._track_iterator(self._epoch_iter())
                 self._sample_idx = 0
                 self._has_workers = True
                 # print("New Iterator", self._persistent_iterator)
             return self._epoch_iterator
         else:
-            return self._epoch_iter()
+            return self._track_iterator(self._epoch_iter())
 
     def _worker_command(self, *cmd_args) -> List[Any]:
         """Executes a command in all workers and returns the results."""
@@ -976,6 +999,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
         Returns:
             The state of the dataset.
         """
+        self._check_open()
         # Fetch current rank's worker's state
         if self.num_workers == 0:
             # No workers configured
@@ -1011,6 +1035,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
         Args:
             state: The state to restore, as saved by `save_state_rank`.
         """
+        self._check_open()
         assert not self._has_workers, "Cannot restore state while workers are running"
         if state is None:
             # Assume initial state
@@ -1248,7 +1273,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
         }
 
 
-class BasicDataLoader(DataLoader[T], Generic[T]):
+class BasicDataLoader(_ClosableDataLoader, DataLoader[T], Generic[T]):
     """DataLoader that supports debugging the dataset without saving capability (e.g. for val/eval)."""
 
     #: The worker config
@@ -1352,23 +1377,9 @@ class BasicDataLoader(DataLoader[T], Generic[T]):
         # We override this, because otherwise we'll see warnings
         return self.dataset.len_rank()
 
-    def close(self) -> None:
-        _close_data_loader(self)
-
-    def __enter__(self) -> "BasicDataLoader[T]":
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback) -> None:
-        self.close()
-
-    def __del__(self) -> None:
-        try:
-            self.close()
-        except Exception:
-            # Destructors may run during interpreter shutdown.
-            pass
-
     def __iter__(self):
+        self._check_open()
+
         def _inner_generator(iterator):
             iter_idx = 0
             id = SavableDataLoader.next_id()
@@ -1421,7 +1432,7 @@ class BasicDataLoader(DataLoader[T], Generic[T]):
                         }
                     )
 
-        return _inner_generator(super().__iter__())
+        return self._track_iterator(_inner_generator(super().__iter__()))
 
     def config(self):
         """Get the configuration, which defines the dataset. Useful in conjunction with `save_state`
