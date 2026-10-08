@@ -54,7 +54,7 @@ T = TypeVar("T")
 
 
 class _ClosableDataLoader:
-    """Explicit resource cleanup shared by the energon data loaders."""
+    """Explicit resource cleanup mixin shared by the energon data loaders."""
 
     dataset: Any
     _iterator: Any
