@@ -131,6 +131,13 @@ class DatasetSampler(SavableDataset[RawSampleData]):
             for reader in self.join_readers:
                 stack.callback(reader.close)
 
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            # Destructors may run during interpreter shutdown.
+            pass
+
     def reset_state_own(self) -> None:
         self._worker_rng = WorkerRng(self.worker_config)
         self._pending_slice_indexes = None
