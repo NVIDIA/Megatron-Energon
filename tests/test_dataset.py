@@ -141,8 +141,8 @@ class TestDataset(unittest.TestCase):
         self.samples = self.create_captioning_test_dataset(self.dataset_path, DATASET_SIZE)
 
     def test_loader_close(self):
-        # Closing a loader stops its workers and releases the open dataset files. The dataset stays
-        # usable for other loaders, also when a loader is closed or garbage collected.
+        # Closing or garbage collecting a loader stops its workers and releases the open dataset
+        # files. The dataset stays usable for other loaders.
         jsonl_path = self.dataset_path / "close.jsonl"
         with open(jsonl_path, "w") as f:
             for idx in range(DATASET_SIZE):
@@ -222,21 +222,27 @@ class TestDataset(unittest.TestCase):
                     loader.close()
                     assert open_dataset_files() == [], open_dataset_files()
 
-                    # Stop in the middle of an epoch, the loader cannot be used anymore
-                    with get_savable_loader(dataset) as loader:
+                    # Stop in the middle of an epoch, by closing or garbage collecting the loader
+                    def start_epoch(loader):
                         next(iter(loader))
                         if num_workers == 0:
                             assert open_dataset_files()
                         else:
                             assert set(multiprocessing.active_children()) != previous_children
-                    assert open_dataset_files() == [], open_dataset_files()
-                    assert set(multiprocessing.active_children()) <= previous_children
-                    with self.assertRaises(RuntimeError):
-                        iter(loader)
-                    with self.assertRaises(RuntimeError):
-                        loader.save_state_rank()
-                    with self.assertRaises(RuntimeError):
-                        loader.restore_state_rank(None)
+
+                    def assert_released():
+                        assert open_dataset_files() == [], open_dataset_files()
+                        assert set(multiprocessing.active_children()) <= previous_children
+
+                    with get_savable_loader(dataset) as loader:
+                        start_epoch(loader)
+                    assert_released()
+
+                    loader = get_savable_loader(dataset)
+                    start_epoch(loader)
+                    del loader
+                    gc.collect()
+                    assert_released()
 
     def tearDown(self):
         # Remove all temporary files

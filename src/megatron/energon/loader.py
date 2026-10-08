@@ -48,8 +48,8 @@ def get_savable_loader(
         fail_on_timeout: If True, stops the whole process upon timeout, after printing a stack trace.
     Returns:
         The instantiated :class:`megatron.energon.SavableDataLoader`, yielding batches from the dataset,
-        allowing to save the state of the dataset. Call ``close()`` or use it as a context manager
-        to stop the workers and release the dataset's open files when it is no longer needed.
+        allowing to save the state of the dataset. The loader owns the dataset's reader resources;
+        call ``close()`` or use it as a context manager when it is no longer needed.
     """
     if worker_config is not None:
         if worker_config != dataset.worker_config:
@@ -97,9 +97,9 @@ def get_loader(
         watchdog_initial_timeout_seconds: The initial timeout in seconds. If None, the timeout is the same as watchdog_timeout_seconds.
         fail_on_timeout: If True, stops the whole process upon timeout, after printing a stack trace.
     Returns:
-        The instantiated :class:`torch.data.DataLoader`, yielding batches from the dataset. Call
-        ``close()`` or use it as a context manager to stop the workers and release the dataset's
-        open files when it is no longer needed.
+        The instantiated :class:`torch.data.DataLoader`, yielding batches from the dataset. The
+        loader owns the dataset's reader resources; call ``close()`` or use it as a context manager
+        when it is no longer needed.
     """
     if worker_config is not None:
         if worker_config != dataset.worker_config:
