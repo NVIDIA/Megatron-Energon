@@ -8,6 +8,7 @@ import threading
 import time
 import traceback
 import weakref
+from contextlib import ExitStack
 from functools import partial
 from typing import (
     Any,
@@ -50,25 +51,29 @@ T = TypeVar("T")
 
 
 def _close_data_loader(loader: DataLoader[Any]) -> None:
-    """Shut down worker processes before closing the main-process dataset tree."""
-    epoch_iterator = getattr(loader, "_epoch_iterator", None)
-    if epoch_iterator is not None:
-        close_iterator = getattr(epoch_iterator, "close", None)
-        if close_iterator is not None:
-            close_iterator()
+    """Finalize the open iterators and shut down the worker processes, then close the
+    main-process dataset tree. Keeps closing if one of the steps fails."""
+    open_iterators = list(getattr(loader, "_open_iterators", ()))
+    if getattr(loader, "_epoch_iterator", None) is not None:
         loader._epoch_iterator = None
 
     data_iterator = getattr(loader, "_iterator", None)
     if data_iterator is not None:
-        shutdown_workers = getattr(data_iterator, "_shutdown_workers", None)
-        if shutdown_workers is not None:
-            shutdown_workers()
         loader._iterator = None
 
     dataset = getattr(loader, "dataset", None)
-    close_dataset = getattr(dataset, "close", None)
-    if close_dataset is not None:
-        close_dataset()
+
+    with ExitStack() as stack:
+        # Callbacks run in reverse order: iterators, then workers, then the dataset
+        close_dataset = getattr(dataset, "close", None)
+        if close_dataset is not None:
+            stack.callback(close_dataset)
+        shutdown_workers = getattr(data_iterator, "_shutdown_workers", None)
+        if shutdown_workers is not None:
+            stack.callback(shutdown_workers)
+        for iterator in open_iterators:
+            # Runs the `finally` blocks of the dataset generators, e.g. `gc.unfreeze()`
+            stack.callback(iterator.close)
 
 
 def _init_worker(seed_per_worker: List[int], worker_id: int):
@@ -695,6 +700,9 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
     #: Instance of the current data iterator. There shall be only one active iterator, such that the
     # dataset is not iterated multiple times in parallel. The state will continue between epochs.
     _epoch_iterator: Optional[Iterator[T]] = None
+    #: Iterators returned by `__iter__`, which are finalized on close. Weak references, such
+    # that dropping an iterator still finalizes it immediately.
+    _open_iterators: "weakref.WeakSet[Iterator[T]]"
     #: Whether the dataloader has running workers.
     _has_workers: bool = False
     #: The index of the current worker. -1 if not started yet.
@@ -749,6 +757,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
             watchdog_initial_timeout_seconds: The initial timeout in seconds. If None, the timeout is the same as watchdog_timeout_seconds.
             fail_on_timeout: If True, stops the whole process upon timeout, after printing a stack trace.
         """
+        self._open_iterators = weakref.WeakSet()
         self.worker_config = dataset.worker_config
         self.id = self.next_id()
 
@@ -930,12 +939,15 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
             # Always keep same iterator alive, as long as it yields data
             if self._epoch_iterator is None:
                 self._epoch_iterator = self._epoch_iter()
+                self._open_iterators.add(self._epoch_iterator)
                 self._sample_idx = 0
                 self._has_workers = True
                 # print("New Iterator", self._persistent_iterator)
             return self._epoch_iterator
         else:
-            return self._epoch_iter()
+            iterator = self._epoch_iter()
+            self._open_iterators.add(iterator)
+            return iterator
 
     def _worker_command(self, *cmd_args) -> List[Any]:
         """Executes a command in all workers and returns the results."""
@@ -1258,6 +1270,9 @@ class BasicDataLoader(DataLoader[T], Generic[T]):
 
     id: int
     _sample_idx: int = 0
+    #: Iterators returned by `__iter__`, which are finalized on close. Weak references, such
+    # that dropping an iterator still finalizes it immediately.
+    _open_iterators: "weakref.WeakSet[Iterator[T]]"
 
     def __init__(
         self,
@@ -1289,6 +1304,7 @@ class BasicDataLoader(DataLoader[T], Generic[T]):
             watchdog_initial_timeout_seconds: The initial timeout in seconds. If None, the timeout is the same as watchdog_timeout_seconds.
             fail_on_timeout: If True, stops the whole process upon timeout, after printing a stack trace.
         """
+        self._open_iterators = weakref.WeakSet()
         self.worker_config = dataset.worker_config
 
         self.id = SavableDataLoader.next_id()
@@ -1421,7 +1437,9 @@ class BasicDataLoader(DataLoader[T], Generic[T]):
                         }
                     )
 
-        return _inner_generator(super().__iter__())
+        iterator = _inner_generator(super().__iter__())
+        self._open_iterators.add(iterator)
+        return iterator
 
     def config(self):
         """Get the configuration, which defines the dataset. Useful in conjunction with `save_state`
