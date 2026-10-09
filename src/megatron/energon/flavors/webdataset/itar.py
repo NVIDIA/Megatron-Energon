@@ -319,6 +319,13 @@ class CachedItarOffsetReader:
 
         return result_byte_offset, length
 
+    def close(self) -> None:
+        """Close all cached index readers, even if closing one of them fails."""
+        entries, self.tar_index_reader_cache = list(self.tar_index_reader_cache.values()), {}
+        with contextlib.ExitStack() as stack:
+            for entry in entries:
+                stack.callback(entry.tar_index_reader.close)
+
 
 class ITarFile(tarfile.TarFile):
     """This class is a subclass of tarfile.TarFile that allows for reading a tarfile,

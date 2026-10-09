@@ -289,6 +289,21 @@ class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC)
         """Returns the length of the dataset for the current rank. Corresponds to `len_rank`."""
         return self.len_rank()
 
+    def close(self) -> None:
+        """Release resources owned by this dataset, such as open reader files.
+
+        Leaf datasets that own readers should override this method. Dataset wrappers
+        propagate closure to their children. Must be idempotent, and the dataset stays usable:
+        readers reopen their files on the next access, so the dataset can be iterated again,
+        e.g. by another loader.
+        """
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self.close()
+
     def save_state(self) -> FlexState:
         """
         Saves the state of the dataset. This will save and return the state of all fields

@@ -98,10 +98,13 @@ class ITarReader(ABC, Generic[T_index]):
         raise NotImplementedError
 
     def close(self):
-        for tar_file in self.itar_files_cache.values():
-            tar_file.fileobj.close()
-            tar_file.close()
-        self.itar_files_cache.clear()
+        """Close all cached tar files, even if closing one of them fails."""
+        tar_files, self.itar_files_cache = list(self.itar_files_cache.values()), {}
+        with contextlib.ExitStack() as stack:
+            for tar_file in tar_files:
+                # Callbacks run in reverse order: first the file object, then the tar file
+                stack.callback(tar_file.close)
+                stack.callback(tar_file.fileobj.close)
 
     @abstractmethod
     def _get_itar_sample_pointer(self, idx: T_index) -> ITarSamplePointer:
@@ -368,6 +371,13 @@ class JoinIndexFileITarReader(ITarReader[int]):
 
         return len(index_reader)
 
+    def close(self):
+        index_readers, self.index_reader_cache = list(self.index_reader_cache.values()), {}
+        with contextlib.ExitStack() as stack:
+            stack.callback(super().close)
+            for index_reader in index_readers:
+                stack.callback(index_reader.close)
+
     def __str__(self) -> str:
         return (
             f"JoinIndexFileITarReader("
@@ -467,6 +477,11 @@ class ShardInfosITarReader(ITarReader[int], SamplePartReader[FilteredSample]):
 
     def __len__(self) -> int:
         return self.shard_count_cumsum[-1]
+
+    def close(self):
+        with contextlib.ExitStack() as stack:
+            stack.callback(super().close)
+            stack.callback(self.cached_offset_reader.close)
 
     def __str__(self) -> str:
         return (

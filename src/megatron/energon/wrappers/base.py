@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from abc import ABC, abstractmethod
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from typing import Any, Generator, Generic, Iterable, Optional, Tuple, Type, TypeVar, Union
 
 from megatron.energon.flavors.base_dataset import (
@@ -63,6 +63,13 @@ class BaseWrapperDataset(SavableDataset[T_sample_out], Generic[T_sample_in, T_sa
 
     def worker_has_samples(self) -> bool:
         return any(ds.worker_has_samples() for ds in self.datasets)
+
+    def close(self) -> None:
+        """Close all child datasets, even if closing one of them fails."""
+        with ExitStack() as stack:
+            # The same child may be wrapped multiple times, close it only once per call
+            for dataset in {id(dataset): dataset for dataset in self.datasets}.values():
+                stack.callback(dataset.close)
 
     def _find_wrapped_dataset(self, cls: Type[SavableDataset]) -> Optional[SavableDataset]:
         """Find the outermost dataset wrapped in this dataset that is of type cls."""

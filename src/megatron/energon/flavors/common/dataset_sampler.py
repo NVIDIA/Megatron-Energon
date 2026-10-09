@@ -1,6 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+from contextlib import ExitStack
 from typing import Any, Dict, Generator, Iterator, List, Optional, Sequence, Tuple, Union
 
 import torch
@@ -124,6 +125,18 @@ class DatasetSampler(SavableDataset[RawSampleData]):
 
         assert shuffle_over_epochs is None or shuffle_over_epochs == -1 or shuffle_over_epochs >= 1
         assert self.parallel_slice_iters >= 1
+
+    def close(self) -> None:
+        with ExitStack() as stack:
+            for reader in self.join_readers:
+                stack.callback(reader.close)
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            # Destructors may run during interpreter shutdown.
+            pass
 
     def reset_state_own(self) -> None:
         self._worker_rng = WorkerRng(self.worker_config)

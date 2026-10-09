@@ -9,6 +9,8 @@ import io
 import json
 import logging
 import math
+import multiprocessing
+import os
 import random
 import shutil
 import sys
@@ -32,6 +34,8 @@ from megatron.energon import (
     BatchDataset,
     BlendDataset,
     CaptioningSample,
+    Cooker,
+    CrudeSample,
     DefaultTaskEncoder,
     MapDataset,
     MixBatchDataset,
@@ -39,6 +43,7 @@ from megatron.energon import (
     SavableDataLoader,
     TaskEncoder,
     WorkerConfig,
+    basic_sample_keys,
     generic_batch,
     get_loader,
     get_savable_loader,
@@ -49,8 +54,9 @@ from megatron.energon import (
 from megatron.energon.dataset_config import get_dataset_from_config
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors import BaseWebdatasetFactory
+from megatron.energon.flavors import BaseWebdatasetFactory, CrudeJsonlDatasetFactory
 from megatron.energon.flavors.common.manifest.paths import INFO_JSON_FILENAME, MAIN_FOLDER_NAME
+from megatron.energon.metadataset.loader import prepare_metadataset
 from megatron.energon.task_encoder.base import stateless
 from megatron.energon.tools.analyze_debug import command as analyze_debug_command
 from megatron.energon.tools.info import command as info_command
@@ -100,6 +106,24 @@ class ShouldRaiseException(Exception):
     pass
 
 
+@edataclass
+class JsonlTextSample(Sample):
+    text: str
+
+
+@stateless
+def cook_jsonl_text(sample: CrudeSample) -> JsonlTextSample:
+    return JsonlTextSample(**basic_sample_keys(sample), text=sample["json"]["txt"])
+
+
+class JsonlTextTaskEncoder(DefaultTaskEncoder):
+    cookers = [Cooker(cook_jsonl_text)]
+
+
+def join_captioning(first: CaptioningSample, second: CaptioningSample) -> CaptioningSample:
+    return CaptioningSample.derive_from(first, image=first.image, caption=second.caption)
+
+
 class TestDataset(unittest.TestCase):
     # Set up the test fixture
     def setUp(self):
@@ -115,6 +139,110 @@ class TestDataset(unittest.TestCase):
 
         # Create a small dummy captioning dataset
         self.samples = self.create_captioning_test_dataset(self.dataset_path, DATASET_SIZE)
+
+    def test_loader_close(self):
+        # Closing or garbage collecting a loader stops its workers and releases the open dataset
+        # files. The dataset stays usable for other loaders.
+        jsonl_path = self.dataset_path / "close.jsonl"
+        with open(jsonl_path, "w") as f:
+            for idx in range(DATASET_SIZE):
+                f.write(json.dumps({"txt": f"jsonl-{idx}"}) + "\n")
+        CrudeJsonlDatasetFactory.prepare_dataset(jsonl_path)
+
+        # Joins the captioning dataset with itself, reading through the join index
+        joined_path = self.dataset_path / "joined.yaml"
+        with open(joined_path, "w") as f:
+            f.write(
+                "\n".join(
+                    [
+                        "__module__: megatron.energon",
+                        "__class__: MetadatasetV2",
+                        "splits:",
+                        "  train:",
+                        "    join:",
+                        "      first:",
+                        "        path: .",
+                        "      second:",
+                        "        path: .",
+                        "    joiner:",
+                        f"      __module__: {join_captioning.__module__}",
+                        f"      __function__: {join_captioning.__name__}",
+                    ]
+                )
+            )
+        prepare_metadataset(EPath(joined_path))
+
+        dataset_root = os.path.realpath(self.dataset_path)
+
+        def open_dataset_files():
+            files = []
+            for fd in os.listdir("/proc/self/fd"):
+                try:
+                    target = os.readlink(f"/proc/self/fd/{fd}")
+                except OSError:
+                    continue
+                if target.startswith(dataset_root):
+                    files.append(target)
+            return files
+
+        def all_keys(batches):
+            return sorted(key for batch in batches for key in batch.__key__)
+
+        for path, task_encoder in (
+            (self.dataset_path, DefaultTaskEncoder()),
+            (jsonl_path, JsonlTextTaskEncoder()),
+            (joined_path, DefaultTaskEncoder()),
+        ):
+            for num_workers in (0, 2):
+                with self.subTest(dataset=path.name, num_workers=num_workers):
+                    previous_children = set(multiprocessing.active_children())
+                    dataset = get_train_dataset(
+                        path,
+                        worker_config=WorkerConfig(rank=0, world_size=1, num_workers=num_workers),
+                        batch_size=1,
+                        shuffle_buffer_size=None,
+                        max_samples_per_sequence=None,
+                        task_encoder=task_encoder,
+                        repeat=False,
+                    )
+
+                    # The dataset can be reused after a loader is garbage collected
+                    keys = all_keys(get_loader(dataset))
+                    assert len(keys) == len(set(keys)) == DATASET_SIZE
+                    gc.collect()
+                    assert all_keys(get_loader(dataset)) == keys
+
+                    # Closing one loader does not break another loader of the same dataset
+                    other_loader = get_loader(dataset)
+                    loader = get_loader(dataset)
+                    batches = iter(loader)
+                    first_batch = next(batches)
+                    other_loader.close()
+                    assert all_keys([first_batch, *batches]) == keys
+                    loader.close()
+                    assert open_dataset_files() == [], open_dataset_files()
+
+                    # Stop in the middle of an epoch, by closing or garbage collecting the loader
+                    def start_epoch(loader):
+                        next(iter(loader))
+                        if num_workers == 0:
+                            assert open_dataset_files()
+                        else:
+                            assert set(multiprocessing.active_children()) != previous_children
+
+                    def assert_released():
+                        assert open_dataset_files() == [], open_dataset_files()
+                        assert set(multiprocessing.active_children()) <= previous_children
+
+                    with get_savable_loader(dataset) as loader:
+                        start_epoch(loader)
+                    assert_released()
+
+                    loader = get_savable_loader(dataset)
+                    start_epoch(loader)
+                    del loader
+                    gc.collect()
+                    assert_released()
 
     def tearDown(self):
         # Remove all temporary files
