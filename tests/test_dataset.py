@@ -244,6 +244,20 @@ class TestDataset(unittest.TestCase):
                     gc.collect()
                     assert_released()
 
+                    # Closing a loader also ends the iterators that are still referenced
+                    for make_loader in (get_loader, get_savable_loader):
+                        loader = make_loader(dataset)
+                        batches = iter(loader)
+                        next(batches)
+                        loader.close()
+                        # Without workers, GcDataset froze the gc of this process until the
+                        # iterator is finalized
+                        assert gc.get_freeze_count() == 0
+                        assert_released()
+                        with self.assertRaises(StopIteration):
+                            next(batches)
+                        assert_released()
+
     def tearDown(self):
         # Remove all temporary files
         gc.collect()
