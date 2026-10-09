@@ -4,7 +4,7 @@ SPDX-License-Identifier: BSD-3-Clause -->
 # Command-Line Interface
 
 After you [installed](../intro/installation) energon, a script called `energon` will be added to your PATH.
-It provides commands to prepare, preview, or lint datasets on disk.
+It provides commands to prepare, preview, or inspect datasets on disk.
 
 Here's a simple example:
 
@@ -42,11 +42,6 @@ See [Data Preparation](../basic/data_prep) for more details on how to use this c
 Prints information about the dataset such as overall number of samples and size.
 It also prints the energon version that was used to prepare the dataset, if a recent version was used.
 
-
-## energon lint
-
-You can execute this tool on the prepared dataset to check if the data is valid and loadable.
-It will report any problems such as non-readable images.
 
 (energon-mount)=
 ## energon mount

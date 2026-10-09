@@ -60,7 +60,6 @@ from megatron.energon.metadataset.loader import prepare_metadataset
 from megatron.energon.task_encoder.base import stateless
 from megatron.energon.tools.analyze_debug import command as analyze_debug_command
 from megatron.energon.tools.info import command as info_command
-from megatron.energon.tools.lint import command as lint_command
 from megatron.energon.tools.prepare import command as prepare_command
 from megatron.energon.tools.preview import command as preview_command
 from tests.epath_s3_emulator import setup_s3_emulator
@@ -1870,15 +1869,6 @@ class TestDataset(unittest.TestCase):
         assert result.exit_code == 0, "Debug analysis failed, see output"
         assert "Forcing to use sample loader logs" in result.stdout
         assert "Found 50 unique sample keys" in result.stdout
-
-    def test_validate_captioning_dataset(self):
-        runner = CliRunner()
-        result = runner.invoke(
-            lint_command,
-            [str(self.dataset_path), "--split-parts=train"],
-            catch_exceptions=False,
-        )
-        assert result.exit_code == 0, "Validation failed, see output"
 
     def test_prepare_dataset(self):
         runner = CliRunner()

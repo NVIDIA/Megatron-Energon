@@ -63,8 +63,22 @@ Here are some examples for things you can do:
 
 | Command | Description  |
 |---|---|
-| `energon prepare DATASET_ROOT` | Take an existing WebDataset and add the required yaml files to turn it into an energon-compatible dataset |
-| `energon lint DATASET_ROOT` | Verify that the dataset complies with the energon dataset format and that all samples are loadable |
+| `energon prepare DATASET_ROOT` | Interactively prepare WebDataset indexes, splits, and configuration |
+| `energon prepare DATASET.jsonl` | Create an index for a single JSONL file |
+| `energon prepare-media --media-metadata-by-extension MEDIA_ROOT` | Collect media metadata, such as image dimensions and video duration |
+| `energon mount DATASET_ROOT MOUNTPOINT --sample-folders` | Browse a prepared WebDataset as a read-only virtual filesystem, grouped by sample |
+| `energon --help` | List available commands and options |
+
+For example, prepare a crude WebDataset without interactive prompts:
+
+```shell
+energon prepare /path/to/dataset \
+    --non-interactive \
+    --sample-type=CrudeWebdataset \
+    --split-ratio=98,1,1
+```
+
+Its samples are processed by cookers registered in your application's `TaskEncoder`.
 
 
 ## Usage of the library
