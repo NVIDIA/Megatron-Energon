@@ -10,7 +10,11 @@ except Exception:
     # Fallback for development mode when package is not installed
     __version__ = "unknown"
 
-from megatron.energon.deprecated import install_deprecated_imports
+from megatron.energon.deprecated import (
+    deprecated_dir,
+    deprecated_getattr,
+    install_deprecated_imports,
+)
 
 install_deprecated_imports()
 
@@ -67,14 +71,13 @@ from megatron.energon.flavors import (
     VQAWebdataset,
 )
 from megatron.energon.loader import get_loader, get_savable_loader
-from megatron.energon.metadataset import (
+from megatron.energon.recipe import (
     DatasetLoader,
     DatasetLoaderInterface,
-    Metadataset,
-    MetadatasetV2,
+    Recipe,
     load_dataset,
-    prepare_metadataset,
-    traverse_metadataset,
+    prepare_recipe,
+    traverse_recipe,
 )
 from megatron.energon.savable_loader import SavableDataLoader
 from megatron.energon.source_info import SourceInfo
@@ -178,8 +181,8 @@ __all__ = [
     "log_exception",
     "LogSampleDataset",
     "MapDataset",
-    "Metadataset",
     "MetadatasetV2",
+    "Recipe",
     "MixBatchDataset",
     "MockLazy",
     "MultiChoiceVQASample",
@@ -190,6 +193,7 @@ __all__ = [
     "PackingDataset",
     "PrimaryFileStore",
     "prepare_metadataset",
+    "prepare_recipe",
     "RepeatDataset",
     "reraise_exception",
     "Sample",
@@ -197,6 +201,7 @@ __all__ = [
     "SavableDataLoader",
     "SavableDataset",
     "traverse_metadataset",
+    "traverse_recipe",
     "ShuffleBufferDataset",
     "SimilarityInterleavedSample",
     "SimilarityInterleavedWebdataset",
@@ -215,3 +220,11 @@ __all__ = [
     "VQAWebdataset",
     "WorkerConfig",
 ]
+
+
+def __getattr__(name: str):
+    return deprecated_getattr(__name__, name)
+
+
+def __dir__() -> list[str]:
+    return deprecated_dir(__name__, __all__)

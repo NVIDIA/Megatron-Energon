@@ -35,7 +35,7 @@ basic/data_prep
 basic/data_decoding
 basic/basics_flow
 basic/task_encoder
-basic/metadataset
+basic/recipe
 basic/save_restore
 basic/glossary
 ```
@@ -78,8 +78,14 @@ api/cli
 caption: Internals
 maxdepth: 2
 ---
-internals/contrib_guidelines
 internals/code_structure
+internals/dataset_formats
+internals/savability
+internals/recipe_checkpoint
+internals/packing_blending
+internals/epath_storage
+internals/compatibility
+internals/contrib_guidelines
 ```
 
 # Indices and tables
