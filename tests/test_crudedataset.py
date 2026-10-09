@@ -531,55 +531,50 @@ class TestDataset(unittest.TestCase):
                 print(key, txt)
 
     def test_loader(self):
-        torch.manual_seed(42)
-        worker_config = WorkerConfig(
-            rank=0,
-            world_size=1,
-            num_workers=2,
-        )
+        for num_workers in (0, 2):
+            with self.subTest(num_workers=num_workers):
+                torch.manual_seed(42)
+                worker_config = WorkerConfig(
+                    rank=0,
+                    world_size=1,
+                    num_workers=num_workers,
+                )
 
-        loader = get_savable_loader(
-            get_train_dataset(
-                self.mds_path,
-                batch_size=2,
-                worker_config=worker_config,
-                task_encoder=CookingTaskEncoder(),
-                shuffle_buffer_size=None,
-                max_samples_per_sequence=None,
-                packing_buffer_size=2,
-            ),
-            checkpoint_every_sec=0,
-            checkpoint_every_min_n_samples=1,
-        )
-        samples = [s.__key__ for idx, s in zip(range(100), loader)]
+                def make_loader():
+                    return get_savable_loader(
+                        get_train_dataset(
+                            self.mds_path,
+                            batch_size=2,
+                            worker_config=worker_config,
+                            task_encoder=CookingTaskEncoder(),
+                            shuffle_buffer_size=None,
+                            max_samples_per_sequence=None,
+                            packing_buffer_size=2 if num_workers else None,
+                            virtual_epoch_length=300 if not num_workers else 0,
+                        ),
+                        checkpoint_every_sec=0,
+                        checkpoint_every_min_n_samples=1,
+                    )
 
-        print(samples)
+                loader = make_loader()
+                samples = [s.__key__ for idx, s in zip(range(100), loader)]
+                print(samples)
+                state = loader.save_state_rank()
+                samples_after = [s.__key__ for idx, s in zip(range(100, 200), loader)]
+                print(samples_after)
 
-        state = loader.save_state_rank()
-
-        samples_after = [s.__key__ for idx, s in zip(range(100, 200), loader)]
-        print(samples_after)
-
-        loader = get_savable_loader(
-            get_train_dataset(
-                self.mds_path,
-                batch_size=2,
-                worker_config=worker_config,
-                task_encoder=CookingTaskEncoder(),
-                shuffle_buffer_size=None,
-                max_samples_per_sequence=None,
-                packing_buffer_size=2,
-            ),
-            checkpoint_every_sec=0,
-            checkpoint_every_min_n_samples=1,
-        )
-
-        loader.restore_state_rank(state)
-
-        samples_restored = [s.__key__ for idx, s in zip(range(100, 200), loader)]
-        print(samples_restored)
-
-        assert all([a == b for a, b in zip(samples_after, samples_restored)])
+                if num_workers:
+                    # A running worker process cannot accept a rank restore.
+                    # Preserve the existing multi-worker fresh-loader coverage.
+                    loader = make_loader()
+                # The no-worker path enables virtual epochs and restores the
+                # same loader, exercising its cached EpochizeDataset iterator.
+                # Packing is covered by the original two-worker path above.
+                loader.restore_state_rank(state)
+                samples_restored = [s.__key__ for idx, s in zip(range(100, 200), loader)]
+                print(samples_restored)
+                self.assertEqual(len(samples_after), 100)
+                self.assertEqual(samples_after, samples_restored)
 
     def test_aux_random_access(self):
         torch.manual_seed(42)
