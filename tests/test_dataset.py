@@ -56,7 +56,7 @@ from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import BaseWebdatasetFactory, CrudeJsonlDatasetFactory
 from megatron.energon.flavors.common.manifest.paths import INFO_JSON_FILENAME, MAIN_FOLDER_NAME
-from megatron.energon.metadataset.loader import prepare_metadataset
+from megatron.energon.recipe import prepare_recipe
 from megatron.energon.task_encoder.base import stateless
 from megatron.energon.tools.analyze_debug import command as analyze_debug_command
 from megatron.energon.tools.info import command as info_command
@@ -169,7 +169,7 @@ class TestDataset(unittest.TestCase):
                     ]
                 )
             )
-        prepare_metadataset(EPath(joined_path))
+        prepare_recipe(EPath(joined_path))
 
         dataset_root = os.path.realpath(self.dataset_path)
 
