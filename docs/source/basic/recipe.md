@@ -106,11 +106,8 @@ Existing `subflavors`, `split_part`, `dataset_config`, `split_config`, weights,
 and `shuffle_over_epochs_multiplier` remain supported. Relative paths are still
 resolved relative to the containing YAML file.
 
-After conversion, validate every top-level and nested recipe:
-
-```shell
-energon lint /path/to/recipe.yaml
-```
+After conversion, validate the recipe by loading it with your application's
+TaskEncoder and cookers.
 
 Renaming a YAML file from `metadataset.yaml` is optional; detection uses its
 contents rather than its filename.
