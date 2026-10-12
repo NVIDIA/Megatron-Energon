@@ -22,6 +22,7 @@ fix: dev-sync
 # Execute the ruff code linter and format checker
 check: dev-sync
     uv run ruff check
+    uv run ruff format --check
 
 # Execute all unit tests
 test: dev-sync

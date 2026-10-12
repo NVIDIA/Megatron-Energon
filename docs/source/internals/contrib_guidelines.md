@@ -25,7 +25,7 @@ documentation dependencies in the project environment.
 
 ```shell
 just fix    # Apply Ruff formatting/fixes and repair license headers in src and tests
-just check  # Run the Ruff linter (including import order); does not check formatting
+just check  # Run the Ruff linter and check Ruff formatting
 just test   # Run the full unittest suite
 just docs   # Build the Sphinx documentation
 just build  # Build the Python distribution
