@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from contextlib import ExitStack
-from dataclasses import dataclass
 from typing import Any, Dict, Generator, Iterator, List, Optional, Sequence, Tuple, Union
 
 import torch
@@ -11,7 +10,7 @@ from megatron.energon.edataclass import edataclass
 from megatron.energon.flavors.base_dataset import SavableDataset
 from megatron.energon.flavors.common.reader import IndexedSampleReader
 from megatron.energon.flavors.common.sample_record import SampleRecord
-from megatron.energon.rng import WorkerRng
+from megatron.energon.rng import FeistelPermutation, WorkerRng
 from megatron.energon.worker import WorkerConfig
 
 
@@ -35,38 +34,6 @@ class SliceState:
     current: int
 
 
-@dataclass(slots=True, eq=False)
-class SliceIndex:
-    """Tracks a compact slice order and the next position to consume."""
-
-    indexes: Sequence[int]
-    modulus: int
-    offset: int = 0
-
-    def __post_init__(self) -> None:
-        if self.modulus < 0 or (len(self.indexes) > 0 and self.modulus == 0):
-            raise ValueError("Slice index modulus must be positive for non-empty indexes")
-        if self.offset < 0 or self.offset > len(self.indexes):
-            raise ValueError("Slice index offset is out of range")
-
-    def __len__(self) -> int:
-        return len(self.indexes) - self.offset
-
-    def pop(self) -> int:
-        if len(self) == 0:
-            raise IndexError("pop from empty slice index")
-        index = self.indexes[self.offset]
-        self.offset += 1
-        return int(index) % self.modulus
-
-    def worker_log(self) -> dict[str, int | str]:
-        return {
-            "type": type(self.indexes).__qualname__,
-            "offset": self.offset,
-            "remaining": len(self),
-        }
-
-
 class DatasetSampler(SavableDataset[RawSampleData]):
     """Samples indexed dataset slices across workers and epochs."""
 
@@ -87,8 +54,11 @@ class DatasetSampler(SavableDataset[RawSampleData]):
     # Worker's random generator
     _worker_rng: WorkerRng
 
-    #: Pending slices and the next slice position in the current epoch.
-    _pending_slice_index: Optional[SliceIndex]
+    #: Seed of the slice permutation of the current epoch. None if the slices are not permuted.
+    _pending_slices_seed: Optional[int]
+    #: Number of slices of the current epoch that have already been opened. None if no epoch is in
+    # progress.
+    _pending_slices_offset: Optional[int]
     #: The active slices are the currently opened slices. May contain `None`, if there are fewer
     # slices available (i.e. pending_slices empty) than parallel slice iterators requested.
     _active_slice_state: List[Optional[SliceState]]
@@ -101,7 +71,8 @@ class DatasetSampler(SavableDataset[RawSampleData]):
 
     _savable_fields = (
         "_worker_rng",
-        "_pending_slice_index",
+        "_pending_slices_seed",
+        "_pending_slices_offset",
         "_active_slice_state",
         "_sample_count",
         "_epoch_count",
@@ -166,7 +137,8 @@ class DatasetSampler(SavableDataset[RawSampleData]):
 
     def reset_state_own(self) -> None:
         self._worker_rng = WorkerRng(self.worker_config)
-        self._pending_slice_index = None
+        self._pending_slices_seed = None
+        self._pending_slices_offset = None
         self._active_slice_state = [None] * self.parallel_slice_iters
         self._sample_count = 0
         self._epoch_count = 0
@@ -195,33 +167,38 @@ class DatasetSampler(SavableDataset[RawSampleData]):
             data=tuple(reader[index] for reader in self.join_readers),
         )
 
-    def _slices_once(self) -> SliceIndex:
-        """Yields the indexes to slice offsets once. Possibly shuffles the list."""
+    def _pending_slices(self) -> Sequence[int]:
+        """Returns the slice order of the current epoch. Entries are taken modulo the number of
+        slices, as the order may span multiple epochs."""
         assert self.slice_offsets is not None
-        assert self._pending_slice_index is None
 
         num_slices = len(self.slice_offsets) - 1
-
         if self.shuffle_over_epochs is None:
             # No shuffling
-            res_list = range(num_slices)
-        else:
-            rng = self._worker_rng
+            return range(num_slices)
+        if self.shuffle_over_epochs == -1:
+            # Shuffle with replacement (i.e. infinite epochs), slices are drawn in
+            # `_pop_pending_slice`.
+            return ()
+        # Shuffle without replacement (potentially over multiple epochs)
+        assert self._pending_slices_seed is not None
+        return FeistelPermutation(num_slices * self.shuffle_over_epochs, self._pending_slices_seed)
 
-            if self.shuffle_over_epochs == -1:
-                # Shuffle with replacement (i.e. infinite epochs), effectively return as many slices
-                # as are required for parallel slice iterators.
-                # Next slices are drawn in the _slices_iter.
-                res_list = tuple(
-                    rng.randbelow(num_slices) for _ in range(self.parallel_slice_iters)
-                )
-            elif self.shuffle_over_epochs >= 1:
-                # Shuffle without replacement (potentially over multiple epochs)
-                res_list = rng.permutation(num_slices * self.shuffle_over_epochs)
-            else:
-                raise ValueError(f"Invalid shuffle_over_epochs: {self.shuffle_over_epochs}")
-        self._pending_slice_index = SliceIndex(res_list, modulus=num_slices)
-        return self._pending_slice_index
+    def _next_pending_slice(self, pending_slices: Sequence[int]) -> Optional[int]:
+        """Returns the next slice index of the current epoch, or None if there is none left."""
+        assert self.slice_offsets is not None
+        assert self._pending_slices_offset is not None
+
+        num_slices = len(self.slice_offsets) - 1
+        if self.shuffle_over_epochs == -1:
+            # Randomly select a new slice directly (with replacement)
+            return self._worker_rng.randbelow(num_slices)
+        if self._pending_slices_offset >= len(pending_slices):
+            return None
+        # Take the next slice (without replacement)
+        slice_index = pending_slices[self._pending_slices_offset] % num_slices
+        self._pending_slices_offset += 1
+        return slice_index
 
     def _slices_iter(self) -> Generator[RawSampleData, None, None]:
         """Iterates the samples in a list of slices, possibly using multiple parallel iterators over
@@ -231,7 +208,6 @@ class DatasetSampler(SavableDataset[RawSampleData]):
 
         active_slice_probs = torch.zeros(self.parallel_slice_iters, dtype=torch.float32)
         active_slices = self._active_slice_state
-        pending_slice_index = self._pending_slice_index
 
         def slice_at(idx: int) -> SliceState:
             assert self.slice_offsets is not None
@@ -241,9 +217,10 @@ class DatasetSampler(SavableDataset[RawSampleData]):
             )
 
         # Weight the slices by their size to get a more even distribution of samples
-        if any(s is not None for s in active_slices) or pending_slice_index is not None:
+        if any(s is not None for s in active_slices) or self._pending_slices_offset is not None:
             # Having an active state, or pending slices. This means we are resuming an epoch.
-            assert pending_slice_index is not None
+            assert self._pending_slices_offset is not None
+            pending_slices = self._pending_slices()
 
             # Restore the state
             assert len(active_slices) == self.parallel_slice_iters
@@ -260,7 +237,8 @@ class DatasetSampler(SavableDataset[RawSampleData]):
                         "t": "DatasetSampler._slices_iter.resume_epoch",
                         "r": self.worker_config.rank,
                         "w": self.worker_config.rank_worker_id(),
-                        "pending_slice_indexes": pending_slice_index.worker_log(),
+                        "pending_slices_remaining": len(pending_slices)
+                        - self._pending_slices_offset,
                         "active_slices": [
                             (
                                 None
@@ -281,8 +259,10 @@ class DatasetSampler(SavableDataset[RawSampleData]):
 
         else:
             # Start a new epoch
-            assert pending_slice_index is None
-            pending_slice_index = self._slices_once()
+            if self.shuffle_over_epochs is not None and self.shuffle_over_epochs >= 1:
+                self._pending_slices_seed = self._worker_rng.randbelow(torch.iinfo(torch.int64).max)
+            self._pending_slices_offset = 0
+            pending_slices = self._pending_slices()
 
             if self.worker_config.should_log(level=1):
                 self.worker_config.worker_log(
@@ -290,7 +270,8 @@ class DatasetSampler(SavableDataset[RawSampleData]):
                         "t": "DatasetSampler._slices_iter.next_epoch",
                         "r": self.worker_config.rank,
                         "w": self.worker_config.rank_worker_id(),
-                        "pending_slice_indexes": pending_slice_index.worker_log(),
+                        "pending_slices_remaining": len(pending_slices)
+                        - self._pending_slices_offset,
                         "count": self._sample_count,
                         "epoch": self._epoch_count,
                         "epoch_count": self._epoch_sample_count,
@@ -302,8 +283,10 @@ class DatasetSampler(SavableDataset[RawSampleData]):
             # List of slice iterators, always of length `parallel_slice_iters`. May contain `None`.
             active_slices.clear()
             # Fill up the slice iterators
-            while len(pending_slice_index) > 0 and len(active_slices) < self.parallel_slice_iters:
-                slice_index = pending_slice_index.pop()
+            while len(active_slices) < self.parallel_slice_iters:
+                slice_index = self._pop_pending_slice(pending_slices)
+                if slice_index is None:
+                    break
                 slice_state = slice_at(slice_index)
                 active_slice_probs[len(active_slices)] = (
                     self.slice_offsets[slice_state.index + 1]
@@ -343,14 +326,8 @@ class DatasetSampler(SavableDataset[RawSampleData]):
             self._epoch_sample_count += 1
             if slice_state.current >= self.slice_offsets[slice_state.index + 1]:
                 # Iterator exhausted -> take next / remove from list
-                if len(pending_slice_index) > 0 or self.shuffle_over_epochs == -1:
-                    if len(pending_slice_index) > 0:
-                        # Take the next slice (without replacement)
-                        next_idx = pending_slice_index.pop()
-                    else:
-                        # Randomly select a new slice directly (with replacement)
-                        num_slices = len(self.slice_offsets) - 1
-                        next_idx = self._worker_rng.randbelow(num_slices)
+                next_idx = self._pop_pending_slice(pending_slices)
+                if next_idx is not None:
                     next_slice_state = slice_at(next_idx)
                     active_slice_probs[slice_idx] = (
                         self.slice_offsets[next_slice_state.index + 1]
@@ -361,7 +338,7 @@ class DatasetSampler(SavableDataset[RawSampleData]):
                     #     f"Slice iter for {self.worker_config.rank}:{self.worker_config.rank_worker_id()} "
                     #     f"[{slice_offsets[slice_state.index]}, {slice_offsets[slice_state.index + 1]}] exhausted at {slice_state.current}, "
                     #     f"taking next slice {next_slice_state} [{slice_offsets[next_slice_state.index]}, {slice_offsets[next_slice_state.index + 1]}], "
-                    #     f"{len(pending_slice_index)} slices left, probs={active_slice_probs.tolist()}"
+                    #     f"{len(pending_slices) - self._pending_slices_offset} slices left, probs={active_slice_probs.tolist()}"
                     # )
                 else:
                     active_slice_probs[slice_idx] = 0
@@ -377,7 +354,7 @@ class DatasetSampler(SavableDataset[RawSampleData]):
                             "t": "DatasetSampler._slices_iter.exhausted",
                             "r": self.worker_config.rank,
                             "w": self.worker_config.rank_worker_id(),
-                            "remaining": len(pending_slice_index),
+                            "remaining": len(pending_slices) - self._pending_slices_offset,
                             "count": self._sample_count,
                             "epoch": self._epoch_count,
                             "epoch_count": self._epoch_sample_count,
@@ -418,7 +395,8 @@ class DatasetSampler(SavableDataset[RawSampleData]):
         # Epoch has finished, reset states.
         self._epoch_count += 1
         self._epoch_sample_count = 0
-        self._pending_slice_index = None
+        self._pending_slices_seed = None
+        self._pending_slices_offset = None
         # print(
         #     f"slice iters exhausted for {self.worker_config.rank}:{self.worker_config.rank_worker_id()} after {cnt} samples"
         # )
