@@ -184,7 +184,7 @@ class DatasetSampler(SavableDataset[RawSampleData]):
         assert self._pending_slices_seed is not None
         return FeistelPermutation(num_slices * self.shuffle_over_epochs, self._pending_slices_seed)
 
-    def _pop_pending_slice(self, pending_slices: Sequence[int]) -> Optional[int]:
+    def _next_pending_slice(self, pending_slices: Sequence[int]) -> Optional[int]:
         """Returns the next slice index of the current epoch, or None if there is none left."""
         assert self.slice_offsets is not None
         assert self._pending_slices_offset is not None
