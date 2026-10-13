@@ -15,7 +15,7 @@ The implementation lives under `src/megatron/energon`. Its main layers are:
 
 | Package | Responsibility |
 | --- | --- |
-| `recipe` | Parse and resolve recipe graphs, references, blends, joins, subsets, and split overrides. |
+| `recipe` | Parse and resolve recipe graphs, references, blends, subsets, and split overrides. |
 | `flavors` | Detect prepared dataset formats and construct their readers and runtime datasets. |
 | `wrappers` | Compose iteration behavior such as mapping, batching, blending, packing, and epochizing. |
 | `task_encoder` | Build the user-facing loading pipeline and invoke application-specific encoding hooks. |
@@ -63,7 +63,7 @@ Energon has two distinct random-access interfaces. They should not be conflated:
 1. **Ordinal iteration** uses an `IndexedSampleReader`. `reader[index]` accepts an integer sample ordinal
    and returns a `SampleRecord`. A `DatasetSampler` maps the worker's iteration order to those ordinals.
 2. **Key and part lookup** uses `FileStore`, `SamplePartReader`, and related readers. These interfaces
-   locate a sample or auxiliary part by a string key and are used by crude datasets, joins, mounts, and
+   locate a sample or auxiliary part by a string key and are used by crude datasets, mounts, and
    restore-by-key paths.
 
 A format can support ordinary indexed training without exposing all file-store capabilities. Conversely,
