@@ -132,3 +132,7 @@ Cover at least:
 - stale, missing, or corrupt indexes;
 - local and remote paths where the format promises both;
 - `FileStore` lookup and provenance when supported.
+
+The contributor-level contracts and full checklist are in
+{ref}`dataset-formats`. Changes that alter existing ordering or metadata must
+also follow {ref}`compatibility`.

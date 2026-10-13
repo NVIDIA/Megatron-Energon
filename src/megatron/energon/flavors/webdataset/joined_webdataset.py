@@ -145,9 +145,9 @@ class JoinedWebdatasetFactory(BaseCoreDatasetFactory[T_sample], Sharder, Generic
         # Get join index, get size, distribute samples
         # Get samples for each worker on current rank
         assert self.join_index.is_file(), (
-            f"Join index {self.join_index} does not exist, did you prepare the metadataset? "
-            "If you already prepared the metadataset, the join index might be outdated due to "
-            "modifications to the inner datasets. In this case, you need to re-prepare the metadataset."
+            f"Join index {self.join_index} does not exist, did you prepare the recipe? "
+            "If you already prepared the recipe, the join index might be outdated due to "
+            "modifications to the inner datasets. In this case, you need to re-prepare the recipe."
         )
 
         with JoinIndexReader(self.join_index) as jir:

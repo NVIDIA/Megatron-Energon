@@ -20,8 +20,8 @@ from megatron.energon.flavors.common.manifest.paths import (
 )
 from megatron.energon.flavors.common.manifest.types import DatasetSubset
 from megatron.energon.flavors.webdataset.indexing import JoinIndexWriter
-from megatron.energon.metadataset.dataset_loader import DatasetLoader
-from megatron.energon.metadataset.loader_interface import (
+from megatron.energon.recipe.dataset_loader import DatasetLoader
+from megatron.energon.recipe.loader_interface import (
     DatasetBlendMode,
     DatasetLoaderInterface,
     LoadedDataset,
@@ -418,9 +418,9 @@ class JoinDatasetLoader(DatasetLoaderInterface):
         assert self.cache_path is not None
         return self.cache_path / f"join_index_{hash.hexdigest()}.bin", meta_infos
 
-    def post_initialize(self, mds_path: Optional[EPath] = None):
-        assert mds_path is not None
-        self.cache_path = mds_path.parent / f"{mds_path.name}.cache"
+    def post_initialize(self, recipe_path: Optional[EPath] = None):
+        assert recipe_path is not None
+        self.cache_path = recipe_path.parent / f"{recipe_path.name}.cache"
 
     def prepare(self, split_part: Optional[str] = None) -> Sequence[EPath]:
         assert self.cache_path is not None

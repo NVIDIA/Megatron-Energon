@@ -325,7 +325,7 @@
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="260" value="&lt;h1 style=&quot;line-height: 110%;&quot;&gt;Blending&lt;/h1&gt;&lt;p style=&quot;line-height: 120%;&quot;&gt;Blend multiple datasets together as specified in the metadataset yaml file.&lt;/p&gt;" style="text;html=1;strokeColor=#6c8ebf;fillColor=#dae8fc;spacing=7;spacingTop=-20;whiteSpace=wrap;overflow=hidden;rounded=0;" parent="1" vertex="1">
+        <mxCell id="260" value="&lt;h1 style=&quot;line-height: 110%;&quot;&gt;Blending&lt;/h1&gt;&lt;p style=&quot;line-height: 120%;&quot;&gt;Blend multiple datasets together as specified in the recipe yaml file.&lt;/p&gt;" style="text;html=1;strokeColor=#6c8ebf;fillColor=#dae8fc;spacing=7;spacingTop=-20;whiteSpace=wrap;overflow=hidden;rounded=0;" parent="1" vertex="1">
           <mxGeometry x="-10" y="90" width="240" height="90" as="geometry" />
         </mxCell>
         <mxCell id="261" value="Other Datasets" style="swimlane;whiteSpace=wrap;fillColor=none;swimlaneFillColor=#BAC8D3;fontColor=#2F5B7C;fontFamily=Tahoma;html=1;strokeColor=none;opacity=50;align=right;" parent="1" vertex="1">

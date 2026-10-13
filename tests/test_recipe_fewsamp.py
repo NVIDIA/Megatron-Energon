@@ -1,7 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""This module defines tests for meta datasets."""
+"""This module defines tests for recipes."""
 
 import gc
 import logging
@@ -83,13 +83,13 @@ class TestDataset(unittest.TestCase):
         self.create_text_test_dataset(self.dataset_path / "ds2", range(100, 107), range(100, 107))
         self.create_text_test_dataset(self.dataset_path / "ds3", range(200, 255), range(0, 55))
 
-        self.mds_path = self.dataset_path / "metadataset_v2.yaml"
-        with open(self.mds_path, "w") as f:
+        self.recipe_path = self.dataset_path / "recipe.yaml"
+        with open(self.recipe_path, "w") as f:
             f.write(
                 "\n".join(
                     [
                         "__module__: megatron.energon",
-                        "__class__: MetadatasetV2",
+                        "__class__: Recipe",
                         "splits:",
                         "  train:",
                         "    blend:",
@@ -154,7 +154,7 @@ class TestDataset(unittest.TestCase):
                 )
             )
 
-    def test_metadataset_few_samples_save_restore(self):
+    def test_recipe_few_samples_save_restore(self):
         torch.manual_seed(42)
         worker_config = WorkerConfig(
             rank=0,
@@ -165,7 +165,7 @@ class TestDataset(unittest.TestCase):
 
         # Train mode dataset
         train_dataset = get_train_dataset(
-            self.mds_path,
+            self.recipe_path,
             worker_config=worker_config,
             batch_size=1,
             shuffle_buffer_size=100,
@@ -197,7 +197,7 @@ class TestDataset(unittest.TestCase):
         # Restore state
         train_loader = get_savable_loader(
             get_train_dataset(
-                self.mds_path,
+                self.recipe_path,
                 worker_config=worker_config,
                 batch_size=1,
                 shuffle_buffer_size=100,
@@ -229,7 +229,7 @@ class TestDataset(unittest.TestCase):
             worker_config = WorkerConfig(rank=i_rank, world_size=ws, num_workers=0)
             loader = get_savable_loader(
                 get_train_dataset(
-                    self.mds_path,
+                    self.recipe_path,
                     batch_size=1,
                     worker_config=worker_config,
                     shuffle_buffer_size=None,
@@ -259,5 +259,5 @@ if __name__ == "__main__":
     # unittest.main()
     ds = TestDataset()
     ds.setUp()
-    ds.test_metadataset_few_samples_save_restore()
+    ds.test_recipe_few_samples_save_restore()
     ds.tearDown()
