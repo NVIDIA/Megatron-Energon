@@ -178,7 +178,7 @@ class DatasetSampler(SavableDataset[RawSampleData]):
             return range(num_slices)
         if self.shuffle_over_epochs == -1:
             # Shuffle with replacement (i.e. infinite epochs), slices are drawn in
-            # `_pop_pending_slice`.
+            # `_next_pending_slice`.
             return ()
         # Shuffle without replacement (potentially over multiple epochs)
         assert self._pending_slices_seed is not None
@@ -284,7 +284,7 @@ class DatasetSampler(SavableDataset[RawSampleData]):
             active_slices.clear()
             # Fill up the slice iterators
             while len(active_slices) < self.parallel_slice_iters:
-                slice_index = self._pop_pending_slice(pending_slices)
+                slice_index = self._next_pending_slice(pending_slices)
                 if slice_index is None:
                     break
                 slice_state = slice_at(slice_index)
@@ -326,7 +326,7 @@ class DatasetSampler(SavableDataset[RawSampleData]):
             self._epoch_sample_count += 1
             if slice_state.current >= self.slice_offsets[slice_state.index + 1]:
                 # Iterator exhausted -> take next / remove from list
-                next_idx = self._pop_pending_slice(pending_slices)
+                next_idx = self._next_pending_slice(pending_slices)
                 if next_idx is not None:
                     next_slice_state = slice_at(next_idx)
                     active_slice_probs[slice_idx] = (
