@@ -55,6 +55,7 @@ Important building blocks include:
 
 Changing a Feistel round function, number of rounds, seeding, or cycle-walking behavior changes the
 permutation even if every sample still appears once. Treat such a change as iteration-order breaking.
+Checkpoints only store the permutation seed, so it also breaks restoring an epoch in progress.
 
 Avoid incidental RNG calls in logging, validation, or skipped paths. A random decision that affects the
 stream must use saved worker state.

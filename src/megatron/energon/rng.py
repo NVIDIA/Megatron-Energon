@@ -33,6 +33,9 @@ class FeistelPermutation(Sequence[int]):
 
     The Feistel network permutes the next power-of-two domain. Cycle walking maps values outside
     ``range(size)`` back into the requested domain without losing bijectivity.
+
+    Fewer than eight rounds leave a measurable bias for small sizes (e.g. adjacent inputs staying
+    adjacent too often), hence the default.
     """
 
     __slots__ = ("_keys", "_left_bits", "_right_bits", "_size")
@@ -41,7 +44,7 @@ class FeistelPermutation(Sequence[int]):
     _right_bits: int
     _size: int
 
-    def __init__(self, size: int, seed: int, *, rounds: int = 4):
+    def __init__(self, size: int, seed: int, *, rounds: int = 8):
         if size < 0:
             raise ValueError("Permutation size must be non-negative")
         if rounds < 4 or rounds % 2 != 0:
@@ -159,17 +162,6 @@ class WorkerRng(Savable):
         """Returns a new list with shuffled entries"""
         p = torch.randperm(len(l), generator=self.rng)
         return [l[p[i]] for i in range(len(l))]
-
-    def permutation(self, n: int) -> FeistelPermutation:
-        """Returns a memory-constant pseudorandom permutation over ``range(n)``."""
-        seed = torch.randint(
-            0,
-            torch.iinfo(torch.int64).max,
-            (),
-            generator=self.rng,
-            dtype=torch.int64,
-        ).item()
-        return FeistelPermutation(n, seed)
 
     def rand_pop(self, l: List[T]) -> T:
         return l.pop(self.randbelow(len(l)))
