@@ -92,20 +92,6 @@ class TestDataset(unittest.TestCase):
         self.create_text_test_dataset(self.dataset_path / "ds2", range(100, 155), range(100, 155))
         self.create_text_test_dataset(self.dataset_path / "ds3", range(200, 255), range(55))
 
-        # Create a shuffled dataset for joining with the ds1. It has  overlap but includes more samples
-        shuffled_range_100 = list(range(100))
-        random.shuffle(shuffled_range_100)
-
-        self.create_text_test_dataset(
-            self.dataset_path / "ds1b", shuffled_range_100, shuffled_range_100, prefix="B"
-        )
-
-        shuffled_range_100 = list(range(100))
-        random.shuffle(shuffled_range_100)
-        self.create_text_test_dataset(
-            self.dataset_path / "ds1c", shuffled_range_100, shuffled_range_100, prefix="C"
-        )
-
         self.recipe_path = self.dataset_path / "recipe.yaml"
         with open(self.recipe_path, "w") as f:
             f.write(
