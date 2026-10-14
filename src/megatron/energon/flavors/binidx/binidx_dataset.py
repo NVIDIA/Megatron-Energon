@@ -66,10 +66,7 @@ class BinIdxDatasetFactory(BaseSingleFileDatasetFactory[CrudeSample]):
         parallel_shard_iters: int,
         part_filter: Callable[[str], bool] | None,
     ):
-        return BinIdxReader(
-            self.path,
-            index_cache_size=parallel_shard_iters,
-        )
+        return BinIdxReader(self.path)
 
     def _load_fn(
         self, part_filter: Callable[[str], bool] | None
