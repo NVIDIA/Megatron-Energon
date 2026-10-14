@@ -166,7 +166,7 @@ class DefaultBinIdxDatasetFactory(BinIdxDatasetFactory):
 
     def load_sample(self, sample: SampleRecord) -> CrudeSample:
         sample["__tags__"] = self.tags
-        sample["tokens"] = numpy.frombuffer(sample["tokens"], dtype=self._dtype)
+        sample["tokens"] = numpy.frombuffer(sample["tokens"], dtype=self._dtype).copy()
         return super().load_sample(sample)
 
     def config(self) -> Dict[str, Any]:

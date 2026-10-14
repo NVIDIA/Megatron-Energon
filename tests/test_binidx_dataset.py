@@ -32,7 +32,7 @@ from megatron.energon import (
 from megatron.energon.dataset_config import load_config
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import Sample
-from megatron.energon.flavors.binidx.binidx_reader import BinIdxReader
+from megatron.energon.flavors.binidx.binidx_reader import BinIdxReader, IdxReader
 from megatron.energon.recipe.recipe import Recipe
 
 # Speed up tests significantly by reducing the torch status check interval for broken worker shutdown
@@ -159,7 +159,7 @@ class TestBinIdxDataset(unittest.TestCase):
             num_docs=2,
             doc_len=3,
         )
-        reader = BinIdxReader(EPath(bin_path))
+        reader = BinIdxReader(str(bin_path))
         idx_reader = reader._idx_reader
 
         self.assertEqual(
@@ -177,6 +177,49 @@ class TestBinIdxDataset(unittest.TestCase):
         reader.close()
         self.assertTrue(reader._bin_file.closed)
         self.assertTrue(idx_reader._idx_file.closed)
+
+    def test_reader_rejects_out_of_range_indexes(self):
+        bin_path = self.create_binidx_dataset(
+            self.dataset_path / "reader_bounds", num_docs=2, doc_len=3
+        )
+        for use_mmap in (True, False):
+            with self.subTest(use_mmap=use_mmap):
+                reader = BinIdxReader(EPath(bin_path))
+                if not use_mmap:
+                    reader._idx_reader.close()
+                    reader._idx_reader = IdxReader(EPath(bin_path.with_suffix(".idx")))
+                try:
+                    for key in (-1, 2, 5000, "-1", "2", "-1.tokens", "2.tokens"):
+                        with self.subTest(key=key):
+                            with self.assertRaisesRegex(IndexError, "out of range"):
+                                reader[key]
+                    self.assertEqual(reader[1]["__key__"], "1")
+                    reader.sample_filter = lambda key: False
+                    self.assertIsNone(reader[0])
+                    with self.assertRaisesRegex(IndexError, "out of range"):
+                        reader[-1]
+                finally:
+                    reader.close()
+
+    def test_loaded_tokens_are_writable_and_independent(self):
+        bin_path = self.create_binidx_dataset(
+            self.dataset_path / "writable_tokens", num_docs=2, doc_len=3
+        )
+        factory = DefaultBinIdxDatasetFactory(
+            EPath(bin_path),
+            training=False,
+            worker_config=WorkerConfig(rank=0, world_size=1, num_workers=0),
+        )
+        reader = BinIdxReader(EPath(bin_path))
+        try:
+            sample = factory.load_sample(reader[0])
+            self.assertEqual(sample["tokens"].dtype, np.dtype(np.int32))
+            sample["tokens"][0] = 99
+            self.assertEqual(sample["tokens"].tolist(), [99, 2, 3])
+            reloaded = factory.load_sample(reader[0])
+            self.assertEqual(reloaded["tokens"].tolist(), [1, 2, 3])
+        finally:
+            reader.close()
 
     def test_get_val_dataset_full_iteration_stable_order(self):
         """Val loader over bin-idx yields every document once in index order (no shuffle)."""
