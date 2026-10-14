@@ -102,11 +102,9 @@ Apply these conversions throughout nested files:
 | `subflavor: value` | `tags: {__subflavor__: value}` |
 | `megatron.energon.metadataset.*` imports | `megatron.energon.recipe.*` imports |
 
-Existing `subflavors` entries remain supported as a compatibility alias for
-`tags`; new recipes should use `tags`. `split_part`, `dataset_config`,
-`split_config`, weights, and `shuffle_over_epochs_multiplier` also remain
-supported. Relative paths are still resolved relative to the containing YAML
-file.
+Existing `split_part`, `dataset_config`, `split_config`, weights, and
+`shuffle_over_epochs_multiplier` remain supported. Relative paths are still
+resolved relative to the containing YAML file.
 
 After conversion, validate the recipe by loading it with your application's
 TaskEncoder and cookers.
@@ -228,16 +226,7 @@ Even when blending many datasets together, you might want to handle some of them
 For example when doing OCR, you might have one dataset with full pages of text and one with only paragraphs. In your task encoder you could decide to augment the images differently.
 
 The effective mapping is available as {py:attr}`Sample.__tags__
-<megatron.energon.Sample.__tags__>`. For backward compatibility, recipe and dataset
-configuration also accepts `subflavors`, and samples expose `__subflavors__` as a
-read/write alias for `__tags__`. Specify only one name at a time; providing both is
-an error. `get_train_dataset`, `get_val_dataset`, `get_val_datasets`, and the dataset
-factories and loaders exported from `megatron.energon` similarly accept `subflavors`,
-`Cooker.has_subflavors` aliases `Cooker.has_tags`, crude samples passed to cookers
-also contain the legacy `"__subflavors__"` key, and the result of `basic_sample_keys`
-accepts `"__subflavors__"` as an alias for `"__tags__"`. Internal APIs, such as
-`TaskEncoder.build_*`, only accept `tags`. The legacy names emit a `FutureWarning`
-and will be removed in a future release.
+<megatron.energon.Sample.__tags__>`.
 
 Here is a modified example of the above `recipe.yaml` config file that adds some tags:
 ```yaml

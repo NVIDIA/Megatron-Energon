@@ -286,26 +286,26 @@ class TestDataset(unittest.TestCase):
         assert cooker.has_tags is legacy_tags
         assert cooker.has_subflavors is legacy_tags
 
-        loader = get_loader(
-            get_val_dataset(
-                self.dataset_path,
-                split_part="train",
-                batch_size=1,
-                subflavors=legacy_tags,
-                worker_config=no_worker_config,
-            )
+        dataset = get_dataset_from_config(
+            self.dataset_path,
+            split_part="train",
+            training=False,
+            subflavors=legacy_tags,
+            worker_config=no_worker_config,
         )
-        assert next(iter(loader)).__tags__ == [legacy_tags]
+        assert dataset.tags["source"] == "legacy"
+        assert dataset.subflavors is dataset.tags
 
         with self.assertRaisesRegex(ValueError, "Cannot set both"):
-            get_val_dataset(
+            get_dataset_from_config(
                 self.dataset_path,
                 split_part="train",
-                batch_size=1,
+                training=False,
                 tags={},
                 subflavors={},
                 worker_config=no_worker_config,
             )
+        print(self.dataset_path)
 
     def tearDown(self):
         # Remove all temporary files
