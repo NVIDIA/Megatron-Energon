@@ -14,7 +14,7 @@ from megatron.energon.recipe.loader_interface import (
     LoadedDataset,
     LoadedDatasetList,
 )
-from megatron.energon.tags import TagsAlias, resolve_tags
+from megatron.energon.tags import TagsAlias
 from megatron.energon.worker import WorkerConfig
 
 
@@ -59,7 +59,6 @@ class DatasetLoader(TagsAlias, DatasetLoaderInterface):
         Returns:
             The loaded dataset
         """
-        tags = resolve_tags(tags, kwargs.pop("subflavors", None))
         if self.split_part is not None:
             split_part = self.split_part
         if split_part is None:
@@ -94,7 +93,6 @@ class DatasetLoader(TagsAlias, DatasetLoaderInterface):
         subset: Optional[DatasetSubset] = None,
         **kwargs,
     ) -> LoadedDatasetList:
-        tags = resolve_tags(tags, kwargs.pop("subflavors", None))
         return LoadedDatasetList(
             blend_mode=DatasetBlendMode.NONE,
             datasets=[

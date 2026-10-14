@@ -12,6 +12,7 @@ from typing import Any, Callable, Dict, Literal, Optional, Tuple, Type, TypeVar,
 
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
+from megatron.energon.tags import apply_config_aliases
 
 
 class JsonValueError(ValueError):
@@ -39,24 +40,6 @@ class _MissingValue:
 _missing_value = _MissingValue()
 
 TType = TypeVar("TType")
-
-
-def _apply_config_aliases(raw_data, inst_type):
-    """Apply explicitly declared legacy-to-canonical configuration field aliases."""
-    if not isinstance(raw_data, dict):
-        return raw_data
-    aliases = getattr(inst_type, "__config_aliases__", None)
-    if not aliases:
-        return raw_data
-
-    raw_data = raw_data.copy()
-    for legacy_name, canonical_name in aliases.items():
-        if legacy_name not in raw_data:
-            continue
-        if canonical_name in raw_data:
-            raise ValueError(f"Cannot set both {canonical_name!r} and {legacy_name!r}.")
-        raw_data[canonical_name] = raw_data.pop(legacy_name)
-    return raw_data
 
 
 def _check_instance_type(cls, inst_type: Type) -> bool:
@@ -206,11 +189,9 @@ class JsonParser:
                     raise JsonValueError(
                         f"Expected {inst_type}, got {cls}", inst_type, cls, _path, _stage
                     )
-        kwargs = _apply_config_aliases(kwargs, cls)
+        kwargs = apply_config_aliases(cls, kwargs)
         if default_kwargs is not None:
-            merged_kwargs = _apply_config_aliases(default_kwargs, cls)
-            merged_kwargs.update(kwargs)
-            kwargs = merged_kwargs
+            kwargs = {**apply_config_aliases(cls, default_kwargs), **kwargs}
         if is_type or is_callable:
             inst = cls
         else:
@@ -253,7 +234,7 @@ class JsonParser:
         Returns:
             The input data as `inst_type`.
         """
-        raw_data = _apply_config_aliases(raw_data, inst_type)
+        raw_data = apply_config_aliases(inst_type, raw_data)
         type_name = getattr(inst_type, "__name__", repr(inst_type))
         if raw_data is _missing_value:
             raise JsonValueError(
@@ -597,7 +578,7 @@ class JsonParser:
             The return value of `fn`
         """
         if inspect.isclass(fn):
-            raw_data = _apply_config_aliases(raw_data, fn)
+            raw_data = apply_config_aliases(fn, raw_data)
         parameters = list(inspect.signature(fn).parameters.items())
         parameter_types = {}
         if inspect.isclass(fn):

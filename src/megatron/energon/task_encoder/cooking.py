@@ -114,7 +114,8 @@ def basic_sample_keys(
     """A convenience helper to extract the basic keys from a crude sample,
     which you will always need to forward to the cooked sample."""
 
-    crude_sample = canonicalize_tag_kwargs(crude_sample)
+    if "__tags__" not in crude_sample:
+        crude_sample = canonicalize_tag_kwargs(crude_sample)
     res = {
         field.name: crude_sample[field.name]
         for field in dataclasses.fields(Sample)

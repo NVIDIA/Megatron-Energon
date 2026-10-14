@@ -231,8 +231,12 @@ The effective mapping is available as {py:attr}`Sample.__tags__
 <megatron.energon.Sample.__tags__>`. For backward compatibility, recipe and dataset
 configuration also accepts `subflavors`, and samples expose `__subflavors__` as a
 read/write alias for `__tags__`. Specify only one name at a time; providing both is
-an error. Dataset factories and references similarly retain a `subflavors` alias,
-and `Cooker.has_subflavors` aliases `Cooker.has_tags`.
+an error. `get_train_dataset`, `get_val_dataset`, `get_val_datasets`, and the dataset
+factories and loaders exported from `megatron.energon` similarly accept `subflavors`,
+`Cooker.has_subflavors` aliases `Cooker.has_tags`, and crude samples passed to cookers
+also contain the legacy `"__subflavors__"` key. Internal APIs, such as
+`TaskEncoder.build_*`, only accept `tags`. The legacy names emit a `FutureWarning`
+and will be removed in a future release.
 
 Here is a modified example of the above `recipe.yaml` config file that adds some tags:
 ```yaml
