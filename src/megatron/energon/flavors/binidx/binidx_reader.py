@@ -170,7 +170,7 @@ class BinIdxReader(SamplePartFileReader[FilteredSample]):
 
         self._bin_size = self.bin_path.size()
 
-        if bin_path.is_local():
+        if self.bin_path.is_local():
             self._idx_reader = MMapIdxReader(idx_path)
         else:
             self._idx_reader = IdxReader(idx_path)
@@ -194,6 +194,11 @@ class BinIdxReader(SamplePartFileReader[FilteredSample]):
                 idx = int(num_idx)
             except ValueError:
                 raise ValueError(f"Invalid bin-idx sample key: {idx}")
+
+        if not 0 <= idx < len(self._idx_reader):
+            raise IndexError(
+                f"Sample index {idx} out of range [0, {len(self._idx_reader)}) in {self.bin_path}"
+            )
 
         key = str(idx)
         if self.sample_filter is not None and not self.sample_filter(key):
