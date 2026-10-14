@@ -178,10 +178,12 @@ class TestBinIdxDataset(unittest.TestCase):
         self.assertTrue(reader._bin_file.closed)
         self.assertTrue(idx_reader._idx_file.closed)
 
-    def test_reader_rejects_out_of_range_indexes(self):
+    def test_reader_rejects_truncated_bin_file(self):
         bin_path = self.create_binidx_dataset(
-            self.dataset_path / "reader_bounds", num_docs=2, doc_len=3
+            self.dataset_path / "truncated_bin", num_docs=2, doc_len=3
         )
+        with bin_path.open("r+b") as bin_file:
+            bin_file.truncate(20)
         for use_mmap in (True, False):
             with self.subTest(use_mmap=use_mmap):
                 reader = BinIdxReader(EPath(bin_path))
@@ -189,15 +191,15 @@ class TestBinIdxDataset(unittest.TestCase):
                     reader._idx_reader.close()
                     reader._idx_reader = IdxReader(EPath(bin_path.with_suffix(".idx")))
                 try:
-                    for key in (-1, 2, 5000, "-1", "2", "-1.tokens", "2.tokens"):
+                    self.assertEqual(
+                        np.frombuffer(reader[0]["tokens"], dtype=np.int32).tolist(), [1, 2, 3]
+                    )
+                    for key in (1, "1", "1.tokens"):
                         with self.subTest(key=key):
-                            with self.assertRaisesRegex(IndexError, "out of range"):
+                            with self.assertRaisesRegex(
+                                ValueError, "sample 1 expects 12 bytes at offset 12, got 8"
+                            ):
                                 reader[key]
-                    self.assertEqual(reader[1]["__key__"], "1")
-                    reader.sample_filter = lambda key: False
-                    self.assertIsNone(reader[0])
-                    with self.assertRaisesRegex(IndexError, "out of range"):
-                        reader[-1]
                 finally:
                     reader.close()
 

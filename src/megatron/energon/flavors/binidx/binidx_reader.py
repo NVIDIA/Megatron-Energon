@@ -161,7 +161,6 @@ class BinIdxReader(SamplePartFileReader[FilteredSample]):
         self,
         bin_path: EPath,
         sample_filter: Optional[Callable[[str], bool]] = None,
-        index_cache_size: int = 5,
     ):
         self.bin_path = EPath(bin_path)
         self.sample_filter = sample_filter
@@ -211,6 +210,12 @@ class BinIdxReader(SamplePartFileReader[FilteredSample]):
 
         self._bin_file.seek(byte_offset)
         token_bytes = self._bin_file.read(byte_length)
+        if len(token_bytes) != byte_length:
+            raise ValueError(
+                f"Truncated or mismatched .bin file {self.bin_path}: sample {idx} expects "
+                f"{byte_length} bytes at offset {byte_offset}, got {len(token_bytes)}. "
+                f"Does the .bin match its .idx?"
+            )
 
         source_info = SourceInfo(
             dataset_path=self.bin_path,
