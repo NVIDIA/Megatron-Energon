@@ -8,7 +8,7 @@ from typing import Callable, Generic, Optional, TypeVar, Union, overload
 
 from megatron.energon.flavors.base_dataset import Sample
 from megatron.energon.source_info import SourceInfo
-from megatron.energon.tags import HasTagsAlias, canonicalize_tag_kwargs
+from megatron.energon.tags import HasTagsAlias, SampleKeys, canonicalize_tag_kwargs
 
 T_sample = TypeVar("T_sample", bound=Sample, covariant=True)
 
@@ -116,11 +116,11 @@ def basic_sample_keys(
 
     if "__tags__" not in crude_sample:
         crude_sample = canonicalize_tag_kwargs(crude_sample)
-    res = {
-        field.name: crude_sample[field.name]
+    res = SampleKeys(
+        (field.name, crude_sample[field.name])
         for field in dataclasses.fields(Sample)
         if field.name in crude_sample
-    }
+    )
 
     if additional_source_info:
         res["__sources__"] = (*crude_sample["__sources__"], *additional_source_info)

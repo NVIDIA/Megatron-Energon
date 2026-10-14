@@ -78,6 +78,42 @@ def apply_config_aliases(cls: Any, kwargs: Any, *, stacklevel: int = 2) -> Any:
     return kwargs
 
 
+def _canonical_sample_key(key: Any) -> Any:
+    if key == "__subflavors__":
+        _warn_legacy_name("__subflavors__", "__tags__", 3)
+        return "__tags__"
+    return key
+
+
+class SampleKeys(dict):
+    """Keyword arguments for constructing a sample, e.g. as returned by `basic_sample_keys`.
+
+    For backward compatibility, the legacy ``"__subflavors__"`` key is an alias of ``"__tags__"``.
+    Unpacking (``**sample_keys``) only yields the canonical keys.
+    """
+
+    def __getitem__(self, key: Any) -> Any:
+        return super().__getitem__(_canonical_sample_key(key))
+
+    def __setitem__(self, key: Any, value: Any) -> None:
+        super().__setitem__(_canonical_sample_key(key), value)
+
+    def __delitem__(self, key: Any) -> None:
+        super().__delitem__(_canonical_sample_key(key))
+
+    def __contains__(self, key: Any) -> bool:
+        return super().__contains__(_canonical_sample_key(key))
+
+    def get(self, key: Any, default: Any = None) -> Any:
+        return super().get(_canonical_sample_key(key), default)
+
+    def pop(self, key: Any, *args: Any) -> Any:
+        return super().pop(_canonical_sample_key(key), *args)
+
+    def setdefault(self, key: Any, default: Any = None) -> Any:
+        return super().setdefault(_canonical_sample_key(key), default)
+
+
 class _TagAliasMeta(ABCMeta):
     """Translate legacy constructor keywords before generated dataclass initializers run."""
 

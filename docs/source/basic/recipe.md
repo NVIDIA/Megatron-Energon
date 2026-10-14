@@ -233,8 +233,9 @@ configuration also accepts `subflavors`, and samples expose `__subflavors__` as 
 read/write alias for `__tags__`. Specify only one name at a time; providing both is
 an error. `get_train_dataset`, `get_val_dataset`, `get_val_datasets`, and the dataset
 factories and loaders exported from `megatron.energon` similarly accept `subflavors`,
-`Cooker.has_subflavors` aliases `Cooker.has_tags`, and crude samples passed to cookers
-also contain the legacy `"__subflavors__"` key. Internal APIs, such as
+`Cooker.has_subflavors` aliases `Cooker.has_tags`, crude samples passed to cookers
+also contain the legacy `"__subflavors__"` key, and the result of `basic_sample_keys`
+accepts `"__subflavors__"` as an alias for `"__tags__"`. Internal APIs, such as
 `TaskEncoder.build_*`, only accept `tags`. The legacy names emit a `FutureWarning`
 and will be removed in a future release.
 
