@@ -9,7 +9,6 @@ from megatron.energon.deprecation import warn_deprecated
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import BaseCoreDatasetFactory, SavableDataset
 from megatron.energon.recipe import load_dataset
-from megatron.energon.tags import resolve_tags
 from megatron.energon.task_encoder.base import DefaultTaskEncoder, TaskEncoder, WorkerConfig
 
 T = TypeVar("T", covariant=True)
@@ -30,12 +29,6 @@ def _split_kwargs(kwargs: dict) -> dict:
     except KeyError:
         pass
     return loader_kwargs
-
-
-def _resolve_legacy_tags_kwarg(kwargs: dict) -> None:
-    """Replace the deprecated `subflavors` keyword argument by `tags`."""
-    if "subflavors" in kwargs:
-        kwargs["tags"] = resolve_tags(kwargs.get("tags"), kwargs.pop("subflavors"), stacklevel=3)
 
 
 def _split_deprecated_dataset_kwargs(
@@ -161,7 +154,6 @@ def get_train_dataset(
         The dataloader.
     """
 
-    _resolve_legacy_tags_kwarg(kwargs)
     loader = load_dataset(path, **_split_kwargs(kwargs))
     _split_deprecated_dataset_kwargs(kwargs, task_encoder, worker_config)
 
@@ -224,7 +216,6 @@ def get_val_dataset(
         The loaded dataset.
     """
     _split_deprecated_dataset_kwargs(kwargs, task_encoder, worker_config)
-    _resolve_legacy_tags_kwarg(kwargs)
     loader = load_dataset(path, **_split_kwargs(kwargs))
     datasets = loader.get_datasets(
         training=False,
@@ -280,7 +271,6 @@ def get_val_datasets(
         The loaded val datasets, with the source datasets.
     """
     _split_deprecated_dataset_kwargs(kwargs, task_encoder, worker_config)
-    _resolve_legacy_tags_kwarg(kwargs)
     loader = load_dataset(path, **_split_kwargs(kwargs))
     datasets = loader.get_datasets(
         training=False,

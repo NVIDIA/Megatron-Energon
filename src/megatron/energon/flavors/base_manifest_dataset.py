@@ -52,9 +52,6 @@ class BaseManifestDatasetFactory(
             split_config = "split.yaml"
         if split_part is None:
             split_part = "train"
-        # Tags are merged in after construction instead of being passed to the constructor, as
-        # custom factories configured in the `dataset.yaml` are not required to accept them.
-        tags = kwargs.pop("tags", None)
         dataset = load_config(
             path / MAIN_FOLDER_NAME / dataset_config,
             default_kwargs=dict(
@@ -65,8 +62,6 @@ class BaseManifestDatasetFactory(
             ),
             default_type=StandardWebdatasetFactory,
         )
-        if tags is not None:
-            dataset.tags.update(tags)
         if sample_type is not None:
             assert issubclass(dataset.__sample_type__, sample_type), (
                 f"Sample of type {dataset.__sample_type__} is not a subclass of {sample_type}."
