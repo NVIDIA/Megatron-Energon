@@ -55,6 +55,7 @@ from megatron.energon.dataset_config import get_dataset_from_config
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import BaseWebdatasetFactory, CrudeJsonlDatasetFactory
+from megatron.energon.flavors.common.dataset_sampler import DatasetSampler
 from megatron.energon.flavors.common.manifest.paths import INFO_JSON_FILENAME, MAIN_FOLDER_NAME
 from megatron.energon.recipe import prepare_recipe
 from megatron.energon.task_encoder.base import stateless
@@ -680,6 +681,64 @@ class TestDataset(unittest.TestCase):
             assert sample.image.shape == (10, 3, 100, 100)
             n_samples += sample.image.shape[0]
         assert n_samples == 50
+
+    def test_max_samples_per_sequence_one_uses_compact_indexes(self):
+        def new_dataset():
+            return get_train_dataset(
+                self.dataset_path,
+                batch_size=1,
+                worker_config=WorkerConfig(rank=0, world_size=1, num_workers=2),
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=1,
+            )
+
+        train_dataset = new_dataset()
+
+        sampler = train_dataset._find_wrapped_dataset(DatasetSampler)
+        assert isinstance(sampler, DatasetSampler)
+        assert all(isinstance(offsets, range) for offsets in sampler.workers_slice_offsets)
+
+        with get_savable_loader(train_dataset) as train_loader:
+            train_iterator = iter(train_loader)
+            first_batches = [next(train_iterator) for _ in range(10)]
+            state = train_loader.save_state_rank()
+            remaining_batches = [next(train_iterator) for _ in range(DATASET_SIZE - 10)]
+            next_epoch_batches = [next(train_iterator) for _ in range(DATASET_SIZE)]
+
+        with get_savable_loader(new_dataset()) as restored_loader:
+            restored_loader.restore_state_rank(state)
+            restored_iterator = iter(restored_loader)
+            restored_batches = [
+                next(restored_iterator) for _ in range(len(remaining_batches) + DATASET_SIZE)
+            ]
+
+        assert [batch.__key__[0] for batch in first_batches[:5]] == [
+            "000043",
+            "000010",
+            "000036",
+            "000009",
+            "000042",
+        ]
+
+        all_batches = first_batches + remaining_batches
+        assert sorted(batch.__key__[0] for batch in all_batches) == [
+            f"{sample_idx:06d}" for sample_idx in range(DATASET_SIZE)
+        ]
+        assert all(batch.image.shape == (1, 3, 100, 100) for batch in all_batches)
+
+        assert sorted(batch.__key__[0] for batch in next_epoch_batches) == [
+            f"{sample_idx:06d}" for sample_idx in range(DATASET_SIZE)
+        ]
+        assert [batch.__key__ for batch in next_epoch_batches] != [
+            batch.__key__ for batch in all_batches
+        ]
+
+        assert [batch.__key__ for batch in restored_batches[: len(remaining_batches)]] == [
+            batch.__key__ for batch in remaining_batches
+        ]
+        assert [batch.__key__ for batch in restored_batches[len(remaining_batches) :]] == [
+            batch.__key__ for batch in next_epoch_batches
+        ]
 
     def test_no_batching(self):
         train_loader = get_loader(
