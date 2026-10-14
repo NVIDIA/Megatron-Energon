@@ -427,6 +427,8 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             aux["cache"] = self.cache
         if cooker.need_primary:
             aux["primary"] = PrimaryFileStore(aux["primary"], current_key=sample["__key__"])
+        # Legacy cookers may still read `__subflavors__`. `basic_sample_keys` only forwards `__tags__`.
+        sample["__subflavors__"] = sample.get("__tags__")
         return cooker.cook(sample, **aux)
 
     @stateless

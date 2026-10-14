@@ -24,7 +24,7 @@ from megatron.energon.recipe.loader_interface import (
     LoadedDatasetList,
     TraversedDatasetReference,
 )
-from megatron.energon.tags import TagsAlias, resolve_tags
+from megatron.energon.tags import TagsAlias
 from megatron.energon.worker import WorkerConfig
 
 # Regex for any URL-like string (any protocol)
@@ -393,7 +393,6 @@ class DatasetReference(
         subset: Optional[DatasetSubset] = None,
         **kwargs,
     ) -> LoadedDatasetList:
-        tags = resolve_tags(tags, kwargs.pop("subflavors", None))
         assert self._dataset is not None
 
         result = self._dataset.get_datasets(
@@ -535,7 +534,6 @@ class RecipeJoin(
         subset: Optional[DatasetSubset] = None,
         **kwargs,
     ) -> LoadedDatasetList:
-        tags = resolve_tags(tags, kwargs.pop("subflavors", None))
         assert self._dataset is not None, "Missing post_initialize call."
         return self._dataset.get_datasets(
             training=training,
@@ -624,7 +622,6 @@ class RecipeBlend(
         subset: Optional[DatasetSubset] = None,
         **kwargs,
     ) -> LoadedDatasetList:
-        tags = resolve_tags(tags, kwargs.pop("subflavors", None))
         subset = self._get_subset(subset)
         tags = self._merge_tags(tags)
         shuffle_over_epochs_multiplier = self._merge_shuffle_over_epochs_multiplier(
@@ -748,7 +745,6 @@ class RecipeBlendEpochized(
         subset: Optional[DatasetSubset] = None,
         **kwargs,
     ) -> LoadedDatasetList:
-        tags = resolve_tags(tags, kwargs.pop("subflavors", None))
         subset = self._get_subset(subset)
         shuffle_over_epochs_multiplier = self._merge_shuffle_over_epochs_multiplier(
             shuffle_over_epochs_multiplier
@@ -854,7 +850,6 @@ class Recipe(DatasetLoaderInterface):
         subset: Optional[DatasetSubset] = None,
         **kwargs,
     ) -> LoadedDatasetList:
-        tags = resolve_tags(tags, kwargs.pop("subflavors", None))
         return self.splits[split_part].get_datasets(
             training=training,
             split_part=split_part,

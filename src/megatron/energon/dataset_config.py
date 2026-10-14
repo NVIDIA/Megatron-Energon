@@ -8,7 +8,6 @@ from megatron.energon.epathlib import EPath
 from megatron.energon.eyaml import load_yaml
 from megatron.energon.flavors import BaseCoreDatasetFactory
 from megatron.energon.flavors.dataset_factory_resolver import get_dataset_factory_resolver
-from megatron.energon.tags import resolve_tags
 from megatron.energon.typed_converter import JsonParser
 from megatron.energon.worker import WorkerConfig
 
@@ -54,7 +53,6 @@ def get_dataset_from_config(
     split_part: str | None = None,
     training: bool = True,
     tags: Optional[Dict[str, Any]] = None,
-    subflavors: Optional[Dict[str, Any]] = None,
     worker_config: WorkerConfig,
     sample_type: Optional[Type[T_sample]] = None,
     **kwargs,
@@ -69,7 +67,6 @@ def get_dataset_from_config(
         split_part: Name of the split to load, or None for jsonl datasets.
         training: If true, apply training randomization and loop the dataset.
         tags: Merge-override the :attr:`Sample.__tags__` property of each sample.
-        subflavors: Legacy alias for ``tags``. Specifying both raises an error.
         worker_config: If set, use this worker config instead of the default one.
         sample_type: Type of the samples to load, only used to ensure typing.
         **kwargs: Additional arguments to be passed to the dataset constructor.
@@ -77,7 +74,6 @@ def get_dataset_from_config(
     Returns:
         The instantiated dataset
     """
-    tags = resolve_tags(tags, subflavors)
     path = EPath(path)
     dataset = get_dataset_factory_resolver().get(
         path,
