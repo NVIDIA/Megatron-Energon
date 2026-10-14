@@ -16,6 +16,7 @@ from typing import Any, Dict, Literal, Optional, Tuple, TypeVar
 from megatron.energon.cache.base import CachePool, FileStore, Lazy
 from megatron.energon.edataclass import edataclass
 from megatron.energon.fork_hook import ForkMixin
+from megatron.energon.safe_unpickler import SafeUnpickler
 from megatron.energon.source_info import SourceInfo, add_source_info
 
 T = TypeVar("T")
@@ -84,7 +85,7 @@ class CacheFileLazy(Lazy[T]):
         """
         if self._data is None:
             with open(self.cache_path, "rb") as f:
-                self._data = pickle.load(f)
+                self._data = SafeUnpickler(f).load()
             self.cache_path.unlink()
             self.cache_path = None
         return self._data
@@ -426,7 +427,7 @@ class FileStoreCachePool(CachePool, ForkMixin):
                 raw = f.read()
                 return entry.ds._decode_raw(raw, fname=entry.fname), entry.source_info
             else:
-                return pickle.load(f), entry.source_info
+                return SafeUnpickler(f).load(), entry.source_info
 
     def _remove_cached_file(self, entry: _PendingTask) -> None:
         """
