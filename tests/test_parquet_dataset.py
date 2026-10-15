@@ -236,6 +236,55 @@ class TestParquetRowGroupShuffle(unittest.TestCase):
         assert sorted(seen) == list(range(self.ROWS))
         assert seen != list(range(self.ROWS))
 
+    def test_serial_read_order(self):
+        wc = WorkerConfig(rank=0, world_size=1, num_workers=0, seed_offset=0)
+        ds = DefaultParquetDatasetFactory(
+            EPath(self.path),
+            training=True,
+            worker_config=wc,
+            decoder=None,
+            parquet_read_order="serial",
+        )
+        wc.worker_activate(0)
+        try:
+            iterator = iter(ds.build())
+            seen = [next(iterator)["id"] for _ in range(2 * self.ROWS)]
+        finally:
+            wc.worker_deactivate()
+        assert seen == list(range(self.ROWS)) * 2
+
+    def test_invalid_read_order(self):
+        wc = WorkerConfig(rank=0, world_size=1, num_workers=0, seed_offset=0)
+        with self.assertRaises(ValueError):
+            DefaultParquetDatasetFactory(
+                EPath(self.path),
+                training=True,
+                worker_config=wc,
+                parquet_read_order="random",
+            )
+
+    def test_recipe_serial_read_order(self):
+        recipe_path = Path(self.temp_dir.name) / "recipe.yaml"
+        recipe_path.write_text(
+            "__module__: megatron.energon\n"
+            "__class__: Recipe\n"
+            "splits:\n"
+            "  train:\n"
+            "    path: data.parquet\n"
+            "    parquet_read_order: serial\n"
+        )
+        train_ds = get_train_dataset(
+            EPath(recipe_path),
+            batch_size=1,
+            worker_config=WorkerConfig(rank=0, world_size=1, num_workers=0),
+            shuffle_buffer_size=None,
+            max_samples_per_sequence=None,
+            task_encoder=ParquetIdEncoder(),
+        )
+        iterator = iter(get_loader(train_ds))
+        seen = [int(next(iterator).row_id[0]) for _ in range(self.ROWS)]
+        assert seen == list(range(self.ROWS))
+
     def test_save_restore_with_workers(self):
         def new_dataset():
             return get_train_dataset(
