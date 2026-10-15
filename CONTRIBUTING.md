@@ -3,13 +3,49 @@ SPDX-License-Identifier: BSD-3-Clause -->
 
 ## Megatron-Energon OSS Contribution Rules
 
+Megatron Energon is a general-purpose PyTorch data loader for large-scale, multi-modal training.
+
+
+#### Human Responsibility and AI Tools
+
+You may use AI tools (coding agents, assistants, code generators) to help with your contribution.
+However:
+
+- **A human must personally review every line** of every pull request, issue and comment before it
+  is submitted. You must understand the change and be able to answer review questions yourself,
+  without relaying them to an AI.
+- **You are responsible for the contribution**, regardless of how it was produced. The
+  `Signed-off-by` line on your commits (see [Signing Your Work](#signing-your-work)) is your
+  statement of that responsibility.
+- Do not add `Co-Authored-By` (or similar) trailers for AI tools. Only humans author and sign off
+  commits in this repository.
+- Pull requests and issues must confirm the human review in their template. We may close
+  contributions without review when they lack this confirmation or look like unreviewed generated
+  output.
+
+Agents working in this repository additionally follow [AGENTS.md](AGENTS.md).
+
+
+#### External Contributions
+
+Contributions from outside the core team are welcome when they solve a real-world problem:
+
+- **Open an issue first** that describes a problem you actually encountered while using Energon:
+  what you were loading or training, what went wrong, and how to reproduce it.
+- **Every external pull request must link such an issue.** Pull requests without one may be closed
+  without review.
+- We do not accept contributions whose main purpose is volume, such as findings from automated or
+  AI-driven bug hunting, static analysis or fuzzing without a real-world impact, typo-only or
+  style-only changes, or speculative "hardening". Report a security vulnerability through
+  [NVIDIA's security process](https://www.nvidia.com/en-us/security/) instead of a public issue.
+- For larger changes (new features, architectural changes), discuss the design in the issue before
+  writing code.
+
 
 #### Coding Guidelines
 
-- We recommend to discuss and plan contributions by opening an issue beforehand.
-
 - All source code contributions must strictly adhere to ruff linter and formatter as configured in `pyproject.toml`.
-    - You can check those by running `just check`.
+    - You can apply fixes with `just fix` and check them by running `just check`.
 
 - All source code files must include the NVIDIA license header as you can see in `src/megatron/energon/__init__.py`.
 
@@ -19,13 +55,67 @@ SPDX-License-Identifier: BSD-3-Clause -->
 
 - Try to keep pull requests (PRs) as concise as possible:
   - Avoid committing commented-out code.
+  - Do not touch code outside the scope of the PR, including formatting or renames.
   - Wherever possible, each PR should address a single concern. If there are several otherwise-unrelated things that should be fixed to reach a desired endpoint, our recommendation is to open several PRs and indicate the dependencies in the description. The more complex the changes are in a single PR, the more time it will take to review those changes.
-
-- Ensure that all tests pass prior to submitting your code.
 
 - All components must contain accompanying documentation in `docs/source`.
 
 - Make sure that you can contribute your work to open source (no license and/or patent conflict is introduced by your code). You will need to [`sign`](#signing-your-work) your commit.
+
+
+#### Testing
+
+- Ensure that all tests pass prior to submitting your code (`just test`).
+- We prefer end-to-end tests over many small unit tests: create a small real dataset in a temporary
+  directory, load it through the public API, and check the samples that come out, including
+  save/restore of the loader state where relevant. See `tests/test_dataset.py` for examples.
+- Extend existing test files where possible instead of creating new ones.
+
+
+#### Commit Messages
+
+We use [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/). Pull requests are
+merged without squashing, so every commit ends up in the history and must follow the format:
+
+```
+<type>(<scope>): <description>
+
+[optional body]
+
+Signed-off-by: Your Name <your@email.com>
+```
+
+- **type** is one of:
+
+  | Type       | Use for                                                       |
+  | ---------- | ------------------------------------------------------------- |
+  | `feat`     | A new feature or user-facing capability                       |
+  | `fix`      | A bug fix                                                     |
+  | `perf`     | A performance improvement without behavior change             |
+  | `refactor` | A code change that neither fixes a bug nor adds a feature     |
+  | `docs`     | Documentation only                                            |
+  | `test`     | Adding or changing tests only                                 |
+  | `build`    | Build system, packaging, dependencies, `justfile`             |
+  | `ci`       | CI configuration (`.github/`)                                 |
+  | `style`    | Formatting only, no code change                               |
+  | `chore`    | Maintenance that fits none of the above                       |
+  | `revert`   | Reverting a previous commit                                   |
+
+- **scope** (optional) names the affected area, usually a module or package, e.g. `loader`,
+  `sampler`, `recipe`, `flavors`, `wrappers`, `task_encoder`, `cache`, `av`, `cli`.
+- **description** is a short summary in the imperative mood ("add", not "added"), starting
+  lowercase, without a trailing period.
+
+Examples from this repository:
+
+```
+fix(loader): close dataset and reader resources deterministically
+perf(sampler): use Feistel-network permutations for slice shuffling
+build(just): check Ruff formatting in just check
+```
+
+CI checks every commit of a pull request for the format and the sign-off. Run `just check-commits`
+to check your branch locally.
 
 
 #### Signing Your Work
@@ -34,9 +124,11 @@ SPDX-License-Identifier: BSD-3-Clause -->
 
   * Any contribution which contains commits that are not Signed-Off will not be accepted.
 
+  * The sign-off must be made by the human author of the commit, with the same email address as the commit author. It also states that you take responsibility for the contribution, including any parts produced with AI tools.
+
 * To sign off on a commit you simply use the `--signoff` (or `-s`) option when committing your changes:
   ```bash
-  $ git commit -s -m "Add cool feature."
+  $ git commit -s -m "feat(loader): add cool feature"
   ```
   This will append the following to your commit message:
   ```
