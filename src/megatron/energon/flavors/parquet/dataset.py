@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import logging
-from typing import Any, Callable, Dict, List, Union
+from typing import Any, Callable, Dict, List, Literal, Union
 
 from megatron.energon.cache import FileStore
 from megatron.energon.decoders import DEFAULT_DECODER, SampleDecoder
@@ -29,9 +29,30 @@ from megatron.energon.worker import WorkerConfig
 
 logger = logging.getLogger(__name__)
 
+#: How Parquet rows are ordered when training:
+#: ``"row_group_shuffled"``: row groups are shuffled, rows within a row group are sequential.
+#: ``"serial"``: rows are read in dataset order, e.g. for datasets that are already shuffled.
+ParquetReadOrder = Literal["row_group_shuffled", "serial"]
+
 _PARQUET_SAMPLE_META = frozenset(
     {"__key__", "__shard__", "__restore_key__", "__sources__"},
 )
+
+
+def _resolve_read_order(
+    parquet_read_order: ParquetReadOrder,
+    shuffle_over_epochs: int | None,
+    parallel_shard_iters: int | None,
+) -> tuple[int | None, int | None]:
+    """Returns the effective ``(shuffle_over_epochs, parallel_shard_iters)`` for the read order."""
+    if parquet_read_order == "serial":
+        return None, 1
+    if parquet_read_order != "row_group_shuffled":
+        raise ValueError(
+            f"Invalid parquet_read_order {parquet_read_order!r}, "
+            "expected 'row_group_shuffled' or 'serial'"
+        )
+    return shuffle_over_epochs, parallel_shard_iters
 
 
 def _select_columns(
@@ -97,9 +118,14 @@ class ParquetDatasetFactory(
         subset: DatasetSubset | None = None,
         part_filter: Callable[[str], bool] | None = None,
         filter_name: str | None = None,
+        parquet_read_order: ParquetReadOrder = "row_group_shuffled",
     ):
         path = EPath(path)
         assert path.is_file(), f"Parquet dataset path must be a file: {path}"
+        self.parquet_read_order = parquet_read_order
+        shuffle_over_epochs, parallel_shard_iters = _resolve_read_order(
+            parquet_read_order, shuffle_over_epochs, parallel_shard_iters
+        )
         self._layout = scan_parquet_file(path)
         self._reader_base_path = path.parent
         self._read_columns = _select_columns(list(self._layout.columns), part_filter)
@@ -135,7 +161,7 @@ class ParquetDatasetFactory(
         )
 
     def _slice_shards(self, shards: list[ShardInfo]) -> list[ShardInfo]:
-        if self.filter_view is not None:
+        if self.parquet_read_order == "serial" or self.filter_view is not None:
             # The filter index only knows the file shards
             return shards
         return _row_group_shards(self._layout, self._reader_base_path)
@@ -163,6 +189,7 @@ class ParquetDatasetFactory(
             max_samples_per_sequence=self.max_samples_per_sequence,
             subset=self.subset.config() if self.subset is not None else None,
             filter_name=self.filter_name,
+            parquet_read_order=self.parquet_read_order,
         )
 
     def __str__(self):
@@ -188,9 +215,14 @@ class ParquetShardListDatasetFactory(BaseManifestShardListDatasetFactory[CrudeSa
         subset: DatasetSubset | None = None,
         part_filter: Callable[[str], bool] | None = None,
         filter_name: str | None = None,
+        parquet_read_order: ParquetReadOrder = "row_group_shuffled",
     ):
         self.split_config = split_config
         self.split_part = split_part
+        self.parquet_read_order = parquet_read_order
+        shuffle_over_epochs, parallel_shard_iters = _resolve_read_order(
+            parquet_read_order, shuffle_over_epochs, parallel_shard_iters
+        )
         self._read_columns: list[str] = []
         super().__init__(
             path,
@@ -231,7 +263,7 @@ class ParquetShardListDatasetFactory(BaseManifestShardListDatasetFactory[CrudeSa
         )
 
     def _slice_shards(self, shards: list[ShardInfo]) -> list[ShardInfo]:
-        if self.filter_view is not None:
+        if self.parquet_read_order == "serial" or self.filter_view is not None:
             # The filter index only knows the file shards
             return shards
         return _row_group_shards(self._layout, self.path)
@@ -258,6 +290,7 @@ class ParquetShardListDatasetFactory(BaseManifestShardListDatasetFactory[CrudeSa
             max_samples_per_sequence=self.max_samples_per_sequence,
             subset=self.subset.config() if self.subset is not None else None,
             filter_name=self.filter_name,
+            parquet_read_order=self.parquet_read_order,
         )
 
     def __str__(self):
