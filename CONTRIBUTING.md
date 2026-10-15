@@ -114,8 +114,8 @@ perf(sampler): use Feistel-network permutations for slice shuffling
 build(just): check Ruff formatting in just check
 ```
 
-CI checks every commit of a pull request for the format and the sign-off. Run `just check-commits`
-to check your branch locally.
+CI checks every commit of a pull request for the format and the sign-off. Merge commits, e.g. from
+GitHub's "Update branch" button, are exempt. Run `just check-commits` to check your branch locally.
 
 
 #### Signing Your Work
