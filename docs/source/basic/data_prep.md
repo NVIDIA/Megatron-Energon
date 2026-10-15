@@ -233,6 +233,17 @@ energon prepare /path/to/my_parquet_directory
 This scans the Parquet footers, writes `.nv-meta/.info.json`, `.nv-meta/split.yaml`, and a default `.nv-meta/dataset.yaml`, and configures the dataset as `DefaultParquetShardListDatasetFactory`.
 The manifest keeps the file order and row counts used for sharding and filtering.
 
+### Shuffling and Row Groups
+
+Random access into a Parquet file is slow, because a whole row group has to be decoded to read a single row.
+When training, Energon therefore shuffles on the level of row groups: The row groups of the dataset are
+distributed across ranks and workers and visited in random order, and the rows within each row group are
+read sequentially. This is a coarser shuffle than for other formats, so write your Parquet files with row
+groups that are small enough to give a good mix, but large enough for efficient reads.
+
+Each worker keeps up to `parallel_shard_iters` decoded row groups in memory.
+If a [filter index](../advanced/filter_index) is used, the sequential ranges are whole files instead of row groups.
+
 (binidx-dataset)=
 ## Using a Megatron-LM BinIdx Dataset
 
