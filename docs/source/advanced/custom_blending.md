@@ -25,7 +25,7 @@ class CaptioningTaskEncoder(
         worker_config: WorkerConfig,
         batch_size: Optional[int],
         batch_drop_last: bool = False,
-        packing_buffer_size: Optional[int] = None,
+        packing_buffer_size: Optional[int | Literal["stream"]] = None,
         virtual_epoch_length: int = 0,
         shuffle_buffer_size: Optional[int] = None,
     ) -> SavableDataset[T_batch]:
@@ -34,6 +34,13 @@ class CaptioningTaskEncoder(
         # and then blend, which would yield the same distribution.
         dataset = BlendDataset(
             *datasets,
+            worker_config=worker_config,
+        )
+        # Apply post-encoding, buffered packing, or streaming packing.
+        dataset = self._build_packing_postencode(
+            dataset,
+            group=None,
+            packing_buffer_size=packing_buffer_size,
             worker_config=worker_config,
         )
         # Build batches from blended samples
