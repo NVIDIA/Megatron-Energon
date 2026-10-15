@@ -72,6 +72,9 @@ class IParquetReader(SamplePartFileReader[FilteredSample]):
         self._total = s
         self._parquet_cache: OrderedDict[int, Tuple[Any, Any]] = OrderedDict()
         self._parquet_cache_max = max(1, parquet_file_cache_size)
+        # Decoded row groups, so that sequential reads decode each row group only once. Holds as
+        # many entries as there are parallel readers.
+        self._table_cache: OrderedDict[Tuple[int, int, Tuple[str, ...]], Any] = OrderedDict()
 
     def __len__(self) -> int:
         return self._total
@@ -106,6 +109,28 @@ class IParquetReader(SamplePartFileReader[FilteredSample]):
             old_raw.close()
         return self._parquet_cache[file_idx]
 
+    def _locate_row_group(self, file_idx: int, row_in_file: int) -> Tuple[int, int]:
+        """Returns the row group index and the row index within that row group."""
+        entry = self.layout.files[file_idx]
+        offset = 0
+        for row_group, rows in enumerate(entry.row_group_rows):
+            if row_in_file < offset + rows:
+                return row_group, row_in_file - offset
+            offset += rows
+        raise RuntimeError(f"Row {row_in_file} out of range for file index {file_idx}")
+
+    def _get_row_group(self, file_idx: int, row_group: int, columns: Sequence[str]) -> Any:
+        key = (file_idx, row_group, tuple(columns))
+        if key in self._table_cache:
+            self._table_cache.move_to_end(key)
+            return self._table_cache[key]
+        _, pf = self._get_parquet_file(file_idx)
+        table = pf.read_row_group(row_group, columns=list(columns))
+        self._table_cache[key] = table
+        while len(self._table_cache) > self._parquet_cache_max:
+            self._table_cache.popitem(last=False)
+        return table
+
     def _get_item(self, idx: int, columns: Sequence[str] | None = None) -> dict[str, Any] | None:
         key = str(idx)
         if self.sample_filter is not None and not self.sample_filter(key):
@@ -113,32 +138,24 @@ class IParquetReader(SamplePartFileReader[FilteredSample]):
         cols = list(self.read_columns if columns is None else columns)
         f_idx, local = self._locate(idx)
         shard_name = self.layout.files[f_idx].rel_path
-        _, pf = self._get_parquet_file(f_idx)
-        off = 0
-        row_in_file = local
-        for rg in range(pf.num_row_groups):
-            nr = pf.metadata.row_group(rg).num_rows
-            if row_in_file < off + nr:
-                table = pf.read_row_group(rg, columns=cols)
-                local_rg = row_in_file - off
-                d = _table_row_to_dict(table, local_rg, cols)
-                file_names = tuple(f"{key}.{c}" for c in cols)
-                return dict(
-                    __key__=key,
-                    __shard__=shard_name,
-                    __restore_key__=("Webdataset", idx),
-                    __sources__=(
-                        SourceInfo(
-                            dataset_path=str(self.dataset_root),
-                            index=idx,
-                            shard_name=shard_name,
-                            file_names=file_names,
-                        ),
-                    ),
-                    **d,
-                )
-            off += nr
-        raise RuntimeError(f"Row {row_in_file} out of range for file index {f_idx}")
+        row_group, local_rg = self._locate_row_group(f_idx, local)
+        table = self._get_row_group(f_idx, row_group, cols)
+        d = _table_row_to_dict(table, local_rg, cols)
+        file_names = tuple(f"{key}.{c}" for c in cols)
+        return dict(
+            __key__=key,
+            __shard__=shard_name,
+            __restore_key__=("Webdataset", idx),
+            __sources__=(
+                SourceInfo(
+                    dataset_path=str(self.dataset_root),
+                    index=idx,
+                    shard_name=shard_name,
+                    file_names=file_names,
+                ),
+            ),
+            **d,
+        )
 
     def __getitem__(self, idx: int | str) -> FilteredSample | tuple[Any, SourceInfo] | None:
         full_entry_name = False
@@ -193,6 +210,7 @@ class IParquetReader(SamplePartFileReader[FilteredSample]):
         return total
 
     def close(self) -> None:
+        self._table_cache.clear()
         while self._parquet_cache:
             _, (raw, pf) = self._parquet_cache.popitem(last=False)
             pf.close()
