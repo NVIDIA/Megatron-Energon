@@ -20,6 +20,7 @@ from megatron.energon.flavors.dataset_factory_resolver import (
 from megatron.energon.flavors.dataset_type import EnergonDatasetType
 from megatron.energon.flavors.parquet.prepare import (
     assert_layout_columns_subset,
+    ParquetLayout,
     scan_parquet_file,
     scan_parquet_shards,
 )
@@ -47,6 +48,15 @@ def _select_columns(
         )
     assert_layout_columns_subset(layout_columns, read_columns)
     return read_columns
+
+
+def _row_group_shards(layout: ParquetLayout, base_path: EPath) -> list[ShardInfo]:
+    """One shard per row group, in global sample order."""
+    return [
+        ShardInfo(name=f"{entry.rel_path}#{row_group}", path=base_path / entry.rel_path, count=rows)
+        for entry in layout.files
+        for row_group, rows in enumerate(entry.row_group_rows)
+    ]
 
 
 class ParquetPreparator:
@@ -123,6 +133,12 @@ class ParquetDatasetFactory(
             columns,
             parquet_file_cache_size=parallel_shard_iters,
         )
+
+    def _slice_shards(self, shards: list[ShardInfo]) -> list[ShardInfo]:
+        if self.filter_view is not None:
+            # The filter index only knows the file shards
+            return shards
+        return _row_group_shards(self._layout, self._reader_base_path)
 
     def as_file_store(self) -> FileStore:
         from megatron.energon.flavors.parquet.file_store import ParquetFileStore
@@ -213,6 +229,12 @@ class ParquetShardListDatasetFactory(BaseManifestShardListDatasetFactory[CrudeSa
             columns,
             parquet_file_cache_size=parallel_shard_iters,
         )
+
+    def _slice_shards(self, shards: list[ShardInfo]) -> list[ShardInfo]:
+        if self.filter_view is not None:
+            # The filter index only knows the file shards
+            return shards
+        return _row_group_shards(self._layout, self.path)
 
     def as_file_store(self) -> FileStore:
         from megatron.energon.flavors.parquet.file_store import ParquetFileStore
