@@ -59,7 +59,7 @@ Do not use string keys on `IndexedSampleReader`; string lookup belongs to `FileS
 
 `FileStore` retrieves `(data, SourceInfo)` for a string key and reports the underlying path. Part-aware
 readers extend that model to enumerate or retrieve named parts. These interfaces support auxiliary media,
-joins, mounts, and crude-dataset access.
+mounts, and crude-dataset access.
 
 When adding file-store support:
 
@@ -96,7 +96,7 @@ Use this checklist:
 3. **Reader:** implement integer ordinal access, length, resource cleanup, and `SampleRecord` provenance.
 4. **Factory:** subclass the appropriate indexed base and implement only the format-specific hooks.
 5. **Filtering:** verify `part_filter` and exclusions.
-6. **Key access:** implement `FileStore` or part readers if joins, mounts, or auxiliary lookup require it.
+6. **Key access:** implement `FileStore` or part readers if mounts or auxiliary lookup require it.
 7. **Detection:** register a provider at the least surprising priority and test competing path shapes.
 8. **Configuration:** ensure `config()` contains stable leaf identity fields used by diagnostics.
 9. **Exports and docs:** expose the supported API and document preparation and recipe syntax.

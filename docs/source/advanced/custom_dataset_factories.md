@@ -94,7 +94,7 @@ data. A new primary format normally needs:
 3. a factory derived from the narrowest suitable base, usually
    `BaseSingleFileDatasetFactory` or `BaseManifestShardListDatasetFactory`;
 4. format-specific `_build_reader` and `load_sample` implementations;
-5. `as_file_store()` only if key lookup, joins, mounts, or primary auxiliary
+5. `as_file_store()` only if key lookup, mounts, or primary auxiliary
    access are supported;
 6. a stable, serializable `config()` used for diagnostics;
 7. preparation or index-generation code when ordinal access cannot be derived

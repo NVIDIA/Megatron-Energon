@@ -10,7 +10,6 @@ __all__ = [
     "DefaultGenericWebdatasetFactory",
     "EmptyDatasetError",
     "ImageDecoderType",
-    "JoinedWebdatasetFactory",
     "SampleDecoder",
     "StandardWebdatasetFactory",
     "ShardListMeta",
@@ -46,10 +45,7 @@ def __getattr__(name: str):
         from megatron.energon.flavors.common.manifest.empty_dataset_error import EmptyDatasetError
 
         return EmptyDatasetError
-    if name == "JoinedWebdatasetFactory":
-        from megatron.energon.flavors.webdataset.joined_webdataset import JoinedWebdatasetFactory
 
-        return JoinedWebdatasetFactory
     if name in {"AVDecoderType", "ImageDecoderType", "SampleDecoder"}:
         from megatron.energon import decoders
 

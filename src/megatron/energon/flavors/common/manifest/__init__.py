@@ -14,7 +14,6 @@ from megatron.energon.flavors.common.manifest.paths import (
     INDEX_UUID_FILENAME,
     INFO_JSON_FILENAME,
     INFO_YAML_FILENAME,
-    JOIN_INDEX_FILENAME,
     MAIN_FOLDER_NAME,
     SPLIT_YAML_FILENAME,
 )
@@ -42,7 +41,6 @@ __all__ = [
     "INDEX_UUID_FILENAME",
     "INFO_JSON_FILENAME",
     "INFO_YAML_FILENAME",
-    "JOIN_INDEX_FILENAME",
     "MAIN_FOLDER_NAME",
     "ManifestDatasetInfo",
     "ManifestSplits",
