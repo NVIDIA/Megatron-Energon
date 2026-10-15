@@ -289,13 +289,17 @@ class Watchdog:
 
 def repr_short(obj: Any) -> str:
     """
-    Return a short repr of an object.
+    Return a short repr of an object, or a diagnostic if it cannot be represented.
     """
-    if isinstance(obj, torch.Tensor):
-        if isinstance(obj, ShardedTensorBase) or obj.is_cuda:
-            return "<CUDA tensor>"
+    try:
+        if isinstance(obj, torch.Tensor):
+            if isinstance(obj, ShardedTensorBase) or obj.is_cuda:
+                return "<CUDA tensor>"
 
-    s = repr(obj)
+        s = repr(obj)
+    except Exception as exc:
+        # A failing local must not prevent the remaining stacks or timeout callback.
+        s = f"<unrepresentable {type(obj).__name__}: {type(exc).__name__}>"
     if len(s) > PRINT_LOCAL_MAX_LENGTH:
         s = s[: PRINT_LOCAL_MAX_LENGTH // 2] + "..." + s[-PRINT_LOCAL_MAX_LENGTH // 2 :]
     return s
