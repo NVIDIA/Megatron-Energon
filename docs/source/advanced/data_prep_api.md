@@ -61,7 +61,7 @@ def prepare_one_dataset(path: Path, num_workers: int, template_dir: Path):
 For non-tar shard lists, use the generic manifest writer
 `megatron.energon.flavors.common.manifest.write.write_manifest_dataset_metadata`
 with `ShardInfo` entries for each shard and a `dataset_definition` that points to the corresponding factory.
-Single-file datasets such as `.jsonl` are detected directly and do not require a manifest.
+Single-file datasets such as `.jsonl` and `.bin` are detected directly and do not require a manifest.
 
 Example usage:
 
