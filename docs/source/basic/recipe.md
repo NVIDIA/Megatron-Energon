@@ -70,7 +70,6 @@ splits:
     datasets:
       - weight: 2
         path: ./dataset-a
-        subflavor: source-a
       - weight: 1
         path: ./dataset-b
         split_part: val
@@ -86,8 +85,6 @@ splits:
     blend:
       - weight: 2
         path: ./dataset-a
-        tags:
-          __subflavor__: source-a
       - weight: 1
         path: ./dataset-b
         split_part: val
@@ -99,14 +96,11 @@ Apply these conversions throughout nested files:
 | --- | --- |
 | `__class__: Metadataset` | `__class__: Recipe` |
 | `splits.<name>.datasets` | `splits.<name>.blend` |
-| `subflavor: value` | `tags: {__subflavor__: value}` |
 | `megatron.energon.metadataset.*` imports | `megatron.energon.recipe.*` imports |
 
-Existing `subflavors` entries remain supported as a compatibility alias for
-`tags`; new recipes should use `tags`. `split_part`, `dataset_config`,
-`split_config`, weights, and `shuffle_over_epochs_multiplier` also remain
-supported. Relative paths are still resolved relative to the containing YAML
-file.
+Existing `split_part`, `dataset_config`, `split_config`, weights, and
+`shuffle_over_epochs_multiplier` remain supported. Relative paths are still
+resolved relative to the containing YAML file.
 
 After conversion, validate the recipe by loading it with your application's
 TaskEncoder and cookers.
@@ -217,7 +211,6 @@ without-replacement shuffling and `-1` changes which slices may be repeated or
 skipped.
 ```
 
-(sect-subflavors)=
 (sect-tags)=
 ## Tags
 
@@ -228,11 +221,7 @@ Even when blending many datasets together, you might want to handle some of them
 For example when doing OCR, you might have one dataset with full pages of text and one with only paragraphs. In your task encoder you could decide to augment the images differently.
 
 The effective mapping is available as {py:attr}`Sample.__tags__
-<megatron.energon.Sample.__tags__>`. For backward compatibility, recipe and dataset
-configuration also accepts `subflavors`, and samples expose `__subflavors__` as a
-read/write alias for `__tags__`. Specify only one name at a time; providing both is
-an error. Dataset factories and references similarly retain a `subflavors` alias,
-and `Cooker.has_subflavors` aliases `Cooker.has_tags`.
+<megatron.energon.Sample.__tags__>`.
 
 Here is a modified example of the above `recipe.yaml` config file that adds some tags:
 ```yaml
