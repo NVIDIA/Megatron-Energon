@@ -70,7 +70,6 @@ splits:
     datasets:
       - weight: 2
         path: ./dataset-a
-        subflavor: source-a
       - weight: 1
         path: ./dataset-b
         split_part: val
@@ -86,8 +85,6 @@ splits:
     blend:
       - weight: 2
         path: ./dataset-a
-        subflavors:
-          __subflavor__: source-a
       - weight: 1
         path: ./dataset-b
         split_part: val
@@ -99,11 +96,10 @@ Apply these conversions throughout nested files:
 | --- | --- |
 | `__class__: Metadataset` | `__class__: Recipe` |
 | `splits.<name>.datasets` | `splits.<name>.blend` |
-| `subflavor: value` | `subflavors: {__subflavor__: value}` |
 | `megatron.energon.metadataset.*` imports | `megatron.energon.recipe.*` imports |
 
-Existing `subflavors`, `split_part`, `dataset_config`, `split_config`, weights,
-and `shuffle_over_epochs_multiplier` remain supported. Relative paths are still
+Existing `split_part`, `dataset_config`, `split_config`, weights, and
+`shuffle_over_epochs_multiplier` remain supported. Relative paths are still
 resolved relative to the containing YAML file.
 
 After conversion, validate the recipe by loading it with your application's
@@ -215,14 +211,19 @@ without-replacement shuffling and `-1` changes which slices may be repeated or
 skipped.
 ```
 
-(sect-subflavors)=
-## Subflavors
+(sect-tags)=
+## Tags
 
-Subflavors are a way to *tag* samples that come from different origins so that they can still be differentiated after blending.
+Tags are custom key/value attributes attached to samples from a dataset or recipe. They can
+differentiate samples after blending and drive cooking, packing, routing, or application-specific
+processing.
 Even when blending many datasets together, you might want to handle some of them differently in your [Task Encoder](task_encoder).
 For example when doing OCR, you might have one dataset with full pages of text and one with only paragraphs. In your task encoder you could decide to augment the images differently.
 
-Here is a modified example of the above `recipe.yaml` config file that adds some subflavors:
+The effective mapping is available as {py:attr}`Sample.__tags__
+<megatron.energon.Sample.__tags__>`.
+
+Here is a modified example of the above `recipe.yaml` config file that adds some tags:
 ```yaml
 __module__: megatron.energon
 __class__: Recipe
@@ -233,39 +234,39 @@ splits:
     blend:
       - weight: 5
         path: ./coco
-        # Set the __subflavors__ property of the samples
-        subflavors:
+        # Set the __tags__ property of the samples
+        tags:
           augmentation_type: small_images
           text_length: short
       # Combine coyo-train and coyo-val
       - weight: 2
         path: ./coyo
         split_part: train
-        # Set the __subflavors__ property of the samples
-        subflavors:
+        # Set the __tags__ property of the samples
+        tags:
           augmentation_type: large_images
           text_length: short
       - weight: 1
         path: ./coyo
         split_part: val
-        # Set the __subflavors__ property of the samples
-        subflavors:
+        # Set the __tags__ property of the samples
+        tags:
           augmentation_type: large_images
           text_length: short
   # For val and test, blending will actually concatenate the datasets
   val:
     # Only use coco val for val
     path: ./coco
-    subflavors:
+    tags:
       augmentation_type: small_images
       text_length: short
   test:
     path: ./coyo
 ```
 
-In the above example, the coco training samples will now have the subflavor `augmentation_type` set to `small_images` while the samples from coyo, will have that property set to `large_images`.
+In the above example, the coco training samples have the tag `augmentation_type` set to `small_images`, while the samples from coyo have it set to `large_images`.
 
-Note that subflavors are entirely custom and you can use any name and any value for them, for example `foo: bar`
+Note that tags are entirely custom and you can use any name and any value for them, for example `foo: bar`
 In the code they will be passed around as a dictionary.
 
 ## Auxiliary Data

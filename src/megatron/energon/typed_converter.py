@@ -12,6 +12,7 @@ from typing import Any, Callable, Dict, Literal, Optional, Tuple, Type, TypeVar,
 
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
+from megatron.energon.tags import apply_config_aliases
 
 
 class JsonValueError(ValueError):
@@ -94,6 +95,8 @@ class JsonParser:
         inst_type: Type[TType],
         _path: str = "root",
         _stage: Tuple[int, ...] = (),
+        *,
+        default_kwargs: Optional[dict] = None,
     ) -> TType:
         """
         Try to import and instantiate a class from a dict with "__module__" and "__class__"/"__function__" keys.
@@ -105,6 +108,8 @@ class JsonParser:
             _path: (internal for recursive call) The path to the object being converted from the root
             _stage: (internal for recursive call) Numbers representing the position of the current
                 object being converted from the root
+            default_kwargs: Default constructor arguments. Aliases are normalized before the
+                config values override these defaults.
 
         Returns:
             Instantiated class
@@ -184,6 +189,9 @@ class JsonParser:
                     raise JsonValueError(
                         f"Expected {inst_type}, got {cls}", inst_type, cls, _path, _stage
                     )
+        kwargs = apply_config_aliases(cls, kwargs)
+        if default_kwargs is not None:
+            kwargs = {**apply_config_aliases(cls, default_kwargs), **kwargs}
         if is_type or is_callable:
             inst = cls
         else:
@@ -226,6 +234,7 @@ class JsonParser:
         Returns:
             The input data as `inst_type`.
         """
+        raw_data = apply_config_aliases(inst_type, raw_data)
         type_name = getattr(inst_type, "__name__", repr(inst_type))
         if raw_data is _missing_value:
             raise JsonValueError(
@@ -568,6 +577,8 @@ class JsonParser:
         Returns:
             The return value of `fn`
         """
+        if inspect.isclass(fn):
+            raw_data = apply_config_aliases(fn, raw_data)
         parameters = list(inspect.signature(fn).parameters.items())
         parameter_types = {}
         if inspect.isclass(fn):

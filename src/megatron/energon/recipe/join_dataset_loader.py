@@ -27,6 +27,7 @@ from megatron.energon.recipe.loader_interface import (
     LoadedDataset,
     LoadedDatasetList,
 )
+from megatron.energon.tags import TagsAlias, resolve_tags
 from megatron.energon.worker import WorkerConfig
 
 
@@ -336,7 +337,7 @@ class JoinedDatasetMetaInfo:
 
 
 @edataclass
-class JoinDatasetLoader(DatasetLoaderInterface):
+class JoinDatasetLoader(TagsAlias, DatasetLoaderInterface):
     """Loads a joined dataset from a path."""
 
     datasets: Union[List[JoinedDatasetInfo], Dict[str, JoinedDatasetInfo]]
@@ -345,7 +346,7 @@ class JoinDatasetLoader(DatasetLoaderInterface):
 
     split_part: Optional[str] = None
     split_config: Optional[str] = None
-    subflavors: Optional[Dict[str, Any]] = None
+    tags: Optional[Dict[str, Any]] = None
     shuffle_over_epochs_multiplier: Optional[int] = 1
 
     def _get_joined_meta(self, split_part: str) -> Tuple[EPath, List[JoinedDatasetMetaInfo]]:
@@ -444,7 +445,7 @@ class JoinDatasetLoader(DatasetLoaderInterface):
         training: bool,
         split_part: Optional[str] = None,
         worker_config: WorkerConfig,
-        subflavors: Optional[Dict[str, Any]] = None,
+        tags: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs: Optional[int] = 1,
         split_config: Optional[str] = None,
         subset: Optional[DatasetSubset] = None,
@@ -456,7 +457,7 @@ class JoinDatasetLoader(DatasetLoaderInterface):
             split_part: Default split part to use.
             worker_config: Worker configuration.
             shuffle_buffer_size: Size of the sample shuffle buffer (before task encoding).
-            subflavors: Subflavors to use, might be overridden by inner datasets.
+            tags: Tags to use, might be overridden by inner datasets.
             shuffle_over_epochs: Shuffle the dataset over this many epochs.
             subset: If specified, the inner dataset(s) will be subsetted.
             **kwargs: Additional arguments to the dataset constructor.
@@ -464,14 +465,15 @@ class JoinDatasetLoader(DatasetLoaderInterface):
         Returns:
             The loaded dataset
         """
+        tags = resolve_tags(tags, kwargs.pop("subflavors", None))
         if self.split_config is not None:
             split_config = self.split_config
         if self.split_part is not None:
             split_part = self.split_part
         if split_part is None:
             raise ValueError("Missing split part")
-        if self.subflavors is not None:
-            subflavors = {**self.subflavors, **(subflavors or {})}
+        if self.tags is not None:
+            tags = {**self.tags, **(tags or {})}
         join_index_path, _ = self._get_joined_meta(split_part)
 
         if isinstance(self.datasets, list):
@@ -480,7 +482,7 @@ class JoinDatasetLoader(DatasetLoaderInterface):
                     training=training,
                     split_part=split_part,
                     worker_config=worker_config,
-                    subflavors=subflavors,
+                    tags=tags,
                     shuffle_over_epochs=shuffle_over_epochs,
                     split_config=split_config,
                     **kwargs,
@@ -496,7 +498,7 @@ class JoinDatasetLoader(DatasetLoaderInterface):
                     training=training,
                     split_part=split_part,
                     worker_config=worker_config,
-                    subflavors=subflavors,
+                    tags=tags,
                     shuffle_over_epochs=shuffle_over_epochs,
                     split_config=split_config,
                     **kwargs,
@@ -527,11 +529,12 @@ class JoinDatasetLoader(DatasetLoaderInterface):
         training: bool,
         split_part: Union[Literal["train", "val", "test"], str],
         worker_config: WorkerConfig,
-        subflavors: Optional[Dict[str, Any]] = None,
+        tags: Optional[Dict[str, Any]] = None,
         shuffle_over_epochs_multiplier: Optional[int] = 1,
         subset: Optional[DatasetSubset] = None,
         **kwargs,
     ) -> LoadedDatasetList:
+        tags = resolve_tags(tags, kwargs.pop("subflavors", None))
         return LoadedDatasetList(
             blend_mode=DatasetBlendMode.NONE,
             datasets=[
@@ -540,7 +543,7 @@ class JoinDatasetLoader(DatasetLoaderInterface):
                         training=training,
                         split_part=split_part,
                         worker_config=worker_config,
-                        subflavors=subflavors,
+                        tags=tags,
                         shuffle_over_epochs=shuffle_over_epochs_multiplier,
                         subset=subset,
                         **kwargs,
