@@ -15,6 +15,7 @@ from typing import Iterator
 
 import numpy as np
 import webdataset as wds
+from click.testing import CliRunner
 
 from megatron.energon import (
     TextSample,
@@ -34,6 +35,7 @@ from megatron.energon.flavors.common.filter_index import (
 from megatron.energon.flavors.common.manifest.io import ShardListMeta
 from megatron.energon.flavors.common.manifest.paths import MAIN_FOLDER_NAME
 from megatron.energon.flavors.common.manifest.types import ShardInfo
+from megatron.energon.tools.prepare import command as prepare_command
 
 
 @contextmanager
@@ -48,6 +50,12 @@ def _active_worker(worker_config: WorkerConfig) -> Iterator[None]:
 def _collect_factory_samples(factory):
     with _active_worker(factory.worker_config):
         return list(factory.build())
+
+
+def _write_jsonl(path: Path, values: range) -> None:
+    with open(path, "w") as f:
+        for value in values:
+            f.write(json.dumps({"idx": value, "text": f"text-{value}"}) + "\n")
 
 
 def _write_binidx(path: Path, *, num_docs: int, doc_len: int = 2) -> None:
@@ -207,6 +215,38 @@ class TestFilterIndex(unittest.TestCase):
         assert len(factory) == 3
         assert [sample.__key__ for sample in samples] == ["000001", "000003", "000005"]
         assert [sample.__restore_key__[1] for sample in samples] == [0, 1, 2]
+
+    def test_prepared_jsonl_shard_filter(self) -> None:
+        dataset_path = self.dataset_path / "jsonl_shards"
+        dataset_path.mkdir()
+        _write_jsonl(dataset_path / "a.jsonl", range(0, 3))
+        _write_jsonl(dataset_path / "b.jsonl", range(3, 6))
+
+        result = CliRunner().invoke(
+            prepare_command,
+            [str(dataset_path), "--split-ratio", "1,0,0", "--non-interactive", "--no-progress"],
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 0, result.stdout
+
+        build_filter_index(
+            EPath(dataset_path),
+            "keep",
+            (2, 4),
+        )
+        worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0)
+        factory = get_dataset_from_config(
+            EPath(dataset_path),
+            split_part="train",
+            training=False,
+            worker_config=worker_config,
+            filter_name="keep",
+        )
+
+        samples = _collect_factory_samples(factory)
+        assert len(factory) == 2
+        assert [sample["json"]["idx"] for sample in samples] == [2, 4]
+        assert [sample["__restore_key__"][1] for sample in samples] == [0, 1]
 
     def test_binidx_filter_and_recipe_passthrough(self) -> None:
         dataset_path = self.dataset_path / "binidx"
