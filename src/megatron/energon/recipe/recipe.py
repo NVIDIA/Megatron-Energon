@@ -241,6 +241,7 @@ class DatasetReference(
     split_part: Optional[str] = None
     dataset_config: Optional[str] = None
     split_config: Optional[str] = None
+    filter: Optional[str] = None
 
     #: Auxiliary datasets. May only be specified for crude datasets for cooking. Cooking will get
     # these references to load data from. If specified as string, it will be interpreted as a
@@ -315,6 +316,7 @@ class DatasetReference(
         assert self.aux is None, "Cannot specify auxiliary datasets for crude datasets"
         assert self.dataset_config is None, "Must not set dataset_config"
         assert self.split_config is None, "Must not set split_config"
+        assert self.filter is None, "Must not set filter"
         return load_config(
             self.path,
             default_type=Recipe,
@@ -335,6 +337,7 @@ class DatasetReference(
                 path=self.path,
                 split_config=self.split_config,
                 dataset_config=self.dataset_config,
+                filter_name=self.filter,
             )
             self._dataset.post_initialize()
             self._normalize_aux_references(recipe_path, validate=True)

@@ -89,7 +89,8 @@ Useful regression tests include:
 
 - `test_recipe.TestDataset.test_save_restore_state_train` for exact recipe save/restore;
 - the current-batch-index tests in `test_dataset.py` for stable iteration;
-- `test_dataset_factory_resolver.py` and format-specific suites for path detection.
+- `test_dataset_factory_resolver.py` and format-specific suites for path detection;
+- `test_filter_index.py` for filtered ordinal translation.
 
 New behavior should normally have a focused test next to the closest existing suite. When fixing a bug,
 write a test that fails for the original cause rather than only for one observed symptom.

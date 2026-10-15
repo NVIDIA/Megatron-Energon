@@ -45,6 +45,7 @@ class BaseWebdatasetFactory(
         subset: Optional[DatasetSubset] = None,
         split_config: str | ManifestSplits | None = None,
         part_filter: Optional[Callable[[str], bool]] = None,
+        filter_name: Optional[str] = None,
     ):
         """
         Base factory for the webdataset sample loader.
@@ -79,6 +80,7 @@ class BaseWebdatasetFactory(
             max_samples_per_sequence=max_samples_per_sequence,
             subset=subset,
             part_filter=part_filter,
+            filter_name=filter_name,
         )
 
     def _build_reader(

@@ -19,7 +19,7 @@ The implementation lives under `src/megatron/energon`. Its main layers are:
 | `flavors` | Detect prepared dataset formats and construct their readers and runtime datasets. |
 | `wrappers` | Compose iteration behavior such as mapping, batching, blending, packing, and epochizing. |
 | `task_encoder` | Build the user-facing loading pipeline and invoke application-specific encoding hooks. |
-| `epathlib` | Provide local and remote path access. |
+| `epathlib` | Provide local and remote path access plus mapped-array helpers. |
 | `cache` | Store generated indexes and cache metadata. |
 | `media`, `decoders`, `transforms` | Decode and transform sample payloads. |
 | `cli`, `tools` | Prepare datasets and expose operational utilities. |
@@ -83,7 +83,7 @@ declare and restore that progress. See {ref}`savability` before adding a wrapper
 
 Dataset partitioning, random number generation, and saved worker state use global worker identities.
 
-Readers and open files belong to worker processes. Keep resource handles out of serialized
+Readers, open files, and mapped arrays belong to worker processes. Keep resource handles out of serialized
 checkpoint state and close readers that own handles. Path and storage rules are described in
 {ref}`epath-storage`.
 
