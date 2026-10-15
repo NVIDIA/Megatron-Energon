@@ -21,6 +21,8 @@ from megatron.energon import (
     basic_sample_keys,
     edataclass,
     get_loader,
+    get_savable_loader,
+    get_train_dataset,
     get_val_dataset,
     stateless,
 )
@@ -50,6 +52,20 @@ def cook_parquet_keep_only(sample: CrudeSample) -> ParquetKeepSample:
         **basic_sample_keys(sample),
         keep_val=int(sample["keep"]),
     )
+
+
+@edataclass
+class ParquetIdSample(Sample):
+    row_id: int
+
+
+@stateless()
+def cook_parquet_id(sample: CrudeSample) -> ParquetIdSample:
+    return ParquetIdSample(**basic_sample_keys(sample), row_id=int(sample["id"]))
+
+
+class ParquetIdEncoder(DefaultTaskEncoder):
+    cookers = [Cooker(cook=cook_parquet_id)]
 
 
 class ParquetCookerPartFilterEncoder(DefaultTaskEncoder):
@@ -174,6 +190,76 @@ class TestParquetCookerPartFilter(unittest.TestCase):
         loader = get_loader(val_ds)
         seen = [int(batch.keep_val[0]) for batch in loader]
         assert sorted(seen) == [10, 20]
+
+
+class TestParquetRowGroupShuffle(unittest.TestCase):
+    ROWS = 24
+    ROW_GROUP_SIZE = 4
+
+    def setUp(self):
+        warnings.simplefilter("ignore", ResourceWarning)
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.path = Path(self.temp_dir.name) / "data.parquet"
+        pq.write_table(
+            pa.table({"id": list(range(self.ROWS))}),
+            self.path,
+            row_group_size=self.ROW_GROUP_SIZE,
+        )
+
+    def tearDown(self):
+        gc.collect()
+        self.temp_dir.cleanup()
+
+    def test_row_groups_are_shuffled_and_read_sequentially(self):
+        wc = WorkerConfig(rank=0, world_size=1, num_workers=0, seed_offset=0)
+        ds = DefaultParquetDatasetFactory(
+            EPath(self.path),
+            training=True,
+            worker_config=wc,
+            decoder=None,
+            parallel_shard_iters=1,
+        )
+        wc.worker_activate(0)
+        try:
+            iterator = iter(ds.build())
+            seen = [next(iterator)["id"] for _ in range(self.ROWS)]
+        finally:
+            wc.worker_deactivate()
+
+        groups = [
+            seen[start : start + self.ROW_GROUP_SIZE]
+            for start in range(0, self.ROWS, self.ROW_GROUP_SIZE)
+        ]
+        for group in groups:
+            assert group == list(range(group[0], group[0] + self.ROW_GROUP_SIZE))
+            assert group[0] % self.ROW_GROUP_SIZE == 0
+        assert sorted(seen) == list(range(self.ROWS))
+        assert seen != list(range(self.ROWS))
+
+    def test_save_restore_with_workers(self):
+        def new_dataset():
+            return get_train_dataset(
+                EPath(self.path),
+                batch_size=1,
+                worker_config=WorkerConfig(rank=0, world_size=1, num_workers=2),
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                task_encoder=ParquetIdEncoder(),
+            )
+
+        with get_savable_loader(new_dataset()) as loader:
+            iterator = iter(loader)
+            first = [int(next(iterator).row_id[0]) for _ in range(5)]
+            state = loader.save_state_rank()
+            remaining = [int(next(iterator).row_id[0]) for _ in range(self.ROWS - 5)]
+
+        with get_savable_loader(new_dataset()) as restored_loader:
+            restored_loader.restore_state_rank(state)
+            restored_iterator = iter(restored_loader)
+            restored = [int(next(restored_iterator).row_id[0]) for _ in range(self.ROWS - 5)]
+
+        assert restored == remaining
+        assert sorted(first + remaining) == list(range(self.ROWS))
 
 
 class TestParquetManifestDataset(unittest.TestCase):

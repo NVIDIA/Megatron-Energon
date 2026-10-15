@@ -150,14 +150,15 @@ class BaseIndexedDatasetFactory(
         else:
             active_shards = self.filter_index.translate_shards(self.shards)
 
+        slice_shards = self._slice_shards(active_shards)
         workers_sample_slice_offsets = self.shard_workers(
-            active_shards,
+            slice_shards,
             worker_config=self.worker_config,
             max_samples_per_sequence=self.max_samples_per_sequence,
             rotation_offset=worker_rotation_offset,
             subset=self.subset,
         )
-        self._print_shard_slices(workers_sample_slice_offsets, active_shards)
+        self._print_shard_slices(workers_sample_slice_offsets, slice_shards)
 
         reader = self._build_reader(
             parallel_shard_iters=parallel_shard_iters,
@@ -181,6 +182,12 @@ class BaseIndexedDatasetFactory(
             map_fn_config=self.config,
             worker_config=self.worker_config,
         )
+
+    def _slice_shards(self, shards: list[ShardInfo]) -> list[ShardInfo]:
+        """Returns the consecutive ranges of samples that are iterated sequentially and shuffled
+        as a whole. By default these are the shards. Must cover the same samples in the same order.
+        """
+        return shards
 
     def _merge_part_filter(
         self, part_filter: Callable[[str], bool] | None

@@ -3,6 +3,7 @@
 
 """Parquet footer scanning helpers for single files and manifest shard lists."""
 
+from dataclasses import field
 from typing import Any, Iterable, List, Mapping, Sequence, Tuple
 
 from megatron.energon.edataclass import edataclass
@@ -18,6 +19,8 @@ class ParquetFileEntry:
 
     rel_path: str
     num_rows: int
+    #: Number of rows of each row group, in file order.
+    row_group_rows: List[int] = field(default_factory=list)
 
 
 @edataclass
@@ -36,8 +39,8 @@ def parse_parquet_layout(raw: Mapping[str, Any]) -> ParquetLayout:
     return JsonParser(strict=True).raw_to_typed(dict(raw), ParquetLayout)
 
 
-def _read_parquet_footer(path: EPath) -> Tuple[int, Tuple[str, ...]]:
-    """Return (num_rows, column names) using footer metadata only."""
+def _read_parquet_footer(path: EPath) -> Tuple[int, Tuple[str, ...], List[int]]:
+    """Return (num_rows, column names, rows per row group) using footer metadata only."""
 
     import pyarrow as pa
     import pyarrow.parquet as pq
@@ -45,7 +48,8 @@ def _read_parquet_footer(path: EPath) -> Tuple[int, Tuple[str, ...]]:
     with path.open("rb") as raw:
         pf = pq.ParquetFile(pa.PythonFile(raw))
         cols = tuple(pf.schema_arrow.names)
-        return pf.metadata.num_rows, cols
+        row_group_rows = [pf.metadata.row_group(i).num_rows for i in range(pf.num_row_groups)]
+        return pf.metadata.num_rows, cols, row_group_rows
 
 
 def discover_parquet_files(dataset_root: EPath) -> List[EPath]:
@@ -65,12 +69,14 @@ def _layout_from_entries(entries: Iterable[tuple[str, EPath, int | None]]) -> Pa
     rows_and_cols: List[Tuple[int, Tuple[str, ...]]] = []
     rel_entries: List[ParquetFileEntry] = []
     for rel_path, path, expected_rows in entries:
-        rows, cols = _read_parquet_footer(path)
+        rows, cols, row_group_rows = _read_parquet_footer(path)
         if expected_rows is not None and rows != expected_rows:
             raise ValueError(
                 f"Parquet row count mismatch for {path}: metadata={expected_rows}, footer={rows}"
             )
-        rel_entries.append(ParquetFileEntry(rel_path=rel_path, num_rows=rows))
+        rel_entries.append(
+            ParquetFileEntry(rel_path=rel_path, num_rows=rows, row_group_rows=row_group_rows)
+        )
         rows_and_cols.append((rows, cols))
 
     if not rows_and_cols:
