@@ -4,11 +4,12 @@
 """Shard-preserving filter index sidecars.
 
 The filter index presents a filtered integer address space while storing the
-original shard-local sample indexes that should be read for each filtered sample.
+original global sample indexes that should be read for each filtered sample.
 Sidecars live in ``.nv-meta`` as ``filter_<name>.json`` and ``filter_<name>.idx``.
 """
 
 import json
+from bisect import bisect_right
 from collections.abc import Iterable, Mapping, Sequence
 from typing import BinaryIO
 
@@ -25,16 +26,23 @@ from megatron.energon.typed_converter import JsonParser
 FILTER_FILENAME_PREFIX = "filter_"
 FILTER_JSON_SUFFIX = ".json"
 FILTER_INDEX_SUFFIX = ".idx"
-FILTER_INDEX_VERSION = 1
+FILTER_INDEX_VERSION = 2
 FILTER_INDEX_DTYPE = np.uint64
 
 
 @edataclass
+class FilterShardMetadata:
+    name: str
+    sample_count: int
+    filtered_sample_count: int
+
+
+@edataclass
 class FilterMetadata:
-    """Metadata for a filter index sidecar file."""
+    """Shard order is the exact order used by the binary translation table."""
 
     version: int
-    filtered_shard_counts: dict[str, int]
+    shards: list[FilterShardMetadata]
 
 
 def filter_index_paths(dataset_path: EPath, filter_name: str) -> tuple[EPath, EPath]:
@@ -72,6 +80,7 @@ class FilterIndex:
         *,
         copy_index_to_local: bool = False,
     ) -> None:
+        # Locate the sidecars and defer mapping the binary index until the first read.
         self.dataset_path = dataset_path
         self.filter_name = filter_name
         json_path, index_path = filter_index_paths(dataset_path, filter_name)
@@ -80,24 +89,48 @@ class FilterIndex:
         self._index_map = None
         self.copy_index_to_local = copy_index_to_local
 
+        # Check the format version before parsing fields that depend on its schema.
         with json_path.open("r") as f:
             metadata = json.load(f)
-            filter_metadata = JsonParser(strict=True).raw_to_typed(metadata, FilterMetadata)
-        assert filter_metadata.version == FILTER_INDEX_VERSION, (
-            f"Unsupported filter index version {filter_metadata.version}; "
-            f"expected {FILTER_INDEX_VERSION}"
-        )
+        if metadata.get("version") != FILTER_INDEX_VERSION:
+            raise ValueError(
+                f"Unsupported filter index version {metadata.get('version')}; "
+                f"expected {FILTER_INDEX_VERSION}. Rebuild filter {filter_name!r}."
+            )
 
-        self.filtered_shard_counts = filter_metadata.filtered_shard_counts
-        self.total_filtered = sum(filter_metadata.filtered_shard_counts.values())
+        # Preserve the recorded shard order: it defines the binary index's layout.
+        filter_metadata = JsonParser(strict=True).raw_to_typed(metadata, FilterMetadata)
+        self.shards = filter_metadata.shards
+
+        # Shard names must be unique so a split can identify each source shard.
+        if len({shard.name for shard in self.shards}) != len(self.shards):
+            raise ValueError("Duplicate shard names in filter metadata")
+
+        # Record each shard's start in both address spaces: original samples
+        # and retained samples. These are sample offsets, not byte offsets.
+        self._shard_offsets = {}
+        original_start = filtered_start = 0
+        for shard in self.shards:
+            if not 0 <= shard.filtered_sample_count <= shard.sample_count:
+                raise ValueError(f"Invalid filter sample counts for {shard.name!r}")
+            self._shard_offsets[shard.name] = (original_start, filtered_start)
+            original_start += shard.sample_count
+            filtered_start += shard.filtered_sample_count
+
+        # Expose retained counts for worker allocation and the full filter length.
+        self.filtered_shard_counts = {
+            shard.name: shard.filtered_sample_count for shard in self.shards
+        }
+        self.total_filtered = filtered_start
 
     def __len__(self) -> int:
         return self.total_filtered
 
     def __getitem__(self, filtered_index: int) -> int:
-        assert filtered_index >= 0 and filtered_index < self.total_filtered, (
-            f"Filtered index {filtered_index} out of range [0, {self.total_filtered})"
-        )
+        if not 0 <= filtered_index < self.total_filtered:
+            raise IndexError(
+                f"Filtered index {filtered_index} out of range [0, {self.total_filtered})"
+            )
         return int(self.index_map[filtered_index])
 
     @property
@@ -124,6 +157,10 @@ class FilterIndex:
     def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
         self.close()
 
+    def for_shards(self, shards: Sequence[ShardInfo]) -> "FilterIndexView":
+        """Translate filtered indexes into a reader's selected, ordered shard layout."""
+        return FilterIndexView(self, shards)
+
     def translate_shards(self, shards: Sequence[ShardInfo]) -> list[ShardInfo]:
         return [
             ShardInfo(
@@ -135,13 +172,65 @@ class FilterIndex:
         ]
 
 
+class FilterIndexView:
+    """Small per-shard offset tables over a shared filter; no per-sample copy."""
+
+    def __init__(self, index: FilterIndex, shards: Sequence[ShardInfo]) -> None:
+        self.index = index
+        self._ends: list[int] = []
+        self._translations: list[tuple[int, int, int, int, int]] = []
+        recorded = {shard.name: shard for shard in index.shards}
+        filtered_start = reader_start = 0
+        for shard in shards:
+            source = recorded.get(shard.name)
+            if source is None:
+                raise ValueError(
+                    f"Shard {shard.name!r} is not covered by filter {index.filter_name!r}"
+                )
+            original_start, sidecar_start = index._shard_offsets[shard.name]
+            if source.filtered_sample_count:
+                self._translations.append(
+                    (filtered_start, sidecar_start, original_start, reader_start, shard.count)
+                )
+                filtered_start += source.filtered_sample_count
+                self._ends.append(filtered_start)
+            reader_start += shard.count
+        self._length = filtered_start
+
+        # Matching layouts share both address spaces, so reads can use the
+        # original translation table directly without finding a shard first.
+        self._same_layout = len(shards) == len(index.shards) and all(
+            shard.name == source.name and shard.count == source.sample_count
+            for shard, source in zip(shards, index.shards)
+        )
+
+    def __len__(self) -> int:
+        return self._length
+
+    def __getitem__(self, filtered_index: int) -> int:
+        if not 0 <= filtered_index < self._length:
+            raise IndexError(f"Filtered index {filtered_index} out of range [0, {self._length})")
+        if self._same_layout:
+            return self.index[filtered_index]
+        start, sidecar, original, reader, count = self._translations[
+            bisect_right(self._ends, filtered_index)
+        ]
+        local_index = self.index[sidecar + filtered_index - start] - original
+        if not 0 <= local_index < count:
+            raise ValueError("Filter entry is outside its source shard; rebuild the filter")
+        return reader + local_index
+
+    def close(self) -> None:
+        self.index.close()
+
+
 class TranslatedIndexReader(IndexedSampleReader[SampleRecord]):
     """Reader wrapper that applies a filter translation before delegation."""
 
     def __init__(
         self,
         inner: IndexedSampleReader[SampleRecord],
-        filter_index: FilterIndex,
+        filter_index: FilterIndex | FilterIndexView,
     ) -> None:
         self.inner = inner
         self.filter_index = filter_index
@@ -204,13 +293,16 @@ class FilterIndexWriter:
         Args:
             dataset_path: The path to the dataset.
             filter_name: The name of the filter.
-            shard_counts: The shard counts. If None, the shard counts are inferred from the dataset info file.
+            shards: Optional source shard selection/order. If omitted, infer the
+                full source layout from the dataset metadata.
             overwrite: Whether to overwrite the existing filter index.
         """
         self.dataset_path = EPath(dataset_path)
         self.filter_name = filter_name
         if shards is None:
             shards = _resolve_shards(self.dataset_path)
+        if len({shard.name for shard in shards}) != len(shards):
+            raise ValueError("Duplicate shard names in filter source layout")
         self.shard_order = tuple(shard.name for shard in shards)
         self.original_shard_counts = {shard.name: int(shard.count) for shard in shards}
         self._original_shard_offsets = {}
@@ -298,7 +390,14 @@ class FilterIndexWriter:
 
                 metadata = {
                     "version": FILTER_INDEX_VERSION,
-                    "filtered_shard_counts": self.filtered_shard_counts,
+                    "shards": [
+                        {
+                            "name": name,
+                            "sample_count": self.original_shard_counts[name],
+                            "filtered_sample_count": self.filtered_shard_counts[name],
+                        }
+                        for name in self.shard_order
+                    ],
                 }
                 with self._tmp_json_path.open("w") as f:
                     json.dump(metadata, f, indent=2, sort_keys=True)
@@ -330,7 +429,7 @@ class FilterIndexWriter:
         expected_shard = self.shard_order[self._next_shard_index]
         if shard_name != expected_shard:
             raise ValueError(
-                f"Filter shards must be appended in shard_counts order: expected "
+                f"Filter shards must be appended in source layout order: expected "
                 f"{expected_shard!r}, got {shard_name!r}"
             )
         self._active_shard = shard_name
@@ -357,6 +456,8 @@ class FilterIndexWriter:
             )
         while original_index >= self._shard_ends[self._global_shard_index]:
             self._global_shard_index += 1
+        while self._next_shard_index <= self._global_shard_index:
+            self._ensure_active_shard(self.shard_order[self._next_shard_index])
         shard_name = self.shard_order[self._global_shard_index]
         self._last_global_index = original_index
         return shard_name, original_index - self._original_shard_offsets[shard_name]
@@ -408,22 +509,23 @@ def build_filter_index_from_shard_indexes(
     shards: Sequence[ShardInfo] | None = None,
     overwrite: bool = False,
 ) -> None:
-    """Build a named filter from explicit kept original shard-local sample indexes."""
+    """Build a named filter from explicit kept shard-local sample indexes."""
 
     kept_indexes = {
         shard_name: tuple(int(index) for index in indexes)
         for shard_name, indexes in indexes_by_shard.items()
     }
-    if shards is None:
-        shards = _resolve_shards(EPath(dataset_path))
     with FilterIndexWriter(
         dataset_path,
         filter_name,
         shards,
         overwrite=overwrite,
     ) as writer:
-        for shard in shards:
-            writer.append_shard(shard.name, kept_indexes.get(shard.name, ()))
+        unknown = kept_indexes.keys() - set(writer.shard_order)
+        if unknown:
+            raise ValueError(f"Unknown shards in filter selection: {sorted(unknown)}")
+        for name in writer.shard_order:
+            writer.append_shard(name, kept_indexes.get(name, ()))
 
 
 def _resolve_shards(dataset_path: EPath) -> list[ShardInfo]:
