@@ -19,6 +19,7 @@ from megatron.energon.deprecated import (
 install_deprecated_imports()
 
 from megatron.energon.cache import (
+    ByteRangeStore,
     CachePool,
     DecodeFileStore,
     DirectLazy,
@@ -86,11 +87,14 @@ from megatron.energon.flavors.common.filter_index import (
 )
 from megatron.energon.loader import get_loader, get_savable_loader
 from megatron.energon.recipe import (
+    AuxFileStoreProtocolFactory,
+    AuxFileStoreReference,
     DatasetLoader,
     DatasetLoaderInterface,
     Recipe,
     load_dataset,
     prepare_recipe,
+    register_aux_filestore_protocol,
     traverse_recipe,
 )
 from megatron.energon.savable_loader import SavableDataLoader
@@ -137,6 +141,8 @@ from megatron.energon.wrappers import (
 __all__ = [
     "__version__",
     "AugmentTaskEncoder",
+    "AuxFileStoreProtocolFactory",
+    "AuxFileStoreReference",
     "BaseCoreDatasetFactory",
     "BaseWebdatasetFactory",
     "basic_sample_keys",
@@ -150,6 +156,7 @@ __all__ = [
     "build_filter_index",
     "build_filter_index_from_global_indexes",
     "build_filter_index_from_shard_indexes",
+    "ByteRangeStore",
     "CachePool",
     "CaptioningSample",
     "CaptioningWebdataset",
@@ -207,6 +214,7 @@ __all__ = [
     "MapDataset",
     "MetadatasetV2",
     "Recipe",
+    "register_aux_filestore_protocol",
     "MixBatchDataset",
     "MockLazy",
     "MultiChoiceVQASample",
