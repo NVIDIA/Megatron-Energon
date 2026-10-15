@@ -129,12 +129,14 @@ class BaseIndexedDatasetFactory(
         self.filter_name = filter_name
         self.restore_key_kind = restore_key_kind
         self.filter_index = None
+        self._filter_view = None
         if filter_name is not None:
             self.filter_index = FilterIndex(self.path, filter_name)
+            self._filter_view = self.filter_index.for_shards(self.shards)
 
     def __len__(self) -> int:
-        if self.filter_index:
-            return len(self.filter_index)
+        if self._filter_view is not None:
+            return len(self._filter_view)
         return sum(shard.count for shard in self.shards)
 
     def build(
@@ -164,7 +166,8 @@ class BaseIndexedDatasetFactory(
             part_filter=part_filter,
         )
         if self.filter_index is not None:
-            reader = TranslatedIndexReader(reader, self.filter_index)
+            assert self._filter_view is not None
+            reader = TranslatedIndexReader(reader, self._filter_view)
 
         dataset = DatasetSampler(
             reader=reader,

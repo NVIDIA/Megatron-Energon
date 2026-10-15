@@ -8,6 +8,7 @@ from typing import Any, Callable, Protocol, Type, TypeVar, overload
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory
 from megatron.energon.flavors.common.manifest.paths import MAIN_FOLDER_NAME
+from megatron.energon.flavors.common.manifest.types import ShardInfo
 from megatron.energon.flavors.dataset_type import EnergonDatasetType
 
 
@@ -60,6 +61,28 @@ class DatasetFactoryResolver:
             if dataset_type is not None:
                 return dataset_type, provider
         return None, None
+
+    def inspect_source(self, path: EPath) -> list[ShardInfo]:
+        """Return original shards in source order, before splits, subsets, or filters.
+
+        Providers supporting filter indexes implement ``inspect_source(path)``
+        without constructing a runtime factory. Each ShardInfo describes a primary
+        file and its original sample count; companion files are outside this contract.
+        """
+        path = EPath(path)
+        _, provider = self.get_type(path)
+        inspect = getattr(provider, "inspect_source", None)
+        if inspect is None:
+            raise ValueError(
+                f"Dataset provider for {path} does not support source inspection; "
+                "implement inspect_source(path) to support filter indexes."
+            )
+        shards = list(inspect(path))
+        if len({shard.name for shard in shards}) != len(shards):
+            raise ValueError(f"Duplicate source shard names for {path}")
+        if any(shard.count < 0 for shard in shards):
+            raise ValueError(f"Negative source sample count for {path}")
+        return shards
 
     def get(
         self,

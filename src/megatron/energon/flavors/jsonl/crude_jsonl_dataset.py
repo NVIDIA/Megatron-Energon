@@ -8,7 +8,7 @@ from typing import Any, Callable, Dict, Optional
 from megatron.energon.cache import FileStore
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.base_single_file_dataset import BaseSingleFileDatasetFactory
-from megatron.energon.flavors.common.manifest.types import DatasetSubset
+from megatron.energon.flavors.common.manifest.types import DatasetSubset, ShardInfo
 from megatron.energon.flavors.common.sample_record import SampleRecord
 from megatron.energon.flavors.crude import CrudeSample
 from megatron.energon.flavors.dataset_factory_resolver import (
@@ -112,6 +112,11 @@ class CrudeJsonlDatasetFactory(
 @register_dataset_factory_provider(priority=PRIORITY_SINGLE_FILE)
 class DefaultCrudeJsonlDatasetFactory(CrudeJsonlDatasetFactory):
     """Adds tags to the sample and loads the JSON payload."""
+
+    @classmethod
+    def inspect_source(cls, path: EPath) -> list[ShardInfo]:
+        """Represent the data file as one shard; derive its count from the offset index."""
+        return [ShardInfo(name=path.name, path=path, count=IJsonlIndexReader.count_samples(path))]
 
     @classmethod
     def detect_path(cls, path: EPath) -> EnergonDatasetType | None:
