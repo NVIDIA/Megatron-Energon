@@ -241,6 +241,20 @@ distributed across ranks and workers and visited in random order, and the rows w
 read sequentially. This is a coarser shuffle than for other formats, so write your Parquet files with row
 groups that are small enough to give a good mix, but large enough for efficient reads.
 
+If your Parquet data is already shuffled, you can read it in dataset order instead by setting `parquet_read_order: serial`
+for the dataset in a [recipe](../basic/recipe) (or in the `dataset.yaml` of a prepared Parquet directory):
+
+```yaml
+__module__: megatron.energon
+__class__: Recipe
+splits:
+  train:
+    path: ./my_dataset.parquet
+    parquet_read_order: serial
+```
+
+The default is `row_group_shuffled`. In `serial` mode, shuffling over epochs and parallel shard iterators are disabled for this dataset.
+
 Each worker keeps up to `parallel_shard_iters` decoded row groups in memory.
 If a [filter index](../advanced/filter_index) is used, the sequential ranges are whole files instead of row groups.
 
