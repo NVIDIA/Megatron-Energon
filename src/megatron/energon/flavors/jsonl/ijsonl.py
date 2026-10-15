@@ -64,7 +64,16 @@ class IJsonlIndexReader:
 
     @staticmethod
     def count_samples(jsonl_path: EPath | str) -> int:
-        return EPath(jsonl_path).with_suffix(IDX_SUFFIX, replace=False).size() // 8 - 1
+        """Count samples from the offset-index size without opening the index.
+
+        Each sample has an 8-byte offset, followed by one terminal offset marking
+        the end of the data file. Reject truncated indexes instead of rounding down.
+        """
+        index_path = EPath(jsonl_path).with_suffix(IDX_SUFFIX, replace=False)
+        index_size = index_path.size()
+        if index_size < 8 or index_size % 8:
+            raise ValueError(f"Invalid JSONL offset index size for {index_path}: {index_size}")
+        return index_size // 8 - 1
 
     @staticmethod
     def size(jsonl_path: EPath) -> int:

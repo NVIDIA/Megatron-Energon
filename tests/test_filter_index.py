@@ -34,7 +34,12 @@ from megatron.energon.flavors.common.filter_index import (
 from megatron.energon.flavors.common.manifest.io import ShardListMeta
 from megatron.energon.flavors.common.manifest.paths import MAIN_FOLDER_NAME
 from megatron.energon.flavors.common.manifest.types import ShardInfo
-from megatron.energon.flavors.jsonl.crude_jsonl_dataset import CrudeJsonlDatasetFactory
+from megatron.energon.flavors.dataset_factory_resolver import DatasetFactoryResolver
+from megatron.energon.flavors.dataset_type import EnergonDatasetType
+from megatron.energon.flavors.jsonl.crude_jsonl_dataset import (
+    CrudeJsonlDatasetFactory,
+    DefaultCrudeJsonlDatasetFactory,
+)
 
 
 @contextmanager
@@ -67,9 +72,9 @@ class TestFilterIndex(unittest.TestCase):
         gc.collect()
         self.temp_dir.cleanup()
 
-    def _webdataset(self, counts):
+    def _webdataset(self, counts, *, name="dataset"):
         """Real tar/index files, with an explicitly ordered source manifest."""
-        dataset_path = self.dataset_path / "dataset"
+        dataset_path = self.dataset_path / name
         dataset_path.mkdir()
         for name, count in counts.items():
             with wds.TarWriter(str(dataset_path / name)) as writer:
@@ -100,6 +105,13 @@ class TestFilterIndex(unittest.TestCase):
             filter_name="keep",
         )
 
+    def _load_samples(self, path, split="train"):
+        loader = get_savable_loader(self._factory(path, split).build())
+        try:
+            return list(loader)
+        finally:
+            loader.close()
+
     def test_filter_index_round_trip(self) -> None:
         dataset_path, shards = self._webdataset({"a": 5, "b": 4})
         build_filter_index(
@@ -111,10 +123,13 @@ class TestFilterIndex(unittest.TestCase):
         json_path, _index_path = filter_index_paths(dataset_path, "keep")
         with json_path.open("r") as f:
             metadata = json.load(f)
-        assert metadata["version"] == 2
+        assert metadata["version"] == 3
         assert [shard["name"] for shard in metadata["shards"]] == ["a", "b"]
         assert [shard["sample_count"] for shard in metadata["shards"]] == [5, 4]
         assert [shard["filtered_sample_count"] for shard in metadata["shards"]] == [2, 2]
+        assert [shard["byte_size"] for shard in metadata["shards"]] == [
+            shard.path.size() for shard in shards
+        ]
 
         index = FilterIndex(dataset_path, "keep")
         assert index.total_filtered == 4
@@ -297,11 +312,22 @@ class TestFilterIndex(unittest.TestCase):
     def test_old_version(self):
         path, _ = self._webdataset({"a": 3})
         build_filter_index(path, "keep", [1])
+        assert [sample.text for sample in self._load_samples(path)] == ["a-1"]
         json_path, _ = filter_index_paths(path, "keep")
-        with json_path.open("w") as f:
-            json.dump({"version": 1, "filtered_shard_counts": {"a": 1}}, f)
-        with self.assertRaisesRegex(ValueError, "Unsupported.*Rebuild"):
-            FilterIndex(path, "keep")
+        for metadata in (
+            {"version": 1, "filtered_shard_counts": {"a": 1}},
+            {
+                "version": 2,
+                "shards": [{"name": "a", "sample_count": 3, "filtered_sample_count": 1}],
+            },
+        ):
+            with self.subTest(version=metadata["version"]):
+                with json_path.open("w") as f:
+                    json.dump(metadata, f)
+                with self.assertRaisesRegex(ValueError, "Unsupported.*Rebuild"):
+                    self._load_samples(path)
+        build_filter_index(path, "keep", [1], overwrite=True)
+        assert [sample.text for sample in self._load_samples(path)] == ["a-1"]
 
     def test_split_shard_missing_from_filter(self):
         path, shards = self._webdataset({"a": 3, "b": 2})
@@ -345,3 +371,137 @@ class TestFilterIndex(unittest.TestCase):
             side_effect=AssertionError("A matching single-file layout must not search"),
         ):
             assert [s["json"]["value"] for s in _collect_factory_samples(factory)] == [1, 4]
+
+    def test_filter_creation_before_dataset_configuration(self):
+        for suffix in ("json", "yaml"):
+            with self.subTest(format=suffix):
+                path, shards = self._webdataset({"z": 3, "a": 2}, name=suffix)
+                root = self.dataset_path / suffix
+                meta = root / MAIN_FOLDER_NAME
+                info = {"shard_counts": {"z": 3, "a": 2}}
+                info_path = meta / f".info.{suffix}"
+                if suffix == "yaml":
+                    (meta / ".info.json").unlink()
+                    info_path.write_text(yaml.safe_dump(info, sort_keys=False))
+                config_path = meta / "dataset.yaml"
+                config = config_path.read_text()
+                config_path.unlink()
+                if suffix == "yaml":
+                    config_path.write_text(
+                        "__module__: does.not.exist\n__class__: UnknownFactory\n"
+                    )
+                # Creating a filter needs only the source info and primary shards,
+                # even before the loader configuration and tar indexes are ready.
+                companions = {
+                    root / f"{shard.name}.idx": (root / f"{shard.name}.idx").read_bytes()
+                    for shard in shards
+                }
+                for file in companions:
+                    file.unlink()
+                build_filter_index(path, "keep", [1, 4])
+                config_path.write_text(config)
+                for file, contents in companions.items():
+                    file.write_bytes(contents)
+                assert [sample.text for sample in self._load_samples(path)] == ["z-1", "a-1"]
+
+                # Reordering the info manifest doesn't change the filter's recorded layout.
+                info["shard_counts"] = {"a": 2, "z": 3}
+                info_path.write_text(
+                    json.dumps(info) if suffix == "json" else yaml.safe_dump(info, sort_keys=False)
+                )
+                assert [sample.text for sample in self._load_samples(path)] == ["z-1", "a-1"]
+
+    def test_webdataset_rejects_stale_filter_and_rebuilds(self):
+        path, _ = self._webdataset({"a": 3, "b": 2})
+        root = self.dataset_path / "dataset"
+        meta = root / MAIN_FOLDER_NAME
+        (meta / "split.yaml").write_text(yaml.safe_dump({"split_parts": {"train": ["a"]}}))
+        build_filter_index(path, "keep", [1])
+        assert [sample.text for sample in self._load_samples(path)] == ["a-1"]
+
+        # A changed shard must be detected even if it contributes no kept samples
+        # and is outside the selected split.
+        file = root / "b"
+        original = file.read_bytes()
+        file.write_bytes(original + b"x")
+        with self.assertRaisesRegex(ValueError, "Stale filter.*byte size"):
+            self._load_samples(path)
+        file.unlink()
+        with self.assertRaisesRegex(ValueError, "Stale filter.*missing"):
+            self._load_samples(path)
+        file.write_bytes(original)
+
+        info_path = meta / ".info.json"
+        for counts in ({"a": 4, "b": 2}, {"a": 3}):
+            with self.subTest(counts=counts):
+                info_path.write_text(json.dumps({"shard_counts": counts}))
+                with self.assertRaisesRegex(ValueError, "Stale filter.*sample count"):
+                    self._load_samples(path)
+        info_path.write_text(json.dumps({"shard_counts": {"a": 3, "b": 2}}))
+        file.write_bytes(original + b"x")
+        build_filter_index(path, "keep", [1], overwrite=True)
+        assert [sample.text for sample in self._load_samples(path)] == ["a-1"]
+
+    def test_jsonl_rejects_stale_filter_and_rebuilds(self):
+        file = self.dataset_path / "source.jsonl"
+        original = b'{"value": 0}        \n{"value": 1}        \n'
+        file.write_bytes(original)
+        path = EPath(file)
+        CrudeJsonlDatasetFactory.prepare_dataset(path)
+        build_filter_index(path, "keep", [1])
+        assert [s["json"]["value"] for s in self._load_samples(path)] == [1]
+
+        file.write_bytes(original + b" ")
+        with self.assertRaisesRegex(ValueError, "Stale filter.*byte size"):
+            self._load_samples(path)
+        # Replace the data with more samples at the same byte size, then prepare it.
+        replacement = b'{"value": 0}\n{"value": 1}\n{"value": 2}\n'
+        assert len(replacement) <= len(original)
+        file.write_bytes(replacement.ljust(len(original), b" "))
+        CrudeJsonlDatasetFactory.prepare_dataset(path)
+        with self.assertRaisesRegex(ValueError, "Stale filter.*sample count"):
+            self._load_samples(path)
+        build_filter_index(path, "keep", [0, 2], overwrite=True)
+        assert [s["json"]["value"] for s in self._load_samples(path)] == [0, 2]
+
+        # A truncated offset index must fail both filter creation and dataset loading.
+        index_path = self.dataset_path / "source.jsonl.idx"
+        offsets = index_path.read_bytes()
+        for truncated in (b"", offsets[:-1]):
+            with self.subTest(index_size=len(truncated)):
+                index_path.write_bytes(truncated)
+                with self.assertRaisesRegex(ValueError, "Invalid JSONL offset index size"):
+                    build_filter_index(path, "new", [0])
+                with self.assertRaisesRegex(ValueError, "Invalid JSONL offset index size"):
+                    self._load_samples(path)
+        CrudeJsonlDatasetFactory.prepare_dataset(path)
+        assert [s["json"]["value"] for s in self._load_samples(path)] == [0, 2]
+
+    def test_custom_direct_file_provider_loads_filtered_samples(self):
+        # Register another extension using the JSONL reader to exercise the full
+        # provider -> source description -> factory -> loader flow.
+        class RecordsProvider(DefaultCrudeJsonlDatasetFactory):
+            @classmethod
+            def detect_path(cls, path):
+                if path.name.endswith(".records") and path.is_file():
+                    return EnergonDatasetType.JSONL
+                return None
+
+        file = self.dataset_path / "source.records"
+        file.write_text('{"value": 0}\n{"value": 1}\n')
+        path = EPath(file)
+        CrudeJsonlDatasetFactory.prepare_dataset(path)
+        resolver = DatasetFactoryResolver()
+        resolver.register(RecordsProvider)
+        with patch(
+            "megatron.energon.flavors.dataset_factory_resolver._DATASET_FACTORY_RESOLVER", resolver
+        ):
+            build_filter_index(path, "keep", [1])
+            assert [s["json"]["value"] for s in self._load_samples(path)] == [1]
+            with file.open("a") as f:
+                f.write('{"value": 2}\n')
+            CrudeJsonlDatasetFactory.prepare_dataset(path)
+            with self.assertRaisesRegex(ValueError, "Stale filter.*sample count"):
+                self._load_samples(path)
+            build_filter_index(path, "keep", [0, 2], overwrite=True)
+            assert [s["json"]["value"] for s in self._load_samples(path)] == [0, 2]

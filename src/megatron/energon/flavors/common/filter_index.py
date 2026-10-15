@@ -17,7 +17,7 @@ import numpy as np
 
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath, EPathMappedArray
-from megatron.energon.flavors.common.manifest.paths import INFO_JSON_FILENAME, MAIN_FOLDER_NAME
+from megatron.energon.flavors.common.manifest.paths import MAIN_FOLDER_NAME
 from megatron.energon.flavors.common.manifest.types import ShardInfo
 from megatron.energon.flavors.common.reader import IndexedSampleReader
 from megatron.energon.flavors.common.sample_record import SampleRecord
@@ -26,7 +26,7 @@ from megatron.energon.typed_converter import JsonParser
 FILTER_FILENAME_PREFIX = "filter_"
 FILTER_JSON_SUFFIX = ".json"
 FILTER_INDEX_SUFFIX = ".idx"
-FILTER_INDEX_VERSION = 2
+FILTER_INDEX_VERSION = 3
 FILTER_INDEX_DTYPE = np.uint64
 
 
@@ -35,6 +35,7 @@ class FilterShardMetadata:
     name: str
     sample_count: int
     filtered_sample_count: int
+    byte_size: int
 
 
 @edataclass
@@ -122,6 +123,37 @@ class FilterIndex:
             shard.name: shard.filtered_sample_count for shard in self.shards
         }
         self.total_filtered = filtered_start
+
+        # Check source freshness without opening the binary translation table.
+        self.validate_source()
+
+    def validate_source(self) -> None:
+        """Reject changed primary shard sizes or original counts; require a rebuild.
+
+        Source inspection uses the registered provider and ignores split selection.
+        Companion files are not validated, though a provider may read an index to
+        determine the current original sample count.
+        """
+        current = {shard.name: shard for shard in _resolve_shards(self.dataset_path)}
+        for recorded in self.shards:
+            actual = current.get(recorded.name)
+            if actual is None or actual.count != recorded.sample_count:
+                raise ValueError(
+                    f"Stale filter {self.filter_name!r}: source shard or sample count changed "
+                    f"for {recorded.name!r}. Rebuild the filter."
+                )
+            try:
+                byte_size = actual.path.size()
+            except FileNotFoundError as exc:
+                raise ValueError(
+                    f"Stale filter {self.filter_name!r}: primary shard {actual.path} is missing. "
+                    "Restore the source or rebuild the filter."
+                ) from exc
+            if byte_size != recorded.byte_size:
+                raise ValueError(
+                    f"Stale filter {self.filter_name!r}: primary shard byte size changed "
+                    f"for {recorded.name!r}. Rebuild the filter."
+                )
 
     def __len__(self) -> int:
         return self.total_filtered
@@ -293,16 +325,26 @@ class FilterIndexWriter:
         Args:
             dataset_path: The path to the dataset.
             filter_name: The name of the filter.
-            shards: Optional source shard selection/order. If omitted, infer the
-                full source layout from the dataset metadata.
+            shards: Optional source shard selection/order. Counts and paths must
+                match the registered provider's original source description.
             overwrite: Whether to overwrite the existing filter index.
         """
         self.dataset_path = EPath(dataset_path)
         self.filter_name = filter_name
+        source_shards = _resolve_shards(self.dataset_path)
         if shards is None:
-            shards = _resolve_shards(self.dataset_path)
+            shards = source_shards
         if len({shard.name for shard in shards}) != len(shards):
             raise ValueError("Duplicate shard names in filter source layout")
+
+        # Record primary-file sizes in the same layout used to write the filter.
+        source_by_name = {shard.name: shard for shard in source_shards}
+        self._source_byte_sizes = {}
+        for shard in shards:
+            source = source_by_name.get(shard.name)
+            if source is None or source.count != shard.count or source.path != shard.path:
+                raise ValueError(f"Filter source shard {shard.name!r} does not match the dataset")
+            self._source_byte_sizes[shard.name] = source.path.size()
         self.shard_order = tuple(shard.name for shard in shards)
         self.original_shard_counts = {shard.name: int(shard.count) for shard in shards}
         self._original_shard_offsets = {}
@@ -394,6 +436,7 @@ class FilterIndexWriter:
                         {
                             "name": name,
                             "sample_count": self.original_shard_counts[name],
+                            "byte_size": self._source_byte_sizes[name],
                             "filtered_sample_count": self.filtered_shard_counts[name],
                         }
                         for name in self.shard_order
@@ -529,35 +572,10 @@ def build_filter_index_from_shard_indexes(
 
 
 def _resolve_shards(dataset_path: EPath) -> list[ShardInfo]:
-    if dataset_path.is_file():
-        return [
-            ShardInfo(
-                name=dataset_path.name,
-                path=dataset_path,
-                count=_count_single_file_samples(dataset_path),
-            )
-        ]
+    # Import lazily because factories also import the filter implementation.
+    from megatron.energon.flavors.dataset_factory_resolver import get_dataset_factory_resolver
 
-    info_path = dataset_path / MAIN_FOLDER_NAME / INFO_JSON_FILENAME
-    if info_path.is_file():
-        with info_path.open("r") as f:
-            info = json.load(f)
-        return [
-            ShardInfo(name=name, path=dataset_path / name, count=int(count))
-            for name, count in info["shard_counts"].items()
-        ]
-    raise FileNotFoundError(
-        f"Cannot infer filter shard counts because {info_path} does not exist. "
-        "Pass shards explicitly for datasets without .info.json metadata."
-    )
-
-
-def _count_single_file_samples(path: EPath) -> int:
-    if path.name.endswith(".jsonl"):
-        from megatron.energon.flavors.jsonl.ijsonl import IDX_SUFFIX as JSONL_IDX_SUFFIX
-
-        return int(path.with_suffix(JSONL_IDX_SUFFIX, replace=False).size() // 8 - 1)
-    raise ValueError(f"Cannot infer sample count for single-file dataset {path}")
+    return get_dataset_factory_resolver().inspect_source(dataset_path)
 
 
 def _validate_index_array(
