@@ -70,7 +70,6 @@ splits:
     datasets:
       - weight: 2
         path: ./dataset-a
-        subflavor: source-a
       - weight: 1
         path: ./dataset-b
         split_part: val
@@ -86,8 +85,6 @@ splits:
     blend:
       - weight: 2
         path: ./dataset-a
-        tags:
-          __subflavor__: source-a
       - weight: 1
         path: ./dataset-b
         split_part: val
@@ -99,7 +96,6 @@ Apply these conversions throughout nested files:
 | --- | --- |
 | `__class__: Metadataset` | `__class__: Recipe` |
 | `splits.<name>.datasets` | `splits.<name>.blend` |
-| `subflavor: value` | `tags: {__subflavor__: value}` |
 | `megatron.energon.metadataset.*` imports | `megatron.energon.recipe.*` imports |
 
 Existing `split_part`, `dataset_config`, `split_config`, weights, and
@@ -215,7 +211,6 @@ without-replacement shuffling and `-1` changes which slices may be repeated or
 skipped.
 ```
 
-(sect-subflavors)=
 (sect-tags)=
 ## Tags
 
