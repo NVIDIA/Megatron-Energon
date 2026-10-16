@@ -10,7 +10,7 @@ Sidecars live in ``.nv-meta`` as ``filter_<name>.json`` and ``filter_<name>.idx`
 
 import json
 from bisect import bisect_right
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Generator, Iterable, Mapping, Sequence
 from typing import BinaryIO
 
 import numpy as np
@@ -19,7 +19,7 @@ from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath, EPathMappedArray
 from megatron.energon.flavors.common.manifest.paths import MAIN_FOLDER_NAME
 from megatron.energon.flavors.common.manifest.types import ShardInfo
-from megatron.energon.flavors.common.reader import IndexedSampleReader
+from megatron.energon.flavors.common.reader import IndexedSampleReader, SequentialSampleReader
 from megatron.energon.flavors.common.sample_record import SampleRecord
 from megatron.energon.typed_converter import JsonParser
 
@@ -281,18 +281,40 @@ class TranslatedIndexReader(IndexedSampleReader[SampleRecord]):
     ) -> None:
         self.inner = inner
         self.filter_view = filter_view
+        self._sequential_inner = inner if isinstance(inner, SequentialSampleReader) else None
 
     def __len__(self) -> int:
         return len(self.filter_view)
 
-    def __getitem__(self, filtered_index: int) -> SampleRecord | None:
-        original_index = self.filter_view[filtered_index]
-        sample = self.inner[original_index]
+    @staticmethod
+    def _translate(sample: SampleRecord | None, filtered_index: int) -> SampleRecord | None:
         if isinstance(sample, dict) and "__restore_key__" in sample:
             sample = dict(sample)
             restore_key = sample["__restore_key__"]
             sample["__restore_key__"] = (restore_key[0], filtered_index)
         return sample
+
+    def __getitem__(self, filtered_index: int) -> SampleRecord | None:
+        return self._translate(self.inner[self.filter_view[filtered_index]], filtered_index)
+
+    def iter_slice(self, start: int, stop: int) -> Generator[SampleRecord | None, None, None]:
+        """Yields the filtered samples ``start`` to ``stop - 1``. Streams the covered original
+        range if the inner reader supports it, skipping the samples that were filtered out."""
+        if self._sequential_inner is None or start >= stop:
+            for filtered_index in range(start, stop):
+                yield self[filtered_index]
+            return
+        position = self.filter_view[start]
+        inner_iter = self._sequential_inner.iter_slice(position, self.filter_view[stop - 1] + 1)
+        try:
+            for filtered_index in range(start, stop):
+                original_index = self.filter_view[filtered_index]
+                for _ in range(position, original_index):
+                    next(inner_iter)
+                position = original_index + 1
+                yield self._translate(next(inner_iter), filtered_index)
+        finally:
+            inner_iter.close()
 
     def close(self) -> None:
         if hasattr(self.inner, "close"):

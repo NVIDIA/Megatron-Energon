@@ -7,7 +7,7 @@ import torch
 
 from megatron.energon.edataclass import edataclass
 from megatron.energon.flavors.base_dataset import SavableDataset
-from megatron.energon.flavors.common.reader import IndexedSampleReader
+from megatron.energon.flavors.common.reader import IndexedSampleReader, SequentialSampleReader
 from megatron.energon.flavors.common.sample_record import SampleRecord
 from megatron.energon.rng import FeistelPermutation, WorkerRng
 from megatron.energon.worker import WorkerConfig
@@ -108,6 +108,8 @@ class DatasetSampler(SavableDataset[RawSampleData]):
         super().__init__(worker_config=worker_config)
 
         self.reader = reader
+        # Readers that support it stream each active slice instead of reading every sample by index
+        self._sequential_reader = reader if isinstance(reader, SequentialSampleReader) else None
         self.shuffle_over_epochs = shuffle_over_epochs
         self.parallel_slice_iters = parallel_slice_iters
         self.restore_key_kind = restore_key_kind
@@ -164,6 +166,26 @@ class DatasetSampler(SavableDataset[RawSampleData]):
             data=self.reader[index],
         )
 
+    def _open_slice_iter(self, slice_state: SliceState) -> Optional[Generator[Any, None, None]]:
+        """Opens a stream over the slice, if the reader supports it."""
+        if self._sequential_reader is None:
+            return None
+        assert self.slice_offsets is not None
+        return self._sequential_reader.iter_slice(
+            slice_state.current, self.slice_offsets[slice_state.index + 1]
+        )
+
+    def _next_slice_sample(
+        self, slice_iter: Optional[Generator[Any, None, None]], slice_state: SliceState
+    ) -> RawSampleData:
+        """Reads the sample at the current position of an active slice."""
+        if slice_iter is None:
+            return self._get_sample(slice_state.current)
+        return RawSampleData(
+            __restore_key__=(self.restore_key_kind, slice_state.current),
+            data=next(slice_iter),
+        )
+
     def _pending_slices(self) -> Sequence[int]:
         """Returns the slice order of the current epoch. Entries are taken modulo the number of
         slices, as the order may span multiple epochs."""
@@ -205,6 +227,9 @@ class DatasetSampler(SavableDataset[RawSampleData]):
 
         active_slice_probs = torch.zeros(self.parallel_slice_iters, dtype=torch.float32)
         active_slices = self._active_slice_state
+        # Streams over the slices opened by this iterator, if the reader supports it. Not part of
+        # the saved state.
+        slice_iters: List[Optional[Generator[Any, None, None]]] = [None] * self.parallel_slice_iters
 
         def slice_at(idx: int) -> SliceState:
             assert self.slice_offsets is not None
@@ -285,6 +310,7 @@ class DatasetSampler(SavableDataset[RawSampleData]):
                 if slice_index is None:
                     break
                 slice_state = slice_at(slice_index)
+                slice_iters[len(active_slices)] = self._open_slice_iter(slice_state)
                 active_slice_probs[len(active_slices)] = (
                     self.slice_offsets[slice_state.index + 1]
                     - self.slice_offsets[slice_state.index]
@@ -316,13 +342,17 @@ class DatasetSampler(SavableDataset[RawSampleData]):
                 slice_idx = self._worker_rng.choice_idx(active_slice_probs)
             slice_state = active_slices[slice_idx]
             assert slice_state is not None
-            sample = self._get_sample(slice_state.current)
+            sample = self._next_slice_sample(slice_iters[slice_idx], slice_state)
             # print(f"Read sample at {slice_state.current} -> {'None' if sample is None or sample.data is None else sample.data['__key__']}")
             slice_state.current += 1
             self._sample_count += 1
             self._epoch_sample_count += 1
             if slice_state.current >= self.slice_offsets[slice_state.index + 1]:
                 # Iterator exhausted -> take next / remove from list
+                slice_iter = slice_iters[slice_idx]
+                if slice_iter is not None:
+                    slice_iter.close()
+                    slice_iters[slice_idx] = None
                 next_idx = self._next_pending_slice(pending_slices)
                 if next_idx is not None:
                     next_slice_state = slice_at(next_idx)
@@ -331,6 +361,7 @@ class DatasetSampler(SavableDataset[RawSampleData]):
                         - self.slice_offsets[next_slice_state.index]
                     )
                     active_slices[slice_idx] = next_slice_state
+                    slice_iters[slice_idx] = self._open_slice_iter(next_slice_state)
                     # print(
                     #     f"Slice iter for {self.worker_config.rank}:{self.worker_config.rank_worker_id()} "
                     #     f"[{slice_offsets[slice_state.index]}, {slice_offsets[slice_state.index + 1]}] exhausted at {slice_state.current}, "
