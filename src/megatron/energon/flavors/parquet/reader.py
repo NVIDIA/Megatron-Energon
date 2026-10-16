@@ -1,7 +1,8 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Random-access reader over a Parquet-tabular in-memory layout (global row index)."""
+"""Random-access and streaming reader over a Parquet-tabular in-memory layout (global row
+index)."""
 
 from __future__ import annotations
 
@@ -10,7 +11,7 @@ from collections import OrderedDict
 from typing import Any, Callable, Generator, List, Sequence, Tuple
 
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.common.reader import SamplePartFileReader
+from megatron.energon.flavors.common.reader import SamplePartFileReader, SequentialSampleReader
 from megatron.energon.flavors.common.sample_record import FilteredSample
 from megatron.energon.flavors.parquet.prepare import ParquetLayout
 from megatron.energon.source_info import SourceInfo
@@ -37,9 +38,12 @@ def _table_row_to_dict(table: Any, row_idx: int, column_names: Sequence[str]) ->
     return out
 
 
-class IParquetReader(SamplePartFileReader[FilteredSample]):
+class IParquetReader(SamplePartFileReader[FilteredSample], SequentialSampleReader[FilteredSample]):
     """
-    Parquet random access over rows described by a :class:`ParquetLayout`.
+    Parquet access over rows described by a :class:`ParquetLayout`.
+
+    Random access decodes the whole row group of the row. Consecutive rows should be read with
+    :meth:`iter_slice`, which decodes them incrementally in batches.
     """
 
     dataset_root: EPath
@@ -55,6 +59,7 @@ class IParquetReader(SamplePartFileReader[FilteredSample]):
         *,
         sample_filter: Callable[[str], bool] | None = None,
         parquet_file_cache_size: int = 5,
+        stream_batch_rows: int = 256,
     ):
         self.dataset_root = EPath(dataset_root)
         self.layout = layout
@@ -70,11 +75,19 @@ class IParquetReader(SamplePartFileReader[FilteredSample]):
             self._cumsum.append(s)
             s += n
         self._total = s
+        # For each file, the first row of each row group
+        self._row_group_starts: List[List[int]] = []
+        for f in files:
+            starts = []
+            s = 0
+            for n in f.row_group_rows:
+                starts.append(s)
+                s += n
+            assert s == f.num_rows, f"Row group sizes of {f.rel_path} do not sum up to its rows"
+            self._row_group_starts.append(starts)
         self._parquet_cache: OrderedDict[int, Tuple[Any, Any]] = OrderedDict()
         self._parquet_cache_max = max(1, parquet_file_cache_size)
-        # Decoded row groups, so that sequential reads decode each row group only once. Holds as
-        # many entries as there are parallel readers.
-        self._table_cache: OrderedDict[Tuple[int, int, Tuple[str, ...]], Any] = OrderedDict()
+        self._stream_batch_rows = stream_batch_rows
 
     def __len__(self) -> int:
         return self._total
@@ -93,15 +106,17 @@ class IParquetReader(SamplePartFileReader[FilteredSample]):
         local = global_idx - self._cumsum[f]
         return f, local
 
+    def _open_parquet_file(self, file_idx: int) -> Tuple[Any, Any]:
+        rel = self.layout.files[file_idx].rel_path
+        path = self.dataset_root / rel
+        raw = path.open("rb")
+        return raw, self._pq.ParquetFile(self._pa.PythonFile(raw))
+
     def _get_parquet_file(self, file_idx: int):
         if file_idx in self._parquet_cache:
             self._parquet_cache.move_to_end(file_idx)
             return self._parquet_cache[file_idx]
-        rel = self.layout.files[file_idx].rel_path
-        path = self.dataset_root / rel
-        raw = path.open("rb")
-        pf = self._pq.ParquetFile(self._pa.PythonFile(raw))
-        self._parquet_cache[file_idx] = (raw, pf)
+        self._parquet_cache[file_idx] = self._open_parquet_file(file_idx)
         self._parquet_cache.move_to_end(file_idx)
         while len(self._parquet_cache) > self._parquet_cache_max:
             old_idx, (old_raw, old_pf) = self._parquet_cache.popitem(last=False)
@@ -111,25 +126,9 @@ class IParquetReader(SamplePartFileReader[FilteredSample]):
 
     def _locate_row_group(self, file_idx: int, row_in_file: int) -> Tuple[int, int]:
         """Returns the row group index and the row index within that row group."""
-        entry = self.layout.files[file_idx]
-        offset = 0
-        for row_group, rows in enumerate(entry.row_group_rows):
-            if row_in_file < offset + rows:
-                return row_group, row_in_file - offset
-            offset += rows
-        raise RuntimeError(f"Row {row_in_file} out of range for file index {file_idx}")
-
-    def _get_row_group(self, file_idx: int, row_group: int, columns: Sequence[str]) -> Any:
-        key = (file_idx, row_group, tuple(columns))
-        if key in self._table_cache:
-            self._table_cache.move_to_end(key)
-            return self._table_cache[key]
-        _, pf = self._get_parquet_file(file_idx)
-        table = pf.read_row_group(row_group, columns=list(columns))
-        self._table_cache[key] = table
-        while len(self._table_cache) > self._parquet_cache_max:
-            self._table_cache.popitem(last=False)
-        return table
+        starts = self._row_group_starts[file_idx]
+        row_group = bisect_right(starts, row_in_file) - 1
+        return row_group, row_in_file - starts[row_group]
 
     def _get_item(self, idx: int, columns: Sequence[str] | None = None) -> dict[str, Any] | None:
         key = str(idx)
@@ -137,10 +136,60 @@ class IParquetReader(SamplePartFileReader[FilteredSample]):
             return None
         cols = list(self.read_columns if columns is None else columns)
         f_idx, local = self._locate(idx)
-        shard_name = self.layout.files[f_idx].rel_path
         row_group, local_rg = self._locate_row_group(f_idx, local)
-        table = self._get_row_group(f_idx, row_group, cols)
-        d = _table_row_to_dict(table, local_rg, cols)
+        _, pf = self._get_parquet_file(f_idx)
+        table = pf.read_row_group(row_group, columns=cols)
+        return self._make_sample(idx, f_idx, cols, _table_row_to_dict(table, local_rg, cols))
+
+    def iter_slice(self, start: int, stop: int) -> Generator[FilteredSample | None, None, None]:
+        """Yields the rows ``start`` to ``stop - 1``, decoding them incrementally in batches. Each
+        row is decoded once. Starting within a row group decodes its preceding rows."""
+        while start < stop:
+            f_idx, local = self._locate(start)
+            file_stop = min(stop, self._cumsum[f_idx] + self._file_rows[f_idx])
+            yield from self._iter_file_rows(f_idx, local, local + file_stop - start)
+            start = file_stop
+
+    def _iter_file_rows(
+        self, file_idx: int, start: int, stop: int
+    ) -> Generator[FilteredSample | None, None, None]:
+        first_row_group, skip = self._locate_row_group(file_idx, start)
+        last_row_group, _ = self._locate_row_group(file_idx, stop - 1)
+        idx = self._cumsum[file_idx] + start
+        remaining = stop - start
+        # Every stream has its own file handle, cached handles may be closed while it is active
+        raw, pf = self._open_parquet_file(file_idx)
+        try:
+            for batch in pf.iter_batches(
+                batch_size=self._stream_batch_rows,
+                row_groups=list(range(first_row_group, last_row_group + 1)),
+                columns=self.read_columns,
+                use_threads=False,
+            ):
+                if skip >= batch.num_rows:
+                    skip -= batch.num_rows
+                    continue
+                rows = batch.slice(skip, remaining).to_pylist()
+                skip = 0
+                for row in rows:
+                    if self.sample_filter is not None and not self.sample_filter(str(idx)):
+                        yield None
+                    else:
+                        yield self._make_sample(idx, file_idx, self.read_columns, row)
+                    idx += 1
+                remaining -= len(rows)
+                if remaining == 0:
+                    return
+            raise RuntimeError(f"Parquet file {self.layout.files[file_idx].rel_path} ended early")
+        finally:
+            pf.close()
+            raw.close()
+
+    def _make_sample(
+        self, idx: int, file_idx: int, cols: Sequence[str], row: dict[str, Any]
+    ) -> dict[str, Any]:
+        key = str(idx)
+        shard_name = self.layout.files[file_idx].rel_path
         file_names = tuple(f"{key}.{c}" for c in cols)
         return dict(
             __key__=key,
@@ -154,7 +203,7 @@ class IParquetReader(SamplePartFileReader[FilteredSample]):
                     file_names=file_names,
                 ),
             ),
-            **d,
+            **row,
         )
 
     def __getitem__(self, idx: int | str) -> FilteredSample | tuple[Any, SourceInfo] | None:
@@ -210,7 +259,6 @@ class IParquetReader(SamplePartFileReader[FilteredSample]):
         return total
 
     def close(self) -> None:
-        self._table_cache.clear()
         while self._parquet_cache:
             _, (raw, pf) = self._parquet_cache.popitem(last=False)
             pf.close()

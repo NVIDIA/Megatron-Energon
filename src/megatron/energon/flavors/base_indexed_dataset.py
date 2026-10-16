@@ -155,7 +155,7 @@ class BaseIndexedDatasetFactory(
         workers_sample_slice_offsets = self.shard_workers(
             slice_shards,
             worker_config=self.worker_config,
-            max_samples_per_sequence=self.max_samples_per_sequence,
+            max_samples_per_sequence=self._slice_max_samples_per_sequence(),
             rotation_offset=worker_rotation_offset,
             subset=self.subset,
         )
@@ -189,6 +189,10 @@ class BaseIndexedDatasetFactory(
         as a whole. By default these are the shards. Must cover the same samples in the same order.
         """
         return shards
+
+    def _slice_max_samples_per_sequence(self) -> Optional[int]:
+        """Returns the length above which the slice shards are split into smaller slices."""
+        return self.max_samples_per_sequence
 
     def _merge_part_filter(
         self, part_filter: Callable[[str], bool] | None
