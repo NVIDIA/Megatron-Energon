@@ -1,5 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
+import datetime
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Tuple
@@ -17,7 +19,7 @@ class HeaderUpdater:
     UPDATE_IDENTIFIER = "Copyright"
 
     HEADER_LINES: Tuple[str, ...] = (
-        "Copyright (c) 2025, NVIDIA CORPORATION.",
+        "Copyright (c) {year}, NVIDIA CORPORATION.",
         "SPDX-License-Identifier: BSD-3-Clause",
     )
 
@@ -43,24 +45,44 @@ class HeaderUpdater:
     def has_header(self, file: Path) -> bool:
         with file.open() as rf:
             num_lines = 0
-            for line, expected in zip(rf, self._expected_lines):
+            for i, (line, expected) in enumerate(zip(rf, self._expected_lines)):
+                has_other_year = False
+                if i == 0:
+                    search_pattern = (
+                        "^" + re.escape(expected).replace("\\{year\\}", "[0-9]{4}") + "$"
+                    )
+                    has_other_year = re.search(search_pattern, line) is not None
                 num_lines += 1
-                if line.rstrip("\n") != expected:
+                if not has_other_year and line.rstrip("\n") != expected:
                     return False
             return num_lines == len(self._expected_lines)
+
+    def _format_header(self, year: Optional[str] = None) -> Tuple[str, ...]:
+        if year is None:
+            year = str(datetime.datetime.now().year)
+        return (self._expected_lines[0].format(year=year),) + self._expected_lines[1:]
 
     def fix_header(self, file: Path):
         contents = file.read_text()
         first_comment = self.line_comment if self.line_comment is not None else self.comment_start
+        # Warning: Assumes that previous content is at the very start of the file.
         if contents.startswith(first_comment) and contents[len(first_comment) :].startswith(
             self.UPDATE_IDENTIFIER
         ):
             # Already has header, but want to update
+            # Warning: Assumes that the previous header and update have the same number of lines.
             *header_lines, remainder = contents.split("\n", len(self._expected_lines))
-            new_contents = "\n".join(self._expected_lines) + "\n" + remainder
+            # Skip matches where only the year is different; we want to keep the original copyright
+            # number.
+            search_pattern = (
+                "^" + re.escape(self._expected_lines[0]).replace("\\{year\\}", "[0-9]{4}") + "$"
+            )
+            if re.search(search_pattern, header_lines[0]) is not None:
+                return
+            new_contents = "\n".join(self._format_header()) + "\n" + remainder
         else:
             # No header, add it
-            new_contents = "\n".join(self._expected_lines) + "\n" + contents
+            new_contents = "\n".join(self._format_header()) + "\n" + contents
         file.write_text(new_contents)
 
 
