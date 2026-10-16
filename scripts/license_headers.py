@@ -40,17 +40,25 @@ class HeaderUpdater:
                     self.comment_start + self.HEADER_LINES[0] + self.comment_end,
                 )
 
+    @staticmethod
+    def split_front_matter(contents: str) -> Tuple[str, str]:
+        """Splits a leading YAML front matter block (e.g. of a skill's SKILL.md), which must stay
+        the first thing in the file, from the rest. The block is empty if there is none."""
+        if contents.startswith("---\n"):
+            end = contents.find("\n---\n", 3)
+            if end != -1:
+                end += len("\n---\n")
+                rest = contents[end:].lstrip("\n")
+                return contents[: len(contents) - len(rest)], rest
+        return "", contents
+
     def has_header(self, file: Path) -> bool:
-        with file.open() as rf:
-            num_lines = 0
-            for line, expected in zip(rf, self._expected_lines):
-                num_lines += 1
-                if line.rstrip("\n") != expected:
-                    return False
-            return num_lines == len(self._expected_lines)
+        _, contents = self.split_front_matter(file.read_text())
+        lines = contents.split("\n", len(self._expected_lines))
+        return tuple(lines[: len(self._expected_lines)]) == self._expected_lines
 
     def fix_header(self, file: Path):
-        contents = file.read_text()
+        front_matter, contents = self.split_front_matter(file.read_text())
         first_comment = self.line_comment if self.line_comment is not None else self.comment_start
         if contents.startswith(first_comment) and contents[len(first_comment) :].startswith(
             self.UPDATE_IDENTIFIER
@@ -61,7 +69,7 @@ class HeaderUpdater:
         else:
             # No header, add it
             new_contents = "\n".join(self._expected_lines) + "\n" + contents
-        file.write_text(new_contents)
+        file.write_text(front_matter + new_contents)
 
 
 headers = (
