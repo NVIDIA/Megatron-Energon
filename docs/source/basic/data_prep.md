@@ -238,8 +238,9 @@ The manifest keeps the file order and row counts used for sharding and filtering
 Random access into a Parquet file is slow, because a whole row group has to be decoded to read a single row.
 When training, Energon therefore shuffles on the level of row groups: The row groups of the dataset are
 distributed across ranks and workers and visited in random order, and the rows within each row group are
-read sequentially. This is a coarser shuffle than for other formats, so write your Parquet files with row
-groups that are small enough to give a good mix, but large enough for efficient reads.
+streamed sequentially, decoding them incrementally in small batches. Row groups are not split further by
+`max_samples_per_sequence`. This is a coarser shuffle than for other formats, so write your Parquet files
+with row groups that are small enough to give a good mix, but large enough for efficient reads.
 
 If your Parquet data is already shuffled, you can read it in dataset order instead by setting `parquet_read_order: serial`
 for the dataset in a [recipe](../basic/recipe) (or in the `dataset.yaml` of a prepared Parquet directory):
@@ -255,7 +256,7 @@ splits:
 
 The default is `row_group_shuffled`. In `serial` mode, shuffling over epochs and parallel shard iterators are disabled for this dataset.
 
-Each worker keeps up to `parallel_shard_iters` decoded row groups in memory.
+Each worker streams up to `parallel_shard_iters` row groups at the same time.
 If a [filter index](../advanced/filter_index) is used, the sequential ranges are whole files instead of row groups.
 
 (binidx-dataset)=

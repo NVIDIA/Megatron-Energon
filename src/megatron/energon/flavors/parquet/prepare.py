@@ -3,7 +3,6 @@
 
 """Parquet footer scanning helpers for single files and manifest shard lists."""
 
-from dataclasses import field
 from typing import Any, Iterable, List, Mapping, Sequence, Tuple
 
 from megatron.energon.edataclass import edataclass
@@ -20,7 +19,7 @@ class ParquetFileEntry:
     rel_path: str
     num_rows: int
     #: Number of rows of each row group, in file order.
-    row_group_rows: List[int] = field(default_factory=list)
+    row_group_rows: List[int]
 
 
 @edataclass
