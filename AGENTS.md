@@ -54,27 +54,18 @@ User documentation lives in `docs/source` (Sphinx, MyST markdown).
   module; match its naming, structure and comment density.
 - Keep diffs minimal and on-topic: no drive-by refactors, reformatting or renames outside the
   task, no commented-out code.
-- Every new `.py`, `.sh` and `.md` file needs the NVIDIA license header (`just fix` adds it in
-  `src/` and `tests/`; copy it from an existing file elsewhere).
-- User-facing changes need matching documentation in `docs/source`.
-
-## Tests
-
-Prefer end-to-end tests over many small unit tests:
-
-- Create a small but real dataset in a temporary directory, load it through the public API
-  (`get_train_dataset`, `get_val_dataset`, `get_savable_loader`, ...), and assert on the samples
-  that come out. See `tests/test_dataset.py` for the pattern.
-- Cover save/restore of the loader state and multiple workers where the change can affect them.
-- Do not add a micro-test per function or test private helpers in isolation.
-- Extend an existing test file before creating a new one.
+- Every new `.py`, `.sh` and `.md` file needs the NVIDIA license header, and user-facing changes
+  need documentation in `docs/source` (skill: `writing-docs`).
+- Prefer end-to-end tests through the public API over micro unit tests (skill: `writing-tests`).
 
 ## Commits and pull requests
 
-- Follow the commit message conventions in [CONTRIBUTING.md](CONTRIBUTING.md#commit-messages)
-  (Conventional Commits).
-- Always commit with `git commit -s`. The human you work for signs off and is responsible for
-  the change. Never add `Co-Authored-By` (or similar) trailers for AI assistants.
+- Always commit with `git commit -s` using Conventional Commits (skill: `committing`). Never add
+  `Co-Authored-By` (or similar) trailers for AI assistants.
 - Never push, open pull requests or issues, or comment on GitHub unless the human explicitly asks
-  you to. Create pull requests as drafts and fill in the PR template, but leave the human review
-  checkbox unticked: only the human may tick it.
+  you to (skill: `opening-a-pr`). Leave the human review checkbox unticked.
+
+## Skills
+
+Task-specific guidance lives in `.claude/skills/`: `writing-tests`, `committing`, `opening-a-pr`,
+`writing-docs`.
