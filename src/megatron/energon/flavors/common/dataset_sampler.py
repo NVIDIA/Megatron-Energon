@@ -118,6 +118,8 @@ class DatasetSampler(SavableDataset[RawSampleData]):
         # The slices for the current worker, will have to be extracted from this list later
         self.workers_slice_offsets = workers_sample_slice_offsets
         self.slice_offsets = None
+        # Streams over the active slices, opened on their first read. Not part of the saved state.
+        self._slice_iters: List[Optional[Generator[Any, None, None]]] = []
 
         self.reset_state_own()
 
@@ -125,6 +127,7 @@ class DatasetSampler(SavableDataset[RawSampleData]):
         assert self.parallel_slice_iters >= 1
 
     def close(self) -> None:
+        self._close_slice_iters()
         self.reader.close()
 
     def __del__(self) -> None:
@@ -135,6 +138,8 @@ class DatasetSampler(SavableDataset[RawSampleData]):
             pass
 
     def reset_state_own(self) -> None:
+        self._close_slice_iters()
+        self._slice_iters = [None] * self.parallel_slice_iters
         self._worker_rng = WorkerRng(self.worker_config)
         self._pending_slices_seed = None
         self._pending_slices_offset = None
@@ -166,21 +171,25 @@ class DatasetSampler(SavableDataset[RawSampleData]):
             data=self.reader[index],
         )
 
-    def _open_slice_iter(self, slice_state: SliceState) -> Optional[Generator[Any, None, None]]:
-        """Opens a stream over the slice, if the reader supports it."""
-        if self._sequential_reader is None:
-            return None
-        assert self.slice_offsets is not None
-        return self._sequential_reader.iter_slice(
-            slice_state.current, self.slice_offsets[slice_state.index + 1]
-        )
+    def _close_slice_iters(self) -> None:
+        """Closes the streams over the active slices. They are reopened on the next read."""
+        for idx, slice_iter in enumerate(self._slice_iters):
+            if slice_iter is not None:
+                self._slice_iters[idx] = None
+                slice_iter.close()
 
-    def _next_slice_sample(
-        self, slice_iter: Optional[Generator[Any, None, None]], slice_state: SliceState
-    ) -> RawSampleData:
-        """Reads the sample at the current position of an active slice."""
-        if slice_iter is None:
+    def _next_slice_sample(self, slice_idx: int, slice_state: SliceState) -> RawSampleData:
+        """Reads the sample at the current position of an active slice. Streams the slice from its
+        current position, if the reader supports it."""
+        if self._sequential_reader is None:
             return self._get_sample(slice_state.current)
+        slice_iter = self._slice_iters[slice_idx]
+        if slice_iter is None:
+            assert self.slice_offsets is not None
+            slice_iter = self._sequential_reader.iter_slice(
+                slice_state.current, self.slice_offsets[slice_state.index + 1]
+            )
+            self._slice_iters[slice_idx] = slice_iter
         return RawSampleData(
             __restore_key__=(self.restore_key_kind, slice_state.current),
             data=next(slice_iter),
@@ -227,9 +236,9 @@ class DatasetSampler(SavableDataset[RawSampleData]):
 
         active_slice_probs = torch.zeros(self.parallel_slice_iters, dtype=torch.float32)
         active_slices = self._active_slice_state
-        # Streams over the slices opened by this iterator, if the reader supports it. Not part of
-        # the saved state.
-        slice_iters: List[Optional[Generator[Any, None, None]]] = [None] * self.parallel_slice_iters
+        # Streams left by a previous iterator may not match the (restored) slice positions
+        self._close_slice_iters()
+        self._slice_iters = [None] * self.parallel_slice_iters
 
         def slice_at(idx: int) -> SliceState:
             assert self.slice_offsets is not None
@@ -310,7 +319,6 @@ class DatasetSampler(SavableDataset[RawSampleData]):
                 if slice_index is None:
                     break
                 slice_state = slice_at(slice_index)
-                slice_iters[len(active_slices)] = self._open_slice_iter(slice_state)
                 active_slice_probs[len(active_slices)] = (
                     self.slice_offsets[slice_state.index + 1]
                     - self.slice_offsets[slice_state.index]
@@ -342,17 +350,17 @@ class DatasetSampler(SavableDataset[RawSampleData]):
                 slice_idx = self._worker_rng.choice_idx(active_slice_probs)
             slice_state = active_slices[slice_idx]
             assert slice_state is not None
-            sample = self._next_slice_sample(slice_iters[slice_idx], slice_state)
+            sample = self._next_slice_sample(slice_idx, slice_state)
             # print(f"Read sample at {slice_state.current} -> {'None' if sample is None or sample.data is None else sample.data['__key__']}")
             slice_state.current += 1
             self._sample_count += 1
             self._epoch_sample_count += 1
             if slice_state.current >= self.slice_offsets[slice_state.index + 1]:
                 # Iterator exhausted -> take next / remove from list
-                slice_iter = slice_iters[slice_idx]
+                slice_iter = self._slice_iters[slice_idx]
                 if slice_iter is not None:
+                    self._slice_iters[slice_idx] = None
                     slice_iter.close()
-                    slice_iters[slice_idx] = None
                 next_idx = self._next_pending_slice(pending_slices)
                 if next_idx is not None:
                     next_slice_state = slice_at(next_idx)
@@ -361,7 +369,6 @@ class DatasetSampler(SavableDataset[RawSampleData]):
                         - self.slice_offsets[next_slice_state.index]
                     )
                     active_slices[slice_idx] = next_slice_state
-                    slice_iters[slice_idx] = self._open_slice_iter(next_slice_state)
                     # print(
                     #     f"Slice iter for {self.worker_config.rank}:{self.worker_config.rank_worker_id()} "
                     #     f"[{slice_offsets[slice_state.index]}, {slice_offsets[slice_state.index + 1]}] exhausted at {slice_state.current}, "

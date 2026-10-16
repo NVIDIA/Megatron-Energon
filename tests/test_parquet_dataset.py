@@ -389,6 +389,72 @@ class TestParquetRowGroupShuffle(unittest.TestCase):
             assert group == list(range(group[0], group[0] + self.ROW_GROUP_SIZE))
         assert decoded.rows == self.ROWS
 
+    def test_resumed_epoch_streams_active_slices(self):
+        def build():
+            return DefaultParquetDatasetFactory(
+                EPath(self.path),
+                training=True,
+                worker_config=wc,
+                decoder=None,
+                parallel_shard_iters=3,
+            ).build()
+
+        wc = WorkerConfig(rank=0, world_size=1, num_workers=0, seed_offset=0)
+        wc.worker_activate(0)
+        try:
+            dataset = build()
+            iterator = iter(dataset)
+            first = [next(iterator)["id"] for _ in range(5)]
+            state = dataset.save_state()
+            dataset.close()
+
+            restored = build()
+            restored.restore_state(state)
+            with _DecodedRows() as decoded:
+                remaining = [sample["id"] for sample in restored]
+            restored.close()
+        finally:
+            wc.worker_deactivate()
+        assert sorted(first + remaining) == list(range(self.ROWS))
+        # Resumed slices stream from their position. Only the rows before it in the row group
+        # are decoded again, instead of the whole row group for every row.
+        assert decoded.rows <= self.ROWS
+
+    def test_close_releases_stream_handles(self):
+        opened = []
+        orig_open = IParquetReader._open_parquet_file
+
+        def open_parquet_file(reader, file_idx):
+            handles = orig_open(reader, file_idx)
+            opened.append(handles[0])
+            return handles
+
+        wc = WorkerConfig(rank=0, world_size=1, num_workers=0, seed_offset=0)
+        ds = DefaultParquetDatasetFactory(
+            EPath(self.path),
+            training=True,
+            worker_config=wc,
+            decoder=None,
+            parallel_shard_iters=2,
+        )
+        wc.worker_activate(0)
+        try:
+            with mock.patch.object(IParquetReader, "_open_parquet_file", open_parquet_file):
+                dataset = ds.build()
+                iterator = iter(dataset)
+                first = [next(iterator)["id"] for _ in range(5)]
+                assert any(not raw.closed for raw in opened)
+                dataset.close()
+                assert all(raw.closed for raw in opened)
+                dataset.close()
+                # The retained iterator reopens its streams and continues
+                remaining = list(sample["id"] for sample in iterator)
+                dataset.close()
+                assert all(raw.closed for raw in opened)
+        finally:
+            wc.worker_deactivate()
+        assert sorted(first + remaining) == list(range(self.ROWS))
+
     def test_filter_index_reads_kept_rows(self):
         kept = [idx for idx in range(self.ROWS) if idx % 3 != 0]
         with FilterIndexWriter(
