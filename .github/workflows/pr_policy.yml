@@ -1,0 +1,42 @@
+name: pr policy
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+    branches:
+      - develop
+
+permissions:
+  contents: read
+
+jobs:
+  commits:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v6
+      with:
+        fetch-depth: 0
+
+    - name: Check sign-off and Conventional Commits
+      env:
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      run: |
+        python3 scripts/check_commits.py "$BASE_SHA..$HEAD_SHA"
+
+  human-review:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Check human review confirmation
+      env:
+        PR_BODY: ${{ github.event.pull_request.body }}
+      run: |
+        if printf '%s\n' "$PR_BODY" | grep -qiE '^[[:space:]]*[-*][[:space:]]+\[x\][[:space:]]+I, a human, have personally reviewed every line of this PR'; then
+          echo "Human review confirmed."
+        else
+          echo "::error::Tick the 'I, a human, have personally reviewed every line of this PR' checkbox in the PR description (see CONTRIBUTING.md)."
+          exit 1
+        fi

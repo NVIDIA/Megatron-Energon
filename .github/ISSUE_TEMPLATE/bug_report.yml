@@ -1,0 +1,58 @@
+name: Bug report
+description: Report a bug you encountered while using Energon.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please report problems you actually ran into. Findings from automated or AI-driven bug
+        hunting without a real-world impact will be closed. See CONTRIBUTING.md.
+  - type: textarea
+    id: context
+    attributes:
+      label: Real-world context
+      description: What were you doing when you hit this? E.g. which data you were loading, how you were training.
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe the bug
+      description: What happened, and what did you expect to happen instead?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: A minimal code snippet, dataset/recipe config or command that reproduces the bug.
+      render: python
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error output
+      description: The full traceback or relevant log output, if any.
+      render: shell
+  - type: input
+    id: version
+    attributes:
+      label: Energon version
+      description: Output of `pip show megatron-energon`, or the commit you are on.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Python and PyTorch versions, OS, storage backend (local, S3, ...), number of nodes/ranks/workers.
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Confirmations
+      options:
+        - label: I, a human, have written or personally reviewed this issue and can answer follow-up questions about it.
+          required: true
+        - label: I encountered this problem in real usage; it was not found by automated scanning or AI-driven bug hunting.
+          required: true
