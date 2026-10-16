@@ -67,5 +67,5 @@ User documentation lives in `docs/source` (Sphinx, MyST markdown).
 
 ## Skills
 
-Task-specific guidance lives in `.claude/skills/`: `writing-tests`, `committing`, `opening-a-pr`,
-`writing-docs`.
+Task-specific guidance lives in `.agents/skills/`: `writing-tests`, `committing`, `opening-a-pr`,
+`writing-docs`. `.claude/skills` is a symlink to it for Claude Code.
