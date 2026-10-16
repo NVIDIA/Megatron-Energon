@@ -19,8 +19,8 @@ from megatron.energon.flavors.dataset_factory_resolver import (
 )
 from megatron.energon.flavors.dataset_type import EnergonDatasetType
 from megatron.energon.flavors.parquet.prepare import (
-    assert_layout_columns_subset,
     ParquetLayout,
+    assert_layout_columns_subset,
     scan_parquet_file,
     scan_parquet_shards,
 )
@@ -166,6 +166,10 @@ class ParquetDatasetFactory(
             return shards
         return _row_group_shards(self._layout, self._reader_base_path)
 
+    def _slice_max_samples_per_sequence(self) -> int | None:
+        # Starting a slice within a row group decodes the rows before it, so never split slices
+        return None
+
     def as_file_store(self) -> FileStore:
         from megatron.energon.flavors.parquet.file_store import ParquetFileStore
 
@@ -267,6 +271,10 @@ class ParquetShardListDatasetFactory(BaseManifestShardListDatasetFactory[CrudeSa
             # The filter index only knows the file shards
             return shards
         return _row_group_shards(self._layout, self.path)
+
+    def _slice_max_samples_per_sequence(self) -> int | None:
+        # Starting a slice within a row group decodes the rows before it, so never split slices
+        return None
 
     def as_file_store(self) -> FileStore:
         from megatron.energon.flavors.parquet.file_store import ParquetFileStore
