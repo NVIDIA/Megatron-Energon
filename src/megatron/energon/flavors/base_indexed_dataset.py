@@ -160,6 +160,7 @@ class BaseIndexedDatasetFactory(
             subset=self.subset,
         )
         self._print_shard_slices(workers_sample_slice_offsets, slice_shards)
+        self._check_slices(workers_sample_slice_offsets, parallel_shard_iters)
 
         reader = self._build_reader(
             parallel_shard_iters=parallel_shard_iters,
@@ -209,6 +210,12 @@ class BaseIndexedDatasetFactory(
     ) -> None:
         if DEBUG_SHARD_PRINT:
             _print_shard_slices(self.worker_config, shards, slice_offsets)
+
+    def _check_slices(
+        self, slice_offsets: Sequence[Sequence[int]], parallel_shard_iters: int
+    ) -> None:
+        """Called with the slice offsets of each worker of this rank, e.g. to warn about poor
+        shuffling. Does nothing by default."""
 
     def _load_fn(
         self, part_filter: Callable[[str], bool] | None

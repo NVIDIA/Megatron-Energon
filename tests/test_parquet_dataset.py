@@ -381,13 +381,41 @@ class TestParquetRowGroupShuffle(unittest.TestCase):
         wc.worker_activate(0)
         try:
             with _DecodedRows() as decoded:
-                seen = [sample["id"] for sample in ds.build()]
+                with self.assertWarnsRegex(
+                    UserWarning, "max_samples_per_sequence=1 has no effect.*Up to 4 rows"
+                ):
+                    dataset = ds.build()
+                seen = [sample["id"] for sample in dataset]
         finally:
             wc.worker_deactivate()
         for start in range(0, self.ROWS, self.ROW_GROUP_SIZE):
             group = seen[start : start + self.ROW_GROUP_SIZE]
             assert group == list(range(group[0], group[0] + self.ROW_GROUP_SIZE))
         assert decoded.rows == self.ROWS
+
+    def _build_warnings(self, **kwargs) -> list[str]:
+        wc = WorkerConfig(rank=0, world_size=1, num_workers=0, seed_offset=0)
+        ds = DefaultParquetDatasetFactory(
+            EPath(self.path), worker_config=wc, decoder=None, **kwargs
+        )
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            ds.build()
+        return [str(w.message) for w in caught if issubclass(w.category, UserWarning)]
+
+    def test_few_slices_warns(self):
+        # 6 row groups, but 16 parallel slice iterators by default when training
+        messages = self._build_warnings(training=True)
+        assert any("only get 6 slice(s) to shuffle" in m for m in messages), messages
+
+    def test_no_slice_warnings(self):
+        for kwargs in (
+            dict(training=True, parallel_shard_iters=6, max_samples_per_sequence=4),
+            dict(training=True, parquet_read_order="serial", max_samples_per_sequence=1),
+            dict(training=False, max_samples_per_sequence=1),
+        ):
+            with self.subTest(**kwargs):
+                assert self._build_warnings(**kwargs) == []
 
     def test_resumed_epoch_streams_active_slices(self):
         def build():
