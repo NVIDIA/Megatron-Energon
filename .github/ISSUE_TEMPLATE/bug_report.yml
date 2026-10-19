@@ -46,7 +46,17 @@ body:
     id: environment
     attributes:
       label: Environment
-      description: Python and PyTorch versions, OS, storage backend (local, S3, ...), number of nodes/ranks/workers.
+      description: Python and PyTorch versions, OS, storage backend (local, S3, ...).
+  - type: textarea
+    id: parallelism
+    attributes:
+      label: Parallelism setup
+      description: Number of nodes, ranks and workers, and your TP, PP, CP and DP settings.
+  - type: textarea
+    id: data
+    attributes:
+      label: Data
+      description: The data you are loading, e.g. total size, data format, number of shards and number of samples.
   - type: checkboxes
     id: confirmations
     attributes:
