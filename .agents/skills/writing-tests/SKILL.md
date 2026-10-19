@@ -27,6 +27,8 @@ Tests use `unittest`, not `pytest`. Prefer end-to-end tests over many small unit
 
 ## Rules
 
+- Only cover behavior that matters to the user. Not every small piece of functionality needs its
+  own test.
 - Do not add a micro-test per function or test private helpers in isolation.
 - Extend an existing test file before creating a new one. New files go in `tests/` as
   `test_<topic>.py` and need the NVIDIA license header (see an existing test).

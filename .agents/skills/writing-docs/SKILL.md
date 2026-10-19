@@ -14,6 +14,9 @@ SPDX-License-Identifier: BSD-3-Clause -->
   (new API, option, CLI command, behavior change) needs matching documentation there.
 - Find the existing page that covers the area and extend it before adding a new page; new pages
   must be linked from a `toctree`.
+- Document what users see and do: what a feature does and how to use it. Do not describe internals
+  or the rationale behind the implementation. Internal file formats are only documented in their
+  dedicated sections.
 - Match the tone, heading structure and code-block style of the surrounding pages.
 - Update docstrings of public API you change; they feed the API docs.
 
