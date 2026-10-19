@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import logging
-from typing import Any, Callable, Dict, List, Literal, Union
+import warnings
+from typing import Any, Callable, Dict, List, Literal, Sequence, Union
 
 from megatron.energon.cache import FileStore
 from megatron.energon.decoders import DEFAULT_DECODER, SampleDecoder
@@ -78,6 +79,41 @@ def _row_group_shards(layout: ParquetLayout, base_path: EPath) -> list[ShardInfo
         for entry in layout.files
         for row_group, rows in enumerate(entry.row_group_rows)
     ]
+
+
+def _warn_coarse_slices(
+    factory: "ParquetDatasetFactory | ParquetShardListDatasetFactory",
+    slice_offsets: Sequence[Sequence[int]],
+    parallel_shard_iters: int,
+) -> None:
+    """Warns if the slices are too coarse to shuffle well, as Parquet never splits them."""
+    if not factory.training or factory.shuffle_over_epochs is None:
+        return
+    longest_slice = max(
+        (end - start for offsets in slice_offsets for start, end in zip(offsets, offsets[1:])),
+        default=0,
+    )
+    if (
+        factory.max_samples_per_sequence is not None
+        and longest_slice > factory.max_samples_per_sequence
+    ):
+        warnings.warn(
+            f"{factory}: max_samples_per_sequence={factory.max_samples_per_sequence} has no "
+            "effect, because Parquet row groups are not split. "
+            f"Up to {longest_slice} rows are read in order.",
+            UserWarning,
+        )
+    # With fewer slices than parallel iterators, all slices of a worker are open at once
+    fewest_slices = min(
+        (len(offsets) - 1 for offsets in slice_offsets if len(offsets) > 1), default=None
+    )
+    if fewest_slices is not None and fewest_slices < max(parallel_shard_iters, 2):
+        warnings.warn(
+            f"{factory}: some workers only get {fewest_slices} slice(s) to shuffle "
+            f"(parallel_shard_iters={parallel_shard_iters}). Each slice is a row group "
+            "(a whole file when filtered) that is read in order, so these workers shuffle poorly.",
+            UserWarning,
+        )
 
 
 class ParquetPreparator:
@@ -169,6 +205,11 @@ class ParquetDatasetFactory(
     def _slice_max_samples_per_sequence(self) -> int | None:
         # Starting a slice within a row group decodes the rows before it, so never split slices
         return None
+
+    def _check_slices(
+        self, slice_offsets: Sequence[Sequence[int]], parallel_shard_iters: int
+    ) -> None:
+        _warn_coarse_slices(self, slice_offsets, parallel_shard_iters)
 
     def as_file_store(self) -> FileStore:
         from megatron.energon.flavors.parquet.file_store import ParquetFileStore
@@ -275,6 +316,11 @@ class ParquetShardListDatasetFactory(BaseManifestShardListDatasetFactory[CrudeSa
     def _slice_max_samples_per_sequence(self) -> int | None:
         # Starting a slice within a row group decodes the rows before it, so never split slices
         return None
+
+    def _check_slices(
+        self, slice_offsets: Sequence[Sequence[int]], parallel_shard_iters: int
+    ) -> None:
+        _warn_coarse_slices(self, slice_offsets, parallel_shard_iters)
 
     def as_file_store(self) -> FileStore:
         from megatron.energon.flavors.parquet.file_store import ParquetFileStore
