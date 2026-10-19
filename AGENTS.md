@@ -68,4 +68,6 @@ User documentation lives in `docs/source` (Sphinx, MyST markdown).
 ## Skills
 
 Task-specific guidance lives in `.agents/skills/`: `writing-tests`, `committing`, `opening-a-pr`,
-`writing-docs`. `.claude/skills` is a symlink to it for Claude Code.
+`writing-docs`, `pr-review`. Use `pr-review` for a single-pass bug review with a red/yellow/green
+verdict and guidance on where humans should focus. `.claude/skills` is a symlink to it for Claude
+Code.
