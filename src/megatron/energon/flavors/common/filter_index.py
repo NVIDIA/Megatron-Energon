@@ -26,7 +26,7 @@ from megatron.energon.typed_converter import JsonParser
 FILTER_FILENAME_PREFIX = "filter_"
 FILTER_JSON_SUFFIX = ".json"
 FILTER_INDEX_SUFFIX = ".idx"
-FILTER_INDEX_VERSION = 3
+FILTER_INDEX_VERSION = 2
 FILTER_INDEX_DTYPE = np.uint64
 
 
@@ -63,14 +63,37 @@ def filter_index_paths(dataset_path: EPath, filter_name: str) -> tuple[EPath, EP
         )
 
 
-class FilterIndex:
-    """Metadata and lazy translation map for one named filter."""
+@edataclass
+class FilterTranslation:
+    """Offsets for translating one selected shard into the reader's layout."""
+
+    # Add to a filtered view index to locate its entry in the binary table.
+    sidecar_offset: int
+    # Add to the stored original index to obtain the reader's index.
+    reader_offset: int
+    # Valid range for the stored original index, with an exclusive end.
+    original_start: int
+    original_end: int
+
+
+class FilterView:
+    """A named filter mapped to a reader's selected, ordered shards.
+
+    Owns the metadata and lazy binary mapping. Translation needs only per-shard
+    offsets, without copying the per-sample index table.
+    """
 
     dataset_path: EPath
     filter_name: str
-    filtered_shard_counts: dict[str, int]
-    total_filtered: int
+    filtered_shards: list[ShardInfo]
+    copy_index_to_local: bool
 
+    _source_shards: list[FilterShardMetadata]
+    _total_filtered: int
+    _length: int
+    _same_layout: bool
+    _ends: list[int]
+    _translations: list[FilterTranslation]
     _index_path: EPath
     _index_map: EPathMappedArray | None
 
@@ -78,6 +101,7 @@ class FilterIndex:
         self,
         dataset_path: EPath,
         filter_name: str,
+        shards: Sequence[ShardInfo],
         *,
         copy_index_to_local: bool = False,
     ) -> None:
@@ -101,31 +125,61 @@ class FilterIndex:
 
         # Preserve the recorded shard order: it defines the binary index's layout.
         filter_metadata = JsonParser(strict=True).raw_to_typed(metadata, FilterMetadata)
-        self.shards = filter_metadata.shards
-
-        # Shard names must be unique so a split can identify each source shard.
-        if len({shard.name for shard in self.shards}) != len(self.shards):
+        self._source_shards = filter_metadata.shards
+        recorded = {shard.name: shard for shard in self._source_shards}
+        if len(recorded) != len(self._source_shards):
             raise ValueError("Duplicate shard names in filter metadata")
 
-        # Record each shard's start in both address spaces: original samples
-        # and retained samples. These are sample offsets, not byte offsets.
-        self._shard_offsets = {}
+        # Record each source shard's start in both address spaces: original samples
+        # and retained samples. The full retained count determines the map's size.
+        shard_offsets = {}
         original_start = filtered_start = 0
-        for shard in self.shards:
-            if not 0 <= shard.filtered_sample_count <= shard.sample_count:
-                raise ValueError(f"Invalid filter sample counts for {shard.name!r}")
-            self._shard_offsets[shard.name] = (original_start, filtered_start)
-            original_start += shard.sample_count
-            filtered_start += shard.filtered_sample_count
+        for source in self._source_shards:
+            if not 0 <= source.filtered_sample_count <= source.sample_count:
+                raise ValueError(f"Invalid filter sample counts for {source.name!r}")
+            shard_offsets[source.name] = (original_start, filtered_start)
+            original_start += source.sample_count
+            filtered_start += source.filtered_sample_count
+        self._total_filtered = filtered_start
 
-        # Expose retained counts for worker allocation and the full filter length.
-        self.filtered_shard_counts = {
-            shard.name: shard.filtered_sample_count for shard in self.shards
-        }
-        self.total_filtered = filtered_start
-
-        # Check source freshness without opening the binary translation table.
+        # Check the full recorded source, including shards outside this view,
+        # without opening the binary translation table.
         self.validate_source()
+
+        # Build offsets and worker-allocation counts in the reader's shard order.
+        # Empty filtered shards contribute no entries but still occupy reader space.
+        self.filtered_shards = []
+        self._ends = []
+        self._translations = []
+        filtered_start = reader_start = 0
+        for shard in shards:
+            source = recorded.get(shard.name)
+            if source is None:
+                raise ValueError(f"Shard {shard.name!r} is not covered by filter {filter_name!r}")
+            original_start, sidecar_start = shard_offsets[shard.name]
+            self.filtered_shards.append(
+                ShardInfo(name=shard.name, path=shard.path, count=source.filtered_sample_count)
+            )
+            if source.filtered_sample_count:
+                self._translations.append(
+                    FilterTranslation(
+                        sidecar_offset=sidecar_start - filtered_start,
+                        reader_offset=reader_start - original_start,
+                        original_start=original_start,
+                        original_end=original_start + shard.count,
+                    )
+                )
+                filtered_start += source.filtered_sample_count
+                self._ends.append(filtered_start)
+            reader_start += shard.count
+        self._length = filtered_start
+
+        # Matching layouts share both address spaces, so reads can use the
+        # original translation table directly without finding a shard first.
+        self._same_layout = len(shards) == len(self._source_shards) and all(
+            shard.name == source.name and shard.count == source.sample_count
+            for shard, source in zip(shards, self._source_shards)
+        )
 
     def validate_source(self) -> None:
         """Reject changed primary shard sizes or original counts; require a rebuild.
@@ -135,7 +189,7 @@ class FilterIndex:
         determine the current original sample count.
         """
         current = {shard.name: shard for shard in _resolve_shards(self.dataset_path)}
-        for recorded in self.shards:
+        for recorded in self._source_shards:
             actual = current.get(recorded.name)
             if actual is None or actual.count != recorded.sample_count:
                 raise ValueError(
@@ -156,14 +210,18 @@ class FilterIndex:
                 )
 
     def __len__(self) -> int:
-        return self.total_filtered
+        return self._length
 
     def __getitem__(self, filtered_index: int) -> int:
-        if not 0 <= filtered_index < self.total_filtered:
-            raise IndexError(
-                f"Filtered index {filtered_index} out of range [0, {self.total_filtered})"
-            )
-        return int(self.index_map[filtered_index])
+        if not 0 <= filtered_index < self._length:
+            raise IndexError(f"Filtered index {filtered_index} out of range [0, {self._length})")
+        if self._same_layout:
+            return int(self.index_map[filtered_index])
+        translation = self._translations[bisect_right(self._ends, filtered_index)]
+        original_index = int(self.index_map[filtered_index + translation.sidecar_offset])
+        if not translation.original_start <= original_index < translation.original_end:
+            raise ValueError("Filter entry is outside its source shard; rebuild the filter")
+        return original_index + translation.reader_offset
 
     @property
     def index_map(self) -> EPathMappedArray:
@@ -173,7 +231,7 @@ class FilterIndex:
             )
             self._index_map = self._index_path.map(
                 dtype=FILTER_INDEX_DTYPE,
-                shape=(self.total_filtered,),
+                shape=(self._total_filtered,),
                 copy_to_local=self.copy_index_to_local,
             )
         return self._index_map
@@ -183,95 +241,32 @@ class FilterIndex:
             self._index_map.close()
             self._index_map = None
 
-    def __enter__(self) -> "FilterIndex":
+    def __enter__(self) -> "FilterView":
         return self
 
     def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
         self.close()
 
-    def for_shards(self, shards: Sequence[ShardInfo]) -> "FilterIndexView":
-        """Translate filtered indexes into a reader's selected, ordered shard layout."""
-        return FilterIndexView(self, shards)
-
-    def translate_shards(self, shards: Sequence[ShardInfo]) -> list[ShardInfo]:
-        return [
-            ShardInfo(
-                name=shard.name,
-                path=shard.path,
-                count=self.filtered_shard_counts.get(shard.name, 0),
-            )
-            for shard in shards
-        ]
-
-
-class FilterIndexView:
-    """Small per-shard offset tables over a shared filter; no per-sample copy."""
-
-    def __init__(self, index: FilterIndex, shards: Sequence[ShardInfo]) -> None:
-        self.index = index
-        self._ends: list[int] = []
-        self._translations: list[tuple[int, int, int, int, int]] = []
-        recorded = {shard.name: shard for shard in index.shards}
-        filtered_start = reader_start = 0
-        for shard in shards:
-            source = recorded.get(shard.name)
-            if source is None:
-                raise ValueError(
-                    f"Shard {shard.name!r} is not covered by filter {index.filter_name!r}"
-                )
-            original_start, sidecar_start = index._shard_offsets[shard.name]
-            if source.filtered_sample_count:
-                self._translations.append(
-                    (filtered_start, sidecar_start, original_start, reader_start, shard.count)
-                )
-                filtered_start += source.filtered_sample_count
-                self._ends.append(filtered_start)
-            reader_start += shard.count
-        self._length = filtered_start
-
-        # Matching layouts share both address spaces, so reads can use the
-        # original translation table directly without finding a shard first.
-        self._same_layout = len(shards) == len(index.shards) and all(
-            shard.name == source.name and shard.count == source.sample_count
-            for shard, source in zip(shards, index.shards)
-        )
-
-    def __len__(self) -> int:
-        return self._length
-
-    def __getitem__(self, filtered_index: int) -> int:
-        if not 0 <= filtered_index < self._length:
-            raise IndexError(f"Filtered index {filtered_index} out of range [0, {self._length})")
-        if self._same_layout:
-            return self.index[filtered_index]
-        start, sidecar, original, reader, count = self._translations[
-            bisect_right(self._ends, filtered_index)
-        ]
-        local_index = self.index[sidecar + filtered_index - start] - original
-        if not 0 <= local_index < count:
-            raise ValueError("Filter entry is outside its source shard; rebuild the filter")
-        return reader + local_index
-
-    def close(self) -> None:
-        self.index.close()
-
 
 class TranslatedIndexReader(IndexedSampleReader[SampleRecord]):
     """Reader wrapper that applies a filter translation before delegation."""
 
+    inner: IndexedSampleReader[SampleRecord]
+    filter_view: FilterView
+
     def __init__(
         self,
         inner: IndexedSampleReader[SampleRecord],
-        filter_index: FilterIndex | FilterIndexView,
+        filter_view: FilterView,
     ) -> None:
         self.inner = inner
-        self.filter_index = filter_index
+        self.filter_view = filter_view
 
     def __len__(self) -> int:
-        return len(self.filter_index)
+        return len(self.filter_view)
 
     def __getitem__(self, filtered_index: int) -> SampleRecord | None:
-        original_index = self.filter_index[filtered_index]
+        original_index = self.filter_view[filtered_index]
         sample = self.inner[original_index]
         if isinstance(sample, dict) and "__restore_key__" in sample:
             sample = dict(sample)
@@ -282,7 +277,7 @@ class TranslatedIndexReader(IndexedSampleReader[SampleRecord]):
     def close(self) -> None:
         if hasattr(self.inner, "close"):
             self.inner.close()
-        self.filter_index.close()
+        self.filter_view.close()
 
 
 class FilterIndexWriter:

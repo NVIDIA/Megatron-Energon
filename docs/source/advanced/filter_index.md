@@ -76,7 +76,7 @@ next to the data file. Example JSON:
 
 ```json
 {
-  "version": 3,
+  "version": 2,
   "shards": [
     {
       "name": "parts/data-0.tar",
@@ -90,7 +90,7 @@ next to the data file. Example JSON:
 
 Loading rejects filters if recorded shards are missing or their original sample counts
 or primary-file sizes have changed. Rebuild the filter after updating the dataset.
-Version-1 and version-2 filters also require rebuilding.
+Version-1 filters also require rebuilding.
 
 These checks do not validate companion-file contents or detect content changes that
 preserve both primary-file sizes and sample counts.

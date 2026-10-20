@@ -17,6 +17,7 @@ import webdataset as wds
 import yaml
 
 from megatron.energon import (
+    FilterView,
     TextSample,
     WorkerConfig,
     build_filter_index,
@@ -27,7 +28,6 @@ from megatron.energon.dataset_config import get_dataset_from_config
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import BaseWebdatasetFactory
 from megatron.energon.flavors.common.filter_index import (
-    FilterIndex,
     FilterIndexWriter,
     filter_index_paths,
 )
@@ -123,7 +123,7 @@ class TestFilterIndex(unittest.TestCase):
         json_path, _index_path = filter_index_paths(dataset_path, "keep")
         with json_path.open("r") as f:
             metadata = json.load(f)
-        assert metadata["version"] == 3
+        assert metadata["version"] == 2
         assert [shard["name"] for shard in metadata["shards"]] == ["a", "b"]
         assert [shard["sample_count"] for shard in metadata["shards"]] == [5, 4]
         assert [shard["filtered_sample_count"] for shard in metadata["shards"]] == [2, 2]
@@ -131,9 +131,9 @@ class TestFilterIndex(unittest.TestCase):
             shard.path.size() for shard in shards
         ]
 
-        index = FilterIndex(dataset_path, "keep")
-        assert index.total_filtered == 4
-        assert index[2] == 5
+        view = FilterView(dataset_path, "keep", shards)
+        assert len(view) == 4
+        assert view[2] == 5
 
     def test_filter_index_global_writer(self) -> None:
         dataset_path, shards = self._webdataset({"a": 5, "b": 4})
@@ -147,8 +147,8 @@ class TestFilterIndex(unittest.TestCase):
             writer.append(5)
             writer.append(7)
 
-        index = FilterIndex(dataset_path, "keep")
-        assert index[3] == 7
+        view = FilterView(dataset_path, "keep", shards)
+        assert view[3] == 7
 
     def test_filter_index_global_builder(self) -> None:
         dataset_path, shards = self._webdataset({"a": 5, "b": 4})
@@ -159,10 +159,10 @@ class TestFilterIndex(unittest.TestCase):
             shards=shards,
         )
 
-        index = FilterIndex(dataset_path, "keep")
-        assert index.filtered_shard_counts == {"a": 2, "b": 2}
-        assert index[0] == 1
-        assert index[3] == 7
+        view = FilterView(dataset_path, "keep", shards)
+        assert [(shard.name, shard.count) for shard in view.filtered_shards] == [("a", 2), ("b", 2)]
+        assert view[0] == 1
+        assert view[3] == 7
 
     def test_filter_index_metadata_loads_without_index_map(self) -> None:
         dataset_path, shards = self._webdataset({"a": 5, "b": 4})
@@ -173,15 +173,15 @@ class TestFilterIndex(unittest.TestCase):
             shards=shards,
         )
         with patch.object(EPath, "map", side_effect=AssertionError("must remain lazy")):
-            index = FilterIndex(dataset_path, "keep")
-        assert len(index) == 4
-        assert index.translate_shards(shards) == [
+            view = FilterView(dataset_path, "keep", shards)
+        assert len(view) == 4
+        assert view.filtered_shards == [
             ShardInfo(name="a", path=dataset_path / "a", count=2),
             ShardInfo(name="b", path=dataset_path / "b", count=2),
         ]
-        assert index._index_map is None
-        assert index[0] == 1
-        index.close()
+        assert view._index_map is None
+        assert view[0] == 1
+        view.close()
 
     def test_webdataset_filter(self) -> None:
         dataset_path = self.dataset_path / "wds"
@@ -268,8 +268,7 @@ class TestFilterIndex(unittest.TestCase):
         # Keep no samples from the middle shard. The reader still includes its
         # original samples when determining the last shard's starting offset.
         build_filter_index(path, "keep", [1, 9])
-        with FilterIndex(path, "keep") as index:
-            view = index.for_shards(shards)
+        with FilterView(path, "keep", shards) as view:
             with patch(
                 "megatron.energon.flavors.common.filter_index.bisect_right",
                 side_effect=AssertionError("Matching layouts must not search for a shard"),
@@ -282,19 +281,20 @@ class TestFilterIndex(unittest.TestCase):
     def test_equal_counts_do_not_make_reordered_layouts_match(self):
         path, shards = self._webdataset({"z": 3, "a": 3})
         build_filter_index(path, "keep", [0, 5])
-        with FilterIndex(path, "keep") as index:
-            # Matching counts alone do not imply matching shard identities/order.
-            view = index.for_shards(list(reversed(shards)))
+        # Matching counts alone do not imply matching shard identities/order.
+        with FilterView(path, "keep", list(reversed(shards))) as view:
             assert [view[i] for i in range(len(view))] == [2, 3]
 
     def test_explicit_filter_order_and_zero_shards(self):
         path, shards = self._webdataset({"z": 3, "a": 5, "m": 2})
         # No samples from first or last source shard, and a different filter layout.
         build_filter_index(path, "keep", [6], shards=list(reversed(shards)))
-        with FilterIndex(path, "keep") as index:
-            assert [s.name for s in index.shards] == ["m", "a", "z"]
-            assert index.filtered_shard_counts == {"m": 0, "a": 1, "z": 0}
-            view = index.for_shards(shards)
+        with FilterView(path, "keep", shards) as view:
+            assert [(s.name, s.count) for s in view.filtered_shards] == [
+                ("z", 0),
+                ("a", 1),
+                ("m", 0),
+            ]
             assert len(view) == 1
             assert view[0] == 7  # a[4] in reader order z,a,m
         assert [s.text for s in _collect_factory_samples(self._factory(path))] == ["a-4"]
@@ -305,21 +305,18 @@ class TestFilterIndex(unittest.TestCase):
         factory = self._factory(path)
         assert len(factory) == 0
         assert _collect_factory_samples(factory) == []
-        with FilterIndex(path, "keep") as index:
+        with FilterView(path, "keep", shards) as view:
             with self.assertRaises(IndexError):
-                index.for_shards(shards)[0]
+                view[0]
 
-    def test_old_version(self):
+    def test_unsupported_version(self):
         path, _ = self._webdataset({"a": 3})
         build_filter_index(path, "keep", [1])
         assert [sample.text for sample in self._load_samples(path)] == ["a-1"]
         json_path, _ = filter_index_paths(path, "keep")
         for metadata in (
             {"version": 1, "filtered_shard_counts": {"a": 1}},
-            {
-                "version": 2,
-                "shards": [{"name": "a", "sample_count": 3, "filtered_sample_count": 1}],
-            },
+            {"version": 3, "shards": []},
         ):
             with self.subTest(version=metadata["version"]):
                 with json_path.open("w") as f:

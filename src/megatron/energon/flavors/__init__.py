@@ -14,8 +14,8 @@ from megatron.energon.flavors.base_manifest_dataset import (
 )
 from megatron.energon.flavors.captioning import CaptioningSample, CaptioningWebdataset
 from megatron.energon.flavors.common.filter_index import (
-    FilterIndex,
     FilterIndexWriter,
+    FilterView,
     build_filter_index,
     build_filter_index_from_global_indexes,
     build_filter_index_from_shard_indexes,
@@ -69,7 +69,7 @@ __all__ = [
     "DefaultDecoderWebdatasetFactory",
     "DefaultGenericWebdatasetFactory",
     "EmptyDatasetError",
-    "FilterIndex",
+    "FilterView",
     "FilterIndexWriter",
     "ImageClassificationSample",
     "ImageClassificationWebdataset",

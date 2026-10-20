@@ -96,7 +96,7 @@ Use this checklist:
    cached index is stale and must be rebuilt.
 3. **Reader:** implement integer ordinal access, length, resource cleanup, and `SampleRecord` provenance.
 4. **Factory:** subclass the appropriate indexed base and implement only the format-specific hooks.
-5. **Filtering:** verify `part_filter`, exclusions, and prepared `FilterIndex` translation.
+5. **Filtering:** verify `part_filter`, exclusions, and prepared `FilterView` translation.
 6. **Key access:** implement `FileStore` or part readers if mounts or auxiliary lookup require it.
 7. **Detection:** register a provider at the least surprising priority and test competing path shapes.
 8. **Configuration:** ensure `config()` contains stable leaf identity fields used by diagnostics.
