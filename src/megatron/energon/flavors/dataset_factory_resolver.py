@@ -17,6 +17,9 @@ class DatasetFactoryProvider(Protocol):
     def detect_path(cls, path: EPath) -> EnergonDatasetType | None: ...
 
     @classmethod
+    def get_original_shards(cls, path: EPath) -> list[ShardInfo]: ...
+
+    @classmethod
     def from_path(cls, path: EPath, **kwargs: Any) -> BaseCoreDatasetFactory: ...
 
 
@@ -62,22 +65,18 @@ class DatasetFactoryResolver:
                 return dataset_type, provider
         return None, None
 
-    def inspect_source(self, path: EPath) -> list[ShardInfo]:
+    def get_original_shards(self, path: EPath) -> list[ShardInfo]:
         """Return original shards in source order, before splits, subsets, or filters.
 
-        Providers supporting filter indexes implement ``inspect_source(path)``
+        Providers implement ``get_original_shards(path)``
         without constructing a runtime factory. Each ShardInfo describes a primary
         file and its original sample count; companion files are outside this contract.
         """
         path = EPath(path)
         _, provider = self.get_type(path)
-        inspect = getattr(provider, "inspect_source", None)
-        if inspect is None:
-            raise ValueError(
-                f"Dataset provider for {path} does not support source inspection; "
-                "implement inspect_source(path) to support filter indexes."
-            )
-        shards = list(inspect(path))
+        if provider is None:
+            raise ValueError(f"No dataset provider found for {path}.")
+        shards = list(provider.get_original_shards(path))
         if len({shard.name for shard in shards}) != len(shards):
             raise ValueError(f"Duplicate source shard names for {path}")
         if any(shard.count < 0 for shard in shards):

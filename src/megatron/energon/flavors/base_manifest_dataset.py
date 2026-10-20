@@ -41,7 +41,7 @@ class BaseManifestDatasetFactory(
         return None
 
     @classmethod
-    def inspect_source(cls, path: EPath) -> list[ShardInfo]:
+    def get_original_shards(cls, path: EPath) -> list[ShardInfo]:
         """Describe primary shards using only the info manifest, in its recorded order."""
         info = JsonParser(strict=True).raw_to_typed(get_dataset_info(path), ManifestDatasetInfo)
         return [

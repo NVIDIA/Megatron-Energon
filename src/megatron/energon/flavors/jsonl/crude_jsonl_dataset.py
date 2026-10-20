@@ -35,6 +35,11 @@ class CrudeJsonlDatasetFactory(
     training: bool
     worker_config: WorkerConfig
 
+    @classmethod
+    def get_original_shards(cls, path: EPath) -> list[ShardInfo]:
+        """Represent the data file as one shard; derive its count from the offset index."""
+        return [ShardInfo(name=path.name, path=path, count=IJsonlIndexReader.count_samples(path))]
+
     def __init__(
         self,
         path: EPath,
@@ -112,11 +117,6 @@ class CrudeJsonlDatasetFactory(
 @register_dataset_factory_provider(priority=PRIORITY_SINGLE_FILE)
 class DefaultCrudeJsonlDatasetFactory(CrudeJsonlDatasetFactory):
     """Adds tags to the sample and loads the JSON payload."""
-
-    @classmethod
-    def inspect_source(cls, path: EPath) -> list[ShardInfo]:
-        """Represent the data file as one shard; derive its count from the offset index."""
-        return [ShardInfo(name=path.name, path=path, count=IJsonlIndexReader.count_samples(path))]
 
     @classmethod
     def detect_path(cls, path: EPath) -> EnergonDatasetType | None:

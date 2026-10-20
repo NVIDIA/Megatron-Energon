@@ -581,7 +581,7 @@ def _resolve_shards(dataset_path: EPath) -> list[ShardInfo]:
     # Import lazily because factories also import the filter implementation.
     from megatron.energon.flavors.dataset_factory_resolver import get_dataset_factory_resolver
 
-    return get_dataset_factory_resolver().inspect_source(dataset_path)
+    return get_dataset_factory_resolver().get_original_shards(dataset_path)
 
 
 def _validate_index_array(

@@ -87,6 +87,11 @@ another format.
 Importing a flavor module must register its provider before detection is used. If a new format is public,
 also expose its factory through the intended API module.
 
+Factories must implement the `BaseCoreDatasetFactory.get_original_shards(path)` class method.
+Providers expose the same method to the resolver. It returns `ShardInfo` entries in source order,
+with names, primary file paths, and original sample counts before splits, subsets, or filters.
+It must work quickly without walking the dataset. Manifest factories inherit this from `BaseManifestDatasetFactory`; direct-file formats supply their own implementation.
+
 ## Adding a dataset flavor
 
 Use this checklist:
