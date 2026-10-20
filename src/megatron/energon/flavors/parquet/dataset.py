@@ -184,11 +184,8 @@ class ParquetDatasetFactory(
         parallel_shard_iters: int,
         part_filter: Callable[[str], bool] | None,
     ):
-        columns = (
-            [column for column in self._read_columns if part_filter(column)]
-            if part_filter is not None
-            else self._read_columns
-        )
+        # The build part filter (e.g. of a cooker) may exclude all columns
+        columns = _select_columns(self._read_columns, part_filter)
         return IParquetReader(
             self._reader_base_path,
             self._layout,
@@ -295,11 +292,8 @@ class ParquetShardListDatasetFactory(BaseManifestShardListDatasetFactory[CrudeSa
         parallel_shard_iters: int,
         part_filter: Callable[[str], bool] | None,
     ):
-        columns = (
-            [column for column in self._read_columns if part_filter(column)]
-            if part_filter is not None
-            else self._read_columns
-        )
+        # The build part filter (e.g. of a cooker) may exclude all columns
+        columns = _select_columns(self._read_columns, part_filter)
         return IParquetReader(
             self.path,
             self._layout,

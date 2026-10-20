@@ -113,6 +113,15 @@ class _DecodedRows:
             patch.stop()
 
 
+class ParquetCookerNoColumnsEncoder(DefaultTaskEncoder):
+    cookers = [
+        Cooker(
+            cook=cook_parquet_keep_only,
+            part_filter=lambda col: col == "jpg",
+        )
+    ]
+
+
 class TestParquetLayoutParse(unittest.TestCase):
     def test_parse_parquet_layout_mapping(self):
         layout = parse_parquet_layout(
@@ -287,6 +296,21 @@ class TestParquetCookerPartFilter(unittest.TestCase):
         loader = get_loader(val_ds)
         seen = [int(batch.keep_val[0]) for batch in loader]
         assert sorted(seen) == [10, 20]
+
+    def test_cooker_part_filter_excluding_all_columns_raises(self):
+        t = pa.table({"keep": [10, 20], "drop": [999, 888]})
+        parquet_path = self.root / "data.parquet"
+        pq.write_table(t, parquet_path)
+        wc = WorkerConfig(rank=0, world_size=1, num_workers=0, seed_offset=0)
+        with self.assertRaisesRegex(ValueError, "excluded all Parquet columns"):
+            val_ds = get_val_dataset(
+                EPath(parquet_path),
+                split_part="train",
+                worker_config=wc,
+                batch_size=1,
+                task_encoder=ParquetCookerNoColumnsEncoder(),
+            )
+            list(get_loader(val_ds))
 
 
 class TestParquetRowGroupShuffle(unittest.TestCase):
