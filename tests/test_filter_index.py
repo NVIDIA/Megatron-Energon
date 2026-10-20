@@ -8,56 +8,32 @@ import json
 import tempfile
 import unittest
 import warnings
-from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
-from unittest.mock import patch
 
 import webdataset as wds
 import yaml
 
 from megatron.energon import (
-    FilterView,
-    TextSample,
+    FilterIndexWriter,
     WorkerConfig,
     build_filter_index,
     build_filter_index_from_shard_indexes,
     get_savable_loader,
+    get_train_dataset,
+    get_val_dataset,
 )
 from megatron.energon.dataset_config import get_dataset_from_config
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import BaseWebdatasetFactory
-from megatron.energon.flavors.common.filter_index import (
-    FilterIndexWriter,
-    filter_index_paths,
-)
-from megatron.energon.flavors.common.manifest.io import ShardListMeta
+from megatron.energon.flavors.common.filter_index import filter_index_paths
 from megatron.energon.flavors.common.manifest.paths import MAIN_FOLDER_NAME
 from megatron.energon.flavors.common.manifest.types import ShardInfo
-from megatron.energon.flavors.dataset_factory_resolver import DatasetFactoryResolver
+from megatron.energon.flavors.dataset_factory_resolver import register_dataset_factory_provider
 from megatron.energon.flavors.dataset_type import EnergonDatasetType
 from megatron.energon.flavors.jsonl.crude_jsonl_dataset import (
     CrudeJsonlDatasetFactory,
     DefaultCrudeJsonlDatasetFactory,
 )
-
-
-@contextmanager
-def _active_worker(worker_config: WorkerConfig) -> Iterator[None]:
-    worker_config.worker_activate(0)
-    try:
-        yield
-    finally:
-        worker_config.worker_deactivate()
-
-
-def _collect_factory_samples(factory):
-    with _active_worker(factory.worker_config):
-        dataset = factory.build()
-        try:
-            return list(dataset)
-        finally:
-            dataset.close()
 
 
 class TestFilterIndex(unittest.TestCase):
@@ -96,8 +72,8 @@ class TestFilterIndex(unittest.TestCase):
         path = EPath(dataset_path)
         return path, [ShardInfo(name=name, path=path / name, count=n) for name, n in counts.items()]
 
-    def _factory(self, path, split="train"):
-        return get_dataset_from_config(
+    def _load_samples(self, path, split="train"):
+        factory = get_dataset_from_config(
             path,
             split_part=split,
             training=False,
@@ -105,218 +81,162 @@ class TestFilterIndex(unittest.TestCase):
             filter_name="keep",
         )
 
-    def _load_samples(self, path, split="train"):
-        loader = get_savable_loader(self._factory(path, split).build())
-        try:
-            return list(loader)
-        finally:
-            loader.close()
+        with get_savable_loader(factory.build()) as loader:
+            samples = list(loader)
+            assert len(samples) == len(factory) == len(loader)
+            return samples
 
-    def test_filter_index_round_trip(self) -> None:
-        dataset_path, shards = self._webdataset({"a": 5, "b": 4})
-        build_filter_index(
-            dataset_path,
-            "keep",
-            (1, 3, 5, 7),
-            shards=shards,
-        )
-        json_path, _index_path = filter_index_paths(dataset_path, "keep")
-        with json_path.open("r") as f:
-            metadata = json.load(f)
-        assert metadata["version"] == 2
-        assert [shard["name"] for shard in metadata["shards"]] == ["a", "b"]
-        assert [shard["sample_count"] for shard in metadata["shards"]] == [5, 4]
-        assert [shard["filtered_sample_count"] for shard in metadata["shards"]] == [2, 2]
-        assert [shard["byte_size"] for shard in metadata["shards"]] == [
-            shard.path.size() for shard in shards
-        ]
+    def test_filter_builders_load_the_same_samples(self):
+        path, _ = self._webdataset({"a": 5, "b": 4})
+        expected = ["a-1", "a-3", "b-0", "b-2"]
+        for builder in ("global", "shard", "writer"):
+            with self.subTest(builder=builder):
+                if builder == "global":
+                    build_filter_index(path, "keep", [1, 3, 5, 7], overwrite=True)
+                elif builder == "shard":
+                    build_filter_index_from_shard_indexes(
+                        path, "keep", {"a": [1, 3], "b": [0, 2]}, overwrite=True
+                    )
+                else:
+                    with FilterIndexWriter(path, "keep", overwrite=True) as writer:
+                        for index in (1, 3, 5, 7):
+                            writer.append(index)
+                samples = self._load_samples(path)
+                assert [sample.__key__ for sample in samples] == expected
+                assert [sample.text for sample in samples] == expected
 
-        view = FilterView(dataset_path, "keep", shards)
-        assert len(view) == 4
-        assert view[2] == 5
-
-    def test_filter_index_global_writer(self) -> None:
-        dataset_path, shards = self._webdataset({"a": 5, "b": 4})
-        with FilterIndexWriter(
-            dataset_path,
-            "keep",
-            shards,
-        ) as writer:
-            writer.append(1)
-            writer.append(3)
-            writer.append(5)
-            writer.append(7)
-
-        view = FilterView(dataset_path, "keep", shards)
-        assert view[3] == 7
-
-    def test_filter_index_global_builder(self) -> None:
-        dataset_path, shards = self._webdataset({"a": 5, "b": 4})
-        build_filter_index(
-            dataset_path,
-            "keep",
-            (1, 3, 5, 7),
-            shards=shards,
-        )
-
-        view = FilterView(dataset_path, "keep", shards)
-        assert [(shard.name, shard.count) for shard in view.filtered_shards] == [("a", 2), ("b", 2)]
-        assert view[0] == 1
-        assert view[3] == 7
-
-    def test_filter_index_metadata_loads_without_index_map(self) -> None:
-        dataset_path, shards = self._webdataset({"a": 5, "b": 4})
-        build_filter_index(
-            dataset_path,
-            "keep",
-            (1, 3, 5, 7),
-            shards=shards,
-        )
-        with patch.object(EPath, "map", side_effect=AssertionError("must remain lazy")):
-            view = FilterView(dataset_path, "keep", shards)
-        assert len(view) == 4
-        assert view.filtered_shards == [
-            ShardInfo(name="a", path=dataset_path / "a", count=2),
-            ShardInfo(name="b", path=dataset_path / "b", count=2),
-        ]
-        assert view._index_map is None
-        assert view[0] == 1
-        view.close()
-
-    def test_webdataset_filter(self) -> None:
-        dataset_path = self.dataset_path / "wds"
-        (dataset_path / "parts").mkdir(parents=True)
-        with wds.ShardWriter(str(dataset_path / "parts/data-%d.tar"), maxcount=10) as writer:
-            for idx in range(6):
-                writer.write({"__key__": f"{idx:06d}", "txt": f"text-{idx}".encode()})
-            total_shards = writer.shard
-
-        BaseWebdatasetFactory.prepare_dataset(
-            dataset_path,
-            [f"parts/data-{{0..{total_shards - 1}}}.tar"],
-            split_parts_ratio=[("train", 1.0)],
-        )
-        with open(dataset_path / MAIN_FOLDER_NAME / "dataset.yaml", "w") as f:
-            f.write(
-                "\n".join(
-                    [
-                        "sample_type:",
-                        "  __module__: megatron.energon",
-                        "  __class__: TextSample",
-                        "field_map:",
-                        "  text: txt",
-                    ]
-                )
-            )
-
-        meta = ShardListMeta.from_config(EPath(dataset_path), split_part="train")
-        kept_by_shard = {
-            meta.shards[0].name: (1, 3, 5),
+    def test_filtered_splits(self):
+        path, _ = self._webdataset({"z": 3, "a": 5, "m": 3})
+        # The first and last shards have equal sizes: their identity and order matter.
+        splits = {
+            "train": ["z", "a", "m"],
+            "reordered": ["m", "a", "z"],
+            "val": ["a"],
+            "test": ["m", "z"],
         }
-        build_filter_index_from_shard_indexes(
-            EPath(dataset_path),
-            "keep",
-            kept_by_shard,
-        )
-        worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0)
-        factory = get_dataset_from_config(
-            EPath(dataset_path),
-            split_part="train",
-            training=False,
-            worker_config=worker_config,
-            sample_type=TextSample,
-            filter_name="keep",
-        )
+        with (path / MAIN_FOLDER_NAME / "split.yaml").open("w") as f:
+            yaml.safe_dump({"split_parts": splits}, f)
 
-        samples = _collect_factory_samples(factory)
-        assert len(factory) == 3
-        assert [sample.__key__ for sample in samples] == ["000001", "000003", "000005"]
-        assert [sample.__restore_key__[1] for sample in samples] == [0, 1, 2]
+        # Also cover zero retained samples in individual shards and in the entire filter.
+        for kept in ({"z": [1], "a": [0, 4], "m": [2]}, {"a": [4]}, {}):
+            build_filter_index_from_shard_indexes(path, "keep", kept, overwrite=True)
+            for split, names in splits.items():
+                with self.subTest(kept=kept, split=split):
+                    expected = [f"{name}-{i}" for name in names for i in kept.get(name, [])]
+                    dataset = get_val_dataset(
+                        path,
+                        split_part=split,
+                        worker_config=WorkerConfig(rank=0, world_size=1, num_workers=0),
+                        batch_size=None,
+                        filter_name="keep",
+                    )
+                    with get_savable_loader(dataset) as loader:
+                        assert len(loader) == len(expected)
+                        samples = list(loader)
+                        assert [sample.__key__ for sample in samples] == expected
+                        assert [sample.text for sample in samples] == expected
+                        for sample in samples:
+                            restored = loader.restore_sample(sample.__restore_key__)
+                            assert (restored.__key__, restored.text) == (
+                                sample.__key__,
+                                sample.text,
+                            )
 
-    def test_reordered_splits_and_restore(self):
+    def test_filter_source_order_and_subset(self):
         path, shards = self._webdataset({"z": 3, "a": 5, "m": 2})
-        # Raw order deliberately differs from alphabetical order and both splits.
-        build_filter_index(path, "keep", [1, 3, 7, 9])
-        (self.dataset_path / "dataset" / MAIN_FOLDER_NAME / "split.yaml").write_text(
+        with (path / MAIN_FOLDER_NAME / "split.yaml").open("w") as f:
+            yaml.safe_dump({"split_parts": {"train": ["a"], "val": ["z", "a", "m"]}}, f)
+        for source in (list(reversed(shards)), shards[1:2]):
+            with self.subTest(source=[shard.name for shard in source]):
+                build_filter_index_from_shard_indexes(
+                    path, "keep", {"a": [4]}, shards=source, overwrite=True
+                )
+                assert [sample.text for sample in self._load_samples(path)] == ["a-4"]
+                if len(source) == 1:
+                    # A train-only filter cannot be used for uncovered validation shards.
+                    with self.assertRaisesRegex(ValueError, "not covered by filter"):
+                        self._load_samples(path, "val")
+                else:
+                    assert [sample.text for sample in self._load_samples(path, "val")] == ["a-4"]
+
+    def test_filter_distribution_across_ranks_and_workers(self):
+        path, _ = self._webdataset({"z": 8, "a": 5, "m": 8})
+        kept = {"z": [1, 3, 5, 7], "m": [0, 2, 4, 6]}
+        build_filter_index_from_shard_indexes(path, "keep", kept)
+        expected = [f"{name}-{i}" for name, indexes in kept.items() for i in indexes]
+        for order in (["z", "a", "m"], ["m", "a", "z"]):
+            with (path / MAIN_FOLDER_NAME / "split.yaml").open("w") as f:
+                yaml.safe_dump({"split_parts": {"train": order}}, f)
+            with self.subTest(order=order):
+                rank_keys = []
+                for rank in range(2):
+                    dataset = get_val_dataset(
+                        path,
+                        split_part="train",
+                        worker_config=WorkerConfig(rank=rank, world_size=2, num_workers=2),
+                        batch_size=2,
+                        filter_name="keep",
+                    )
+                    with get_savable_loader(dataset) as loader:
+                        batches = list(loader)
+                        assert len(batches) == len(loader)
+                        keys = [key for batch in batches for key in batch.__key__]
+                        assert [text for batch in batches for text in batch.text] == keys
+                        assert len(keys) == len(set(keys)) == 4
+                        rank_keys.append(keys)
+                assert set(rank_keys[0]).isdisjoint(rank_keys[1])
+                self.assertCountEqual(rank_keys[0] + rank_keys[1], expected)
+
+    def test_filtered_training_recipe_checkpoint(self):
+        path, _ = self._webdataset({"z": 8, "a": 5, "m": 8})
+        kept = {"z": [1, 3, 5, 7], "m": [0, 2, 4, 6]}
+        build_filter_index_from_shard_indexes(path, "keep", kept)
+        expected = [f"{name}-{i}" for name, indexes in kept.items() for i in indexes]
+        recipe_path = self.dataset_path / "recipe.yaml"
+        recipe_path.write_text(
             yaml.safe_dump(
-                {"split_parts": {"train": ["m", "z", "a"], "val": ["a"], "test": ["m", "z"]}}
+                {
+                    "__module__": "megatron.energon",
+                    "__class__": "Recipe",
+                    "splits": {"train": {"path": str(path), "filter": "keep"}},
+                }
             )
         )
-        for split, expected in (
-            ("train", ["m-1", "z-1", "a-0", "a-4"]),
-            ("val", ["a-0", "a-4"]),
-            ("test", ["m-1", "z-1"]),
-        ):
-            with self.subTest(split=split):
-                factory = self._factory(path, split)
-                assert len(factory) == len(expected)
-                with _active_worker(factory.worker_config):
-                    dataset = factory.build()
-                    try:
-                        samples = list(dataset)
-                        assert [s.text for s in samples] == expected
-                        assert [s.__restore_key__[1] for s in samples] == list(range(len(expected)))
-                        for sample in samples:
-                            assert (
-                                dataset.restore_sample(sample.__restore_key__).text == sample.text
+
+        for order in (["z", "a", "m"], ["m", "a", "z"]):
+            with (path / MAIN_FOLDER_NAME / "split.yaml").open("w") as f:
+                yaml.safe_dump({"split_parts": {"train": order}}, f)
+            for num_workers in (0, 2):
+                with self.subTest(order=order, num_workers=num_workers):
+
+                    def new_loader():
+                        return get_savable_loader(
+                            get_train_dataset(
+                                recipe_path,
+                                worker_config=WorkerConfig(
+                                    rank=0, world_size=1, num_workers=num_workers, seed_offset=42
+                                ),
+                                batch_size=2,
+                                shuffle_buffer_size=3,
+                                max_samples_per_sequence=2,
+                                repeat=False,
                             )
-                    finally:
-                        dataset.close()
+                        )
 
-    def test_matching_layout_skips_translation_tables_and_shard_search(self):
-        path, shards = self._webdataset({"z": 3, "a": 5, "m": 2})
-        # Keep no samples from the middle shard. The reader still includes its
-        # original samples when determining the last shard's starting offset.
-        build_filter_index(path, "keep", [1, 9])
-        with (
-            patch(
-                "megatron.energon.flavors.common.filter_index.FilterTranslation",
-                side_effect=AssertionError("Matching layouts must not build translations"),
-            ),
-            patch(
-                "megatron.energon.flavors.common.filter_index.bisect_right",
-                side_effect=AssertionError("Matching layouts must not search for a shard"),
-            ),
-        ):
-            with FilterView(path, "keep", shards) as view:
-                assert view._ends == []
-                assert view._translations == []
-                assert [view[i] for i in range(len(view))] == [1, 9]
-                for invalid in (-1, len(view)):
-                    with self.assertRaises(IndexError):
-                        view[invalid]
-            assert [sample.text for sample in self._load_samples(path)] == ["z-1", "m-1"]
-
-    def test_equal_counts_do_not_make_reordered_layouts_match(self):
-        path, shards = self._webdataset({"z": 3, "a": 3})
-        build_filter_index(path, "keep", [0, 5])
-        # Matching counts alone do not imply matching shard identities/order.
-        with FilterView(path, "keep", list(reversed(shards))) as view:
-            assert [view[i] for i in range(len(view))] == [2, 3]
-
-    def test_explicit_filter_order_and_zero_shards(self):
-        path, shards = self._webdataset({"z": 3, "a": 5, "m": 2})
-        # No samples from first or last source shard, and a different filter layout.
-        build_filter_index(path, "keep", [6], shards=list(reversed(shards)))
-        with FilterView(path, "keep", shards) as view:
-            assert [(s.name, s.count) for s in view.filtered_shards] == [
-                ("z", 0),
-                ("a", 1),
-                ("m", 0),
-            ]
-            assert len(view) == 1
-            assert view[0] == 7  # a[4] in reader order z,a,m
-        assert [s.text for s in _collect_factory_samples(self._factory(path))] == ["a-4"]
-
-    def test_empty_filter(self):
-        path, shards = self._webdataset({"a": 3, "b": 2})
-        build_filter_index(path, "keep", [])
-        factory = self._factory(path)
-        assert len(factory) == 0
-        assert _collect_factory_samples(factory) == []
-        with FilterView(path, "keep", shards) as view:
-            with self.assertRaises(IndexError):
-                view[0]
+                    with new_loader() as loader:
+                        batches = iter(loader)
+                        first = next(batches)
+                        state = loader.save_state_rank()
+                        remaining = [(batch.__key__, batch.text) for batch in batches]
+                        all_batches = [(first.__key__, first.text), *remaining]
+                        self.assertCountEqual(
+                            [key for keys, _ in all_batches for key in keys], expected
+                        )
+                        assert all(keys == text for keys, text in all_batches)
+                        assert remaining
+                    with new_loader() as restored:
+                        restored.restore_state_rank(state)
+                        assert [(batch.__key__, batch.text) for batch in restored] == remaining
 
     def test_unsupported_version(self):
         path, _ = self._webdataset({"a": 3})
@@ -334,49 +254,6 @@ class TestFilterIndex(unittest.TestCase):
                     self._load_samples(path)
         build_filter_index(path, "keep", [1], overwrite=True)
         assert [sample.text for sample in self._load_samples(path)] == ["a-1"]
-
-    def test_split_shard_missing_from_filter(self):
-        path, shards = self._webdataset({"a": 3, "b": 2})
-        build_filter_index(path, "keep", [1], shards=shards[:1])
-        with self.assertRaisesRegex(ValueError, "not covered by filter"):
-            self._factory(path)
-
-    def test_reordered_split_checkpoint(self):
-        path, _ = self._webdataset({"z": 3, "a": 5, "m": 2})
-        build_filter_index(path, "keep", [1, 3, 7, 9])
-        (self.dataset_path / "dataset" / MAIN_FOLDER_NAME / "split.yaml").write_text(
-            yaml.safe_dump({"split_parts": {"train": ["m", "z", "a"]}})
-        )
-        loader = get_savable_loader(self._factory(path).build())
-        try:
-            iterator = iter(loader)
-            assert next(iterator).text == "m-1"
-            state = loader.save_state_rank()
-            remaining = [s.text for s in iterator]
-            assert remaining == ["z-1", "a-0", "a-4"]
-        finally:
-            loader.close()
-        restored = get_savable_loader(self._factory(path).build())
-        try:
-            restored.restore_state_rank(state)
-            assert [s.text for s in restored] == remaining
-        finally:
-            restored.close()
-
-    def test_jsonl_provider(self):
-        path = EPath(self.dataset_path / "data.jsonl")
-        with path.open("w") as f:
-            for i in range(5):
-                f.write(json.dumps({"value": i}) + "\n")
-        CrudeJsonlDatasetFactory.prepare_dataset(path)
-        build_filter_index(path, "keep", [1, 4])
-        factory = self._factory(path)
-        assert len(factory) == 2
-        with patch(
-            "megatron.energon.flavors.common.filter_index.bisect_right",
-            side_effect=AssertionError("A matching single-file layout must not search"),
-        ):
-            assert [s["json"]["value"] for s in _collect_factory_samples(factory)] == [1, 4]
 
     def test_filter_creation_before_dataset_configuration(self):
         for suffix in ("json", "yaml"):
@@ -486,28 +363,24 @@ class TestFilterIndex(unittest.TestCase):
     def test_custom_direct_file_provider_loads_filtered_samples(self):
         # Register another extension using the JSONL reader to exercise the full
         # provider -> source description -> factory -> loader flow.
+        @register_dataset_factory_provider
         class RecordsProvider(DefaultCrudeJsonlDatasetFactory):
             @classmethod
             def detect_path(cls, path):
-                if path.name.endswith(".records") and path.is_file():
+                if path.name.endswith(".filter-test-records") and path.is_file():
                     return EnergonDatasetType.JSONL
                 return None
 
-        file = self.dataset_path / "source.records"
+        file = self.dataset_path / "source.filter-test-records"
         file.write_text('{"value": 0}\n{"value": 1}\n')
         path = EPath(file)
         CrudeJsonlDatasetFactory.prepare_dataset(path)
-        resolver = DatasetFactoryResolver()
-        resolver.register(RecordsProvider)
-        with patch(
-            "megatron.energon.flavors.dataset_factory_resolver._DATASET_FACTORY_RESOLVER", resolver
-        ):
-            build_filter_index(path, "keep", [1])
-            assert [s["json"]["value"] for s in self._load_samples(path)] == [1]
-            with file.open("a") as f:
-                f.write('{"value": 2}\n')
-            CrudeJsonlDatasetFactory.prepare_dataset(path)
-            with self.assertRaisesRegex(ValueError, "Stale filter.*sample count"):
-                self._load_samples(path)
-            build_filter_index(path, "keep", [0, 2], overwrite=True)
-            assert [s["json"]["value"] for s in self._load_samples(path)] == [0, 2]
+        build_filter_index(path, "keep", [1])
+        assert [s["json"]["value"] for s in self._load_samples(path)] == [1]
+        with file.open("a") as f:
+            f.write('{"value": 2}\n')
+        CrudeJsonlDatasetFactory.prepare_dataset(path)
+        with self.assertRaisesRegex(ValueError, "Stale filter.*sample count"):
+            self._load_samples(path)
+        build_filter_index(path, "keep", [0, 2], overwrite=True)
+        assert [s["json"]["value"] for s in self._load_samples(path)] == [0, 2]
