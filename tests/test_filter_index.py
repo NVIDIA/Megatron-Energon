@@ -263,20 +263,29 @@ class TestFilterIndex(unittest.TestCase):
                     finally:
                         dataset.close()
 
-    def test_matching_layout_skips_shard_search(self):
+    def test_matching_layout_skips_translation_tables_and_shard_search(self):
         path, shards = self._webdataset({"z": 3, "a": 5, "m": 2})
         # Keep no samples from the middle shard. The reader still includes its
         # original samples when determining the last shard's starting offset.
         build_filter_index(path, "keep", [1, 9])
-        with FilterView(path, "keep", shards) as view:
-            with patch(
+        with (
+            patch(
+                "megatron.energon.flavors.common.filter_index.FilterTranslation",
+                side_effect=AssertionError("Matching layouts must not build translations"),
+            ),
+            patch(
                 "megatron.energon.flavors.common.filter_index.bisect_right",
                 side_effect=AssertionError("Matching layouts must not search for a shard"),
-            ):
+            ),
+        ):
+            with FilterView(path, "keep", shards) as view:
+                assert view._ends == []
+                assert view._translations == []
                 assert [view[i] for i in range(len(view))] == [1, 9]
                 for invalid in (-1, len(view)):
                     with self.assertRaises(IndexError):
                         view[invalid]
+            assert [sample.text for sample in self._load_samples(path)] == ["z-1", "m-1"]
 
     def test_equal_counts_do_not_make_reordered_layouts_match(self):
         path, shards = self._webdataset({"z": 3, "a": 3})

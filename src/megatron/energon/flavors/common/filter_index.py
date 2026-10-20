@@ -130,27 +130,45 @@ class FilterView:
         if len(recorded) != len(self._source_shards):
             raise ValueError("Duplicate shard names in filter metadata")
 
-        # Record each source shard's start in both address spaces: original samples
-        # and retained samples. The full retained count determines the map's size.
-        shard_offsets = {}
-        original_start = filtered_start = 0
+        # Validate sample counts and determine the full binary map's size.
+        self._total_filtered = 0
         for source in self._source_shards:
             if not 0 <= source.filtered_sample_count <= source.sample_count:
                 raise ValueError(f"Invalid filter sample counts for {source.name!r}")
-            shard_offsets[source.name] = (original_start, filtered_start)
-            original_start += source.sample_count
-            filtered_start += source.filtered_sample_count
-        self._total_filtered = filtered_start
+            self._total_filtered += source.filtered_sample_count
 
         # Check the full recorded source, including shards outside this view,
         # without opening the binary translation table.
         self.validate_source()
 
+        # Matching layouts use the binary table directly. Only worker-allocation
+        # counts are needed; skip building source offsets and translation tables.
+        self._ends = []
+        self._translations = []
+        self._same_layout = len(shards) == len(self._source_shards) and all(
+            shard.name == source.name and shard.count == source.sample_count
+            for shard, source in zip(shards, self._source_shards)
+        )
+        if self._same_layout:
+            self.filtered_shards = [
+                ShardInfo(name=shard.name, path=shard.path, count=source.filtered_sample_count)
+                for shard, source in zip(shards, self._source_shards)
+            ]
+            self._length = self._total_filtered
+            return
+
+        # Other layouts need each source shard's start in both address spaces:
+        # original samples and retained samples.
+        shard_offsets = {}
+        original_start = filtered_start = 0
+        for source in self._source_shards:
+            shard_offsets[source.name] = (original_start, filtered_start)
+            original_start += source.sample_count
+            filtered_start += source.filtered_sample_count
+
         # Build offsets and worker-allocation counts in the reader's shard order.
         # Empty filtered shards contribute no entries but still occupy reader space.
         self.filtered_shards = []
-        self._ends = []
-        self._translations = []
         filtered_start = reader_start = 0
         for shard in shards:
             source = recorded.get(shard.name)
@@ -173,13 +191,6 @@ class FilterView:
                 self._ends.append(filtered_start)
             reader_start += shard.count
         self._length = filtered_start
-
-        # Matching layouts share both address spaces, so reads can use the
-        # original translation table directly without finding a shard first.
-        self._same_layout = len(shards) == len(self._source_shards) and all(
-            shard.name == source.name and shard.count == source.sample_count
-            for shard, source in zip(shards, self._source_shards)
-        )
 
     def validate_source(self) -> None:
         """Reject changed primary shard sizes or original counts; require a rebuild.
