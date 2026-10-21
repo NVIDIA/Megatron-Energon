@@ -1,7 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from collections.abc import Iterable
+from collections.abc import Generator, Iterable
 from typing import Any, Protocol, TypeVar, runtime_checkable
 
 from megatron.energon.flavors.common.sample_record import SampleRecord
@@ -22,6 +22,17 @@ class IndexedSampleReader(Protocol[T_sample_record]):
         raise NotImplementedError
 
     def close(self) -> None:
+        raise NotImplementedError
+
+
+@runtime_checkable
+class SequentialSampleReader(Protocol[T_sample_record]):
+    """Reader that can stream a consecutive range of samples cheaper than random access, e.g.
+    because random access needs to decode a whole block of samples."""
+
+    def iter_slice(self, start: int, stop: int) -> Generator[T_sample_record | None, None, None]:
+        """Yields the samples ``start`` to ``stop - 1`` in order, one entry per index (``None`` for
+        skipped samples). Closing the generator releases its resources."""
         raise NotImplementedError
 
 

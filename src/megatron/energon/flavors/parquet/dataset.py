@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import logging
-from typing import Any, Callable, Dict, List, Union
+import warnings
+from typing import Any, Callable, Dict, List, Literal, Sequence, Union
 
 from megatron.energon.cache import FileStore
 from megatron.energon.decoders import DEFAULT_DECODER, SampleDecoder
@@ -19,6 +20,7 @@ from megatron.energon.flavors.dataset_factory_resolver import (
 )
 from megatron.energon.flavors.dataset_type import EnergonDatasetType
 from megatron.energon.flavors.parquet.prepare import (
+    ParquetLayout,
     assert_layout_columns_subset,
     scan_parquet_file,
     scan_parquet_shards,
@@ -28,9 +30,30 @@ from megatron.energon.worker import WorkerConfig
 
 logger = logging.getLogger(__name__)
 
+#: How Parquet rows are ordered when training:
+#: ``"row_group_shuffled"``: row groups are shuffled, rows within a row group are sequential.
+#: ``"serial"``: rows are read in dataset order, e.g. for datasets that are already shuffled.
+ParquetReadOrder = Literal["row_group_shuffled", "serial"]
+
 _PARQUET_SAMPLE_META = frozenset(
     {"__key__", "__shard__", "__restore_key__", "__sources__"},
 )
+
+
+def _resolve_read_order(
+    parquet_read_order: ParquetReadOrder,
+    shuffle_over_epochs: int | None,
+    parallel_shard_iters: int | None,
+) -> tuple[int | None, int | None]:
+    """Returns the effective ``(shuffle_over_epochs, parallel_shard_iters)`` for the read order."""
+    if parquet_read_order == "serial":
+        return None, 1
+    if parquet_read_order != "row_group_shuffled":
+        raise ValueError(
+            f"Invalid parquet_read_order {parquet_read_order!r}, "
+            "expected 'row_group_shuffled' or 'serial'"
+        )
+    return shuffle_over_epochs, parallel_shard_iters
 
 
 def _select_columns(
@@ -47,6 +70,50 @@ def _select_columns(
         )
     assert_layout_columns_subset(layout_columns, read_columns)
     return read_columns
+
+
+def _row_group_shards(layout: ParquetLayout, base_path: EPath) -> list[ShardInfo]:
+    """One shard per row group, in global sample order."""
+    return [
+        ShardInfo(name=f"{entry.rel_path}#{row_group}", path=base_path / entry.rel_path, count=rows)
+        for entry in layout.files
+        for row_group, rows in enumerate(entry.row_group_rows)
+    ]
+
+
+def _warn_coarse_slices(
+    factory: "ParquetDatasetFactory | ParquetShardListDatasetFactory",
+    slice_offsets: Sequence[Sequence[int]],
+    parallel_shard_iters: int,
+) -> None:
+    """Warns if the slices are too coarse to shuffle well, as Parquet never splits them."""
+    if not factory.training or factory.shuffle_over_epochs is None:
+        return
+    longest_slice = max(
+        (end - start for offsets in slice_offsets for start, end in zip(offsets, offsets[1:])),
+        default=0,
+    )
+    if (
+        factory.max_samples_per_sequence is not None
+        and longest_slice > factory.max_samples_per_sequence
+    ):
+        warnings.warn(
+            f"{factory}: max_samples_per_sequence={factory.max_samples_per_sequence} has no "
+            "effect, because Parquet row groups are not split. "
+            f"Up to {longest_slice} rows are read in order.",
+            UserWarning,
+        )
+    # With fewer slices than parallel iterators, all slices of a worker are open at once
+    fewest_slices = min(
+        (len(offsets) - 1 for offsets in slice_offsets if len(offsets) > 1), default=None
+    )
+    if fewest_slices is not None and fewest_slices < max(parallel_shard_iters, 2):
+        warnings.warn(
+            f"{factory}: some workers only get {fewest_slices} slice(s) to shuffle "
+            f"(parallel_shard_iters={parallel_shard_iters}). Each slice is a row group "
+            "(a whole file when filtered) that is read in order, so these workers shuffle poorly.",
+            UserWarning,
+        )
 
 
 class ParquetPreparator:
@@ -87,9 +154,14 @@ class ParquetDatasetFactory(
         subset: DatasetSubset | None = None,
         part_filter: Callable[[str], bool] | None = None,
         filter_name: str | None = None,
+        parquet_read_order: ParquetReadOrder = "row_group_shuffled",
     ):
         path = EPath(path)
         assert path.is_file(), f"Parquet dataset path must be a file: {path}"
+        self.parquet_read_order = parquet_read_order
+        shuffle_over_epochs, parallel_shard_iters = _resolve_read_order(
+            parquet_read_order, shuffle_over_epochs, parallel_shard_iters
+        )
         self._layout = scan_parquet_file(path)
         self._reader_base_path = path.parent
         self._read_columns = _select_columns(list(self._layout.columns), part_filter)
@@ -124,6 +196,21 @@ class ParquetDatasetFactory(
             parquet_file_cache_size=parallel_shard_iters,
         )
 
+    def _slice_shards(self, shards: list[ShardInfo]) -> list[ShardInfo]:
+        if self.parquet_read_order == "serial" or self.filter_view is not None:
+            # The filter index only knows the file shards
+            return shards
+        return _row_group_shards(self._layout, self._reader_base_path)
+
+    def _slice_max_samples_per_sequence(self) -> int | None:
+        # Starting a slice within a row group decodes the rows before it, so never split slices
+        return None
+
+    def _check_slices(
+        self, slice_offsets: Sequence[Sequence[int]], parallel_shard_iters: int
+    ) -> None:
+        _warn_coarse_slices(self, slice_offsets, parallel_shard_iters)
+
     def as_file_store(self) -> FileStore:
         from megatron.energon.flavors.parquet.file_store import ParquetFileStore
 
@@ -147,6 +234,7 @@ class ParquetDatasetFactory(
             max_samples_per_sequence=self.max_samples_per_sequence,
             subset=self.subset.config() if self.subset is not None else None,
             filter_name=self.filter_name,
+            parquet_read_order=self.parquet_read_order,
         )
 
     def __str__(self):
@@ -172,9 +260,14 @@ class ParquetShardListDatasetFactory(BaseManifestShardListDatasetFactory[CrudeSa
         subset: DatasetSubset | None = None,
         part_filter: Callable[[str], bool] | None = None,
         filter_name: str | None = None,
+        parquet_read_order: ParquetReadOrder = "row_group_shuffled",
     ):
         self.split_config = split_config
         self.split_part = split_part
+        self.parquet_read_order = parquet_read_order
+        shuffle_over_epochs, parallel_shard_iters = _resolve_read_order(
+            parquet_read_order, shuffle_over_epochs, parallel_shard_iters
+        )
         self._read_columns: list[str] = []
         super().__init__(
             path,
@@ -214,6 +307,21 @@ class ParquetShardListDatasetFactory(BaseManifestShardListDatasetFactory[CrudeSa
             parquet_file_cache_size=parallel_shard_iters,
         )
 
+    def _slice_shards(self, shards: list[ShardInfo]) -> list[ShardInfo]:
+        if self.parquet_read_order == "serial" or self.filter_view is not None:
+            # The filter index only knows the file shards
+            return shards
+        return _row_group_shards(self._layout, self.path)
+
+    def _slice_max_samples_per_sequence(self) -> int | None:
+        # Starting a slice within a row group decodes the rows before it, so never split slices
+        return None
+
+    def _check_slices(
+        self, slice_offsets: Sequence[Sequence[int]], parallel_shard_iters: int
+    ) -> None:
+        _warn_coarse_slices(self, slice_offsets, parallel_shard_iters)
+
     def as_file_store(self) -> FileStore:
         from megatron.energon.flavors.parquet.file_store import ParquetFileStore
 
@@ -236,6 +344,7 @@ class ParquetShardListDatasetFactory(BaseManifestShardListDatasetFactory[CrudeSa
             max_samples_per_sequence=self.max_samples_per_sequence,
             subset=self.subset.config() if self.subset is not None else None,
             filter_name=self.filter_name,
+            parquet_read_order=self.parquet_read_order,
         )
 
     def __str__(self):
