@@ -244,7 +244,7 @@ class FilterView:
         the selected split. Do not use directly; use ``__getitem__`` to obtain an index
         in the selected split's shard order.
         """
-        
+
         if self._index_map is None:
             assert self._index_path.is_file(), (
                 f"Filter translation index not found: {self._index_path}"
