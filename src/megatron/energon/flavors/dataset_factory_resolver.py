@@ -8,12 +8,16 @@ from typing import Any, Callable, Protocol, Type, TypeVar, overload
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory
 from megatron.energon.flavors.common.manifest.paths import MAIN_FOLDER_NAME
+from megatron.energon.flavors.common.manifest.types import ShardInfo
 from megatron.energon.flavors.dataset_type import EnergonDatasetType
 
 
 class DatasetFactoryProvider(Protocol):
     @classmethod
     def detect_path(cls, path: EPath) -> EnergonDatasetType | None: ...
+
+    @classmethod
+    def get_original_shards(cls, path: EPath) -> list[ShardInfo]: ...
 
     @classmethod
     def from_path(cls, path: EPath, **kwargs: Any) -> BaseCoreDatasetFactory: ...
@@ -60,6 +64,24 @@ class DatasetFactoryResolver:
             if dataset_type is not None:
                 return dataset_type, provider
         return None, None
+
+    def get_original_shards(self, path: EPath) -> list[ShardInfo]:
+        """Return original shards in source order, before splits, subsets, or filters.
+
+        Providers implement ``get_original_shards(path)``
+        without constructing a runtime factory. Each ShardInfo describes a primary
+        file and its original sample count; companion files are outside this contract.
+        """
+        path = EPath(path)
+        _, provider = self.get_type(path)
+        if provider is None:
+            raise ValueError(f"No dataset provider found for {path}.")
+        shards = list(provider.get_original_shards(path))
+        if len({shard.name for shard in shards}) != len(shards):
+            raise ValueError(f"Duplicate source shard names for {path}")
+        if any(shard.count < 0 for shard in shards):
+            raise ValueError(f"Negative source sample count for {path}")
+        return shards
 
     def get(
         self,
