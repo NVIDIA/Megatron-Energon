@@ -6,24 +6,14 @@ from typing import Any, Callable, Generic, Optional, Type, TypeVar
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory
 from megatron.energon.flavors.base_indexed_dataset import BaseIndexedDatasetFactory
-from megatron.energon.flavors.common.manifest.io import (
-    ShardListMeta,
-    check_dataset_info_present,
-    get_dataset_info,
-)
+from megatron.energon.flavors.common.manifest.io import ShardListMeta, check_dataset_info_present
 from megatron.energon.flavors.common.manifest.paths import MAIN_FOLDER_NAME
-from megatron.energon.flavors.common.manifest.types import (
-    DatasetSubset,
-    ManifestDatasetInfo,
-    ManifestSplits,
-    ShardInfo,
-)
+from megatron.energon.flavors.common.manifest.types import DatasetSubset, ManifestSplits
 from megatron.energon.flavors.dataset_factory_resolver import (
     PRIORITY_MANIFEST,
     register_dataset_factory_provider,
 )
 from megatron.energon.flavors.dataset_type import EnergonDatasetType
-from megatron.energon.typed_converter import JsonParser
 from megatron.energon.worker import WorkerConfig
 
 T_sample = TypeVar("T_sample", covariant=True)
@@ -39,15 +29,6 @@ class BaseManifestDatasetFactory(
         if check_dataset_info_present(path):
             return EnergonDatasetType.MANIFEST_DATASET
         return None
-
-    @classmethod
-    def get_original_shards(cls, path: EPath) -> list[ShardInfo]:
-        """Describe primary shards using only the info manifest, in its recorded order."""
-        info = JsonParser(strict=True).raw_to_typed(get_dataset_info(path), ManifestDatasetInfo)
-        return [
-            ShardInfo(name=name, path=path / name, count=count)
-            for name, count in info.shard_counts.items()
-        ]
 
     @classmethod
     def from_path(
@@ -107,7 +88,6 @@ class BaseManifestShardListDatasetFactory(
         subset: Optional[DatasetSubset] = None,
         split_config: str | ManifestSplits | None = None,
         part_filter: Optional[Callable[[str], bool]] = None,
-        filter_name: Optional[str] = None,
     ):
         meta = ShardListMeta.from_config(
             path=EPath(path),
@@ -127,7 +107,6 @@ class BaseManifestShardListDatasetFactory(
             max_samples_per_sequence=max_samples_per_sequence,
             subset=subset,
             part_filter=part_filter,
-            filter_name=filter_name,
         )
 
     def _validate_manifest_meta(self, meta: ShardListMeta) -> None:

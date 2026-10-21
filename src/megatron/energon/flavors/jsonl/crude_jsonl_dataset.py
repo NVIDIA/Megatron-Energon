@@ -8,7 +8,7 @@ from typing import Any, Callable, Dict, Optional
 from megatron.energon.cache import FileStore
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.base_single_file_dataset import BaseSingleFileDatasetFactory
-from megatron.energon.flavors.common.manifest.types import DatasetSubset, ShardInfo
+from megatron.energon.flavors.common.manifest.types import DatasetSubset
 from megatron.energon.flavors.common.sample_record import SampleRecord
 from megatron.energon.flavors.crude import CrudeSample
 from megatron.energon.flavors.dataset_factory_resolver import (
@@ -35,11 +35,6 @@ class CrudeJsonlDatasetFactory(
     training: bool
     worker_config: WorkerConfig
 
-    @classmethod
-    def get_original_shards(cls, path: EPath) -> list[ShardInfo]:
-        """Represent the data file as one shard; derive its count from the offset index."""
-        return [ShardInfo(name=path.name, path=path, count=IJsonlIndexReader.count_samples(path))]
-
     def __init__(
         self,
         path: EPath,
@@ -51,7 +46,6 @@ class CrudeJsonlDatasetFactory(
         max_samples_per_sequence: Optional[int] = None,
         subset: Optional[DatasetSubset] = None,
         part_filter: Optional[Callable[[str], bool]] = None,
-        filter_name: Optional[str] = None,
     ):
         path = EPath(path)
         original_len = IJsonlIndexReader.count_samples(path)
@@ -65,7 +59,6 @@ class CrudeJsonlDatasetFactory(
             max_samples_per_sequence=max_samples_per_sequence,
             subset=subset,
             part_filter=part_filter,
-            filter_name=filter_name,
         )
         assert self.path.size() == IJsonlIndexReader.size(path), (
             "The index of the jsonl file does not match the file. Regenerate the index."
@@ -107,7 +100,6 @@ class CrudeJsonlDatasetFactory(
             parallel_shard_iters=self.parallel_shard_iters,
             max_samples_per_sequence=self.max_samples_per_sequence,
             subset=self.subset.config() if self.subset is not None else None,
-            filter_name=self.filter_name,
         )
 
     def __str__(self):

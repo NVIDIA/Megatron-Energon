@@ -26,7 +26,6 @@ class BaseSingleFileDatasetFactory(BaseIndexedDatasetFactory[T_sample]):
         max_samples_per_sequence: Optional[int] = None,
         subset: Optional[DatasetSubset] = None,
         part_filter: Optional[Callable[[str], bool]] = None,
-        filter_name: Optional[str] = None,
     ):
         dataset_path = EPath(path)
         super().__init__(
@@ -45,5 +44,4 @@ class BaseSingleFileDatasetFactory(BaseIndexedDatasetFactory[T_sample]):
             max_samples_per_sequence=max_samples_per_sequence,
             subset=subset,
             part_filter=part_filter,
-            filter_name=filter_name,
         )
