@@ -173,7 +173,9 @@ class FilterView:
         for shard in shards:
             source = recorded.get(shard.name)
             if source is None:
-                raise ValueError(f"Shard {shard.name!r} is not covered by filter {filter_name!r}")
+                raise ValueError(
+                    f"The selected filter {filter_name!r} is missing information about the shard {shard.name!r}. Please rebuild the filter."
+                )
             original_start, sidecar_start = shard_offsets[shard.name]
             self.filtered_shards.append(
                 ShardInfo(name=shard.name, path=shard.path, count=source.filtered_sample_count)
@@ -236,6 +238,13 @@ class FilterView:
 
     @property
     def index_map(self) -> EPathMappedArray:
+        """Return the lazily opened, cached array of original sample indexes from the filter file.
+
+        Entries use the filter's recorded source-shard order, without translation for
+        the selected split. Do not use directly; use ``__getitem__`` to obtain an index
+        in the selected split's shard order.
+        """
+        
         if self._index_map is None:
             assert self._index_path.is_file(), (
                 f"Filter translation index not found: {self._index_path}"
