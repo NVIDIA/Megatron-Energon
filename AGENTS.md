@@ -54,6 +54,9 @@ User documentation lives in `docs/source` (Sphinx, MyST markdown).
   module; match its naming, structure and comment density.
 - Keep diffs minimal and on-topic: no drive-by refactors, reformatting or renames outside the
   task, no commented-out code.
+- Never copy code from other repositories, packages or websites, even if it is permissively
+  licensed. Everything you write must be original and contributable under this project's
+  BSD-3-Clause license. If reusing third-party code seems necessary, stop and ask the human.
 - Every new `.py`, `.sh` and `.md` file needs the NVIDIA license header, and user-facing changes
   need documentation in `docs/source` (skill: `writing-docs`).
 - Prefer end-to-end tests through the public API over micro unit tests (skill: `writing-tests`).

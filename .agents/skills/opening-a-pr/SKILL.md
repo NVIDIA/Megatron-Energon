@@ -25,6 +25,8 @@ Policy lives in [CONTRIBUTING.md](../../../CONTRIBUTING.md); the template is
 2. `just check-commits` passes (Conventional Commits, `Signed-off-by` of the commit author).
 3. User-facing changes have docs in `docs/source`.
 4. The branch is focused on a single concern.
+5. No code was copied from other repositories or projects; everything is original and
+   contributable under the project's BSD-3-Clause license.
 
 ## PR content
 

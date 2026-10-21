@@ -19,6 +19,8 @@ SPDX-License-Identifier: BSD-3-Clause -->
 
 ## Checklist
 
+- [ ] No code was copied from other repositories or projects; the whole change can be contributed
+      under this project's BSD-3-Clause license.
 - [ ] Tests cover the change (end-to-end through the public API where possible).
 - [ ] Documentation in `docs/source` is updated for user-facing changes.
 - [ ] `just check` passes.
