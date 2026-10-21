@@ -87,6 +87,11 @@ another format.
 Importing a flavor module must register its provider before detection is used. If a new format is public,
 also expose its factory through the intended API module.
 
+Factories must implement the `BaseCoreDatasetFactory.get_original_shards(path)` class method.
+Providers expose the same method to the resolver. It returns `ShardInfo` entries in source order,
+with names, primary file paths, and original sample counts before splits, subsets, or filters.
+It must work quickly without walking the dataset. Manifest factories inherit this from `BaseManifestDatasetFactory`; direct-file formats supply their own implementation.
+
 ## Adding a dataset flavor
 
 Use this checklist:
@@ -96,7 +101,7 @@ Use this checklist:
    cached index is stale and must be rebuilt.
 3. **Reader:** implement integer ordinal access, length, resource cleanup, and `SampleRecord` provenance.
 4. **Factory:** subclass the appropriate indexed base and implement only the format-specific hooks.
-5. **Filtering:** verify `part_filter`, exclusions, and prepared `FilterIndex` translation.
+5. **Filtering:** verify `part_filter`, exclusions, and prepared `FilterView` translation.
 6. **Key access:** implement `FileStore` or part readers if mounts or auxiliary lookup require it.
 7. **Detection:** register a provider at the least surprising priority and test competing path shapes.
 8. **Configuration:** ensure `config()` contains stable leaf identity fields used by diagnostics.

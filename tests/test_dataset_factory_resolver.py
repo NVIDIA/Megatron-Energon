@@ -6,6 +6,7 @@ from typing import Any
 
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.base_dataset import BaseCoreDatasetFactory
+from megatron.energon.flavors.common.manifest.types import ShardInfo
 from megatron.energon.flavors.dataset_factory_resolver import (
     PRIORITY_FIRST,
     PRIORITY_MANIFEST,
@@ -17,6 +18,10 @@ from megatron.energon.flavors.dataset_type import EnergonDatasetType
 
 class _FirstProvider:
     @classmethod
+    def get_original_shards(cls, path: EPath) -> list[ShardInfo]:
+        raise NotImplementedError
+
+    @classmethod
     def detect_path(cls, path: EPath) -> EnergonDatasetType | None:
         return EnergonDatasetType.JSONL
 
@@ -27,6 +32,10 @@ class _FirstProvider:
 
 class _SingleFileProvider:
     @classmethod
+    def get_original_shards(cls, path: EPath) -> list[ShardInfo]:
+        raise NotImplementedError
+
+    @classmethod
     def detect_path(cls, path: EPath) -> EnergonDatasetType | None:
         return EnergonDatasetType.FILESYSTEM
 
@@ -36,6 +45,10 @@ class _SingleFileProvider:
 
 
 class _LateProvider:
+    @classmethod
+    def get_original_shards(cls, path: EPath) -> list[ShardInfo]:
+        raise NotImplementedError
+
     @classmethod
     def detect_path(cls, path: EPath) -> EnergonDatasetType | None:
         return EnergonDatasetType.MANIFEST_DATASET

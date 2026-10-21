@@ -57,9 +57,6 @@ DEPRECATED_MODULES: DeprecatedModuleMap = {
         "FILTER_JSON_SUFFIX": DeprecatedSymbol(
             "megatron.energon.flavors.common.filter_index", "FILTER_JSON_SUFFIX"
         ),
-        "FilterIndex": DeprecatedSymbol(
-            "megatron.energon.flavors.common.filter_index", "FilterIndex"
-        ),
         "FilterIndexWriter": DeprecatedSymbol(
             "megatron.energon.flavors.common.filter_index", "FilterIndexWriter"
         ),

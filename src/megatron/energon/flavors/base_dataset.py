@@ -35,6 +35,9 @@ from megatron.energon.state import FlexState
 from megatron.energon.tags import SampleTagsAlias, TagsAlias, canonicalize_tag_kwargs
 from megatron.energon.worker import WorkerConfig
 
+if typing.TYPE_CHECKING:
+    from megatron.energon.flavors.common.manifest.types import ShardInfo
+
 T_sample = TypeVar("T_sample", covariant=True)
 T = TypeVar("T", covariant=True)
 
@@ -370,6 +373,16 @@ class BaseCoreDatasetFactory(TagsAlias, Generic[T_sample], ABC):
     paths: List[EPath]
 
     tags: Dict[str, Any]
+
+    @classmethod
+    @abstractmethod
+    def get_original_shards(cls, path: EPath) -> list["ShardInfo"]:
+        """Return shards in source order, before splits, subsets, or filters.
+
+        Each shard describes its name, primary file path, and original sample count.
+        This must be the order in which filters will apply to the dataset.
+        """
+        ...
 
     @abstractmethod
     def build(
