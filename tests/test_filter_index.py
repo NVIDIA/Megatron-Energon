@@ -154,7 +154,9 @@ class TestFilterIndex(unittest.TestCase):
                 assert [sample.text for sample in self._load_samples(path)] == ["a-4"]
                 if len(source) == 1:
                     # A train-only filter cannot be used for uncovered validation shards.
-                    with self.assertRaisesRegex(ValueError, "not covered by filter"):
+                    with self.assertRaisesRegex(
+                        ValueError, "missing information about the shard 'z'"
+                    ):
                         self._load_samples(path, "val")
                 else:
                     assert [sample.text for sample in self._load_samples(path, "val")] == ["a-4"]
