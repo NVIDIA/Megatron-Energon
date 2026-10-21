@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from bisect import bisect_right
 from collections import OrderedDict
 from typing import Any, Callable, Generator, List, Sequence, Tuple
@@ -40,12 +41,23 @@ def _table_row_to_dict(table: Any, row_idx: int, column_names: Sequence[str]) ->
 class IParquetReader(SamplePartFileReader[FilteredSample]):
     """
     Parquet random access over rows described by a :class:`ParquetLayout`.
+
+    Args:
+        dataset_root: The base path for the relative Parquet file paths of the layout.
+        layout: The Parquet files and their row counts.
+        read_columns: The columns to read.
+        sample_filter: An optional filter function to select samples by their key.
+        parquet_file_cache_size: The number of Parquet files to keep open at the same time.
+        disable_cache: If True, disables caching of open Parquet files and opens a fresh file
+            for every read. This mode avoids sharing Parquet file handles across threads and is
+            intended to be thread-safe.
     """
 
     dataset_root: EPath
     layout: ParquetLayout
     read_columns: list[str]
     sample_filter: Callable[[str], bool] | None
+    disable_cache: bool
 
     def __init__(
         self,
@@ -55,11 +67,13 @@ class IParquetReader(SamplePartFileReader[FilteredSample]):
         *,
         sample_filter: Callable[[str], bool] | None = None,
         parquet_file_cache_size: int = 5,
+        disable_cache: bool = False,
     ):
         self.dataset_root = EPath(dataset_root)
         self.layout = layout
         self.read_columns = list(read_columns)
         self.sample_filter = sample_filter
+        self.disable_cache = disable_cache
         self._pa, self._pq = _import_pyarrow()
 
         files = layout.files
@@ -90,21 +104,42 @@ class IParquetReader(SamplePartFileReader[FilteredSample]):
         local = global_idx - self._cumsum[f]
         return f, local
 
+    def _open_parquet_file(self, file_idx: int) -> Tuple[Any, Any]:
+        rel = self.layout.files[file_idx].rel_path
+        path = self.dataset_root / rel
+        raw = path.open("rb")
+        return raw, self._pq.ParquetFile(self._pa.PythonFile(raw))
+
     def _get_parquet_file(self, file_idx: int):
         if file_idx in self._parquet_cache:
             self._parquet_cache.move_to_end(file_idx)
             return self._parquet_cache[file_idx]
-        rel = self.layout.files[file_idx].rel_path
-        path = self.dataset_root / rel
-        raw = path.open("rb")
-        pf = self._pq.ParquetFile(self._pa.PythonFile(raw))
-        self._parquet_cache[file_idx] = (raw, pf)
+        self._parquet_cache[file_idx] = self._open_parquet_file(file_idx)
         self._parquet_cache.move_to_end(file_idx)
         while len(self._parquet_cache) > self._parquet_cache_max:
             old_idx, (old_raw, old_pf) = self._parquet_cache.popitem(last=False)
             old_pf.close()
             old_raw.close()
         return self._parquet_cache[file_idx]
+
+    @contextlib.contextmanager
+    def _access_parquet_file(self, file_idx: int) -> Generator[Any, None, None]:
+        """
+        Context manager to access the ParquetFile of a file.
+
+        - If caching is enabled, yields the cached ParquetFile and does not close it.
+        - If caching is disabled, opens a fresh ParquetFile for the duration of the context.
+        """
+        if not self.disable_cache:
+            yield self._get_parquet_file(file_idx)[1]
+            return
+
+        raw, pf = self._open_parquet_file(file_idx)
+        try:
+            yield pf
+        finally:
+            pf.close()
+            raw.close()
 
     def _get_item(self, idx: int, columns: Sequence[str] | None = None) -> dict[str, Any] | None:
         key = str(idx)
@@ -113,31 +148,31 @@ class IParquetReader(SamplePartFileReader[FilteredSample]):
         cols = list(self.read_columns if columns is None else columns)
         f_idx, local = self._locate(idx)
         shard_name = self.layout.files[f_idx].rel_path
-        _, pf = self._get_parquet_file(f_idx)
-        off = 0
-        row_in_file = local
-        for rg in range(pf.num_row_groups):
-            nr = pf.metadata.row_group(rg).num_rows
-            if row_in_file < off + nr:
-                table = pf.read_row_group(rg, columns=cols)
-                local_rg = row_in_file - off
-                d = _table_row_to_dict(table, local_rg, cols)
-                file_names = tuple(f"{key}.{c}" for c in cols)
-                return dict(
-                    __key__=key,
-                    __shard__=shard_name,
-                    __restore_key__=("Webdataset", idx),
-                    __sources__=(
-                        SourceInfo(
-                            dataset_path=str(self.dataset_root),
-                            index=idx,
-                            shard_name=shard_name,
-                            file_names=file_names,
+        with self._access_parquet_file(f_idx) as pf:
+            off = 0
+            row_in_file = local
+            for rg in range(pf.num_row_groups):
+                nr = pf.metadata.row_group(rg).num_rows
+                if row_in_file < off + nr:
+                    table = pf.read_row_group(rg, columns=cols)
+                    local_rg = row_in_file - off
+                    d = _table_row_to_dict(table, local_rg, cols)
+                    file_names = tuple(f"{key}.{c}" for c in cols)
+                    return dict(
+                        __key__=key,
+                        __shard__=shard_name,
+                        __restore_key__=("Webdataset", idx),
+                        __sources__=(
+                            SourceInfo(
+                                dataset_path=str(self.dataset_root),
+                                index=idx,
+                                shard_name=shard_name,
+                                file_names=file_names,
+                            ),
                         ),
-                    ),
-                    **d,
-                )
-            off += nr
+                        **d,
+                    )
+                off += nr
         raise RuntimeError(f"Row {row_in_file} out of range for file index {f_idx}")
 
     def __getitem__(self, idx: int | str) -> FilteredSample | tuple[Any, SourceInfo] | None:
@@ -147,6 +182,11 @@ class IParquetReader(SamplePartFileReader[FilteredSample]):
             num_idx = idx
             if "." in idx:
                 num_idx, column_name = idx.split(".", 1)
+                if column_name not in self.read_columns:
+                    raise KeyError(
+                        f"Column {column_name!r} of {idx!r} is not read, "
+                        f"read columns: {self.read_columns}"
+                    )
                 full_entry_name = True
                 columns = (column_name,)
             try:
