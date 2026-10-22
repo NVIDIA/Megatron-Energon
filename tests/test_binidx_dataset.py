@@ -5,6 +5,7 @@
 
 import gc
 import logging
+import os
 import random
 import struct
 import sys
@@ -15,6 +16,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from click.testing import CliRunner
 
 from megatron.energon import (
     Cooker,
@@ -34,6 +36,7 @@ from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import Sample
 from megatron.energon.flavors.binidx.binidx_reader import BinIdxReader, IdxReader
 from megatron.energon.recipe.recipe import Recipe
+from megatron.energon.tools.prepare import command as prepare_command
 
 # Speed up tests significantly by reducing the torch status check interval for broken worker shutdown
 try:
@@ -66,6 +69,20 @@ def cook_binidx_stats(sample: CrudeSample) -> BinIdxStatsSample:
 
 class BinIdxStatsEncoder(DefaultTaskEncoder):
     cookers = [Cooker(cook=cook_binidx_stats)]
+
+
+@edataclass
+class BinIdxKeySample(Sample):
+    has_tokens: bool
+
+
+@stateless()
+def cook_binidx_key(sample: CrudeSample) -> BinIdxKeySample:
+    return BinIdxKeySample(**basic_sample_keys(sample), has_tokens="tokens" in sample)
+
+
+class BinIdxKeyEncoder(DefaultTaskEncoder):
+    cookers = [Cooker(cook=cook_binidx_key, part_filter=lambda part: part != "tokens")]
 
 
 class TestBinIdxDataset(unittest.TestCase):
@@ -121,47 +138,82 @@ class TestBinIdxDataset(unittest.TestCase):
 
         return bin_path
 
-    def test_get_train_dataset_iterates_expected_tokens(self):
-        torch.manual_seed(42)
+    def test_train_loader_with_workers_close_and_part_filter(self):
+        """Full train epochs read the right tokens per sample with and without workers, the
+        dataset stays usable after a loader is closed, and filtering out ``tokens`` skips the
+        .bin file."""
+        num_docs, doc_len = 64, 1024
         bin_path = self.create_binidx_dataset(
-            self.dataset_path / "train_loop",
-            num_docs=5,
-            doc_len=4,
-            token_start=1,
+            self.dataset_path / "train_loop", num_docs=num_docs, doc_len=doc_len
         )
-        worker_config = WorkerConfig(
-            rank=0,
-            world_size=1,
-            num_workers=0,
-            seed_offset=42,
-        )
+        bin_file = os.path.realpath(bin_path)
 
-        train_dataset = get_train_dataset(
-            bin_path,
-            worker_config=worker_config,
-            batch_size=1,
-            shuffle_buffer_size=None,
-            max_samples_per_sequence=None,
-            task_encoder=BinIdxStatsEncoder(),
-        )
-        train_loader = get_loader(train_dataset)
-        expected_sums = [sum(range(i * 4 + 1, (i + 1) * 4 + 1)) for i in range(5)]
-        seen = []
-        for _ in range(5):
-            batch = next(iter(train_loader))
-            seen.append(int(batch.token_sum[0]))
-            self.assertEqual(int(batch.seq_len[0]), 4)
-        self.assertEqual(sorted(seen), sorted(expected_sums))
+        def bin_file_open():
+            return any(
+                os.path.realpath(f"/proc/self/fd/{fd}") == bin_file
+                for fd in os.listdir("/proc/self/fd")
+            )
 
-    def test_reader_lists_readable_parts_and_closes_index(self):
+        def check_epoch(batches):
+            docs = []
+            for batch in batches:
+                doc_idx = int(batch.doc_idx[0])
+                first_token = 1 + doc_idx * doc_len
+                self.assertEqual(int(batch.first_token[0]), first_token)
+                self.assertEqual(
+                    int(batch.token_sum[0]), doc_len * first_token + doc_len * (doc_len - 1) // 2
+                )
+                docs.append(doc_idx)
+            self.assertEqual(sorted(docs), list(range(num_docs)))
+
+        for num_workers in (0, 2):
+            with self.subTest(num_workers=num_workers):
+
+                def get_dataset(task_encoder):
+                    return get_train_dataset(
+                        bin_path,
+                        worker_config=WorkerConfig(rank=0, world_size=1, num_workers=num_workers),
+                        batch_size=1,
+                        shuffle_buffer_size=None,
+                        max_samples_per_sequence=None,
+                        task_encoder=task_encoder,
+                        repeat=False,
+                    )
+
+                dataset = get_dataset(BinIdxStatsEncoder())
+                # The .bin must not be opened before forking, workers would share its offset
+                self.assertFalse(bin_file_open())
+
+                # Closing one loader does not break another loader of the same dataset
+                loader = get_loader(dataset)
+                batches = iter(loader)
+                first_batch = next(batches)
+                get_loader(dataset).close()
+                check_epoch([first_batch, *batches])
+                loader.close()
+                self.assertFalse(bin_file_open())
+
+                keys = []
+                for batch in get_loader(get_dataset(BinIdxKeyEncoder())):
+                    self.assertFalse(any(batch.has_tokens))
+                    self.assertFalse(bin_file_open())
+                    keys.extend(int(key) for key in batch.__key__)
+                self.assertEqual(sorted(keys), list(range(num_docs)))
+
+    def test_prepare_cli_skips_binidx(self):
+        bin_path = self.create_binidx_dataset(self.dataset_path, num_docs=2, doc_len=3)
+        result = CliRunner().invoke(prepare_command, [str(bin_path)], catch_exceptions=False)
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("BinIdx datasets need no preparation", result.output)
+
+    def test_reader_lists_readable_parts_and_reopens_after_close(self):
         bin_path = self.create_binidx_dataset(
             self.dataset_path / "reader_contract",
             num_docs=2,
             doc_len=3,
         )
         reader = BinIdxReader(str(bin_path))
-        idx_reader = reader._idx_reader
-
+        self.assertEqual(len(reader), 2)
         self.assertEqual(
             [part for part, _, _ in reader.list_all_sample_parts()],
             ["0.tokens", "1.tokens"],
@@ -170,13 +222,11 @@ class TestBinIdxDataset(unittest.TestCase):
             [part for part, _, _ in reader.list_sample_parts("1")],
             ["1.tokens"],
         )
-        token_bytes, source_info = reader["1.tokens"]
-        self.assertEqual(source_info.file_names, ("1.tokens",))
-        self.assertEqual(np.frombuffer(token_bytes, dtype=np.int32).tolist(), [4, 5, 6])
-
-        reader.close()
-        self.assertTrue(reader._bin_file.closed)
-        self.assertTrue(idx_reader._idx_file.closed)
+        for _ in range(2):
+            token_bytes, source_info = reader["1.tokens"]
+            self.assertEqual(source_info.file_names, ("1.tokens",))
+            self.assertEqual(np.frombuffer(token_bytes, dtype=np.int32).tolist(), [4, 5, 6])
+            reader.close()
 
     def test_reader_rejects_truncated_bin_file(self):
         bin_path = self.create_binidx_dataset(
@@ -188,8 +238,7 @@ class TestBinIdxDataset(unittest.TestCase):
             with self.subTest(use_mmap=use_mmap):
                 reader = BinIdxReader(EPath(bin_path))
                 if not use_mmap:
-                    reader._idx_reader.close()
-                    reader._idx_reader = IdxReader(EPath(bin_path.with_suffix(".idx")))
+                    reader._lazy_idx_reader = IdxReader(EPath(bin_path.with_suffix(".idx")))
                 try:
                     self.assertEqual(
                         np.frombuffer(reader[0]["tokens"], dtype=np.int32).tolist(), [1, 2, 3]

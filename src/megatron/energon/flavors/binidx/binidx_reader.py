@@ -156,30 +156,36 @@ class BinIdxReader(SamplePartFileReader[FilteredSample]):
 
     bin_path: EPath
     sample_filter: Optional[Callable[[str], bool]]
+    part_filter: Optional[Callable[[str], bool]]
+
+    # Files are opened lazily, so forked loader workers don't share file offsets and the
+    # reader can be reused after close().
+    _lazy_idx_reader: IIdxReader | None = None
+    _bin_file: BinaryIO | None = None
 
     def __init__(
         self,
         bin_path: EPath,
         sample_filter: Optional[Callable[[str], bool]] = None,
+        part_filter: Optional[Callable[[str], bool]] = None,
     ):
         self.bin_path = EPath(bin_path)
         self.sample_filter = sample_filter
-
-        idx_path = _idx_path(self.bin_path)
-
+        self.part_filter = part_filter
         self._bin_size = self.bin_path.size()
 
-        if self.bin_path.is_local():
-            self._idx_reader = MMapIdxReader(idx_path)
-        else:
-            self._idx_reader = IdxReader(idx_path)
+    @property
+    def _idx_reader(self) -> IIdxReader:
+        if self._lazy_idx_reader is None:
+            idx_path = _idx_path(self.bin_path)
+            if self.bin_path.is_local():
+                self._lazy_idx_reader = MMapIdxReader(idx_path)
+            else:
+                self._lazy_idx_reader = IdxReader(idx_path)
+        return self._lazy_idx_reader
 
-        try:
-            # Keep .bin file open for seek+read per sample (no mmap needed)
-            self._bin_file = self.bin_path.open("rb")
-        except:
-            self._idx_reader.close()
-            raise
+    def __len__(self) -> int:
+        return len(self._idx_reader)
 
     def __getitem__(self, idx: int | str) -> FilteredSample | tuple[bytes, SourceInfo] | None:
         full_entry_name = False
@@ -194,28 +200,12 @@ class BinIdxReader(SamplePartFileReader[FilteredSample]):
             except ValueError:
                 raise ValueError(f"Invalid bin-idx sample key: {idx}")
 
-        if not 0 <= idx < len(self._idx_reader):
-            raise IndexError(
-                f"Sample index {idx} out of range [0, {len(self._idx_reader)}) in {self.bin_path}"
-            )
+        if not 0 <= idx < len(self):
+            raise IndexError(f"Sample index {idx} out of range [0, {len(self)}) in {self.bin_path}")
 
         key = str(idx)
         if self.sample_filter is not None and not self.sample_filter(key):
             return None
-
-        # Read token data from .bin via seek+read
-        byte_offset = self._idx_reader.pointer(idx)
-        length = self._idx_reader.length(idx)
-        byte_length = length * self._idx_reader.dtype_size
-
-        self._bin_file.seek(byte_offset)
-        token_bytes = self._bin_file.read(byte_length)
-        if len(token_bytes) != byte_length:
-            raise ValueError(
-                f"Truncated or mismatched .bin file {self.bin_path}: sample {idx} expects "
-                f"{byte_length} bytes at offset {byte_offset}, got {len(token_bytes)}. "
-                f"Does the .bin match its .idx?"
-            )
 
         source_info = SourceInfo(
             dataset_path=self.bin_path,
@@ -225,22 +215,40 @@ class BinIdxReader(SamplePartFileReader[FilteredSample]):
         )
 
         if full_entry_name:
-            return token_bytes, source_info
+            return self._read_tokens(idx), source_info
 
-        return FilteredSample(
+        sample = FilteredSample(
             __key__=key,
             __shard__=self.bin_path.name,
             __restore_key__=("Webdataset", idx),
             __sources__=(source_info,),
-            tokens=token_bytes,
         )
+        if self.part_filter is None or self.part_filter("tokens"):
+            sample["tokens"] = self._read_tokens(idx)
+        return sample
+
+    def _read_tokens(self, idx: int) -> bytes:
+        byte_offset = self._idx_reader.pointer(idx)
+        byte_length = self._idx_reader.length(idx) * self._idx_reader.dtype_size
+
+        if self._bin_file is None:
+            self._bin_file = self.bin_path.open("rb")
+        self._bin_file.seek(byte_offset)
+        token_bytes = self._bin_file.read(byte_length)
+        if len(token_bytes) != byte_length:
+            raise ValueError(
+                f"Truncated or mismatched .bin file {self.bin_path}: sample {idx} expects "
+                f"{byte_length} bytes at offset {byte_offset}, got {len(token_bytes)}. "
+                f"Does the .bin match its .idx?"
+            )
+        return token_bytes
 
     def list_all_samples(self) -> Generator[Tuple[str, int, int], None, None]:
-        for i in range(len(self._idx_reader)):
+        for i in range(len(self)):
             yield str(i), self._idx_reader.length(i) * self._idx_reader.dtype_size, 0
 
     def list_all_sample_parts(self) -> Generator[Tuple[str, int, int], None, None]:
-        for i in range(len(self._idx_reader)):
+        for i in range(len(self)):
             yield f"{i}.tokens", self._idx_reader.length(i) * self._idx_reader.dtype_size, 0
 
     def list_sample_parts(self, sample_key: str) -> Generator[Tuple[str, int, int], None, None]:
@@ -255,9 +263,13 @@ class BinIdxReader(SamplePartFileReader[FilteredSample]):
 
     def close(self):
         try:
-            self._bin_file.close()
+            if self._bin_file is not None:
+                self._bin_file.close()
+                self._bin_file = None
         finally:
-            self._idx_reader.close()
+            if self._lazy_idx_reader is not None:
+                self._lazy_idx_reader.close()
+                self._lazy_idx_reader = None
 
     @staticmethod
     def count_samples(bin_path: EPath | str) -> int:
