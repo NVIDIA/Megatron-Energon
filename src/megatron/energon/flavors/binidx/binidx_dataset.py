@@ -10,7 +10,6 @@ from megatron.energon.cache import FileStore
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.base_single_file_dataset import BaseSingleFileDatasetFactory
 from megatron.energon.flavors.binidx.binidx_reader import BinIdxReader
-from megatron.energon.flavors.common.dataset_sampler import RawSampleData
 from megatron.energon.flavors.common.manifest.types import DatasetSubset, ShardInfo
 from megatron.energon.flavors.common.sample_record import SampleRecord
 from megatron.energon.flavors.crude import CrudeSample
@@ -71,20 +70,7 @@ class BinIdxDatasetFactory(BaseSingleFileDatasetFactory[CrudeSample]):
         parallel_shard_iters: int,
         part_filter: Callable[[str], bool] | None,
     ):
-        return BinIdxReader(self.path)
-
-    def _load_fn(
-        self, part_filter: Callable[[str], bool] | None
-    ) -> Callable[[RawSampleData], CrudeSample]:
-        if part_filter is not None and not part_filter("tokens"):
-
-            def load_fn(sample: RawSampleData) -> CrudeSample:
-                assert sample.data is not None
-                sample.data.pop("tokens", None)
-                return self._load_sample_raw(sample)
-
-            return load_fn
-        return self._load_sample_raw
+        return BinIdxReader(self.path, part_filter=part_filter)
 
     def as_file_store(self) -> FileStore:
         from megatron.energon.flavors.binidx.file_store import BinIdxFileStore
@@ -163,7 +149,8 @@ class DefaultBinIdxDatasetFactory(BinIdxDatasetFactory):
 
     def load_sample(self, sample: SampleRecord) -> CrudeSample:
         sample["__tags__"] = self.tags
-        sample["tokens"] = numpy.frombuffer(sample["tokens"], dtype=self._dtype).copy()
+        if "tokens" in sample:
+            sample["tokens"] = numpy.frombuffer(sample["tokens"], dtype=self._dtype).copy()
         return super().load_sample(sample)
 
     def config(self) -> Dict[str, Any]:
