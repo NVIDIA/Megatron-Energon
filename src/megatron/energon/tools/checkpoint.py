@@ -27,10 +27,38 @@ def detect_and_replicate_pattern(file_list):
     a function that, when called with integer n (starting from 0), generates
     the n-th filename following that pattern.
 
+    For a single file, the last numeric token (or an appended index if there is none)
+    is used as the varying part.
+
     Raises an Exception if no pattern or multiple patterns are found.
     """
     if not file_list:
         raise ValueError("Cannot detect a pattern from an empty list.")
+
+    # A single file has nothing to compare against, so no varying numeric token can be detected.
+    # Use its last numeric token as the rank index, or append one if there is none.
+    if len(file_list) == 1:
+        tokens = re.split(r"(\d+)", file_list[0])
+        if len(tokens) > 1:
+            base_value = int(tokens[-2])
+            width = len(tokens[-2])
+
+            def generate_single_filename(n):
+                new_tokens = tokens[:]
+                new_tokens[-2] = str(base_value + n).zfill(width)
+                return "".join(new_tokens)
+
+        else:
+            stem, dot, suffix = file_list[0].rpartition(".")
+            if not dot:
+                stem, suffix = file_list[0], ""
+            else:
+                suffix = dot + suffix
+
+            def generate_single_filename(n):
+                return f"{stem}_{n}{suffix}"
+
+        return generate_single_filename
 
     # -- 1) Sort the list using a natural key so that numbers compare numerically
     sorted_files = sorted(file_list, key=natural_sort_key)
