@@ -253,6 +253,9 @@ def command(
         count = CrudeJsonlDatasetFactory.prepare_dataset(path)
         print(f"Done. Found {count} samples.")
         return
+    elif ds_type == EnergonDatasetType.BINIDX:
+        print("BinIdx datasets need no preparation; pass the .bin path to the loader directly.")
+        return
     elif ds_type == EnergonDatasetType.FILESYSTEM:
         raise click.ClickException(
             "Filesystem datasets must be prepared using 'energon prepare-media'."

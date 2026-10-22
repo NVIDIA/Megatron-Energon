@@ -5,11 +5,13 @@
 
 import gc
 import json
+import struct
 import tempfile
 import unittest
 import warnings
 from pathlib import Path
 
+import numpy as np
 import webdataset as wds
 import yaml
 
@@ -21,6 +23,7 @@ from megatron.energon import (
     get_savable_loader,
     get_train_dataset,
     get_val_dataset,
+    load_dataset,
 )
 from megatron.energon.dataset_config import get_dataset_from_config
 from megatron.energon.epathlib import EPath
@@ -34,6 +37,21 @@ from megatron.energon.flavors.jsonl.crude_jsonl_dataset import (
     CrudeJsonlDatasetFactory,
     DefaultCrudeJsonlDatasetFactory,
 )
+
+
+def _write_binidx(path: Path, *, num_docs: int, doc_len: int = 2) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    values = np.arange(num_docs * doc_len, dtype=np.int32)
+    values.tofile(str(path))
+    with open(path.with_suffix(".idx"), "wb") as f:
+        f.write(b"MMIDIDX\x00\x00")
+        f.write(struct.pack("<Q", 1))
+        f.write(struct.pack("<B", 4))
+        f.write(struct.pack("<Q", num_docs))
+        f.write(struct.pack("<Q", num_docs))
+        f.write(np.full(num_docs, doc_len, dtype=np.int32).tobytes())
+        f.write((np.arange(num_docs, dtype=np.int64) * doc_len * 4).tobytes())
+        f.write(np.arange(num_docs, dtype=np.int64).tobytes())
 
 
 class TestFilterIndex(unittest.TestCase):
@@ -386,3 +404,33 @@ class TestFilterIndex(unittest.TestCase):
             self._load_samples(path)
         build_filter_index(path, "keep", [0, 2], overwrite=True)
         assert [s["json"]["value"] for s in self._load_samples(path)] == [0, 2]
+
+    def test_binidx_filter_and_recipe_passthrough(self):
+        dataset_path = self.dataset_path / "binidx"
+        bin_path = dataset_path / "tokens.bin"
+        _write_binidx(bin_path, num_docs=6)
+        path = EPath(bin_path)
+        build_filter_index(path, "keep", [1, 4])
+        json_path, idx_path = filter_index_paths(path, "keep")
+        assert json_path.name == "tokens.bin.keep.json"
+        assert idx_path.name == "tokens.bin.keep.idx"
+
+        samples = self._load_samples(path)
+        assert [s["__key__"] for s in samples] == ["1", "4"]
+        assert [s["tokens"].tolist() for s in samples] == [[2, 3], [8, 9]]
+
+        recipe_path = dataset_path / "recipe.yaml"
+        recipe_path.write_text(
+            "__module__: megatron.energon\n"
+            "__class__: Recipe\n"
+            "splits:\n"
+            "  train:\n"
+            "    path: tokens.bin\n"
+            "    filter: keep\n"
+        )
+        loaded = load_dataset(EPath(recipe_path)).get_datasets(
+            training=False,
+            split_part="train",
+            worker_config=WorkerConfig(rank=0, world_size=1, num_workers=0),
+        )
+        assert len(loaded.datasets[0].dataset) == 2
