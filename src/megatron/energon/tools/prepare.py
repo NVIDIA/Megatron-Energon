@@ -7,6 +7,7 @@ import json
 import re
 import typing
 from contextlib import nullcontext
+from itertools import chain
 from pathlib import Path
 from types import FunctionType
 from typing import Any, List, Optional, Tuple, Type
@@ -107,6 +108,13 @@ def _discover_jsonl_shards(path: EPath, exclude: str) -> list[tuple[str, EPath]]
     return shards
 
 
+def _has_tar_shards(path: EPath, exclude: str) -> bool:
+    for tar_path in chain(path.glob("**/*.tar"), path.glob("**/*.tgz")):
+        if not (exclude and re.search(exclude, str(tar_path.relative_to(path)))):
+            return True
+    return False
+
+
 def _is_jsonl_shard_manifest(path: EPath) -> bool:
     dataset_yaml = path / MAIN_FOLDER_NAME / "dataset.yaml"
     if not dataset_yaml.is_file():
@@ -155,21 +163,18 @@ def _prepare_jsonl_shard_directory(
     non_interactive: bool,
     split_ratio: Optional[str],
     force_overwrite: bool,
-) -> int:
-    if check_dataset_info_present(path):
-        info = get_dataset_info(path)
-        if not force_overwrite:
-            if non_interactive:
-                raise click.ClickException(
-                    "JSONL shard dataset has already been prepared. "
-                    "Use --force-overwrite to overwrite."
-                )
-            if not click.confirm(
-                "It seems the JSONL shard dataset had already been prepared. "
-                "Do you want to continue?"
-            ):
-                return int(sum(info.get("shard_counts", {}).values()))
+) -> None:
+    if check_dataset_info_present(path) and not force_overwrite:
+        if non_interactive:
+            raise click.ClickException(
+                "JSONL shard dataset has already been prepared. Use --force-overwrite to overwrite."
+            )
+        if not click.confirm(
+            "It seems the JSONL shard dataset had already been prepared. Do you want to continue?"
+        ):
+            return
 
+    print("Preparing jsonl shard dataset...")
     click.echo(f"Found {len(shards)} JSONL shard files.")
     shard_counts = {}
     iterable = shards
@@ -206,7 +211,7 @@ def _prepare_jsonl_shard_directory(
         dataset_definition=dataset_definition,
     )
 
-    return sum(shard_counts.values())
+    print(f"Done. Found {sum(shard_counts.values())} samples.")
 
 
 @click.command(name="prepare")
@@ -380,8 +385,7 @@ def command(
             raise click.ClickException(
                 "JSONL datasets do not support media metadata. Remove --media-metadata-by-... to continue."
             )
-        print("Preparing jsonl shard dataset...")
-        count = _prepare_jsonl_shard_directory(
+        _prepare_jsonl_shard_directory(
             path,
             shards=_discover_jsonl_shards(path, exclude),
             progress=progress,
@@ -391,7 +395,6 @@ def command(
             split_ratio=split_ratio,
             force_overwrite=force_overwrite,
         )
-        print(f"Done. Found {count} samples.")
         return
     elif ds_type == EnergonDatasetType.FILESYSTEM:
         raise click.ClickException(
@@ -403,13 +406,19 @@ def command(
     jsonl_shards = (
         _discover_jsonl_shards(path, exclude) if ds_type == EnergonDatasetType.INVALID else []
     )
+    if jsonl_shards and _has_tar_shards(path, exclude):
+        # Tars win so that WebDatasets shipping JSONL side files keep preparing as before.
+        click.echo(
+            f"Ignoring {len(jsonl_shards)} JSONL file(s) because tar shards were found. "
+            "Use --exclude to select the shards to prepare."
+        )
+        jsonl_shards = []
     if jsonl_shards:
         if do_media_metadata:
             raise click.ClickException(
                 "JSONL datasets do not support media metadata. Remove --media-metadata-by-... to continue."
             )
-        print("Preparing jsonl shard dataset...")
-        count = _prepare_jsonl_shard_directory(
+        _prepare_jsonl_shard_directory(
             path,
             shards=jsonl_shards,
             progress=progress,
@@ -419,7 +428,6 @@ def command(
             split_ratio=split_ratio,
             force_overwrite=force_overwrite,
         )
-        print(f"Done. Found {count} samples.")
         return
     if tar_index_only:
         info = get_dataset_info(path)

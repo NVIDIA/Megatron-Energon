@@ -6,6 +6,7 @@
 import gc
 import json
 import logging
+import os
 import random
 import sys
 import tempfile
@@ -16,6 +17,7 @@ from pathlib import Path
 from typing import Iterable
 
 import torch
+import webdataset as wds
 from click.testing import CliRunner
 
 from megatron.energon import (
@@ -28,6 +30,7 @@ from megatron.energon import (
     basic_sample_keys,
     edataclass,
     get_loader,
+    get_savable_loader,
     get_train_dataset,
     stateless,
 )
@@ -508,9 +511,63 @@ class TestJsonlDataset(unittest.TestCase):
         with open(shard_dir / "shard_0.jsonl", "a") as f:
             f.write(json.dumps({"idx": 2, "txt": "2"}) + "\n")
 
-        with self.assertRaises(AssertionError):
-            get_train_dataset(
-                shard_dir,
+        dataset = get_train_dataset(
+            shard_dir,
+            worker_config=WorkerConfig(rank=0, world_size=1, num_workers=0, seed_offset=42),
+            batch_size=1,
+            shuffle_buffer_size=None,
+            max_samples_per_sequence=None,
+            task_encoder=SimpleCookingTaskEncoder(),
+            repeat=False,
+        )
+        with self.assertRaisesRegex(ValueError, "Regenerate the index"):
+            list(get_loader(dataset))
+
+    def test_prepared_jsonl_shard_directory_validates_shards_lazily(self):
+        shard_dir = self.dataset_path / "jsonl_shards_lazy"
+        shard_dir.mkdir()
+        self.create_text_test_dataset(
+            shard_dir / "shard_0.jsonl", range(0, 2), range(0, 2), prepare=False
+        )
+        self.create_text_test_dataset(
+            shard_dir / "shard_1.jsonl", range(2, 4), range(2, 4), prepare=False
+        )
+        self.prepare_jsonl_shard_dir(shard_dir)
+        (shard_dir / "shard_1.jsonl.idx").unlink()
+
+        # Building the factory relies on the manifest and must not open every shard index.
+        factory = DefaultCrudeJsonlShardListDatasetFactory(
+            EPath(shard_dir),
+            training=False,
+            worker_config=WorkerConfig(rank=0, world_size=1, num_workers=0),
+            split_part="train",
+        )
+        assert len(factory) == 4
+        store = factory.as_file_store()
+        data, _source = store["1"]
+        assert json.loads(data) == {"idx": 1, "txt": "1"}
+        with self.assertRaisesRegex(ValueError, "Regenerate the index"):
+            store["2"]
+        store.close()
+
+    def test_index_freshness_ignores_mtime(self):
+        shard_dir = self.dataset_path / "jsonl_shards_copied"
+        shard_dir.mkdir()
+        self.create_text_test_dataset(
+            shard_dir / "shard_0.jsonl", range(0, 2), range(0, 2), prepare=False
+        )
+        self.prepare_jsonl_shard_dir(shard_dir)
+        # Copies and uploads without preserved timestamps make data files newer than their index.
+        for jsonl_path in (shard_dir / "shard_0.jsonl", self.dataset_path / "ds1.jsonl"):
+            newer = os.stat(f"{jsonl_path}.idx").st_mtime + 60
+            os.utime(jsonl_path, (newer, newer))
+
+        for path, expected in (
+            (shard_dir, [0, 1]),
+            (self.dataset_path / "ds1.jsonl", list(range(55))),
+        ):
+            dataset = get_train_dataset(
+                path,
                 worker_config=WorkerConfig(rank=0, world_size=1, num_workers=0, seed_offset=42),
                 batch_size=1,
                 shuffle_buffer_size=None,
@@ -518,6 +575,73 @@ class TestJsonlDataset(unittest.TestCase):
                 task_encoder=SimpleCookingTaskEncoder(),
                 repeat=False,
             )
+            assert sorted(idx for batch in get_loader(dataset) for idx in batch.idx) == expected
+
+    def test_prepared_jsonl_shard_directory_restore_sample(self):
+        shard_dir = self.dataset_path / "jsonl_shards_restore"
+        shard_dir.mkdir()
+        self.create_text_test_dataset(
+            shard_dir / "shard_0.jsonl", range(0, 3), range(0, 3), prepare=False
+        )
+        self.create_text_test_dataset(
+            shard_dir / "shard_1.jsonl", range(3, 6), range(3, 6), prepare=False
+        )
+        self.prepare_jsonl_shard_dir(shard_dir)
+
+        loader = get_savable_loader(
+            get_train_dataset(
+                shard_dir,
+                worker_config=WorkerConfig(rank=0, world_size=1, num_workers=0, seed_offset=42),
+                batch_size=2,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                task_encoder=SimpleCookingTaskEncoder(),
+            )
+        )
+        batches = [batch for _, batch in zip(range(4), loader)]
+        assert loader.can_restore_sample()
+        for batch in batches:
+            restored = loader.restore_sample(batch.__restore_key__)
+            assert restored.idx == batch.idx
+            assert restored.text == batch.text
+
+    def test_prepare_prefers_tars_over_jsonl_files(self):
+        mixed_dir = self.dataset_path / "tars_with_jsonl"
+        mixed_dir.mkdir()
+        with wds.TarWriter(str(mixed_dir / "data-0.tar")) as writer:
+            for i in range(4):
+                writer.write({"__key__": f"{i:04d}", "txt": str(i)})
+        self.create_text_test_dataset(
+            mixed_dir / "captions.jsonl", range(1), range(1), prepare=False
+        )
+
+        result = CliRunner().invoke(
+            prepare_command,
+            [str(mixed_dir), "--split-ratio", "1,0,0", "--non-interactive", "--no-progress"],
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 0, result.stdout
+        assert "Ignoring 1 JSONL file" in result.stdout, result.stdout
+        with open(mixed_dir / ".nv-meta" / ".info.json") as f:
+            assert json.load(f)["shard_counts"] == {"data-0.tar": 4}
+        assert not (mixed_dir / "captions.jsonl.idx").exists()
+
+    def test_prepare_jsonl_shard_directory_declined_overwrite(self):
+        shard_dir = self.dataset_path / "jsonl_shards_reprepare"
+        shard_dir.mkdir()
+        self.create_text_test_dataset(
+            shard_dir / "shard_0.jsonl", range(0, 2), range(0, 2), prepare=False
+        )
+        self.prepare_jsonl_shard_dir(shard_dir)
+
+        result = CliRunner().invoke(
+            prepare_command,
+            [str(shard_dir), "--no-progress"],
+            input="n\n",
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 0, result.stdout
+        assert "Done" not in result.stdout, result.stdout
 
     def test_prepared_jsonl_shard_directory_file_store(self):
         shard_dir = self.dataset_path / "jsonl_shards_filestore"
