@@ -161,14 +161,17 @@ Prepare the directory rather than an individual file:
 
 ```shell
 energon prepare /path/to/my_jsonl_dataset \
-    --split-ratio 8,1,1 \
+    --split-parts 'train:train/.*' \
+    --split-parts 'val:validation/.*' \
     --non-interactive
 ```
 
-The split ratio assigns complete shards, not individual JSONL records. In
-interactive mode, omitting `--split-ratio` prompts for the ratio. To assign
-shards by name instead, repeat `--split-parts SPLIT:PATTERN`; explicit patterns
-take precedence over the ratio.
+Each `--split-parts SPLIT:PATTERN` assigns the shards whose path relative to the
+dataset root matches the regular expression. Without patterns, `--split-ratio 8,1,1`
+assigns complete shards, not individual JSONL records, in path order (shuffled
+with `--shuffle-tars`) and ignores the folder layout. In interactive mode,
+omitting both options prompts for the ratio. If the directory also contains tar
+files, `energon prepare` prepares it as a WebDataset and ignores the JSONL files.
 
 Preparation creates an index beside every shard and a manifest for the whole
 directory:
@@ -208,8 +211,8 @@ splits:
     split_part: val
 ```
 
-If any JSONL shard changes after preparation, its index is considered stale and
-loading fails. Run `energon prepare` again (using `--force-overwrite` in
+If the size of a JSONL shard no longer matches its index, the index is considered
+stale and reading that shard fails. Run `energon prepare` again (using `--force-overwrite` in
 non-interactive workflows) to rebuild the indexes and manifest. Prepared JSONL
 shard directories support shard-level splits but not sample-level excludes.
 
