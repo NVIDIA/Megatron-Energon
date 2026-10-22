@@ -160,7 +160,7 @@ class BinIdxReader(SamplePartFileReader[FilteredSample]):
 
     # Files are opened lazily, so forked loader workers don't share file offsets and the
     # reader can be reused after close().
-    _idx_reader: IIdxReader | None = None
+    _lazy_idx_reader: IIdxReader | None = None
     _bin_file: BinaryIO | None = None
 
     def __init__(
@@ -175,17 +175,17 @@ class BinIdxReader(SamplePartFileReader[FilteredSample]):
         self._bin_size = self.bin_path.size()
 
     @property
-    def idx_reader(self) -> IIdxReader:
-        if self._idx_reader is None:
+    def _idx_reader(self) -> IIdxReader:
+        if self._lazy_idx_reader is None:
             idx_path = _idx_path(self.bin_path)
             if self.bin_path.is_local():
-                self._idx_reader = MMapIdxReader(idx_path)
+                self._lazy_idx_reader = MMapIdxReader(idx_path)
             else:
-                self._idx_reader = IdxReader(idx_path)
-        return self._idx_reader
+                self._lazy_idx_reader = IdxReader(idx_path)
+        return self._lazy_idx_reader
 
     def __len__(self) -> int:
-        return len(self.idx_reader)
+        return len(self._idx_reader)
 
     def __getitem__(self, idx: int | str) -> FilteredSample | tuple[bytes, SourceInfo] | None:
         full_entry_name = False
@@ -228,8 +228,8 @@ class BinIdxReader(SamplePartFileReader[FilteredSample]):
         return sample
 
     def _read_tokens(self, idx: int) -> bytes:
-        byte_offset = self.idx_reader.pointer(idx)
-        byte_length = self.idx_reader.length(idx) * self.idx_reader.dtype_size
+        byte_offset = self._idx_reader.pointer(idx)
+        byte_length = self._idx_reader.length(idx) * self._idx_reader.dtype_size
 
         if self._bin_file is None:
             self._bin_file = self.bin_path.open("rb")
@@ -245,18 +245,18 @@ class BinIdxReader(SamplePartFileReader[FilteredSample]):
 
     def list_all_samples(self) -> Generator[Tuple[str, int, int], None, None]:
         for i in range(len(self)):
-            yield str(i), self.idx_reader.length(i) * self.idx_reader.dtype_size, 0
+            yield str(i), self._idx_reader.length(i) * self._idx_reader.dtype_size, 0
 
     def list_all_sample_parts(self) -> Generator[Tuple[str, int, int], None, None]:
         for i in range(len(self)):
-            yield f"{i}.tokens", self.idx_reader.length(i) * self.idx_reader.dtype_size, 0
+            yield f"{i}.tokens", self._idx_reader.length(i) * self._idx_reader.dtype_size, 0
 
     def list_sample_parts(self, sample_key: str) -> Generator[Tuple[str, int, int], None, None]:
         try:
             idx = int(sample_key)
         except ValueError:
             raise ValueError(f"Invalid bin-idx sample key: {sample_key}")
-        yield f"{sample_key}.tokens", self.idx_reader.length(idx) * self.idx_reader.dtype_size, 0
+        yield f"{sample_key}.tokens", self._idx_reader.length(idx) * self._idx_reader.dtype_size, 0
 
     def get_total_size(self) -> int:
         return self._bin_size
@@ -267,9 +267,9 @@ class BinIdxReader(SamplePartFileReader[FilteredSample]):
                 self._bin_file.close()
                 self._bin_file = None
         finally:
-            if self._idx_reader is not None:
-                self._idx_reader.close()
-                self._idx_reader = None
+            if self._lazy_idx_reader is not None:
+                self._lazy_idx_reader.close()
+                self._lazy_idx_reader = None
 
     @staticmethod
     def count_samples(bin_path: EPath | str) -> int:

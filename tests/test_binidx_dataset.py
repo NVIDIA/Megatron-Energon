@@ -238,7 +238,7 @@ class TestBinIdxDataset(unittest.TestCase):
             with self.subTest(use_mmap=use_mmap):
                 reader = BinIdxReader(EPath(bin_path))
                 if not use_mmap:
-                    reader._idx_reader = IdxReader(EPath(bin_path.with_suffix(".idx")))
+                    reader._lazy_idx_reader = IdxReader(EPath(bin_path.with_suffix(".idx")))
                 try:
                     self.assertEqual(
                         np.frombuffer(reader[0]["tokens"], dtype=np.int32).tolist(), [1, 2, 3]
