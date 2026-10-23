@@ -1078,7 +1078,6 @@ class TestDataset(unittest.TestCase):
         locals().clear()
         gc.collect()
 
-
     def test_redist_single_rank_checkpoint(self):
         """A checkpoint of a single rank can be redistributed to more ranks."""
         num_workers = 4
