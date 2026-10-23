@@ -22,6 +22,7 @@ from megatron.energon.recipe.loader_interface import (
     LoadedDatasetList,
     TraversedDatasetReference,
 )
+from megatron.energon.recipe.merge import merge_weighted_datasets
 from megatron.energon.tags import TagsAlias, resolve_tags
 from megatron.energon.worker import WorkerConfig
 
@@ -525,7 +526,7 @@ class RecipeBlend(
                 datasets.append(loaded_dataset)
         return LoadedDatasetList(
             blend_mode=DatasetBlendMode.DATASET_WEIGHT,
-            datasets=datasets,
+            datasets=merge_weighted_datasets(datasets),
         )
 
 
