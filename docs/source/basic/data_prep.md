@@ -69,7 +69,7 @@ These are the typical steps to get your data ready:
 2. Create the auxiliary dataset(s). Can be multiple datasets, e.g. one per modality.
     * Either as a folder on disk with all the media files inside
     * Or as another WebDataset that contains just the media files (with the exact same names)
-3. Run our preparation tool `energon prepare` **on both datasets** (yes also on JSONL files) to convert to an energon-compatible format
+3. Run our preparation tool `energon prepare` **on both datasets** (yes also on JSONL files or directories) to convert to an energon-compatible format
     * Configure WebDataset-based crude datasets as `CrudeWebdataset`; JSONL datasets are loaded as crude data by default.
     * For the auxiliary datasets, we recommend to enable the [media metadata feature](media-metadata) to store additional information about the media (like image size, resolution, video duration etc.)
 4. Create a [recipe](../basic/recipe) that specifies what auxiliary data to load for each primary dataset
@@ -84,7 +84,7 @@ It has fewer features, but can easily be read using a standard editor.
 ```{admonition} Good to know
 :class: tip
 A JSONL dataset cannot contain media files, but it can reference media files elsewhere (auxiliary data).
-A direct JSONL file has no train/val/test split.
+A direct JSONL file has no train/val/test split; a prepared directory of JSONL shards can define splits.
 It cannot be used as an auxiliary dataset by other primary datasets.
 It cannot be mounted using `energon mount`.
 ```
@@ -140,6 +140,78 @@ splits:
 
 An auxiliary data source can be a local or remote folder, or other energon-prepared webdatasets. Even multiple auxiliary sources can be used.
 For all the options and to see how to specify a matching cooker, please check out the section on [auxiliary data](aux-data).
+
+### A Directory of JSONL Shards
+
+Use a prepared shard directory when one JSONL file is too large, when the
+dataset should be distributed as an indexed shard list across ranks and workers,
+or when train/validation/test splits should be assigned by shard. Energon discovers
+`.jsonl` files recursively:
+
+```text
+my_jsonl_dataset/
+├── train/
+│   ├── shard_000.jsonl
+│   └── shard_001.jsonl
+└── validation/
+    └── shard_000.jsonl
+```
+
+Prepare the directory rather than an individual file:
+
+```shell
+energon prepare /path/to/my_jsonl_dataset \
+    --split-ratio 8,1,1 \
+    --non-interactive
+```
+
+The split ratio assigns complete shards, not individual JSONL records. In
+interactive mode, omitting `--split-ratio` prompts for the ratio. To assign
+shards by name instead, repeat `--split-parts SPLIT:PATTERN`; explicit patterns
+take precedence over the ratio.
+
+Preparation creates an index beside every shard and a manifest for the whole
+directory:
+
+```text
+my_jsonl_dataset/
+├── .nv-meta/
+│   ├── .info.json
+│   ├── dataset.yaml
+│   └── split.yaml
+├── train/
+│   ├── shard_000.jsonl
+│   ├── shard_000.jsonl.idx
+│   ├── shard_001.jsonl
+│   └── shard_001.jsonl.idx
+└── validation/
+    ├── shard_000.jsonl
+    └── shard_000.jsonl.idx
+```
+
+`dataset.yaml` selects
+{py:class}`DefaultCrudeJsonlShardListDatasetFactory
+<megatron.energon.DefaultCrudeJsonlShardListDatasetFactory>`. The factory uses
+the manifest's stable shard order and sample counts, supports distributed
+loading, and exposes the selected split as crude samples. A Recipe can select a
+different physical split for a logical split:
+
+```yaml
+__module__: megatron.energon
+__class__: Recipe
+splits:
+  train:
+    path: ./my_jsonl_dataset
+    split_part: train
+  val:
+    path: ./my_jsonl_dataset
+    split_part: val
+```
+
+If any JSONL shard changes after preparation, its index is considered stale and
+loading fails. Run `energon prepare` again (using `--force-overwrite` in
+non-interactive workflows) to rebuild the indexes and manifest. Prepared JSONL
+shard directories support shard-level splits but not sample-level excludes.
 
 (binidx-dataset)=
 ## Using a Megatron-LM BinIdx Dataset
@@ -793,11 +865,32 @@ The `media_metadata` table is used to store the media metadata for the selected 
 (data-on-disk-jsonl)=
 ## Dataset Format on Disk for JSONL Datasets
 
+A direct JSONL file and a prepared JSONL shard directory have different metadata
+layouts.
+
 For a direct file, `energon prepare` creates only an index with the same base
 filename. If the dataset is named `my_dataset.jsonl`, the resulting index is
 `my_dataset.jsonl.idx`. The direct file is loaded as crude data and has no
 train/validation/test split; callers may pass a split name for API consistency,
 but the full file is used.
+
+For a directory of shards, each JSONL file has its own adjacent `.idx` file and
+the directory has a `.nv-meta` manifest:
+
+```text
+my_dataset/
+├── .nv-meta/
+│   ├── .info.json
+│   ├── dataset.yaml
+│   └── split.yaml
+├── shard_000.jsonl
+├── shard_000.jsonl.idx
+├── shard_001.jsonl
+└── shard_001.jsonl.idx
+```
+
+The manifest records the ordered shard list, sample counts, and shard-level
+split assignment.
 
 (data-on-disk-filesystem)=
 ## Dataset Format on Disk for Filesystem Datasets
