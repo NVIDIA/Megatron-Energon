@@ -8,7 +8,8 @@ The aim of data preparation is to convert your data to a format that the energon
 Energon's primary prepared format is a manifest dataset with extra information stored in a folder called `.nv-meta`.
 The most common manifest-backed format is [WebDataset](https://github.com/webdataset/webdataset).
 Below in [](data-on-disk) we explain the details about this format.
-We also support direct JSONL datasets, which are interpreted as [crude data](crude-data).
+We also support direct JSONL and [Megatron-LM BinIdx](binidx-dataset)
+datasets, which are interpreted as [crude data](crude-data).
 
 ## Important Considerations
 
@@ -139,6 +140,103 @@ splits:
 
 An auxiliary data source can be a local or remote folder, or other energon-prepared webdatasets. Even multiple auxiliary sources can be used.
 For all the options and to see how to specify a matching cooker, please check out the section on [auxiliary data](aux-data).
+
+(binidx-dataset)=
+## Using a Megatron-LM BinIdx Dataset
+
+Energon can load a Megatron-LM indexed dataset directly as a crude,
+pre-tokenized dataset. The two files must be next to each other and have the same
+stem:
+
+```text
+my_dataset/
+├── tokens.bin
+└── tokens.idx
+```
+
+The `.idx` file must use the version 1 `MMIDIDX` format produced by
+`megatron.core.datasets.indexed_dataset`. It stores the token dtype, sequence
+lengths, and byte offsets into the `.bin` file. Each indexed sequence becomes one
+Energon sample.
+
+Pass the `.bin` path—not the `.idx` path—to {py:func}`get_train_dataset
+<megatron.energon.get_train_dataset>` or {py:func}`get_val_dataset
+<megatron.energon.get_val_dataset>`. Energon detects the matching `.idx` file
+automatically, so no `energon prepare` step or `.nv-meta` directory is required.
+
+The default factory yields a {py:class}`CrudeSample
+<megatron.energon.CrudeSample>` with:
+
+* `sample["tokens"]`: a one-dimensional NumPy array using the dtype recorded in
+  the `.idx` header,
+* `sample["__key__"]`: the decimal sequence index as a string, and
+* the standard Energon source and restore metadata.
+
+Use a cooker to convert that crude representation to the sample type expected by
+the task:
+
+```python
+import numpy as np
+
+from megatron.energon import (
+    Cooker,
+    CrudeSample,
+    DefaultTaskEncoder,
+    Sample,
+    basic_sample_keys,
+    edataclass,
+    stateless,
+)
+
+
+@edataclass
+class TokenSample(Sample):
+    tokens: np.ndarray
+
+
+@stateless
+def cook_tokens(sample: CrudeSample) -> TokenSample:
+    return TokenSample(
+        **basic_sample_keys(sample),
+        tokens=sample["tokens"],
+    )
+
+
+class TokenTaskEncoder(DefaultTaskEncoder):
+    cookers = [Cooker(cook=cook_tokens)]
+```
+
+Then load it like any other dataset:
+
+```python
+from megatron.energon import WorkerConfig, get_train_dataset
+
+dataset = get_train_dataset(
+    "/data/my_dataset/tokens.bin",
+    worker_config=WorkerConfig.default_worker_config(),
+    task_encoder=TokenTaskEncoder(),
+    batch_size=1,
+    shuffle_buffer_size=100,
+    max_samples_per_sequence=None,
+)
+```
+
+Real token sequences usually have different lengths. For larger batches, extend
+the task encoder with the padding, packing, and batching behavior required by the
+model instead of relying on the minimal example above.
+
+A recipe may also refer to the `.bin` file directly:
+
+```yaml
+__module__: megatron.energon
+__class__: Recipe
+splits:
+  train:
+    path: ./my_dataset/tokens.bin
+```
+
+A BinIdx pair has no internal train/validation/test split. Use different file
+pairs or recipe subsets when the training and evaluation data must differ.
 
 (wds-format)=
 ## Step 1: Creating a WebDataset
@@ -530,7 +628,7 @@ For more information please also read [](custom-sample-loader).
 
 The energon library supports loading large multi-modal datasets from disk. A
 manifest-backed WebDataset must comply with the format described in this
-section; direct JSONL datasets use the layout above.
+section; direct JSONL and BinIdx datasets use the layouts above.
 
 A valid energon dataset must contain an `.nv-meta` folder with certain files as shown below.
 

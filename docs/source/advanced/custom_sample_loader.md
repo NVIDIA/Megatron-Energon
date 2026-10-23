@@ -58,6 +58,7 @@ part should be kept. The meaning of the name depends on the dataset format:
 | --- | --- |
 | WebDataset | Sample part names/extensions such as `jpg`, `gt.txt`, or `bbox.json` |
 | JSONL | The single logical part `json` |
+| Megatron-LM BinIdx | The single logical part `tokens` |
 
 For example, a WebDataset cooker can avoid decoding unused parts:
 
@@ -70,8 +71,9 @@ Cooker(
 
 A filter configured by the dataset factory and a filter supplied by a cooker
 are combined by intersection: a part is loaded only when both filters keep it.
-Filtering out `json` removes the only payload part from JSONL samples, leaving
-only Energon metadata.
+Filtering out `json` or `tokens` removes the only
+payload part from JSONL or BinIdx samples respectively, leaving only Energon
+metadata.
 
 
 (interleaved-sample-loader)=

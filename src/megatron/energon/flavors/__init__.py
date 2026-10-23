@@ -12,7 +12,15 @@ from megatron.energon.flavors.base_manifest_dataset import (
     BaseManifestDatasetFactory,
     BaseManifestShardListDatasetFactory,
 )
+from megatron.energon.flavors.binidx import BinIdxDatasetFactory, DefaultBinIdxDatasetFactory
 from megatron.energon.flavors.captioning import CaptioningSample, CaptioningWebdataset
+from megatron.energon.flavors.common.filter_index import (
+    FilterIndexWriter,
+    FilterView,
+    build_filter_index,
+    build_filter_index_from_global_indexes,
+    build_filter_index_from_shard_indexes,
+)
 from megatron.energon.flavors.common.manifest.io import ShardListMeta
 from megatron.energon.flavors.crude import CrudeSample, CrudeWebdataset
 from megatron.energon.flavors.image import ImageSample, ImageWebdataset
@@ -53,15 +61,19 @@ __all__ = [
     "BaseManifestDatasetFactory",
     "BaseManifestShardListDatasetFactory",
     "BaseWebdatasetFactory",
+    "BinIdxDatasetFactory",
     "CaptioningSample",
     "CaptioningWebdataset",
     "CrudeJsonlDatasetFactory",
     "CrudeSample",
     "CrudeWebdataset",
+    "DefaultBinIdxDatasetFactory",
     "DefaultCrudeJsonlDatasetFactory",
     "DefaultDecoderWebdatasetFactory",
     "DefaultGenericWebdatasetFactory",
     "EmptyDatasetError",
+    "FilterView",
+    "FilterIndexWriter",
     "ImageClassificationSample",
     "ImageClassificationWebdataset",
     "ImageDecoderType",
@@ -88,4 +100,7 @@ __all__ = [
     "VQASample",
     "VQAWebdataset",
     "ShardListMeta",
+    "build_filter_index",
+    "build_filter_index_from_global_indexes",
+    "build_filter_index_from_shard_indexes",
 ]
