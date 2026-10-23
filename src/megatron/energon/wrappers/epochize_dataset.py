@@ -3,7 +3,7 @@
 
 from typing import Any, Dict, Generic, Iterator, Optional, TypeVar
 
-from megatron.energon.flavors.base_dataset import SavableDataset
+from megatron.energon.flavors.base_dataset import FlexState, SavableDataset
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset
 
@@ -46,7 +46,13 @@ class EpochizeDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample])
         self.reset_state_own()
 
     def reset_state_own(self) -> None:
+        self._active_iter = None
         self._offset = 0
+
+    def restore_state(self, state: FlexState) -> None:
+        """Recreate the iterator from the restored source state on the next iteration."""
+        self._active_iter = None
+        super().restore_state(state)
 
     def __iter__(self) -> Iterator[T_sample]:
         # Compute the local length for this worker, i.e. all worker's lengths sum up to the total
