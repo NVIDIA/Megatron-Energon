@@ -24,6 +24,10 @@ check: dev-sync
     uv run ruff check
     uv run ruff format --check
 
+# Check that all commits since the base are signed off and follow Conventional Commits
+check-commits base="origin/develop":
+    python3 scripts/check_commits.py {{base}}..HEAD
+
 # Execute all unit tests
 test: dev-sync
     uv run -m unittest discover -v -s tests
