@@ -12,6 +12,8 @@ import warnings
 from pathlib import Path
 
 import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
 import webdataset as wds
 import yaml
 from click.testing import CliRunner
@@ -32,6 +34,7 @@ from megatron.energon.flavors import BaseWebdatasetFactory
 from megatron.energon.flavors.common.filter_index import filter_index_paths
 from megatron.energon.flavors.common.manifest.paths import MAIN_FOLDER_NAME
 from megatron.energon.flavors.common.manifest.types import ShardInfo
+from megatron.energon.flavors.common.manifest.write import write_manifest_dataset_metadata
 from megatron.energon.flavors.dataset_factory_resolver import register_dataset_factory_provider
 from megatron.energon.flavors.dataset_type import EnergonDatasetType
 from megatron.energon.flavors.jsonl.crude_jsonl_dataset import (
@@ -428,6 +431,34 @@ class TestFilterIndex(unittest.TestCase):
         path = EPath(dataset_path)
         build_filter_index(path, "keep", [2, 4])
         assert [s["json"]["idx"] for s in self._load_samples(path)] == [2, 4]
+
+    def test_parquet_filter(self):
+        dataset_path = self.dataset_path / "parquet"
+        dataset_path.mkdir()
+        (dataset_path / MAIN_FOLDER_NAME).mkdir()
+        pq.write_table(pa.table({"idx": [0, 1, 2]}), dataset_path / "a.parquet")
+        pq.write_table(pa.table({"idx": [3, 4, 5]}), dataset_path / "b.parquet")
+        path = EPath(dataset_path)
+        write_manifest_dataset_metadata(
+            path,
+            shards=[
+                ShardInfo(name=name, path=path / name, count=3)
+                for name in ("a.parquet", "b.parquet")
+            ],
+            split_config="split.yaml",
+            split_parts_ratio=[("train", 1.0)],
+            dataset_definition={
+                "__module__": "megatron.energon",
+                "__class__": "DefaultParquetShardListDatasetFactory",
+            },
+        )
+        build_filter_index(path, "keep", [2, 4])
+        assert [s["idx"] for s in self._load_samples(path)] == [2, 4]
+
+        # A direct Parquet file is one shard.
+        file_path = path / "b.parquet"
+        build_filter_index(file_path, "keep", [1])
+        assert [s["idx"] for s in self._load_samples(file_path)] == [4]
 
     def test_binidx_filter_and_recipe_passthrough(self):
         dataset_path = self.dataset_path / "binidx"

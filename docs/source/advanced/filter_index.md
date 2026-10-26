@@ -18,8 +18,8 @@ build_filter_index(EPath("/data/my_dataset"), "quality", [1, 5, 9, 10, 13])
 ```
 
 Indexes refer to the full dataset before split selection. For manifest datasets, shard
-order comes from `.nv-meta/.info.json` or `.info.yaml`. A direct JSONL or bin-idx `.bin`
-file is one shard. You can pass `shards=` to choose an explicit source order or subset.
+order comes from `.nv-meta/.info.json` or `.info.yaml`. A direct JSONL, Parquet, or bin-idx
+`.bin` file is one shard. You can pass `shards=` to choose an explicit source order or subset.
 
 If you already have indexes within each shard, use:
 
