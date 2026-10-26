@@ -31,7 +31,9 @@ from megatron.energon.flavors.image_classification import (
 from megatron.energon.flavors.interleaved import InterleavedSample, InterleavedWebdataset
 from megatron.energon.flavors.jsonl import (
     CrudeJsonlDatasetFactory,
+    CrudeJsonlShardListDatasetFactory,
     DefaultCrudeJsonlDatasetFactory,
+    DefaultCrudeJsonlShardListDatasetFactory,
 )
 from megatron.energon.flavors.multichoice_vqa import MultiChoiceVQASample, MultiChoiceVQAWebdataset
 from megatron.energon.flavors.ocr import OCRSample, OCRWebdataset
@@ -65,10 +67,12 @@ __all__ = [
     "CaptioningSample",
     "CaptioningWebdataset",
     "CrudeJsonlDatasetFactory",
+    "CrudeJsonlShardListDatasetFactory",
     "CrudeSample",
     "CrudeWebdataset",
     "DefaultBinIdxDatasetFactory",
     "DefaultCrudeJsonlDatasetFactory",
+    "DefaultCrudeJsonlShardListDatasetFactory",
     "DefaultDecoderWebdatasetFactory",
     "DefaultGenericWebdatasetFactory",
     "EmptyDatasetError",
