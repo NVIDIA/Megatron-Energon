@@ -80,7 +80,12 @@ class ShardListMeta:
         if len(split_part_files) == 0:
             raise EmptyDatasetError(f"No shards found in split part {split_part!r}")
         return ShardListMeta(
-            sample_excludes={excluded for excluded in split_excludes if "/" in excluded},
+            # Shard names may contain "/" (e.g. "train/0.jsonl"), so they are not sample excludes.
+            sample_excludes={
+                excluded
+                for excluded in split_excludes
+                if "/" in excluded and excluded not in info.shard_counts
+            },
             shards=[
                 ShardInfo(
                     name=name,

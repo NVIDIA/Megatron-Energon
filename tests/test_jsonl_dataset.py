@@ -501,6 +501,33 @@ class TestJsonlDataset(unittest.TestCase):
         assert json.loads(data) == {"idx": 10, "txt": "10"}
         store.close()
 
+    def test_prepared_jsonl_shard_directory_excludes_nested_shard(self):
+        shard_dir = self.dataset_path / "jsonl_shards_nested_exclude"
+        (shard_dir / "train").mkdir(parents=True)
+        self.create_text_test_dataset(
+            shard_dir / "train" / "shard_0.jsonl", range(0, 2), range(0, 2), prepare=False
+        )
+        self.create_text_test_dataset(
+            shard_dir / "train" / "shard_1.jsonl", range(10, 12), range(10, 12), prepare=False
+        )
+        self.prepare_jsonl_shard_dir(shard_dir)
+
+        dataset = get_train_dataset(
+            shard_dir,
+            worker_config=WorkerConfig(rank=0, world_size=1, num_workers=0, seed_offset=42),
+            batch_size=1,
+            shuffle_buffer_size=None,
+            max_samples_per_sequence=None,
+            task_encoder=SimpleCookingTaskEncoder(),
+            repeat=False,
+            split_config=WebdatasetSplits(
+                split_parts={"train": ["train/shard_0.jsonl", "train/shard_1.jsonl"]},
+                exclude=["train/shard_0.jsonl"],
+            ),
+        )
+        samples = list(get_loader(dataset))
+        assert sorted(idx for batch in samples for idx in batch.idx) == [10, 11]
+
     def test_prepared_jsonl_shard_directory_rejects_stale_index(self):
         shard_dir = self.dataset_path / "jsonl_shards_stale"
         shard_dir.mkdir()
