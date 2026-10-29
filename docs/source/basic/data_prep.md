@@ -161,40 +161,22 @@ Prepare the directory rather than an individual file:
 
 ```shell
 energon prepare /path/to/my_jsonl_dataset \
-    --split-ratio 8,1,1 \
+    --split-parts 'train:train/.*' \
+    --split-parts 'val:validation/.*' \
     --non-interactive
 ```
 
-The split ratio assigns complete shards, not individual JSONL records. In
-interactive mode, omitting `--split-ratio` prompts for the ratio. To assign
-shards by name instead, repeat `--split-parts SPLIT:PATTERN`; explicit patterns
-take precedence over the ratio.
+Each `--split-parts SPLIT:PATTERN` assigns the shards whose path relative to the
+dataset root matches the regular expression. Without patterns, `--split-ratio 8,1,1`
+assigns complete shards, not individual JSONL records, in path order (shuffled
+with `--shuffle-tars`) and ignores the folder layout. In interactive mode,
+omitting both options prompts for the ratio. If the directory also contains tar
+files, `energon prepare` prepares it as a WebDataset and ignores the JSONL files.
 
 Preparation creates an index beside every shard and a manifest for the whole
-directory:
+directory, see [Dataset Format on Disk for JSONL Datasets](data-on-disk-jsonl).
 
-```text
-my_jsonl_dataset/
-├── .nv-meta/
-│   ├── .info.json
-│   ├── dataset.yaml
-│   └── split.yaml
-├── train/
-│   ├── shard_000.jsonl
-│   ├── shard_000.jsonl.idx
-│   ├── shard_001.jsonl
-│   └── shard_001.jsonl.idx
-└── validation/
-    ├── shard_000.jsonl
-    └── shard_000.jsonl.idx
-```
-
-`dataset.yaml` selects
-{py:class}`DefaultCrudeJsonlShardListDatasetFactory
-<megatron.energon.DefaultCrudeJsonlShardListDatasetFactory>`. The factory uses
-the manifest's stable shard order and sample counts, supports distributed
-loading, and exposes the selected split as crude samples. A Recipe can select a
-different physical split for a logical split:
+A Recipe can select a different physical split for a logical split:
 
 ```yaml
 __module__: megatron.energon
@@ -208,9 +190,11 @@ splits:
     split_part: val
 ```
 
-If any JSONL shard changes after preparation, its index is considered stale and
-loading fails. Run `energon prepare` again (using `--force-overwrite` in
-non-interactive workflows) to rebuild the indexes and manifest. Prepared JSONL
+If the size of a JSONL shard no longer matches its index, the index is considered
+stale and reading that shard fails. Run `energon prepare` again (using `--force-overwrite` in
+non-interactive workflows) to rebuild the indexes and manifest. Pass
+`--skip-dataset-yaml` to keep a customized `dataset.yaml`. If only index files are
+missing, `--tar-index-only` rebuilds them without changing `.nv-meta`. Prepared JSONL
 shard directories support shard-level splits but not sample-level excludes.
 
 (binidx-dataset)=
@@ -878,15 +862,19 @@ For a directory of shards, each JSONL file has its own adjacent `.idx` file and
 the directory has a `.nv-meta` manifest:
 
 ```text
-my_dataset/
+my_jsonl_dataset/
 ├── .nv-meta/
 │   ├── .info.json
 │   ├── dataset.yaml
 │   └── split.yaml
-├── shard_000.jsonl
-├── shard_000.jsonl.idx
-├── shard_001.jsonl
-└── shard_001.jsonl.idx
+├── train/
+│   ├── shard_000.jsonl
+│   ├── shard_000.jsonl.idx
+│   ├── shard_001.jsonl
+│   └── shard_001.jsonl.idx
+└── validation/
+    ├── shard_000.jsonl
+    └── shard_000.jsonl.idx
 ```
 
 The manifest records the ordered shard list, sample counts, and shard-level
