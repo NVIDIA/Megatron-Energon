@@ -174,23 +174,7 @@ omitting both options prompts for the ratio. If the directory also contains tar
 files, `energon prepare` prepares it as a WebDataset and ignores the JSONL files.
 
 Preparation creates an index beside every shard and a manifest for the whole
-directory:
-
-```text
-my_jsonl_dataset/
-├── .nv-meta/
-│   ├── .info.json
-│   ├── dataset.yaml
-│   └── split.yaml
-├── train/
-│   ├── shard_000.jsonl
-│   ├── shard_000.jsonl.idx
-│   ├── shard_001.jsonl
-│   └── shard_001.jsonl.idx
-└── validation/
-    ├── shard_000.jsonl
-    └── shard_000.jsonl.idx
-```
+directory, see [Dataset Format on Disk for JSONL Datasets](data-on-disk-jsonl).
 
 A Recipe can select a different physical split for a logical split:
 
@@ -876,15 +860,19 @@ For a directory of shards, each JSONL file has its own adjacent `.idx` file and
 the directory has a `.nv-meta` manifest:
 
 ```text
-my_dataset/
+my_jsonl_dataset/
 ├── .nv-meta/
 │   ├── .info.json
 │   ├── dataset.yaml
 │   └── split.yaml
-├── shard_000.jsonl
-├── shard_000.jsonl.idx
-├── shard_001.jsonl
-└── shard_001.jsonl.idx
+├── train/
+│   ├── shard_000.jsonl
+│   ├── shard_000.jsonl.idx
+│   ├── shard_001.jsonl
+│   └── shard_001.jsonl.idx
+└── validation/
+    ├── shard_000.jsonl
+    └── shard_000.jsonl.idx
 ```
 
 The manifest records the ordered shard list, sample counts, and shard-level
