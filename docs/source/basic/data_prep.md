@@ -192,12 +192,7 @@ my_jsonl_dataset/
     └── shard_000.jsonl.idx
 ```
 
-`dataset.yaml` selects
-{py:class}`DefaultCrudeJsonlShardListDatasetFactory
-<megatron.energon.DefaultCrudeJsonlShardListDatasetFactory>`. The factory uses
-the manifest's stable shard order and sample counts, supports distributed
-loading, and exposes the selected split as crude samples. A Recipe can select a
-different physical split for a logical split:
+A Recipe can select a different physical split for a logical split:
 
 ```yaml
 __module__: megatron.energon
