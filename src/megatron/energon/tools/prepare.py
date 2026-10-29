@@ -163,6 +163,7 @@ def _prepare_jsonl_shard_directory(
     non_interactive: bool,
     split_ratio: Optional[str],
     force_overwrite: bool,
+    skip_dataset_yaml: bool,
 ) -> None:
     if check_dataset_info_present(path) and not force_overwrite:
         if non_interactive:
@@ -184,10 +185,12 @@ def _prepare_jsonl_shard_directory(
         for rel_path, shard_path in shard_iter:
             shard_counts[rel_path] = CrudeJsonlDatasetFactory.prepare_dataset(shard_path)
 
-    dataset_definition = {
-        "__module__": "megatron.energon",
-        "__class__": "DefaultCrudeJsonlShardListDatasetFactory",
-    }
+    dataset_definition = None
+    if not skip_dataset_yaml:
+        dataset_definition = {
+            "__module__": "megatron.energon",
+            "__class__": "DefaultCrudeJsonlShardListDatasetFactory",
+        }
     jsonl_shards = [
         ShardInfo(name=rel_path, path=shard_path, count=shard_counts[rel_path])
         for rel_path, shard_path in shards
@@ -394,6 +397,7 @@ def command(
             non_interactive=non_interactive,
             split_ratio=split_ratio,
             force_overwrite=force_overwrite,
+            skip_dataset_yaml=skip_dataset_yaml,
         )
         return
     elif ds_type == EnergonDatasetType.FILESYSTEM:
@@ -427,6 +431,7 @@ def command(
             non_interactive=non_interactive,
             split_ratio=split_ratio,
             force_overwrite=force_overwrite,
+            skip_dataset_yaml=skip_dataset_yaml,
         )
         return
     if tar_index_only:

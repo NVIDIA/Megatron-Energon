@@ -670,6 +670,33 @@ class TestJsonlDataset(unittest.TestCase):
         assert result.exit_code == 0, result.stdout
         assert "Done" not in result.stdout, result.stdout
 
+    def test_prepare_jsonl_shard_directory_skip_dataset_yaml(self):
+        shard_dir = self.dataset_path / "jsonl_shards_skip_yaml"
+        shard_dir.mkdir()
+        self.create_text_test_dataset(
+            shard_dir / "shard_0.jsonl", range(0, 2), range(0, 2), prepare=False
+        )
+        self.prepare_jsonl_shard_dir(shard_dir)
+        dataset_yaml = shard_dir / ".nv-meta" / "dataset.yaml"
+        custom_yaml = dataset_yaml.read_text() + "# customized\n"
+        dataset_yaml.write_text(custom_yaml)
+
+        result = CliRunner().invoke(
+            prepare_command,
+            [
+                str(shard_dir),
+                "--split-ratio",
+                "1,0,0",
+                "--non-interactive",
+                "--no-progress",
+                "--force-overwrite",
+                "--skip-dataset-yaml",
+            ],
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 0, result.stdout
+        assert dataset_yaml.read_text() == custom_yaml
+
     def test_prepared_jsonl_shard_directory_file_store(self):
         shard_dir = self.dataset_path / "jsonl_shards_filestore"
         shard_dir.mkdir()

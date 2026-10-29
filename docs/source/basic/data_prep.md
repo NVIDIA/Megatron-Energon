@@ -192,7 +192,8 @@ splits:
 
 If the size of a JSONL shard no longer matches its index, the index is considered
 stale and reading that shard fails. Run `energon prepare` again (using `--force-overwrite` in
-non-interactive workflows) to rebuild the indexes and manifest. Prepared JSONL
+non-interactive workflows) to rebuild the indexes and manifest. Pass
+`--skip-dataset-yaml` to keep a customized `dataset.yaml`. Prepared JSONL
 shard directories support shard-level splits but not sample-level excludes.
 
 (binidx-dataset)=
