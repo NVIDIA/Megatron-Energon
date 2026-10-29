@@ -697,6 +697,43 @@ class TestJsonlDataset(unittest.TestCase):
         assert result.exit_code == 0, result.stdout
         assert dataset_yaml.read_text() == custom_yaml
 
+    def test_prepare_jsonl_shard_directory_index_only(self):
+        shard_dir = self.dataset_path / "jsonl_shards_index_only"
+        shard_dir.mkdir()
+        self.create_text_test_dataset(
+            shard_dir / "shard_0.jsonl", range(0, 2), range(0, 2), prepare=False
+        )
+        self.create_text_test_dataset(
+            shard_dir / "shard_1.jsonl", range(2, 4), range(2, 4), prepare=False
+        )
+        self.prepare_jsonl_shard_dir(shard_dir, split_ratio="1,1,0")
+        meta_dir = shard_dir / ".nv-meta"
+        (meta_dir / "dataset.yaml").write_text(
+            (meta_dir / "dataset.yaml").read_text() + "# customized\n"
+        )
+        meta_before = {f.name: f.read_text() for f in meta_dir.iterdir()}
+        (shard_dir / "shard_0.jsonl.idx").unlink()
+
+        result = CliRunner().invoke(
+            prepare_command,
+            [str(shard_dir), "--tar-index-only", "--non-interactive", "--no-progress"],
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 0, result.stdout
+        assert (shard_dir / "shard_0.jsonl.idx").exists()
+        assert {f.name: f.read_text() for f in meta_dir.iterdir()} == meta_before
+
+        dataset = get_train_dataset(
+            shard_dir,
+            worker_config=WorkerConfig(rank=0, world_size=1, num_workers=0, seed_offset=42),
+            batch_size=1,
+            shuffle_buffer_size=None,
+            max_samples_per_sequence=None,
+            task_encoder=SimpleCookingTaskEncoder(),
+            repeat=False,
+        )
+        assert sorted(idx for batch in get_loader(dataset) for idx in batch.idx) == [0, 1]
+
     def test_prepared_jsonl_shard_directory_file_store(self):
         shard_dir = self.dataset_path / "jsonl_shards_filestore"
         shard_dir.mkdir()

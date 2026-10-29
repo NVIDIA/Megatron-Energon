@@ -163,9 +163,10 @@ def _prepare_jsonl_shard_directory(
     non_interactive: bool,
     split_ratio: Optional[str],
     force_overwrite: bool,
+    index_only: bool,
     skip_dataset_yaml: bool,
 ) -> None:
-    if check_dataset_info_present(path) and not force_overwrite:
+    if not index_only and check_dataset_info_present(path) and not force_overwrite:
         if non_interactive:
             raise click.ClickException(
                 "JSONL shard dataset has already been prepared. Use --force-overwrite to overwrite."
@@ -184,6 +185,10 @@ def _prepare_jsonl_shard_directory(
     with iterable if progress else nullcontext(iterable) as shard_iter:
         for rel_path, shard_path in shard_iter:
             shard_counts[rel_path] = CrudeJsonlDatasetFactory.prepare_dataset(shard_path)
+
+    if index_only:
+        print(f"Done. Indexed {sum(shard_counts.values())} samples.")
+        return
 
     dataset_definition = None
     if not skip_dataset_yaml:
@@ -244,7 +249,7 @@ def _prepare_jsonl_shard_directory(
 )
 @click.option(
     "--tar-index-only",
-    help="Only (re)generate the tar-index",
+    help="Only (re)generate the tar-index (or the JSONL shard indexes)",
     is_flag=True,
 )
 @click.option(
@@ -397,6 +402,7 @@ def command(
             non_interactive=non_interactive,
             split_ratio=split_ratio,
             force_overwrite=force_overwrite,
+            index_only=tar_index_only,
             skip_dataset_yaml=skip_dataset_yaml,
         )
         return
@@ -431,6 +437,7 @@ def command(
             non_interactive=non_interactive,
             split_ratio=split_ratio,
             force_overwrite=force_overwrite,
+            index_only=tar_index_only,
             skip_dataset_yaml=skip_dataset_yaml,
         )
         return
