@@ -29,6 +29,7 @@ class DatasetLoader(TagsAlias, DatasetLoaderInterface):
     dataset_config: Optional[str] = None
     split_config: Optional[str] = None
     filter_name: Optional[str] = None
+    parquet_read_order: Optional[Literal["row_group_shuffled", "serial"]] = None
 
     def post_initialize(self, recipe_path: Optional[EPath] = None):
         pass
@@ -73,6 +74,8 @@ class DatasetLoader(TagsAlias, DatasetLoaderInterface):
             dataset_config = self.dataset_config
         if self.filter_name is not None:
             kwargs = {**kwargs, "filter_name": self.filter_name}
+        if self.parquet_read_order is not None:
+            kwargs = {**kwargs, "parquet_read_order": self.parquet_read_order}
         return get_dataset_from_config(
             self.path,
             training=training,

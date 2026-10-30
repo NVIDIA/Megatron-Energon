@@ -151,14 +151,16 @@ class BaseIndexedDatasetFactory(
         else:
             active_shards = self.filter_view.filtered_shards
 
+        slice_shards = self._slice_shards(active_shards)
         workers_sample_slice_offsets = self.shard_workers(
-            active_shards,
+            slice_shards,
             worker_config=self.worker_config,
-            max_samples_per_sequence=self.max_samples_per_sequence,
+            max_samples_per_sequence=self._slice_max_samples_per_sequence(),
             rotation_offset=worker_rotation_offset,
             subset=self.subset,
         )
-        self._print_shard_slices(workers_sample_slice_offsets, active_shards)
+        self._print_shard_slices(workers_sample_slice_offsets, slice_shards)
+        self._check_slices(workers_sample_slice_offsets, parallel_shard_iters)
 
         reader = self._build_reader(
             parallel_shard_iters=parallel_shard_iters,
@@ -183,6 +185,16 @@ class BaseIndexedDatasetFactory(
             worker_config=self.worker_config,
         )
 
+    def _slice_shards(self, shards: list[ShardInfo]) -> list[ShardInfo]:
+        """Returns the consecutive ranges of samples that are iterated sequentially and shuffled
+        as a whole. By default these are the shards. Must cover the same samples in the same order.
+        """
+        return shards
+
+    def _slice_max_samples_per_sequence(self) -> Optional[int]:
+        """Returns the length above which the slice shards are split into smaller slices."""
+        return self.max_samples_per_sequence
+
     def _merge_part_filter(
         self, part_filter: Callable[[str], bool] | None
     ) -> Callable[[str], bool] | None:
@@ -198,6 +210,12 @@ class BaseIndexedDatasetFactory(
     ) -> None:
         if DEBUG_SHARD_PRINT:
             _print_shard_slices(self.worker_config, shards, slice_offsets)
+
+    def _check_slices(
+        self, slice_offsets: Sequence[Sequence[int]], parallel_shard_iters: int
+    ) -> None:
+        """Called with the slice offsets of each worker of this rank, e.g. to warn about poor
+        shuffling. Does nothing by default."""
 
     def _load_fn(
         self, part_filter: Callable[[str], bool] | None

@@ -242,6 +242,10 @@ class DatasetReference(
     dataset_config: Optional[str] = None
     split_config: Optional[str] = None
     filter: Optional[str] = None
+    #: Row order of Parquet datasets when training: ``row_group_shuffled`` (default) shuffles row
+    # groups and reads each sequentially, ``serial`` reads all rows in dataset order. Only valid
+    # for Parquet datasets.
+    parquet_read_order: Optional[Literal["row_group_shuffled", "serial"]] = None
 
     #: Auxiliary datasets. May only be specified for crude datasets for cooking. Cooking will get
     # these references to load data from. If specified as string, it will be interpreted as a
@@ -317,6 +321,7 @@ class DatasetReference(
         assert self.dataset_config is None, "Must not set dataset_config"
         assert self.split_config is None, "Must not set split_config"
         assert self.filter is None, "Must not set filter"
+        assert self.parquet_read_order is None, "Must not set parquet_read_order"
         return load_config(
             self.path,
             default_type=Recipe,
@@ -340,6 +345,7 @@ class DatasetReference(
                 split_config=self.split_config,
                 dataset_config=self.dataset_config,
                 filter_name=self.filter,
+                parquet_read_order=self.parquet_read_order,
             )
             self._dataset.post_initialize()
             self._normalize_aux_references(recipe_path, validate=True)
