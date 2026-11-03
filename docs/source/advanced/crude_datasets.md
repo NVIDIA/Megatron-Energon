@@ -309,7 +309,8 @@ access requirements described above.
 
 Protocol names are case-insensitive and must be registered without `+`, `:`, or
 `/`. Register the protocol before loading or traversing the Recipe in every
-process that uses it. Re-registering an existing name raises an error unless
+process that uses it; a `name+backend://` reference with an unregistered `name`
+raises an error. Re-registering an existing name raises an error unless
 `override=True`; use overrides deliberately because they change the meaning of
 existing recipes.
 

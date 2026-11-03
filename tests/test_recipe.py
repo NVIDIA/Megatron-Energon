@@ -36,7 +36,11 @@ from megatron.energon.epathlib.epath import EPath
 from megatron.energon.flavors.common.manifest.paths import MAIN_FOLDER_NAME
 from megatron.energon.recipe.loader import traverse_recipe
 from megatron.energon.recipe.loader_interface import DatasetBlendMode
-from megatron.energon.recipe.recipe import AuxDatasetReference, DatasetReference
+from megatron.energon.recipe.recipe import (
+    AuxDatasetReference,
+    AuxFilesystemReference,
+    DatasetReference,
+)
 from megatron.energon.task_encoder.base import DefaultTaskEncoder
 from megatron.energon.wrappers.blend_dataset import BlendDataset
 from megatron.energon.wrappers.watchdog_dataset import WatchdogDataset
@@ -652,6 +656,37 @@ class TestDataset(unittest.TestCase):
 
         assert isinstance(aux_ref, AuxDatasetReference)
         assert aux_ref.path == "msc://profile/bucket/ds"
+
+    def test_unregistered_wrapped_aux_protocol_raises(self):
+        with self.assertRaisesRegex(ValueError, "Unknown auxiliary filestore protocol"):
+            DatasetReference._normalize_aux_reference("filesytem+msc://profile/bucket/media")
+
+    def test_aux_reference_from_mapping(self):
+        media_path = self.dataset_path / "media"
+        media_path.mkdir()
+
+        recipe_path = self.dataset_path / "mapping_aux_recipe.yaml"
+        recipe_path.write_text(
+            "\n".join(
+                [
+                    "__module__: megatron.energon",
+                    "__class__: Recipe",
+                    "splits:",
+                    "  train:",
+                    "    path: ds1",
+                    "    aux:",
+                    "      media:",
+                    "        fs_path: media",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        train = load_dataset(recipe_path).splits["train"]
+        assert train.aux is not None
+        aux_ref = train.aux["media"]
+        assert isinstance(aux_ref, AuxFilesystemReference)
+        assert aux_ref.fs_path == EPath(media_path)
 
     def test_register_aux_filestore_protocol_rejects_duplicate_without_override(self):
         register_aux_filestore_protocol(
