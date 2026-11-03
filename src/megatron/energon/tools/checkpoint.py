@@ -74,7 +74,8 @@ def detect_and_replicate_pattern(file_list):
             values = [int(x) if x.isdigit() else None for x in all_tokens_at_pos]
             # If *any* of them is None or they vary, we track that as "differences".
             # But let's see if indeed they differ across the files or not.
-            if len(set(values)) > 1:
+            # A single file has no variation, but its numeric tokens are still candidates.
+            if len(set(values)) > 1 or len(tokenized) == 1:
                 # This token position changes among files
                 num_positions.append(pos)
             else:
@@ -87,9 +88,14 @@ def detect_and_replicate_pattern(file_list):
 
     # We expect exactly 1 changing numeric token position
     if len(num_positions) == 0:
-        raise Exception("No numeric portion found that differs among files.")
+        raise Exception(
+            "No numeric portion usable as the rank index found in the checkpoint file name(s)."
+        )
     if len(num_positions) > 1:
-        raise Exception("Multiple numeric portions found that differ. Not a single pattern.")
+        raise Exception(
+            "Multiple numeric portions found in the checkpoint file name(s); "
+            "cannot determine which one is the rank index."
+        )
 
     varying_pos = num_positions[0]
 
@@ -307,10 +313,9 @@ def command_redist(
     required=True,
 )
 def command_info(input_files: List[EPath]):
-    """Display information about a checkpoint.
+    """Display information about one or more checkpoint files.
 
-    Read a checkpoint from CHECKPOINT_PATH (either a single file or directory with *.pt files)
-    and display information about it.
+    Read checkpoint files from INPUT_FILES and display information about them.
     """
 
     # Load the checkpoint(s)
