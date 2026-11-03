@@ -81,9 +81,6 @@ class AuxFilesystemReference(AuxFileStoreReference):
             self.fs_path = recipe_path.parent / self.fs_path
         return self.fs_path
 
-    def post_initialize(self, recipe_path: Optional[EPath] = None) -> None:
-        self._resolve_path(recipe_path)
-
     def get_file_store(self) -> FileStore:
         assert isinstance(self.fs_path, EPath), "Missing call to post_initialize"
         return SystemFileStore(self.fs_path)
@@ -102,9 +99,6 @@ class AuxByteRangeStoreReference(AuxFileStoreReference):
         if not isinstance(self.byterange_fs_path, EPath):
             self.byterange_fs_path = recipe_path.parent / self.byterange_fs_path
         return self.byterange_fs_path
-
-    def post_initialize(self, recipe_path: Optional[EPath] = None) -> None:
-        self._resolve_path(recipe_path)
 
     def get_file_store(self) -> FileStore:
         assert isinstance(self.byterange_fs_path, EPath), "Missing call to post_initialize"
