@@ -171,18 +171,15 @@ class ByteRangeStore(FileStore[bytes]):
         assert byte_offset >= 0, f"byte_offset must be non-negative, got {byte_offset}"
         assert byte_size >= 0, f"byte_size must be non-negative, got {byte_size}"
         file_path = self._resolve_path(path)
-        if byte_size == 0:
-            data = b""
-        else:
-            with file_path.open("rb") as f:
-                f.seek(byte_offset)
-                data = f.read(byte_size)
+        with file_path.open("rb") as f:
+            f.seek(byte_offset)
+            data = f.read(byte_size)
 
-            if len(data) != byte_size:
-                raise IOError(
-                    f"Byte-range read from {file_path} returned {len(data)} bytes, "
-                    f"expected {byte_size} bytes"
-                )
+        if len(data) != byte_size:
+            raise IOError(
+                f"Byte-range read from {file_path} returned {len(data)} bytes, "
+                f"expected {byte_size} bytes"
+            )
 
         key = self._make_key(path, byte_offset, byte_size)
         return data, SourceInfo(
