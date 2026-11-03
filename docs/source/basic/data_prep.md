@@ -867,6 +867,19 @@ my_jsonl_dataset/
 │   ├── .info.json
 │   ├── dataset.yaml
 │   └── split.yaml
+├── shard_000.jsonl
+├── shard_000.jsonl.idx
+├── shard_001.jsonl
+└── shard_001.jsonl.idx
+```
+
+The shards may also be organized in subdirectories, for example to assign splits
+with `--split-parts`:
+
+```text
+my_jsonl_dataset/
+├── .nv-meta/
+│   └── ...
 ├── train/
 │   ├── shard_000.jsonl
 │   ├── shard_000.jsonl.idx
