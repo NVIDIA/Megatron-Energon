@@ -14,6 +14,7 @@ from pathlib import Path
 import numpy as np
 import webdataset as wds
 import yaml
+from click.testing import CliRunner
 
 from megatron.energon import (
     FilterIndexWriter,
@@ -37,6 +38,13 @@ from megatron.energon.flavors.jsonl.crude_jsonl_dataset import (
     CrudeJsonlDatasetFactory,
     DefaultCrudeJsonlDatasetFactory,
 )
+from megatron.energon.tools.prepare import command as prepare_command
+
+
+def _write_jsonl(path: Path, values: range) -> None:
+    with open(path, "w") as f:
+        for value in values:
+            f.write(json.dumps({"idx": value, "text": f"text-{value}"}) + "\n")
 
 
 def _write_binidx(path: Path, *, num_docs: int, doc_len: int = 2) -> None:
@@ -404,6 +412,22 @@ class TestFilterIndex(unittest.TestCase):
             self._load_samples(path)
         build_filter_index(path, "keep", [0, 2], overwrite=True)
         assert [s["json"]["value"] for s in self._load_samples(path)] == [0, 2]
+
+    def test_prepared_jsonl_shard_filter(self):
+        dataset_path = self.dataset_path / "jsonl_shards"
+        dataset_path.mkdir()
+        _write_jsonl(dataset_path / "a.jsonl", range(0, 3))
+        _write_jsonl(dataset_path / "b.jsonl", range(3, 6))
+        result = CliRunner().invoke(
+            prepare_command,
+            [str(dataset_path), "--split-ratio", "1,0,0", "--non-interactive", "--no-progress"],
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 0, result.stdout
+
+        path = EPath(dataset_path)
+        build_filter_index(path, "keep", [2, 4])
+        assert [s["json"]["idx"] for s in self._load_samples(path)] == [2, 4]
 
     def test_binidx_filter_and_recipe_passthrough(self):
         dataset_path = self.dataset_path / "binidx"

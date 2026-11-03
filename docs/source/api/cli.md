@@ -14,7 +14,7 @@ energon prepare /mnt/data/my_captioning_webdataset
 
 The above command will scan your existing off-the-shelf [web dataset](https://webdataset.github.io/webdataset/)
 and add the [needed metadata](data-on-disk) to make it compatible with Energon.
-The same command can also prepare JSONL files.
+The same command can also prepare JSONL files and JSONL shard directories.
 
 Below, you can see the available sub-commands under `energon`.
 
