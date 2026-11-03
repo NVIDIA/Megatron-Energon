@@ -161,21 +161,11 @@ class CrudeJsonlShardListDatasetFactory(
             part_filter=part_filter,
             filter_name=filter_name,
         )
-        self.jsonl_paths = [shard.path for shard in self.shards]
 
     def _validate_manifest_meta(self, meta: ShardListMeta) -> None:
+        # Shard indexes are validated lazily by MultiJsonlReader when a shard is first read.
         if meta.sample_excludes:
             raise ValueError("Prepared JSONL shard datasets do not support sample-level excludes")
-        for shard in meta.shards:
-            actual_count = IJsonlIndexReader.count_samples(shard.path)
-            assert shard.count == actual_count, (
-                f"JSONL shard count mismatch for {shard.path}: "
-                f"metadata={shard.count}, index={actual_count}"
-            )
-            assert IJsonlIndexReader.is_current(shard.path), (
-                "The index of the jsonl file does not match the file. Regenerate the index: "
-                f"{shard.path}"
-            )
 
     def _build_reader(
         self,
@@ -185,7 +175,7 @@ class CrudeJsonlShardListDatasetFactory(
     ):
         return MultiJsonlReader(
             self.path,
-            self.jsonl_paths,
+            self.shards,
             index_cache_size=parallel_shard_iters,
             reader_cache_size=self.reader_cache_size,
             part_filter=part_filter,
@@ -194,7 +184,7 @@ class CrudeJsonlShardListDatasetFactory(
     def as_file_store(self) -> FileStore:
         return MultiJsonlFileStore(
             self.path,
-            self.jsonl_paths,
+            self.shards,
             reader_cache_size=self.reader_cache_size,
         )
 

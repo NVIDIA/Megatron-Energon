@@ -7,6 +7,7 @@ from typing import Any, Callable, Optional
 
 from megatron.energon.cache import FileStore
 from megatron.energon.epathlib import EPath
+from megatron.energon.flavors.common.manifest.types import ShardInfo
 from megatron.energon.flavors.common.reader import IndexedSampleReader
 from megatron.energon.flavors.common.sample_record import FilteredSample
 from megatron.energon.flavors.jsonl.ijsonl import IJsonlIndexReader
@@ -19,31 +20,46 @@ class MultiJsonlReader(IndexedSampleReader[FilteredSample]):
     def __init__(
         self,
         path: EPath,
-        jsonl_paths: list[EPath],
+        shards: list[ShardInfo],
         *,
         index_cache_size: int = 5,
         reader_cache_size: int = 16,
         part_filter: Optional[Callable[[str], bool]] = None,
     ):
-        assert jsonl_paths, f"No JSONL shards found for {path}"
+        assert shards, f"No JSONL shards found for {path}"
         self.path = path
-        self.jsonl_paths = jsonl_paths
+        self.shards = shards
         self.index_cache_size = index_cache_size
         self.reader_cache_size = reader_cache_size
         self.part_filter = part_filter
-        self.counts = [IJsonlIndexReader.count_samples(path) for path in jsonl_paths]
+        # Counts come from the manifest; shard indexes are only opened when a shard is first read.
         self.cumulative_counts: list[int] = []
         running = 0
-        for count in self.counts:
-            running += count
+        for shard in shards:
+            running += shard.count
             self.cumulative_counts.append(running)
+        self._validated_shards: set[int] = set()
         self._readers: OrderedDict[int, Any] = OrderedDict()
 
     def __len__(self) -> int:
         return self.cumulative_counts[-1] if self.cumulative_counts else 0
 
     def __str__(self) -> str:
-        return f"MultiJsonlReader(path={self.path}, num_shards={len(self.jsonl_paths)})"
+        return f"MultiJsonlReader(path={self.path}, num_shards={len(self.shards)})"
+
+    def _validate_shard(self, shard_idx: int) -> None:
+        if shard_idx in self._validated_shards:
+            return
+        shard = self.shards[shard_idx]
+        if (
+            not IJsonlIndexReader.is_current(shard.path)
+            or IJsonlIndexReader.count_samples(shard.path) != shard.count
+        ):
+            raise ValueError(
+                f"The index of {shard.path} does not match the file or the dataset manifest. "
+                "Regenerate the index with `energon prepare`."
+            )
+        self._validated_shards.add(shard_idx)
 
     def _reader_for_shard(self, shard_idx: int):
         from megatron.energon.flavors.jsonl.ijsonl_reader import IJsonlReader
@@ -53,8 +69,9 @@ class MultiJsonlReader(IndexedSampleReader[FilteredSample]):
             self._readers[shard_idx] = reader
             return reader
 
+        self._validate_shard(shard_idx)
         reader = IJsonlReader(
-            self.jsonl_paths[shard_idx],
+            self.shards[shard_idx].path,
             index_cache_size=self.index_cache_size,
             part_filter=self.part_filter,
         )
@@ -71,13 +88,6 @@ class MultiJsonlReader(IndexedSampleReader[FilteredSample]):
         prev_count = self.cumulative_counts[shard_idx - 1] if shard_idx > 0 else 0
         return shard_idx, idx - prev_count
 
-    def _shard_name(self, shard_idx: int) -> str:
-        shard_path = self.jsonl_paths[shard_idx]
-        try:
-            return shard_path.relative_to(self.path)
-        except ValueError:
-            return shard_path.name
-
     def _with_global_metadata(
         self,
         sample: FilteredSample,
@@ -86,11 +96,12 @@ class MultiJsonlReader(IndexedSampleReader[FilteredSample]):
         shard_idx: int,
         local_idx: int,
     ) -> FilteredSample:
-        shard_name = self._shard_name(shard_idx)
+        shard_name = self.shards[shard_idx].name
         sample = FilteredSample(sample)
         sample["__key__"] = str(global_idx)
         sample["__shard__"] = shard_name
-        sample["__restore_key__"] = ("JsonlShardList", global_idx)
+        # Must match the restore_key_kind of the DatasetSampler built by the factory.
+        sample["__restore_key__"] = ("Webdataset", global_idx)
         sample["__sources__"] = (
             SourceInfo(
                 dataset_path=str(self.path),
@@ -135,14 +146,14 @@ class MultiJsonlFileStore(FileStore[bytes]):
     def __init__(
         self,
         path: EPath,
-        jsonl_paths: list[EPath],
+        shards: list[ShardInfo],
         *,
         reader_cache_size: int = 16,
     ):
         self.path = path
         self.reader = MultiJsonlReader(
             path,
-            jsonl_paths,
+            shards,
             reader_cache_size=reader_cache_size,
         )
 
