@@ -1,0 +1,41 @@
+name: Feature request
+description: Propose a new feature or a change to existing behavior.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Real-world problem
+      description: What are you trying to do, and why is it not possible or hard with Energon today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How should Energon support this? Include an API or config sketch if you have one.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds or other approaches you considered.
+  - type: dropdown
+    id: contribute
+    attributes:
+      label: Would you implement this yourself?
+      options:
+        - "Yes, after the design is agreed on here"
+        - "No"
+    validations:
+      required: true
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Confirmations
+      options:
+        - label: I, a human, have written or personally reviewed this issue and can answer follow-up questions about it.
+          required: true
+        - label: This request comes from a real use case of mine, not from automated or AI-driven analysis.
+          required: true

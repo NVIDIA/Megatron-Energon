@@ -62,7 +62,6 @@ autodoc_mock_imports = [
     # "torch",
     "webdataset",
     "tqdm",
-    "numpy",
     "PIL",
     "s3fs",
 ]
