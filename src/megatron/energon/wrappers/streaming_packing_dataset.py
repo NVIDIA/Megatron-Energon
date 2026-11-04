@@ -267,9 +267,9 @@ class StreamingPackingDataset(
             else:
                 assert not isinstance(selected, Generator), "Generator not supported"
                 pack, pushback = self._normalize_selection(selected)
-                # The selector pulled the pushback before any carryover it left unconsumed.
-                self._carryover_buffer.prepend(pushback)
                 if len(pack) > 0:
+                    # The selector pulled the pushback before any carryover it left unconsumed.
+                    self._carryover_buffer.prepend(pushback)
                     empty_rounds = 0
                     yield from self._finalize_pack(pack)
                     continue
