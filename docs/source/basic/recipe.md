@@ -160,6 +160,12 @@ When referring to datasets under `val:` obviously `split_part: val` is the defau
 
 Energon also supports blending by specifying the number of repetitions for each dataset using [Epochized Blending](../advanced/epochized_blending).
 
+Identical leaf datasets reached through multiple weighted blend paths are combined into one
+sample stream, with their weights added. Different loading settings, subsets, splits, tags,
+and auxiliary data remain separate. Epochized repetitions are unchanged. Coalescing changes
+the loader structure: do not restore a checkpoint created from the earlier duplicate-stream
+layout into a coalesced blend. Newly created blends retain normal save/restore behavior.
+
 (shuffle-over-epochs)=
 ## Shuffling over Epochs
 
