@@ -2364,6 +2364,100 @@ class TestDataset(unittest.TestCase):
         assert sample_keys.isdisjoint(task_encoder.failed_keys)
         assert sample_keys.isdisjoint(task_encoder.empty_keys)
 
+    def test_stream_packing_pushback_precedes_carryover(self):
+        """Pushback of a partially consumed carryover sample comes before older carryover."""
+
+        chunk_size = 4
+
+        class ChunkTaskEncoder(DefaultTaskEncoder):
+            def __init__(self):
+                super().__init__(raw_batch_type=CaptioningBatch)
+
+            def select_next_pack(
+                self,
+                samples: Iterator[CaptioningSample | PartialSample[CaptioningSample, tuple]],
+            ) -> PackedSamplesOutput[CaptioningSample | PartialSample[CaptioningSample, tuple]]:
+                sample = next(samples)
+                if isinstance(sample, PartialSample):
+                    base_sample = sample.sample
+                    start, stop = sample.slice
+                    lookahead = ()
+                else:
+                    base_sample = sample
+                    start, stop = 0, len(sample.caption)
+                    # Pull one sample ahead and push it back, so that it stays in the carryover
+                    # while the remainder of the current sample is consumed.
+                    lookahead = (next(samples),)
+                split = min(start + chunk_size, stop)
+                remainder = (
+                    (PartialSample(sample=base_sample, slice=(split, stop)),)
+                    if split < stop
+                    else ()
+                )
+                return PackedSamplesOutput(
+                    packs=[[PartialSample(sample=base_sample, slice=(start, split))]],
+                    pushback=remainder + lookahead,
+                )
+
+            @stateless
+            def pack_selected_samples(
+                self, samples: list[PartialSample[CaptioningSample, tuple]]
+            ) -> CaptioningSample:
+                (part,) = samples
+                start, stop = part.slice
+                return CaptioningSample.derive_from(
+                    part.sample,
+                    __key__=f"{part.sample.__key__}:{start}:{stop}",
+                    image=part.sample.image,
+                    caption=part.sample.caption[start:stop],
+                )
+
+        def build_loader():
+            return get_savable_loader(
+                get_train_dataset(
+                    self.dataset_path,
+                    batch_size=None,
+                    packing_buffer_size="stream",
+                    worker_config=no_worker_config,
+                    shuffle_buffer_size=None,
+                    max_samples_per_sequence=None,
+                    task_encoder=ChunkTaskEncoder(),
+                ),
+                checkpoint_every_min_n_samples=1,
+                checkpoint_every_sec=0,
+            )
+
+        loader = build_loader()
+        loader_iter = iter(loader)
+        packs = [next(loader_iter) for _ in range(2)]
+        # The carryover now holds the remainder of the first sample and the lookahead sample.
+        rank_state = loader.save_state_rank()
+        cmp_packs = [next(loader_iter) for _ in range(30)]
+        packs.extend(cmp_packs)
+
+        # Every sample is emitted as one contiguous run of chunks, in source order.
+        emitted_keys = []
+        prev_stop = 0
+        for pack in packs:
+            key, start, stop = pack.__key__.rsplit(":", 2)
+            start, stop = int(start), int(stop)
+            if not emitted_keys or emitted_keys[-1] != key:
+                assert key not in emitted_keys, f"{key} was interrupted by another sample"
+                assert start == 0
+                if emitted_keys:
+                    assert prev_stop == len(self.samples[int(emitted_keys[-1])]["caption"])
+                emitted_keys.append(key)
+            else:
+                assert start == prev_stop
+            assert pack.caption == self.samples[int(key)]["caption"][start:stop]
+            prev_stop = stop
+        assert len(emitted_keys) > 2
+
+        restored_loader = build_loader()
+        restored_loader.restore_state_rank(rank_state)
+        restored_packs = [pack for _, pack in zip(range(30), restored_loader)]
+        assert [pack.__key__ for pack in restored_packs] == [pack.__key__ for pack in cmp_packs]
+
     def test_group_batch(self):
         class GroupingTaskEncoder(
             TaskEncoder[CaptioningSample, CaptioningSample, CaptioningSample, CaptioningSample]

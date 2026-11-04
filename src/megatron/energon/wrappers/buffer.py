@@ -59,6 +59,10 @@ class SavableSampleBuffer(BaseWrapperDataset[T_sample, T_sample], Generic[T_samp
         else:
             self._restore_keys.extend(restore_keys)
 
+    def prepend(self, samples: Sequence[T_sample]) -> None:
+        self._buffer[:0] = samples
+        self._restore_keys[:0] = [get_sample_restore_key(sample) for sample in samples]
+
     def append_iter(self) -> Generator[T_sample, None, None]:
         for sample in self.dataset:
             yield self.append(sample)
