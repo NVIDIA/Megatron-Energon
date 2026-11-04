@@ -2458,6 +2458,50 @@ class TestDataset(unittest.TestCase):
         restored_packs = [pack for _, pack in zip(range(30), restored_loader)]
         assert [pack.__key__ for pack in restored_packs] == [pack.__key__ for pack in cmp_packs]
 
+    def test_stream_packing_discards_pushback_without_pack(self):
+        """Pushback returned without a pack is discarded, so an incomplete tail ends the epoch."""
+
+        pack_size = 3
+
+        class TripletTaskEncoder(DefaultTaskEncoder):
+            def __init__(self):
+                super().__init__(raw_batch_type=CaptioningBatch)
+
+            def select_next_pack(
+                self, samples: Iterator[CaptioningSample]
+            ) -> list[list[CaptioningSample]] | PackedSamplesOutput[CaptioningSample]:
+                pack = [sample for _, sample in zip(range(pack_size), samples)]
+                if len(pack) < pack_size:
+                    return PackedSamplesOutput(packs=[], pushback=pack)
+                return [pack]
+
+            @stateless
+            def pack_selected_samples(self, samples: list[CaptioningSample]) -> CaptioningSample:
+                return CaptioningSample.derive_from(
+                    samples[0],
+                    __key__="|".join(sample.__key__ for sample in samples),
+                    image=samples[0].image,
+                    caption="|".join(sample.caption for sample in samples),
+                )
+
+        loader = get_loader(
+            get_train_dataset(
+                self.dataset_path,
+                batch_size=None,
+                packing_buffer_size="stream",
+                worker_config=no_worker_config,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                repeat=False,
+                task_encoder=TripletTaskEncoder(),
+            )
+        )
+
+        packs = list(loader)
+        keys = [key for pack in packs for key in pack.__key__.split("|")]
+        assert len(packs) == DATASET_SIZE // pack_size
+        assert len(set(keys)) == len(keys) == len(packs) * pack_size
+
     def test_group_batch(self):
         class GroupingTaskEncoder(
             TaskEncoder[CaptioningSample, CaptioningSample, CaptioningSample, CaptioningSample]
