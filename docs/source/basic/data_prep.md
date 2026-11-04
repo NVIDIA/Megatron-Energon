@@ -216,6 +216,7 @@ energon prepare /path/to/my_parquet_directory
 
 This scans the Parquet footers, writes `.nv-meta/.info.json`, `.nv-meta/split.yaml`, and a default `.nv-meta/dataset.yaml`, and configures the dataset as `DefaultParquetShardListDatasetFactory`.
 The manifest keeps the file order and row counts used for sharding and filtering.
+When re-preparing, pass `--skip-dataset-yaml` to keep a customized `dataset.yaml`.
 
 ### Shuffling and Row Groups
 

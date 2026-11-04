@@ -12,6 +12,7 @@ from unittest import mock
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from click.testing import CliRunner
 
 from megatron.energon import (
     Cooker,
@@ -42,6 +43,7 @@ from megatron.energon.flavors.parquet.prepare import (
     scan_parquet_dataset,
 )
 from megatron.energon.flavors.parquet.reader import IParquetReader
+from megatron.energon.tools.prepare import command as prepare_command
 
 
 @edataclass
@@ -635,6 +637,25 @@ class TestParquetManifestDataset(unittest.TestCase):
         finally:
             wc.worker_deactivate()
         assert seen == [0, 1, 2, 3, 4]
+
+    def test_prepare_parquet_shard_directory_skip_dataset_yaml(self):
+        pq.write_table(pa.table({"idx": [0, 1]}), self.root / "a.parquet")
+        prepare_args = [str(self.root), "--split-ratio", "1,0,0", "--non-interactive"]
+        result = CliRunner().invoke(
+            prepare_command, [*prepare_args, "--no-progress"], catch_exceptions=False
+        )
+        assert result.exit_code == 0, result.stdout
+        dataset_yaml = self.root / ".nv-meta" / "dataset.yaml"
+        custom_yaml = dataset_yaml.read_text() + "# customized\n"
+        dataset_yaml.write_text(custom_yaml)
+
+        result = CliRunner().invoke(
+            prepare_command,
+            [*prepare_args, "--no-progress", "--force-overwrite", "--skip-dataset-yaml"],
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 0, result.stdout
+        assert dataset_yaml.read_text() == custom_yaml
 
 
 if __name__ == "__main__":
