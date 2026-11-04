@@ -49,7 +49,14 @@ def select_next_pack(self, samples):
     pack = []
     remaining = self.max_tokens
     for sample in samples:
-        sample_len = len(sample.tokens)
+        # The remainder pushed back by the previous call comes first, as a PartialSample.
+        if isinstance(sample, PartialSample):
+            base_sample = sample.sample
+            start, stop = sample.slice
+        else:
+            base_sample = sample
+            start, stop = 0, len(sample.tokens)
+        sample_len = stop - start
         if sample_len <= remaining:
             pack.append(sample)
             remaining -= sample_len
@@ -57,18 +64,19 @@ def select_next_pack(self, samples):
                 return [pack]
             continue
 
-        split = remaining
-        pack.append(PartialSample(sample=sample, slice=(0, split)))
+        split = start + remaining
+        pack.append(PartialSample(sample=base_sample, slice=(start, split)))
         return PackedSamplesOutput(
             packs=[pack],
-            pushback=(PartialSample(sample=sample, slice=(split, sample_len)),),
+            pushback=(PartialSample(sample=base_sample, slice=(split, stop)),),
         )
     return [pack] if pack else []
 ```
 
 Selector failures and empty successful selections discard all samples pulled by that call, matching
 the error-handler semantics of other sample-processing stages. Pushback returned with an empty pack
-is discarded as well. For a non-empty pack, returned pushback is prepended ahead of any older,
+is discarded as well, so when the iterator is exhausted, return the incomplete last pack (as above)
+to keep its samples. For a non-empty pack, returned pushback is prepended ahead of any older,
 unconsumed carryover so source order is preserved.
 
 As with buffered packing, {py:meth}`postencode_sample <megatron.energon.TaskEncoder.postencode_sample>`
