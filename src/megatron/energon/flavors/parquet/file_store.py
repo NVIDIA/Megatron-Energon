@@ -24,7 +24,6 @@ class ParquetFileStore(IParquetReader, FileStore[Any]):
         *,
         shards: Sequence[ShardInfo] | None = None,
         part_filter: Callable[[str], bool] | None = None,
-        parquet_file_cache_size: int = 5,
     ):
         path = EPath(dataset_path)
         if path.is_file():
@@ -55,7 +54,8 @@ class ParquetFileStore(IParquetReader, FileStore[Any]):
             reader_base_path,
             layout,
             read_columns,
-            parquet_file_cache_size=parquet_file_cache_size,
+            # The cache pool reads from file stores in a thread pool
+            disable_cache=True,
         )
         self.dataset_path = path
 
