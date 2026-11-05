@@ -200,7 +200,7 @@ shard directories support shard-level splits but not sample-level excludes.
 (create-parquet-dataset)=
 ## Steps to Create a Parquet Dataset
 
-Parquet is supported for crude tabular datasets.
+Parquet is supported for crude tabular datasets. Reading Parquet requires `pyarrow`, which is installed with the `parquet` extra: `pip install megatron-energon[parquet]`.
 There are two supported layouts:
 
 * A single `.parquet` file can be loaded directly, similar to a single `.jsonl` file.
