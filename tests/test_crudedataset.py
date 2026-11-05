@@ -227,6 +227,12 @@ class LazyCookingTaskEncoder(
     def pack_selected_samples(self, samples: List[LazyTextSample]) -> TextSample:
         assert len(samples) == 1, f"Expected 1 sample, got {len(samples)}"
         next_txt = samples[0].next_txt.get(samples[0])
+        # Re-reading the same lazy reference must return the cached value without
+        # releasing another cache reference, and must still propagate provenance
+        # to a new recipient.
+        repeated_recipient = {}
+        assert samples[0].next_txt.get(repeated_recipient) == next_txt
+        assert repeated_recipient["__sources__"][-1] == samples[0].__sources__[-1]
         return TextSample.derive_from(
             samples[0],
             text=samples[0].txt + "|" + next_txt,
