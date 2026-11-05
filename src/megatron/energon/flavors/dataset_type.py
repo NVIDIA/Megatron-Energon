@@ -16,6 +16,7 @@ class EnergonDatasetType(Enum):
     MANIFEST_DATASET = "manifest_dataset"
     JSONL = "jsonl"
     BINIDX = "binidx"
+    PARQUET = "parquet"
     FILESYSTEM = "filesystem"
     INVALID = "invalid"
 
