@@ -9,13 +9,17 @@ from __future__ import annotations
 import contextlib
 from bisect import bisect_right
 from collections import OrderedDict
-from typing import Any, Callable, Generator, List, Sequence, Tuple
+from typing import TYPE_CHECKING, Any, BinaryIO, Callable, Generator, List, Sequence, Tuple
 
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.common.reader import SamplePartFileReader, SequentialSampleReader
 from megatron.energon.flavors.common.sample_record import FilteredSample
 from megatron.energon.flavors.parquet.prepare import ParquetLayout
 from megatron.energon.source_info import SourceInfo
+
+if TYPE_CHECKING:
+    import pyarrow
+    import pyarrow.parquet
 
 
 def _import_pyarrow():
@@ -29,7 +33,9 @@ def _import_pyarrow():
     return pa, pq
 
 
-def _table_row_to_dict(table: Any, row_idx: int, column_names: Sequence[str]) -> dict[str, Any]:
+def _table_row_to_dict(
+    table: pyarrow.Table, row_idx: int, column_names: Sequence[str]
+) -> dict[str, Any]:
     """Build a dict for one row (0-based within ``table``)."""
     out: dict[str, Any] = {}
     for name in column_names:
@@ -101,7 +107,9 @@ class IParquetReader(SamplePartFileReader[FilteredSample], SequentialSampleReade
                 s += n
             assert s == f.num_rows, f"Row group sizes of {f.rel_path} do not sum up to its rows"
             self._row_group_starts.append(starts)
-        self._parquet_cache: OrderedDict[int, Tuple[Any, Any]] = OrderedDict()
+        self._parquet_cache: OrderedDict[
+            int, Tuple[BinaryIO, pyarrow.parquet.ParquetFile]
+        ] = OrderedDict()
         self._parquet_cache_max = max(1, parquet_file_cache_size)
         self._stream_batch_rows = stream_batch_rows
 
@@ -122,13 +130,13 @@ class IParquetReader(SamplePartFileReader[FilteredSample], SequentialSampleReade
         local = global_idx - self._cumsum[f]
         return f, local
 
-    def _open_parquet_file(self, file_idx: int) -> Tuple[Any, Any]:
+    def _open_parquet_file(self, file_idx: int) -> Tuple[BinaryIO, pyarrow.parquet.ParquetFile]:
         rel = self.layout.files[file_idx].rel_path
         path = self.dataset_root / rel
         raw = path.open("rb")
         return raw, self._pq.ParquetFile(self._pa.PythonFile(raw))
 
-    def _get_parquet_file(self, file_idx: int):
+    def _get_parquet_file(self, file_idx: int) -> Tuple[BinaryIO, pyarrow.parquet.ParquetFile]:
         if file_idx in self._parquet_cache:
             self._parquet_cache.move_to_end(file_idx)
             return self._parquet_cache[file_idx]
@@ -147,7 +155,9 @@ class IParquetReader(SamplePartFileReader[FilteredSample], SequentialSampleReade
         return row_group, row_in_file - starts[row_group]
 
     @contextlib.contextmanager
-    def _access_parquet_file(self, file_idx: int) -> Generator[Any, None, None]:
+    def _access_parquet_file(
+        self, file_idx: int
+    ) -> Generator[pyarrow.parquet.ParquetFile, None, None]:
         """
         Context manager to access the ParquetFile of a file.
 
