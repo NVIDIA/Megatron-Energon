@@ -107,9 +107,9 @@ class IParquetReader(SamplePartFileReader[FilteredSample], SequentialSampleReade
                 s += n
             assert s == f.num_rows, f"Row group sizes of {f.rel_path} do not sum up to its rows"
             self._row_group_starts.append(starts)
-        self._parquet_cache: OrderedDict[
-            int, Tuple[BinaryIO, pyarrow.parquet.ParquetFile]
-        ] = OrderedDict()
+        self._parquet_cache: OrderedDict[int, Tuple[BinaryIO, pyarrow.parquet.ParquetFile]] = (
+            OrderedDict()
+        )
         self._parquet_cache_max = max(1, parquet_file_cache_size)
         self._stream_batch_rows = stream_batch_rows
 
