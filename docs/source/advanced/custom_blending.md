@@ -20,6 +20,22 @@ class TextTaskEncoder(DefaultTaskEncoder):
 The recipe selects that unit with `blend_weight_unit: tokens`. The reserved unit `samples` keeps
 sample-count blending and does not call a sample size metric.
 
+If {py:meth}`build_packing_groups <megatron.energon.TaskEncoder.build_packing_groups>` returns more
+than one group, the packed streams of the groups are blended as well. The metric is then also called
+on the packed samples returned by
+{py:meth}`pack_selected_samples <megatron.energon.TaskEncoder.pack_selected_samples>` and must
+return the same unit for them:
+
+```py
+class PackedTextTaskEncoder(DefaultTaskEncoder):
+    @sample_size_metric("tokens")
+    @stateless
+    def token_count(self, sample: TextSample | PackedTextSample) -> int:
+        if isinstance(sample, PackedTextSample):
+            return sum(len(text) for text in sample.texts)
+        return len(sample.text)
+```
+
 In your Task Encoder you could customize the blend of datasets by overriding the `build_train_datasets` method as shown below.
 
 

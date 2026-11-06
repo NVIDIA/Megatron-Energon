@@ -150,7 +150,11 @@ def stateless(fn: Callable[P, T]) -> Callable[P, T]: ...
 
 
 def sample_size_metric(name: str) -> Callable[[Callable[P, int | float]], Callable[P, int | float]]:
-    """Decorator to register a named sample size metric for blend weighting."""
+    """Decorator to register a named sample size metric for blend weighting.
+
+    The metric receives the loaded or cooked samples before encoding. With multiple packing groups,
+    it also receives the packed samples when the group streams are blended.
+    """
     if not name:
         raise ValueError("Sample size metric names must not be empty.")
     if name == DEFAULT_BLEND_WEIGHT_UNIT:
@@ -163,7 +167,7 @@ def sample_size_metric(name: str) -> Callable[[Callable[P, int | float]], Callab
     return decorator
 
 
-def get_sample_size_metric(fn: Callable) -> str:
+def get_sample_size_metric(fn: Callable) -> str | None:
     """Get the sample size metric of a function."""
     return getattr(fn, "__sample_size_metric__", None)
 
@@ -411,7 +415,11 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
     #: The decoder to use for decoding samples. Set manually as needed to override options.
     decoder: Optional[SampleDecoder] = SampleDecoder()
 
+    #: Exponent for size-deficit credits when blending by a :func:`sample_size_metric`. Higher
+    #: values favor datasets furthest behind their target size share.
     blend_sample_size_alpha: float = 1.0
+    #: Floor added to size-deficit credits, so every active dataset keeps a non-zero selection
+    #: probability when blending by a :func:`sample_size_metric`.
     blend_sample_size_epsilon: float = 1.0
 
     def _is_overridden(

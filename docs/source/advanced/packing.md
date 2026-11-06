@@ -113,6 +113,9 @@ def build_packing_groups(
     ]
 ```
 
+The packed streams of the groups are blended afterward. If the recipe blends by a sample size metric,
+that metric also receives the packed samples (see [Customized Blending](custom_blending)).
+
 
 ```{admonition} Note
 :class: important
