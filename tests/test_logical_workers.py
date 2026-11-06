@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 import warnings
+from contextlib import closing
 from pathlib import Path
 from typing import List
 
@@ -414,3 +415,60 @@ class TestLogicalWorkerCrudeE2E(unittest.TestCase):
         assert te.post_indexes == expected_all_indexes
         assert [index for pack in te.pack_group_indexes for index in pack] == expected_all_indexes
         assert te.batch_packed_indexes == expected_stride_indexes
+
+    def test_strided_worker_checkpoint_resume_preserves_pending_outputs(self) -> None:
+        """A fresh loader must continue each physical worker's logical stride exactly."""
+
+        def create_loader(rank: int, num_workers: int):
+            worker_config = WorkerConfig(
+                rank=rank,
+                world_size=4,
+                num_workers=num_workers,
+                logical_workers=1,
+            )
+            dataset = get_train_dataset(
+                str(self.ds_path),
+                task_encoder=TrackingCrudePackingTaskEncoder(),
+                worker_config=worker_config,
+                batch_size=3,
+                packing_buffer_size=self.NUM_SAMPLES // 4,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=4,
+                repeat=True,
+            )
+            return get_savable_loader(
+                dataset,
+                checkpoint_every_sec=0,
+                checkpoint_every_min_n_samples=1,
+                watchdog_timeout_seconds=None,
+            )
+
+        for num_workers in (0, 1):
+            for rank in range(4):
+                for checkpoint_after in (0, 1, 3):
+                    with self.subTest(
+                        num_workers=num_workers,
+                        rank=rank,
+                        checkpoint_after=checkpoint_after,
+                    ):
+                        loader = create_loader(rank, num_workers)
+                        try:
+                            if checkpoint_after == 0:
+                                state = pickle.loads(pickle.dumps(loader.save_state_rank()))
+                            with closing(iter(loader)) as iterator:
+                                for _ in range(checkpoint_after):
+                                    next(iterator)
+                                if checkpoint_after > 0:
+                                    state = pickle.loads(pickle.dumps(loader.save_state_rank()))
+                                expected = [next(iterator).indexes for _ in range(3)]
+                        finally:
+                            loader.close()
+
+                        restored_loader = create_loader(rank, num_workers)
+                        try:
+                            restored_loader.restore_state_rank(state)
+                            with closing(iter(restored_loader)) as restored_iterator:
+                                actual = [next(restored_iterator).indexes for _ in range(3)]
+                            self.assertEqual(actual, expected)
+                        finally:
+                            restored_loader.close()

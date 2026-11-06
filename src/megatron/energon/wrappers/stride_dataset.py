@@ -5,6 +5,7 @@ from typing import Any, Dict, Generic, Iterator, Optional, TypeVar
 
 from megatron.energon.flavors.base_dataset import SavableDataset
 from megatron.energon.logical_worker import LogicalWorkerAssignment
+from megatron.energon.state import FlexState
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset
 
@@ -23,7 +24,7 @@ class StrideDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
     outputs are produced under skip mode so skip-safe wrappers can avoid heavy work.
     """
 
-    _savable_fields = ()
+    _savable_fields = ("_pending_skips",)
 
     def __init__(
         self,
@@ -37,7 +38,16 @@ class StrideDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
         self.reset_state_own()
 
     def reset_state_own(self) -> None:
-        pass
+        self._pending_skips = 0
+
+    def restore_state(self, state: FlexState) -> None:
+        pending_skips = state.get("_pending_skips")
+        if type(pending_skips) is not int or pending_skips < 0:
+            raise ValueError(
+                "Stride checkpoint requires a nonnegative integer _pending_skips; "
+                "older stride checkpoints do not preserve exact replay state"
+            )
+        super().restore_state(state)
 
     def len_worker(self, worker_idx: int | None = None) -> int:
         inner_len = self.dataset.len_worker(worker_idx)
@@ -76,13 +86,18 @@ class StrideDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
         src_iter = iter(self.dataset)
         try:
             while True:
+                self._skip_inner(src_iter, self._pending_skips)
+                self._pending_skips = 0
                 self._skip_inner(src_iter, assignment.stride_offset)
                 self.dataset.set_skip_mode(False)
                 try:
-                    yield next(src_iter)
+                    sample = next(src_iter)
                 except StopIteration:
                     break
-                self._skip_inner(src_iter, assignment.stride - assignment.stride_offset - 1)
+                # A checkpoint at the yield must retain the discarded tail owed
+                # before the next stride, without reading those outputs early.
+                self._pending_skips = assignment.stride - assignment.stride_offset - 1
+                yield sample
         finally:
             self.dataset.set_skip_mode(False)
             WorkerConfig.set_active_logical_global_worker_id(None)

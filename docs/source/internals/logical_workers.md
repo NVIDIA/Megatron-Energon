@@ -39,9 +39,11 @@ When `P > L`, the pipeline is wrapped in `StrideDataset`. Each physical worker a
 logical stream but emits only positions matching its stride offset. Positions assigned to sibling physical
 workers are evaluated under skip mode where possible.
 
-`StrideDataset` intentionally has no independent iteration cursor to save: the nested logical stream owns
-progress. During iteration it activates the logical worker identity so nested datasets use the correct
-partition, random stream, sample indexes, and restore keys.
+The nested logical stream owns record progress. `StrideDataset` also saves the number of discarded
+outputs remaining after its last emitted output. Restoring that pending stride tail preserves exact
+continuation without reading discarded outputs before delivery. During iteration it activates the logical
+worker identity so nested datasets use the correct partition, random stream, sample indexes, and restore
+keys.
 
 This design means fanout is not ordinary modulo sharding at the file-reader boundary. All physical workers
 for one logical worker represent one coordinated logical stream.
@@ -77,6 +79,11 @@ Dataset splitting and state use the logical worker id, not the physical id. Cons
 
 A change to the mapping, stride order, or skip advancement is an iteration-order change and can also be a
 checkpoint change.
+
+Checkpoints created before pending stride tails were saved cannot reliably resume a strided stream and
+are rejected when that state is missing. The default `L=P` pipeline has no stride wrapper and is
+unaffected. Exact replay tests use an unchanged worker assignment, pipeline and microbatch size; changing
+those settings requires the corresponding checkpoint migration support.
 
 ## Testing changes
 
