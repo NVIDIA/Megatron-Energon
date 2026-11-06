@@ -27,6 +27,7 @@ from megatron.energon.wrappers.repeat_dataset import RepeatDataset
 from megatron.energon.wrappers.shuffle_buffer_dataset import ShuffleBufferDataset
 from megatron.energon.wrappers.skip import SkipSample
 from megatron.energon.wrappers.streaming_packing_dataset import StreamingPackingDataset
+from megatron.energon.wrappers.stride_dataset import StrideDataset, maybe_wrap_stride_dataset
 
 __all__ = [
     "BatchDataset",
@@ -44,6 +45,8 @@ __all__ = [
     "RepeatDataset",
     "ShuffleBufferDataset",
     "SkipSample",
+    "StrideDataset",
+    "maybe_wrap_stride_dataset",
     "PackingDataset",
     "PackedSamplesOutput",
     "PartialSample",
