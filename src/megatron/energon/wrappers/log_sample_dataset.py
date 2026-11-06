@@ -15,7 +15,7 @@ class LogSampleDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]
     """This dataset logs every yielded sample to the debug logs."""
 
     get_keys_fn: Callable[[T_sample], list[str] | None]
-    mode: Literal["train", "val"]
+    mode: Literal["train", "val", "processing"]
     _step: int
 
     _savable_fields = ("_step",)
@@ -23,7 +23,7 @@ class LogSampleDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]
     def __init__(
         self,
         dataset: SavableDataset[T_sample],
-        mode: Literal["train", "val"],
+        mode: Literal["train", "val", "processing"],
         worker_config: WorkerConfig,
         get_keys_fn: Callable[[T_sample], list[str] | None] = default_get_batch_keys,
     ):
