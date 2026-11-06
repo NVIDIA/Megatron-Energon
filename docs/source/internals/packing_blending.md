@@ -43,10 +43,13 @@ score_i   = target_i * (epsilon + credit_i) ** alpha
 The scores are normalized to probabilities and sampled with the saved worker RNG. The size metric must
 return a nonnegative value.
 
-The metric is evaluated on the loaded or cooked sample at the blend point, before `encode_sample`,
-pre-encoding, padding, or packing. If token count is the desired metric, that count must already be exposed
-by the cooker or source sample metadata. A token count produced only inside `encode_sample` is not visible
-to the blend metric.
+Within a branch, the metric is evaluated on the loaded or cooked sample at the blend point, before
+`encode_sample`, pre-encoding, padding, or packing. If token count is the desired metric, that count must
+already be exposed by the cooker or source sample metadata. A token count produced only inside
+`encode_sample` is not visible to the dataset blend metric.
+
+With multiple packing groups, the same metric is also evaluated on the packed outputs when the group streams
+are blended. It must therefore accept both sample types and report the same unit for both.
 
 Changing the metric, its evaluation point, the probability formula, or RNG consumption changes iteration
 order.

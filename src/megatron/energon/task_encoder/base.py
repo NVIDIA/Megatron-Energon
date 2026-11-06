@@ -150,7 +150,11 @@ def stateless(fn: Callable[P, T]) -> Callable[P, T]: ...
 
 
 def sample_size_metric(name: str) -> Callable[[Callable[P, int | float]], Callable[P, int | float]]:
-    """Decorator to register a named sample size metric for blend weighting."""
+    """Decorator to register a named sample size metric for blend weighting.
+
+    The metric receives the loaded or cooked samples before encoding. With multiple packing groups,
+    it also receives the packed samples when the group streams are blended.
+    """
     if not name:
         raise ValueError("Sample size metric names must not be empty.")
     if name == DEFAULT_BLEND_WEIGHT_UNIT:
