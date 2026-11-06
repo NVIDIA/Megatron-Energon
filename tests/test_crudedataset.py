@@ -195,7 +195,7 @@ def cook_aux_byterange_reference(sample: dict, byte_source: FileStore) -> TextSa
     range_bytes = byte_source.get(f"bundle.bin#bytes={byte_offset}:2", sample)
     return TextSample(
         **basic_sample_keys(sample),
-        text=f"<{sample['txt']}|range|{range_bytes.decode()}>",
+        text=f"<{byte_offset}|range|{range_bytes.decode()}>",
     )
 
 
@@ -958,6 +958,8 @@ class TestDataset(unittest.TestCase):
         with self.assertRaises(AssertionError):
             store.read_range("bundle.bin", -1, 1)
         assert store.read_range("bundle.bin", 1, 0) == b""
+        with self.assertRaises(FileNotFoundError):
+            store.read_range("missing.bin", 0, 0)
         with self.assertRaises(ValueError):
             store.read_range("../outside.bin", 0, 1)
         with self.assertRaises(IOError):
@@ -997,9 +999,10 @@ class TestDataset(unittest.TestCase):
             ),
         )
 
-        sample = next(iter(loader))
-
-        assert "|range|" in sample.txts[0]
+        for _, sample in zip(range(10), loader):
+            byte_offset = int(sample.txts[0][1 : sample.txts[0].index("|")])
+            expected = "abcdef"[byte_offset : byte_offset + 2]
+            assert sample.txts[0] == f"<{byte_offset}|range|{expected}>", sample.txts[0]
 
     def test_aux_msc(self):
         """Recipe aux supports msc:// and filesystem+msc:// (issue #211). Same aux keys as aux_recipe.yaml, ds2 and fs content uploaded to S3."""

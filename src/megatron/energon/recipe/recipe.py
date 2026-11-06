@@ -81,9 +81,6 @@ class AuxFilesystemReference(AuxFileStoreReference):
             self.fs_path = recipe_path.parent / self.fs_path
         return self.fs_path
 
-    def post_initialize(self, recipe_path: Optional[EPath] = None) -> None:
-        self._resolve_path(recipe_path)
-
     def get_file_store(self) -> FileStore:
         assert isinstance(self.fs_path, EPath), "Missing call to post_initialize"
         return SystemFileStore(self.fs_path)
@@ -103,9 +100,6 @@ class AuxByteRangeStoreReference(AuxFileStoreReference):
             self.byterange_fs_path = recipe_path.parent / self.byterange_fs_path
         return self.byterange_fs_path
 
-    def post_initialize(self, recipe_path: Optional[EPath] = None) -> None:
-        self._resolve_path(recipe_path)
-
     def get_file_store(self) -> FileStore:
         assert isinstance(self.byterange_fs_path, EPath), "Missing call to post_initialize"
         return ByteRangeStore(self.byterange_fs_path)
@@ -115,7 +109,14 @@ class AuxByteRangeStoreReference(AuxFileStoreReference):
         return self.byterange_fs_path
 
 
-AuxReference = Union[AuxDatasetReference, AuxFileStoreReference]
+# The concrete dataclasses come before the base class, so the config parser can still build them
+# from mappings. The non-dataclass base class only matches already constructed references.
+AuxReference = Union[
+    AuxDatasetReference,
+    AuxFilesystemReference,
+    AuxByteRangeStoreReference,
+    AuxFileStoreReference,
+]
 AuxFileStoreProtocolFactory = Callable[[Union[str, EPath]], AuxFileStoreReference]
 
 _AUX_FILESTORE_PROTOCOL_FACTORIES: dict[str, AuxFileStoreProtocolFactory] = {}
@@ -348,14 +349,20 @@ class DatasetReference(
     ) -> AuxReference:
         if isinstance(reference, (AuxDatasetReference, AuxFileStoreReference)):
             return reference
+        if not isinstance(reference, str):
+            raise TypeError(f"Invalid auxiliary reference: {reference!r}")
         if m := url_regex.match(reference):
             prot = m.group("protocol")
             if prot.count("+") == 1:
                 # aux_filestore_protocol+fs_prot://...
                 aux_protocol, fs_prot = prot.split("+")
                 factory = _get_aux_filestore_protocol_factory(aux_protocol)
-                if factory is not None:
-                    return factory(f"{fs_prot}://{m.group('path')}")
+                if factory is None:
+                    raise ValueError(
+                        f"Unknown auxiliary filestore protocol {aux_protocol!r} in {reference!r}. "
+                        "Register it with register_aux_filestore_protocol."
+                    )
+                return factory(f"{fs_prot}://{m.group('path')}")
             else:
                 factory = _get_aux_filestore_protocol_factory(prot)
                 if factory is not None:
