@@ -11,6 +11,7 @@ import logging
 import math
 import multiprocessing
 import os
+import pickle
 import random
 import shutil
 import sys
@@ -2307,6 +2308,182 @@ class TestDataset(unittest.TestCase):
             for restored, cmp in zip(restored_samples, cmp_samples)
         )
         assert_segments([first_sample, *cmp_samples])
+
+    def test_stream_packing_restores_finite_tail_exhaustion(self):
+        finite_dataset = self.dataset_path / "finite-tail"
+        self.create_captioning_test_dataset(finite_dataset, num_samples=5)
+
+        class TailTaskEncoder(DefaultTaskEncoder):
+            @stateless
+            def select_next_pack(
+                self, samples: Iterator[CaptioningSample]
+            ) -> list[list[CaptioningSample]]:
+                pack = []
+                for _ in range(4):
+                    try:
+                        pack.append(next(samples))
+                    except StopIteration:
+                        break
+                return [pack] if pack else []
+
+            @stateless
+            def pack_selected_samples(self, samples: List[CaptioningSample]) -> CaptioningSample:
+                return CaptioningSample(
+                    __key__="|".join(sample.__key__ for sample in samples),
+                    __restore_key__=(),
+                    image=samples[0].image,
+                    caption="|".join(sample.caption for sample in samples),
+                )
+
+        def build_loader(num_workers: int, *, checkpoint_each_pack: bool = True):
+            return get_savable_loader(
+                get_train_dataset(
+                    finite_dataset,
+                    batch_size=None,
+                    packing_buffer_size="stream",
+                    worker_config=WorkerConfig(rank=0, world_size=1, num_workers=num_workers),
+                    shuffle_buffer_size=None,
+                    max_samples_per_sequence=None,
+                    repeat=False,
+                    task_encoder=TailTaskEncoder(),
+                ),
+                checkpoint_every_min_n_samples=1 if checkpoint_each_pack else 2 * num_workers,
+                checkpoint_every_sec=0 if checkpoint_each_pack else 60,
+                watchdog_timeout_seconds=None,
+            )
+
+        def find_streaming_state(value, seen=None):
+            if seen is None:
+                seen = set()
+            if id(value) in seen:
+                return None
+            seen.add(id(value))
+            if isinstance(value, dict):
+                if value.get("__class__") == "StreamingPackingDataset":
+                    return value
+                for item in value.values():
+                    found = find_streaming_state(item, seen)
+                    if found is not None:
+                        return found
+            elif isinstance(value, (list, tuple)):
+                for item in value:
+                    found = find_streaming_state(item, seen)
+                    if found is not None:
+                        return found
+            elif hasattr(value, "__dict__"):
+                return find_streaming_state(vars(value), seen)
+            return None
+
+        for num_workers in (0, 1):
+            with self.subTest(num_workers=num_workers):
+                loader = build_loader(num_workers)
+                iterator = iter(loader)
+                try:
+                    first = next(iterator)
+                    before_tail = (
+                        pickle.loads(pickle.dumps(loader.save_state_rank()))
+                        if num_workers
+                        else None
+                    )
+                    tail = next(iterator)
+                    self.assertEqual(
+                        [len(first.__key__.split("|")), len(tail.__key__.split("|"))],
+                        [4, 1],
+                    )
+                    saved_state = pickle.loads(pickle.dumps(loader.save_state_rank()))
+                    self.assertIsNotNone(saved_state)
+                    uninterrupted_continuation = list(iterator)
+                    self.assertEqual(uninterrupted_continuation, [])
+                finally:
+                    iterator.close()
+                    loader.close()
+
+                resume_states = [saved_state]
+                if before_tail is not None:
+                    # Represent a committed tail using an older native worker
+                    # checkpoint plus its ordinary one-output replay offset.
+                    checkpoint = before_tail.worker_states[0]
+                    self.assertEqual(checkpoint.state.sample_index + checkpoint.offset, 1)
+                    checkpoint.offset += 1
+                    resume_states.append(before_tail)
+
+                for resume_state in resume_states:
+                    restored_loader = build_loader(num_workers)
+                    restored_iterator = None
+                    next_epoch_iterator = None
+                    try:
+                        restored_loader.restore_state_rank(resume_state)
+                        restored_iterator = iter(restored_loader)
+                        restored_continuation = list(restored_iterator)
+                        self.assertEqual(restored_continuation, uninterrupted_continuation)
+
+                        # A completed iteration retains checkpoint-safe EOF, while
+                        # an intentional next iteration still starts a new epoch.
+                        next_epoch_iterator = iter(restored_loader)
+                        next_epoch = list(next_epoch_iterator)
+                        self.assertEqual(
+                            sum(len(sample.__key__.split("|")) for sample in next_epoch), 5
+                        )
+                    finally:
+                        if restored_iterator is not None:
+                            restored_iterator.close()
+                        if next_epoch_iterator is not None:
+                            next_epoch_iterator.close()
+                        restored_loader.close()
+
+                if num_workers == 0:
+                    for invalid_value in ("missing", 1):
+                        invalid_state = pickle.loads(pickle.dumps(saved_state))
+                        streaming_state = find_streaming_state(invalid_state.worker_states[0])
+                        self.assertIsNotNone(streaming_state)
+                        if invalid_value == "missing":
+                            streaming_state.pop("_source_exhausted")
+                        else:
+                            streaming_state["_source_exhausted"] = invalid_value
+
+                        invalid_loader = build_loader(num_workers)
+                        try:
+                            with self.assertRaisesRegex(
+                                ValueError, "boolean _source_exhausted field"
+                            ):
+                                invalid_loader.restore_state_rank(invalid_state)
+                        finally:
+                            invalid_loader.close()
+
+        # Ordinary cadence can select the previous epoch's completed EOF
+        # checkpoint with an offset into the next epoch. Replay must cross that
+        # empty saved boundary, then stop after exactly the committed offset.
+        loader = build_loader(1, checkpoint_each_pack=False)
+        first_epoch = iter(loader)
+        second_epoch = None
+        try:
+            self.assertEqual(len(list(first_epoch)), 2)
+            second_epoch = iter(loader)
+            next(second_epoch)
+            cross_epoch_state = pickle.loads(pickle.dumps(loader.save_state_rank()))
+            checkpoint = cross_epoch_state.worker_states[0]
+            self.assertEqual(checkpoint.state.sample_index, 2)
+            self.assertEqual(checkpoint.offset, 1)
+            expected_tail = [(sample.__key__, sample.caption) for sample in second_epoch]
+            self.assertEqual(len(expected_tail), 1)
+        finally:
+            first_epoch.close()
+            if second_epoch is not None:
+                second_epoch.close()
+            loader.close()
+
+        restored_loader = build_loader(1, checkpoint_each_pack=False)
+        restored_iterator = None
+        try:
+            restored_loader.restore_state_rank(cross_epoch_state)
+            restored_iterator = iter(restored_loader)
+            self.assertEqual(
+                [(sample.__key__, sample.caption) for sample in restored_iterator], expected_tail
+            )
+        finally:
+            if restored_iterator is not None:
+                restored_iterator.close()
+            restored_loader.close()
 
     def test_stream_packing_discards_failed_and_empty_selections(self):
         class RetryTaskEncoder(DefaultTaskEncoder):

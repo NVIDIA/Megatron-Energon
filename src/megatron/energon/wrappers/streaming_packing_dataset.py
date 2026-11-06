@@ -77,6 +77,7 @@ class StreamingPackingDataset(
         "_select_sample_index",
         "_sample_encoder_sample_index",
         "_final_packing_sample_index",
+        "_source_exhausted",
     )
 
     def __init__(
@@ -167,6 +168,18 @@ class StreamingPackingDataset(
         self._final_packing_sample_index = SampleIndex(self.worker_config, src=self)
         self._sample_encoder_sample_index = SampleIndex(self.worker_config, src=self)
         self._skip_mode = False
+        self._source_exhausted = False
+        self._iteration_finished = False
+
+    def restore_state(self, state: Any) -> None:
+        source_exhausted = state.get("_source_exhausted") if isinstance(state, dict) else None
+        if type(source_exhausted) is not bool:
+            raise ValueError(
+                "Streaming packing checkpoint requires a boolean _source_exhausted field; "
+                "checkpoints saved before finite-tail replay support cannot be restored"
+            )
+        super().restore_state(state)
+        self._iteration_finished = False
 
     def len_worker(self, worker_idx: int | None = None) -> int:
         # The real length depends on pack boundaries and partial carryover.
@@ -274,16 +287,28 @@ class StreamingPackingDataset(
                 )
 
     def __iter__(self) -> Iterator[T_batch_sample]:
+        if self._iteration_finished:
+            self._source_exhausted = False
+            self._iteration_finished = False
         self._carryover_buffer.worker_start()
-        src_iter = iter(self.dataset)
+        src_iter = None if self._source_exhausted else iter(self.dataset)
         empty_rounds = 0
 
         while True:
-            sample_iter = _StreamingSampleIterator(self._carryover_buffer, src_iter)
+            if self._source_exhausted and self._carryover_buffer.len_worker() == 0:
+                # Keep EOF in checkpoints taken after worker prefetch drains the iterator.
+                # Only an intentional subsequent iteration starts a new epoch.
+                self._iteration_finished = True
+                break
+            sample_iter = _StreamingSampleIterator(
+                self._carryover_buffer, src_iter, source_exhausted=self._source_exhausted
+            )
             selected = None
             with self._select_failure_handler.handle_errors(self._carryover_buffer.buffer.copy()):
                 with self._select_sample_index.ctx():
                     selected = self.select_next_pack(sample_iter)
+            if sample_iter.source_exhausted:
+                self._source_exhausted = True
             if selected is None:
                 empty_rounds += 1
             else:
@@ -296,8 +321,8 @@ class StreamingPackingDataset(
                     continue
                 empty_rounds += 1
 
-            if sample_iter.source_exhausted and self._carryover_buffer.len_worker() == 0:
-                break
+            if self._source_exhausted and self._carryover_buffer.len_worker() == 0:
+                continue  # Complete EOF before applying the empty-selection failure limit.
             if self.select_failure_tolerance > 0 and empty_rounds > self.select_failure_tolerance:
                 raise RuntimeError(
                     f"Streaming pack selector {self.select_next_pack} did not yield any packs after {empty_rounds} rounds. Likely your code or dataset are broken."
@@ -398,11 +423,13 @@ class _StreamingSampleIterator(Generic[T_sample, T_slice]):
     def __init__(
         self,
         carryover_buffer: SavablePartialSampleBuffer[T_sample, T_slice],
-        source_iter: Iterator[T_sample],
+        source_iter: Optional[Iterator[T_sample]],
+        *,
+        source_exhausted: bool = False,
     ) -> None:
         self.carryover_buffer = carryover_buffer
         self.source_iter = source_iter
-        self.source_exhausted = False
+        self.source_exhausted = source_exhausted or source_iter is None
 
     def __iter__(self) -> "_StreamingSampleIterator[T_sample, T_slice]":
         return self
@@ -410,6 +437,9 @@ class _StreamingSampleIterator(Generic[T_sample, T_slice]):
     def __next__(self) -> T_sample | PartialSample[T_sample, T_slice]:
         if self.carryover_buffer.len_worker() > 0:
             return self.carryover_buffer.pop(0)
+        if self.source_iter is None:
+            self.source_exhausted = True
+            raise StopIteration
         try:
             return next(self.source_iter)
         except StopIteration:

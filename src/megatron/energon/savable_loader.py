@@ -398,6 +398,7 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
                 # If skipping, also restart the iterator to reach the start of the restored
                 # checkpoint
                 last_was_skip = True
+                restarted_empty_epoch = False
                 while last_was_skip:
                     dataset_has_samples = False
                     self.worker_config.worker_activate(
@@ -446,8 +447,16 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
                         if worker_active:
                             self.worker_config.worker_deactivate()
 
-                    # If the dataset is empty, don't try again and again
+                    remaining_skips = self._workers_skip_samples[self._worker_id]
                     if not dataset_has_samples:
+                        # An exhausted checkpoint may precede a cursor in the next epoch.
+                        # Retry once during replay; genuinely empty sources still terminate.
+                        if remaining_skips > 0 and not restarted_empty_epoch:
+                            restarted_empty_epoch = True
+                            continue
+                        break
+                    # Reaching EOF exactly at the saved cursor must stay exhausted.
+                    if remaining_skips == 0:
                         break
         finally:
             # print(f"{id(self)}:{multiprocessing.current_process().ident} Worker iter closing")

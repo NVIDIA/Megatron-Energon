@@ -71,6 +71,14 @@ the error-handler semantics of other sample-processing stages. Pushback returned
 is discarded as well. For a non-empty pack, returned pushback is prepended ahead of any older,
 unconsumed carryover so source order is preserved.
 
+Streaming-packing checkpoints record whether the source had reached end-of-stream when the last
+pack was emitted. Restoring such a checkpoint drains its saved carryover without starting a fresh
+source iterator. Streaming-packing checkpoints saved before this end-of-stream state was recorded
+cannot distinguish a final tail from an active source and are rejected. This preserves exact replay
+for an unchanged loader configuration; it does not provide topology or micro-batch-size migration.
+Worker prefetch and replay offsets that end exactly at source EOF also retain exhaustion. After
+that restored iteration finishes, explicitly iterating the loader again starts the next epoch.
+
 As with buffered packing, {py:meth}`postencode_sample <megatron.energon.TaskEncoder.postencode_sample>`
 runs on each selected pack member before
 {py:meth}`pack_selected_samples <megatron.energon.TaskEncoder.pack_selected_samples>` is called.
