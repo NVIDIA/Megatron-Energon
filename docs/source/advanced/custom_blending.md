@@ -39,7 +39,6 @@ class CaptioningTaskEncoder(
         # Apply post-encoding, buffered packing, or streaming packing.
         dataset = self._build_packing_postencode(
             dataset,
-            group=None,
             packing_buffer_size=packing_buffer_size,
             worker_config=worker_config,
         )

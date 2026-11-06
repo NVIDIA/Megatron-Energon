@@ -614,7 +614,8 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
 
         Returns:
             Either a ``list[list[T]]`` containing at most one pack, or
-            :class:`PackedSamplesOutput` containing at most one pack plus pushback.
+            :class:`PackedSamplesOutput` containing at most one pack plus pushback. Pushback is
+            only kept if a pack is returned.
         """
         raise NotImplementedError("Streaming packing only effective when overridden.")
 
