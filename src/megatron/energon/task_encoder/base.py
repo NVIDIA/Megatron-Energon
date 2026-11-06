@@ -163,7 +163,7 @@ def sample_size_metric(name: str) -> Callable[[Callable[P, int | float]], Callab
     return decorator
 
 
-def get_sample_size_metric(fn: Callable) -> str:
+def get_sample_size_metric(fn: Callable) -> str | None:
     """Get the sample size metric of a function."""
     return getattr(fn, "__sample_size_metric__", None)
 
