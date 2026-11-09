@@ -2128,6 +2128,99 @@ class TestDataset(unittest.TestCase):
         )
         assert_segments(final_packer_samples)
 
+    def test_packing_save_restore_every_step(self):
+        """Restoring after any output continues exactly like the uninterrupted loader.
+
+        Covers restoring in the middle of the outputs of a generator final packer, and after the
+        input was exhausted while filling the last packing buffer.
+        """
+
+        pack_size = 3
+
+        class TripletTaskEncoder(DefaultTaskEncoder):
+            def __init__(self):
+                super().__init__(raw_batch_type=CaptioningBatch)
+
+            def select_samples_to_pack(
+                self, samples: list[CaptioningSample]
+            ) -> list[list[CaptioningSample]]:
+                return [samples[idx : idx + pack_size] for idx in range(0, len(samples), pack_size)]
+
+            @stateless
+            def pack_selected_samples(
+                self, samples: list[CaptioningSample]
+            ) -> Generator[CaptioningSample, None, None]:
+                key = "|".join(sample.__key__ for sample in samples)
+                for part in ("first", "second"):
+                    yield CaptioningSample.derive_from(
+                        samples[0],
+                        __key__=f"{key}#{part}",
+                        image=samples[0].image,
+                        caption="|".join(sample.caption for sample in samples),
+                    )
+
+        # With workers, the loader cannot restore a non-repeating dataset after a worker already
+        # finished its input, so multiple workers are only covered with a repeating dataset.
+        for repeat, num_workers in ((False, 0), (True, 2)):
+            with self.subTest(repeat=repeat, num_workers=num_workers):
+                worker_config = WorkerConfig(rank=0, world_size=1, num_workers=num_workers)
+
+                def build_loader():
+                    return get_savable_loader(
+                        get_train_dataset(
+                            self.dataset_path,
+                            batch_size=None,
+                            # The last buffer of the 50 samples only holds 2 samples.
+                            packing_buffer_size=12,
+                            worker_config=worker_config,
+                            shuffle_buffer_size=None,
+                            max_samples_per_sequence=None,
+                            repeat=repeat,
+                            task_encoder=TripletTaskEncoder(),
+                        ),
+                        checkpoint_every_min_n_samples=1,
+                        checkpoint_every_sec=0,
+                    )
+
+                loader = build_loader()
+                outputs = []
+                states = []
+                for output in loader:
+                    outputs.append(output)
+                    states.append(loader.save_state_rank())
+                    if repeat and len(outputs) == 12:
+                        break
+
+                keys = [output.__key__ for output in outputs]
+                assert len(set(keys)) == len(keys)
+                if not repeat:
+                    sample_keys = {
+                        key for output in keys for key in output.split("#")[0].split("|")
+                    }
+                    assert len(sample_keys) == DATASET_SIZE
+                    # Stopping right after the last output and iterating again starts a new pass.
+                    for _ in range(2):
+                        restarted = [output.__key__ for _, output in zip(keys, loader)]
+                        assert len(restarted) == len(keys)
+                        assert {
+                            key for output in restarted for key in output.split("#")[0].split("|")
+                        } == sample_keys
+
+                for step, state in enumerate(states):
+                    expected = outputs[step + 1 :]
+                    restored_loader = build_loader()
+                    restored_loader.restore_state_rank(state)
+                    if repeat:
+                        restored = [output for _, output in zip(expected, restored_loader)]
+                    else:
+                        restored = list(restored_loader)
+                    assert [output.__key__ for output in restored] == keys[step + 1 :], (
+                        f"Restored after output {step}"
+                    )
+                    assert [output.__restore_key__ for output in restored] == [
+                        output.__restore_key__ for output in expected
+                    ], f"Restored after output {step}"
+
     def test_stream_packing(self):
         """Streaming packing pulls just enough samples for one pack and carries remainders."""
 
