@@ -101,8 +101,7 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
         self._state_restored = False
 
     def restore_state(self, state: FlexState) -> None:
-        # States saved before `_source_exhausted` was added did not exhaust the input.
-        super().restore_state(FlexState({"_source_exhausted": False, **state}))
+        super().restore_state(state)
         self._state_restored = True
 
     def len_worker(self, worker_idx: int | None = None) -> int:
