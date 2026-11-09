@@ -2747,6 +2747,52 @@ class TestDataset(unittest.TestCase):
                         f"Restored after batch {step}"
                     )
 
+    def _check_save_restore_every_step(self, build_loader) -> List[List[str]]:
+        """Restores after every batch and compares with the uninterrupted loader.
+
+        Also checks that stopping right after the last batch and iterating again yields a full new
+        pass. Returns the batch keys of the uninterrupted loader.
+        """
+        loader = build_loader()
+        keys = []
+        states = []
+        for batch in loader:
+            keys.append(batch.__key__)
+            states.append(loader.save_state_rank())
+        sample_keys = sorted(key for batch_keys in keys for key in batch_keys)
+        for _ in range(2):
+            restarted = [batch.__key__ for _, batch in zip(keys, loader)]
+            assert sorted(key for batch_keys in restarted for key in batch_keys) == sample_keys
+        for step, state in enumerate(states):
+            restored_loader = build_loader()
+            restored_loader.restore_state_rank(state)
+            restored_keys = [batch.__key__ for batch in restored_loader]
+            assert restored_keys == keys[step + 1 :], (
+                f"Restored after batch {step} of {len(keys)}: got {len(restored_keys)} batches, "
+                f"expected {len(keys) - step - 1}"
+            )
+        return keys
+
+    def test_shuffle_buffer_save_restore_every_step(self):
+        """Restoring while the shuffle buffer drains does not start a new pass over the input."""
+
+        def build_loader():
+            return get_savable_loader(
+                get_train_dataset(
+                    self.dataset_path,
+                    batch_size=1,
+                    worker_config=no_worker_config,
+                    shuffle_buffer_size=10,
+                    max_samples_per_sequence=None,
+                    repeat=False,
+                ),
+                checkpoint_every_min_n_samples=1,
+                checkpoint_every_sec=0,
+            )
+
+        keys = self._check_save_restore_every_step(build_loader)
+        assert len(keys) == DATASET_SIZE
+
     def test_group_batch(self):
         class GroupingTaskEncoder(
             TaskEncoder[CaptioningSample, CaptioningSample, CaptioningSample, CaptioningSample]
