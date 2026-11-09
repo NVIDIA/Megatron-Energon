@@ -2596,6 +2596,64 @@ class TestDataset(unittest.TestCase):
                         output.__restore_key__ for output in expected
                     ], f"Restored after output {step}"
 
+    def test_batch_save_restore_every_step(self):
+        """Restoring after the incomplete last batch does not start a new pass over the input."""
+
+        class SplitBatchTaskEncoder(DefaultTaskEncoder):
+            """Emits every batch twice, to restore in the middle of the last batch."""
+
+            def __init__(self):
+                super().__init__(raw_batch_type=CaptioningBatch)
+
+            @stateless
+            def batch(self, samples: list[CaptioningSample]) -> Generator[Batch, None, None]:
+                for part in ("first", "second"):
+                    batch = super().batch(samples)
+                    batch.__key__ = [f"{key}#{part}" for key in batch.__key__]
+                    yield batch
+
+        for task_encoder in (DefaultTaskEncoder(), SplitBatchTaskEncoder()):
+            with self.subTest(task_encoder=type(task_encoder).__name__):
+
+                def build_loader():
+                    return get_savable_loader(
+                        get_train_dataset(
+                            self.dataset_path,
+                            batch_size=4,
+                            worker_config=no_worker_config,
+                            shuffle_buffer_size=None,
+                            max_samples_per_sequence=None,
+                            repeat=False,
+                            task_encoder=task_encoder,
+                        ),
+                        checkpoint_every_min_n_samples=1,
+                        checkpoint_every_sec=0,
+                    )
+
+                loader = build_loader()
+                keys = []
+                states = []
+                for batch in loader:
+                    keys.append(batch.__key__)
+                    states.append(loader.save_state_rank())
+                sample_keys = {key.split("#")[0] for batch_keys in keys for key in batch_keys}
+                assert len(sample_keys) == DATASET_SIZE
+                assert len(keys[-1]) == DATASET_SIZE % 4
+                # Stopping right after the last batch and iterating again starts a new pass.
+                for _ in range(2):
+                    restarted = [batch.__key__ for _, batch in zip(keys, loader)]
+                    assert len(restarted) == len(keys)
+                    assert {
+                        key.split("#")[0] for batch_keys in restarted for key in batch_keys
+                    } == sample_keys
+
+                for step, state in enumerate(states):
+                    restored_loader = build_loader()
+                    restored_loader.restore_state_rank(state)
+                    assert [batch.__key__ for batch in restored_loader] == keys[step + 1 :], (
+                        f"Restored after batch {step}"
+                    )
+
     def test_group_batch(self):
         class GroupingTaskEncoder(
             TaskEncoder[CaptioningSample, CaptioningSample, CaptioningSample, CaptioningSample]

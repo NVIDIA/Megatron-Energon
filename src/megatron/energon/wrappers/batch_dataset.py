@@ -17,7 +17,11 @@ from typing import (
 )
 
 from megatron.energon.errors import ErrorContext, handle_restore_errors
-from megatron.energon.flavors.base_dataset import SavableDataset, set_sample_restore_key
+from megatron.energon.flavors.base_dataset import (
+    FlexState,
+    SavableDataset,
+    set_sample_restore_key,
+)
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset, SampleIndex, get_sample_restore_key
 
@@ -34,9 +38,18 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
     _sample_index: SampleIndex
     _generator_sample_keys: Optional[Any]
     _generator_offset: Optional[int]
+    #: Set once the input dataset is exhausted, so that a restored state does not start a new pass.
+    _source_exhausted: bool
+    #: Whether the state was restored since the last iteration started (not saved).
+    _state_restored: bool
     _batch_failure_handler: ErrorContext
 
-    _savable_fields = ("_sample_index", "_generator_sample_keys", "_generator_offset")
+    _savable_fields = (
+        "_sample_index",
+        "_generator_sample_keys",
+        "_generator_offset",
+        "_source_exhausted",
+    )
 
     def __init__(
         self,
@@ -84,6 +97,13 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
         self._sample_index = SampleIndex(self.worker_config, src=self)
         self._generator_sample_keys = None
         self._generator_offset = None
+        self._source_exhausted = False
+        self._state_restored = False
+
+    def restore_state(self, state: FlexState) -> None:
+        # States saved before `_source_exhausted` was added did not exhaust the input.
+        super().restore_state(FlexState({"_source_exhausted": False, **state}))
+        self._state_restored = True
 
     def len_worker(self, worker_idx: int | None = None) -> int:
         n_samples = self.dataset.len_worker(worker_idx)
@@ -95,6 +115,12 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
     def __iter__(self) -> Iterator[T_batch]:
         batch: List[T_batch_sample] = []
         sample_restore_keys = []
+
+        if not self._state_restored:
+            # A new iteration starts a new pass, even if the previous one was not iterated to its
+            # end (e.g. stopped right after the last batch).
+            self._source_exhausted = False
+        self._state_restored = False
 
         if self._generator_sample_keys is not None:
             sample_restore_keys = self._generator_sample_keys
@@ -156,14 +182,21 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
                     yield batch_sample
             sample_restore_keys.clear()
 
+        if self._source_exhausted:
+            # Restored after the input was exhausted: the last batch was already emitted.
+            self._source_exhausted = False
+            return
+
         for sample in self.dataset:
             batch.append(sample)
             sample_restore_keys.append(get_sample_restore_key(sample))
             if len(batch) == self.batch_size:
                 yield from flush()
                 batch = []
+        self._source_exhausted = True
         if len(batch) > 0 and not self.drop_last:
             yield from flush()
+        self._source_exhausted = False
 
     def can_restore_sample(self) -> bool:
         # Cannot really verify if the returned elements contain a __restore_key__.
