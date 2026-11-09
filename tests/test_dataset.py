@@ -2793,6 +2793,37 @@ class TestDataset(unittest.TestCase):
         keys = self._check_save_restore_every_step(build_loader)
         assert len(keys) == DATASET_SIZE
 
+    def test_group_batch_save_restore_every_step(self):
+        """Restoring while the last incomplete group batches are flushed does not start a new pass."""
+
+        class GroupingTaskEncoder(
+            TaskEncoder[CaptioningSample, CaptioningSample, CaptioningSample, CaptioningSample]
+        ):
+            def batch_group_criterion(self, sample: CaptioningSample) -> Tuple[Hashable, int]:
+                # data-0.tar has 30 samples, data-1.tar has 20: both groups end incomplete.
+                shard_name = sample.__sources__[0].shard_name.split("/")[-1]
+                return shard_name, 4 if shard_name == "data-0.tar" else 8
+
+        def build_loader():
+            return get_savable_loader(
+                get_train_dataset(
+                    self.dataset_path,
+                    batch_size=None,
+                    batch_drop_last=False,
+                    worker_config=no_worker_config,
+                    shuffle_buffer_size=None,
+                    max_samples_per_sequence=None,
+                    repeat=False,
+                    task_encoder=GroupingTaskEncoder(),
+                ),
+                checkpoint_every_min_n_samples=1,
+                checkpoint_every_sec=0,
+            )
+
+        keys = self._check_save_restore_every_step(build_loader)
+        assert sum(len(batch_keys) for batch_keys in keys) == DATASET_SIZE
+        assert sorted(len(batch_keys) for batch_keys in keys[-2:]) == [2, 4]
+
     def test_group_batch(self):
         class GroupingTaskEncoder(
             TaskEncoder[CaptioningSample, CaptioningSample, CaptioningSample, CaptioningSample]
