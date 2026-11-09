@@ -2824,6 +2824,36 @@ class TestDataset(unittest.TestCase):
         assert sum(len(batch_keys) for batch_keys in keys) == DATASET_SIZE
         assert sorted(len(batch_keys) for batch_keys in keys[-2:]) == [2, 4]
 
+    def test_concat_save_restore_every_step(self):
+        """Restoring in a later dataset of a concatenation does not repeat the earlier datasets."""
+        recipe_path = self.dataset_path / "concat_recipe.yaml"
+        recipe_path.write_text(
+            "\n".join(
+                [
+                    "__module__: megatron.energon",
+                    "__class__: Recipe",
+                    "splits:",
+                    "  val:",
+                    "    blend:",
+                    "      - path: .",
+                    "        split_part: train",
+                    "      - path: .",
+                    "        split_part: train",
+                ]
+            )
+        )
+
+        # The last batch is incomplete, so it is emitted after both datasets are exhausted.
+        def build_loader():
+            return get_savable_loader(
+                get_val_dataset(recipe_path, batch_size=7, worker_config=no_worker_config),
+                checkpoint_every_min_n_samples=1,
+                checkpoint_every_sec=0,
+            )
+
+        keys = self._check_save_restore_every_step(build_loader)
+        assert len(keys) == math.ceil(2 * DATASET_SIZE / 7)
+
     def test_group_batch(self):
         class GroupingTaskEncoder(
             TaskEncoder[CaptioningSample, CaptioningSample, CaptioningSample, CaptioningSample]
