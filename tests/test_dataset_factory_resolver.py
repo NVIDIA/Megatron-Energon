@@ -37,7 +37,7 @@ class _SingleFileProvider:
 
     @classmethod
     def detect_path(cls, path: EPath) -> EnergonDatasetType | None:
-        return EnergonDatasetType.FILESYSTEM
+        return EnergonDatasetType.PARQUET
 
     @classmethod
     def from_path(cls, path: EPath, **kwargs: Any) -> BaseCoreDatasetFactory:
