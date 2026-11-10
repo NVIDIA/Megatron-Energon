@@ -131,6 +131,10 @@ samples for packing. If augmentations happen, it should be marked with
 You have to make sure the methods are actually stateless, meaning that they will produce the same output when invoked
 with the same input and random states.
 
+With `restore_seeds=True`, the Torch CPU, NumPy, and Python random streams are seeded deterministically.
+Accelerator RNGs (e.g. CUDA) are not seeded. If a transform uses accelerator randomness, it has to
+seed it itself.
+
 ## Carrying over partial samples
 
 Sometimes the next sample only partially fits into the remaining packed context. In that case,
