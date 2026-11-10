@@ -383,6 +383,9 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
 
     __default_failure_tolerance__: Optional[int] = 100
 
+    #: Drain selected packs before filling the next buffered packing window.
+    defer_packing_refill: bool = False
+
     cookers: Sequence[Cooker[T_sample]] = ()
     #: Internal: List of registered cookers. Will be the same as `cookers` after registering cookers.
     _registered_cookers: List[Cooker[T_sample]]
@@ -724,6 +727,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         return PackingDataset(
             dataset,
             buffer_size=packing_buffer_size,
+            defer_refill=self.defer_packing_refill,
             pre_packer=self.select_samples_to_pack,
             final_packer=self.pack_selected_samples,
             final_packer_stateless=get_stateless(self.pack_selected_samples),

@@ -2161,11 +2161,18 @@ class TestDataset(unittest.TestCase):
 
         # With workers, the loader cannot restore a non-repeating dataset after a worker already
         # finished its input, so multiple workers are only covered with a repeating dataset.
-        for repeat, num_workers in ((False, 0), (True, 2)):
-            with self.subTest(repeat=repeat, num_workers=num_workers):
+        for repeat, num_workers, defer_refill in (
+            (False, 0, False),
+            (False, 0, True),
+            (True, 2, False),
+            (True, 2, True),
+        ):
+            with self.subTest(repeat=repeat, num_workers=num_workers, defer_refill=defer_refill):
                 worker_config = WorkerConfig(rank=0, world_size=1, num_workers=num_workers)
 
                 def build_loader():
+                    encoder = TripletTaskEncoder()
+                    encoder.defer_packing_refill = defer_refill
                     return get_savable_loader(
                         get_train_dataset(
                             self.dataset_path,
@@ -2176,7 +2183,7 @@ class TestDataset(unittest.TestCase):
                             shuffle_buffer_size=None,
                             max_samples_per_sequence=None,
                             repeat=repeat,
-                            task_encoder=TripletTaskEncoder(),
+                            task_encoder=encoder,
                         ),
                         checkpoint_every_min_n_samples=1,
                         checkpoint_every_sec=0,

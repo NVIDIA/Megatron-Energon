@@ -173,6 +173,7 @@ class PackingDataset(
         ],
         *,
         final_packer_stateless: bool = False,
+        defer_refill: bool = False,
         sample_encoder: Optional[
             Callable[[T_sample | PartialSample[T_sample, T_slice]], T_encoded_sample]
         ] = None,
@@ -196,6 +197,9 @@ class PackingDataset(
                 May return :class:`PackedSamplesOutput` to include a ``pushback`` sequence
                 reapplied to the reading buffer. May raise :exc:`megatron.energon.SkipSample` to skip a buffer.
             final_packer: Function which combines the selected samples into a single sample.
+            defer_refill: Drain selected packs before filling the next packing window.
+                Source sampling and pack transforms must have independent RNG/state.
+                This shifts preprocessing to window boundaries without changing capacity.
             final_packer_stateless: If True, the final_packer is stateless, thus samples can be
                 stored/restored.
             sample_encoder: Function which encodes the samples.
@@ -212,6 +216,12 @@ class PackingDataset(
 
         assert buffer_size > 0, "Packing buffer size must be greater than 0."
 
+        if defer_refill and (
+            not final_packer_stateless
+            or (sample_encoder is not None and not sample_encoder_stateless)
+        ):
+            raise ValueError("Deferred refill requires stateless final packing and sample encoding")
+        self.defer_refill = defer_refill
         self.buffer_size = buffer_size
         self.pre_packer = pre_packer
         self.final_packer = final_packer
@@ -503,12 +513,12 @@ class PackingDataset(
                 raise RuntimeError(
                     f"Pre packer {self.pre_packer} did not yield any packs after {pre_pack_round} rounds. Likely your code or dataset are broken."
                 )
-            # Fill a portion of the buffer
-            if not self._fill_reading_buffer(src_iter, log_progress=is_initial_pack):
-                # Break out of the main loop when the source is exhausted.
-                self._source_exhausted = True
-                break
-            is_initial_pack = False
+            # Existing packs do not need samples from the next selection window.
+            if not self.defer_refill or not pre_packing_lengths:
+                if not self._fill_reading_buffer(src_iter, log_progress=is_initial_pack):
+                    self._source_exhausted = True
+                    break
+                is_initial_pack = False
 
             # Create new pre packs if necessary
             if len(pre_packing_lengths) == 0:
@@ -600,6 +610,7 @@ class PackingDataset(
         return {
             "type": type(self).__qualname__,
             "buffer_size": self.buffer_size,
+            "defer_refill": self.defer_refill,
             "pre_packer": self._function_config(self.pre_packer),
             "final_packer": self._function_config(self.final_packer),
             "final_packer_stateless": self.final_packer_stateless,

@@ -24,6 +24,19 @@ a list of lists of samples. Alternatively it may return {py:class}`PackedSamples
 For each group, the second method `pack_selected_samples` will be called. You need to implement how a group of
 samples will be mapped to a single sample. In terms of LLMs for example, this method might concatenate the input tokens.
 
+### Deferring buffer refill
+
+A task encoder can set `defer_packing_refill = True` to drain its selected packs
+before preprocessing the next buffered packing window. The default is `False`.
+This can shorten delivery of the first batch but can produce longer waits at later
+window boundaries; evaluate it with the consuming training loop before enabling it.
+
+Use this option only when source sampling and pack transforms have independent
+random state. Final packing and per-sample postencoding must be marked stateless;
+unsupported stateful hooks are rejected. Buffer capacity and selection-window
+membership are unchanged. Keep the same option when saving and restoring loader
+state. Streaming packing is unaffected.
+
 ## Streaming packing
 
 Buffered packing is useful when the selector needs a window of samples, for example to sort or search
