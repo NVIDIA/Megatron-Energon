@@ -133,6 +133,10 @@ splits:
 The built-in unit `samples` is reserved for sample-count blending and is used when
 `blend_weight_unit` is omitted.
 
+A nested `blend` does not inherit the unit of the outer blend. Set the same `blend_weight_unit` on
+every nested `blend`, including blends in referenced recipes. Otherwise, loading the dataset raises
+an error.
+
 To use the recipe in your loader, simply load it with {py:func}`get_train_dataset <megatron.energon.get_train_dataset>` instead of a normal energon dataset:
 ```python
 from megatron.energon import get_train_dataset
