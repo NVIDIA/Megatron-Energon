@@ -134,8 +134,12 @@ class SystemRng:
 
     @staticmethod
     def seed(seed: int) -> None:
-        """Seeds the global random generators."""
-        torch.manual_seed(seed)
+        """Seeds the global random generators.
+
+        Only the CPU generators are seeded, which matches the state saved and restored by
+        SystemRng. Accelerator RNGs (e.g. CUDA) are not seeded.
+        """
+        torch.random.default_generator.manual_seed(seed)
         numpy.random.seed(seed)
         random.seed(seed)
 
