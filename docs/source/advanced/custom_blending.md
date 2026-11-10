@@ -20,6 +20,10 @@ class TextTaskEncoder(DefaultTaskEncoder):
 The recipe selects that unit with `blend_weight_unit: tokens`. The reserved unit `samples` keeps
 sample-count blending and does not call a sample size metric.
 
+The metric must not return negative values. A dataset whose samples all have size zero never reaches
+its share and is selected more and more often, so make sure that every blended dataset yields
+samples with a non-zero size.
+
 If {py:meth}`build_packing_groups <megatron.energon.TaskEncoder.build_packing_groups>` returns more
 than one group, the output streams of the groups are blended as well. This blend needs a second
 metric for the same unit, registered with `stage="encoded"`. It receives the samples the groups
