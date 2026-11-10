@@ -151,7 +151,8 @@ energon checkpoint redist dataloader_state_rank0.pth dataloader_state_rank1.pth 
 The output files are named after the input files, so energon has to work out how the rank number appears in the file name:
 
 - **Several input files:** the one number that differs between the files is the rank index, e.g. `state_rank000.pth`, `state_rank001.pth`, ... The output files continue that pattern up to the new world size, keeping the zero padding.
-- **A single input file** (e.g. a global checkpoint): there is nothing to compare against, so the **last number** in the file name is treated as the rank index and is incremented for each output file. `state_0.pth` becomes `state_0.pth`, `state_1.pth`, ... If the file name contains no number, `_N` is **appended** before the extension: `state.pth` becomes `state_0.pth`, `state_1.pth`, ...
+- **Global checkpoint:** produces one file with the same name, containing the states for all new ranks.
+- **Single per-rank file:** there is nothing to compare against, so the **last number** in the file name is treated as the rank index and is incremented for each output file. `state_0.pth` becomes `state_0.pth`, `state_1.pth`, ... If the file name contains no number, `_N` is **appended** before the extension: `state.pth` becomes `state_0.pth`, `state_1.pth`, ...
 
 ```{note}
 If a file name contains several numbers (e.g. `run2_state.pth`), only the last one is changed.
