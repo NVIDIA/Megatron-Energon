@@ -113,6 +113,10 @@ def build_packing_groups(
     ]
 ```
 
+The output streams of the groups are blended afterward. If the recipe blends by a sample size metric,
+this blend needs a second metric registered with `stage="encoded"`, which receives the packed samples,
+or the encoded samples of a group without packing (see [Customized Blending](custom_blending)).
+
 
 ```{admonition} Note
 :class: important
