@@ -77,6 +77,10 @@ PackingBufferSize = int | Literal["stream"] | None
 
 DEFAULT_BLEND_WEIGHT_UNIT = "samples"
 
+#: Blend a sample size metric is evaluated in: ``"sample"`` for the blend of datasets, ``"encoded"``
+#: for the blend of packing group streams.
+SampleSizeMetricStage = Literal["sample", "encoded"]
+
 
 @dataclasses.dataclass(frozen=True)
 class PackingGroupConfig:
@@ -149,15 +153,28 @@ def stateless(
 def stateless(fn: Callable[P, T]) -> Callable[P, T]: ...
 
 
-def sample_size_metric(name: str) -> Callable[[Callable[P, int | float]], Callable[P, int | float]]:
-    """Decorator to register a named sample size metric for blend weighting."""
+def sample_size_metric(
+    name: str, *, stage: SampleSizeMetricStage = "sample"
+) -> Callable[[Callable[P, int | float]], Callable[P, int | float]]:
+    """Decorator to register a named sample size metric for blend weighting.
+
+    Args:
+        name: The unit the metric measures, selected in the recipe with ``blend_weight_unit``.
+        stage: ``"sample"`` registers the metric for blending datasets. It receives the loaded or
+            cooked samples before encoding. ``"encoded"`` registers the metric for blending the
+            streams of multiple packing groups. It receives the samples yielded by the groups: the
+            packed samples, or the encoded samples of a group without packing.
+    """
     if not name:
         raise ValueError("Sample size metric names must not be empty.")
     if name == DEFAULT_BLEND_WEIGHT_UNIT:
         raise ValueError(f"{DEFAULT_BLEND_WEIGHT_UNIT!r} is reserved for sample-count blending.")
+    if stage not in ("sample", "encoded"):
+        raise ValueError(f"Sample size metric stage must be 'sample' or 'encoded', got {stage!r}.")
 
     def decorator(fn: Callable[P, int | float]) -> Callable[P, int | float]:
         setattr(fn, "__sample_size_metric__", name)
+        setattr(fn, "__sample_size_metric_stage__", stage)
         return fn
 
     return decorator
@@ -166,6 +183,11 @@ def sample_size_metric(name: str) -> Callable[[Callable[P, int | float]], Callab
 def get_sample_size_metric(fn: Callable) -> str | None:
     """Get the sample size metric of a function."""
     return getattr(fn, "__sample_size_metric__", None)
+
+
+def get_sample_size_metric_stage(fn: Callable) -> SampleSizeMetricStage | None:
+    """Get the stage of the sample size metric of a function."""
+    return getattr(fn, "__sample_size_metric_stage__", None)
 
 
 def stateless(
@@ -509,26 +531,30 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         return sample
 
     def _resolve_sample_size_metric(
-        self, blend_weight_unit: str
+        self, blend_weight_unit: str, stage: SampleSizeMetricStage
     ) -> Callable[[Any], int | float] | None:
-        """Return the registered sample size function for a blend weight unit."""
+        """Return the registered sample size function for a blend weight unit and stage."""
         if blend_weight_unit == DEFAULT_BLEND_WEIGHT_UNIT:
             return None
 
         matches: list[str] = []
         for attr_name, attr in inspect.getmembers(type(self), predicate=inspect.isfunction):
-            if get_sample_size_metric(attr) == blend_weight_unit:
+            if (
+                get_sample_size_metric(attr) == blend_weight_unit
+                and get_sample_size_metric_stage(attr) == stage
+            ):
                 matches.append(attr_name)
 
         if not matches:
             raise ValueError(
                 f"Recipe requested blend_weight_unit={blend_weight_unit!r}, but "
-                f"{type(self).__name__} does not register that sample size metric."
+                f"{type(self).__name__} does not register that sample size metric with "
+                f"stage={stage!r}."
             )
         if len(matches) > 1:
             raise ValueError(
                 f"{type(self).__name__} registers multiple sample size metrics named "
-                f"{blend_weight_unit!r}: {', '.join(sorted(matches))}"
+                f"{blend_weight_unit!r} with stage={stage!r}: {', '.join(sorted(matches))}"
             )
         return getattr(self, matches[0])
 
@@ -1121,7 +1147,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         repeat: bool,
         shuffle_buffer_size: Optional[int],
         worker_config: WorkerConfig,
-        sample_size_fn: Callable[[Any], int | float] | None,
+        blend_weight_unit: str,
     ) -> SavableDataset[T_encoded_sample]:
         """Builds the train pipeline with optional task-defined packing group isolation.
 
@@ -1141,6 +1167,13 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         packing_groups = self._build_validated_packing_groups(
             datasets, packing_buffer_size, shuffle_buffer_size
         )
+        # Only the blends that are built need a sample size metric.
+        sample_size_fn = None
+        if any(len(packing_group.datasets) > 1 for packing_group in packing_groups):
+            sample_size_fn = self._resolve_sample_size_metric(blend_weight_unit, "sample")
+        group_sample_size_fn = None
+        if len(packing_groups) > 1:
+            group_sample_size_fn = self._resolve_sample_size_metric(blend_weight_unit, "encoded")
 
         streams: List[tuple[SavableDataset[Any], float]] = []
         for packing_group in packing_groups:
@@ -1175,7 +1208,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             return BlendDataset(
                 *streams,
                 worker_config=worker_config,
-                sample_size_fn=sample_size_fn,
+                sample_size_fn=group_sample_size_fn,
                 sample_size_epsilon=self.blend_sample_size_epsilon,
                 sample_size_alpha=self.blend_sample_size_alpha,
             )
@@ -1222,7 +1255,6 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             if isinstance(dataset.dataset, CrudeWebdataset):
                 assert self.cookers, "CrudeWebdataset found, but no cookers registered."
 
-        sample_size_fn = self._resolve_sample_size_metric(blend_weight_unit)
         dataset = self._build_train_blend_shuffle_encode_packing_groups(
             datasets=datasets,
             packing_buffer_size=packing_buffer_size,
@@ -1230,7 +1262,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             repeat=repeat,
             shuffle_buffer_size=shuffle_buffer_size,
             worker_config=worker_config,
-            sample_size_fn=sample_size_fn,
+            blend_weight_unit=blend_weight_unit,
         )
         dataset = self.build_batch(
             dataset,

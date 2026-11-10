@@ -22,6 +22,7 @@ import webdataset as wds
 from megatron.energon import (
     AuxFileStoreReference,
     PackingGroupConfig,
+    Sample,
     SystemFileStore,
     TextSample,
     WorkerConfig,
@@ -95,6 +96,58 @@ class SizeBlendTaskEncoder(DefaultTaskEncoder):
     @stateless
     def text_chars(self, sample: TextSample) -> int:
         return len(sample.text)
+
+
+@edataclass
+class PackedTextSample(Sample):
+    texts: list[str]
+
+
+def build_pair_packing_groups(
+    self,
+    datasets: list[LoadedDataset],
+    packing_buffer_size: PackingBufferSize,
+    shuffle_buffer_size: int | None,
+) -> list[PackingGroupConfig]:
+    """Puts every two consecutive datasets into one packing group."""
+    return [
+        PackingGroupConfig(
+            datasets=datasets[idx : idx + 2],
+            packing_buffer_size=packing_buffer_size,
+            shuffle_buffer_size=shuffle_buffer_size,
+        )
+        for idx in range(0, len(datasets), 2)
+    ]
+
+
+class GroupedSizeBlendTaskEncoder(DefaultTaskEncoder):
+    """Packs pairs of datasets in one group each and blends by text characters."""
+
+    build_packing_groups = build_pair_packing_groups
+
+    @sample_size_metric("text_chars")
+    @stateless
+    def text_chars(self, sample: TextSample) -> int:
+        assert isinstance(sample, TextSample), type(sample)
+        return len(sample.text)
+
+    @sample_size_metric("text_chars", stage="encoded")
+    @stateless
+    def packed_text_chars(self, sample: PackedTextSample) -> int:
+        assert isinstance(sample, PackedTextSample), type(sample)
+        return sum(len(text) for text in sample.texts)
+
+    def select_samples_to_pack(self, samples: list[TextSample]) -> list[list[TextSample]]:
+        return [samples]
+
+    @stateless
+    def pack_selected_samples(self, samples: list[TextSample]) -> PackedTextSample:
+        return PackedTextSample.derive_from(
+            samples[0],
+            __key__=",".join(sample.__key__ for sample in samples),
+            __restore_key__=(),
+            texts=[sample.text for sample in samples],
+        )
 
 
 @edataclass
@@ -2434,6 +2487,109 @@ class TestDataset(unittest.TestCase):
         assert isinstance(blend_dataset, BlendDataset)
         assert blend_dataset.sample_size_fn is not None
         assert sum(blend_dataset._emitted_sizes) > 0
+
+    def test_blend_sample_size_packing_groups(self):
+        torch.manual_seed(42)
+        worker_config = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=0,
+            seed_offset=42,
+        )
+
+        # Two packing groups of two datasets each, every dataset with its own text size.
+        text_sizes = {"ds_2": 2, "ds_50": 50, "ds_10": 10, "ds_200": 200}
+        for idx, (name, text_size) in enumerate(text_sizes.items()):
+            self.create_fixed_size_text_dataset(
+                self.dataset_path / name, range(idx * 100, idx * 100 + 55), text_size=text_size
+            )
+
+        size_blend_recipe_path = self.dataset_path / "recipe_size_blend_groups.yaml"
+        lines = [
+            "__module__: megatron.energon",
+            "__class__: Recipe",
+            "splits:",
+            "  train:",
+            "    blend_weight_unit: text_chars",
+            "    blend:",
+        ]
+        for name in text_sizes:
+            lines += ["      - weight: 1", f"        path: {name}"]
+        size_blend_recipe_path.write_text("\n".join(lines))
+
+        def new_loader():
+            return get_savable_loader(
+                get_train_dataset(
+                    size_blend_recipe_path,
+                    worker_config=worker_config,
+                    batch_size=None,
+                    packing_buffer_size=4,
+                    shuffle_buffer_size=None,
+                    max_samples_per_sequence=None,
+                    task_encoder=GroupedSizeBlendTaskEncoder(),
+                ),
+                checkpoint_every_sec=0,
+                checkpoint_every_min_n_samples=1,
+            )
+
+        # The dataset blends use the sample metric, the group blend uses the encoded metric. Both
+        # metrics assert their input type, so every dataset reaches its character share.
+        loader = new_loader()
+        group_blend = get_blend_dataset(loader.dataset.dataset)
+        assert group_blend.sample_size_fn is not None
+        assert group_blend.sample_size_fn.__func__ is GroupedSizeBlendTaskEncoder.packed_text_chars
+        char_totals: Counter[int] = Counter()
+        for _, pack in zip(range(2000), loader):
+            assert isinstance(pack, PackedTextSample)
+            for text in pack.texts:
+                char_totals[len(text)] += len(text)
+        for text_size in text_sizes.values():
+            char_ratio = char_totals[text_size] / char_totals.total()
+            assert 0.2 <= char_ratio <= 0.3, char_totals
+
+        loader = new_loader()
+        list(zip(range(20), loader))
+        state = loader.save_state_rank()
+        order_1 = [pack.__key__ for _, pack in zip(range(30), loader)]
+
+        loader = new_loader()
+        loader.restore_state_rank(state)
+        order_1_rest = [pack.__key__ for _, pack in zip(range(len(order_1)), loader)]
+        assert order_1 == order_1_rest
+
+    def test_blend_sample_size_packing_groups_missing_metric(self):
+        worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0)
+
+        class MissingEncodedMetricTaskEncoder(SizeBlendTaskEncoder):
+            build_packing_groups = build_pair_packing_groups
+
+        recipe_path = self.dataset_path / "recipe_size_blend_groups.yaml"
+        recipe_path.write_text(
+            "\n".join(
+                [
+                    "__module__: megatron.energon",
+                    "__class__: Recipe",
+                    "splits:",
+                    "  train:",
+                    "    blend_weight_unit: text_chars",
+                    "    blend:",
+                    "      - path: ds1",
+                    "      - path: ds2",
+                    "      - path: ds3",
+                ]
+            )
+        )
+
+        # Three datasets give two groups, so the group blend needs an encoded metric.
+        with self.assertRaisesRegex(ValueError, "stage='encoded'"):
+            get_train_dataset(
+                recipe_path,
+                worker_config=worker_config,
+                batch_size=None,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                task_encoder=MissingEncodedMetricTaskEncoder(),
+            )
 
     def test_s3(self):
         # Create a recipe configuration
