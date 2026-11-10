@@ -112,10 +112,13 @@ contents rather than its filename.
 In the above example, we create a blend of three datasets. Out of the yielded training samples, 62.5% ({math}`=\frac{5}{8}`) will come from `./coco`, 25% from `./coyo` and 12.5% from `./other`.
 Note that the relative paths in the recipe are relative to the location of the recipe file. Absolute paths are allowed but won't work for object storage.
 
+(blend-weight-unit)=
+
 By default, blend weights target the number of samples yielded from each dataset. To make weights
 target a task-defined unit, set `blend_weight_unit` on the blend and register a matching metric on
-the task encoder with `@sample_size_metric`. For example, `blend_weight_unit: tokens` makes the
-weights target token volume if the task encoder registers a `tokens` sample size metric:
+the task encoder with `@sample_size_metric` (see [Customized Blending](../advanced/custom_blending)).
+For example, `blend_weight_unit: tokens` makes the weights target token volume if the task encoder
+registers a `tokens` sample size metric:
 
 ```yaml
 __module__: megatron.energon

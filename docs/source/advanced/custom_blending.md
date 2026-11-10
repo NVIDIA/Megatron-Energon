@@ -17,7 +17,8 @@ class TextTaskEncoder(DefaultTaskEncoder):
         return len(sample.text)
 ```
 
-The recipe selects that unit with `blend_weight_unit: tokens`. The reserved unit `samples` keeps
+The recipe selects that unit with `blend_weight_unit: tokens` (see
+{ref}`blend weight units in recipes <blend-weight-unit>`). The reserved unit `samples` keeps
 sample-count blending and does not call a sample size metric.
 
 The metric must not return negative values. A dataset whose samples all have size zero never reaches
