@@ -18,6 +18,7 @@ from typing import (
 )
 
 from megatron.energon.epathlib import EPath
+from megatron.energon.epathlib.bounded_io import open_sample_file
 from megatron.energon.flavors.common.manifest.io import get_info_shard_files
 from megatron.energon.flavors.common.manifest.paths import INDEX_SQLITE_FILENAME
 from megatron.energon.flavors.common.manifest.types import ShardInfo
@@ -118,7 +119,7 @@ class ITarReader(ABC, Generic[T_index]):
         the global cache limit, close the least recently used file.
         """
         if tar_file_id not in self.itar_files_cache:
-            file_object = self.tar_filepaths[tar_file_id].open(mode="rb")
+            file_object = open_sample_file(self.tar_filepaths[tar_file_id])
             tar_file = ITarFile.open(fileobj=file_object, mode="r:")
             self.itar_files_cache[tar_file_id] = tar_file
 
@@ -147,7 +148,7 @@ class ITarReader(ABC, Generic[T_index]):
 
         # Open a fresh tar file handle for this access. This avoids sharing file positions
         # and tarfile internal state across threads.
-        with self.tar_filepaths[tar_file_id].open(mode="rb") as file_object:
+        with open_sample_file(self.tar_filepaths[tar_file_id]) as file_object:
             with ITarFile.open(fileobj=file_object, mode="r:") as tar_file:
                 yield tar_file
 

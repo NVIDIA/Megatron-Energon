@@ -11,6 +11,7 @@ from typing import (
 )
 
 from megatron.energon.epathlib import EPath
+from megatron.energon.epathlib.bounded_io import open_sample_file
 from megatron.energon.flavors.common.reader import SamplePartFileReader
 from megatron.energon.flavors.common.sample_record import FilteredSample
 from megatron.energon.flavors.jsonl.ijsonl import (
@@ -100,7 +101,7 @@ class IJsonlReader(ABC, SamplePartFileReader[FilteredSample]):
         )
         if self.part_filter is None or self.part_filter("json"):
             if self.ijsonl_file is None:
-                self.ijsonl_file = IJsonlFile(self.jsonl_path.open("rb"))
+                self.ijsonl_file = IJsonlFile(open_sample_file(self.jsonl_path))
 
             json_data = self.ijsonl_file.next(sample_pointer.byte_offset, sample_pointer.byte_size)
             if json_data is None:

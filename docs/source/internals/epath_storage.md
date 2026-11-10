@@ -27,6 +27,12 @@ retain their existing buffering policy. JSONL and TAR offset-index readers reque
 8 KiB buffers for sparse eight-byte lookups. This changes read-ahead, not index
 encoding, offsets, or ownership of file positions.
 
+Indexed JSONL and TAR sample streams request 64 KiB POSIX buffers. This bounds
+read-ahead after sparse seeks while allowing nearby reads to share a buffer.
+Large records are still read in full. Smaller buffers can increase read syscall
+counts; they do not change formats, sample ordering, or storage-backend selection.
+Each reader retains its own mutable file position.
+
 ## Mapped numeric arrays
 
 `map_epath` exposes one-dimensional typed arrays used by indexes. Its backend depends on the path and
