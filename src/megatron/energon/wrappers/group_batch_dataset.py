@@ -67,6 +67,10 @@ class GroupBatchDataset(
     _group_key_sample_index: SampleIndex
     _batch_sample_index: SampleIndex
     _buckets: Dict[Hashable, Bucket[T_batch_sample]]
+    #: Set once the input dataset is exhausted, so that a restored state does not start a new pass.
+    _source_exhausted: bool
+    #: Whether the state was restored since the last iteration started (not saved).
+    _state_restored: bool
     _batch_failure_handler: ErrorContext
     _group_key_failure_handler: ErrorContext
 
@@ -124,12 +128,20 @@ class GroupBatchDataset(
         self._group_key_sample_index = SampleIndex(self.worker_config, src=self)
         self._batch_sample_index = SampleIndex(self.worker_config, src=self)
         self._buckets = {}
+        self._source_exhausted = False
+        self._state_restored = False
 
     def len_worker(self, worker_idx: int | None = None) -> int:
         # Return an upper bound. This is for sure not correct.
         return self.dataset.len_worker(worker_idx)
 
     def __iter__(self) -> Iterator[T_batch]:
+        if not self._state_restored:
+            # A new iteration starts a new pass, even if the previous one was not iterated to its
+            # end (e.g. stopped right after the last batch).
+            self._source_exhausted = False
+        self._state_restored = False
+
         buckets = self._buckets
 
         if buckets is None:
@@ -163,8 +175,9 @@ class GroupBatchDataset(
                 set_sample_restore_key(batch_sample, sample_idx, *sample_restore_keys, src=self)
                 yield batch_sample
 
-        # Add samples to the buckets
-        for sample in self.dataset:
+        # Add samples to the buckets. When restored after the input was exhausted, only flush the
+        # remaining buckets.
+        for sample in () if self._source_exhausted else self.dataset:
             with self._group_key_failure_handler.handle_errors(sample):
                 with self._group_key_sample_index.ctx():
                     bucket_key, batch_size = self.sample_group_key(sample)
@@ -188,6 +201,7 @@ class GroupBatchDataset(
             bucket.samples.append(sample)
             if bucket.samples.len_worker() >= bucket.batch_size:
                 yield from flush(bucket)
+        self._source_exhausted = True
         # Flush out last samples
         if not self.drop_last:
             for bucket in buckets.values():
@@ -195,12 +209,14 @@ class GroupBatchDataset(
                     yield from flush(bucket)
         # Clear the buckets
         self._buckets.clear()
+        self._source_exhausted = False
 
     def save_state(self) -> FlexState:
         return FlexState(
             bucket_sample_index=self._group_key_sample_index.save_state(),
             batch_sample_index=self._batch_sample_index.save_state(),
             buckets={key: bucket.save_state() for key, bucket in self._buckets.items()},
+            source_exhausted=self._source_exhausted,
             **super().save_state(),
         )
 
@@ -215,6 +231,8 @@ class GroupBatchDataset(
                 samples=SavableSampleBuffer(self.dataset, worker_config=self.worker_config),
             )
             self._buckets[key].restore_state(bucket_state)
+        self._source_exhausted = state["source_exhausted"]
+        self._state_restored = True
 
     def can_restore_sample(self) -> bool:
         return super().can_restore_sample() and self.batcher_stateless

@@ -21,6 +21,7 @@ from typing import (
 from megatron.energon.edataclass import edataclass
 from megatron.energon.errors import ErrorContext, handle_restore_errors
 from megatron.energon.flavors.base_dataset import (
+    FlexState,
     SavableDataset,
     add_sample_restore_key,
     set_sample_restore_key,
@@ -129,6 +130,17 @@ class PackingDataset(
     #: Sample index for the final_packer
     _final_packing_sample_index: SampleIndex
 
+    #: Set once the input dataset is exhausted, so that a restored state does not start a new pass.
+    _source_exhausted: bool
+
+    #: The pack whose final packer generator is being emitted, and how many outputs were emitted.
+    _generator_pack_idx: Optional[int]
+    _generator_sample_keys: Optional[tuple]
+    _generator_offset: Optional[int]
+
+    #: Whether the state was restored since the last iteration started (not saved).
+    _state_restored: bool
+
     #: Error handlers for tracking failures
     _pre_pack_failure_handler: ErrorContext
     _final_pack_failure_handler: ErrorContext
@@ -141,6 +153,10 @@ class PackingDataset(
         "_pre_packing_sample_index",
         "_sample_encoder_sample_index",
         "_final_packing_sample_index",
+        "_source_exhausted",
+        "_generator_pack_idx",
+        "_generator_sample_keys",
+        "_generator_offset",
     )
 
     def __init__(
@@ -242,6 +258,15 @@ class PackingDataset(
         self._pre_packing_sample_index = SampleIndex(self.worker_config, src=self)
         self._final_packing_sample_index = SampleIndex(self.worker_config, src=self)
         self._sample_encoder_sample_index = SampleIndex(self.worker_config, src=self)
+        self._source_exhausted = False
+        self._generator_pack_idx = None
+        self._generator_sample_keys = None
+        self._generator_offset = None
+        self._state_restored = False
+
+    def restore_state(self, state: FlexState) -> None:
+        super().restore_state(state)
+        self._state_restored = True
 
     def len_worker(self, worker_idx: int | None = None) -> int:
         # The real length is unknown, since it depends on the packing function.
@@ -282,13 +307,111 @@ class PackingDataset(
                     return False
         return True
 
+    def _restore_pack(
+        self,
+        pack_restore_keys: Sequence[Any],
+    ) -> List[T_encoded_sample | T_sample | PartialSample[T_sample, Any]]:
+        pack = []
+        for inner_idx in pack_restore_keys:
+            if self.sample_encoder is not None:
+                id, sample_idx, *inner_idx = inner_idx
+                assert id == type(self).__name__
+                assert isinstance(sample_idx, int)
+            sample = self._reading_buffer.restore_sample(inner_idx)
+            if self.sample_encoder is not None:
+                with handle_restore_errors(self.worker_config.restore_error_handler, sample):
+                    input_sample = sample
+                    input_restore_key = get_sample_restore_key(input_sample)
+                    with self._sample_encoder_sample_index.ctx(sample_idx):
+                        sample = self.sample_encoder(sample)
+                    assert not isinstance(sample, Generator), "Generator not supported"
+                    if isinstance(input_sample, PartialSample) and input_restore_key is not None:
+                        sample = set_sample_restore_key(
+                            sample,
+                            *input_restore_key[1:],
+                            src=input_sample,
+                        )
+                    sample = add_sample_restore_key(sample, sample_idx, src=self)
+
+            pack.append(sample)
+        return pack
+
+    def _finalize_pack(
+        self,
+        pack: List[T_encoded_sample | T_sample | PartialSample[T_sample, Any]],
+        *,
+        pack_idx: Optional[int] = None,
+        skip_outputs: int = 0,
+    ) -> Generator[T_batch_sample, None, None]:
+        """Runs the final packer on an encoded pack.
+
+        Args:
+            pack: The encoded pack members.
+            pack_idx: The final packer sample index, if continuing a restored generator pack.
+            skip_outputs: Number of generator outputs that were already emitted before restoring.
+        """
+        with self._final_pack_failure_handler.handle_errors(pack):
+            pack_restore_keys = tuple(get_sample_restore_key(sample) for sample in pack)
+            with self._final_packing_sample_index.ctx(pack_idx) as pack_idx:
+                final_packed_sample = self.final_packer(pack)
+            if isinstance(final_packed_sample, Generator):
+                assert inspect.isgeneratorfunction(self.final_packer), (
+                    f"Generator in {self.final_packer} but not marked as such."
+                )
+                # The pack members are already consumed, so save the pack until all its outputs
+                # are emitted.
+                self._generator_pack_idx = pack_idx
+                self._generator_sample_keys = pack_restore_keys
+                self._generator_offset = skip_outputs
+                for pack_sub_idx, (pack_idx, inner_batch_sample) in enumerate(
+                    self._final_packing_sample_index.iter_ctx(final_packed_sample, pack_idx)
+                ):
+                    if pack_sub_idx < skip_outputs:
+                        continue
+                    self._generator_offset = pack_sub_idx + 1
+                    self._final_pack_failure_handler.reset()
+                    yield set_sample_restore_key(
+                        inner_batch_sample,
+                        pack_idx,
+                        pack_sub_idx,
+                        *pack_restore_keys,
+                        src=self,
+                    )
+            else:
+                self._final_pack_failure_handler.reset()
+                yield set_sample_restore_key(
+                    final_packed_sample,
+                    pack_idx,
+                    *pack_restore_keys,
+                    src=self,
+                )
+        self._generator_pack_idx = None
+        self._generator_sample_keys = None
+        self._generator_offset = None
+
     def __iter__(self) -> Iterator[T_batch_sample]:
         pre_packing_lengths = self._pre_packing_lengths
-        # The source dataset
-        src_iter = iter(self.dataset)
+        if not self._state_restored:
+            # A new iteration starts a new pass, even if the previous one was not iterated to its
+            # end (e.g. stopped right after the last pack).
+            self._source_exhausted = False
+            self._generator_pack_idx = None
+            self._generator_sample_keys = None
+            self._generator_offset = None
+        self._state_restored = False
+        # The source dataset. When restored after it was exhausted, do not start another pass.
+        src_iter = iter(()) if self._source_exhausted else iter(self.dataset)
 
         self._pre_packing_buffer.worker_start()
         self._reading_buffer.worker_start()
+
+        if self._generator_sample_keys is not None:
+            # Restored in the middle of a pack: emit its remaining final packer outputs first.
+            yield from self._finalize_pack(
+                self._restore_pack(self._generator_sample_keys),
+                pack_idx=self._generator_pack_idx,
+                skip_outputs=self._generator_offset,
+            )
 
         is_initial_pack = True
 
@@ -368,33 +491,7 @@ class PackingDataset(
 
             del self._pre_packing_buffer[: pre_packing_lengths[0]]
             del pre_packing_lengths[0]
-            with self._final_pack_failure_handler.handle_errors(pack):
-                pack_restore_keys = tuple(get_sample_restore_key(sample) for sample in pack)
-                with self._final_packing_sample_index.ctx() as pack_idx:
-                    final_packed_sample = self.final_packer(pack)
-                if isinstance(final_packed_sample, Generator):
-                    assert inspect.isgeneratorfunction(self.final_packer), (
-                        f"Generator in {self.final_packer} but not marked as such."
-                    )
-                    for pack_sub_idx, (pack_idx, inner_batch_sample) in enumerate(
-                        self._final_packing_sample_index.iter_ctx(final_packed_sample, pack_idx)
-                    ):
-                        self._final_pack_failure_handler.reset()
-                        yield set_sample_restore_key(
-                            inner_batch_sample,
-                            pack_idx,
-                            pack_sub_idx,
-                            *pack_restore_keys,
-                            src=self,
-                        )
-                else:
-                    self._final_pack_failure_handler.reset()
-                    yield set_sample_restore_key(
-                        final_packed_sample,
-                        pack_idx,
-                        *pack_restore_keys,
-                        src=self,
-                    )
+            yield from self._finalize_pack(pack)
 
         # Main loop:
         pre_pack_round = 0
@@ -409,6 +506,7 @@ class PackingDataset(
             # Fill a portion of the buffer
             if not self._fill_reading_buffer(src_iter, log_progress=is_initial_pack):
                 # Break out of the main loop when the source is exhausted.
+                self._source_exhausted = True
                 break
             is_initial_pack = False
 
@@ -447,6 +545,7 @@ class PackingDataset(
                     raise RuntimeError(
                         f"Pre packer {self.pre_packer} did not yield any packs after {flush_round} flush rounds. Likely your code or dataset are broken."
                     )
+        self._source_exhausted = False
 
     def can_restore_sample(self) -> bool:
         # Cannot really verify if the returned elements contain a __restore_key__.
@@ -473,29 +572,7 @@ class PackingDataset(
             id, pack_idx, *pack_restore_keys = restore_key
             assert id == type(self).__name__
 
-        pack = []
-        for inner_idx in pack_restore_keys:
-            if self.sample_encoder is not None:
-                id, sample_idx, *inner_idx = inner_idx
-                assert id == type(self).__name__
-                assert isinstance(sample_idx, int)
-            sample = self._reading_buffer.restore_sample(inner_idx)
-            if self.sample_encoder is not None:
-                with handle_restore_errors(self.worker_config.restore_error_handler, sample):
-                    input_sample = sample
-                    input_restore_key = get_sample_restore_key(input_sample)
-                    with self._sample_encoder_sample_index.ctx(sample_idx):
-                        sample = self.sample_encoder(sample)
-                    assert not isinstance(sample, Generator), "Generator not supported"
-                    if isinstance(input_sample, PartialSample) and input_restore_key is not None:
-                        sample = set_sample_restore_key(
-                            sample,
-                            *input_restore_key[1:],
-                            src=input_sample,
-                        )
-                    sample = add_sample_restore_key(sample, sample_idx, src=self)
-
-            pack.append(sample)
+        pack = self._restore_pack(pack_restore_keys)
 
         with handle_restore_errors(self.worker_config.restore_error_handler, pack):
             with self._final_packing_sample_index.ctx(pack_idx):
