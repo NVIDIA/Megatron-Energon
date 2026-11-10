@@ -3,6 +3,52 @@ SPDX-License-Identifier: BSD-3-Clause -->
 
 # Customized Blending
 
+Recipe `blend` weights target sample counts by default. A task encoder can expose another unit for
+weighted blending by registering a named sample size metric:
+
+```py
+from megatron.energon import DefaultTaskEncoder, TextSample, sample_size_metric, stateless
+
+
+class TextTaskEncoder(DefaultTaskEncoder):
+    @sample_size_metric("tokens")
+    @stateless
+    def token_count(self, sample: TextSample) -> int:
+        return len(sample.text)
+```
+
+The recipe selects that unit with `blend_weight_unit: tokens` (see
+{ref}`blend weight units in recipes <blend-weight-unit>`). The reserved unit `samples` keeps
+sample-count blending and does not call a sample size metric.
+
+The metric must not return negative values. A dataset whose samples all have size zero never reaches
+its share and is selected more and more often, so make sure that every blended dataset yields
+samples with a non-zero size.
+
+If {py:meth}`build_packing_groups <megatron.energon.TaskEncoder.build_packing_groups>` returns more
+than one group, the output streams of the groups are blended as well. This blend needs a second
+metric for the same unit, registered with `stage="encoded"`. It receives the samples the groups
+yield: the packed samples returned by
+{py:meth}`pack_selected_samples <megatron.energon.TaskEncoder.pack_selected_samples>`, or the
+encoded samples of a group without packing:
+
+```py
+class PackedTextTaskEncoder(DefaultTaskEncoder):
+    @sample_size_metric("tokens")
+    @stateless
+    def token_count(self, sample: TextSample) -> int:
+        return len(sample.text)
+
+    @sample_size_metric("tokens", stage="encoded")
+    @stateless
+    def packed_token_count(self, sample: PackedTextSample) -> int:
+        return sum(len(text) for text in sample.texts)
+```
+
+A metric is only required for a blend that is built: the default metric if a group contains more
+than one dataset, and the encoded metric if there is more than one group. If a required metric is
+missing, loading the dataset raises an error.
+
 In your Task Encoder you could customize the blend of datasets by overriding the `build_train_datasets` method as shown below.
 
 
