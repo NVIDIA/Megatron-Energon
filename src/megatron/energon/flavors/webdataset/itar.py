@@ -50,7 +50,7 @@ class TarIndexReader:
         tar_path = EPath(tar_path)
         index_path = tar_path.with_suffix(IDX_SUFFIX, replace=False)
         self._length = index_path.size() // 8
-        self.itar = index_path.open("rb")
+        self.itar = index_path.open("rb", buffering=8192)
 
     def __getitem__(self, index: int) -> int:
         if index >= self._length or index < 0:

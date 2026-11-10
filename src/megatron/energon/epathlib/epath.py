@@ -191,6 +191,8 @@ class EPath:
         mode: Literal["r", "w"] = "r",
         block_size: Optional[int] = None,
         prefetch_file: bool = False,
+        *,
+        buffering: int = -1,
     ) -> TextIO: ...
 
     @overload
@@ -199,6 +201,8 @@ class EPath:
         mode: Literal["rb", "wb"],
         block_size: Optional[int] = None,
         prefetch_file: bool = False,
+        *,
+        buffering: int = -1,
     ) -> BinaryIO: ...
 
     def open(
@@ -206,8 +210,17 @@ class EPath:
         mode: Literal["r", "rb", "w", "wb"] = "r",
         block_size: Optional[int] = None,
         prefetch_file: bool = False,
+        *,
+        buffering: int = -1,
     ) -> Union[TextIO, BinaryIO]:
-        return self.fs.open(self._internal_str_path, mode, prefetch_file=prefetch_file)
+        """Open a stream with optional POSIX buffering, retaining the storage backend.
+
+        Non-POSIX backends keep their own buffering behavior. ``-1`` keeps the
+        storage client's default; positive values bound POSIX read-ahead.
+        """
+        return self.fs.open(
+            self._internal_str_path, mode, prefetch_file=prefetch_file, buffering=buffering
+        )
 
     def map(
         self,

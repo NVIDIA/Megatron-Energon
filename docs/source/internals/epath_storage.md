@@ -19,6 +19,14 @@ Protocol handlers may also compose an auxiliary path with a primary path, as use
 datasets. Keep the original dataset path in configuration and provenance even when bytes are served from a
 cache or auxiliary location.
 
+## Buffered streams
+
+`EPath.open(..., buffering=N)` sets the POSIX stream buffer size through the storage
+client. The default `-1` preserves the client's default. Remote object backends
+retain their existing buffering policy. JSONL and TAR offset-index readers request
+8 KiB buffers for sparse eight-byte lookups. This changes read-ahead, not index
+encoding, offsets, or ownership of file positions.
+
 ## Mapped numeric arrays
 
 `map_epath` exposes one-dimensional typed arrays used by indexes. Its backend depends on the path and
