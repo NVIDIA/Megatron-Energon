@@ -2858,7 +2858,7 @@ class TestDataset(unittest.TestCase):
         class GroupingTaskEncoder(
             TaskEncoder[CaptioningSample, CaptioningSample, CaptioningSample, CaptioningSample]
         ):
-            @stateless
+            @stateless(skip_safe=True)
             def encode_sample(self, sample: CaptioningSample) -> CaptioningSample:
                 sample.caption = sample.__sources__[0].shard_name.split("/")[-1]
                 return sample
@@ -2871,11 +2871,12 @@ class TestDataset(unittest.TestCase):
                 else:
                     assert False
 
-            @stateless
+            @stateless(skip_safe=True)
             def encode_batch(self, batch: CaptioningSample) -> CaptioningEncodedBatch:
                 return CaptioningEncodedBatch(**dataclasses.asdict(batch))
 
-        worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0)
+        # Grouping must receive encoded samples even when fanout discards a batch.
+        worker_config = WorkerConfig(rank=0, world_size=1, num_workers=2, logical_workers=1)
         loader = get_savable_loader(
             get_train_dataset(
                 self.dataset_path,
