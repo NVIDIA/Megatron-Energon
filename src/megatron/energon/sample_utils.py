@@ -25,10 +25,17 @@ def default_get_batch_keys(batch: Any) -> list[str] | None:
         batch: A sample or batch to extract keys from. If a list, uses the first element.
 
     Returns:
-        List of string keys if found, None otherwise.
+        List of string keys if found, None otherwise. The key of a single unbatched sample is
+        returned as a one-element list.
     """
     if isinstance(batch, list):
         batch = batch[0]
+    if isinstance(batch, dict):
+        sample_key = batch.get("__key__")
+    else:
+        sample_key = getattr(batch, "__key__", None)
+    if isinstance(sample_key, str):
+        return [sample_key]
     if (
         hasattr(batch, "__key__")
         and isinstance(batch.__key__, list)
