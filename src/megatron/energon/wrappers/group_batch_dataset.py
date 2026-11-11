@@ -135,6 +135,11 @@ class GroupBatchDataset(
         # Return an upper bound. This is for sure not correct.
         return self.dataset.len_worker(worker_idx)
 
+    def set_skip_mode(self, active: bool) -> None:
+        # Group selection needs real inputs, including samples buffered for a
+        # later retained batch while advancing a discarded batch.
+        self.dataset.set_skip_mode(False)
+
     def __iter__(self) -> Iterator[T_batch]:
         if not self._state_restored:
             # A new iteration starts a new pass, even if the previous one was not iterated to its

@@ -96,6 +96,14 @@ A `postencode_sample` hook used without packing is currently executed as an
 ordinary map and is not elided by its marker. Use `encode_sample` for the
 no-packing fast path.
 
+When `batch_group_criterion` is defined, sample encoding and any preceding
+packing stages run even for batches assigned to another physical worker.
+Grouping needs real encoded samples or packs to choose buckets, and samples
+read while forming a discarded batch can belong to a later retained batch.
+You may keep their `skip_safe` annotations, but grouped batching prevents those
+upstream computations from being skipped. A skip-safe `encode_batch` can still
+be omitted for discarded batches.
+
 When uncertain, leave the function unmarked. The output stream remains correct;
 only the opportunity to avoid work on discarded fanout outputs is lost. Changing
 skip-safety annotations can change which side effects and failures are observed,
