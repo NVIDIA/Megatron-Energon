@@ -348,7 +348,6 @@ def get_processing_dataset(
     Returns:
         One processing pipeline containing all resolved recipe leaves.
     """
-    _split_deprecated_dataset_kwargs(kwargs, task_encoder, worker_config)
     datasets = _load_leaf_datasets(
         path,
         split_part=split_part,
@@ -385,7 +384,6 @@ def get_processing_datasets(
     Returns:
         Processing pipelines paired with their source dataset factories.
     """
-    _split_deprecated_dataset_kwargs(kwargs, task_encoder, worker_config)
     datasets = _load_leaf_datasets(
         path,
         split_part=split_part,
