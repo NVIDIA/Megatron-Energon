@@ -29,6 +29,7 @@ from megatron.energon import (
     TextSample,
     WorkerConfig,
     basic_sample_keys,
+    get_processing_dataset,
     get_savable_loader,
     get_train_dataset,
     get_val_dataset,
@@ -547,6 +548,12 @@ class TestDataset(unittest.TestCase):
                     assert txt == f"<{key_int}|{key_int}>"
 
                 print(key, txt)
+
+    def test_processing_dataset_without_cookers(self):
+        worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0)
+
+        with self.assertRaisesRegex(AssertionError, "no cookers registered"):
+            get_processing_dataset(self.recipe_path, worker_config=worker_config)
 
     def test_val_dataset_without_cookers(self):
         worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0)

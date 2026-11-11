@@ -1474,6 +1474,12 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         Returns:
             The processing :class:`~megatron.energon.flavors.SavableDataset` pipeline.
         """
+
+        # Check if there's a CrudeWebdataset but no cookers
+        for dataset in datasets:
+            if isinstance(dataset.dataset, CrudeWebdataset):
+                assert self.cookers, "CrudeWebdataset found, but no cookers registered."
+
         rotation_offsets = self._compute_rotation_offsets(datasets, worker_config)
         dataset = self._build_val_concat_encode_branch(
             datasets=datasets,
