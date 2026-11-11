@@ -218,9 +218,16 @@ class SystemRng:
     This affects torch, numpy and the standard library random module."""
 
     @staticmethod
-    def seed(seed: int) -> None:
-        """Seeds the global random generators."""
-        torch.manual_seed(seed)
+    def seed(seed: int, *, seed_accelerators: bool = False) -> None:
+        """Seed CPU RNGs, and accelerator RNGs only if explicitly enabled.
+
+        Accelerator seeding is off by default, which matches the CPU RNG state
+        saved/restored by SystemRng. Enable it for code that uses accelerator randomness.
+        """
+        if seed_accelerators:
+            torch.manual_seed(seed)
+        else:
+            torch.random.default_generator.manual_seed(seed)
         numpy.random.seed(seed)
         random.seed(seed)
 
@@ -254,6 +261,6 @@ class SystemRng:
         return seed_value
 
     @staticmethod
-    def seed_args(*args: Any) -> None:
+    def seed_args(*args: Any, seed_accelerators: bool = False) -> None:
         """Seeds the global random generators deterministically from the given arguments."""
-        SystemRng.seed(SystemRng.get_seed_from_args(*args))
+        SystemRng.seed(SystemRng.get_seed_from_args(*args), seed_accelerators=seed_accelerators)

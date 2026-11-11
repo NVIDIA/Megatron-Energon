@@ -145,7 +145,10 @@ P = ParamSpec("P")
 
 @overload
 def stateless(
-    *, restore_seeds: bool = False, failure_tolerance: Optional[int] = None
+    *,
+    restore_seeds: bool = False,
+    seed_accelerators: bool = False,
+    failure_tolerance: Optional[int] = None,
 ) -> Callable[[Callable[P, T]], Callable[P, T]]: ...
 
 
@@ -194,6 +197,7 @@ def stateless(
     fn: Optional[Callable[..., T]] = None,
     *,
     restore_seeds: bool = False,
+    seed_accelerators: bool = False,
     failure_tolerance: Optional[int] = None,
 ) -> Union[Callable[[Callable[..., T]], Callable[..., T]], Callable[..., T]]:
     """Decorator to mark a function of the task encoder as restorable.
@@ -203,6 +207,9 @@ def stateless(
         restore_seeds: Whether to restore the seeds for the function. I.e. the seeds are set
             from the sample index and the worker seed, such that they can be restored when a sample
             is restored from that function.
+        seed_accelerators: Also seed accelerator RNGs when restore_seeds is enabled.
+            Set True only for transforms that use accelerator randomness (e.g. ``torch.rand``
+            on CUDA); by default only the CPU RNGs are seeded.
         failure_tolerance: The number of consecutive exceptions that are handled, after which a `FatalSampleError` is
             raised for this function. Set to 0 to disable.
 
@@ -223,7 +230,10 @@ def stateless(
 
     if fn is None:
         return lambda f: stateless(
-            f, restore_seeds=restore_seeds, failure_tolerance=failure_tolerance
+            f,
+            restore_seeds=restore_seeds,
+            seed_accelerators=seed_accelerators,
+            failure_tolerance=failure_tolerance,
         )
     if restore_seeds:
         worker_seed = None
@@ -240,7 +250,9 @@ def stateless(
             # Before constructing the generator and before the first
             # iteration, set inner RNG based on seed computed
             # from worker_seed and current sample index
-            SystemRng.seed_args(worker_seed, self.current_sample_index)
+            SystemRng.seed_args(
+                worker_seed, self.current_sample_index, seed_accelerators=seed_accelerators
+            )
 
             it = iter(fn(self, *args, **kwargs))
 
@@ -284,7 +296,9 @@ def stateless(
             # Save the RNG states and set the new seed
             rng_state = SystemRng.save_state()
 
-            SystemRng.seed_args(worker_seed, self.current_sample_index)
+            SystemRng.seed_args(
+                worker_seed, self.current_sample_index, seed_accelerators=seed_accelerators
+            )
 
             try:
                 return fn(self, *args, **kwargs)
