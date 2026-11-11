@@ -1427,7 +1427,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
 
         # Check if there's a CrudeWebdataset but no cookers
         for dataset in datasets:
-            if isinstance(dataset, CrudeWebdataset):
+            if isinstance(dataset.dataset, CrudeWebdataset):
                 assert self.cookers, "CrudeWebdataset found, but no cookers registered."
 
         dataset = self._build_val_concat_encode_packing_groups(
