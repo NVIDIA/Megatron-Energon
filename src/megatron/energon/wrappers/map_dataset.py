@@ -13,6 +13,7 @@ from typing import (
     Tuple,
     TypeVar,
     Union,
+    cast,
 )
 
 from megatron.energon.errors import (
@@ -32,10 +33,12 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
 
     map_fn: Callable[[T_sample], Union[T_sample_out, Generator[T_sample_out, None, None]]]
     stateless_map_fn: bool
+    map_fn_skip_safe: bool
     map_fn_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]]
     _sample_index: SampleIndex
     _generator_sample_key: Optional[Any]
     _generator_offset: Optional[int]
+    _skip_mode: bool
     _map_failure_handler: ErrorContext
 
     _savable_fields = (
@@ -50,6 +53,7 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
         map_fn: Callable[[T_sample], Union[T_sample_out, Generator[T_sample_out, None, None]]],
         *,
         stateless_map_fn: bool = False,
+        map_fn_skip_safe: bool = False,
         map_fn_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]] = None,
         failure_tolerance: int = 100,
         worker_config: WorkerConfig,
@@ -74,6 +78,7 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
         super().__init__(dataset, worker_config=worker_config)
         self.map_fn = map_fn
         self.stateless_map_fn = stateless_map_fn
+        self.map_fn_skip_safe = map_fn_skip_safe
         self.map_fn_config = map_fn_config
         self.failure_tolerance = failure_tolerance
         self._map_failure_handler = ErrorContext(
@@ -88,9 +93,17 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
         self._sample_index = SampleIndex(self.worker_config, src=self)
         self._generator_sample_key = None
         self._generator_offset = None
+        self._skip_mode = False
 
     def len_worker(self, worker_idx: int | None = None) -> int:
         return self.dataset.len_worker(worker_idx)
+
+    def set_skip_mode(self, active: bool) -> None:
+        if self.map_fn_skip_safe and not inspect.isgeneratorfunction(self.map_fn):
+            self.dataset.set_skip_mode(active)
+        else:
+            self.dataset.set_skip_mode(False)
+        self._skip_mode = active
 
     def __iter__(self) -> Iterator[T_sample_out]:
         if self._generator_sample_key is not None:
@@ -121,11 +134,20 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
             self._generator_offset = None
 
         for sample in self.dataset:
+            if (
+                self._skip_mode
+                and self.map_fn_skip_safe
+                and not inspect.isgeneratorfunction(self.map_fn)
+            ):
+                self._sample_index.skip(1)
+                yield cast(T_sample_out, None)
+                continue
             restore_key = get_sample_restore_key(sample)
             with self._map_failure_handler.handle_errors(sample):
                 with self._sample_index.ctx() as sample_idx:
                     mapped_sample = self.map_fn(sample)
                 if isinstance(mapped_sample, Generator):
+                    assert not self.map_fn_skip_safe, "Generator in map_fn but skip_mode is active"
                     assert inspect.isgeneratorfunction(self.map_fn), (
                         f"Generator in {self.map_fn} but not marked as such."
                     )

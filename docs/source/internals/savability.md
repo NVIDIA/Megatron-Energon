@@ -33,10 +33,11 @@ A complete implementation also defines:
 
 - `reset_state_own()` for a clean restart of its own state;
 - `len_worker()` and `worker_has_samples()` for worker-local availability;
+- `set_skip_mode()` when work can be elided for discarded samples;
 - `config()` for a stable, serializable description;
 - `can_restore_sample()` and sample restoration where the dataset supports it.
 
-State is per worker. The loader merges or distributes worker state at its process boundary; an
+State is per logical worker. The loader merges or distributes worker state at its process boundary; an
 individual dataset should not invent a second global-worker aggregation scheme.
 
 ## Wrapper datasets
@@ -46,7 +47,7 @@ individual dataset should not invent a second global-worker aggregation scheme.
 - all children must use the same `WorkerConfig`;
 - child state is saved under `datasets`;
 - restore verifies the number of children;
-- reset propagates to children;
+- reset and skip mode propagate to children;
 - a multi-child restore key records which child produced the sample.
 
 A new wrapper should use those mechanics rather than manually walking a private child attribute. If it owns
@@ -58,18 +59,38 @@ Review a new wrapper against this checklist:
 2. Does saved state include every cursor, buffer, random generator, and pending item?
 3. Does reset clear both the wrapper's own state and nested savable helpers?
 4. Are `len_worker` and `worker_has_samples` correct for empty and exhausted children?
-5. Do emitted restore keys contain enough structure to route sample restoration?
-6. Does `config()` describe construction without including open handles or mutable progress?
-7. Do tests save and restore in the middle of any buffer, group, or batch?
+5. Is skip mode propagated, handled locally, or deliberately blocked?
+6. Do emitted restore keys contain enough structure to route sample restoration?
+7. Does `config()` describe construction without including open handles or mutable progress?
+8. Do tests save and restore in the middle of any buffer, group, or batch?
 
 ## Randomness and sample indexes
 
 Use `WorkerRng` for stateful worker randomness. Its state is part of the checkpoint, and its choice
 implementation is designed to remain stable across supported PyTorch versions.
 
-`SampleIndex` and related helpers track nested sample-number scopes.
+`SampleIndex` and related helpers track nested sample-number scopes. Calling `skip()` must advance the same
+logical index that ordinary execution would have consumed. This is required when `StrideDataset` discards
+outputs while multiple physical workers fan out one logical stream.
 
 Do not replace these helpers with an unsaved local counter or a module-global random generator.
+
+## Skip mode
+
+Skip mode means "advance the stream while omitting explicitly safe computation." It does not mean "ignore
+state." A skipped transform must consume the same sample index and leave downstream state aligned with a
+fully evaluated stream.
+
+A callable marked `skip_safe` must not:
+
+- mutate state that later samples observe;
+- perform required validation or error detection;
+- create a restore-key component that later stages need;
+- consume untracked randomness;
+- change how many samples the stage emits.
+
+Selectors are not skip-safe because their decisions define which inputs form an output. For details on
+physical/logical worker fanout, see {ref}`logical-workers`.
 
 ## Buffered stages
 
