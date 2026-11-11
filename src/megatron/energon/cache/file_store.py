@@ -96,7 +96,7 @@ class SystemFileStore(FileStore[bytes]):
                 )
 
             local_sqlite_path = ensure_local_copy(sqlite_path)
-            db_uri = f"file:{str(local_sqlite_path)}?mode=ro&immutable=1"
+            db_uri = f"{local_sqlite_path.local_path().as_uri()}?mode=ro&immutable=1"
             self._media_metadata_reader = ThreadLocalSqlite(db_uri, is_uri=True)
 
         if not self._media_metadata_checked:
