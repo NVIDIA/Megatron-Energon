@@ -31,6 +31,7 @@ from megatron.energon import (
     basic_sample_keys,
     get_savable_loader,
     get_train_dataset,
+    get_val_dataset,
     stateless,
 )
 from megatron.energon.cache import ByteRangeStore, FileStore, FileStoreCachePool, Lazy
@@ -546,6 +547,12 @@ class TestDataset(unittest.TestCase):
                     assert txt == f"<{key_int}|{key_int}>"
 
                 print(key, txt)
+
+    def test_val_dataset_without_cookers(self):
+        worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0)
+
+        with self.assertRaisesRegex(AssertionError, "no cookers registered"):
+            get_val_dataset(self.recipe_path, batch_size=2, worker_config=worker_config)
 
     def test_loader(self):
         torch.manual_seed(42)
