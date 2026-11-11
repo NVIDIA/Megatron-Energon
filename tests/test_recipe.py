@@ -4,6 +4,7 @@
 """This module defines tests for recipes."""
 
 import gc
+import json
 import logging
 import random
 import sys
@@ -434,6 +435,31 @@ class TestDataset(unittest.TestCase):
         ]
         assert datasets[0][1].tags["number"] == 43
         assert datasets[1][1].tags["number"] == 44
+
+    def test_processing_dataset_logs_sample_keys(self):
+        worker_config = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=0,
+            worker_log_level=3,
+            worker_debug_path=str(self.dataset_path) + "/worker_debug/{worker_id}.jsonl",
+        )
+
+        dataset = get_processing_dataset(
+            self.recipe_path,
+            worker_config=worker_config,
+        )
+        keys = [sample.__key__ for sample in get_loader(dataset)]
+
+        with (self.dataset_path / "worker_debug" / "0.jsonl").open() as rf:
+            log_entries = [json.loads(line) for line in rf]
+        logged_keys = [
+            entry["keys"]
+            for entry in log_entries
+            if entry["t"] == "yield_batch" and entry["m"] == "processing"
+        ]
+        assert len(keys) == 110
+        assert logged_keys == [[key] for key in keys]
 
     def test_deprecated_v2_aliases(self):
         from megatron.energon.recipe.recipe import Recipe

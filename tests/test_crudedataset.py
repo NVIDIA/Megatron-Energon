@@ -29,8 +29,10 @@ from megatron.energon import (
     TextSample,
     WorkerConfig,
     basic_sample_keys,
+    get_processing_dataset,
     get_savable_loader,
     get_train_dataset,
+    get_val_dataset,
     stateless,
 )
 from megatron.energon.cache import ByteRangeStore, FileStore, FileStoreCachePool, Lazy
@@ -300,6 +302,18 @@ class GenericCookingTaskEncoder(DefaultTaskEncoder[TextSample, TextSample, TextB
         )
 
 
+class ProcessingTaskEncoder(CookingTaskEncoder):
+    """Marks every sample in the encode and post-encode stages."""
+
+    @stateless
+    def encode_sample(self, sample: TextSample) -> TextSample:
+        return TextSample.derive_from(sample, text=f"enc:{sample.text}")
+
+    @stateless
+    def postencode_sample(self, sample: TextSample) -> TextSample:
+        return TextSample.derive_from(sample, text=f"{sample.text}:post")
+
+
 class TestDataset(unittest.TestCase):
     # Set up the test fixture
     def setUp(self):
@@ -546,6 +560,58 @@ class TestDataset(unittest.TestCase):
                     assert txt == f"<{key_int}|{key_int}>"
 
                 print(key, txt)
+
+    def test_processing_dataset(self):
+        """Cooks, encodes and post-encodes every sample exactly once across workers."""
+        worker_config = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=2,
+            global_error_handler=reraise_exception,
+        )
+
+        def build_loader():
+            return get_savable_loader(
+                get_processing_dataset(
+                    self.recipe_path,
+                    worker_config=worker_config,
+                    task_encoder=ProcessingTaskEncoder(),
+                ),
+                checkpoint_every_sec=0,
+                checkpoint_every_min_n_samples=1,
+            )
+
+        loader = build_loader()
+        texts = []
+        states = {}
+        for step, sample in enumerate(loader):
+            texts.append(sample.text)
+            if step in (0, 40):
+                states[step] = loader.save_state_rank()
+
+        assert sorted(texts) == sorted(
+            [f"enc:<{idx}>:post" for idx in range(55)]
+            + [f"enc:<{idx}|{idx}>:post" for idx in range(100, 155)]
+        )
+
+        for step, state in states.items():
+            restored_loader = build_loader()
+            restored_loader.restore_state_rank(state)
+            assert [sample.text for sample in restored_loader] == texts[step + 1 :], (
+                f"Restored after sample {step}"
+            )
+
+    def test_processing_dataset_without_cookers(self):
+        worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0)
+
+        with self.assertRaisesRegex(AssertionError, "no cookers registered"):
+            get_processing_dataset(self.recipe_path, worker_config=worker_config)
+
+    def test_val_dataset_without_cookers(self):
+        worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0)
+
+        with self.assertRaisesRegex(AssertionError, "no cookers registered"):
+            get_val_dataset(self.recipe_path, batch_size=2, worker_config=worker_config)
 
     def test_loader(self):
         torch.manual_seed(42)
