@@ -82,3 +82,5 @@ Before adding a new protocol or reader:
 
 User-facing remote and auxiliary dataset configuration is documented in
 [Remote Datasets](../advanced/remote_dataset.md) and [Crude Datasets](../advanced/crude_datasets.md).
+
+See [index reader reuse](startup-review-07-index-reader-reuse.md).

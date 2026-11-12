@@ -9,6 +9,7 @@ from typing import BinaryIO, Dict, Generator, Optional, Tuple, Type, Union
 
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
+from megatron.energon.epathlib.index_io import open_sized_index
 from megatron.energon.retry_stream import RetryReadStream
 
 IDX_SUFFIX = ".idx"
@@ -49,8 +50,7 @@ class TarIndexReader:
     def __init__(self, tar_path: Union[EPath, str]):
         tar_path = EPath(tar_path)
         index_path = tar_path.with_suffix(IDX_SUFFIX, replace=False)
-        self._length = index_path.size() // 8
-        self.itar = index_path.open("rb")
+        self.itar, self._length = open_sized_index(index_path)
 
     def __getitem__(self, index: int) -> int:
         if index >= self._length or index < 0:
@@ -221,6 +221,14 @@ class CachedItarOffsetReader:
         """
         tar_file = str(tar_file)
         key = (tar_file, sample_offset)
+
+        # Reposition an idle reader for this same index instead of reopening it.
+        if key not in self.tar_index_reader_cache:
+            reuse_key = next(
+                (old for old in self.tar_index_reader_cache if old[0] == tar_file), None
+            )
+            if reuse_key is not None:
+                self.tar_index_reader_cache[key] = self.tar_index_reader_cache.pop(reuse_key)
 
         # Direct hit in the cache?
         if key in self.tar_index_reader_cache:
