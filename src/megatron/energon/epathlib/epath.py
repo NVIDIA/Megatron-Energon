@@ -21,6 +21,7 @@ from typing import (
 import multistorageclient as msc
 
 from megatron.energon.deprecation import warn_deprecated
+from megatron.energon.epathlib.metadata_snapshot import active_snapshot
 
 if TYPE_CHECKING:
     from megatron.energon.epathlib.mapped_array import EPathMappedArray
@@ -207,6 +208,11 @@ class EPath:
         block_size: Optional[int] = None,
         prefetch_file: bool = False,
     ) -> Union[TextIO, BinaryIO]:
+        snapshot = active_snapshot()
+        if snapshot is not None:
+            stream = snapshot.open(str(self), mode)
+            if stream is not None:
+                return stream
         return self.fs.open(self._internal_str_path, mode, prefetch_file=prefetch_file)
 
     def map(
@@ -307,6 +313,9 @@ class EPath:
             return False
 
     def is_file(self) -> bool:
+        snapshot = active_snapshot()
+        if snapshot is not None and str(self) in snapshot.file_checks:
+            return snapshot.file_checks[str(self)]
         return self.fs.is_file(self._internal_str_path)
 
     def mkdir(self, exist_ok: bool = True, parents: bool = False):
@@ -371,6 +380,9 @@ class EPath:
             yield new_path
 
     def size(self) -> int:
+        snapshot = active_snapshot()
+        if snapshot is not None and str(self) in snapshot.sizes:
+            return snapshot.sizes[str(self)]
         return self.fs.info(self._internal_str_path).content_length
 
     def with_suffix(self, suffix: str, replace: bool = True) -> "EPath":
