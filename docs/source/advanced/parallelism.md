@@ -183,22 +183,37 @@ topology independent; use sample-local stateless randomness for reproducible tra
 Sparse checkpoints first replay the saved number of full logical outputs, then distribute
 new outputs using the current fanout. The logical methods select the last contributors and route their checkpoints
 to the correct groups; do not manually substitute another physical member's checkpoint.
-Existing saved dataloader states from earlier checkpoint formats are not supported.
 
 ### Continuing across iteration boundaries
 
-Opening another iterator after partial consumption continues the strided stream. A virtual
-epoch created with `virtual_epoch_length` also continues the underlying stream on the next
-iteration. `LimitDataset(reset_after_epoch=False)` continues after each limited segment,
-without consuming an extra output beyond the limit. With `reset_after_epoch=True`, the
-underlying stream is reset once when the limited iteration completes, so the next iteration
-starts from the beginning. These lengths count returned outputs per rank, after worker outputs
-have been merged. Virtual epoch boundaries preserve worker delivery order even when the epoch
-length is not divisible by the number of workers.
+Configure `epochize` and `limit` on `get_loader` / `get_savable_loader`, or their
+`BasicDataLoader` / `SavableDataLoader` constructors. Both count returned outputs per rank
+after merging worker outputs.
 
-Both physical and logical checkpoints preserve the remaining epoch/limit budget. Hidden
-checkpoint replay does not count against it. Saving at the last yield, before the iterator has
-reported completion, preserves that pending completion too.
+- `epochize=N` ends an iteration after N outputs and continues the source on the next iteration.
+  Its reported `len(loader)` is N.
+- `limit=N` ends an iteration after at most N outputs and resets the source when that
+  iteration completes. Its reported length is capped by the estimated source length.
+
+```py
+train_loader = get_savable_loader(train_dataset, epochize=1000)
+val_loader = get_loader(val_dataset, limit=100)
+```
+
+The loader also owns sample logging. `worker_log_level >= 1` enables `yield_batch` records
+after striding, so outputs discarded by the stride are not logged. Each record identifies the rank,
+worker, output index, and available sample keys.
+
+A finite source can exhaust before either budget. Opening another iterator after partial
+consumption resumes the current segment. When both options are active, the smaller boundary
+ends the iteration and the limit resets the source. For example, `epochize=5, limit=3`
+produces iterations of three outputs starting from the beginning each time.
+
+Physical and logical checkpoints preserve the progress of both boundaries, including a
+partially consumed segment. Hidden checkpoint replay does not count against the budget.
+Saving at the last yield, before the iterator has reported completion, preserves that pending
+completion too. Worker delivery order continues across epochized segments even when the
+length is not divisible by the worker count.
 
 ### What Fanout Skips
 

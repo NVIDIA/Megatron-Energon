@@ -58,7 +58,7 @@ class StrideDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
         previous_worker_id: int,
     ) -> None:
         """Install logical state and transient replay information supplied by the loader."""
-        self.reset_state_deep()
+        self.reset_state_own()
         if state is not None:
             self.dataset.restore_state(state)
         self._logical_sample_index = sample_index

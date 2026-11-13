@@ -150,19 +150,63 @@ saved progress are part of the contract.
 
 ## Loader iteration boundaries
 
-Dataset builders express `virtual_epoch_length` and validation limits with outer
-`EpochizeDataset` / `LimitDataset` wrappers. Both loaders extract these outer policies and
-apply them after merging worker outputs. The execution order is:
+The loader factories and constructors accept `epochize` and `limit`.
+Epochization continues the worker stream between segments; a limit resets it when an
+iteration completes. Standalone `EpochizeDataset` and `LimitDataset` provide the
+corresponding behavior when composing processing datasets directly.
+
+`IterationController` owns the loader's boundaries and their progress. It counts delivered
+outputs and reports whether the source must reset; it has no dataset, worker, or queue references.
+The loader creates one stride wrapper when logical workers are configured, followed by
+sample logging when enabled by `worker_log_level`. Task encoders build the processing
+pipeline. Output logging observes retained outputs after striding.
+The loader owns worker startup, prefetch shutdown, and source resets. The execution order is:
 
 ```text
 logical pipeline -> checkpoint replay -> striding -> worker queues -> epoch/limit -> caller
 ```
 
-The loader retains the merged worker iterator across virtual epochs and non-resetting limits.
+The loader retains the merged worker iterator across epochized segments.
 Its scheduling count continues across these boundaries, even when an epoch length is not
 divisible by the number of workers. Logical and physical loader checkpoints save epoch/limit
 progress separately, so replay does not consume the remaining public epoch budget.
 
-A resetting limit discards prefetched outputs, shuts down the old workers, resets the source,
+A limit discards prefetched outputs, shuts down the old workers, resets the source,
 and starts a new stream on the next iteration. A checkpoint taken at the final yield preserves
 the pending boundary; its restored iterator finishes that epoch before starting the next one.
+
+
+## Checkpoint and worker responsibilities
+
+The checkpoint schemas and conversion/routing helpers in `savable_loader.py` handle logical
+snapshots, group merging, and validation independently of loader execution.
+
+The worker wrappers in `savable_loader.py` own per-worker iteration, checkpoint history,
+and snapshot installation.
+The main-process and subprocess paths use the same physical checkpoint representation:
+a dataset snapshot, its RNG state and output counter, plus a physical replay offset.
+Pending logical restores remain explicitly distinguishable because their offsets count full
+logical outputs instead.
+
+Snapshot installation resets the pipeline once and copies mutable dataset state once before
+restoring it. This keeps the caller's checkpoint and retained history unchanged during replay
+or later iteration. RNG restoration belongs to this same worker operation. The stride wrapper
+receives its logical cursor and transient replay/assignment information directly.
+
+
+## Finite-source exhaustion
+
+A worker can reach EOF through prefetch before the caller consumes its last output.
+The worker retains its post-EOF checkpoint separately from ordinary yield checkpoints,
+even though both can have the same output counter. Save uses the post-EOF state only
+after the main loader has observed source EOF. Saving at the final yield therefore
+preserves the pending `StopIteration`; saving after it resumes the next pass.
+
+Historical replay stops at source EOF, including when every remaining output was replayed.
+A new worker iterator records a fresh origin checkpoint so replay does not cross into
+a previous pass.
+
+After source exhaustion, a loader restored with rotated worker order rebuilds the workers
+in ordinary order using their end-of-pass snapshots. Each physical identity retains its
+advanced dataset and RNG state. Ordinary unrotated iteration keeps its persistent workers.
+Limits reset the source explicitly when an iteration completes.

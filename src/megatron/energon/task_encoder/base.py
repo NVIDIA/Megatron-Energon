@@ -51,10 +51,7 @@ from megatron.energon.wrappers import (
     BatchDataset,
     BlendDataset,
     ConcatDataset,
-    EpochizeDataset,
     GroupBatchDataset,
-    LimitDataset,
-    LogSampleDataset,
     MapDataset,
     PackingDataset,
     PartialSample,
@@ -1274,7 +1271,6 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         batch_size: Optional[int],
         batch_drop_last: bool = False,
         packing_buffer_size: PackingBufferSize = None,
-        virtual_epoch_length: int = 0,
         shuffle_buffer_size: Optional[int] = None,
         blend_mode: DatasetBlendMode = DatasetBlendMode.NONE,
         blend_weight_unit: str = DEFAULT_BLEND_WEIGHT_UNIT,
@@ -1289,7 +1285,6 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             batch_drop_last: If true, drop the last batch when smaller than ``batch_size``.
             packing_buffer_size: Packing buffer size, ``"stream"`` for pull-based packing, or
                 ``None`` to disable packing. Used as the default by :meth:`build_packing_groups`.
-            virtual_epoch_length: If positive, wraps with epochization at this length.
             shuffle_buffer_size: Shuffle buffer before encoding. Used as the default by
                 :meth:`build_packing_groups`.
             blend_mode: How leaf weights map to the inner :class:`~megatron.energon.BlendDataset`.
@@ -1321,15 +1316,6 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             batch_drop_last=batch_drop_last,
             worker_config=worker_config,
         )
-        if virtual_epoch_length > 0:
-            dataset = EpochizeDataset(
-                dataset,
-                length=virtual_epoch_length,
-                worker_config=worker_config,
-            )
-        if worker_config.should_log(level=1):
-            dataset = LogSampleDataset(dataset, mode="train", worker_config=worker_config)
-
         return dataset
 
     def _build_val_concat_encode_branch(
@@ -1406,7 +1392,6 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         batch_size: int,
         batch_drop_last: bool = False,
         packing_buffer_size: PackingBufferSize = None,
-        limit: Optional[int] = None,
     ) -> SavableDataset[T_batch]:
         """Combines validation datasets into one batched dataset pipeline.
 
@@ -1417,7 +1402,6 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             batch_drop_last: If true, drop the last batch when smaller than ``batch_size``.
             packing_buffer_size: Packing buffer size, ``"stream"`` for pull-based packing, or
                 ``None`` to disable packing. Used as the default by :meth:`build_packing_groups`.
-            limit: If set and positive, caps the number of batches via :class:`~megatron.energon.LimitDataset`.
 
         Returns:
             The full validation :class:`~megatron.energon.flavors.SavableDataset` pipeline.
@@ -1439,17 +1423,6 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             batch_drop_last=batch_drop_last,
             worker_config=worker_config,
         )
-        if limit is not None and limit > 0:
-            dataset = LimitDataset(
-                dataset,
-                length=limit,
-                worker_config=worker_config,
-                reset_after_epoch=True,
-            )
-
-        if worker_config.should_log(level=2):
-            dataset = LogSampleDataset(dataset, mode="val", worker_config=worker_config)
-
         return dataset
 
     @property
