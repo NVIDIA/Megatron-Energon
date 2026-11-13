@@ -97,9 +97,3 @@ class CaptioningTaskEncoder(
         return dataset
 
 ```
-
-Set the epoch length when constructing the loader:
-
-```py
-loader = get_savable_loader(dataset, epochize=1000)
-```
