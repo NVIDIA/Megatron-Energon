@@ -11,7 +11,7 @@ T_sample = TypeVar("T_sample")
 
 
 class LimitDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
-    """Limits the length of the dataset."""
+    """Limits iteration length and resets the source when the iteration completes."""
 
     length: int
 
@@ -23,7 +23,6 @@ class LimitDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
         dataset: SavableDataset[T_sample],
         length: int,
         *,
-        reset_after_epoch: bool = False,
         worker_config: WorkerConfig,
     ):
         """
@@ -32,12 +31,10 @@ class LimitDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
         Args:
             dataset: The dataset to limit
             length: The length to limit to
-            reset_after_epoch: If true, reset the underlying dataset after one epoch.
             worker_config: Configuration for the workers.
         """
         super().__init__(dataset, worker_config=worker_config)
         self.length = length
-        self.reset_after_epoch = reset_after_epoch
         self.reset_state_own()
 
     def reset_state_own(self) -> None:
@@ -84,9 +81,9 @@ class LimitDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
         offset_range = list(range(self.current_offset, local_limit))
         # Only iterate self.dataset if there are samples to iterate
         if len(offset_range) > 0:
-            for sample, offset in zip(
-                self.dataset,
+            for offset, sample in zip(
                 offset_range,
+                self.dataset,
             ):
                 self.current_offset = offset + 1
                 yield sample
@@ -103,11 +100,8 @@ class LimitDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
                 }
             )
 
-        # Reset the inner dataset
-        self.dataset.reset_state_deep()
         self.current_offset = 0
-        if self.reset_after_epoch:
-            self.dataset.reset_state_deep()
+        self.dataset.reset_state_deep()
 
     def worker_has_samples(self) -> bool:
         return super().worker_has_samples() and self.length > 0
@@ -117,7 +111,6 @@ class LimitDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
             "type": type(self).__qualname__,
             "dataset": self.dataset.config(),
             "length": self.length,
-            "reset_after_epoch": self.reset_after_epoch,
             "worker_config": self.worker_config.config(),
         }
 

@@ -106,6 +106,9 @@ class BaseWrapperDataset(SavableDataset[T_sample_out], Generic[T_sample_in, T_sa
 
         return FlexState(datasets=[ds.save_state() for ds in self.datasets], **own_state)
 
+    def export_logical_state(self, state: FlexState) -> Tuple[FlexState, int]:
+        return self.dataset.export_logical_state(state["datasets"][0])
+
     def restore_state(self, state: FlexState) -> None:
         assert len(self.datasets) == len(state["datasets"])
         for dataset, dstate in zip(self.datasets, state["datasets"]):

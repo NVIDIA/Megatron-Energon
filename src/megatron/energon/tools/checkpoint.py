@@ -281,8 +281,9 @@ def command_redist(
     new_states = [
         SavableDataLoaderState(
             worker_states=new_rank_state,
-            next_worker_id=0,  # Reset the next worker ID
+            iteration_index=0,  # Start a new local worker round after redistribution.
             micro_batch_size=rsi.get_micro_batch_size(),
+            boundary_offsets=list(rsi.rank_states[0].boundary_offsets),
         )
         for new_rank_state in new_rank_states
     ]

@@ -149,6 +149,45 @@ For this simple tutorial, we don't really distribute the work, so we use only a 
 
 The worker config also controls error handling behavior. See [](../advanced/error_handling) for details on customizing error handlers.
 
+(loader-iteration)=
+### Controlling iteration length
+
+Configure `epochize` and `limit` on `get_loader` / `get_savable_loader`, or their
+`BasicDataLoader` / `SavableDataLoader` constructors. Both count returned outputs per rank
+after merging worker outputs.
+
+- `epochize=N` ends an iteration after N outputs and continues the source on the next iteration.
+  Its reported `len(loader)` is N.
+- `limit=N` ends an iteration after at most N outputs and resets the source when that
+  iteration completes. Its reported length is capped by the estimated source length.
+
+```py
+from megatron.energon import get_loader, get_savable_loader
+
+train_loader = get_savable_loader(train_dataset, epochize=1000)
+val_loader = get_loader(val_dataset, limit=100)
+```
+
+A finite source can exhaust before either budget. Opening another iterator after partial
+consumption resumes the current segment. When both options are active, the smaller boundary
+ends the iteration and the limit resets the source. For example, `epochize=5, limit=3`
+produces iterations of three outputs starting from the beginning each time.
+
+Physical and logical checkpoints preserve the progress of both boundaries, including a
+partially consumed segment. Hidden checkpoint replay does not count against the budget.
+Saving at the last yield, before the iterator has reported completion, preserves that pending
+completion too. Worker delivery order continues across epochized segments even when the
+length is not divisible by the worker count.
+
+See [](save_restore) for checkpoint usage and {ref}`logical-workers` for changing physical
+worker topology when restoring logical streams.
+
+### Sample logging
+
+The loader also owns sample logging. `worker_log_level >= 1` enables `yield_batch` records
+after striding, so outputs discarded by the stride are not logged. Each record identifies the rank,
+worker, output index, and available sample keys.
+
 ## Tutorial 3: Batch Size
 
 Actually, we would like to use a `batch_size` of more than one, let's go with 2 for now.

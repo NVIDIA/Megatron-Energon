@@ -72,7 +72,6 @@ class CaptioningTaskEncoder(
         batch_size: Optional[int],
         batch_drop_last: bool = False,
         packing_buffer_size: Optional[int | Literal["stream"]] = None,
-        virtual_epoch_length: int = 0,
         shuffle_buffer_size: Optional[int] = None,
     ) -> SavableDataset[T_batch]:
         # The default implementation uses MixDataset, which mixes the datasets according to their weights
@@ -95,13 +94,6 @@ class CaptioningTaskEncoder(
             batch_drop_last=batch_drop_last,
             worker_config=worker_config,
         )
-        # Optionally epochize
-        if virtual_epoch_length > 0:
-            dataset = EpochizeDataset(
-                dataset,
-                length=virtual_epoch_length,
-                worker_config=worker_config,
-            )
         return dataset
 
 ```

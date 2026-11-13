@@ -54,8 +54,8 @@ divisible by two, so the fanout is six:
 
 | Physical global worker IDs | Logical global worker ID | Stride offsets | Stride |
 | --- | --- | --- | --- |
-| 0, 1, 2, 3, 4, 5 | 0 | 0, 1, 2, 3, 4, 5 | 6 |
-| 6, 7, 8, 9, 10, 11 | 1 | 0, 1, 2, 3, 4, 5 | 6 |
+| 0, 1, 2, 3, 4, 5 | 0 | 0, 2, 4, 1, 3, 5 | 6 |
+| 6, 7, 8, 9, 10, 11 | 1 | 0, 2, 4, 1, 3, 5 | 6 |
 
 Set {py:attr}`WorkerConfig.logical_workers
 <megatron.energon.WorkerConfig.logical_workers>` to use fewer logical dataset
@@ -73,6 +73,9 @@ All six physical workers assigned to one logical stream advance that same
 deterministic stream. Each one yields only the outputs at its stride offset.
 Interleaving offsets `0` through `5` reconstructs the original logical stream
 in order; the physical workers do not receive independently shuffled streams.
+
+See {ref}`logical-workers` for delivery order and logical checkpoints across physical
+fanout changes. Loader iteration controls are described in {ref}`loader-iteration`.
 
 ### What Fanout Skips
 

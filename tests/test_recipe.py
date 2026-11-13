@@ -584,9 +584,8 @@ class TestDataset(unittest.TestCase):
             shuffle_buffer_size=8,
             max_samples_per_sequence=None,
             task_encoder=GroupIsolationEncoder(),
-            virtual_epoch_length=10,
         )
-        list(get_loader(packed_ds))
+        list(get_loader(packed_ds, epochize=10))
 
     def test_nested_recipe(self):
         torch.manual_seed(42)
@@ -1714,10 +1713,10 @@ class TestDataset(unittest.TestCase):
                 worker_config=worker_config,
                 batch_size=1,
                 parallel_shard_iters=psi,
-                virtual_epoch_length=vel,
                 shuffle_buffer_size=sbs,
                 max_samples_per_sequence=sbs,
             ),
+            epochize=vel,
         )
         state_0 = loader.save_state_rank()
         order_1 = [data.text[0] for data in loader]
@@ -1733,10 +1732,10 @@ class TestDataset(unittest.TestCase):
                 worker_config=worker_config,
                 batch_size=1,
                 parallel_shard_iters=psi,
-                virtual_epoch_length=vel,
                 shuffle_buffer_size=sbs,
                 max_samples_per_sequence=sbs,
             ),
+            epochize=vel,
         )
         print("state_0:", _norng_state(state_0))
         loader.restore_state_rank(state_0)
@@ -1752,10 +1751,10 @@ class TestDataset(unittest.TestCase):
                 worker_config=worker_config,
                 batch_size=1,
                 parallel_shard_iters=psi,
-                virtual_epoch_length=vel,
                 shuffle_buffer_size=sbs,
                 max_samples_per_sequence=sbs,
             ),
+            epochize=vel,
         )
         print("state_1:", _norng_state(state_1))
         loader.restore_state_rank(state_1)
@@ -1771,10 +1770,10 @@ class TestDataset(unittest.TestCase):
                 worker_config=worker_config,
                 batch_size=1,
                 parallel_shard_iters=psi,
-                virtual_epoch_length=vel,
                 shuffle_buffer_size=sbs,
                 max_samples_per_sequence=sbs,
             ),
+            epochize=vel,
         )
         print("state_2:", _norng_state(state_2))
         loader.restore_state_rank(state_2)
@@ -2623,8 +2622,8 @@ class TestDataset(unittest.TestCase):
                     batch_size=1,
                     shuffle_buffer_size=10,
                     max_samples_per_sequence=None,
-                    virtual_epoch_length=10,
-                )
+                ),
+                epochize=10,
             )
 
             data = list(enumerate(train_dataset))
