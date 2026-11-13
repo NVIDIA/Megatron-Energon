@@ -114,6 +114,9 @@ performing an exact restore.
 In the above example, we create a blend of three datasets. Out of the yielded training samples, 62.5% ({math}`=\frac{5}{8}`) will come from `./coco`, 25% from `./coyo` and 12.5% from `./other`.
 Note that the relative paths in the recipe are relative to the location of the recipe file. Absolute paths are allowed but won't work for object storage.
 
+A `weight` of `0` excludes a dataset or a nested blend from the training data without deleting its entry.
+Prefer this over deleting the entry if training resumes from a checkpoint, see {ref}`checkpoint-recipe-migration`.
+
 (blend-weight-unit)=
 
 By default, blend weights target the number of samples yielded from each dataset. To make weights
