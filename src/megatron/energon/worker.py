@@ -114,7 +114,8 @@ class WorkerConfig:
         cache_pool: "Optional[CachePool]" = None,
     ):
         """Activates the worker config for the current worker and sets it as actively iterating.
-        Must be called before next() call on the datasets."""
+        Must be called before next() call on the datasets.
+        """
         assert WorkerConfig.active_worker_config is None
         WorkerConfig._sample_index_stack = [sample_index]
         WorkerConfig.active_worker_config = self
@@ -149,6 +150,11 @@ class WorkerConfig:
     @property
     def active_worker_sample_index(self) -> int:
         """Returns the current sample index for the actively iterating worker."""
+        if self.logical_workers is not None:
+            return (
+                WorkerConfig._sample_index_stack[-1] * self.logical_worker_count()
+                + self.logical_global_worker_id()
+            )
         # Internal sample index is for the local worker. If using multiple workers per rank, this
         # must be multiplied by the number of workers and offset by the local worker index.
         return (
@@ -199,11 +205,64 @@ class WorkerConfig:
 
         fanout = physical_count // logical_count
         logical_id = physical_global_worker_id // fanout
+        start = logical_id * fanout
+        end = start + fanout
+        workers_per_rank = self.physical_workers_per_rank()
+        local_worker = physical_global_worker_id % workers_per_rank
+        start_rank, start_local = divmod(start, workers_per_rank)
+        end_rank, end_local = divmod(end, workers_per_rank)
+        # Count group members with smaller local worker ids, then members with
+        # the same local id on earlier ranks. Partial first/last ranks are included.
+        stride_offset = (
+            (end_rank - start_rank) * local_worker
+            + min(end_local, local_worker)
+            - min(start_local, local_worker)
+            + (physical_global_worker_id - start) // workers_per_rank
+        )
         return LogicalWorkerAssignment(
             logical_global_worker_id=logical_id,
-            stride_offset=physical_global_worker_id % fanout,
+            stride_offset=stride_offset,
             stride=fanout,
         )
+
+    def logical_worker_last_physical_worker(
+        self, logical_worker_id: int, iteration_index: int
+    ) -> int:
+        """Last contributor to a logical group after synchronized dataloader calls.
+
+        iteration_index is the number of completed next() calls per rank. Only its phase
+        modulo physical_workers_per_rank() matters, so the loader may pass next_worker_id.
+        At zero calls, return the end-of-round member to select an initial checkpoint.
+        Logical membership and physical ids remain unchanged.
+        """
+        assert iteration_index >= 0
+        assert 0 <= logical_worker_id < self.logical_worker_count()
+        fanout = self.physical_worker_count() // self.logical_worker_count()
+        start = logical_worker_id * fanout
+        last = start + fanout - 1
+        workers_per_rank = self.physical_workers_per_rank()
+        last_local_worker = (iteration_index - 1) % workers_per_rank
+        # Last physical member with the requested local id. If that local id is
+        # absent, the group's final physical member is the latest eligible one.
+        candidate = last - (last - last_local_worker) % workers_per_rank
+        return candidate if candidate >= start else last
+
+    def logical_worker_next_offset(
+        self, physical_global_worker_id: int, previous_worker_id: Optional[int] = None
+    ) -> int:
+        """Outputs to skip before this worker's next output in its logical stream.
+
+        With no previous worker, count from the start of a logical round. Otherwise,
+        count from just after previous_worker_id's output; both must belong to the same
+        logical group. Passing the same worker gives the ordinary stride minus one.
+        """
+        assignment = self.logical_assignment_for_physical(physical_global_worker_id)
+        if previous_worker_id is None:
+            return assignment.stride_offset
+        previous = self.logical_assignment_for_physical(previous_worker_id)
+        if previous.logical_global_worker_id != assignment.logical_global_worker_id:
+            raise ValueError("Previous worker must belong to the same logical group")
+        return (assignment.stride_offset - previous.stride_offset - 1) % assignment.stride
 
     def assignment_for_current_physical_worker(self) -> LogicalWorkerAssignment:
         """Logical assignment for the currently active physical worker."""

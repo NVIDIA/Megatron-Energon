@@ -270,6 +270,10 @@ class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC)
     def __exit__(self, exc_type, exc_value, traceback) -> None:
         self.close()
 
+    def export_logical_state(self, state: FlexState) -> Tuple[FlexState, int]:
+        """Convert a snapshot to logical pipeline state and its next logical output index."""
+        raise NotImplementedError("This dataset does not expose a logical stream")
+
     def save_state(self) -> FlexState:
         """
         Saves the state of the dataset. This will save and return the state of all fields

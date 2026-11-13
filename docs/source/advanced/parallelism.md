@@ -54,8 +54,8 @@ divisible by two, so the fanout is six:
 
 | Physical global worker IDs | Logical global worker ID | Stride offsets | Stride |
 | --- | --- | --- | --- |
-| 0, 1, 2, 3, 4, 5 | 0 | 0, 1, 2, 3, 4, 5 | 6 |
-| 6, 7, 8, 9, 10, 11 | 1 | 0, 1, 2, 3, 4, 5 | 6 |
+| 0, 1, 2, 3, 4, 5 | 0 | 0, 2, 4, 1, 3, 5 | 6 |
+| 6, 7, 8, 9, 10, 11 | 1 | 0, 2, 4, 1, 3, 5 | 6 |
 
 Set {py:attr}`WorkerConfig.logical_workers
 <megatron.energon.WorkerConfig.logical_workers>` to use fewer logical dataset
@@ -73,6 +73,132 @@ All six physical workers assigned to one logical stream advance that same
 deterministic stream. Each one yields only the outputs at its stride offset.
 Interleaving offsets `0` through `5` reconstructs the original logical stream
 in order; the physical workers do not receive independently shuffled streams.
+
+Ranks must advance their dataloaders synchronously. Within each logical group, stride
+offsets follow delivery order: local worker index first, then data parallel rank. The
+logical partition and its physical members are unchanged. Ordering is guaranteed within
+each logical stream; streams may be interleaved in global batches.
+
+For three ranks, two subprocess workers per rank, and two logical streams A and B:
+
+| Synchronized call | Rank 0 | Rank 1 | Rank 2 |
+| --- | --- | --- | --- |
+| 0 | A0 | A1 | B0 |
+| 1 | A2 | B1 | B2 |
+| 2 | A3 | A4 | B3 |
+| 3 | A5 | B4 | B5 |
+
+### Saving and Changing Physical Fanout
+
+Ordinary `save_state_rank()` and `save_state_global()` save every physical worker,
+including its stream position and a shared iteration count. The next worker is derived
+from that count. Use the corresponding
+`restore_state_rank()` or `restore_state_global()` with the same physical assignment.
+
+For a checkpoint that can be restored with another physical fanout, set `logical_workers`
+explicitly and use the separate logical save/restore methods. **Save the last contributor
+to each logical group at the current iteration, and restore it into the same logical group.**
+Group ids identify logical data streams and remain stable when the physical topology changes.
+Each entry contains a logical pipeline snapshot, RNG state, and replay distance in logical
+outputs. It contains no source rank, physical worker id, fanout, or stride assignment.
+Save and restore treat the returned state as an opaque object; callers need not construct
+or modify checkpoint records.
+
+#### Save and restore without gathering
+
+Each rank can save its own contribution without distributed collectives:
+
+```python
+state = loader.save_state_logical_rank()
+if state is not None:
+    # state.worker_states maps global logical group ids to their checkpoints.
+    torch.save(state, checkpoint_file)
+    # Record each group id in state.worker_states -> checkpoint_file in your manifest.
+```
+
+`save_state_logical_rank()` returns `None` on ranks that own no group's last contributor.
+A rank can own the last contributors of several groups; its returned state contains
+all of them. Owning ranks return a checkpoint even before consuming any batches.
+`loader.get_logical_worker_group_ids(for_save=True)` lists the groups this rank writes.
+
+Save after the same number of dataloader calls on every rank; zero calls is also valid.
+There is no requirement to complete a local worker round. Checkpoint ownership can change
+after every call: in the example above, after one call rank 1 writes A and rank 2 writes B;
+after two calls rank 0 writes A and rank 2 writes B. Query the save group ids at each save.
+Prefetched batches do not count as consumed batches.
+
+On a fresh loader under the new topology, discover which groups this rank needs, use your
+manifest to load their checkpoint files, and restore them:
+
+```python
+group_ids = loader.get_logical_worker_group_ids()
+files = {group_to_file[group_id] for group_id in group_ids}
+states = [torch.load(path, weights_only=False) for path in files]
+loader.restore_state_logical_rank(states)
+```
+
+Restore accepts one logical state or a sequence. Each required group must be present;
+extra groups in the loaded files are allowed. Deduplicate file paths before loading a
+sequence so each group occurs once. Missing or duplicate group checkpoints raise `ValueError`.
+The checkpoint's original physical rank is not its restore destination: use logical group ids.
+
+For example, with two logical groups and six ranks without subprocess workers, workers `2` and `5` save
+groups `0` and `1`. After changing to four physical workers, workers `0,1` restore group
+`0` and workers `2,3` restore group `1`. With no subprocess workers, these worker ids are
+also the data parallel rank ids.
+
+#### Gather and restore globally
+
+Alternatively, gather all logical checkpoints to one rank:
+
+```python
+state = loader.save_state_logical_global()  # Destination defaults to global rank 0.
+# All ranks participate; only the destination rank receives the state to serialize.
+
+# On fresh loaders, load state only on data parallel rank 0:
+loader.restore_state_logical_global(state, src_rank=0)
+```
+
+Only the selected logical entries are gathered; other physical-worker states are not
+included in the global checkpoint. All ranks must have made the same number of dataloader calls. Global saving checks their
+iteration counts agree and selects the last contributor in each group. Without `src_rank`,
+load the global state on every rank before restoring.
+
+#### Restore guarantees
+
+The new configuration may use another number of ranks or subprocess workers, provided the global physical
+worker count remains a multiple of the unchanged `logical_workers`. Micro batch size
+and the dataset pipeline must remain unchanged. Logical stream order is preserved;
+physical output ownership and rank interleaving can change. The overall checkpoint stores the
+number of completed `next()` calls in the current dataloader iteration once. Restore computes the next local worker as that count modulo
+the current number of workers per rank and assigns each logical stream's next outputs in
+the current delivery order. No scheduling or physical-topology arguments are required.
+
+With explicit `logical_workers`, sample indices used for stateless transform seeds
+also follow logical stream identities, so changing physical fanout preserves seeded
+sample transformations. Without explicit logical workers, indexing is unchanged.
+Hooks that depend on physical worker identity or `current_batch_index` are not
+topology independent; use sample-local stateless randomness for reproducible transforms.
+
+Sparse checkpoints first replay the saved number of full logical outputs, then distribute
+new outputs using the current fanout. The logical methods select the last contributors and route their checkpoints
+to the correct groups; do not manually substitute another physical member's checkpoint.
+Existing saved dataloader states from earlier checkpoint formats are not supported.
+
+### Continuing across iteration boundaries
+
+Opening another iterator after partial consumption continues the strided stream. A virtual
+epoch created with `virtual_epoch_length` also continues the underlying stream on the next
+iteration. `LimitDataset(reset_after_epoch=False)` continues after each limited segment,
+without consuming an extra output beyond the limit. With `reset_after_epoch=True`, the
+underlying stream is reset once when the limited iteration completes, so the next iteration
+starts from the beginning. These lengths count returned outputs per rank, after worker outputs
+have been merged. Virtual epoch boundaries preserve worker delivery order even when the epoch
+length is not divisible by the number of workers.
+
+Both physical and logical checkpoints preserve the remaining epoch/limit budget. Hidden
+checkpoint replay does not count against it. Saving at the last yield, before the iterator has
+reported completion, preserves that pending completion too.
 
 ### What Fanout Skips
 

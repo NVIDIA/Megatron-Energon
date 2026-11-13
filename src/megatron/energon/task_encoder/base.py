@@ -63,7 +63,6 @@ from megatron.energon.wrappers import (
 )
 from megatron.energon.wrappers.packing_dataset import PackedSamplesOutput
 from megatron.energon.wrappers.repeat_dataset import RepeatDataset
-from megatron.energon.wrappers.stride_dataset import maybe_wrap_stride_dataset
 
 T = TypeVar("T")
 V = TypeVar("V")
@@ -1322,7 +1321,6 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             batch_drop_last=batch_drop_last,
             worker_config=worker_config,
         )
-        dataset = maybe_wrap_stride_dataset(dataset, worker_config=worker_config)
         if virtual_epoch_length > 0:
             dataset = EpochizeDataset(
                 dataset,
@@ -1441,7 +1439,6 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             batch_drop_last=batch_drop_last,
             worker_config=worker_config,
         )
-        dataset = maybe_wrap_stride_dataset(dataset, worker_config=worker_config)
         if limit is not None and limit > 0:
             dataset = LimitDataset(
                 dataset,
