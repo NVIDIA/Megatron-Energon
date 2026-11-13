@@ -1219,17 +1219,27 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         packing_groups = self._build_validated_packing_groups(
             datasets, packing_buffer_size, shuffle_buffer_size
         )
+        # Datasets with a zero weight are not used. They still count for the rotation offsets
+        # above, so that setting a weight to zero keeps the worker assignment of all other datasets.
+        used_groups = [
+            (packing_group, [dataset for dataset in packing_group.datasets if dataset.weight != 0])
+            for packing_group in packing_groups
+        ]
+        used_groups = [
+            (packing_group, group_ds) for packing_group, group_ds in used_groups if group_ds
+        ]
+        if len(used_groups) == 0:
+            raise ValueError("All datasets have a zero weight.")
         # Only the blends that are built need a sample size metric.
         sample_size_fn = None
-        if any(len(packing_group.datasets) > 1 for packing_group in packing_groups):
+        if any(len(group_ds) > 1 for _, group_ds in used_groups):
             sample_size_fn = self._resolve_sample_size_metric(blend_weight_unit, "sample")
         group_sample_size_fn = None
-        if len(packing_groups) > 1:
+        if len(used_groups) > 1:
             group_sample_size_fn = self._resolve_sample_size_metric(blend_weight_unit, "encoded")
 
         streams: List[tuple[SavableDataset[Any], float]] = []
-        for packing_group in packing_groups:
-            group_ds = packing_group.datasets
+        for packing_group, group_ds in used_groups:
             group_rotation_offsets = [
                 rotation_offsets_by_dataset_id[id(dataset)] for dataset in group_ds
             ]

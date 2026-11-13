@@ -736,6 +736,41 @@ class TestDataset(unittest.TestCase):
                         }
                     )
 
+    def test_blend_zero_weight_excludes_datasets(self):
+        worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0)
+        ds1, ds2, ds3 = (str(self.dataset_path / name) for name in ("ds1", "ds2", "ds3"))
+
+        def loaded_datasets(blend: list[dict]) -> set[int]:
+            """Returns the indexes of the datasets which the samples of the blend come from."""
+            train_dataset = get_train_dataset(
+                {
+                    "__module__": "megatron.energon",
+                    "__class__": "Recipe",
+                    "splits": {"train": {"blend": blend}},
+                },
+                worker_config=worker_config,
+                batch_size=1,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+            )
+            texts = [batch.text[0] for _, batch in zip(range(300), get_loader(train_dataset))]
+            return {int(text) // 100 for text in texts}
+
+        assert loaded_datasets(
+            [{"path": ds1}, {"weight": 0, "path": ds2}, {"weight": 2, "path": ds3}]
+        ) == {0, 2}
+        # A zero weight excludes all datasets of a nested blend.
+        assert loaded_datasets(
+            [{"path": ds1}, {"weight": 0, "blend": [{"path": ds2}, {"path": ds3}]}]
+        ) == {0}
+        # All datasets of a nested blend may have a zero weight.
+        assert loaded_datasets(
+            [{"path": ds1}, {"blend": [{"weight": 0, "path": ds2}, {"weight": 0, "path": ds3}]}]
+        ) == {0}
+
+        with self.assertRaisesRegex(ValueError, "All datasets have a zero weight"):
+            loaded_datasets([{"weight": 0, "path": ds1}, {"weight": 0, "path": ds2}])
+
     def test_traverse_recipe_recurses_nested_v2_references(self):
         """Traversed tags only reflect recipe hierarchy merges.
 
