@@ -255,7 +255,8 @@ class BaseIndexedDatasetFactory(
                 )
                 for shard in self.shards
             ],
-            sample_excludes=list(self.sample_excludes),
+            # Sorted, so that the config does not depend on the set order of the process.
+            sample_excludes=sorted(self.sample_excludes),
             shuffle_over_epochs=self.shuffle_over_epochs,
             parallel_shard_iters=self.parallel_shard_iters,
             max_samples_per_sequence=self.max_samples_per_sequence,

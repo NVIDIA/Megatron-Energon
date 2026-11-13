@@ -3,7 +3,7 @@
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Callable, Generic, Optional, TypeVar
+from typing import Any, Callable, Dict, Generic, Optional, TypeVar
 
 from megatron.energon.cache import FileStore
 from megatron.energon.epathlib import EPath
@@ -69,6 +69,7 @@ class BaseWebdatasetFactory(
             split_config: Config file to use for shard split definitions.
             part_filter: (internal) Function for filtering tar files by dict keys
         """
+        self.split_part = split_part
         super().__init__(
             path,
             split_part=split_part,
@@ -81,6 +82,12 @@ class BaseWebdatasetFactory(
             subset=subset,
             part_filter=part_filter,
             filter_name=filter_name,
+        )
+
+    def config(self) -> Dict[str, Any]:
+        return dict(
+            **super().config(),
+            split_part=self.split_part,
         )
 
     def _build_reader(
