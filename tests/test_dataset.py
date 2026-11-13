@@ -622,6 +622,12 @@ class TestDataset(unittest.TestCase):
         keys = [entry.__key__ for entry in get_loader(ds.build())]
         assert keys == [f"{i:06d}" for i in list(range(30, 35)) + list(range(40, 50))], keys
 
+        # The config identifies the dataset across processes, e.g. for checkpoint migration, so it
+        # must not depend on the order of a set.
+        sample_excludes = ds.config()["sample_excludes"]
+        assert len(sample_excludes) == 5
+        assert sample_excludes == sorted(sample_excludes)
+
     def test_loader(self):
         torch.manual_seed(42)
 
