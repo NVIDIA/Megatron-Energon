@@ -34,19 +34,16 @@ _SavedNodes = dict[str, list[tuple[FlexState, bool]]]
 
 @dataclass(frozen=True)
 class ResumeDatasetMetadata:
-    """Resume metadata of one node of the dataset tree.
+    """Resume metadata of one node of the dataset tree."""
 
-    Attributes:
-        type: The class name of the dataset.
-        config_hash: Digest of the configuration of the node and of all nodes below it.
-        datasets: Descriptions of the recipe datasets read by the node. Only set on the innermost
-            node that names them.
-        children: The metadata of the wrapped datasets.
-    """
-
+    #: The class name of the dataset.
     type: str
+    #: Digest of the configuration of the node and of all nodes below it.
     config_hash: str
+    #: Descriptions of the recipe datasets read by the node. Only set on the innermost node that
+    #: names them.
     datasets: tuple[str, ...] = ()
+    #: The metadata of the wrapped datasets.
     children: tuple["ResumeDatasetMetadata", ...] = ()
 
     @classmethod
