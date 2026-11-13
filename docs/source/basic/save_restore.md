@@ -144,9 +144,17 @@ loader.restore_state_global(state, src_rank=None)
 ## Migrating a Checkpoint After Recipe Changes
 
 The restore methods above are exact restores: they expect the new loader to have
-the same dataset topology and configuration as the saved loader. If a recipe is
-edited between saving and restoring—for example, if a dataset is added, removed,
-or reordered—save resume metadata alongside the normal loader state.
+the same dataset topology and configuration as the saved loader. To resume after
+editing a recipe, save resume metadata alongside the normal loader state. Two
+kinds of edits are supported:
+
+* adding datasets,
+* setting the `weight` of datasets in a `blend` to `0`.
+
+To stop using a dataset, set its weight to `0` instead of deleting its entry. The
+dataset is not read anymore, but its entry keeps the samples of all other
+datasets assigned to the same workers. Its progress is dropped: if the weight is
+raised again later, the dataset starts from a fresh state.
 
 The following per-rank example saves both objects:
 
@@ -199,30 +207,51 @@ migrated_state = migrate_dataloader_state(
 loader.restore_state_rank(migrated_state)
 ```
 
-Migration matches recipe leaves by a stable identity composed of:
+Migration reuses the saved progress of every dataset whose configuration is
+unchanged. The configuration of a dataset includes:
 
 * dataset path,
 * `split_part`,
 * relative or absolute subset,
-* filter name.
+* filter name,
+* the assignment of its samples to workers.
 
-For matched leaves, the saved dataset progress is retained. Newly added or
-changed leaves start from a fresh state, and removed leaves are ignored. When a
-wrapper or blend topology changes, its state is rebuilt for the new topology and
-the matched child states are overlaid.
+Added datasets and datasets with a changed configuration start from a fresh
+state. The state of everything that combines the datasets, such as blending,
+shuffling, packing, and batching, is rebuilt for the new recipe. This also covers
+a recipe that changes between a single used dataset and a blend of several
+datasets.
+
+If a dataset is still part of the recipe but its saved progress cannot be
+reused, `migrate_dataloader_state` emits a `UserWarning` that names the dataset.
+Such a dataset starts from a fresh state.
 
 ```{admonition} Migration is not an exact continuation
 :class: important
 
-Adding, removing, reordering, or reweighting datasets changes the global blended
-stream. Migration preserves progress for matched dataset leaves, but it cannot
-preserve the exact next global sample sequence of the old recipe.
+Adding or reweighting datasets changes the global blended stream. Migration
+preserves the progress of the datasets, but it cannot preserve the exact next
+global sample sequence of the old recipe.
 
-A path move or a change to `split_part`, subset, or filter creates a different
-identity and therefore starts that leaf fresh. Changes to auxiliary references,
-tokenizer, or task-encoder behavior are not
-validated automatically; only migrate when the retained leaf progress is
-semantically compatible with the new training configuration.
+A path move or a change to `split_part`, subset, or filter starts that dataset
+fresh. The same applies to a dataset that is listed more than once with the same
+configuration, because its entries cannot be told apart. Changes to auxiliary
+references, tokenizer, or task-encoder behavior are not validated
+automatically; only migrate when the retained dataset progress is semantically
+compatible with the new training configuration.
+
+With more than one worker (workers of all ranks combined), the samples of a
+dataset are assigned to the workers depending on the entries listed before it.
+Add new datasets at the end of the recipe, and do not delete or reorder entries:
+this can change the assignment of the datasets behind them. Their progress then
+cannot be reused, and they are named in the warning described above. Changing
+weights, including to `0`, keeps the assignment of all datasets.
+
+Samples that were read but not yet returned when the state was saved are
+dropped if they are buffered above the changed part of the recipe, for example
+in the shuffle buffer, in a packing buffer, or in an incomplete batch. With
+worker processes, a few samples around the checkpoint may additionally be
+repeated or skipped.
 ```
 
 The example uses `save_state_rank()` and must run independently on every data
