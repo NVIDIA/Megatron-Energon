@@ -155,7 +155,7 @@ The output files are named after the input files, so energon has to work out how
 - **Single per-rank file:** there is nothing to compare against, so the **last number** in the file name is treated as the rank index and is incremented for each output file. `state_0.pth` becomes `state_0.pth`, `state_1.pth`, ... If the file name contains no number, `_N` is **appended** before the extension: `state.pth` becomes `state_0.pth`, `state_1.pth`, ...
 
 ```{note}
-If a file name contains several numbers (e.g. `run2_state.pth`), only the last one is changed.
+If a file name contains several numbers (e.g. `run2_state_0.pth`), only the last one is changed.
 Rename the file beforehand if that is not the number you want to vary.
 ```
 
