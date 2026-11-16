@@ -33,7 +33,14 @@ def get_my_loader():
 ### 1. Save/Restore the State per Rank Separately
 
 In this scenario, each rank saves and restores its own state in an independent file.
-This is our recommended way, since it avoids transferring the data across ranks.
+This avoids transferring state across ranks. Without explicit `logical_workers`, every
+local physical worker contributes one checkpoint. With logical fanout, only ranks owning
+a group's last contributor return state; other ranks return `None`.
+
+States are keyed by global logical worker id. With an unchanged physical topology,
+each rank can reload its own file. When the topology changes, route files using
+`loader.get_logical_worker_group_ids()`; see {ref}`logical-workers` for manifest-based
+saving and restoring. All ranks must save after the same number of dataloader calls.
 
 ```python
 # Saving the state
@@ -48,7 +55,7 @@ for i, batch in zip(range(10), loader):
 state = loader.save_state_rank()
 # Save the state on each rank
 # In this example, save the state using `torch.save`, this can of course be custom
-torch.save(dataloader_state, f'dataloader_state_rank{worker_config.rank}.pth')
+torch.save(state, f'dataloader_state_rank{worker_config.rank}.pth')
 ```
 
 ```python
@@ -56,7 +63,7 @@ torch.save(dataloader_state, f'dataloader_state_rank{worker_config.rank}.pth')
 loader = get_my_loader()
 
 # Now, when restoring the state:
-state = torch.load(f'dataloader_state_rank{worker_config.rank}.pth')
+state = torch.load(f'dataloader_state_rank{worker_config.rank}.pth', weights_only=False)
 
 # Restore the state for the loader on each rank separately
 loader.restore_state_rank(state)
@@ -67,7 +74,7 @@ loader.restore_state_rank(state)
 
 In this scenario, the primary rank (usually rank 0) is responsible for saving the state.
 All ranks' states are collected (gathered) by one rank and can be stored in one file.
-When restoring, the state is scatterd from the primary rank to all other ranks.
+When restoring, the state is broadcast from the primary rank and each rank selects its logical groups.
 This approach centralizes the state management, which can simplify the process and reduces the number of files stored.
 
 ```python
@@ -80,11 +87,11 @@ for i, batch in zip(range(10), loader):
     break
 
 # Save the state to primary rank 0
-state = loader.save_state_global(dst_rank=0)
+state = loader.save_state_global(global_dst_rank=0)
 if worker_config.rank == 0:
     # Only rank 0 has the state now, for the others, the state is None
     # In this example, save the state using `torch.save`, this can of course be custom
-    torch.save(dataloader_state, 'dataloader_state.pth')
+    torch.save(state, 'dataloader_state.pth')
 ```
 
 ```python
@@ -93,7 +100,7 @@ loader = get_my_loader()
 
 # Load the state only on the primary rank
 if worker_config.rank == 0:
-    state = torch.load('dataloader_state.pth')
+    state = torch.load('dataloader_state.pth', weights_only=False)
 else:
     state = None
 
@@ -109,7 +116,7 @@ Even though only one rank collects the states, all ranks need to execute the `lo
 
 ### 3. Save the State on the Primary Rank, Restore on Ranks Separately
 
-In this scenario, the primary rank saves the state, but each rank restores the state separately. Each rank loads all saved states and selects the correct one. This approach combines centralized saving with distributed restoring and is rather uncommon.
+In this scenario, the primary rank saves the state, but each rank restores the state separately. Each rank loads the global state and selects its logical groups. This approach combines centralized saving with distributed restoring and is rather uncommon.
 
 Depending on the framework used for training, that framework may already handle the scattering/gathering of the states. In that case, refer to the first scenario using `save_state_rank`/`restore_state_rank`.
 
@@ -123,10 +130,10 @@ for i, batch in zip(range(10), loader):
     break
 
 # Save the state
-state = loader.save_state_global(dst_rank=0)
+state = loader.save_state_global(global_dst_rank=0)
 if worker_config.rank == 0:
     # In this example, save the state using `torch.save`, this can of course be custom
-    torch.save(dataloader_state, 'dataloader_state.pth')
+    torch.save(state, 'dataloader_state.pth')
 ```
 
 ```python
@@ -134,7 +141,7 @@ if worker_config.rank == 0:
 loader = get_my_loader()
 
 # Load on all ranks
-state = torch.load('dataloader_state.pth')
+state = torch.load('dataloader_state.pth', weights_only=False)
 
 # Restore the state for the loader on current rank, using all ranks checkpoint
 loader.restore_state_global(state, src_rank=None)

@@ -15,9 +15,6 @@ class LogSampleDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]
     """This dataset logs every yielded sample to the debug logs."""
 
     get_keys_fn: Callable[[T_sample], list[str] | None]
-    _step: int
-
-    _savable_fields = ("_step",)
 
     def __init__(
         self,
@@ -33,10 +30,8 @@ class LogSampleDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]
         super().__init__(dataset, worker_config=worker_config)
         self.get_keys_fn = get_keys_fn
 
-        self.reset_state_own()
-
     def reset_state_own(self) -> None:
-        self._step = 0
+        pass
 
     def len_worker(self, worker_idx: int | None = None) -> int:
         return self.dataset.len_worker(worker_idx)
@@ -47,7 +42,10 @@ class LogSampleDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]
                 "t": "yield_batch",
                 "r": self.worker_config.rank,
                 "w": self.worker_config.global_worker_id(),
-                "idx": self._step,
+                "idx": (
+                    self.worker_config.active_worker_batch_index
+                    // self.worker_config.physical_workers_per_rank()
+                ),
             }
             keys = self.get_keys_fn(sample)
             if keys is not None:
@@ -58,7 +56,6 @@ class LogSampleDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]
     def __iter__(self) -> Iterator[T_sample]:
         for sample in self.dataset:
             self._log(sample)
-            self._step += 1
             yield sample
 
     def config(self) -> Dict[str, Any]:

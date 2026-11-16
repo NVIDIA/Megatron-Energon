@@ -150,15 +150,9 @@ class WorkerConfig:
     @property
     def active_worker_sample_index(self) -> int:
         """Returns the current sample index for the actively iterating worker."""
-        if self.logical_workers is not None:
-            return (
-                WorkerConfig._sample_index_stack[-1] * self.logical_worker_count()
-                + self.logical_global_worker_id()
-            )
-        # Internal sample index is for the local worker. If using multiple workers per rank, this
-        # must be multiplied by the number of workers and offset by the local worker index.
         return (
-            WorkerConfig._sample_index_stack[-1] * max(self.num_workers, 1) + self.rank_worker_id()
+            WorkerConfig._sample_index_stack[-1] * self.logical_worker_count()
+            + self.logical_global_worker_id()
         )
 
     @property

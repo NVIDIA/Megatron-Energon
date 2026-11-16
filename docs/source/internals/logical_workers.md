@@ -54,13 +54,12 @@ For three ranks, two subprocess workers per rank, and two logical streams A and 
 
 ## Saving and restoring logical workers
 
-Ordinary `save_state_rank()` and `save_state_global()` save every physical worker,
-including its stream position and a shared iteration count. The next worker is derived
-from that count. Use the corresponding
-`restore_state_rank()` or `restore_state_global()` with the same physical assignment.
+All loaders use the same `save_state_rank()` / `restore_state_rank()` and
+`save_state_global()` / `restore_state_global()` methods. Without an explicit logical count,
+each physical worker is a separate logical worker (`L = P`), so every worker contributes
+a checkpoint. With fanout greater than one, only one physical member contributes per group.
 
-For a checkpoint that can be restored with another physical fanout, set `logical_workers`
-explicitly and use the separate logical save/restore methods. **Save the last contributor
+**Save the last contributor
 to each logical group at the current iteration, and restore it into the same logical group.**
 Group ids identify logical data streams and remain stable when the physical topology changes.
 Each entry contains a logical pipeline snapshot, RNG state, and replay distance in logical
@@ -73,14 +72,14 @@ or modify checkpoint records.
 Each rank can save its own contribution without distributed collectives:
 
 ```python
-state = loader.save_state_logical_rank()
+state = loader.save_state_rank()
 if state is not None:
     # state.worker_states maps global logical group ids to their checkpoints.
     torch.save(state, checkpoint_file)
     # Record each group id in state.worker_states -> checkpoint_file in your manifest.
 ```
 
-`save_state_logical_rank()` returns `None` on ranks that own no group's last contributor.
+`save_state_rank()` returns `None` on ranks that own no group's last contributor.
 A rank can own the last contributors of several groups; its returned state contains
 all of them. Owning ranks return a checkpoint even before consuming any batches.
 `loader.get_logical_worker_group_ids(for_save=True)` lists the groups this rank writes.
@@ -98,7 +97,7 @@ manifest to load their checkpoint files, and restore them:
 group_ids = loader.get_logical_worker_group_ids()
 files = {group_to_file[group_id] for group_id in group_ids}
 states = [torch.load(path, weights_only=False) for path in files]
-loader.restore_state_logical_rank(states)
+loader.restore_state_rank(states)
 ```
 
 Restore accepts one logical state or a sequence. Each required group must be present;
@@ -116,11 +115,11 @@ also the data parallel rank ids.
 Alternatively, gather all logical checkpoints to one rank:
 
 ```python
-state = loader.save_state_logical_global()  # Destination defaults to global rank 0.
+state = loader.save_state_global()  # Destination defaults to global rank 0.
 # All ranks participate; only the destination rank receives the state to serialize.
 
 # On fresh loaders, load state only on data parallel rank 0:
-loader.restore_state_logical_global(state, src_rank=0)
+loader.restore_state_global(state, src_rank=0)
 ```
 
 Only the selected logical entries are gathered; other physical-worker states are not
@@ -131,31 +130,34 @@ load the global state on every rank before restoring.
 ### Restore guarantees
 
 The new configuration may use another number of ranks or subprocess workers, provided the global physical
-worker count remains a multiple of the unchanged `logical_workers`. Micro batch size
-and the dataset pipeline must remain unchanged. Logical stream order is preserved;
+worker count remains a multiple of the saved logical worker count. Set `logical_workers`
+to that saved count before building the dataset under the new topology. Leaving it unset
+would instead default to the new physical count and redefine the logical partitions.
+The dataset pipeline must remain unchanged. With subprocess workers, the micro batch size
+may be reduced to a divisor of the saved size; replay distances are scaled accordingly. Logical stream order is preserved;
 physical output ownership and rank interleaving can change. The overall checkpoint stores the
 number of completed `next()` calls in the current dataloader iteration once. Restore computes the next local worker as that count modulo
 the current number of workers per rank and assigns each logical stream's next outputs in
 the current delivery order. No scheduling or physical-topology arguments are required.
 
-With explicit `logical_workers`, sample indices used for stateless transform seeds
-also follow logical stream identities, so changing physical fanout preserves seeded
-sample transformations. Without explicit logical workers, indexing is unchanged.
+Sample indices used for stateless transform seeds follow logical stream identities,
+including when the logical count defaults to the physical count. Changing physical
+fanout with a fixed logical count preserves seeded sample transformations.
 Hooks that depend on physical worker identity or `current_batch_index` are not
 topology independent; use sample-local stateless randomness for reproducible transforms.
 
 Sparse checkpoints first replay the saved number of full logical outputs, then distribute
-new outputs using the current fanout. The logical methods select the last contributors and route their checkpoints
+new outputs using the current fanout. The save/restore methods select the last contributors and route their checkpoints
 to the correct groups; do not manually substitute another physical member's checkpoint.
 
 ## `StrideDataset`
 
-With explicit `logical_workers`, the loader wraps the pipeline in `StrideDataset`, including fanout one.
+The loader wraps the pipeline in `StrideDataset`, including fanout one when the logical count is implicit.
 Each physical worker advances its full assigned
 logical stream but emits only positions matching its stride offset. Positions assigned to sibling physical
 workers are evaluated under skip mode where possible.
 
-Physical snapshots of `StrideDataset` save only the next output index in the full logical stream,
+Internal snapshots of `StrideDataset` save only the next output index in the full logical stream,
 including outputs discarded by striding. Its `export_logical_state()` returns this logical cursor
 and the inner pipeline state, without serializing the stride wrapper itself. Outer execution
 wrappers forward this operation. The loader retains a direct reference to the stride wrapper and
@@ -167,20 +169,21 @@ partition, random stream, sample indexes, and restore keys.
 Logical checkpoints retain the consumed checkpoint of each group's last contributor at the
 current synchronized iteration, keyed by global logical group id. This member depends on the
 local worker phase; it need not have the largest fixed stride offset. Each returned
-`LogicalWorkerCheckpoint` contains a logical pipeline snapshot with its cursor and RNG state,
+`SavableDatasetCheckpoint` contains a logical pipeline snapshot with its cursor and RNG state,
 and an offset measured in full logical outputs. Source worker ids, worker counts, stride and
-stride offsets are not serialized. Ordinary physical checkpoints require an unchanged assignment.
+stride offsets are not serialized.
 
 `WorkerConfig.logical_worker_last_physical_worker(group, iteration_index)` computes the last
 contributor after the given number of completed dataloader calls. Only the phase modulo the
 local worker count matters, so the loader uses its iteration count. At zero calls,
-the end-of-round member supplies the initial checkpoint. Both logical save and restore use
+the end-of-round member supplies the initial checkpoint. Both save and restore use
 this method. `logical_worker_next_offset(worker, previous_worker)` computes how many outputs
 to skip from just after the previous contributor to this worker's next output. With no previous
 worker, it gives the initial offset; with the same worker, it gives `stride - 1`.
 
-Historical worker checkpoints can lag the consumed boundary. Saving converts the physical
-output offset into a logical replay distance and exports the logical snapshot. An initial
+Historical worker checkpoints can lag the consumed boundary. Each snapshot already contains
+only the logical pipeline and its cursor. A worker converts the physical output offset into a
+logical replay distance when selecting a historical checkpoint. An initial
 snapshot also accounts for the selected member's first output offset. The loader passes the
 previous contributor and replay distance directly to its stride wrapper when installing the
 checkpoint. There is no shared restore context in `WorkerConfig`.
@@ -193,12 +196,12 @@ iteration bookkeeping; only the logical source cursor is a savable stride field.
 
 Checkpoints are taken before iteration or at output yields. After replay, the replacement worker
 checkpoint is taken after the first new output, rather than at the intermediate replay boundary.
-Ordinary physical continuation skips `current_stride - 1` outputs; logical replay skips none.
+Uninterrupted continuation skips `current_stride - 1` outputs; full-stream replay skips none.
 These skips are derived when iteration resumes. Replay offsets are
 loader progress, not permission to seek backward from a later sibling's state.
 
-The overall `LogicalDataLoaderState` stores group checkpoints, logical worker count, micro batch
-size, one iteration count and rank-local epoch/limit progress. The next worker is derived modulo the current local worker count,
+The overall `SavableDataLoaderState` stores group checkpoints, logical worker count, micro batch
+size, one iteration count and synchronized epoch/limit progress. The next worker is derived modulo the current local worker count,
 without saving source topology or next-worker ids. A rank owning several groups returns several
 entries in this one opaque object; callers can restore it directly or pass a sequence of such
 objects loaded from group checkpoint files.
@@ -243,7 +246,7 @@ checkpoint change.
 `test_logical_workers.py` covers mapping validation, skip-safe execution, and non-skip-safe execution.
 Changes to this area should additionally test:
 
-- fanout one, with the same wrapper topology as higher fanout when logical_workers is explicit;
+- fanout one with both implicit and explicit logical worker counts;
 - at least two fanout values greater than one;
 - exact save/restore after different stride offsets;
 - empty and exhausted logical streams;
@@ -275,7 +278,7 @@ logical pipeline -> checkpoint replay -> striding -> worker queues -> epoch/limi
 
 The loader retains the merged worker iterator across epochized segments.
 Its scheduling count continues across these boundaries, even when an epoch length is not
-divisible by the number of workers. Logical and physical loader checkpoints save epoch/limit
+divisible by the number of workers. Loader checkpoints save epoch/limit
 progress separately, so replay does not consume the remaining public epoch budget.
 
 A limit discards prefetched outputs, shuts down the old workers, resets the source,
@@ -285,15 +288,15 @@ the pending boundary; its restored iterator finishes that epoch before starting 
 
 ## Checkpoint and worker responsibilities
 
-The checkpoint schemas and conversion/routing helpers in `savable_loader.py` handle logical
+The checkpoint schemas and routing helpers in `savable_loader.py` handle logical
 snapshots, group merging, and validation independently of loader execution.
 
 The worker wrappers in `savable_loader.py` own per-worker iteration, checkpoint history,
 and snapshot installation.
-The main-process and subprocess paths use the same physical checkpoint representation:
-a dataset snapshot, its RNG state and output counter, plus a physical replay offset.
-Pending logical restores remain explicitly distinguishable because their offsets count full
-logical outputs instead.
+The main-process and subprocess paths use the same checkpoint representation:
+a logical dataset snapshot, its RNG state and logical output cursor, plus a replay offset
+in full logical outputs. Physical output counters are only used internally to locate the
+historical snapshot matching consumed outputs despite worker prefetching.
 
 Snapshot installation resets the pipeline once and copies mutable dataset state once before
 restoring it. This keeps the caller's checkpoint and retained history unchanged during replay

@@ -8,7 +8,7 @@ import click
 import torch
 
 from megatron.energon.epathlib import EPath
-from megatron.energon.savable_loader import SavableDataLoaderState
+from megatron.energon.savable_loader import SavableDataLoaderState, _merge_worker_states
 
 
 def natural_sort_key(s):
@@ -138,51 +138,30 @@ def detect_and_replicate_pattern(file_list):
     return generate_filename
 
 
-class RankStateIterable:
-    """Iterates the SavableDatasetCheckpoints of mulitple ranks in a round-robin fashion."""
+class CheckpointFiles:
+    """Load checkpoint files and merge their globally identified worker states."""
 
     def __init__(self, state_files: List[EPath]):
         state_file_names = [state_file.name for state_file in state_files]
 
-        self.file_pattern_func = detect_and_replicate_pattern(state_file_names)
-        self.num_states = len(state_files)
-
-        # First open the first one to figure out if this is a global checkpoint or not
-        first_state = torch.load(str(state_files[0]), weights_only=False)
-
-        if isinstance(first_state, dict) and "dataloader_state_dict" in first_state:
-            self.megatron_style = True
-            first_state = first_state["dataloader_state_dict"]
-        else:
-            self.megatron_style = False
-
-        if isinstance(first_state, SavableDataLoaderState):
-            if self.megatron_style:
-                self.rank_states = [first_state] + [
-                    torch.load(str(state_file), weights_only=False)["dataloader_state_dict"]
-                    for state_file in state_files[1:]
-                ]
-            else:
-                self.rank_states = [first_state] + [
-                    torch.load(str(state_file), weights_only=False)
-                    for state_file in state_files[1:]
-                ]
-            self.is_global_checkpoint = False
-        elif isinstance(first_state, list):
-            assert len(state_files) == 1, "Global checkpoint must contain exactly one file"
-            assert all(isinstance(state, SavableDataLoaderState) for state in first_state)
-            self.rank_states = first_state
-            self.is_global_checkpoint = True
-        else:
-            raise ValueError(f"Unknown checkpoint type: {type(first_state)}")
-
-        self.rank_cur_worker = [0] * len(self.rank_states)
-        self.rank_worker_offset = [state.next_worker_id for state in self.rank_states]
-
-        self.rank_num_workers = [len(state.worker_states) for state in self.rank_states]
-        assert all(
-            self.rank_num_workers[0] == num_workers for num_workers in self.rank_num_workers
-        ), "All ranks must have the same number of workers."
+        self.is_global_checkpoint = len(state_files) == 1
+        self.file_pattern_func = (
+            None if self.is_global_checkpoint else detect_and_replicate_pattern(state_file_names)
+        )
+        self.rank_states = []
+        self.megatron_style = False
+        for state_file in state_files:
+            state = torch.load(str(state_file), weights_only=False)
+            if isinstance(state, dict) and "dataloader_state_dict" in state:
+                self.megatron_style = True
+                state = state["dataloader_state_dict"]
+            if state is not None:
+                if not isinstance(state, SavableDataLoaderState):
+                    raise ValueError(f"Unknown checkpoint type: {type(state)}")
+                self.rank_states.append(state)
+        self.state = _merge_worker_states(self.rank_states)
+        if set(self.state.worker_states) != set(range(self.state.logical_workers)):
+            raise ValueError("Input files must cover every logical worker group")
 
     def write_new_states_to_folder(
         self, output_folder: EPath, new_states: List[SavableDataLoaderState]
@@ -196,21 +175,6 @@ class RankStateIterable:
                 )
             else:
                 torch.save(rank_state, str(output_file))
-
-    def get_num_ranks(self):
-        return len(self.rank_states)
-
-    def get_num_workers(self):
-        return self.rank_num_workers[0]
-
-    def get_micro_batch_size(self):
-        return self.rank_states[0].micro_batch_size
-
-    def __iter__(self):
-        """Iterates the SavableDatasetCheckpoints of mulitple ranks in a round-robin fashion."""
-        for rank, state in enumerate(self.rank_states):
-            for worker_state in state.worker_states:
-                yield worker_state
 
 
 @click.command(name="redist")
@@ -244,55 +208,48 @@ def command_redist(
     click.echo(f"Processing {len(input_file_list)} checkpoint files")
 
     # Determine if we're processing a single global checkpoint or multiple rank files
-    rsi = RankStateIterable(input_file_list)
+    rsi = CheckpointFiles(input_file_list)
 
     if not rsi.rank_states:
         raise click.ClickException("No valid checkpoint states found")
 
     if new_world_size is None:
-        click.echo(f"Current DP world size: {rsi.get_num_ranks()}")
-        click.echo(f"Current number of workers per DP rank: {rsi.get_num_workers()}")
+        click.echo(f"Logical workers: {rsi.state.logical_workers}")
         new_world_size = click.prompt("Please enter the new DP world size", type=int)
         assert isinstance(new_world_size, int)
 
     if new_world_size <= 0:
         raise click.ClickException("New world size must be greater than 0")
 
-    total_num_workers = rsi.get_num_workers() * rsi.get_num_ranks()
+    total_num_workers = rsi.state.logical_workers
     assert total_num_workers % new_world_size == 0, (
-        "New DP world size must be a multiple of the current DP world size"
+        "Logical worker count must be divisible by the new world size"
     )
     new_workers_per_rank = total_num_workers // new_world_size
 
     # Ensure output directory exists
     output_path.mkdir(exist_ok=True, parents=True)
 
-    new_rank_states = [list() for _ in range(new_world_size)]
-    rsi_iter = iter(rsi)
-    for rank_idx in range(new_world_size):
-        for _ in range(new_workers_per_rank):
-            state = next(rsi_iter)
-            new_rank_states[rank_idx].append(state)
-
-    assert all(
-        len(new_rank_states[0]) == len(new_rank_states[rank]) for rank in range(1, new_world_size)
-    ), "All ranks must have the same number of workers, also for the new distribution."
-
     new_states = [
         SavableDataLoaderState(
-            worker_states=new_rank_state,
-            iteration_index=0,  # Start a new local worker round after redistribution.
-            micro_batch_size=rsi.get_micro_batch_size(),
-            boundary_offsets=list(rsi.rank_states[0].boundary_offsets),
+            worker_states={
+                group: rsi.state.worker_states[group]
+                for group in range(rank * new_workers_per_rank, (rank + 1) * new_workers_per_rank)
+            },
+            logical_workers=rsi.state.logical_workers,
+            iteration_index=rsi.state.iteration_index,
+            micro_batch_size=rsi.state.micro_batch_size,
+            boundary_offsets=list(rsi.state.boundary_offsets),
         )
-        for new_rank_state in new_rank_states
+        for rank in range(new_world_size)
     ]
 
     # Save the redistributed checkpoint
     if rsi.is_global_checkpoint:
         # Save as a single global checkpoint file
         output_file = output_path / input_file_list[0].name
-        torch.save(new_states, str(output_file))
+        state = {"dataloader_state_dict": rsi.state} if rsi.megatron_style else rsi.state
+        torch.save(state, str(output_file))
         click.echo(f"Saved global checkpoint to {output_file}")
     else:
         rsi.write_new_states_to_folder(output_path, new_states)
@@ -315,7 +272,7 @@ def command_info(input_files: List[EPath]):
     """
 
     # Load the checkpoint(s)
-    rsi = RankStateIterable(input_files)
+    rsi = CheckpointFiles(input_files)
 
     # Display basic information
     if rsi.is_global_checkpoint:
@@ -323,8 +280,8 @@ def command_info(input_files: List[EPath]):
     else:
         click.echo("Checkpoint type: Per-rank checkpoint files")
 
-    click.echo(f"Number of DP ranks: {rsi.get_num_ranks()}")
-    click.echo(f"Number of workers per DP rank: {rsi.get_num_workers()}")
+    click.echo(f"Number of checkpoint files: {len(input_files)}")
+    click.echo(f"Number of logical workers: {rsi.state.logical_workers}")
 
     # Additional detailed information
     click.echo("\nDetailed information:")
@@ -333,7 +290,8 @@ def command_info(input_files: List[EPath]):
             click.echo(f"  Rank {rank_idx}:")
         else:
             click.echo(f"  Rank {rank_idx} ({input_files[rank_idx].name}):")
-        click.echo(f"    Next worker ID: {state.next_worker_id}")
+        click.echo(f"    Iteration index: {state.iteration_index}")
+        click.echo(f"    Logical worker IDs: {sorted(state.worker_states)}")
         click.echo(f"    Number of worker states: {len(state.worker_states)}")
 
 

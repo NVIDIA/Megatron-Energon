@@ -119,7 +119,7 @@ class SimpleSavableDatasetWrapper(BaseWrapperDataset[T, Tuple[int, int, T]], Gen
         dataset: SavableDataset[T],
         worker_config: WorkerConfig,
         cache_pool: CachePool,
-        stride_dataset: Optional[StrideDataset[T]] = None,
+        stride_dataset: StrideDataset[T],
     ):
         """
         Args:
@@ -136,33 +136,23 @@ class SimpleSavableDatasetWrapper(BaseWrapperDataset[T, Tuple[int, int, T]], Gen
     def reset_state_own(self) -> None:
         self._sample_index = 0
         self._state_restored = False
-        self._pending_logical_checkpoint = None
+        self._pending_checkpoint = None
 
-    def get_checkpoint(self) -> SavableDatasetCheckpoint | LogicalWorkerCheckpoint:
-        if self._pending_logical_checkpoint is not None:
-            return self._pending_logical_checkpoint
-        return SavableDatasetCheckpoint(
-            state=SavableDatasetState(
-                rng=SystemRng.save_state(),
-                dataset_state=self.dataset.save_state(),
-                sample_index=self._sample_index,
-            ),
-            offset=0,
-        )
+    def get_checkpoint(self) -> SavableDatasetCheckpoint:
+        if self._pending_checkpoint is not None:
+            return self._pending_checkpoint
+        return _save_worker_checkpoint(self.dataset)
 
     def restore_checkpoint(
         self,
-        checkpoint: SavableDatasetCheckpoint | LogicalWorkerCheckpoint,
+        checkpoint: SavableDatasetCheckpoint,
         iteration_index: int,
     ) -> None:
-        if isinstance(checkpoint, SavableDatasetCheckpoint) and checkpoint.offset:
-            raise ValueError("Main-process physical checkpoints cannot have a replay offset")
         self.reset_state_own()
         self._sample_index = _restore_worker_checkpoint(
             self.dataset, self._stride_dataset, checkpoint, self.worker_config, iteration_index
         )
-        if isinstance(checkpoint, LogicalWorkerCheckpoint):
-            self._pending_logical_checkpoint = checkpoint
+        self._pending_checkpoint = checkpoint
 
     def reset_for_iteration(self) -> None:
         self.reset_state_deep()
@@ -187,7 +177,7 @@ class SimpleSavableDatasetWrapper(BaseWrapperDataset[T, Tuple[int, int, T]], Gen
                 for src_data in self.dataset:
                     self.worker_config.worker_deactivate()
                     worker_active = False
-                    self._pending_logical_checkpoint = None
+                    self._pending_checkpoint = None
                     sample_index = self._sample_index
                     src_data = add_sample_restore_key(
                         src_data, logical_worker_id, sample_index, src=self
@@ -202,6 +192,9 @@ class SimpleSavableDatasetWrapper(BaseWrapperDataset[T, Tuple[int, int, T]], Gen
                         cache_pool=self.cache_pool,
                     )
                     worker_active = True
+                else:
+                    # EOF can finish replay without producing a new output.
+                    self._pending_checkpoint = None
             finally:
                 if worker_active:
                     self.worker_config.worker_deactivate()
@@ -234,24 +227,7 @@ class SimpleSavableDatasetWrapper(BaseWrapperDataset[T, Tuple[int, int, T]], Gen
 
 @edataclass
 class SavableDatasetState(State):
-    """State of the dataset wrapper. It stores the global random states and the index of the next
-    sample to be returned from the dataset. This class is not intended to be used directly, but by
-    :class:`megatron.energon.SavableDatasetWrapper`."""
-
-    #: The state of all the system random number generators
-    rng: SystemRngState
-    #: The state of the savable dataset
-    dataset_state: FlexState
-    #: Index of the next sample to be returned from the dataset
-    sample_index: int
-
-    def __repr__(self):
-        return f"SavableDatasetState(rng={self.rng!r}, sample_index={self.sample_index})"
-
-
-@edataclass
-class LogicalWorkerState(State):
-    """A logical pipeline snapshot, independent of its physical reader assignment."""
+    """Logical pipeline snapshot, independent of its physical reader assignment."""
 
     dataset_state: FlexState
     sample_index: int
@@ -259,10 +235,10 @@ class LogicalWorkerState(State):
 
 
 @edataclass
-class LogicalWorkerCheckpoint(State):
-    """Logical snapshot plus the number of full logical outputs to replay."""
+class SavableDatasetCheckpoint(State):
+    """Pipeline snapshot plus the number of full logical outputs to replay."""
 
-    state: Optional[LogicalWorkerState]
+    state: Optional[SavableDatasetState]
     offset: int
 
 
@@ -274,22 +250,11 @@ class SavableCheckpoint:
     """
 
     #: The state of the wrapper
-    state: Optional[SavableDatasetState | LogicalWorkerCheckpoint]
+    checkpoint: SavableDatasetCheckpoint
     #: The time at which the checkpoint was created
     checkpoint_time: float
     #: Index of the next sample to be returned from the dataset after restoring the checkpoint
     sample_index: int
-
-
-@edataclass
-class SavableDatasetCheckpoint(State):
-    """Checkpoint data for :class:`megatron.energon.SavableDatasetWrapper`. The checkpoint state
-    represents a state before that checkpoint, with an offset (i.e. samples to be skipped)."""
-
-    #: The state of the wrapper at the sample index when the checkpoint was created.
-    state: Optional[SavableDatasetState]
-    #: Offset of the checkpoint to the actual sample index to be restored.
-    offset: int
 
 
 class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
@@ -320,8 +285,7 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
     _last_checkpoints: List[SavableCheckpoint]
     _final_checkpoint: Optional[SavableDatasetCheckpoint]
 
-    _workers_restore_from: List[Optional[SavableDatasetState | LogicalWorkerCheckpoint]] = list()
-    _workers_skip_samples: List[int]
+    _workers_restore_from: List[Optional[SavableDatasetCheckpoint]]
 
     _running: bool = False
     _command_lock: Optional[threading.RLock] = None
@@ -338,7 +302,7 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
         cmd_queues: List[torch.multiprocessing.Queue],
         result_queues: List[torch.multiprocessing.Queue],
         cache_pool: CachePool,
-        stride_dataset: Optional[StrideDataset[T]] = None,
+        stride_dataset: StrideDataset[T],
     ):
         """
         Create the savable dataset wrapper for multiprocessing data loading.
@@ -363,10 +327,13 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
         self.checkpoint_every_min_n_samples = checkpoint_every_min_n_samples
         self.n_checkpoints = n_checkpoints
         self._last_checkpoints = [
-            SavableCheckpoint(state=None, checkpoint_time=time.perf_counter(), sample_index=-1)
+            SavableCheckpoint(
+                checkpoint=SavableDatasetCheckpoint(state=None, offset=0),
+                checkpoint_time=time.perf_counter(),
+                sample_index=0,
+            )
         ]
         self._workers_restore_from = [None] * num_workers
-        self._workers_skip_samples = [0] * num_workers
         self._restore_iteration_index = 0
         self._final_checkpoint = None
         self._cmd_queues = cmd_queues
@@ -463,27 +430,20 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
             with self._command_lock:
                 pending = self._workers_restore_from[self._worker_id]
                 if pending is not None:
-                    checkpoint = (
-                        pending
-                        if isinstance(pending, LogicalWorkerCheckpoint)
-                        else SavableDatasetCheckpoint(state=pending, offset=0)
-                    )
                     self._sample_index = _restore_worker_checkpoint(
                         self.dataset,
                         self._stride_dataset,
-                        checkpoint,
+                        pending,
                         self.worker_config,
                         self._restore_iteration_index,
                     )
                     self._last_checkpoints = [
                         SavableCheckpoint(
-                            state=pending,
+                            checkpoint=pending,
                             checkpoint_time=time.perf_counter(),
                             sample_index=self._sample_index,
                         )
                     ]
-                    if isinstance(pending, LogicalWorkerCheckpoint):
-                        self._workers_skip_samples[self._worker_id] = 0
                     self._workers_restore_from[self._worker_id] = None
                 else:
                     # Store the initial state of the worker if we stop before the first sample
@@ -500,19 +460,6 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
                     for src_data in self.dataset:
                         self.worker_config.worker_deactivate()
                         worker_active = False
-                        remaining = self._workers_skip_samples[self._worker_id]
-                        if remaining > 0:
-                            # Skip ahead to reach the start of the restored checkpoint
-                            # print(f"Skip [{self._sample_index}:{self._worker_id}] {src_data}")
-                            self._workers_skip_samples[self._worker_id] -= 1
-                            self._sample_index += 1
-                            last_was_skip = True
-                            self.worker_config.worker_activate(
-                                self._sample_index,
-                                cache_pool=self.cache_pool,
-                            )
-                            worker_active = True
-                            continue
                         sample_index = self._sample_index
                         add_sample_restore_key(src_data, logical_worker_id, sample_index, src=self)
                         self._sample_index += 1
@@ -544,7 +491,7 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
             # print(f"{id(self)}:{multiprocessing.current_process().ident} Worker iter closing")
             # Prefetch can observe EOF before the caller. Keep this transition separate
             # from the last yield, which has the same physical output counter.
-            self._final_checkpoint = SavableDatasetCheckpoint(state=self._save_state(), offset=0)
+            self._final_checkpoint = _save_worker_checkpoint(self.dataset)
 
     def _store_checkpoint(self, force: bool = False) -> None:
         """
@@ -568,7 +515,7 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
             # print(f"Storing checkpoint at {self._worker_id}:{self._sample_index}")
             self._last_checkpoints.append(
                 SavableCheckpoint(
-                    state=self._save_state(),
+                    checkpoint=_save_worker_checkpoint(self.dataset),
                     checkpoint_time=time.perf_counter(),
                     sample_index=self._sample_index,
                 )
@@ -576,17 +523,9 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
             if len(self._last_checkpoints) > self.n_checkpoints:
                 self._last_checkpoints.pop(0)
 
-    def _save_state(self) -> SavableDatasetState:
-        """Saves the internal state"""
-        return SavableDatasetState(
-            rng=SystemRng.save_state(),
-            dataset_state=self.dataset.save_state(),
-            sample_index=self._sample_index,
-        )
-
     def get_checkpoint(
         self, last_sample_indexes: List[int], source_exhausted: bool = False
-    ) -> SavableDatasetCheckpoint | LogicalWorkerCheckpoint:
+    ) -> SavableDatasetCheckpoint:
         """
         Get a checkpoint given the last emitted sample indexes for all workers.
 
@@ -602,29 +541,25 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
             assert self._final_checkpoint is not None, "Worker has not reached EOF"
             return self._final_checkpoint
         sample_index = last_sample_indexes[self._worker_id] + 1
-        for checkpoint in reversed(self._last_checkpoints):
-            if checkpoint.sample_index <= sample_index:
-                if isinstance(checkpoint.state, LogicalWorkerCheckpoint):
-                    # Before the first new output is consumed, retain the original logical state.
-                    assert checkpoint.sample_index == sample_index
-                    return checkpoint.state
-                # print(f"Found cp for {sample_index} at {checkpoint.sample_index}")
+        for historical in reversed(self._last_checkpoints):
+            if historical.sample_index <= sample_index:
+                checkpoint = historical.checkpoint
+                outputs = sample_index - historical.sample_index
+                if outputs == 0:
+                    return checkpoint
+                # History is addressed by physical outputs; replay advances the full stream.
+                assignment = self.worker_config.assignment_for_current_physical_worker()
+                offset = outputs * assignment.stride
+                if checkpoint.state is None or checkpoint.state.sample_index == 0:
+                    offset -= assignment.stride - 1 - assignment.stride_offset
                 return SavableDatasetCheckpoint(
-                    state=checkpoint.state,
-                    offset=sample_index - checkpoint.sample_index,
+                    state=checkpoint.state, offset=checkpoint.offset + offset
                 )
-
-        # Immediate save after restore
-        if len(self._last_checkpoints) == 0:
-            return SavableDatasetCheckpoint(
-                state=self._workers_restore_from[self._worker_id],
-                offset=self._workers_skip_samples[self._worker_id],
-            )
         raise ValueError("No checkpoint found")
 
     def restore_checkpoint(
         self,
-        worker_states: Optional[List[SavableDatasetCheckpoint | LogicalWorkerCheckpoint]],
+        worker_states: Optional[List[SavableDatasetCheckpoint]],
         worker_offset: int,
         *,
         iteration_index: int = 0,
@@ -646,21 +581,14 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
             self._workers_restore_from = [None] * num_workers
             assert worker_offset == 0
             self._worker_offset = 0
-            self._workers_skip_samples = [0] * num_workers
         else:
             assert isinstance(worker_states, list)
             assert len(worker_states) == num_workers
-            assert isinstance(worker_states[0], (SavableDatasetCheckpoint, LogicalWorkerCheckpoint))
+            assert all(isinstance(state, SavableDatasetCheckpoint) for state in worker_states)
 
             self._worker_offset = worker_offset
 
-            # Tear the state_list apart (which has len=num_workers)
-            # and store the states in the internal arrays
-            self._workers_restore_from = [
-                state if isinstance(state, LogicalWorkerCheckpoint) else state.state
-                for state in worker_states
-            ]
-            self._workers_skip_samples = [state.offset for state in worker_states]
+            self._workers_restore_from = list(worker_states)
 
     def reset_for_iteration(self) -> None:
         self.dataset.reset_state_deep()
@@ -668,7 +596,7 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
 
     def get_initial_checkpoint(
         self,
-    ) -> Optional[List[SavableDatasetCheckpoint | LogicalWorkerCheckpoint]]:
+    ) -> Optional[List[SavableDatasetCheckpoint]]:
         """
         Get the initial checkpoint for all worker processes if they have not started yet.
 
@@ -678,19 +606,11 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
         assert torch.utils.data.get_worker_info() is None, (
             "Cannot get initial checkpoint in worker process"
         )
-        if all(s is None for s in self._workers_restore_from):
-            assert all(s == 0 for s in self._workers_skip_samples)
-            # Initial state, no checkpoint
+        if all(state is None for state in self._workers_restore_from):
             return None
-
         return [
-            state
-            if isinstance(state, LogicalWorkerCheckpoint)
-            else SavableDatasetCheckpoint(
-                state=state,
-                offset=offset,
-            )
-            for state, offset in zip(self._workers_restore_from, self._workers_skip_samples)
+            state if state is not None else SavableDatasetCheckpoint(state=None, offset=0)
+            for state in self._workers_restore_from
         ]
 
     def can_restore_sample(self) -> bool:
@@ -722,43 +642,33 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
 
 @edataclass
 class SavableDataLoaderState(State):
-    """Saved state of the :class:`megatron.energon.SavableDataLoader`. Contains the state for all worker
-    processed of a single rank."""
+    """Worker checkpoints keyed by global logical id, independent of physical topology."""
 
-    #: The internal state of the dataset (for each worker process)
-    worker_states: List[SavableDatasetCheckpoint | LogicalWorkerCheckpoint]
-    #: Completed dataloader calls in this iteration; the next worker is derived from it.
-    iteration_index: int
-
-    #: The micro batch size that was used, if available.
-    #: On restore, this is used to compare the new and old micro batch size.
+    worker_states: Dict[int, SavableDatasetCheckpoint]
+    logical_workers: int
     micro_batch_size: Optional[int]
-
+    #: Completed dataloader calls per rank; determines the next physical worker.
+    iteration_index: int
     #: Progress within the public epoch/limit, outside worker replay.
     boundary_offsets: List[int]
 
-    @property
-    def next_worker_id(self) -> int:
-        return self.iteration_index % len(self.worker_states)
 
-
-@edataclass
-class LogicalDataLoaderState(State):
-    """One consumed last-stride checkpoint per logical worker, independent of physical topology."""
-
-    #: Checkpoints keyed by global logical worker group id, not rank or physical worker id.
-    worker_states: Dict[int, LogicalWorkerCheckpoint]
-    logical_workers: int
-    micro_batch_size: Optional[int]
-    #: One scheduling count for the whole checkpoint, interpreted under the current topology.
-    iteration_index: int
-    boundary_offsets: List[int]
+def _save_worker_checkpoint(dataset: SavableDataset) -> SavableDatasetCheckpoint:
+    pipeline_state, sample_index = dataset.export_logical_state(dataset.save_state())
+    return SavableDatasetCheckpoint(
+        state=SavableDatasetState(
+            dataset_state=pipeline_state,
+            sample_index=sample_index,
+            rng=SystemRng.save_state(),
+        ),
+        offset=0,
+    )
 
 
 def _restore_worker_checkpoint(
     dataset: SavableDataset,
-    stride: Optional[StrideDataset],
-    checkpoint: SavableDatasetCheckpoint | LogicalWorkerCheckpoint,
+    stride: StrideDataset,
+    checkpoint: SavableDatasetCheckpoint,
     worker_config: WorkerConfig,
     iteration_index: int,
 ) -> int:
@@ -766,86 +676,51 @@ def _restore_worker_checkpoint(
     dataset.reset_state_deep()
     snapshot = checkpoint.state
     state = None if snapshot is None else deepcopy(snapshot.dataset_state)
-    if isinstance(checkpoint, LogicalWorkerCheckpoint):
-        assert stride is not None, "Logical restore requires a loader-owned stride dataset"
-        stride.restore_logical_checkpoint(
-            state,
-            0 if snapshot is None else snapshot.sample_index,
-            replay_outputs=checkpoint.offset,
-            previous_worker_id=worker_config.logical_worker_last_physical_worker(
-                worker_config.logical_global_worker_id(), iteration_index
-            ),
-        )
-        workers = worker_config.physical_workers_per_rank()
-        sample_index = iteration_index // workers + int(
-            worker_config.rank_worker_id() < iteration_index % workers
-        )
-    else:
-        if state is not None:
-            dataset.restore_state(state)
-        sample_index = 0 if snapshot is None else snapshot.sample_index
+    stride.restore_logical_checkpoint(
+        state,
+        0 if snapshot is None else snapshot.sample_index,
+        replay_outputs=checkpoint.offset,
+        previous_worker_id=worker_config.logical_worker_last_physical_worker(
+            worker_config.logical_global_worker_id(), iteration_index
+        ),
+    )
     if snapshot is not None:
         if snapshot.rng is None:
             SystemRng.seed(torch.initial_seed() & 0xFFFFFFFF)
         else:
             SystemRng.restore_state(snapshot.rng)
-    return sample_index
-
-
-def _to_logical_checkpoint(
-    checkpoint: SavableDatasetCheckpoint | LogicalWorkerCheckpoint,
-    dataset: SavableDataset,
-    worker_config: WorkerConfig,
-    physical_worker: int,
-) -> LogicalWorkerCheckpoint:
-    if isinstance(checkpoint, LogicalWorkerCheckpoint):
-        return checkpoint
-    if checkpoint.state is None:
-        if checkpoint.offset:
-            raise ValueError("Initial logical checkpoint cannot have a replay offset")
-        return LogicalWorkerCheckpoint(state=None, offset=0)
-    pipeline_state, sample_index = dataset.export_logical_state(checkpoint.state.dataset_state)
-    assignment = worker_config.logical_assignment_for_physical(physical_worker)
-    offset = checkpoint.offset * assignment.stride
-    if sample_index == 0 and checkpoint.offset:
-        # From the origin, the first retained output follows only the initial offset.
-        offset -= assignment.stride - 1 - assignment.stride_offset
-    return LogicalWorkerCheckpoint(
-        state=LogicalWorkerState(
-            dataset_state=pipeline_state, sample_index=sample_index, rng=checkpoint.state.rng
-        ),
-        offset=offset,
+    workers = worker_config.physical_workers_per_rank()
+    return iteration_index // workers + int(
+        worker_config.rank_worker_id() < iteration_index % workers
     )
 
 
-def _merge_logical_states(
-    states: Sequence[LogicalDataLoaderState],
-    logical_workers: int,
-    micro_batch_size: Optional[int],
-) -> LogicalDataLoaderState:
+def _merge_worker_states(states: Sequence[SavableDataLoaderState]) -> SavableDataLoaderState:
+    if not states:
+        raise ValueError("Missing logical worker group checkpoints")
+    first = states[0]
     checkpoints = {}
-    iteration_index = None
-    boundary_offsets = None
     for state in states:
-        if not isinstance(state, LogicalDataLoaderState):
-            raise ValueError("Expected logical worker group checkpoints")
-        if state.logical_workers != logical_workers or state.micro_batch_size != micro_batch_size:
-            raise ValueError("Logical checkpoints require unchanged logical_workers and batch size")
+        if not isinstance(state, SavableDataLoaderState):
+            raise ValueError("Expected a dataloader checkpoint")
+        if (
+            state.logical_workers != first.logical_workers
+            or state.micro_batch_size != first.micro_batch_size
+        ):
+            raise ValueError("Worker checkpoints require unchanged logical_workers and batch size")
         if checkpoints.keys() & state.worker_states.keys():
             raise ValueError("Duplicate logical worker group checkpoint")
-        if iteration_index is not None and iteration_index != state.iteration_index:
-            raise ValueError("Logical checkpoints require synchronized dataloader iteration")
-        if boundary_offsets is not None and boundary_offsets != state.boundary_offsets:
-            raise ValueError("Logical checkpoints require synchronized epoch/limit progress")
-        boundary_offsets = state.boundary_offsets
-        iteration_index = state.iteration_index
+        if state.iteration_index != first.iteration_index:
+            raise ValueError("Worker checkpoints require synchronized dataloader iteration")
+        if state.boundary_offsets != first.boundary_offsets:
+            raise ValueError("Worker checkpoints require synchronized epoch/limit progress")
         checkpoints.update(state.worker_states)
-    return LogicalDataLoaderState(
+    return SavableDataLoaderState(
         worker_states=checkpoints,
-        logical_workers=logical_workers,
-        micro_batch_size=micro_batch_size,
-        iteration_index=iteration_index or 0,
-        boundary_offsets=list(boundary_offsets or []),
+        logical_workers=first.logical_workers,
+        micro_batch_size=first.micro_batch_size,
+        iteration_index=first.iteration_index,
+        boundary_offsets=list(first.boundary_offsets),
     )
 
 
@@ -869,14 +744,11 @@ def logical_worker_group_ids(
 
 
 def logical_checkpoints_for_rank(
-    state: LogicalDataLoaderState,
+    state: SavableDataLoaderState,
     worker_config: WorkerConfig,
-    micro_batch_size: Optional[int],
-) -> List[LogicalWorkerCheckpoint]:
-    if worker_config.logical_workers != state.logical_workers:
-        raise ValueError("Logical checkpoint requires the same explicit logical_workers")
-    if micro_batch_size != state.micro_batch_size:
-        raise ValueError("Changing micro batch size with logical checkpoints is unsupported")
+) -> List[SavableDatasetCheckpoint]:
+    if worker_config.logical_worker_count() != state.logical_workers:
+        raise ValueError("Checkpoint requires the same logical worker count")
     if any(not 0 <= group < state.logical_workers for group in state.worker_states):
         raise ValueError("Invalid logical worker group id")
     missing = (
@@ -993,10 +865,8 @@ class _BaseDataLoader(DataLoader[T], Generic[T]):
         self._stream_iterator = None
         self._epoch_iterator = None
 
-        self._stride_dataset = None
-        if self.worker_config.logical_workers is not None:
-            self._stride_dataset = StrideDataset(dataset, worker_config=self.worker_config)
-            dataset = self._stride_dataset
+        self._stride_dataset = StrideDataset(dataset, worker_config=self.worker_config)
+        dataset = self._stride_dataset
         if self.worker_config.should_log(level=1):
             dataset = LogSampleDataset(dataset, worker_config=self.worker_config)
         return dataset
@@ -1007,12 +877,10 @@ class _BaseDataLoader(DataLoader[T], Generic[T]):
         self.dataset.reset_for_iteration()
         self._has_workers = False
         self._worker_sample_counters = [-1] * max(1, self.num_workers)
-        self._next_worker_id = 0
         self._sample_idx = 0
 
     def _source_exhausted(self) -> None:
         self._stream_iterator = None
-        self._next_worker_id = 0
         self._sample_idx = 0
 
     def _epoch_outputs(self):
@@ -1035,20 +903,17 @@ class _BaseDataLoader(DataLoader[T], Generic[T]):
 
 
 class SavableDataLoader(_BaseDataLoader[T], Generic[T]):
-    """DataLoader with physical and logical worker checkpointing.
+    """DataLoader with one checkpoint per logical worker.
 
-    Both main-process and subprocess workers save a dataset snapshot, RNG state, and
-    output counter. Subprocess workers retain historical snapshots so checkpoints can
-    describe the consumed position despite prefetched outputs. Restoring replays the
-    offset from the selected snapshot and rotates workers to resume delivery order.
+    Without explicit logical_workers, each physical worker is its own logical worker.
+    Workers retain historical snapshots to describe the consumed position despite
+    prefetching. Saving selects each logical group's last contributor; restoring replays
+    full logical outputs before applying the current physical assignment.
 
-    Logical checkpoints select each group's last contributor and convert its snapshot
-    and replay distance into the full logical stream. They can restore under a different
-    physical topology with unchanged logical workers, batching, and processing pipeline.
-
-    Epoch/limit progress is tracked after worker outputs are merged, independently of
-    checkpoint replay. Use the matching rank/global and physical/logical save/restore
-    methods for the desired checkpoint scope.
+    Rank methods support external checkpoint storage and routing by logical group id.
+    Global methods gather and broadcast the same checkpoint format. Physical topology
+    may change with fixed logical worker count and processing pipeline.
+    Epoch/limit progress is stored separately from worker replay.
     """
 
     #: The worker config
@@ -1073,8 +938,6 @@ class SavableDataLoader(_BaseDataLoader[T], Generic[T]):
     _has_workers: bool = False
     #: The index of the current worker. -1 if not started yet.
     _worker_sample_counters: List[int]
-    #: Id of the next worker to retrieve data from
-    _next_worker_id: int = 0
     #: Global index of the last yielded sample
     _global_sample_idx: int = 0
     #: Current iterator index of the last yielded sample
@@ -1239,9 +1102,7 @@ class SavableDataLoader(_BaseDataLoader[T], Generic[T]):
             checkpoints = self._worker_command("get_checkpoint", self._worker_sample_counters, True)
             _stop_loader_stream(self)
             self.dataset.restore_checkpoint(checkpoints, worker_offset=0)
-            self._worker_sample_counters = [
-                checkpoint.state.sample_index - 1 for checkpoint in checkpoints
-            ]
+            self._worker_sample_counters = [-1 for checkpoint in checkpoints]
             self._has_workers = False
         super()._source_exhausted()
 
@@ -1288,8 +1149,6 @@ class SavableDataLoader(_BaseDataLoader[T], Generic[T]):
         try:
             for worker_id, sample_idx, sample in self._epoch_outputs():
                 self._worker_sample_counters[worker_id] = sample_idx
-                # If the next sample will be from the first worker, we can safely resume
-                self._next_worker_id = (worker_id + 1) % max(self.num_workers, 1)
                 # self._debugf.write(
                 #     f"[w={worker_id}, s={sample_idx}] {self._sample_str(sample)}\n"
                 # )
@@ -1380,271 +1239,105 @@ class SavableDataLoader(_BaseDataLoader[T], Generic[T]):
         return logical_worker_group_ids(self.worker_config, self._sample_idx, for_save=for_save)
 
     def save_state_rank(self) -> Optional[SavableDataLoaderState]:
+        """Save this rank's last-contributor checkpoints, keyed by global logical id.
+
+        All ranks must have completed the same number of dataloader calls, including zero.
+        No collectives are used. Returns None if this rank owns no last contributor.
+        Use get_logical_worker_group_ids(for_save=True) to discover the saved ids.
+        Without explicit logical_workers, every local physical worker contributes.
         """
-        Saves the state of the dataset for the current rank. Allows for restoring the state later
-        using `restore_state_rank`, given the result of this method.
-
-        Returns:
-            The state of the dataset.
-        """
-        # Fetch current rank's worker's state
-        if self.num_workers == 0:
-            # No workers configured
-            assert isinstance(self.dataset, SimpleSavableDatasetWrapper)
-            worker_states = [self.dataset.get_checkpoint()]
-            assert self._next_worker_id == 0
-        elif self._has_workers:
-            # Fetch from worker processes
-            worker_states = self._worker_command(
-                "get_checkpoint", self._worker_sample_counters, self._stream_iterator is None
-            )
-        else:
-            # Workers configured, but not started yet.
-            # If a state has already been restored, it will be returned.
-            assert isinstance(self.dataset, SavableDatasetWrapper)
-            worker_states = self.dataset.get_initial_checkpoint()
-
-        if worker_states is None:
-            return None
-
-        # Merge the states
-        merged_state = SavableDataLoaderState(
-            worker_states=worker_states,
-            iteration_index=self._sample_idx,
-            boundary_offsets=self._iteration.save_state(),
-            micro_batch_size=self._get_batch_size(),
-        )
-
-        # Not distributed -> return the merged state
-        return merged_state
-
-    def restore_state_rank(self, state: Optional[SavableDataLoaderState]) -> None:
-        """
-        Restores the saved state for the current rank.
-
-        Args:
-            state: The state to restore, as saved by `save_state_rank`.
-        """
-        assert not self._has_workers, "Cannot restore state while workers are running"
-        if state is None:
-            # Assume initial state
-            return
-        assert isinstance(state, SavableDataLoaderState)
-        self._iteration.restore_state(state.boundary_offsets)
-        self._sample_idx = state.iteration_index
-        self._next_worker_id = state.next_worker_id
-
-        old_micro_batch_size = state.micro_batch_size
-        micro_batch_size = self._get_batch_size()
-        if micro_batch_size != old_micro_batch_size and any(
-            isinstance(checkpoint, LogicalWorkerCheckpoint) for checkpoint in state.worker_states
-        ):
-            raise ValueError("Changing micro batch size with logical checkpoints is unsupported")
-
-        if self.num_workers == 0:
-            # No workers configured
-            assert isinstance(self.dataset, SimpleSavableDatasetWrapper)
-            assert micro_batch_size == old_micro_batch_size, (
-                "Changing micro batch size is not allowed without workers"
-            )
-
-            assert len(state.worker_states) == 1
-            self.dataset.restore_checkpoint(state.worker_states[0], state.iteration_index)
-        else:
-            # Workers configured
-            assert isinstance(self.dataset, SavableDatasetWrapper)
-            assert all(
-                isinstance(s, (SavableDatasetCheckpoint, LogicalWorkerCheckpoint))
-                for s in state.worker_states
-            )
-
-            # Check batch sizes (before and after)
-            if micro_batch_size != old_micro_batch_size:
-                assert micro_batch_size is not None and old_micro_batch_size is not None, (
-                    "Cannot resume with different batching mode "
-                    "(batching to non-batching or vice versa)"
-                )
-
-                if micro_batch_size > old_micro_batch_size:
-                    raise ValueError(
-                        "Resuming with larger micro batch size is not allowed: "
-                        f"{micro_batch_size} > {state.micro_batch_size}"
-                    )
-                elif (
-                    micro_batch_size < old_micro_batch_size
-                    and old_micro_batch_size % micro_batch_size != 0
-                ):
-                    raise ValueError(
-                        "Resuming with smaller micro batch size only allowed if the old "
-                        f"micro batch size is a multiple of the new one: {micro_batch_size} < {state.micro_batch_size}"
-                    )
-                batch_size_ratio = old_micro_batch_size // micro_batch_size
-                for worker_state in state.worker_states:
-                    assert isinstance(worker_state, SavableDatasetCheckpoint)
-                    # When resuming with a smaller micro batch size, the offset must be scaled
-                    # up to the new micro batch size to skip the same number of samples as before.
-                    worker_state.offset *= batch_size_ratio
-
-            self.dataset.restore_checkpoint(
-                state.worker_states,
-                worker_offset=state.next_worker_id,
-                iteration_index=state.iteration_index,
-            )
-
-            # Initialize the worker-sample counters so that every worker owns a valid
-            # "last emitted sample" index.  Workers that have not emitted anything yet keep
-            # the default value ``-1``.
-
-            assert isinstance(state.worker_states, list)
-
-            self._worker_sample_counters = [
-                (
-                    state.iteration_index // max(1, self.num_workers)
-                    + int(worker_id < state.next_worker_id)
-                    - 1
-                    if isinstance(ws, LogicalWorkerCheckpoint)
-                    else (0 if ws.state is None else ws.state.sample_index) + ws.offset - 1
-                )
-                for worker_id, ws in enumerate(state.worker_states)
-            ]
-
-            self._next_worker_id = state.next_worker_id
-
-    @deprecated(
-        "`save_state` is deprecated and was renamed to `save_state_global` and will be removed "
-        "in a future update. If you actually do not want to gather the states to a rank, use "
-        "`save_state_rank` instead."
-    )
-    def save_state(self, dst_rank: int) -> Optional[Sequence[Optional[SavableDataLoaderState]]]:
-        """Deprecated. Use `save_state_global` (or `save_state_rank`) instead."""
-
-        return self.save_state_global(dst_rank)
-
-    def save_state_global(
-        self, global_dst_rank: int
-    ) -> Optional[Sequence[Optional[SavableDataLoaderState]]]:
-        """
-        Saves the state of the dataset globally, collecting the state from all ranks using torch
-        distributed. Allows for restoring the state later using `restore_state_global`, given the
-        result of this method.
-        Typical scenario: Save the state to disk only on the `dst_rank`, the other ranks do not
-        save the state. Later, restore the state either only loaded on the `dst_rank` or
-        loading on all ranks separately using `restore_state_global`.
-
-        Note: If you want to save/restore the state per rank separately, use `save_state_rank` and
-        the corresponding `restore_state_rank`. Also, these do not rely on torch distributed.
-
-        Args:
-            global_dst_rank: The state will be gathered to this rank. The rank refers to the
-                global rank, not the rank within the data parallel group.
-
-        Returns:
-            The state of the dataset (or `None`, if not on `dst_rank`).
-        """
-        # Fetch current rank's worker's state
-        merged_state = self.save_state_rank()
-
-        # Gather the merged states
-        if self.worker_config.world_size > 1:
-            output: Optional[Sequence[Optional[SavableDataLoaderState]]]
-            if self.worker_config.global_rank() == global_dst_rank:
-                output = [None] * self.worker_config.world_size
-            else:
-                # Check if the global_dst_rank is in the same group at all
-                if self.worker_config.data_parallel_group is not None:
-                    try:
-                        _ = torch.distributed.get_group_rank(
-                            self.worker_config.data_parallel_group, global_dst_rank
-                        )
-                    except RuntimeError:
-                        raise ValueError(
-                            f"global_dst_rank {global_dst_rank} is not in the group of the current rank's worker config"
-                        )
-
-                output = None
-
-            torch.distributed.gather_object(
-                merged_state,
-                output,
-                global_dst_rank,
-                group=self.worker_config.data_parallel_group,
-            )
-
-            return output
-        else:
-            return [merged_state]
-
-    def save_state_logical_rank(self) -> Optional[LogicalDataLoaderState]:
-        """Save last-member checkpoints owned by this rank, keyed by logical group id.
-
-        Returns None if no logical group's last physical member is on this rank. Even at
-        zero consumed batches, owning ranks return a checkpoint. Requires explicit
-        logical_workers and synchronized dataloader calls across ranks.
-        No distributed collectives are used. Use `get_logical_worker_group_ids(for_save=True)`
-        to discover ownership, and `restore_state_logical_rank` to restore.
-        """
-        if self.worker_config.logical_workers is None:
-            raise ValueError("Set logical_workers explicitly for logical checkpoints")
         groups = self.get_logical_worker_group_ids(for_save=True)
         if not groups:
             return None
-        workers_per_rank = max(1, self.num_workers)
-        rank_state = self.save_state_rank()
-        checkpoints = (
-            rank_state.worker_states
-            if rank_state is not None
-            else [SavableDatasetCheckpoint(state=None, offset=0) for _ in range(workers_per_rank)]
-        )
-        selected = {}
-        for group in groups:
-            physical_worker = self.worker_config.logical_worker_last_physical_worker(
-                group, self._sample_idx
+        workers = self.worker_config.physical_workers_per_rank()
+        if self.num_workers == 0:
+            checkpoints = [self.dataset.get_checkpoint()]
+        elif self._has_workers:
+            checkpoints = self._worker_command(
+                "get_checkpoint", self._worker_sample_counters, self._stream_iterator is None
             )
-            selected[group] = _to_logical_checkpoint(
-                checkpoints[physical_worker - self.worker_config.rank * workers_per_rank],
-                self.dataset.dataset,
-                self.worker_config,
-                physical_worker,
-            )
-        return LogicalDataLoaderState(
-            worker_states=selected,
+        else:
+            checkpoints = self.dataset.get_initial_checkpoint()
+        if checkpoints is None:
+            checkpoints = [SavableDatasetCheckpoint(state=None, offset=0) for _ in range(workers)]
+        return SavableDataLoaderState(
+            worker_states={
+                group: checkpoints[
+                    self.worker_config.logical_worker_last_physical_worker(group, self._sample_idx)
+                    - self.worker_config.rank * workers
+                ]
+                for group in groups
+            },
             logical_workers=self.worker_config.logical_worker_count(),
             micro_batch_size=self._get_batch_size(),
             iteration_index=self._sample_idx,
             boundary_offsets=self._iteration.save_state(),
         )
 
-    def restore_state_logical_rank(
-        self, state: LogicalDataLoaderState | Sequence[LogicalDataLoaderState]
+    def restore_state_rank(
+        self,
+        state: Optional[SavableDataLoaderState | Sequence[SavableDataLoaderState]],
     ) -> None:
-        """Restore logical checkpoints needed by this rank, without distributed collectives.
+        """Restore the logical groups needed by this rank, without collectives.
 
-        Accept one state or a sequence of states from `save_state_logical_rank`. They must
-        cover `get_logical_worker_group_ids()`; extra groups are allowed. Physical rank and
-        subprocess counts may change; logical_workers, batch size and pipeline must not.
-        Call before starting the loader. Missing or duplicate group ids raise ValueError.
+        Accept one state or a sequence of states covering get_logical_worker_group_ids().
+        Extra groups are allowed; duplicate or missing groups raise ValueError.
+        None leaves a fresh loader at its initial position. Restore before iteration.
+        Physical topology may change if the logical worker count remains fixed.
         """
+        if self._has_workers or self._epoch_iterator is not None:
+            raise ValueError("Restore before starting the loader")
         if state is None:
-            raise ValueError("Load the logical group checkpoints required by this rank")
-        if isinstance(state, LogicalDataLoaderState):
-            self._restore_logical_state(state)
             return
-        self._restore_logical_state(
-            _merge_logical_states(
-                state, self.worker_config.logical_worker_count(), self._get_batch_size()
+        if not isinstance(state, SavableDataLoaderState):
+            state = _merge_worker_states(state)
+        checkpoints = logical_checkpoints_for_rank(state, self.worker_config)
+        batch_size = self._get_batch_size()
+        if batch_size != state.micro_batch_size:
+            if self.num_workers == 0 or batch_size is None or state.micro_batch_size is None:
+                raise ValueError("Changing batch size requires subprocess workers and batching")
+            if batch_size > state.micro_batch_size or state.micro_batch_size % batch_size:
+                raise ValueError("The saved micro batch size must be a multiple of the new size")
+            ratio = state.micro_batch_size // batch_size
+            # Replay units are full pipeline outputs, so smaller batches require more outputs.
+            checkpoints = [
+                SavableDatasetCheckpoint(state=checkpoint.state, offset=checkpoint.offset * ratio)
+                for checkpoint in checkpoints
+            ]
+        workers = self.worker_config.physical_workers_per_rank()
+        next_worker_id = state.iteration_index % workers
+        if self.num_workers == 0:
+            self.dataset.restore_checkpoint(checkpoints[0], state.iteration_index)
+        else:
+            self.dataset.restore_checkpoint(
+                checkpoints,
+                worker_offset=next_worker_id,
+                iteration_index=state.iteration_index,
             )
-        )
+            self._worker_sample_counters = [
+                state.iteration_index // workers + int(worker_id < next_worker_id) - 1
+                for worker_id in range(workers)
+            ]
+        self._iteration.restore_state(state.boundary_offsets)
+        self._sample_idx = state.iteration_index
 
-    def save_state_logical_global(
-        self, global_dst_rank: int = 0
-    ) -> Optional[LogicalDataLoaderState]:
-        """Gather one last-member checkpoint per logical group on global_dst_rank.
+    @deprecated(
+        "`save_state` is deprecated and was renamed to `save_state_global` and will be removed "
+        "in a future update. If you actually do not want to gather the states to a rank, use "
+        "`save_state_rank` instead."
+    )
+    def save_state(self, dst_rank: int) -> Optional[SavableDataLoaderState]:
+        """Deprecated. Use save_state_global or save_state_rank."""
+        return self.save_state_global(dst_rank)
 
-        All ranks participate. Requires explicit logical_workers and synchronized dataloader
-        calls. The result is keyed by logical group id and can be restored with
-        `restore_state_logical_global` under another physical topology.
+    def save_state_global(self, global_dst_rank: int = 0) -> Optional[SavableDataLoaderState]:
+        """Gather one checkpoint per logical group to global_dst_rank.
+
+        All ranks participate after synchronized dataloader calls. Only the destination
+        receives a state. The destination is a global rank, including when using a data
+        parallel group. The returned format is the same as save_state_rank.
         """
-        local = self.save_state_logical_rank()
+        local = self.save_state_rank()
         if self.worker_config.world_size == 1:
             return local
         if self.worker_config.data_parallel_group is not None:
@@ -1661,20 +1354,23 @@ class SavableDataLoader(_BaseDataLoader[T], Generic[T]):
         )
         if output is None:
             return None
-        return _merge_logical_states(
-            [state for state in output if state is not None],
-            self.worker_config.logical_worker_count(),
-            self._get_batch_size(),
-        )
+        return _merge_worker_states([state for state in output if state is not None])
 
-    def restore_state_logical_global(
-        self, state: Optional[LogicalDataLoaderState], *, src_rank: Optional[int] = None
+    @deprecated(
+        "`restore_state` was renamed to `restore_state_global` and will be removed in a future update."
+    )
+    def restore_state(self, state: Optional[SavableDataLoaderState]) -> None:
+        """Deprecated. Use restore_state_global or restore_state_rank."""
+        return self.restore_state_global(state)
+
+    def restore_state_global(
+        self, state: Optional[SavableDataLoaderState], *, src_rank: Optional[int] = None
     ) -> None:
-        """Restore logical groups from a global logical checkpoint.
+        """Restore from a global checkpoint, routing logical groups to this rank.
 
-        Load the state on every rank, or supply src_rank (within the data parallel group)
-        to broadcast it. Logical group ids route each checkpoint to its new physical
-        members. Requires a fresh loader and unchanged logical_workers, batch size and pipeline.
+        Load the state on every rank, or supply src_rank to broadcast it from one rank
+        within the data parallel group. Call before starting the loader and keep the
+        logical worker count and processing pipeline unchanged.
         """
         if src_rank is not None and self.worker_config.world_size > 1:
             global_src = (
@@ -1689,118 +1385,7 @@ class SavableDataLoader(_BaseDataLoader[T], Generic[T]):
                 objects, src=global_src, group=self.worker_config.data_parallel_group
             )
             state = objects[0]
-        if not isinstance(state, LogicalDataLoaderState):
-            raise ValueError("Expected a logical dataloader checkpoint")
-        self._restore_logical_state(state)
-
-    def _restore_logical_state(self, state: LogicalDataLoaderState) -> None:
-        if self._has_workers or self._epoch_iterator is not None:
-            raise ValueError("Restore before starting the loader")
-        local_checkpoints = logical_checkpoints_for_rank(
-            state, self.worker_config, self._get_batch_size()
-        )
-        next_worker_id = state.iteration_index % max(1, self.num_workers)
-
-        if self.num_workers == 0:
-            self.dataset.restore_checkpoint(local_checkpoints[0], state.iteration_index)
-        else:
-            self.dataset.restore_checkpoint(
-                local_checkpoints,
-                worker_offset=next_worker_id,
-                iteration_index=state.iteration_index,
-            )
-            self._worker_sample_counters = [
-                state.iteration_index // max(1, self.num_workers)
-                + int(worker_id < next_worker_id)
-                - 1
-                for worker_id in range(max(1, self.num_workers))
-            ]
-
-        self._next_worker_id = next_worker_id
-        self._iteration.restore_state(state.boundary_offsets)
-        self._sample_idx = state.iteration_index
-
-    @deprecated(
-        "`restore_state` was renamed to `restore_state_global` and will be removed in a future update."
-    )
-    def restore_state(
-        self,
-        state: Optional[Sequence[Optional[SavableDataLoaderState]]],
-    ) -> None:
-        """Deprecated. Use `restore_state_global` (or `restore_state_rank`) instead."""
-
-        return self.restore_state_global(state)
-
-    def restore_state_global(
-        self,
-        state: Optional[Sequence[Optional[SavableDataLoaderState]]],
-        *,
-        src_rank: Optional[int] = None,
-    ) -> None:
-        """
-        Restores the saved state from `save_state_global` (in torch distributed setup).
-        The global state needs be loaded on every rank that has a data loader instance.
-
-        Optionally, one can specify a src_rank and only provide the state once.
-        In case of multiple data parallel groups, you must provide the state once
-        in each data parallel group. In this case the `src_rank` is the rank within the
-        data parallel group.
-
-        Args:
-            state: The state to restore, as saved by `save_state_global`.
-            src_rank: The rank from which the state is broadcasted (within the data parallel group, if using DP groups).
-        """
-
-        assert self._epoch_iterator is None, "Cannot restore state while workers are running"
-
-        # Only restore multi-rank if state is actually a list and we are in a distributed setup.
-        # Otherwise treat as single rank state.
-        if src_rank is None or self.worker_config.world_size == 1:
-            assert isinstance(state, list), "State must be a list in distributed setup"
-            assert len(state) == self.worker_config.world_size, (
-                "State must be a list of size world_size"
-            )
-
-            # All ranks have the state
-            # Select the state of the current rank
-            rank_state = state[self.worker_config.rank]
-        else:
-            if self.worker_config.data_parallel_group is not None:
-                # Only the src_rank has the state within this dp group
-                try:
-                    global_src_rank = torch.distributed.get_global_rank(
-                        self.worker_config.data_parallel_group, src_rank
-                    )
-                except RuntimeError:
-                    raise ValueError(
-                        f"src_rank {src_rank} is not in the group of the current rank's worker config"
-                    )
-            else:
-                # If no DP group is given, we assume the global rank is
-                # the same as the data parallel rank
-                global_src_rank = src_rank
-
-            if self.worker_config.rank != src_rank:
-                # Send the state to all other ranks
-                assert state is None
-                # Must still be a list of Nones
-                state = [None] * self.worker_config.world_size
-            else:
-                assert isinstance(state, list), "State must be a list in distributed setup"
-                assert len(state) == self.worker_config.world_size, (
-                    "State must be a list of size world_size"
-                )
-
-            local_object = [None]
-            torch.distributed.scatter_object_list(
-                local_object,
-                state,
-                src=global_src_rank,
-                group=self.worker_config.data_parallel_group,
-            )
-            rank_state = local_object[0]
-
-        self.restore_state_rank(rank_state)
+        self.restore_state_rank(state)
 
     def can_restore_sample(self) -> bool:
         return self.dataset.can_restore_sample()
