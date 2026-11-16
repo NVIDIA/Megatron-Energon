@@ -54,10 +54,21 @@ For three ranks, two subprocess workers per rank, and two logical streams A and 
 
 ## Saving and restoring logical workers
 
-All loaders use the same `save_state_rank()` / `restore_state_rank()` and
-`save_state_global()` / `restore_state_global()` methods. Without an explicit logical count,
-each physical worker is a separate logical worker (`L = P`), so every worker contributes
-a checkpoint. With fanout greater than one, only one physical member contributes per group.
+Choose the checkpoint API according to the restore requirements:
+
+- `save_state_rank()` / `restore_state_rank()` save every local physical worker. Each
+  rank can reload its own file without communication, including with fanout, provided
+  rank assignments, world size, workers per rank, and logical worker count stay fixed.
+  `save_state_global()` / `restore_state_global()` gather and restore a rank-ordered
+  list of these physical states.
+- `save_state_logical_rank()` / `restore_state_logical_rank()` save one checkpoint per
+  logical group and allow changing the physical topology. The global variants,
+  `save_state_logical_global()` / `restore_state_logical_global()`, gather and broadcast
+  these logical states.
+
+Without an explicit logical count, each physical worker is a separate logical worker
+(`L = P`). With fanout greater than one, only one physical member contributes per group
+to a logical save. The remaining instructions describe logical checkpoints.
 
 **Save the last contributor
 to each logical group at the current iteration, and restore it into the same logical group.**
@@ -76,16 +87,16 @@ contribution in one file and uses a manifest to locate its logical groups.
 Each rank can save its own contribution without distributed collectives:
 
 ```python
-state = loader.save_state_rank()
-if state is not None:
-    # state.worker_states maps global logical group ids to their checkpoints.
-    torch.save(state, checkpoint_file)
-    # Record each group id in state.worker_states -> checkpoint_file in your manifest.
+states = dict(loader.save_state_logical_rank())
+if states:
+    torch.save(states, checkpoint_file)
+    # Record each logical group id in states -> checkpoint_file in your manifest.
 ```
 
-`save_state_rank()` returns `None` on ranks that own no group's last contributor.
-A rank can own the last contributors of several groups; its returned state contains
-all of them. Owning ranks return a checkpoint even before consuming any batches.
+`save_state_logical_rank()` returns `(logical_id, state)` pairs, or an empty tuple on
+ranks that own no group's last contributor. Each state includes one group's checkpoint,
+the total logical worker count, micro batch size, and iteration index. A rank can own
+the last contributors of several groups. Owning ranks return checkpoints even before consuming any batches.
 `loader.get_logical_worker_group_ids(for_save=True)` lists the groups this rank writes.
 
 Save after the same number of dataloader calls on every rank; zero calls is also valid.
@@ -108,13 +119,16 @@ manifest to load their checkpoint files, and restore them:
 ```python
 group_ids = loader.get_logical_worker_group_ids()
 files = {group_to_file[group_id] for group_id in group_ids}
-states = [torch.load(path, weights_only=False) for path in files]
-loader.restore_state_rank(states)
+states = {}
+for path in files:
+    states.update(torch.load(path, weights_only=False))
+loader.restore_state_logical_rank(states)
 ```
 
-Restore accepts one logical state or a sequence. Each required group must be present;
-extra groups in the loaded files are allowed. Deduplicate file paths before loading a
-sequence so each group occurs once. Missing or duplicate group checkpoints raise `ValueError`.
+Restore accepts a mapping of logical ids to states or a sequence of `(logical_id, state)`
+pairs. Each required group must be present; extra groups in the loaded files are allowed.
+Deduplicate file paths before loading so each group is loaded once. Missing or duplicate
+group checkpoints in a sequence raise `ValueError`.
 The checkpoint's original physical rank is not its restore destination: use logical group ids.
 
 For example, with two logical groups and six ranks without subprocess workers, workers `2` and `5` save
@@ -127,11 +141,11 @@ also the data parallel rank ids.
 Alternatively, gather all logical checkpoints to one rank:
 
 ```python
-state = loader.save_state_global()  # Destination defaults to global rank 0.
+states = loader.save_state_logical_global()  # Destination defaults to global rank 0.
 # All ranks participate; only the destination rank receives the state to serialize.
 
 # On fresh loaders, load state only on data parallel rank 0:
-loader.restore_state_global(state, src_rank=0)
+loader.restore_state_logical_global(states, src_rank=0)
 ```
 
 Only the selected logical entries are gathered; other physical-worker states are not
@@ -148,9 +162,13 @@ to that saved count before building the dataset under the new topology. Leaving 
 would instead default to the new physical count and redefine the logical partitions.
 The dataset pipeline must remain unchanged. With subprocess workers, the micro batch size
 may be reduced to a divisor of the saved size; replay distances are scaled accordingly. Logical stream order is preserved;
-physical output ownership and rank interleaving can change. The overall checkpoint stores the
-number of delivered outputs since the last source reset or exhaustion once. This count
-continues across virtual epochs. Restore computes the next local worker as that count modulo
+physical output ownership and rank interleaving can change. The checkpoint's `iteration_index`
+counts outputs delivered per rank within the current worker pass, excluding prefetch and
+checkpoint replay. It resets when the loader observes that pass's `StopIteration`, including
+for an epochized pass. A checkpoint taken immediately after the final yield still contains
+the completed pass's count; the count becomes zero after the caller advances again and
+observes `StopIteration`. The underlying dataset can continue across virtual epochs while
+this scheduling counter resets. Restore computes the next local worker as this count modulo
 the current number of workers per rank and assigns each logical stream's next outputs in
 the current delivery order. No scheduling or physical-topology arguments are required.
 

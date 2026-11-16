@@ -33,14 +33,14 @@ def get_my_loader():
 ### 1. Save/Restore the State per Rank Separately
 
 In this scenario, each rank saves and restores its own state in an independent file.
-This avoids transferring state across ranks. Without explicit `logical_workers`, every
-local physical worker contributes one checkpoint. With logical fanout, only ranks owning
-a group's last contributor return state; other ranks return `None`.
+`save_state_rank()` saves every local physical worker, including when a logical group
+spans several ranks. Each rank reloads its own file without transferring state across
+ranks. Keep the rank assignment, world size, workers per rank, and logical worker
+count unchanged when restoring.
 
-States are keyed by global logical worker id. With an unchanged physical topology,
-each rank can reload its own file. When the topology changes, route files using
-`loader.get_logical_worker_group_ids()`; see {ref}`logical-workers` for manifest-based
-saving and restoring. All ranks must save after the same number of dataloader calls.
+To change the physical topology on restart, use
+{ref}`save-restore-per-logical-rank` instead. The logical APIs select one checkpoint
+per logical worker and route it to the ranks that need it.
 
 ```python
 # Saving the state
@@ -84,8 +84,8 @@ multiple of the logical worker count. See {ref}`logical-workers` for the mapping
 restore guarantees.
 
 All ranks must save after the same number of delivered batches, including zero.
-`save_state_rank()` selects each logical group's last contributing physical worker.
-A rank may contribute several groups or return `None`; the rank responsible for a
+`save_state_logical_rank()` selects each logical group's last contributing physical worker.
+A rank may contribute several groups or return an empty tuple; the rank responsible for a
 group can change at each save. The save and restore methods below use no distributed
 collectives.
 
@@ -99,15 +99,13 @@ checkpoint_dir = Path('checkpoint_step_1000/dataloader')
 checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
 # On each rank, after synchronized training iterations:
-state = loader.save_state_rank()
-if state is not None:
-    for logical_id, single_state in state.iter_logical_worker_states():
-        torch.save(single_state, checkpoint_dir / f'logical_{logical_id}.pth')
+for logical_id, state in loader.save_state_logical_rank():
+    torch.save(state, checkpoint_dir / f'logical_{logical_id}.pth')
 ```
 
 Wait until all ranks have finished writing before treating the training checkpoint
-as complete. `iter_logical_worker_states()` preserves the logical worker count,
-micro batch size, and iteration index in every returned state. File storage remains
+as complete. Every returned state preserves the logical worker count,
+micro batch size, and iteration index. File storage remains
 under your control.
 
 On restart, construct a fresh loader with the saved logical worker count and the
@@ -118,16 +116,23 @@ desired physical topology. Before iterating, load the files requested by that ra
 loader = get_my_loader()
 
 logical_ids = loader.get_logical_worker_group_ids()
-states = [
-    torch.load(checkpoint_dir / f'logical_{logical_id}.pth', weights_only=False)
+states = {
+    logical_id: torch.load(checkpoint_dir / f'logical_{logical_id}.pth', weights_only=False)
     for logical_id in logical_ids
-]
-loader.restore_state_rank(states)
+}
+loader.restore_state_logical_rank(states)
 ```
 
 Use files from the same training checkpoint for every rank. Multiple ranks may load
 the same logical worker file when they share a logical group. The loader assigns the
 restored state to their physical workers and resumes the logical stream.
+
+To gather the logical states onto one rank, all ranks call
+`loader.save_state_logical_global(global_dst_rank=0)`. The destination receives the
+same `(logical_id, state)` pairs; other ranks receive `None`. Restore the collection
+with `loader.restore_state_logical_global(states, src_rank=0)`, where `src_rank` is
+within the data parallel group. All ranks participate in the broadcast. See
+{ref}`logical-workers` for details.
 
 
 
@@ -135,7 +140,7 @@ restored state to their physical workers and resumes the logical stream.
 
 In this scenario, the primary rank (usually rank 0) is responsible for saving the state.
 All ranks' states are collected (gathered) by one rank and can be stored in one file.
-When restoring, the state is broadcast from the primary rank and each rank selects its logical groups.
+When restoring, the primary rank scatters the entries of the rank-ordered state list to their ranks. The physical topology and logical worker count must remain unchanged.
 This approach centralizes the state management, which can simplify the process and reduces the number of files stored.
 
 ```python
@@ -177,7 +182,7 @@ Even though only one rank collects the states, all ranks need to execute the `lo
 
 ### 4. Save the State on the Primary Rank, Restore on Ranks Separately
 
-In this scenario, the primary rank saves the state, but each rank restores the state separately. Each rank loads the global state and selects its logical groups. This approach combines centralized saving with distributed restoring and is rather uncommon.
+In this scenario, the primary rank saves the state, but each rank restores the state separately. Each rank loads the global list and selects its own rank's state. The physical topology and logical worker count must remain unchanged. This approach combines centralized saving with distributed restoring and is rather uncommon.
 
 Depending on the framework used for training, that framework may already handle the scattering/gathering of the states. In that case, refer to the first scenario using `save_state_rank`/`restore_state_rank`.
 
