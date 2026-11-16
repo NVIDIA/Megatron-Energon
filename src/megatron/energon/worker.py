@@ -258,6 +258,27 @@ class WorkerConfig:
             raise ValueError("Previous worker must belong to the same logical group")
         return (assignment.stride_offset - previous.stride_offset - 1) % assignment.stride
 
+    def logical_worker_length(self, length: int, worker_idx: Optional[int] = None) -> int:
+        """Full logical outputs needed for a per-rank post-stride output budget.
+
+        All physical replicas of a logical worker receive the same budget. Remainders
+        follow the synchronized delivery order: local worker id first, then rank.
+        """
+        physical = self.physical_global_worker_id(worker_idx)
+        assignment = self.logical_assignment_for_physical(physical)
+        workers = self.physical_workers_per_rank()
+        rounds, remainder = divmod(length, workers)
+        start = assignment.logical_global_worker_id * assignment.stride
+        end = start + assignment.stride
+        # Count group members whose local worker id receives an extra output.
+        extras = (
+            end // workers * remainder
+            + min(end % workers, remainder)
+            - start // workers * remainder
+            - min(start % workers, remainder)
+        )
+        return rounds * assignment.stride + extras
+
     def assignment_for_current_physical_worker(self) -> LogicalWorkerAssignment:
         """Logical assignment for the currently active physical worker."""
         return self.logical_assignment_for_physical(self.physical_global_worker_id())

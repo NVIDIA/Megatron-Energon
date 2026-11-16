@@ -14,7 +14,7 @@ class EpochizeDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample])
     """
     Uses the base dataset, and creates one epoch, which has length samples. Keeps the underlying
     dataset iterator alive over epochs (i.e. if it is an infinite dataset, it will keep the state).
-    Repeats the underlying dataset if the iterator is exhausted.
+    Finite sources may end an epoch before the configured length.
     """
 
     length: int
@@ -46,17 +46,25 @@ class EpochizeDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample])
         self.reset_state_own()
 
     def reset_state_own(self) -> None:
+        if self._active_iter is not None:
+            close = getattr(self._active_iter, "close", None)
+            if close is not None:
+                close()
+        self._active_iter = None
         self._offset = 0
 
-    def __iter__(self) -> Iterator[T_sample]:
-        # Compute the local length for this worker, i.e. all worker's lengths sum up to the total
+    def reset_state_deep(self) -> None:
+        self.reset_state_own()
+        self.dataset.reset_state_deep()
 
-        if self.worker_config.num_workers <= 1:
-            local_length = self.length
-        else:
-            local_length = self.length // self.worker_config.num_workers
-            if self.worker_config.rank_worker_id() < self.length % self.worker_config.num_workers:
-                local_length += 1
+    def close(self) -> None:
+        try:
+            self.reset_state_own()
+        finally:
+            super().close()
+
+    def __iter__(self) -> Iterator[T_sample]:
+        local_length = self.len_worker()
 
         if self.worker_config.should_log(level=2):
             self.worker_config.worker_log(
@@ -78,11 +86,12 @@ class EpochizeDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample])
                 self._active_iter = iter(self.dataset)
 
             for idx in offset_range:
-                self._offset = (idx + 1) % local_length
                 try:
                     sample = next(self._active_iter)
                 except StopIteration:
+                    self._active_iter = None
                     break
+                self._offset = idx + 1
                 yield sample
 
         if self.worker_config.should_log(level=2):
@@ -96,6 +105,8 @@ class EpochizeDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample])
                     "length": self.length,
                 }
             )
+
+        self._offset = 0
 
     def len_worker(self, worker_idx: int | None = None) -> int:
         if worker_idx is None:

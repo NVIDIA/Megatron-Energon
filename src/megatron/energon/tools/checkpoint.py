@@ -239,7 +239,6 @@ def command_redist(
             logical_workers=rsi.state.logical_workers,
             iteration_index=rsi.state.iteration_index,
             micro_batch_size=rsi.state.micro_batch_size,
-            boundary_offsets=list(rsi.state.boundary_offsets),
         )
         for rank in range(new_world_size)
     ]

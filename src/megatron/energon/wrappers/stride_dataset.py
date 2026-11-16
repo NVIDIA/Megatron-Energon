@@ -3,16 +3,12 @@
 
 from typing import Any, Dict, Generic, Iterator, Optional, TypeVar
 
-from megatron.energon.flavors.base_dataset import FlexState, SavableDataset
+from megatron.energon.flavors.base_dataset import SavableDataset
 from megatron.energon.logical_worker import LogicalWorkerAssignment
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset
 
 T_sample = TypeVar("T_sample")
-
-
-def _stride_needed(worker_config: WorkerConfig) -> bool:
-    return worker_config.physical_worker_count() > worker_config.logical_worker_count()
 
 
 class StrideDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
@@ -23,8 +19,18 @@ class StrideDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
     outputs are produced under skip mode so skip-safe wrappers can avoid heavy work.
     """
 
+    #: Cached assignment, resolved lazily in the active physical worker.
+    _assignment: Optional[LogicalWorkerAssignment]
+    #: Whether the caller supplied a fixed assignment.
+    _explicit_assignment: bool
     #: Next output position in the full logical stream, including discarded outputs.
     _logical_sample_index: int
+    #: Whether the next iterator must replay and apply the restored starting offset.
+    _restore_pending: bool
+    #: Full logical outputs to replay before applying the current stride.
+    _replay_outputs: int
+    #: Previous contributor used to compute the first offset after restoring.
+    _previous_worker_id: Optional[int]
 
     _savable_fields = ("_logical_sample_index",)
 
@@ -46,24 +52,10 @@ class StrideDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
         self._replay_outputs = 0
         self._previous_worker_id = None
 
-    def export_logical_state(self, state: FlexState) -> tuple[FlexState, int]:
-        return state["datasets"][0], state["_logical_sample_index"]
-
-    def restore_logical_checkpoint(
-        self,
-        state: Optional[FlexState],
-        sample_index: int,
-        *,
-        replay_outputs: int,
-        previous_worker_id: int,
-    ) -> None:
-        """Install logical state and transient replay information supplied by the loader."""
-        self.reset_state_own()
-        if state is not None:
-            self.dataset.restore_state(state)
-        self._logical_sample_index = sample_index
+    def prepare_replay(self, outputs: int, *, previous_worker_id: int) -> None:
+        """Apply transient replay instructions after ordinary dataset state restoration."""
         self._restore_pending = True
-        self._replay_outputs = replay_outputs
+        self._replay_outputs = outputs
         self._previous_worker_id = previous_worker_id
 
     def len_worker(self, worker_idx: int | None = None) -> int:
@@ -166,15 +158,3 @@ class StrideDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
 
     def __str__(self) -> str:
         return f"StrideDataset(dataset={self.dataset})"
-
-
-def maybe_wrap_stride_dataset(
-    dataset: SavableDataset[T_sample],
-    *,
-    worker_config: WorkerConfig,
-    assignment: Optional[LogicalWorkerAssignment] = None,
-) -> SavableDataset[T_sample]:
-    """Wrap explicitly configured logical streams, including fanout one for portable checkpoints."""
-    if worker_config.logical_workers is not None or assignment is not None:
-        return StrideDataset(dataset, worker_config=worker_config, assignment=assignment)
-    return dataset

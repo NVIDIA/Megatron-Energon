@@ -11,7 +11,7 @@ import time
 import traceback
 import weakref
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import replace
 from functools import partial
 from typing import (
     Any,
@@ -20,7 +20,6 @@ from typing import (
     Generic,
     Iterator,
     List,
-    Literal,
     Optional,
     Sequence,
     Tuple,
@@ -47,7 +46,9 @@ from megatron.energon.rng import SystemRng, SystemRngState
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset
 from megatron.energon.wrappers.batch_dataset import BatchDataset
+from megatron.energon.wrappers.epochize_dataset import EpochizeDataset
 from megatron.energon.wrappers.gc_dataset import GC_DEFAULT_EVERY_N_ITER, GcDataset, gc_init_worker
+from megatron.energon.wrappers.limit_dataset import LimitDataset
 from megatron.energon.wrappers.log_sample_dataset import LogSampleDataset, default_get_batch_keys
 from megatron.energon.wrappers.stride_dataset import StrideDataset
 from megatron.energon.wrappers.watchdog_dataset import WatchdogDataset
@@ -102,6 +103,30 @@ def _init_worker(seed_per_worker: List[int], worker_id: int):
     SystemRng.seed(worker_seed)
 
 
+def _configure_worker_boundary(
+    boundary: Optional[Tuple[Union[EpochizeDataset, LimitDataset], int]],
+    worker_config: WorkerConfig,
+    *,
+    iteration_index: Optional[int] = None,
+    replay_outputs: int = 0,
+) -> None:
+    """Supply a plain boundary wrapper with this logical replica's endpoint."""
+    if boundary is None:
+        return
+    dataset, length = boundary
+    if iteration_index is None:
+        endpoint = worker_config.logical_worker_length(length)
+    else:
+        remaining = worker_config.logical_worker_length(
+            max(iteration_index, length)
+        ) - worker_config.logical_worker_length(iteration_index)
+        offset = dataset.current_offset if isinstance(dataset, LimitDataset) else dataset._offset
+        endpoint = offset + replay_outputs + remaining
+    # EpochizeDataset divides length among physical workers. An exact multiple
+    # supplies this replica's endpoint without another remainder distribution.
+    dataset.length = endpoint * worker_config.physical_workers_per_rank()
+
+
 class SimpleSavableDatasetWrapper(BaseWrapperDataset[T, Tuple[int, int, T]], Generic[T]):
     """Wrapper for non-multiprocessing savable datasets. Restarts the inner dataset. This class is
     not intended to be used directly."""
@@ -111,6 +136,8 @@ class SimpleSavableDatasetWrapper(BaseWrapperDataset[T, Tuple[int, int, T]], Gen
 
     _state_restored: bool
     _sample_index: int
+    #: Loader-owned boundary and its public per-rank budget; not checkpoint state.
+    _boundary: Optional[Tuple[Union[EpochizeDataset, LimitDataset], int]]
 
     _savable_fields = ("_sample_index",)
 
@@ -120,6 +147,7 @@ class SimpleSavableDatasetWrapper(BaseWrapperDataset[T, Tuple[int, int, T]], Gen
         worker_config: WorkerConfig,
         cache_pool: CachePool,
         stride_dataset: StrideDataset[T],
+        boundary: Optional[Tuple[Union[EpochizeDataset, LimitDataset], int]] = None,
     ):
         """
         Args:
@@ -130,6 +158,7 @@ class SimpleSavableDatasetWrapper(BaseWrapperDataset[T, Tuple[int, int, T]], Gen
         super().__init__(dataset, worker_config=worker_config)
         self.cache_pool = cache_pool
         self._stride_dataset = stride_dataset
+        self._boundary = boundary
 
         self.reset_state_own()
 
@@ -141,7 +170,7 @@ class SimpleSavableDatasetWrapper(BaseWrapperDataset[T, Tuple[int, int, T]], Gen
     def get_checkpoint(self) -> SavableDatasetCheckpoint:
         if self._pending_checkpoint is not None:
             return self._pending_checkpoint
-        return _save_worker_checkpoint(self.dataset)
+        return _save_worker_checkpoint(self._stride_dataset)
 
     def restore_checkpoint(
         self,
@@ -150,12 +179,14 @@ class SimpleSavableDatasetWrapper(BaseWrapperDataset[T, Tuple[int, int, T]], Gen
     ) -> None:
         self.reset_state_own()
         self._sample_index = _restore_worker_checkpoint(
-            self.dataset, self._stride_dataset, checkpoint, self.worker_config, iteration_index
+            self.dataset,
+            self._stride_dataset,
+            checkpoint,
+            self.worker_config,
+            iteration_index,
+            self._boundary,
         )
         self._pending_checkpoint = checkpoint
-
-    def reset_for_iteration(self) -> None:
-        self.reset_state_deep()
 
     def len_worker(self, worker_idx: int | None = None) -> int:
         return self.dataset.len_worker(worker_idx)
@@ -166,6 +197,8 @@ class SimpleSavableDatasetWrapper(BaseWrapperDataset[T, Tuple[int, int, T]], Gen
         raise AttributeError("Disabled direct length access to avoid DataLoader warnings.")
 
     def __iter__(self):
+        if self._pending_checkpoint is None:
+            _configure_worker_boundary(self._boundary, self.worker_config)
         self._state_restored = True
         worker_id = self.worker_config.rank_worker_id()
         logical_worker_id = self.worker_config.logical_global_worker_id()
@@ -230,7 +263,6 @@ class SavableDatasetState(State):
     """Logical pipeline snapshot, independent of its physical reader assignment."""
 
     dataset_state: FlexState
-    sample_index: int
     rng: Optional[SystemRngState]
 
 
@@ -243,17 +275,14 @@ class SavableDatasetCheckpoint(State):
 
 
 @edataclass
-class SavableCheckpoint:
-    """Checkpoint data for :class:`megatron.energon.SavableDatasetWrapper`. An instance is created
-    regularly to be able to save the state of the dataset wrapper before the currently emitted
-    sample.
-    """
+class _CheckpointHistoryEntry:
+    """Worker-local history entry used to locate snapshots despite output prefetching."""
 
-    #: The state of the wrapper
+    #: Pipeline snapshot and logical replay offset.
     checkpoint: SavableDatasetCheckpoint
-    #: The time at which the checkpoint was created
+    #: Monotonic creation time used to schedule the next snapshot.
     checkpoint_time: float
-    #: Index of the next sample to be returned from the dataset after restoring the checkpoint
+    #: Next physical output counter at this history boundary.
     sample_index: int
 
 
@@ -282,10 +311,12 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
 
     _sample_index: int = 0
     _worker_offset: int = 0
-    _last_checkpoints: List[SavableCheckpoint]
+    _last_checkpoints: List[_CheckpointHistoryEntry]
     _final_checkpoint: Optional[SavableDatasetCheckpoint]
 
     _workers_restore_from: List[Optional[SavableDatasetCheckpoint]]
+    #: Loader-owned boundary and its public per-rank budget; not checkpoint state.
+    _boundary: Optional[Tuple[Union[EpochizeDataset, LimitDataset], int]]
 
     _running: bool = False
     _command_lock: Optional[threading.RLock] = None
@@ -303,6 +334,7 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
         result_queues: List[torch.multiprocessing.Queue],
         cache_pool: CachePool,
         stride_dataset: StrideDataset[T],
+        boundary: Optional[Tuple[Union[EpochizeDataset, LimitDataset], int]] = None,
     ):
         """
         Create the savable dataset wrapper for multiprocessing data loading.
@@ -327,7 +359,7 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
         self.checkpoint_every_min_n_samples = checkpoint_every_min_n_samples
         self.n_checkpoints = n_checkpoints
         self._last_checkpoints = [
-            SavableCheckpoint(
+            _CheckpointHistoryEntry(
                 checkpoint=SavableDatasetCheckpoint(state=None, offset=0),
                 checkpoint_time=time.perf_counter(),
                 sample_index=0,
@@ -340,6 +372,7 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
         self._result_queues = result_queues
         self.cache_pool = cache_pool
         self._stride_dataset = stride_dataset
+        self._boundary = boundary
 
     @staticmethod
     def _command_thread(self: "SavableDatasetWrapper"):
@@ -436,9 +469,10 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
                         pending,
                         self.worker_config,
                         self._restore_iteration_index,
+                        self._boundary,
                     )
                     self._last_checkpoints = [
-                        SavableCheckpoint(
+                        _CheckpointHistoryEntry(
                             checkpoint=pending,
                             checkpoint_time=time.perf_counter(),
                             sample_index=self._sample_index,
@@ -446,6 +480,7 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
                     ]
                     self._workers_restore_from[self._worker_id] = None
                 else:
+                    _configure_worker_boundary(self._boundary, self.worker_config)
                     # Store the initial state of the worker if we stop before the first sample
                     self._store_checkpoint(force=True)
                 # If skipping, also restart the iterator to reach the start of the restored
@@ -491,7 +526,7 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
             # print(f"{id(self)}:{multiprocessing.current_process().ident} Worker iter closing")
             # Prefetch can observe EOF before the caller. Keep this transition separate
             # from the last yield, which has the same physical output counter.
-            self._final_checkpoint = _save_worker_checkpoint(self.dataset)
+            self._final_checkpoint = _save_worker_checkpoint(self._stride_dataset)
 
     def _store_checkpoint(self, force: bool = False) -> None:
         """
@@ -514,8 +549,8 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
         ):
             # print(f"Storing checkpoint at {self._worker_id}:{self._sample_index}")
             self._last_checkpoints.append(
-                SavableCheckpoint(
-                    checkpoint=_save_worker_checkpoint(self.dataset),
+                _CheckpointHistoryEntry(
+                    checkpoint=_save_worker_checkpoint(self._stride_dataset),
                     checkpoint_time=time.perf_counter(),
                     sample_index=self._sample_index,
                 )
@@ -550,7 +585,10 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
                 # History is addressed by physical outputs; replay advances the full stream.
                 assignment = self.worker_config.assignment_for_current_physical_worker()
                 offset = outputs * assignment.stride
-                if checkpoint.state is None or checkpoint.state.sample_index == 0:
+                if (
+                    checkpoint.state is None
+                    or checkpoint.state.dataset_state["_logical_sample_index"] == 0
+                ):
                     offset -= assignment.stride - 1 - assignment.stride_offset
                 return SavableDatasetCheckpoint(
                     state=checkpoint.state, offset=checkpoint.offset + offset
@@ -565,7 +603,7 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
         iteration_index: int = 0,
     ) -> None:
         """
-        Restores the merged checkpoint from all worker processes.
+        Restores the merged checkpoint before starting replacement worker processes.
 
         Args:
             worker_states: The state to restore for each worker
@@ -576,6 +614,14 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
         assert torch.utils.data.get_worker_info() is None, "Cannot restore in worker process"
         num_workers = max(self.worker_config.num_workers, 1)
         self._restore_iteration_index = iteration_index
+
+        # A stopped worker's command thread can leave a queue reader lock acquired.
+        # Recreate the channels before starting replacement workers. Update the shared
+        # lists in place so the loader and dataset wrapper keep using the same channels.
+        for queues in (self._cmd_queues, self._result_queues):
+            for channel in queues:
+                channel.close()
+            queues[:] = [multiprocessing.Queue() for _ in range(num_workers)]
 
         if worker_states is None:
             self._workers_restore_from = [None] * num_workers
@@ -590,7 +636,8 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
 
             self._workers_restore_from = list(worker_states)
 
-    def reset_for_iteration(self) -> None:
+    def reset_state_deep(self) -> None:
+        """Reset the dataset tree and pending worker restore assignments."""
         self.dataset.reset_state_deep()
         self.restore_checkpoint(None, worker_offset=0)
 
@@ -644,23 +691,38 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
 class SavableDataLoaderState(State):
     """Worker checkpoints keyed by global logical id, independent of physical topology."""
 
+    #: Checkpoints keyed by global logical worker id, not physical worker or rank id.
+    #: A rank save contains only groups whose last contributor is on that rank;
+    #: a global save contains every group.
     worker_states: Dict[int, SavableDatasetCheckpoint]
+
+    #: Total logical worker count across all ranks, including groups absent from this state.
+    #: Must match the restored WorkerConfig's effective logical worker count.
     logical_workers: int
+
+    #: Configured micro batch size inferred from the pipeline, or None if unavailable.
+    #: Restore uses this to validate batching and scale replay offsets for smaller batches.
     micro_batch_size: Optional[int]
-    #: Completed dataloader calls per rank; determines the next physical worker.
+
+    #: Outputs delivered per rank in the current worker iterator pass.
+    #: Restarts after its StopIteration; excludes prefetch and checkpoint replay.
+    #: Modulo the current workers per rank, this gives the next physical worker.
     iteration_index: int
-    #: Progress within the public epoch/limit, outside worker replay.
-    boundary_offsets: List[int]
+
+    def iter_logical_worker_states(self) -> Iterator[Tuple[int, SavableDataLoaderState]]:
+        """Yield (global logical worker id, state) pairs for separate serialization.
+
+        Each state contains one logical worker's checkpoint and all loader metadata,
+        including the micro batch size and iteration index. Checkpoint contents are
+        shared with this state; no deep copy is made.
+        """
+        for logical_id, checkpoint in self.worker_states.items():
+            yield logical_id, replace(self, worker_states={logical_id: checkpoint})
 
 
-def _save_worker_checkpoint(dataset: SavableDataset) -> SavableDatasetCheckpoint:
-    pipeline_state, sample_index = dataset.export_logical_state(dataset.save_state())
+def _save_worker_checkpoint(stride: StrideDataset) -> SavableDatasetCheckpoint:
     return SavableDatasetCheckpoint(
-        state=SavableDatasetState(
-            dataset_state=pipeline_state,
-            sample_index=sample_index,
-            rng=SystemRng.save_state(),
-        ),
+        state=SavableDatasetState(dataset_state=stride.save_state(), rng=SystemRng.save_state()),
         offset=0,
     )
 
@@ -671,15 +733,19 @@ def _restore_worker_checkpoint(
     checkpoint: SavableDatasetCheckpoint,
     worker_config: WorkerConfig,
     iteration_index: int,
+    boundary: Optional[Tuple[Union[EpochizeDataset, LimitDataset], int]],
 ) -> int:
     """Install a worker snapshot, taking ownership of one copy of its mutable state."""
     dataset.reset_state_deep()
     snapshot = checkpoint.state
     state = None if snapshot is None else deepcopy(snapshot.dataset_state)
-    stride.restore_logical_checkpoint(
-        state,
-        0 if snapshot is None else snapshot.sample_index,
-        replay_outputs=checkpoint.offset,
+    if state is not None:
+        stride.restore_state(state)
+    _configure_worker_boundary(
+        boundary, worker_config, iteration_index=iteration_index, replay_outputs=checkpoint.offset
+    )
+    stride.prepare_replay(
+        checkpoint.offset,
         previous_worker_id=worker_config.logical_worker_last_physical_worker(
             worker_config.logical_global_worker_id(), iteration_index
         ),
@@ -712,15 +778,12 @@ def _merge_worker_states(states: Sequence[SavableDataLoaderState]) -> SavableDat
             raise ValueError("Duplicate logical worker group checkpoint")
         if state.iteration_index != first.iteration_index:
             raise ValueError("Worker checkpoints require synchronized dataloader iteration")
-        if state.boundary_offsets != first.boundary_offsets:
-            raise ValueError("Worker checkpoints require synchronized epoch/limit progress")
         checkpoints.update(state.worker_states)
     return SavableDataLoaderState(
         worker_states=checkpoints,
         logical_workers=first.logical_workers,
         micro_batch_size=first.micro_batch_size,
         iteration_index=first.iteration_index,
-        boundary_offsets=list(first.boundary_offsets),
     )
 
 
@@ -770,86 +833,8 @@ def logical_checkpoints_for_rank(
     ]
 
 
-@dataclass
-class _Boundary:
-    kind: Literal["epoch", "limit"]
-    length: int
-    offset: int = 0
-
-
-class IterationController:
-    """Count delivered outputs and report when the loader should reset its source."""
-
-    def __init__(
-        self,
-        *,
-        epochize: int = 0,
-        limit: int | None = None,
-    ):
-        self._boundaries = []
-        if limit is not None and limit > 0:
-            self._boundaries.append(_Boundary("limit", limit))
-        if epochize > 0:
-            self._boundaries.append(_Boundary("epoch", epochize))
-
-    def __bool__(self) -> bool:
-        return bool(self._boundaries)
-
-    def has_room(self) -> bool:
-        return all(boundary.offset < boundary.length for boundary in self._boundaries)
-
-    def advance(self) -> None:
-        for boundary in self._boundaries:
-            boundary.offset += 1
-
-    def finish(self, *, source_exhausted: bool = False) -> bool:
-        """Finish all enclosing boundaries; return whether the source must reset."""
-        last = (
-            len(self._boundaries) - 1
-            if source_exhausted
-            else max(
-                idx
-                for idx, boundary in enumerate(self._boundaries)
-                if boundary.offset == boundary.length
-            )
-        )
-        ended = self._boundaries[: last + 1]
-        reset_source = any(boundary.kind == "limit" for boundary in ended)
-        for boundary in self._boundaries if reset_source else ended:
-            boundary.offset = 0
-        return reset_source
-
-    def save_state(self) -> list[int]:
-        return [boundary.offset for boundary in self._boundaries]
-
-    def restore_state(self, offsets: list[int]) -> None:
-        if len(offsets) != len(self._boundaries) or any(
-            not 0 <= offset <= boundary.length
-            for offset, boundary in zip(offsets, self._boundaries)
-        ):
-            raise ValueError("Checkpoint requires the same epoch/limit configuration")
-        for offset, boundary in zip(offsets, self._boundaries):
-            boundary.offset = offset
-
-    def len_rank(self, source_length: int) -> int:
-        for boundary in reversed(self._boundaries):
-            source_length = (
-                boundary.length if boundary.kind == "epoch" else min(source_length, boundary.length)
-            )
-        return source_length
-
-    def config(self) -> list[dict]:
-        return [
-            {
-                "type": boundary.kind,
-                "length": boundary.length,
-            }
-            for boundary in self._boundaries
-        ]
-
-
 class _BaseDataLoader(DataLoader[T], Generic[T]):
-    """Shared worker-stream lifecycle; boundary counting is delegated to its controller."""
+    """Construct worker pipelines and coordinate their shared stream lifecycle."""
 
     def _prepare_dataset(
         self,
@@ -858,62 +843,165 @@ class _BaseDataLoader(DataLoader[T], Generic[T]):
         epochize: int,
         limit: Optional[int],
     ) -> SavableDataset[T]:
-        self._iteration = IterationController(
-            epochize=epochize,
-            limit=limit,
-        )
+        self._epochize = max(epochize, 0)
+        self._limit = limit if limit is not None and limit > 0 else None
+        self._has_boundaries = bool(self._epochize or self._limit)
         self._stream_iterator = None
         self._epoch_iterator = None
 
+        self._boundary = None
+        length = self._limit
+        if self._epochize:
+            length = min(length, self._epochize) if length else self._epochize
+        if length:
+            fanout = (
+                self.worker_config.physical_worker_count()
+                // self.worker_config.logical_worker_count()
+            )
+            if self._limit is not None:
+                dataset = LimitDataset(dataset, length * fanout, worker_config=self.worker_config)
+            else:
+                dataset = EpochizeDataset(
+                    dataset, length * fanout, worker_config=self.worker_config
+                )
+            self._boundary = (dataset, length)
         self._stride_dataset = StrideDataset(dataset, worker_config=self.worker_config)
         dataset = self._stride_dataset
         if self.worker_config.should_log(level=1):
             dataset = LogSampleDataset(dataset, worker_config=self.worker_config)
         return dataset
 
-    def _reset_stream(self) -> None:
-        """Discard prefetched outputs and restart the worker pipelines."""
-        _stop_loader_stream(self)
-        self.dataset.reset_for_iteration()
-        self._has_workers = False
-        self._worker_sample_counters = [-1] * max(1, self.num_workers)
-        self._sample_idx = 0
-
     def _source_exhausted(self) -> None:
         self._stream_iterator = None
         self._sample_idx = 0
 
     def _epoch_outputs(self):
-        while self._iteration.has_room():
-            if self._stream_iterator is None:
-                self._stream_iterator = DataLoader.__iter__(self)
-                self._has_workers = self.num_workers > 0
+        if self._stream_iterator is None:
+            self._stream_iterator = DataLoader.__iter__(self)
+            self._has_workers = self.num_workers > 0
+        while True:
             try:
                 output = next(self._stream_iterator)
             except StopIteration:
-                if self._iteration.finish(source_exhausted=True):
-                    self._reset_stream()
-                else:
-                    self._source_exhausted()
+                self._source_exhausted()
                 return
-            self._iteration.advance()
             yield output
-        if self._iteration.finish():
-            self._reset_stream()
+
+    def _len_rank(self) -> int:
+        if self._epochize:
+            return min(self._epochize, self._limit) if self._limit else self._epochize
+        if self._boundary is None:
+            return self.dataset.len_rank()
+        boundary, length = self._boundary
+        # Estimate the bounded logical inputs, then apply each physical stride.
+        # The worker's actual endpoint is configured at startup, after its id is known.
+        result = 0
+        for worker in range(self.worker_config.physical_workers_per_rank()):
+            assignment = self.worker_config.logical_assignment_for_physical(
+                self.worker_config.physical_global_worker_id(worker)
+            )
+            logical_length = min(
+                self.worker_config.logical_worker_length(length, worker),
+                boundary.dataset.len_worker(worker),
+            )
+            result += max(
+                0,
+                (logical_length - assignment.stride_offset + assignment.stride - 1)
+                // assignment.stride,
+            )
+        return result
+
+    def _iteration_config(self) -> Dict[str, Any]:
+        return {"epochize": self._epochize, "limit": self._limit}
 
 
 class SavableDataLoader(_BaseDataLoader[T], Generic[T]):
-    """DataLoader with one checkpoint per logical worker.
+    """DataLoader that saves and restores the consumed position of each logical worker.
 
-    Without explicit logical_workers, each physical worker is its own logical worker.
-    Workers retain historical snapshots to describe the consumed position despite
-    prefetching. Saving selects each logical group's last contributor; restoring replays
-    full logical outputs before applying the current physical assignment.
+    A logical worker defines a dataset partition and processing stream. Physical workers
+    assigned to the same logical worker advance that stream with different strides.
+    Without explicit ``logical_workers``, each physical worker is its own logical worker.
 
-    Rank methods support external checkpoint storage and routing by logical group id.
-    Global methods gather and broadcast the same checkpoint format. Physical topology
-    may change with fixed logical worker count and processing pipeline.
-    Epoch/limit progress is stored separately from worker replay.
+    How snapshots track consumed outputs
+    ------------------------------------
+
+    With no subprocess workers, the loader snapshots the pipeline directly in the main
+    process. With subprocess workers, PyTorch prefetches outputs through internal queues,
+    so a worker's current state may be ahead of the last output consumed by the caller.
+
+    1. ``SavableDatasetWrapper`` periodically retains historical snapshots of its logical
+       pipeline, logical output cursor, and system RNG state. Each history entry also
+       records a physical output counter and creation time for worker-local bookkeeping.
+    2. The main process tracks the physical output counter of every consumed output.
+       When saving, it asks each worker for a snapshot at or before that consumed position.
+    3. The worker returns the selected snapshot and the distance to replay, expressed in
+       full logical outputs, including outputs discarded by striding. Prefetched outputs
+       do not advance the saved consumed position.
+
+    A worker can also observe source EOF before the caller. Its post-EOF snapshot is kept
+    separately from the last-yield snapshot, even when their physical counters are equal.
+    Saving at the final yield preserves the pending StopIteration; saving after the caller
+    observes EOF preserves the state for the next source pass.
+
+    Selecting and storing logical worker checkpoints
+    ------------------------------------------------
+
+    All ranks must advance their dataloaders synchronously before saving; zero consumed
+    outputs and incomplete local worker rounds are supported. For each logical group,
+    saving selects the consumed checkpoint of its last physical contributor at that
+    scheduling position. This contributor can change after every dataloader call.
+
+    Synchronized calls also require matching delivered output counts and boundary phases.
+    The loader does not coordinate early EOF across ranks. Repeated sources with a common
+    output budget or an externally coordinated stopping policy are needed when finite
+    partitions can exhaust at different times.
+
+    :meth:`save_state_rank` returns only the groups whose last contributor is on this rank,
+    keyed by global logical worker id, and returns None if there are no such groups.
+    :meth:`get_logical_worker_group_ids` identifies groups to save or load when callers
+    manage checkpoint files themselves. :meth:`save_state_global` gathers the selected
+    groups to one destination rank. Both methods use ``SavableDataLoaderState`` and store
+    one checkpoint per logical worker, without source physical worker assignments.
+
+    Restoring pipeline state and delivery order
+    -------------------------------------------
+
+    Restore into a fresh loader before starting iteration. Keep the dataset pipeline and
+    logical worker count unchanged. With unchanged batching, the physical rank and worker
+    counts may change provided their global total remains a multiple of the logical count.
+    Configure that logical count before building the restored dataset; an implicit count
+    otherwise defaults to the new physical total. Restore methods also validate batching
+    and handle supported reductions of micro batch size by scaling replay offsets.
+
+    1. :meth:`restore_state_rank` routes checkpoints by logical worker id to this rank's
+       physical workers. :meth:`restore_state_global` can first broadcast the global state
+       from one source rank, then uses the same routing and restore operation.
+    2. Each physical worker restores its logical pipeline and RNG state. The loader-owned
+       stride wrapper replays the saved number of full logical outputs before applying
+       the current physical assignment, so replay produces no caller-visible outputs.
+    3. The saved ``iteration_index`` determines the next local worker modulo the current
+       number of workers per rank. PyTorch's worker queue order is fixed, so worker
+       identities are rotated using ``WorkerConfig.worker_id_offset`` to resume delivery
+       at that worker. The current group assignment determines each member's next stride.
+
+    Epoch and limit progress
+    ------------------------
+
+    The loader builds EpochizeDataset or LimitDataset inside its stride, around the
+    TaskEncoder-built pipeline. Public lengths remain delivered outputs per rank;
+    logical worker budgets account for physical fanout and remainder assignments.
+    Replicas of a logical worker receive identical boundaries.
+
+    Ordinary recursive dataset save/restore includes the stride cursor and boundary
+    offset, retaining a pending StopIteration after the final yield. No loader-level
+    boundary field or separately saved logical cursor is needed. Epochization retains
+    the inner iterator between segments; a limit resets the source after completion.
+    With both settings active, the smaller budget is used and the source resets.
+
+    Lengths come from the restored loader configuration. Replay reaches the saved consumed
+    position before enforcing a newly configured boundary. If its budget is already
+    exhausted, the restored iterator completes without yielding new outputs. Replay
+    never reopens an exhausted iterator or crosses into another worker pass.
     """
 
     #: The worker config
@@ -1043,6 +1131,7 @@ class SavableDataLoader(_BaseDataLoader[T], Generic[T]):
                 result_queues=self.result_queues,
                 cache_pool=cache_pool,
                 stride_dataset=self._stride_dataset,
+                boundary=self._boundary,
             )
         else:
             dataset = SimpleSavableDatasetWrapper(
@@ -1050,6 +1139,7 @@ class SavableDataLoader(_BaseDataLoader[T], Generic[T]):
                 self.worker_config,
                 cache_pool=cache_pool,
                 stride_dataset=self._stride_dataset,
+                boundary=self._boundary,
             )
 
         self._worker_sample_counters = [-1] * num_procs
@@ -1114,7 +1204,7 @@ class SavableDataLoader(_BaseDataLoader[T], Generic[T]):
 
     def __len__(self):
         # We override this, because otherwise we'll see warnings
-        return self._iteration.len_rank(self.dataset.len_rank())
+        return self._len_rank()
 
     def close(self) -> None:
         _close_data_loader(self)
@@ -1190,7 +1280,7 @@ class SavableDataLoader(_BaseDataLoader[T], Generic[T]):
                 )
 
     def __iter__(self):
-        if self.num_workers == 0 and not self._iteration:
+        if self.num_workers == 0 and not self._has_boundaries:
             # Preserve finite-dataset reopening without requiring an extra next() at EOF.
             _stop_loader_stream(self)
             return self._epoch_iter()
@@ -1271,7 +1361,6 @@ class SavableDataLoader(_BaseDataLoader[T], Generic[T]):
             logical_workers=self.worker_config.logical_worker_count(),
             micro_batch_size=self._get_batch_size(),
             iteration_index=self._sample_idx,
-            boundary_offsets=self._iteration.save_state(),
         )
 
     def restore_state_rank(
@@ -1318,7 +1407,6 @@ class SavableDataLoader(_BaseDataLoader[T], Generic[T]):
                 state.iteration_index // workers + int(worker_id < next_worker_id) - 1
                 for worker_id in range(workers)
             ]
-        self._iteration.restore_state(state.boundary_offsets)
         self._sample_idx = state.iteration_index
 
     @deprecated(
@@ -1400,7 +1488,7 @@ class SavableDataLoader(_BaseDataLoader[T], Generic[T]):
         return {
             "type": type(self).__qualname__,
             "num_workers": self.num_workers,
-            "iteration": self._iteration.config(),
+            "iteration": self._iteration_config(),
             "persistent_workers": self.persistent_workers,
             "pin_memory": self.pin_memory,
             "prefetch_factor": None if self.num_workers == 0 else self.prefetch_factor,
@@ -1488,6 +1576,7 @@ class BasicDataLoader(_BaseDataLoader[T], Generic[T]):
             worker_config=self.worker_config,
             cache_pool=cache_pool,
             stride_dataset=self._stride_dataset,
+            boundary=self._boundary,
         )
 
         self._worker_sample_counters = [0] * max(self.worker_config.num_workers, 1)
@@ -1527,7 +1616,7 @@ class BasicDataLoader(_BaseDataLoader[T], Generic[T]):
 
     def __len__(self):
         # We override this, because otherwise we'll see warnings
-        return self._iteration.len_rank(self.dataset.len_rank())
+        return self._len_rank()
 
     def close(self) -> None:
         _close_data_loader(self)
@@ -1599,7 +1688,7 @@ class BasicDataLoader(_BaseDataLoader[T], Generic[T]):
                         }
                     )
 
-        if self.num_workers == 0 and not self._iteration:
+        if self.num_workers == 0 and not self._has_boundaries:
             _stop_loader_stream(self)
             return _inner_generator(self._epoch_outputs())
         if self._epoch_iterator is None:
@@ -1612,7 +1701,7 @@ class BasicDataLoader(_BaseDataLoader[T], Generic[T]):
         return {
             "type": type(self).__qualname__,
             "num_workers": self.worker_config.num_workers,
-            "iteration": self._iteration.config(),
+            "iteration": self._iteration_config(),
             "persistent_workers": self.persistent_workers,
             "pin_memory": self.pin_memory,
             "prefetch_factor": None if self.num_workers == 0 else self.prefetch_factor,

@@ -58,13 +58,7 @@ class LimitDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
     def __iter__(self) -> Iterator[T_sample]:
         worker_id = self.worker_config.rank_worker_id()
 
-        # Compute the local limit for this worker, i.e. all worker's limits sum up to the total
-        if self.worker_config.num_workers <= 1:
-            local_limit = self.length
-        else:
-            local_limit = self.length // self.worker_config.num_workers
-            if worker_id < self.length % self.worker_config.num_workers:
-                local_limit += 1
+        local_limit = self.len_worker()
 
         if self.worker_config.should_log(level=2):
             self.worker_config.worker_log(
@@ -100,8 +94,9 @@ class LimitDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
                 }
             )
 
-        self.current_offset = 0
+        # Reset the inner dataset
         self.dataset.reset_state_deep()
+        self.current_offset = 0
 
     def worker_has_samples(self) -> bool:
         return super().worker_has_samples() and self.length > 0

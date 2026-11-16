@@ -69,6 +69,10 @@ or modify checkpoint records.
 
 ### Save and restore without gathering
 
+For one file per logical worker, see
+{ref}`save-restore-per-logical-rank`. The example below instead stores each rank's
+contribution in one file and uses a manifest to locate its logical groups.
+
 Each rank can save its own contribution without distributed collectives:
 
 ```python
@@ -89,6 +93,14 @@ There is no requirement to complete a local worker round. Checkpoint ownership c
 after every call: in the example above, after one call rank 1 writes A and rank 2 writes B;
 after two calls rank 0 writes A and rank 2 writes B. Query the save group ids at each save.
 Prefetched batches do not count as consumed batches.
+
+Synchronization requires matching delivered output counts and boundary phases, not just
+calling `next()` at the same time. The loader does not coordinate EOF across ranks. A finite
+partition can end while another rank still has outputs; `epochize` and `limit` only cap
+iteration and do not pad or balance those partitions. For synchronized training, use
+repeated nonempty streams with a common output budget, or ensure the finite pipelines
+produce equal output counts. Supporting uneven finite streams requires an explicit
+application policy for padding, dropping outputs, or coordinating completion.
 
 On a fresh loader under the new topology, discover which groups this rank needs, use your
 manifest to load their checkpoint files, and restore them:
@@ -123,8 +135,9 @@ loader.restore_state_global(state, src_rank=0)
 ```
 
 Only the selected logical entries are gathered; other physical-worker states are not
-included in the global checkpoint. All ranks must have made the same number of dataloader calls. Global saving checks their
-iteration counts agree and selects the last contributor in each group. Without `src_rank`,
+included in the global checkpoint. All ranks must have matching delivered output counts and
+boundary phases. Merging checks those values agree among the contributed states; it does
+not synchronize iteration or coordinate EOF. Without `src_rank`,
 load the global state on every rank before restoring.
 
 ### Restore guarantees
@@ -136,7 +149,8 @@ would instead default to the new physical count and redefine the logical partiti
 The dataset pipeline must remain unchanged. With subprocess workers, the micro batch size
 may be reduced to a divisor of the saved size; replay distances are scaled accordingly. Logical stream order is preserved;
 physical output ownership and rank interleaving can change. The overall checkpoint stores the
-number of completed `next()` calls in the current dataloader iteration once. Restore computes the next local worker as that count modulo
+number of delivered outputs since the last source reset or exhaustion once. This count
+continues across virtual epochs. Restore computes the next local worker as that count modulo
 the current number of workers per rank and assigns each logical stream's next outputs in
 the current delivery order. No scheduling or physical-topology arguments are required.
 
@@ -157,11 +171,10 @@ Each physical worker advances its full assigned
 logical stream but emits only positions matching its stride offset. Positions assigned to sibling physical
 workers are evaluated under skip mode where possible.
 
-Internal snapshots of `StrideDataset` save only the next output index in the full logical stream,
-including outputs discarded by striding. Its `export_logical_state()` returns this logical cursor
-and the inner pipeline state, without serializing the stride wrapper itself. Outer execution
-wrappers forward this operation. The loader retains a direct reference to the stride wrapper and
-restores the inner pipeline and cursor under the current assignment.
+The loader calls `StrideDataset.save_state()` directly. Ordinary recursive state contains
+the stride's logical cursor, the epochize/limit progress, and the inner pipeline state.
+The physical assignment and transient replay fields are excluded from `_savable_fields`.
+Restore uses `stride.restore_state()` before supplying transient replay instructions.
 During iteration the wrapper
 activates the logical worker identity so nested datasets use the correct
 partition, random stream, sample indexes, and restore keys.
@@ -201,7 +214,9 @@ These skips are derived when iteration resumes. Replay offsets are
 loader progress, not permission to seek backward from a later sibling's state.
 
 The overall `SavableDataLoaderState` stores group checkpoints, logical worker count, micro batch
-size, one iteration count and synchronized epoch/limit progress. The next worker is derived modulo the current local worker count,
+size and one iteration count within the current worker pass. Boundary progress, including a
+pending StopIteration, belongs to the logical dataset tree; no separate loader boundary
+field is saved. The next worker is derived modulo the current local worker count,
 without saving source topology or next-worker ids. A rank owning several groups returns several
 entries in this one opaque object; callers can restore it directly or pass a sequence of such
 objects loaded from group checkpoint files.
@@ -258,6 +273,8 @@ Run the general iteration-order tests as well. A locally plausible output set is
 saved progress are part of the contract.
 
 
+(loader-iteration)=
+
 ## Loader iteration boundaries
 
 The loader factories and constructors accept `epochize` and `limit`.
@@ -265,25 +282,51 @@ Epochization continues the worker stream between segments; a limit resets it whe
 iteration completes. Standalone `EpochizeDataset` and `LimitDataset` provide the
 corresponding behavior when composing processing datasets directly.
 
-`IterationController` owns the loader's boundaries and their progress. It counts delivered
-outputs and reports whether the source must reset; it has no dataset, worker, or queue references.
-The loader creates one stride wrapper when logical workers are configured, followed by
-sample logging when enabled by `worker_log_level`. Task encoders build the processing
-pipeline. Output logging observes retained outputs after striding.
-The loader owns worker startup, prefetch shutdown, and source resets. The execution order is:
+The loader constructs the boundary wrapper inside its stride wrapper, around the
+TaskEncoder-built processing pipeline:
 
 ```text
-logical pipeline -> checkpoint replay -> striding -> worker queues -> epoch/limit -> caller
+StrideDataset -> EpochizeDataset / LimitDataset -> processing pipeline
 ```
 
-The loader retains the merged worker iterator across epochized segments.
-Its scheduling count continues across these boundaries, even when an epoch length is not
-divisible by the number of workers. Loader checkpoints save epoch/limit
-progress separately, so replay does not consume the remaining public epoch budget.
+Public lengths remain output budgets per rank after striding. For a budget divisible by
+the local physical worker count, each logical stream receives the per-physical-worker
+budget multiplied by fanout. For remainders, `WorkerConfig.logical_worker_length()` counts
+the contributions assigned to each logical group in synchronized delivery order. Every
+replica of that group receives the same logical boundary, even when a group spans ranks.
+With both options enabled, the smaller length is used and completion resets the source.
 
-A limit discards prefetched outputs, shuts down the old workers, resets the source,
-and starts a new stream on the next iteration. A checkpoint taken at the final yield preserves
-the pending boundary; its restored iterator finishes that epoch before starting the next one.
+All count conversion belongs to the loader integration. Before each worker iterator
+starts, the loader supplies the group's endpoint as an ordinary wrapper length, multiplied
+by the local physical worker count to account for the wrapper's normal division among
+workers. `EpochizeDataset` and `LimitDataset` only count outputs and save their offset;
+they have no logical-worker option or replay-specific state. The stride does not inspect
+boundary wrappers.
+
+Boundary wrappers retain their full offset at the final yield and reset it only when the
+iterator completes. Ordinary recursive save/restore therefore preserves both partial
+segments and pending boundary completion. Epochization retains its inner iterator between
+segments. A limit closes that iterator and resets the inner pipeline after completion.
+The loader's scheduling count restarts for each worker pass.
+
+Configured lengths are not saved. A restored loader may use new epochize/limit lengths
+and another physical fanout while retaining its logical pipeline position. Before
+iteration starts, the loader sets the endpoint to the snapshot's progress plus its
+logical replay distance and the newly allocated remaining budget. The boundary wrapper
+then uses its ordinary length check for the whole pass. If the new budget has already
+been consumed, replay reaches the saved position and the iterator completes without new
+outputs. Replay stays within the checkpoint's iterator pass and never reopens an
+exhausted iterator.
+
+After a partial save, the remaining rank budget is allocated under the new worker mapping.
+Each group's endpoint is its recovered logical position plus its share of those remaining
+outputs. This handles groups whose contributions before the save differ from their shares
+under the new fanout. The endpoint is plain length configuration supplied by the loader,
+recomputed during restore and excluded from the saved dataset state.
+
+Output logging remains outside the stride, so it observes only retained outputs.
+Worker startup, queue shutdown, checkpoint selection, and group routing remain owned by
+the loader.
 
 
 ## Checkpoint and worker responsibilities
@@ -294,14 +337,14 @@ snapshots, group merging, and validation independently of loader execution.
 The worker wrappers in `savable_loader.py` own per-worker iteration, checkpoint history,
 and snapshot installation.
 The main-process and subprocess paths use the same checkpoint representation:
-a logical dataset snapshot, its RNG state and logical output cursor, plus a replay offset
+a recursive dataset snapshot containing its logical cursor and boundary state, RNG state, plus a replay offset
 in full logical outputs. Physical output counters are only used internally to locate the
 historical snapshot matching consumed outputs despite worker prefetching.
 
 Snapshot installation resets the pipeline once and copies mutable dataset state once before
 restoring it. This keeps the caller's checkpoint and retained history unchanged during replay
 or later iteration. RNG restoration belongs to this same worker operation. The stride wrapper
-receives its logical cursor and transient replay/assignment information directly.
+restores its logical cursor through the ordinary dataset state and receives transient replay information directly.
 
 
 ## Finite-source exhaustion

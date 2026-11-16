@@ -34,7 +34,6 @@ from megatron.energon.flavors.base_dataset import Sample
 from megatron.energon.flavors.common.manifest.paths import MAIN_FOLDER_NAME
 from megatron.energon.logical_worker import LogicalWorkerAssignment
 from megatron.energon.wrappers.limit_dataset import LimitDataset
-from megatron.energon.wrappers.stride_dataset import _stride_needed
 
 try:
     torch.utils.data._utils.worker.MP_STATUS_CHECK_INTERVAL = 0.1
@@ -107,12 +106,6 @@ class TestWorkerConfigLogicalWorkers(unittest.TestCase):
     def test_invalid_multiple_raises(self) -> None:
         with self.assertRaises(ValueError):
             WorkerConfig(rank=0, world_size=1, num_workers=5, logical_workers=3)
-
-    def test_stride_needed(self) -> None:
-        wc = WorkerConfig(rank=0, world_size=1, num_workers=4, logical_workers=2)
-        assert _stride_needed(wc)
-        wc2 = WorkerConfig(rank=0, world_size=1, num_workers=2)
-        assert not _stride_needed(wc2)
 
     def test_restore_uses_logical_worker_override_without_remapping(self) -> None:
         wc = WorkerConfig(rank=0, world_size=6, num_workers=0, logical_workers=2)
@@ -513,6 +506,189 @@ class TestLogicalWorkerCrudeE2E(unittest.TestCase):
                             self.assertEqual([batch.indexes for batch in loader], remaining)
                             self.assertEqual([batch.indexes for batch in loader], next_epoch)
 
+    def test_checkpoint_preserves_pending_and_completed_boundaries(self):
+        for workers in (0, 2):
+            for boundary in ({"epochize": 4}, {"limit": 4}, {"epochize": 4, "limit": 6}):
+                for phase in ("pending", "completed", "next_partial", "next_pending"):
+                    with self.subTest(workers=workers, boundary=boundary, phase=phase):
+                        with self._checkpoint_loader(
+                            workers, logical_workers=1, sparse=True, **boundary
+                        ) as loader:
+                            iterator = iter(loader)
+                            for _ in range(4):
+                                next(iterator)
+                            if phase != "pending":
+                                with self.assertRaises(StopIteration):
+                                    next(iterator)
+                                iterator = iter(loader)
+                                if phase in ("next_partial", "next_pending"):
+                                    for _ in range(2 if phase == "next_partial" else 4):
+                                        next(iterator)
+                            state = pickle.loads(pickle.dumps(loader.save_state_rank()))
+                            self.assertFalse(hasattr(state, "boundary_pending"))
+                            self.assertFalse(hasattr(state, "boundary_offsets"))
+                            remaining = [batch.indexes for batch in iterator]
+                            following = [batch.indexes for batch in loader]
+                        with self._checkpoint_loader(
+                            3 if workers else 0, logical_workers=1, **boundary
+                        ) as loader:
+                            loader.restore_state_rank(state)
+                            self.assertEqual([batch.indexes for batch in loader], remaining)
+                            self.assertEqual([batch.indexes for batch in loader], following)
+
+    def test_changed_boundaries_after_restore_with_new_fanout(self):
+        with self._checkpoint_loader(0, logical_workers=1) as reference:
+            iterator = iter(reference)
+            stream = [next(iterator).indexes for _ in range(24)]
+        for kind in ("epochize", "limit"):
+            for consumed in (6, 8):
+                with self._checkpoint_loader(
+                    2, logical_workers=1, sparse=True, **{kind: 8}
+                ) as loader:
+                    iterator = iter(loader)
+                    for _ in range(consumed):
+                        next(iterator)
+                    state = pickle.loads(pickle.dumps(loader.save_state_rank()))
+                    self.assertGreater(state.worker_states[0].offset, 0)
+                for length in (3, 10):
+                    with self.subTest(kind=kind, consumed=consumed, length=length):
+                        with self._checkpoint_loader(
+                            3, logical_workers=1, **{kind: length}
+                        ) as loader:
+                            loader.restore_state_rank(state)
+                            end = max(consumed, length)
+                            self.assertEqual(
+                                [batch.indexes for batch in loader], stream[consumed:end]
+                            )
+                            start = end if kind == "epochize" else 0
+                            self.assertEqual(
+                                [batch.indexes for batch in loader], stream[start : start + length]
+                            )
+
+    def test_logical_boundaries_distribute_remainders_consistently(self):
+        with self._checkpoint_loader(2) as reference:
+            iterator = iter(reference)
+            streams = [[], []]
+            for step in range(60):
+                streams[step % 2].append(next(iterator).indexes)
+        for kind in ("epochize", "limit"):
+            with self.subTest(kind=kind), ExitStack() as stack:
+                loaders = [
+                    stack.enter_context(
+                        self._checkpoint_loader(2, rank=rank, world_size=3, **{kind: 5})
+                    )
+                    for rank in range(3)
+                ]
+                cursors = [0, 0]
+                for _ in range(3):
+                    if kind == "limit":
+                        cursors = [0, 0]
+                    iterators = [iter(loader) for loader in loaders]
+                    for step in range(5):
+                        for rank, iterator in enumerate(iterators):
+                            group = (rank * 2 + step % 2) // 3
+                            self.assertEqual(next(iterator).indexes, streams[group][cursors[group]])
+                            cursors[group] += 1
+                    for iterator in iterators:
+                        with self.assertRaises(StopIteration):
+                            next(iterator)
+
+    def test_partial_boundary_restore_with_multiple_logical_groups(self):
+        with self._checkpoint_loader(3, logical_workers=3) as reference:
+            iterator = iter(reference)
+            streams = [[], [], []]
+            for step in range(90):
+                streams[step % 3].append(next(iterator).indexes)
+        for kind in ("epochize", "limit"):
+            with self.subTest(kind=kind):
+                cursors = [0, 0, 0]
+                with ExitStack() as stack:
+                    loaders = [
+                        stack.enter_context(
+                            self._checkpoint_loader(
+                                3,
+                                logical_workers=3,
+                                rank=rank,
+                                world_size=2,
+                                sparse=True,
+                                **{kind: 6},
+                            )
+                        )
+                        for rank in range(2)
+                    ]
+                    iterators = [iter(loader) for loader in loaders]
+                    for step in range(2):
+                        for rank, iterator in enumerate(iterators):
+                            group = (rank * 3 + step) // 2
+                            self.assertEqual(next(iterator).indexes, streams[group][cursors[group]])
+                            cursors[group] += 1
+                    states = pickle.loads(
+                        pickle.dumps(
+                            [
+                                state
+                                for loader in loaders
+                                if (state := loader.save_state_rank()) is not None
+                            ]
+                        )
+                    )
+                for start in (2, 4):
+                    with ExitStack() as stack:
+                        loaders = [
+                            stack.enter_context(
+                                self._checkpoint_loader(
+                                    6,
+                                    logical_workers=3,
+                                    rank=rank,
+                                    world_size=2,
+                                    sparse=True,
+                                    **{kind: 6},
+                                )
+                            )
+                            for rank in range(2)
+                        ]
+                        for loader in loaders:
+                            loader.restore_state_rank(states)
+                        iterators = [iter(loader) for loader in loaders]
+                        for step in range(start, start + 2):
+                            for rank, iterator in enumerate(iterators):
+                                group = (rank * 6 + step) // 4
+                                self.assertEqual(
+                                    next(iterator).indexes, streams[group][cursors[group]]
+                                )
+                                cursors[group] += 1
+                        if start == 2:
+                            states = pickle.loads(
+                                pickle.dumps(
+                                    [
+                                        state
+                                        for loader in loaders
+                                        if (state := loader.save_state_rank()) is not None
+                                    ]
+                                )
+                            )
+                        else:
+                            for iterator in iterators:
+                                with self.assertRaises(StopIteration):
+                                    next(iterator)
+
+    def test_checkpoint_rejects_mixed_boundary_phases(self):
+        states = []
+        for rank in range(2):
+            with self._checkpoint_loader(
+                0, rank=rank, world_size=2, logical_workers=2, epochize=2
+            ) as loader:
+                iterator = iter(loader)
+                next(iterator)
+                next(iterator)
+                if rank == 1:
+                    with self.assertRaises(StopIteration):
+                        next(iterator)
+                states.append(loader.save_state_rank())
+        self.assertEqual([state.iteration_index for state in states], [2, 0])
+        with self._checkpoint_loader(0, world_size=2, logical_workers=2, epochize=2) as loader:
+            with self.assertRaisesRegex(ValueError, "synchronized dataloader iteration"):
+                loader.restore_state_rank(states)
+
     def test_main_process_physical_checkpoint_can_be_reused(self):
         with self._checkpoint_loader(0, logical_workers=1) as loader:
             iterator = iter(loader)
@@ -637,7 +813,8 @@ class TestLogicalWorkerCrudeE2E(unittest.TestCase):
                 loader.restore_state_rank(state)
                 self.assertEqual(len(list(loader)), 3)
         logged = [event for event in events if event["t"] == "yield_batch"]
-        self.assertEqual([event["idx"] for event in logged], [3, 4, 5])
+        # A restored completed worker pass starts new physical output counters.
+        self.assertEqual([event["idx"] for event in logged], [0, 1, 2])
 
     def test_loader_controls_sample_logging(self):
         for basic in (False, True):
@@ -831,7 +1008,9 @@ class TestLogicalWorkerCrudeE2E(unittest.TestCase):
                     for group_state in states:
                         for group, checkpoint in group_state.worker_states.items():
                             snapshot_index = (
-                                0 if checkpoint.state is None else checkpoint.state.sample_index
+                                0
+                                if checkpoint.state is None
+                                else checkpoint.state.dataset_state["_logical_sample_index"]
                             )
                             self.assertEqual(
                                 snapshot_index + checkpoint.offset, expected_positions[group]
@@ -1113,15 +1292,30 @@ class TestLogicalWorkerCrudeE2E(unittest.TestCase):
                 self.assertNotIn(b"_pending_skip", serialized)
                 self.assertNotIn(b"_replay_outputs", serialized)
                 self.assertNotIn(b"LogicalWorkerRestore", serialized)
-                self.assertNotIn(b"StrideDataset", serialized)
+                if consumed:
+                    self.assertIn(b"StrideDataset", serialized)
+                self.assertNotIn(b"_assignment", serialized)
+                self.assertNotIn(b"_previous_worker_id", serialized)
                 self.assertNotIn(b"GcDataset", serialized)
                 self.assertNotIn(b"WatchdogDataset", serialized)
-                self.assertNotIn(b"_logical_sample_index", serialized)
+                if consumed:
+                    self.assertIn(b"_logical_sample_index", serialized)
                 self.assertFalse(hasattr(state, "physical_workers"))
                 self.assertFalse(hasattr(state, "workers_per_rank"))
                 self.assertFalse(hasattr(state, "next_worker_ids"))
-            with self._checkpoint_loader(2) as loader:
-                loader.restore_state_rank([state])
+            with tempfile.TemporaryDirectory() as directory, self._checkpoint_loader(2) as loader:
+                files = []
+                for logical_id, single_state in state.iter_logical_worker_states():
+                    self.assertEqual(list(single_state.worker_states), [logical_id])
+                    self.assertEqual(single_state.logical_workers, state.logical_workers)
+                    self.assertEqual(single_state.micro_batch_size, 3)
+                    self.assertEqual(single_state.iteration_index, consumed)
+                    path = Path(directory) / f"logical_{logical_id}.pth"
+                    torch.save(single_state, path)
+                    files.append(path)
+                self.assertEqual(set(state.worker_states), {0, 1})
+                self.assertEqual(len(files), 2)
+                loader.restore_state_rank([torch.load(path, weights_only=False) for path in files])
                 iterator = iter(loader)
                 self.assertEqual(
                     [next(iterator).indexes for _ in range(6)],

@@ -69,8 +69,69 @@ state = torch.load(f'dataloader_state_rank{worker_config.rank}.pth', weights_onl
 loader.restore_state_rank(state)
 ```
 
+(save-restore-per-logical-rank)=
 
-### 2. Save/Restore the State on the Primary Rank Only
+### 2. Save/Restore the State per Logical Rank Separately
+
+In this scenario, save one file per global logical worker id, independently of the
+physical rank that writes it. On restart, each rank loads the files for its assigned
+logical workers. This allows the number of ranks or loader workers to change without
+requiring a manifest mapping logical workers to rank files.
+
+Set `worker_config.logical_workers` explicitly before building the dataset, and keep
+that count fixed when restoring. The global physical worker count must be a positive
+multiple of the logical worker count. See {ref}`logical-workers` for the mapping and
+restore guarantees.
+
+All ranks must save after the same number of delivered batches, including zero.
+`save_state_rank()` selects each logical group's last contributing physical worker.
+A rank may contribute several groups or return `None`; the rank responsible for a
+group can change at each save. The save and restore methods below use no distributed
+collectives.
+
+```python
+from pathlib import Path
+
+import torch
+
+# Use a separate shared directory for each training checkpoint.
+checkpoint_dir = Path('checkpoint_step_1000/dataloader')
+checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+# On each rank, after synchronized training iterations:
+state = loader.save_state_rank()
+if state is not None:
+    for logical_id, single_state in state.iter_logical_worker_states():
+        torch.save(single_state, checkpoint_dir / f'logical_{logical_id}.pth')
+```
+
+Wait until all ranks have finished writing before treating the training checkpoint
+as complete. `iter_logical_worker_states()` preserves the logical worker count,
+micro batch size, and iteration index in every returned state. File storage remains
+under your control.
+
+On restart, construct a fresh loader with the saved logical worker count and the
+desired physical topology. Before iterating, load the files requested by that rank:
+
+```python
+# worker_config must already describe the new topology and fixed logical count.
+loader = get_my_loader()
+
+logical_ids = loader.get_logical_worker_group_ids()
+states = [
+    torch.load(checkpoint_dir / f'logical_{logical_id}.pth', weights_only=False)
+    for logical_id in logical_ids
+]
+loader.restore_state_rank(states)
+```
+
+Use files from the same training checkpoint for every rank. Multiple ranks may load
+the same logical worker file when they share a logical group. The loader assigns the
+restored state to their physical workers and resumes the logical stream.
+
+
+
+### 3. Save/Restore the State on the Primary Rank Only
 
 In this scenario, the primary rank (usually rank 0) is responsible for saving the state.
 All ranks' states are collected (gathered) by one rank and can be stored in one file.
@@ -114,7 +175,7 @@ loader.restore_state_global(state, src_rank=0)
 Even though only one rank collects the states, all ranks need to execute the `loader.save_state_global()` and `loader.restore_state_global()` lines of code
 ```
 
-### 3. Save the State on the Primary Rank, Restore on Ranks Separately
+### 4. Save the State on the Primary Rank, Restore on Ranks Separately
 
 In this scenario, the primary rank saves the state, but each rank restores the state separately. Each rank loads the global state and selects its logical groups. This approach combines centralized saving with distributed restoring and is rather uncommon.
 
