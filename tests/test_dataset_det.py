@@ -28,6 +28,7 @@ from megatron.energon import (
 from megatron.energon.dataset_config import get_dataset_from_config
 from megatron.energon.flavors.common.manifest.paths import MAIN_FOLDER_NAME
 from megatron.energon.loader import get_savable_loader
+from megatron.energon.savable_loader import SavableDataLoaderState
 from megatron.energon.task_encoder.base import stateless
 from megatron.energon.tools.checkpoint import command_redist
 
@@ -1076,6 +1077,82 @@ class TestDataset(unittest.TestCase):
         # Delete all locals, otherwise loaders might be kept alive
         locals().clear()
         gc.collect()
+
+    def test_redist_single_rank_checkpoint(self):
+        """A checkpoint of a single rank can be redistributed to more ranks."""
+        num_workers = 4
+        state = SavableDataLoaderState(
+            worker_states=[{"worker": i} for i in range(num_workers)],
+            next_worker_id=0,
+            micro_batch_size=1,
+        )
+        for name in ("state_rank0.pt", "state.pt"):
+            for new_world_size in (2, 4):
+                with tempfile.TemporaryDirectory() as tmp:
+                    in_file = Path(tmp) / name
+                    out_dir = Path(tmp) / "out"
+                    out_dir.mkdir()
+                    torch.save(state, str(in_file))
+
+                    result = CliRunner().invoke(
+                        command_redist,
+                        ["--new-world-size", str(new_world_size), str(in_file), str(out_dir)],
+                    )
+                    assert result.exception is None, result.exception
+                    assert result.exit_code == 0, result.output
+
+                    out_files = sorted(out_dir.iterdir())
+                    assert len(out_files) == new_world_size, out_files
+
+                    worker_states = []
+                    for out_file in out_files:
+                        new_state = torch.load(str(out_file), weights_only=False)
+                        assert len(new_state.worker_states) == num_workers // new_world_size
+                        worker_states.extend(new_state.worker_states)
+                    assert worker_states == state.worker_states
+
+    def test_redist_global_checkpoint(self):
+        """A global checkpoint (list of rank states in one file) can be redistributed."""
+        old_world_size = 2
+        workers_per_rank = 2
+        states = [
+            SavableDataLoaderState(
+                worker_states=[{"rank": rank, "worker": i} for i in range(workers_per_rank)],
+                next_worker_id=1,
+                micro_batch_size=1,
+            )
+            for rank in range(old_world_size)
+        ]
+        all_worker_states = [ws for state in states for ws in state.worker_states]
+
+        for new_world_size in (1, 2, 4):
+            with tempfile.TemporaryDirectory() as tmp:
+                in_file = Path(tmp) / "global_state.pt"
+                out_dir = Path(tmp) / "out"
+                out_dir.mkdir()
+                torch.save(states, str(in_file))
+
+                result = CliRunner().invoke(
+                    command_redist,
+                    ["--new-world-size", str(new_world_size), str(in_file), str(out_dir)],
+                )
+                assert result.exception is None, result.exception
+                assert result.exit_code == 0, result.output
+
+                # The output is again a single global checkpoint with the same name
+                out_files = sorted(out_dir.iterdir())
+                assert [f.name for f in out_files] == ["global_state.pt"], out_files
+
+                new_states = torch.load(str(out_files[0]), weights_only=False)
+                assert len(new_states) == new_world_size
+                worker_states = []
+                for new_state in new_states:
+                    assert len(new_state.worker_states) == (
+                        old_world_size * workers_per_rank // new_world_size
+                    )
+                    assert new_state.next_worker_id == 0
+                    worker_states.extend(new_state.worker_states)
+                assert worker_states == all_worker_states
 
 
 if __name__ == "__main__":
