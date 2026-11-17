@@ -329,7 +329,7 @@ def get_processing_dataset(
     *,
     split_part: Union[Literal["train", "val", "test"], str] = "train",
     worker_config: WorkerConfig,
-    task_encoder: TaskEncoder[Any, Any, Any, T] = DefaultTaskEncoder(),
+    task_encoder: TaskEncoder[Any, T, Any, Any] = DefaultTaskEncoder(),
     **kwargs,
 ) -> SavableDataset[T]:
     """Build one finite processing pipeline from a dataset or recipe.
@@ -366,7 +366,7 @@ def get_processing_datasets(
     *,
     split_part: Union[Literal["train", "val", "test"], str] = "train",
     worker_config: WorkerConfig,
-    task_encoder: TaskEncoder[Any, Any, Any, T] = DefaultTaskEncoder(),
+    task_encoder: TaskEncoder[Any, T, Any, Any] = DefaultTaskEncoder(),
     **kwargs,
 ) -> List[Tuple[SavableDataset[T], BaseCoreDatasetFactory]]:
     """Build one finite processing pipeline per resolved dataset or recipe leaf.
