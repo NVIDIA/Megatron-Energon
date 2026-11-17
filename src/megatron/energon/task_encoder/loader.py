@@ -9,6 +9,7 @@ from megatron.energon.deprecation import warn_deprecated
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import BaseCoreDatasetFactory, SavableDataset
 from megatron.energon.recipe import load_dataset
+from megatron.energon.recipe.loader_interface import LoadedDataset
 from megatron.energon.task_encoder.base import DefaultTaskEncoder, TaskEncoder, WorkerConfig
 
 T = TypeVar("T", covariant=True)
@@ -304,12 +305,31 @@ def get_val_datasets(
     ]
 
 
+def _load_leaf_datasets(
+    path: Union[str, EPath, Path],
+    *,
+    split_part: str,
+    worker_config: WorkerConfig,
+    task_encoder: TaskEncoder,
+    kwargs: dict,
+) -> List[LoadedDataset]:
+    """Loads all resolved leaves of a dataset or recipe without training randomization."""
+    loader = load_dataset(path, **_split_kwargs(kwargs))
+    return loader.get_datasets(
+        training=False,
+        split_part=split_part,
+        worker_config=worker_config,
+        decoder=task_encoder.decoder,
+        **kwargs,
+    ).datasets
+
+
 def get_processing_dataset(
     path: Union[str, EPath, Path],
     *,
     split_part: Union[Literal["train", "val", "test"], str] = "train",
     worker_config: WorkerConfig,
-    task_encoder: TaskEncoder[Any, Any, Any, T] = DefaultTaskEncoder(),
+    task_encoder: TaskEncoder[Any, T, Any, Any] = DefaultTaskEncoder(),
     **kwargs,
 ) -> SavableDataset[T]:
     """Build one finite processing pipeline from a dataset or recipe.
@@ -328,15 +348,13 @@ def get_processing_dataset(
     Returns:
         One processing pipeline containing all resolved recipe leaves.
     """
-    _split_deprecated_dataset_kwargs(kwargs, task_encoder, worker_config)
-    loader = load_dataset(path, **_split_kwargs(kwargs))
-    datasets = loader.get_datasets(
-        training=False,
+    datasets = _load_leaf_datasets(
+        path,
         split_part=split_part,
         worker_config=worker_config,
-        decoder=task_encoder.decoder,
-        **kwargs,
-    ).datasets
+        task_encoder=task_encoder,
+        kwargs=kwargs,
+    )
     return task_encoder.build_processing_datasets(
         datasets=datasets,
         worker_config=worker_config,
@@ -348,7 +366,7 @@ def get_processing_datasets(
     *,
     split_part: Union[Literal["train", "val", "test"], str] = "train",
     worker_config: WorkerConfig,
-    task_encoder: TaskEncoder[Any, Any, Any, T] = DefaultTaskEncoder(),
+    task_encoder: TaskEncoder[Any, T, Any, Any] = DefaultTaskEncoder(),
     **kwargs,
 ) -> List[Tuple[SavableDataset[T], BaseCoreDatasetFactory]]:
     """Build one finite processing pipeline per resolved dataset or recipe leaf.
@@ -366,15 +384,13 @@ def get_processing_datasets(
     Returns:
         Processing pipelines paired with their source dataset factories.
     """
-    _split_deprecated_dataset_kwargs(kwargs, task_encoder, worker_config)
-    loader = load_dataset(path, **_split_kwargs(kwargs))
-    datasets = loader.get_datasets(
-        training=False,
+    datasets = _load_leaf_datasets(
+        path,
         split_part=split_part,
         worker_config=worker_config,
-        decoder=task_encoder.decoder,
-        **kwargs,
-    ).datasets
+        task_encoder=task_encoder,
+        kwargs=kwargs,
+    )
     return [
         (
             task_encoder.build_processing_datasets(

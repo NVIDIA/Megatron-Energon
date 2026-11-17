@@ -76,6 +76,7 @@ from megatron.energon import (
     get_loader,
     get_processing_dataset,
     reraise_exception,
+    stateless,
 )
 
 
@@ -90,6 +91,7 @@ def keep_manifest_parts(part: str) -> bool:
     return part in {"txt", "jpg"}
 
 
+@stateless
 def cook_manifest_record(sample: CrudeSample) -> ManifestRecord:
     caption_bytes = sample["txt"]
     image_bytes = sample["jpg"]
