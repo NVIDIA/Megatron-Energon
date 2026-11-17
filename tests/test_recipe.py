@@ -4,6 +4,7 @@
 """This module defines tests for recipes."""
 
 import gc
+import json
 import logging
 import random
 import sys
@@ -27,6 +28,8 @@ from megatron.energon import (
     TextSample,
     WorkerConfig,
     get_loader,
+    get_processing_dataset,
+    get_processing_datasets,
     get_savable_loader,
     get_train_dataset,
     get_val_dataset,
@@ -403,6 +406,60 @@ class TestDataset(unittest.TestCase):
             for text in data.text
         ]
         assert len(Counter(train_order)) == 110
+
+    def test_processing_dataset_ignores_recipe_blend_weights(self):
+        worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0)
+
+        dataset = get_processing_dataset(
+            self.recipe_path,
+            worker_config=worker_config,
+        )
+        texts = [sample.text for sample in get_loader(dataset)]
+
+        assert texts == [str(idx) for idx in range(55)] + [str(idx) for idx in range(100, 155)]
+
+    def test_processing_datasets_returns_each_recipe_leaf(self):
+        worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0)
+
+        datasets = get_processing_datasets(
+            self.recipe_path,
+            worker_config=worker_config,
+        )
+
+        assert len(datasets) == 2
+        assert [sample.text for sample in get_loader(datasets[0][0])] == [
+            str(idx) for idx in range(55)
+        ]
+        assert [sample.text for sample in get_loader(datasets[1][0])] == [
+            str(idx) for idx in range(100, 155)
+        ]
+        assert datasets[0][1].tags["number"] == 43
+        assert datasets[1][1].tags["number"] == 44
+
+    def test_processing_dataset_logs_sample_keys(self):
+        worker_config = WorkerConfig(
+            rank=0,
+            world_size=1,
+            num_workers=0,
+            worker_log_level=3,
+            worker_debug_path=str(self.dataset_path) + "/worker_debug/{worker_id}.jsonl",
+        )
+
+        dataset = get_processing_dataset(
+            self.recipe_path,
+            worker_config=worker_config,
+        )
+        keys = [sample.__key__ for sample in get_loader(dataset)]
+
+        with (self.dataset_path / "worker_debug" / "0.jsonl").open() as rf:
+            log_entries = [json.loads(line) for line in rf]
+        logged_keys = [
+            entry["keys"]
+            for entry in log_entries
+            if entry["t"] == "yield_batch" and entry["m"] == "processing"
+        ]
+        assert len(keys) == 110
+        assert logged_keys == [[key] for key in keys]
 
     def test_deprecated_v2_aliases(self):
         from megatron.energon.recipe.recipe import Recipe
