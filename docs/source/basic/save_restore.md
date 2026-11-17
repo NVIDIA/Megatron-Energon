@@ -140,6 +140,96 @@ state = torch.load('dataloader_state.pth')
 loader.restore_state_global(state, src_rank=None)
 ```
 
+(checkpoint-recipe-migration)=
+## Migrating a Checkpoint After Recipe Changes
+
+The restore methods above are exact restores: they expect the new loader to have
+the same dataset topology and configuration as the saved loader. If a recipe is
+edited between saving and restoring—for example, if a dataset is added, removed,
+or reordered—save resume metadata alongside the normal loader state.
+
+The following per-rank example saves both objects:
+
+```python
+import torch
+
+from megatron.energon.checkpoint import collect_resume_metadata
+
+loader = get_my_loader()
+
+# Train for some number of steps.
+for batch in loader:
+    train_step(batch)
+    if should_checkpoint():
+        break
+
+state = loader.save_state_rank()
+resume_metadata = collect_resume_metadata(loader)
+
+torch.save(
+    {
+        "dataloader_state": state,
+        # Store the serializable form rather than depending on pickling the class.
+        "dataloader_resume_metadata": resume_metadata.to_dict(),
+    },
+    f"dataloader_state_rank{worker_config.rank}.pth",
+)
+```
+
+After editing the recipe, construct the new loader first, migrate the saved state
+to its topology, and then restore:
+
+```python
+import torch
+
+from megatron.energon.checkpoint import migrate_dataloader_state
+
+checkpoint = torch.load(
+    f"dataloader_state_rank{worker_config.rank}.pth",
+    weights_only=False,
+)
+
+# get_my_loader() now reads the edited recipe.
+loader = get_my_loader()
+migrated_state = migrate_dataloader_state(
+    loader,
+    checkpoint["dataloader_state"],
+    checkpoint["dataloader_resume_metadata"],
+)
+loader.restore_state_rank(migrated_state)
+```
+
+Migration matches recipe leaves by a stable identity composed of:
+
+* dataset path,
+* `split_part`,
+* relative or absolute subset,
+* filter name.
+
+For matched leaves, the saved dataset progress is retained. Newly added or
+changed leaves start from a fresh state, and removed leaves are ignored. When a
+wrapper or blend topology changes, its state is rebuilt for the new topology and
+the matched child states are overlaid.
+
+```{admonition} Migration is not an exact continuation
+:class: important
+
+Adding, removing, reordering, or reweighting datasets changes the global blended
+stream. Migration preserves progress for matched dataset leaves, but it cannot
+preserve the exact next global sample sequence of the old recipe.
+
+A path move or a change to `split_part`, subset, or filter creates a different
+identity and therefore starts that leaf fresh. Changes to auxiliary references,
+tokenizer, or task-encoder behavior are not
+validated automatically; only migrate when the retained leaf progress is
+semantically compatible with the new training configuration.
+```
+
+The example uses `save_state_rank()` and must run independently on every data
+parallel rank. If a training framework gathers loader states centrally, migrate
+each rank's state against the corresponding newly constructed loader before
+restoring it.
+
 ## Error Handling During Restore
 
 By default, energon uses a strict error handler during checkpoint restoration to ensure data integrity.
