@@ -642,11 +642,11 @@ class TestDataset(unittest.TestCase):
                 batch_size=10,
                 worker_config=no_worker_config,
                 parallel_shard_iters=2,
-                virtual_epoch_length=2,
                 shuffle_buffer_size=None,
                 max_samples_per_sequence=None,
                 task_encoder=TestTaskEncoder(),
-            )
+            ),
+            epochize=2,
         )
 
         assert len(loader) == 2
@@ -802,13 +802,11 @@ class TestDataset(unittest.TestCase):
             self.dataset_path,
             batch_size=11,
             worker_config=worker_config,
-            virtual_epoch_length=12,
             shuffle_buffer_size=None,
             max_samples_per_sequence=None,
         )
-        train_loader = get_loader(train_dataset)
+        train_loader = get_loader(train_dataset, epochize=12)
 
-        assert len(train_dataset) == 12
         assert len(train_loader) == 12
         assert len(list(train_loader)) == 12
 
@@ -841,13 +839,11 @@ class TestDataset(unittest.TestCase):
             self.dataset_path,
             batch_size=11,
             worker_config=worker_config_r0,
-            virtual_epoch_length=12,
             shuffle_buffer_size=None,
             max_samples_per_sequence=None,
         )
-        train_loader = get_loader(train_dataset)
+        train_loader = get_loader(train_dataset, epochize=12)
 
-        assert len(train_dataset) == 12
         assert len(train_loader) == 12
         assert len(list(train_loader)) == 12
 
@@ -1093,8 +1089,8 @@ class TestDataset(unittest.TestCase):
                 split_part="train",
                 batch_size=2,
                 worker_config=no_worker_config,
-                limit=3,
-            )
+            ),
+            limit=3,
         )
 
         assert len(loader) == 3
@@ -1111,8 +1107,8 @@ class TestDataset(unittest.TestCase):
                 split_part="train",
                 batch_size=2,
                 worker_config=worker_config,
-                limit=3,
-            )
+            ),
+            limit=3,
         )
 
         assert len(loader) == 3
@@ -1611,11 +1607,11 @@ class TestDataset(unittest.TestCase):
                 batch_size=2,
                 packing_buffer_size=21,
                 worker_config=no_worker_config,
-                virtual_epoch_length=6,
                 shuffle_buffer_size=None,
                 max_samples_per_sequence=None,
                 task_encoder=TestTaskEncoder(),
-            )
+            ),
+            epochize=6,
         )
 
         assert len(loader) == 6
@@ -1654,13 +1650,13 @@ class TestDataset(unittest.TestCase):
                 batch_size=2,
                 packing_buffer_size=21,
                 worker_config=worker_config_r0,
-                virtual_epoch_length=8,
                 shuffle_buffer_size=None,
                 max_samples_per_sequence=None,
                 task_encoder=TestTaskEncoder(),
             ),
             checkpoint_every_min_n_samples=1,
             checkpoint_every_sec=0,
+            epochize=8,
         )
 
         samples_r0 = list(loader_r0)
@@ -1684,13 +1680,13 @@ class TestDataset(unittest.TestCase):
                 batch_size=2,
                 packing_buffer_size=21,
                 worker_config=worker_config_r0,
-                virtual_epoch_length=8,
                 shuffle_buffer_size=None,
                 max_samples_per_sequence=None,
                 task_encoder=TestTaskEncoder(),
             ),
             checkpoint_every_min_n_samples=1,
             checkpoint_every_sec=0,
+            epochize=8,
         )
 
         loader_r0.restore_state_rank(rank_state_r0)
@@ -1859,11 +1855,11 @@ class TestDataset(unittest.TestCase):
                 batch_size=2,
                 packing_buffer_size=buf,
                 worker_config=no_worker_config,
-                virtual_epoch_length=4,
                 shuffle_buffer_size=None,
                 max_samples_per_sequence=None,
                 task_encoder=task_encoder,
-            )
+            ),
+            epochize=4,
         )
 
         out = list(loader)
@@ -2072,13 +2068,13 @@ class TestDataset(unittest.TestCase):
                     batch_size=None,
                     packing_buffer_size=buffer_size,
                     worker_config=no_worker_config,
-                    virtual_epoch_length=8,
                     shuffle_buffer_size=None,
                     max_samples_per_sequence=None,
                     task_encoder=TestTaskEncoder(),
                 ),
                 checkpoint_every_min_n_samples=1,
                 checkpoint_every_sec=0,
+                epochize=8,
             )
 
         loader = build_loader()
@@ -2110,11 +2106,11 @@ class TestDataset(unittest.TestCase):
                 batch_size=None,
                 packing_buffer_size=buffer_size,
                 worker_config=no_worker_config,
-                virtual_epoch_length=4,
                 shuffle_buffer_size=None,
                 max_samples_per_sequence=None,
                 task_encoder=FinalPackerTaskEncoder(),
-            )
+            ),
+            epochize=4,
         )
         final_packer_samples = list(final_packer_loader)
         assert final_packer_loader.can_restore_sample()
@@ -2159,8 +2155,8 @@ class TestDataset(unittest.TestCase):
                         caption="|".join(sample.caption for sample in samples),
                     )
 
-        # With workers, the loader cannot restore a non-repeating dataset after a worker already
-        # finished its input, so multiple workers are only covered with a repeating dataset.
+        # Finite multi-worker EOF and continuation are covered in test_logical_workers.
+        # Here worker coverage focuses on generator outputs during a repeating stream.
         for repeat, num_workers in ((False, 0), (True, 2)):
             with self.subTest(repeat=repeat, num_workers=num_workers):
                 worker_config = WorkerConfig(rank=0, world_size=1, num_workers=num_workers)
@@ -2369,13 +2365,13 @@ class TestDataset(unittest.TestCase):
                     batch_size=None,
                     packing_buffer_size="stream",
                     worker_config=no_worker_config,
-                    virtual_epoch_length=8,
                     shuffle_buffer_size=None,
                     max_samples_per_sequence=None,
                     task_encoder=TestTaskEncoder(),
                 ),
                 checkpoint_every_min_n_samples=1,
                 checkpoint_every_sec=0,
+                epochize=8,
             )
 
         loader = build_loader()
@@ -2443,11 +2439,11 @@ class TestDataset(unittest.TestCase):
                 batch_size=None,
                 packing_buffer_size="stream",
                 worker_config=no_worker_config,
-                virtual_epoch_length=1,
                 shuffle_buffer_size=None,
                 max_samples_per_sequence=None,
                 task_encoder=task_encoder,
-            )
+            ),
+            epochize=1,
         )
 
         sample = next(iter(loader))
@@ -2628,8 +2624,8 @@ class TestDataset(unittest.TestCase):
                         caption="|".join(sample.caption for sample in samples),
                     )
 
-        # With workers, the loader cannot restore a non-repeating dataset after a worker already
-        # finished its input, so multiple workers are only covered with a repeating dataset.
+        # Finite multi-worker EOF and continuation are covered in test_logical_workers.
+        # Here worker coverage focuses on generator outputs during a repeating stream.
         for repeat, num_workers in ((False, 0), (True, 2)):
             with self.subTest(repeat=repeat, num_workers=num_workers):
                 worker_config = WorkerConfig(rank=0, world_size=1, num_workers=num_workers)
@@ -3226,9 +3222,9 @@ class TestDataset(unittest.TestCase):
                 worker_config=worker_config,
                 shuffle_buffer_size=None,
                 max_samples_per_sequence=None,
-                virtual_epoch_length=50,
                 task_encoder=ErrorProneTaskEncoder(),
-            )
+            ),
+            epochize=50,
         )
 
         # Iterate through the loader - errors should be handled by custom handler
@@ -3270,9 +3266,9 @@ class TestDataset(unittest.TestCase):
                 worker_config=worker_config_r1,
                 shuffle_buffer_size=None,
                 max_samples_per_sequence=None,
-                virtual_epoch_length=50,
                 task_encoder=ErrorProneTaskEncoder(),
-            )
+            ),
+            epochize=50,
         )
 
         with self.assertRaises(ShouldRaiseException):

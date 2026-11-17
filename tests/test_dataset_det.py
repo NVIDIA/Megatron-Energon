@@ -29,7 +29,7 @@ from megatron.energon.dataset_config import get_dataset_from_config
 from megatron.energon.flavors.common.manifest.paths import MAIN_FOLDER_NAME
 from megatron.energon.loader import get_savable_loader
 from megatron.energon.task_encoder.base import stateless
-from megatron.energon.tools.checkpoint import command_redist
+from megatron.energon.tools.checkpoint import command_info, command_redist
 
 # Speed up tests significantly by reducing the torch status check interval for broken worker shutdown
 try:
@@ -873,6 +873,224 @@ class TestDataset(unittest.TestCase):
         # Delete all locals, otherwise loaders might be kept alive
         locals().clear()
         gc.collect()
+
+    def _checkpoint_cli_loader(self, config):
+        return get_savable_loader(
+            get_train_dataset(
+                self.dataset_path,
+                split_part="train",
+                sample_type=TextSample,
+                worker_config=config,
+                batch_size=1,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=2,
+            ),
+            watchdog_timeout_seconds=None,
+        )
+
+    def test_checkpoint_cli_formats(self):
+        physical = []
+        logical = []
+        for rank in range(2):
+            with self._checkpoint_cli_loader(
+                WorkerConfig(rank=rank, world_size=2, num_workers=0, logical_workers=1)
+            ) as loader:
+                iterator = iter(loader)
+                for _ in range(3):
+                    next(iterator)
+                physical.append(loader.save_state_rank())
+                logical.extend(loader.save_state_logical_rank())
+        with self._checkpoint_cli_loader(
+            WorkerConfig(rank=0, world_size=1, num_workers=0, logical_workers=1)
+        ) as reference:
+            iterator = iter(reference)
+            for _ in range(6):
+                next(iterator)
+            single_rank = reference.save_state_rank()
+            expected = [next(iterator).text for _ in range(6)]
+        formats = (
+            ("physical_ranks", physical, False, True, False),
+            ("physical_rank", [single_rank], False, True, False),
+            ("physical_global", [physical], True, True, False),
+            ("physical_wrapped", [physical], True, True, True),
+            ("logical_rank", [logical[0][1]], False, False, False),
+            ("logical_pairs", [tuple(logical)], True, False, False),
+            ("logical_mapping", [dict(logical)], True, False, False),
+            ("logical_wrapped", [dict(logical)], True, False, True),
+        )
+        runner = CliRunner()
+        for name, payloads, global_save, physical_save, wrapped in formats:
+            with self.subTest(name=name):
+                folder = Path(self.temp_dir.name) / name
+                folder.mkdir()
+                paths = []
+                for index, payload in enumerate(payloads):
+                    path = folder / f"input_{index}.pt"
+                    torch.save({"dataloader_state_dict": payload} if wrapped else payload, path)
+                    paths.append(str(path))
+                result = runner.invoke(command_info, paths)
+                self.assertEqual(result.exit_code, 0, result.output)
+                self.assertIn("Physical" if physical_save else "Logical", result.output)
+                self.assertIn(
+                    "global collection" if global_save else "rank checkpoint files", result.output
+                )
+                output = folder / "output"
+                result = runner.invoke(
+                    command_redist, ["--new-world-size", "1", *paths, str(output)]
+                )
+                self.assertIsNone(result.exception, result.output)
+                self.assertEqual(result.exit_code, 0, result.output)
+                output_file = output / ("input_0.pt" if global_save else "state_rank0.pt")
+                state = torch.load(output_file, weights_only=False)
+                if wrapped:
+                    state = state["dataloader_state_dict"]
+                with self._checkpoint_cli_loader(
+                    WorkerConfig(rank=0, world_size=1, num_workers=1, logical_workers=1)
+                ) as loader:
+                    if not physical_save:
+                        loader.restore_state_logical_rank(state)
+                    elif global_save:
+                        loader.restore_state_global(state)
+                    else:
+                        loader.restore_state_rank(state)
+                    iterator = iter(loader)
+                    self.assertEqual([next(iterator).text for _ in expected], expected)
+
+    def test_checkpoint_cli_physical_partial_round(self):
+        streams = [[], []]
+        with self._checkpoint_cli_loader(
+            WorkerConfig(rank=0, world_size=1, num_workers=2, logical_workers=2)
+        ) as reference:
+            iterator = iter(reference)
+            for step in range(24):
+                streams[step % 2].append(next(iterator).text)
+        with self._checkpoint_cli_loader(
+            WorkerConfig(rank=0, world_size=1, num_workers=4, logical_workers=2)
+        ) as loader:
+            iterator = iter(loader)
+            for _ in range(7):
+                next(iterator)
+            state = loader.save_state_global(0)
+        path = self.checkpoint_dir / "global.pt"
+        torch.save(state, path)
+        result = CliRunner().invoke(
+            command_redist, ["--new-world-size", "1", str(path), str(self.redist_dir)]
+        )
+        self.assertIsNone(result.exception, result.output)
+        with self._checkpoint_cli_loader(
+            WorkerConfig(rank=0, world_size=1, num_workers=2, logical_workers=2)
+        ) as loader:
+            loader.restore_state_global(
+                torch.load(self.redist_dir / "global.pt", weights_only=False)
+            )
+            iterator = iter(loader)
+            positions = [4, 3]
+            for step in range(8):
+                group = (7 + step) % 2
+                self.assertEqual(next(iterator).text, streams[group][positions[group]])
+                positions[group] += 1
+
+    def test_checkpoint_cli_sparse_logical_files(self):
+        paths = []
+        for rank in range(6):
+            with self._checkpoint_cli_loader(
+                WorkerConfig(rank=rank, world_size=6, num_workers=0, logical_workers=2)
+            ) as loader:
+                iterator = iter(loader)
+                next(iterator)
+                next(iterator)
+                for _, state in loader.save_state_logical_rank():
+                    path = Path(self.temp_dir.name) / f"state_rank{rank}.pt"
+                    torch.save(state, path)
+                    paths.append(str(path))
+        self.assertEqual([Path(path).name for path in paths], ["state_rank2.pt", "state_rank5.pt"])
+        runner = CliRunner()
+        # Inspecting a partial contribution should not require loading every group.
+        result = runner.invoke(command_info, paths[:1])
+        self.assertEqual(result.exit_code, 0, result.output)
+        result = runner.invoke(command_info, paths)
+        self.assertEqual(result.exit_code, 0, result.output)
+        output = Path(self.temp_dir.name) / "sparse_output"
+        result = runner.invoke(
+            command_redist,
+            [
+                "--new-world-size",
+                "2",
+                "--output-filename",
+                "loader_{rank}.pth",
+                *paths,
+                str(output),
+            ],
+        )
+        self.assertIsNone(result.exception, result.output)
+        self.assertEqual(result.exit_code, 0, result.output)
+        for rank in range(2):
+            config = WorkerConfig(rank=rank, world_size=2, num_workers=0, logical_workers=2)
+            with self._checkpoint_cli_loader(config) as reference:
+                iterator = iter(reference)
+                for _ in range(6):
+                    next(iterator)
+                expected = [next(iterator).text for _ in range(6)]
+            with self._checkpoint_cli_loader(config) as loader:
+                loader.restore_state_logical_rank(
+                    torch.load(output / f"loader_{rank}.pth", weights_only=False)
+                )
+                iterator = iter(loader)
+                self.assertEqual([next(iterator).text for _ in expected], expected)
+        missing_output = output / "missing"
+        result = runner.invoke(
+            command_redist, ["--new-world-size", "2", paths[0], str(missing_output)]
+        )
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("cover every logical worker group", result.output)
+        self.assertFalse(missing_output.exists())
+        duplicate_output = output / "duplicate_names"
+        result = runner.invoke(
+            command_redist,
+            [
+                "--new-world-size",
+                "2",
+                "--output-filename",
+                "state_{{rank}}.pt",
+                *paths,
+                str(duplicate_output),
+            ],
+        )
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("different name for every rank", result.output)
+        self.assertFalse(duplicate_output.exists())
+
+        # A manifest may point to several files containing per-rank logical collections.
+        collection_paths = []
+        for group, path in enumerate(paths):
+            state = torch.load(path, weights_only=False)
+            collection = {group: state} if group == 0 else ((group, state),)
+            collection_path = Path(self.temp_dir.name) / ("alpha.pt" if group == 0 else "omega.pt")
+            torch.save(collection, collection_path)
+            collection_paths.append(str(collection_path))
+        result = runner.invoke(command_info, collection_paths)
+        self.assertEqual(result.exit_code, 0, result.output)
+        collection_output = output / "collections"
+        result = runner.invoke(
+            command_redist, ["--new-world-size", "2", *collection_paths, str(collection_output)]
+        )
+        self.assertIsNone(result.exception, result.output)
+        for rank in range(2):
+            with self._checkpoint_cli_loader(
+                WorkerConfig(rank=rank, world_size=2, num_workers=0, logical_workers=2)
+            ) as loader:
+                loader.restore_state_logical_rank(
+                    torch.load(collection_output / f"state_rank{rank}.pt", weights_only=False)
+                )
+                iterator = iter(loader)
+                actual = [next(iterator).text for _ in range(6)]
+            with self._checkpoint_cli_loader(
+                WorkerConfig(rank=rank, world_size=2, num_workers=0, logical_workers=2)
+            ) as reference:
+                iterator = iter(reference)
+                for _ in range(6):
+                    next(iterator)
+                self.assertEqual(actual, [next(iterator).text for _ in range(6)])
 
     def test_redist(self):
         scenarios = [

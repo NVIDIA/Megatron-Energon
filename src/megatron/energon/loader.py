@@ -26,6 +26,8 @@ def get_savable_loader(
     watchdog_timeout_seconds: Optional[float] = 60,
     watchdog_initial_timeout_seconds: Optional[float] = None,
     fail_on_timeout: bool = False,
+    epochize: int = 0,
+    limit: Optional[int] = None,
 ) -> SavableDataLoader[T]:
     """
 
@@ -33,6 +35,13 @@ def get_savable_loader(
 
     Args:
         dataset: The dataset to create a loader for.
+        epochize: Maximum delivered outputs per rank in a virtual epoch.
+            The next iteration continues the worker stream. Zero disables epochization.
+            Without a limit, the reported length is this budget; finite sources may end earlier.
+        limit: Maximum delivered outputs per rank in one iteration. Always resets the
+            source on completion. None or zero disables it.
+            Used alone, its reported length is capped by the source estimate. When used with
+            epochize, the limit bounds each segment of the virtual epoch.
         worker_config: Deprecated. Please pass this to the dataset instead.
         checkpoint_every_sec: This is the time in seconds after which an internal checkpoint is
             saved. It may take the same duration to restore a checkpoint, but introduces additional
@@ -73,6 +82,8 @@ def get_savable_loader(
         watchdog_timeout_seconds=watchdog_timeout_seconds,
         watchdog_initial_timeout_seconds=watchdog_initial_timeout_seconds,
         fail_on_timeout=fail_on_timeout,
+        epochize=epochize,
+        limit=limit,
     )
 
 
@@ -85,12 +96,21 @@ def get_loader(
     watchdog_timeout_seconds: Optional[float] = 60,
     watchdog_initial_timeout_seconds: Optional[float] = None,
     fail_on_timeout: bool = False,
+    epochize: int = 0,
+    limit: Optional[int] = None,
 ) -> BasicDataLoader[T]:
     """
     Get a dataloader for the given dataset.
 
     Args:
         dataset: The dataset to create a loader for.
+        epochize: Maximum delivered outputs per rank in a virtual epoch.
+            The next iteration continues the worker stream. Zero disables epochization.
+            Without a limit, the reported length is this budget; finite sources may end earlier.
+        limit: Maximum delivered outputs per rank in one iteration. Always resets the
+            source on completion. None or zero disables it.
+            Used alone, its reported length is capped by the source estimate. When used with
+            epochize, the limit bounds each segment of the virtual epoch.
         worker_config: Deprecated. Please pass this to the dataset instead.
         cache_pool: If set, the cache pool to use for the dataset.
         watchdog_timeout_seconds: The timeout in seconds. If None, the watchdog is disabled.
@@ -119,4 +139,6 @@ def get_loader(
         watchdog_timeout_seconds=watchdog_timeout_seconds,
         watchdog_initial_timeout_seconds=watchdog_initial_timeout_seconds,
         fail_on_timeout=fail_on_timeout,
+        epochize=epochize,
+        limit=limit,
     )

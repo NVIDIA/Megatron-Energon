@@ -11,10 +11,6 @@ from megatron.energon.wrappers.base import BaseWrapperDataset
 T_sample = TypeVar("T_sample")
 
 
-def _stride_needed(worker_config: WorkerConfig) -> bool:
-    return worker_config.physical_worker_count() > worker_config.logical_worker_count()
-
-
 class StrideDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
     """Maps physical workers onto logical streams.
 
@@ -23,7 +19,20 @@ class StrideDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
     outputs are produced under skip mode so skip-safe wrappers can avoid heavy work.
     """
 
-    _savable_fields = ()
+    #: Cached assignment, resolved lazily in the active physical worker.
+    _assignment: Optional[LogicalWorkerAssignment]
+    #: Whether the caller supplied a fixed assignment.
+    _explicit_assignment: bool
+    #: Next output position in the full logical stream, including discarded outputs.
+    _logical_sample_index: int
+    #: Whether the next iterator must replay and apply the restored starting offset.
+    _restore_pending: bool
+    #: Full logical outputs to replay before applying the current stride.
+    _replay_outputs: int
+    #: Previous contributor used to compute the first offset after restoring.
+    _previous_worker_id: Optional[int]
+
+    _savable_fields = ("_logical_sample_index",)
 
     def __init__(
         self,
@@ -34,14 +43,30 @@ class StrideDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
     ):
         super().__init__(dataset, worker_config=worker_config)
         self._assignment = assignment
+        self._explicit_assignment = assignment is not None
         self.reset_state_own()
 
     def reset_state_own(self) -> None:
-        pass
+        self._logical_sample_index = 0
+        self._restore_pending = False
+        self._replay_outputs = 0
+        self._previous_worker_id = None
+
+    def prepare_replay(self, outputs: int, *, previous_worker_id: int) -> None:
+        """Apply transient replay instructions after ordinary dataset state restoration."""
+        self._restore_pending = True
+        self._replay_outputs = outputs
+        self._previous_worker_id = previous_worker_id
 
     def len_worker(self, worker_idx: int | None = None) -> int:
         inner_len = self.dataset.len_worker(worker_idx)
-        assignment = self._ensure_assignment()
+        assignment = (
+            self._ensure_assignment()
+            if worker_idx is None or self._explicit_assignment
+            else self.worker_config.logical_assignment_for_physical(
+                self.worker_config.physical_global_worker_id(worker_idx)
+            )
+        )
         if inner_len <= assignment.stride_offset:
             return 0
         return (inner_len - assignment.stride_offset + assignment.stride - 1) // assignment.stride
@@ -64,6 +89,7 @@ class StrideDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
             self.dataset.set_skip_mode(True)
             try:
                 next(src_iter)
+                self._logical_sample_index += 1
             except StopIteration:
                 return
             finally:
@@ -73,16 +99,40 @@ class StrideDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
         assignment = self._ensure_assignment()
 
         self._apply_active_logical_worker()
+        physical_worker = self.worker_config.physical_global_worker_id()
+        if self._explicit_assignment:
+            initial_skip = assignment.stride_offset
+            following_skip = assignment.stride - 1
+        else:
+            initial_skip = self.worker_config.logical_worker_next_offset(
+                physical_worker,
+                self._previous_worker_id if self._restore_pending else None,
+            )
+            following_skip = self.worker_config.logical_worker_next_offset(
+                physical_worker, physical_worker
+            )
+        if self._restore_pending or self._logical_sample_index == 0:
+            pending_skip = initial_skip
+        else:
+            # Ordinary physical checkpoints resume just after this member's last output.
+            pending_skip = following_skip
         src_iter = iter(self.dataset)
         try:
+            # Replay the full logical stream before applying the current worker's stride.
+            self._skip_inner(src_iter, self._replay_outputs)
+            self._replay_outputs = 0
+            self._restore_pending = False
+            self._previous_worker_id = None
             while True:
-                self._skip_inner(src_iter, assignment.stride_offset)
-                self.dataset.set_skip_mode(False)
+                self._skip_inner(src_iter, pending_skip)
                 try:
-                    yield next(src_iter)
+                    sample = next(src_iter)
                 except StopIteration:
                     break
-                self._skip_inner(src_iter, assignment.stride - assignment.stride_offset - 1)
+                self._logical_sample_index += 1
+                yield sample
+                pending_skip = following_skip
+            self.reset_state_own()
         finally:
             self.dataset.set_skip_mode(False)
             WorkerConfig.set_active_logical_global_worker_id(None)
@@ -108,15 +158,3 @@ class StrideDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
 
     def __str__(self) -> str:
         return f"StrideDataset(dataset={self.dataset})"
-
-
-def maybe_wrap_stride_dataset(
-    dataset: SavableDataset[T_sample],
-    *,
-    worker_config: WorkerConfig,
-    assignment: Optional[LogicalWorkerAssignment] = None,
-) -> SavableDataset[T_sample]:
-    """Wrap with :class:`StrideDataset` when logical and physical worker counts differ."""
-    if _stride_needed(worker_config) or assignment is not None:
-        return StrideDataset(dataset, worker_config=worker_config, assignment=assignment)
-    return dataset

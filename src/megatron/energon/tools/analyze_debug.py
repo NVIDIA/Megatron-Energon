@@ -103,14 +103,12 @@ class YieldBatchLogLine(TypedDict):
     #   "t": "yield_batch",
     #   "r": 1,
     #   "w": 1,
-    #   "m": "train",
     #   "idx": 1,
     #   "keys": ["parts/data-train-000051.tar/528866", ...],
     # }
     t: Literal["yield_batch"]
     r: int
     w: int
-    m: Literal["train", "val"]
     idx: int
     keys: List[str]
 

@@ -310,9 +310,9 @@ class TestJsonlDataset(unittest.TestCase):
                     batch_size=1,
                     shuffle_buffer_size=10,
                     max_samples_per_sequence=None,
-                    virtual_epoch_length=55 * 10,
                     task_encoder=SimpleCookingTaskEncoder(),
-                )
+                ),
+                epochize=55 * 10,
             )
 
             data = list(enumerate(train_dataset))
