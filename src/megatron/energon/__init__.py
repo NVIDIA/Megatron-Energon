@@ -86,6 +86,7 @@ from megatron.energon.flavors.common.filter_index import (
     build_filter_index_from_shard_indexes,
 )
 from megatron.energon.loader import get_loader, get_savable_loader
+from megatron.energon.logical_worker import LogicalWorkerAssignment
 from megatron.energon.recipe import (
     AuxFileStoreProtocolFactory,
     AuxFileStoreReference,
@@ -118,6 +119,7 @@ from megatron.energon.task_encoder import (
     get_val_dataset,
     get_val_datasets,
     sample_size_metric,
+    skip_safe,
     stateless,
 )
 from megatron.energon.worker import WorkerConfig
@@ -256,6 +258,7 @@ __all__ = [
     "SourceInfo",
     "StandardWebdatasetFactory",
     "StreamingPackingDataset",
+    "skip_safe",
     "stateless",
     "SystemFileStore",
     "TaskEncoder",
@@ -267,6 +270,7 @@ __all__ = [
     "VQASample",
     "VQAWebdataset",
     "WorkerConfig",
+    "LogicalWorkerAssignment",
 ]
 
 
