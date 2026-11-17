@@ -213,6 +213,35 @@ state = torch.load('dataloader_state.pth', weights_only=False)
 loader.restore_state_global(state, src_rank=None)
 ```
 
+## Inspecting and Redistributing Checkpoint Files
+
+Use `energon checkpoint info FILE...` to inspect physical rank states, global physical
+state lists, individual logical states, or logical collections saved as mappings or
+`(logical_id, state)` pairs. Files wrapped in a `dataloader_state_dict` entry are also
+supported. Inspecting one logical contribution does not require every group.
+
+To redistribute a complete checkpoint into two ranks:
+
+```bash
+energon checkpoint redist --new-world-size 2 checkpoint_rank*.pt redistributed/
+```
+
+Supply every physical rank file in natural filename order, or one global file. For
+logical checkpoints, supply files covering every logical group exactly once; filenames
+may have gaps or arbitrary names. All contributions must come from the same synchronized
+save. Redistribution selects each logical group's last contributor from physical saves.
+
+The destination uses one physical worker per logical worker. The new rank count must
+divide the logical worker count; configure workers per rank to their quotient (zero
+subprocess workers is also valid when the quotient is one), and retain the saved logical
+worker count. Rank-file inputs produce `state_rank0.pt`, `state_rank1.pt`, and so on.
+Use `--output-filename 'loader_{rank}.pth'` to choose another filename template. A global
+collection stays in one file with its original filename and checkpoint envelope.
+Physical inputs produce physical states for `restore_state_rank` or `restore_state_global`.
+Logical rank outputs are mappings of logical ids to independently savable states; global
+logical outputs are `(logical_id, state)` pairs. Pass either form to the corresponding
+logical restore method.
+
 ## Error Handling During Restore
 
 By default, energon uses a strict error handler during checkpoint restoration to ensure data integrity.

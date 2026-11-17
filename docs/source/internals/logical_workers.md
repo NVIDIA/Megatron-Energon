@@ -126,7 +126,9 @@ loader.restore_state_logical_rank(states)
 ```
 
 Restore accepts a mapping of logical ids to states or a sequence of `(logical_id, state)`
-pairs. Each required group must be present; extra groups in the loaded files are allowed.
+pairs, as returned by logical save. Each state contains exactly its identified group's
+checkpoint. Pass `None` to leave a fresh loader at its initial position. Each required
+group must be present; extra groups in the loaded files are allowed.
 Deduplicate file paths before loading so each group is loaded once. Missing or duplicate
 group checkpoints in a sequence raise `ValueError`.
 The checkpoint's original physical rank is not its restore destination: use logical group ids.
@@ -297,14 +299,14 @@ saved progress are part of the contract.
 
 The loader factories and constructors accept `epochize` and `limit`.
 Epochization continues the worker stream between segments; a limit resets it when an
-iteration completes. Standalone `EpochizeDataset` and `LimitDataset` provide the
-corresponding behavior when composing processing datasets directly.
+iteration completes. Both behaviors are implemented by `BoundedDataset` in
+`savable_loader.py`, constructed and controlled by the loader.
 
 The loader constructs the boundary wrapper inside its stride wrapper, around the
 TaskEncoder-built processing pipeline:
 
 ```text
-StrideDataset -> EpochizeDataset / LimitDataset -> processing pipeline
+StrideDataset -> BoundedDataset -> processing pipeline
 ```
 
 Public lengths remain output budgets per rank after striding. For a budget divisible by
@@ -314,14 +316,12 @@ the contributions assigned to each logical group in synchronized delivery order.
 replica of that group receives the same logical boundary, even when a group spans ranks.
 With both options enabled, the smaller length is used and completion resets the source.
 
-All count conversion belongs to the loader integration. Before each worker iterator
-starts, the loader supplies the group's endpoint as an ordinary wrapper length, multiplied
-by the local physical worker count to account for the wrapper's normal division among
-workers. `EpochizeDataset` and `LimitDataset` only count outputs and save their offset;
-they have no logical-worker option or replay-specific state. The stride does not inspect
-boundary wrappers.
+When constructing the pipeline, the loader computes each local worker's budget and
+supplies these lengths to `BoundedDataset`. The loader retains a direct reference to
+that dataset. The stride handles physical output selection and replay traversal;
+the bounded dataset handles pass completion and whether the source resets or continues.
 
-Boundary wrappers retain their full offset at the final yield and reset it only when the
+The bounded dataset retains its full offset at the final yield and resets it only when the
 iterator completes. Ordinary recursive save/restore therefore preserves both partial
 segments and pending boundary completion. Epochization retains its inner iterator between
 segments. A limit closes that iterator and resets the inner pipeline after completion.
@@ -329,18 +329,22 @@ The loader's scheduling count restarts for each worker pass.
 
 Configured lengths are not saved. A restored loader may use new epochize/limit lengths
 and another physical fanout while retaining its logical pipeline position. Before
-iteration starts, the loader sets the endpoint to the snapshot's progress plus its
-logical replay distance and the newly allocated remaining budget. The boundary wrapper
-then uses its ordinary length check for the whole pass. If the new budget has already
-been consumed, replay reaches the saved position and the iterator completes without new
-outputs. Replay stays within the checkpoint's iterator pass and never reopens an
-exhausted iterator.
+iteration starts, a pure helper computes immutable per-worker restore plans with named
+`replay_allowance` and `remaining_outputs` fields, both measured in full logical outputs.
+The replay allowance includes checkpoint replay plus any gap to outputs already consumed
+by sibling physical workers. The loader installs these runtime plans on `BoundedDataset`.
+In replay mode, `BoundedDataset` advances the source
+without enforcing the budget or resetting it. After replay, it counts down the remaining
+budget. If the new budget has already been consumed, replay reaches the saved position
+and the iterator completes without new outputs. Replay stays within the checkpoint's
+iterator pass and never reopens an exhausted iterator.
 
 After a partial save, the remaining rank budget is allocated under the new worker mapping.
-Each group's endpoint is its recovered logical position plus its share of those remaining
-outputs. This handles groups whose contributions before the save differ from their shares
-under the new fanout. The endpoint is plain length configuration supplied by the loader,
-recomputed during restore and excluded from the saved dataset state.
+This handles groups whose contributions before the save differ from their shares under
+the new fanout. Physical checkpoints also account for outputs already consumed by sibling
+workers before starting the remaining budget. Replay counters and restore plans are
+transient; only the bounded dataset's progress is saved. The next pass uses the normal
+configured budget again.
 
 Output logging remains outside the stride, so it observes only retained outputs.
 Worker startup, queue shutdown, checkpoint selection, and group routing remain owned by
