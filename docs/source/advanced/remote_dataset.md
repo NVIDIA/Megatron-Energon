@@ -116,6 +116,10 @@ logical EPath strings; `jsonl_sizes` contains terminal byte offsets. A producer
 must capture these values from the intended immutable dataset revision. The
 loader rejects a mismatched package digest or recipe identity.
 
+File checks must be JSON booleans. Sizes and terminal byte offsets must be
+nonnegative integers. The loaded mappings are read-only. A recorded index size
+takes precedence over the POSIX descriptor size inside the snapshot context.
+
 Recorded reads receive independent streams. Unrecorded paths retain their normal
 storage backend. Leaving the context restores ordinary access, including after
 an exception. Keep media payloads outside the package and rebuild it after any

@@ -15,18 +15,38 @@ import contextvars
 import hashlib
 import io
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Iterator
 
 
 @dataclass(frozen=True)
 class MetadataSnapshot:
     recipe_identity: str
-    contents: dict[str, bytes]
-    file_checks: dict[str, bool]
-    sizes: dict[str, int]
-    jsonl_sizes: dict[str, int]
+    contents: Mapping[str, bytes]
+    file_checks: Mapping[str, bool]
+    sizes: Mapping[str, int]
+    jsonl_sizes: Mapping[str, int]
+
+    def __post_init__(self):
+        for name, value_type in (
+            ("contents", bytes),
+            ("file_checks", bool),
+            ("sizes", int),
+            ("jsonl_sizes", int),
+        ):
+            values = getattr(self, name)
+            if not isinstance(values, Mapping):
+                raise ValueError(f"Metadata snapshot {name} must be a mapping")
+            values = dict(values)
+            for path, value in values.items():
+                if not isinstance(path, str) or type(value) is not value_type:
+                    raise ValueError(f"Invalid metadata snapshot {name} entry for {path!r}")
+                if value_type is int and value < 0:
+                    raise ValueError(f"Negative metadata snapshot {name} entry for {path!r}")
+            object.__setattr__(self, name, MappingProxyType(values))
 
     @classmethod
     def load(cls, path: str | Path, *, sha256: str, recipe_identity: str) -> "MetadataSnapshot":
@@ -35,7 +55,7 @@ class MetadataSnapshot:
         if hashlib.sha256(payload).hexdigest() != sha256:
             raise ValueError("Metadata snapshot SHA256 mismatch")
         document = json.loads(payload)
-        if document["format_version"] != 1:
+        if type(document["format_version"]) is not int or document["format_version"] != 1:
             raise ValueError("Unsupported metadata snapshot format")
         if document["recipe_identity"] != recipe_identity:
             raise ValueError("Metadata snapshot recipe identity mismatch")

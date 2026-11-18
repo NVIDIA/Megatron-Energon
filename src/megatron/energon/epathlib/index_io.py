@@ -7,6 +7,7 @@ from typing import BinaryIO
 from multistorageclient.file import PosixFile
 
 from megatron.energon.epathlib.epath import EPath
+from megatron.energon.epathlib.metadata_snapshot import active_snapshot
 
 
 def open_sized_index(index_path: EPath) -> tuple[BinaryIO, int]:
@@ -15,7 +16,12 @@ def open_sized_index(index_path: EPath) -> tuple[BinaryIO, int]:
     try:
         # Object streams can expose a temporary fd. A composite profile can also
         # open a plain POSIX child while supplying its own authoritative size.
-        if type(stream) is PosixFile and getattr(index_path.fs, "_metadata_provider", True) is None:
+        snapshot = active_snapshot()
+        if snapshot is not None and (key := str(index_path)) in snapshot.sizes:
+            size = snapshot.sizes[key]
+        elif (
+            type(stream) is PosixFile and getattr(index_path.fs, "_metadata_provider", True) is None
+        ):
             size = os.fstat(stream.fileno()).st_size
         else:
             size = index_path.size()

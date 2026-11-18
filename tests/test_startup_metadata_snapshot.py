@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import hashlib
-from contextlib import closing
+import json
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
@@ -14,11 +15,54 @@ from megatron.energon.epathlib.metadata_snapshot import (
     MetadataSnapshot,
     use_metadata_snapshot,
 )
+from megatron.energon.flavors.jsonl.ijsonl import IJsonlIndexReader
 from tests import test_jsonl_dataset
 from tests.capture_metadata import capture_metadata
 
 
 class SnapshotTest(unittest.TestCase):
+    def test_replay_maps_are_immutable(self):
+        sizes = {"/index": 16}
+        snapshot = MetadataSnapshot("revision", {}, {}, sizes, {})
+        sizes["/index"] = 80
+        self.assertEqual(snapshot.sizes["/index"], 16)
+        mappings = (snapshot.contents, snapshot.sizes, snapshot.file_checks, snapshot.jsonl_sizes)
+        for mapping in mappings:
+            with self.assertRaises(TypeError):
+                mapping["/index"] = 0
+
+    def test_reject_invalid_package_values(self):
+        with tempfile.TemporaryDirectory() as directory:
+            package = Path(directory) / "metadata.json"
+            with capture_metadata(package, "revision"):
+                pass
+            valid = json.loads(package.read_bytes())
+            for field, invalid in (
+                ("file_checks", {"/missing": "false"}),
+                ("sizes", {"/index": -1}),
+                ("jsonl_sizes", {"/data": True}),
+            ):
+                with self.subTest(field=field):
+                    payload = json.dumps({**valid, field: invalid}).encode()
+                    package.write_bytes(payload)
+                    with self.assertRaisesRegex(ValueError, field):
+                        MetadataSnapshot.load(
+                            package,
+                            sha256=hashlib.sha256(payload).hexdigest(),
+                            recipe_identity="revision",
+                        )
+
+    def test_snapshot_size_takes_precedence_over_posix_descriptor(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "data.jsonl"
+            index = source.with_suffix(".jsonl.idx")
+            index.write_bytes(bytes(24))
+            snapshot = MetadataSnapshot("revision", {}, {}, {str(index): 16}, {})
+            with use_metadata_snapshot(snapshot), IJsonlIndexReader(source) as reader:
+                self.assertEqual(len(reader), 2)
+            with IJsonlIndexReader(source) as reader:
+                self.assertEqual(len(reader), 3)
+
     def test_public_loader_order_and_resume_with_snapshot(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
