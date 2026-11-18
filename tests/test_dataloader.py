@@ -21,6 +21,7 @@ from typing import Iterable
 
 import torch
 import webdataset as wds
+from click.testing import CliRunner
 
 from megatron.energon import (
     WorkerConfig,
@@ -32,9 +33,10 @@ from megatron.energon.dataloader.workers.base_worker import WorkerSampleRestoreK
 from megatron.energon.flavors.common.sample_record import IndexedRestoreKey
 from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
 from megatron.energon.task_encoder.base import DefaultTaskEncoder, stateless
-from megatron.energon.wrappers.batch_dataset import BatchGenRestoreKey
+from megatron.energon.tools.checkpoint import command_redist
+from megatron.energon.wrappers.batch_dataset import BatchGenRestoreKey, BatchRestoreKey
 from megatron.energon.wrappers.epochize_dataset import EpochizeDataset
-from megatron.energon.wrappers.map_dataset import MapGenRestoreKey
+from megatron.energon.wrappers.map_dataset import MapGenRestoreKey, MapRestoreKey
 from megatron.energon.wrappers.packing_dataset import PartialSampleRestoreKey
 
 
@@ -246,19 +248,81 @@ class TestDataLoader(unittest.TestCase):
 
         assert loader._workers is None
 
-    def test_split_batch_generator_restore_key_preserves_subtype(self):
-        keys = tuple(IndexedRestoreKey(kind="Webdataset", index=i) for i in range(1, 5))
-        batch = BatchGenRestoreKey(sample_idx=12, gen_idx=3, inner=keys)
-        mapped = MapGenRestoreKey(sample_idx=7, gen_idx=11, inner=batch)
+    def test_split_batch_restore_key_by_target_size(self):
+        keys = tuple(IndexedRestoreKey(kind="Webdataset", index=i) for i in range(6))
+        batch = BatchRestoreKey(sample_idx=12, inner=keys)
+        mapped = MapRestoreKey(sample_idx=7, inner=batch)
         wrapped = WorkerSampleRestoreKey(worker_id=5, sample_idx=32, inner=mapped)
-        split = _split_batch_restore_key(wrapped, 2)
-        for idx, key in enumerate(split):
-            self.assertIsInstance(key, WorkerSampleRestoreKey)
-            self.assertIsInstance(key.inner, MapGenRestoreKey)
-            self.assertIsInstance(key.inner.inner, BatchGenRestoreKey)
-            self.assertEqual(key.inner.gen_idx, 11)
-            self.assertEqual(key.inner.inner.gen_idx, 3)
-            self.assertEqual(key.inner.inner.inner, keys[idx * 2 : idx * 2 + 2])
+
+        expected = [
+            replace(wrapped, inner=replace(mapped, inner=replace(batch, inner=chunk)))
+            for chunk in (keys[:4], keys[4:])
+        ]
+        self.assertEqual(_split_batch_restore_key(wrapped, 4), expected)
+        self.assertEqual(_split_batch_restore_key(wrapped, 4, drop_last=True), expected[:1])
+        self.assertEqual(
+            _split_batch_restore_key(replace(batch, inner=keys[:3]), 4)[0].inner, keys[:3]
+        )
+
+        generator_batch = BatchGenRestoreKey(sample_idx=12, gen_idx=3, inner=keys)
+        with self.assertRaisesRegex(ValueError, "prefetched generator batches"):
+            _split_batch_restore_key(replace(wrapped, inner=generator_batch), 4)
+
+    def test_restore_smaller_micro_batches_with_prefetched_tail(self):
+        wc = WorkerConfig(rank=0, world_size=1, num_workers=1)
+
+        def loader(batch_size, prefetch_factor, drop_last=False):
+            return DataLoader(
+                get_train_dataset(
+                    self.ds1_path,
+                    worker_config=wc,
+                    batch_size=batch_size,
+                    batch_drop_last=drop_last,
+                    shuffle_buffer_size=None,
+                    max_samples_per_sequence=None,
+                    repeat=False,
+                ),
+                prefetch_factor=prefetch_factor,
+                pin_memory=None,
+            )
+
+        with loader(8, 8) as source:
+            first = next(iter(source)).text
+            checkpoint = source.save_state_rank()
+            self.assertTrue(checkpoint.prefetched_restore_keys[0])
+            source_tail = [text for batch in source for text in batch.text]
+        self.assertEqual(len(first), 8)
+        self.assertEqual(len(source_tail) % 4, 3)
+
+        for drop_last in (False, True):
+            with self.subTest(drop_last=drop_last):
+                with loader(4, 0, drop_last).with_restored_state_rank(checkpoint) as restored:
+                    batches = [list(batch.text) for batch in restored]
+                stop = len(source_tail) - 3 if drop_last else len(source_tail)
+                self.assertEqual(batches, [source_tail[i : i + 4] for i in range(0, stop, 4)])
+
+        input_file = self.dataset_path / "global.pt"
+        output_dir = self.dataset_path / "redistributed"
+        torch.save([checkpoint], input_file)
+        result = CliRunner().invoke(
+            command_redist,
+            [
+                str(input_file),
+                str(output_dir),
+                "--new-world-size",
+                "1",
+                "--new-micro-batch-size",
+                "4",
+            ],
+            catch_exceptions=False,
+        )
+        self.assertEqual(result.exit_code, 0, result.output)
+        redistributed = torch.load(output_dir / input_file.name, weights_only=False)[0]
+        with loader(4, 0).with_restored_state_rank(redistributed) as restored:
+            self.assertEqual(
+                [list(batch.text) for batch in restored],
+                [source_tail[i : i + 4] for i in range(0, len(source_tail), 4)],
+            )
 
     def test_fork_worker_exit_fails_iteration_and_all_pending_requests(self):
         # Bound the subprocess in case failure detection regresses into a blocking queue read.
