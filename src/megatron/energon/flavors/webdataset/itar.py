@@ -222,14 +222,6 @@ class CachedItarOffsetReader:
         tar_file = str(tar_file)
         key = (tar_file, sample_offset)
 
-        # Reposition an idle reader for this same index instead of reopening it.
-        if key not in self.tar_index_reader_cache:
-            reuse_key = next(
-                (old for old in self.tar_index_reader_cache if old[0] == tar_file), None
-            )
-            if reuse_key is not None:
-                self.tar_index_reader_cache[key] = self.tar_index_reader_cache.pop(reuse_key)
-
         # Direct hit in the cache?
         if key in self.tar_index_reader_cache:
             return key, self.tar_index_reader_cache[key]

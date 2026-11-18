@@ -163,13 +163,6 @@ class CachedIJsonlOffsetReader:
         1. If we already have a key == sample_offset, return it.
         2. Otherwise, create a new entry or reuse the oldest entry.
         """
-        # Every entry in this instance refers to the same JSONL index file.
-        if sample_offset not in self.ijsonl_index_reader_cache and self.ijsonl_index_reader_cache:
-            oldest = next(iter(self.ijsonl_index_reader_cache))
-            self.ijsonl_index_reader_cache[sample_offset] = self.ijsonl_index_reader_cache.pop(
-                oldest
-            )
-
         # Direct hit in the cache?
         if sample_offset in self.ijsonl_index_reader_cache:
             return self.ijsonl_index_reader_cache[sample_offset]

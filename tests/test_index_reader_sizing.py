@@ -7,7 +7,6 @@ import random
 import struct
 import tempfile
 import unittest
-from collections import Counter
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -19,25 +18,22 @@ from megatron.energon.flavors.jsonl import ijsonl
 from megatron.energon.flavors.webdataset import itar
 
 
-class IndexReaderReuseTest(unittest.TestCase):
-    def test_random_offsets_lifetime_and_backend_fallback(self):
-        counts = Counter()
+class IndexReaderSizingTest(unittest.TestCase):
+    def test_index_reads_lifetime_and_backend_fallback(self):
         opened = []
         original_open, original_size = EPath.open, EPath.size
 
         def counted_open(self, *a, **kw):
-            counts["opens"] += 1
             stream = original_open(self, *a, **kw)
             opened.append(stream)
             return stream
 
-        def counted_size(self):
-            counts["size_queries"] += 1
-            return original_size(self)
+        def unexpected_size(self):
+            raise AssertionError("Plain POSIX indexes must use descriptor sizing")
 
         self.addCleanup(setattr, EPath, "open", original_open)
         self.addCleanup(setattr, EPath, "size", original_size)
-        EPath.open, EPath.size = counted_open, counted_size
+        EPath.open, EPath.size = counted_open, unexpected_size
 
         rng = random.Random(20261111)
         with tempfile.TemporaryDirectory(prefix="owned-index-test-") as temporary:
@@ -53,7 +49,6 @@ class IndexReaderReuseTest(unittest.TestCase):
             jsonl.with_suffix(".jsonl.idx").write_bytes(blob)
             tar = itar.CachedItarOffsetReader(cache_size=3)
             js = ijsonl.CachedIJsonlOffsetReader(jsonl, cache_size=3)
-            calls = 0
             # Interleave distant positions in one file, then exceed the file cache limit.
             requests = [(tar_paths[0], n) for n in (0, 100, 1, 101, 2, 102) * 10]
             requests += [(rng.choice(tar_paths), rng.randrange(len(values))) for _ in range(2500)]
@@ -70,7 +65,6 @@ class IndexReaderReuseTest(unittest.TestCase):
                 max_json_entries = max(max_json_entries, len(js.ijsonl_index_reader_cache))
                 assert max_tar_entries <= 3 and max_json_entries <= 3
                 assert sum(not stream.closed for stream in opened) <= 6
-                calls += 2
             assert len(js) == len(values) - 1
             assert js.get_total_size() == values[-1]
             for entry in tar.tar_index_reader_cache.values():
@@ -112,14 +106,12 @@ class IndexReaderReuseTest(unittest.TestCase):
                 def fileno(self):
                     raise AssertionError("ObjectFile descriptor must not be inspected")
 
-            fallback_checks = 0
             for stream in (io.BytesIO(b"abcdefgh"), FakeObjectFile(b"abcdefgh")):
                 path = FakePath(stream)
                 result, length = open_sized_index(path)
                 assert result is stream and length == 3 and path.queries == 1
                 assert stream.tell() == 0
                 stream.close()
-                fallback_checks += 1
 
             # Real MSC POSIX stream, but manifest/metadata-provider size is authoritative.
             stream = original_open(EPath(tar_paths[0].with_suffix(".tar.idx")), "rb")
@@ -128,7 +120,6 @@ class IndexReaderReuseTest(unittest.TestCase):
             result, length = open_sized_index(path)
             assert length == 2 and path.queries == 1
             stream.close()
-            fallback_checks += 1
 
             # Failed size lookup must not leak a newly opened stream.
             stream = io.BytesIO(b"abcdefgh")
@@ -138,7 +129,6 @@ class IndexReaderReuseTest(unittest.TestCase):
                 assert stream.closed
             else:
                 raise AssertionError("Missing expected error")
-            fallback_checks += 1
 
             # Plain POSIX sizing preserves the stream cursor and avoids full metadata.
             stream = original_open(EPath(tar_paths[0].with_suffix(".tar.idx")), "rb")
@@ -147,7 +137,6 @@ class IndexReaderReuseTest(unittest.TestCase):
             result, length = open_sized_index(path)
             assert length == len(values) and stream.tell() == 0 and path.queries == 0
             stream.close()
-            fallback_checks += 1
 
             # A renamed path does not redirect sizing away from the opened descriptor.
             physical = root / "rename.idx"
@@ -159,4 +148,3 @@ class IndexReaderReuseTest(unittest.TestCase):
             result, length = open_sized_index(FakePath(stream, size=8))
             assert length == len(values)
             stream.close()
-            fallback_checks += 1
