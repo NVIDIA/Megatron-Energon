@@ -7,6 +7,7 @@ import gc
 import io
 import json
 import logging
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -15,6 +16,7 @@ from collections import Counter
 from contextlib import redirect_stdout
 from dataclasses import replace
 from pathlib import Path
+from textwrap import dedent
 from typing import Iterable
 
 import torch
@@ -257,6 +259,68 @@ class TestDataLoader(unittest.TestCase):
             self.assertEqual(key.inner.gen_idx, 11)
             self.assertEqual(key.inner.inner.gen_idx, 3)
             self.assertEqual(key.inner.inner.inner, keys[idx * 2 : idx * 2 + 2])
+
+    def test_fork_worker_exit_fails_iteration_and_all_pending_requests(self):
+        # Bound the subprocess in case failure detection regresses into a blocking queue read.
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                dedent("""
+                    import multiprocessing
+                    import os
+                    from megatron.energon import WorkerConfig
+                    from megatron.energon.dataloader import DataLoader
+                    from megatron.energon.dataloader.asynchronous.base import WorkerExitedError
+
+                    exit_worker = multiprocessing.get_context("fork").Event()
+
+                    class Dataset:
+                        worker_config = WorkerConfig(rank=0, world_size=1, num_workers=1)
+
+                        def __iter__(self):
+                            exit_worker.wait()
+                            os._exit(17)
+                            yield
+
+                        def worker_init(self): pass
+                        def worker_close(self): pass
+                        def reset_state_deep(self): pass
+                        def close(self): pass
+
+                    with DataLoader(
+                        Dataset(), prefetch_factor=0, pin_memory=None,
+                        watchdog_timeout_seconds=None, gc_collect_every_n_steps=0,
+                    ) as loader:
+                        worker = loader._workers[0]
+                        pending = [worker.prefetch_next(), worker.prefetch_next()]
+                        exit_worker.set()
+                        for future in pending:
+                            try:
+                                future.get()
+                            except WorkerExitedError as error:
+                                assert "wkr-0 exited with code 17" in str(error), error
+                            else:
+                                raise AssertionError("Expected worker-exit error")
+                    assert not worker.running()
+
+                    with DataLoader(
+                        Dataset(), prefetch_factor=0, pin_memory=None,
+                        watchdog_timeout_seconds=None, gc_collect_every_n_steps=0,
+                    ) as loader:
+                        try:
+                            next(iter(loader))
+                        except WorkerExitedError as error:
+                            assert "wkr-0 exited with code 17" in str(error), error
+                        else:
+                            raise AssertionError("Expected iteration to report the worker exit")
+                """),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_generator_keys_resume_and_restore_at_the_original_index(self):
         wc = WorkerConfig(rank=0, world_size=1, num_workers=0, worker_log_level=1)

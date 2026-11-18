@@ -9,6 +9,7 @@ from megatron.energon.dataloader.asynchronous.base import (
     Asynchronous,
     QueueProtocol,
     WorkerCommand,
+    WorkerExitedError,
     WorkerResult,
 )
 
@@ -55,13 +56,18 @@ class ThreadAsynchronous(Asynchronous):
                 self._cancel_futures()
                 self._thread = None
             else:
-                self._shutdown_worker()
-                self._thread.join()
-                self._thread = None
+                try:
+                    self._shutdown_worker()
+                except WorkerExitedError:
+                    pass
+                finally:
+                    self._thread.join()
+                    self._thread = None
 
     def running(self) -> bool:
         return self._thread is not None
 
     def _assert_running(self) -> None:
         assert self._thread is not None, "Thread must be started first"
-        assert self._thread.is_alive(), "Thread died"
+        if not self._thread.is_alive():
+            raise WorkerExitedError(f"Worker {self._name} thread exited")
