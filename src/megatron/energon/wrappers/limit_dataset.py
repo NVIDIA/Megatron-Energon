@@ -33,6 +33,8 @@ class LimitDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
             dataset: The dataset to limit
             length: The length to limit to
             reset_after_epoch: If true, reset the underlying dataset after one epoch.
+                Otherwise, preserve its state so the next iteration continues with the
+                next unconsumed sample.
             worker_config: Configuration for the workers.
         """
         super().__init__(dataset, worker_config=worker_config)
@@ -84,10 +86,8 @@ class LimitDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
         offset_range = list(range(self.current_offset, local_limit))
         # Only iterate self.dataset if there are samples to iterate
         if len(offset_range) > 0:
-            for sample, offset in zip(
-                self.dataset,
-                offset_range,
-            ):
+            # Stop at the limit before requesting another source sample.
+            for offset, sample in zip(offset_range, self.dataset):
                 self.current_offset = offset + 1
                 yield sample
 
@@ -103,8 +103,6 @@ class LimitDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
                 }
             )
 
-        # Reset the inner dataset
-        self.dataset.reset_state_deep()
         self.current_offset = 0
         if self.reset_after_epoch:
             self.dataset.reset_state_deep()
