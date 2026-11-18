@@ -3,6 +3,7 @@
 import threading
 import traceback
 from abc import abstractmethod
+from queue import Empty
 from typing import Any, Callable, ParamSpec, Protocol, TypeVar
 
 from megatron.energon.dataloader.future import CancelledError, Future
@@ -19,7 +20,7 @@ DEBUG_LEVEL = 0
 class QueueProtocol(Protocol[T]):
     """Protocol for a queue."""
 
-    def get(self, /) -> T: ...
+    def get(self, *, timeout: float | None = None) -> T: ...
 
     def put(self, item: T, /) -> None: ...
 
@@ -43,6 +44,10 @@ class WorkerResult:
     future_id: int
     result: Any = None
     exception: Exception | None = None
+
+
+class WorkerExitedError(RuntimeError):
+    """A worker exited before completing its requests."""
 
 
 class FutureImpl(Future[Any]):
@@ -74,9 +79,7 @@ class FutureImpl(Future[Any]):
                     end="",
                 )
             return False
-        self._exception = CancelledError.with_current_traceback()
-        self._worker._cancel_future(self._future_id)
-        return True
+        return self._worker._cancel_future(self._future_id)
 
     def done(self) -> bool:
         return hasattr(self, "_result") or hasattr(self, "_exception")
@@ -100,6 +103,7 @@ class Asynchronous:
     _pending_futures: dict[int, FutureImpl]
     _name: str
     _result_lock: threading.Lock
+    _pending_lock: threading.Lock
 
     def _asynchronous_init(self, name: str) -> None:
         self._cmd_queue, self._result_queue = self._queues()
@@ -107,6 +111,7 @@ class Asynchronous:
         self._pending_futures = {}
         self._name = name
         self._result_lock = threading.Lock()
+        self._pending_lock = threading.Lock()
 
     @abstractmethod
     def _queues(self) -> tuple[QueueProtocol[WorkerCommand], QueueProtocol[WorkerResult]]: ...
@@ -128,41 +133,50 @@ class Asynchronous:
                 return
             if DEBUG_LEVEL >= 2:
                 print(f"[{self._name}, fut={future._future_id}] got future\n", end="")
-            while True:
-                res = self._result_queue.get()
-                fut = self._pending_futures.pop(res.future_id)
-                if res.exception is not None:
-                    fut._set_exception(res.exception)
-                else:
-                    fut._set_result(res.result)
-                if res.future_id == future._future_id:
-                    if DEBUG_LEVEL >= 2:
-                        print(
-                            f"[{self._name}, fut={future._future_id}] got result, return\n", end=""
-                        )
-                    return
-                else:
-                    if DEBUG_LEVEL >= 2:
-                        print(
-                            f"[{self._name}, fut={future._future_id}] got result for {res.future_id=}, continue\n",
-                            end="",
+            while not future.done():
+                try:
+                    res = self._result_queue.get(timeout=0.1)
+                except Empty:
+                    if not future.done():
+                        try:
+                            self._assert_running()
+                        except WorkerExitedError as error:
+                            self._fail_pending_futures(error)
+                    continue
+                except (EOFError, OSError, ValueError):
+                    if not future.done():
+                        self._fail_pending_futures(
+                            WorkerExitedError(f"Result queue for worker {self._name} closed")
                         )
                     continue
+                with self._pending_lock:
+                    pending = self._pending_futures.pop(res.future_id, None)
+                    if pending is not None:
+                        if res.exception is not None:
+                            pending._set_exception(res.exception)
+                        else:
+                            pending._set_result(res.result)
 
-    def _cancel_future(self, future_id: int) -> None:
-        """Cancel a future."""
-        if DEBUG_LEVEL >= 1:
-            print(f"[{self._name}, fut={future_id}] cancelling future\n", end="")
-        # In case the main process is waiting for thie future to complete, add the result
-        self._result_queue.put(
-            WorkerResult(future_id=future_id, exception=CancelledError.with_current_traceback())
-        )
+    def _fail_pending_futures(self, error: WorkerExitedError) -> None:
+        with self._pending_lock:
+            for future in self._pending_futures.values():
+                future._set_exception(WorkerExitedError(*error.args))
+            self._pending_futures.clear()
+
+    def _cancel_future(self, future_id: int) -> bool:
+        with self._pending_lock:
+            future = self._pending_futures.pop(future_id, None)
+            if future is None:
+                return False
+            future._set_exception(CancelledError.with_current_traceback())
+            return True
 
     def _cancel_futures(self) -> None:
         """Cancel all futures after worker shutdown."""
-        for fut in self._pending_futures.values():
-            fut.cancel()
-        self._pending_futures.clear()
+        with self._pending_lock:
+            for future in self._pending_futures.values():
+                future._set_exception(CancelledError.with_current_traceback())
+            self._pending_futures.clear()
 
     def _worker_call(self, fn: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> Future[R]:
         """
@@ -175,12 +189,16 @@ class Asynchronous:
             *args: The arguments to pass to the function.
             **kwargs: The keyword arguments to pass to the function.
         """
-        self._assert_running()
         assert not self._in_worker(), "worker_call must not be called in the worker"
-        future_id = self._next_future_id
-        self._next_future_id += 1
-
-        self._pending_futures[future_id] = future = FutureImpl(self, future_id)
+        try:
+            with self._pending_lock:
+                self._assert_running()
+                future_id = self._next_future_id
+                self._next_future_id += 1
+                self._pending_futures[future_id] = future = FutureImpl(self, future_id)
+        except WorkerExitedError as error:
+            self._fail_pending_futures(error)
+            raise
         if DEBUG_LEVEL >= 2:
             print(
                 f"[{self._name}] worker_call {fn.__name__=} {future_id=}\n",
@@ -255,8 +273,8 @@ class Asynchronous:
             raise
 
     @abstractmethod
-    def _assert_running(self) -> bool:
-        """Check if the execution is within the worker."""
+    def _assert_running(self) -> None:
+        """Raise if the worker cannot execute requests."""
         ...
 
     @abstractmethod

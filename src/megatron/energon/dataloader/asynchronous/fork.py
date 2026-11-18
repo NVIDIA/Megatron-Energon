@@ -12,6 +12,7 @@ from megatron.energon.dataloader.asynchronous.base import (
     Asynchronous,
     QueueProtocol,
     WorkerCommand,
+    WorkerExitedError,
     WorkerResult,
 )
 
@@ -139,30 +140,42 @@ class ForkAsynchronous(Asynchronous):
                 self._result_queue.close()
                 self._result_queue.cancel_join_thread()
                 # Kill the process, because we cannot communicate with it in the gc loop.
-                self._process.terminate()
-                self._process = None
+                if self._process.pid is not None:
+                    self._process.terminate()
                 self._cancel_futures()
+                self._process = None
             else:
                 try:
-                    self._shutdown_worker()
-                except Exception:
-                    self._process.join(10)
+                    if self._process.pid is not None:
+                        self._shutdown_worker()
+                        self._process.join()
+                        assert self._process.exitcode == 0, (
+                            f"Process exit code {self._process.exitcode}"
+                        )
+                except WorkerExitedError:
                     if self._process.is_alive():
                         self._process.terminate()
-                else:
                     self._process.join()
-                    assert self._process.exitcode == 0, (
-                        f"Process exit code {self._process.exitcode}"
-                    )
-                self._process = None
-                self._cmd_queue.close()
-                self._cmd_queue.cancel_join_thread()
-                self._result_queue.close()
-                self._result_queue.cancel_join_thread()
+                except Exception:
+                    if self._process.pid is not None:
+                        self._process.join(10)
+                        if self._process.is_alive():
+                            self._process.terminate()
+                            self._process.join()
+                finally:
+                    self._cancel_futures()
+                    self._process = None
+                    self._cmd_queue.close()
+                    self._cmd_queue.cancel_join_thread()
+                    self._result_queue.close()
+                    self._result_queue.cancel_join_thread()
 
     def running(self) -> bool:
         return self._process is not None
 
     def _assert_running(self) -> None:
         assert self._process is not None, "Worker must be started first"
-        assert self._process.is_alive(), "Worker died"
+        if not self._process.is_alive():
+            raise WorkerExitedError(
+                f"Worker {self._name} exited with code {self._process.exitcode}"
+            )
