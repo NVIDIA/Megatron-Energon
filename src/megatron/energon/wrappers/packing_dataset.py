@@ -16,20 +16,23 @@ from typing import (
     Sequence,
     TypeVar,
     Union,
+    cast,
 )
 
 from megatron.energon.edataclass import edataclass
 from megatron.energon.errors import ErrorContext, handle_restore_errors
 from megatron.energon.flavors.base_dataset import (
     FlexState,
+    RestoreKey,
     SavableDataset,
-    add_sample_restore_key,
     set_sample_restore_key,
 )
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import (
     BaseWrapperDataset,
+    MultiWrappedRestoreKey,
     SampleIndex,
+    WrappedRestoreKey,
     get_sample_restore_key,
 )
 from megatron.energon.wrappers.buffer import SavableSampleBuffer
@@ -40,18 +43,40 @@ T_batch_sample = TypeVar("T_batch_sample")
 T_slice = TypeVar("T_slice")
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PartialSampleRestoreKey(WrappedRestoreKey):
+    slice: Any
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class EncodePackRestoreKey(WrappedRestoreKey):
+    sample_idx: int
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PackingRestoreKey(MultiWrappedRestoreKey):
+    pack_idx: int
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PackingGenRestoreKey(PackingRestoreKey):
+    gen_idx: int
+
+
 @edataclass
 class PartialSample(Generic[T_sample, T_slice]):
     """A view onto part of a sample selected during packing."""
 
     sample: T_sample
     slice: T_slice
-    __restore_key__: tuple | None = field(init=False, repr=False, default=None)
+    __restore_key__: PartialSampleRestoreKey | None = field(init=False, repr=False, default=None)
 
     def __post_init__(self) -> None:
         inner_restore_key = get_sample_restore_key(self.sample)
         if inner_restore_key is not None:
-            set_sample_restore_key(self, inner_restore_key, self.slice, src=self)
+            self.__restore_key__ = PartialSampleRestoreKey(
+                inner=inner_restore_key, slice=self.slice
+            )
 
 
 class SavablePartialSampleBuffer(
@@ -60,16 +85,12 @@ class SavablePartialSampleBuffer(
 ):
     """Sample buffer that can save and restore packing-only partial sample wrappers."""
 
-    def restore_sample(self, restore_key: Any) -> T_sample | PartialSample[T_sample, T_slice]:
-        if (
-            isinstance(restore_key, (tuple, list))
-            and len(restore_key) == 3
-            and restore_key[0] == PartialSample.__name__
-        ):
-            _, sample_restore_key, sample_slice = restore_key
+    def restore_sample(
+        self, restore_key: RestoreKey
+    ) -> T_sample | PartialSample[T_sample, T_slice]:
+        if isinstance(restore_key, PartialSampleRestoreKey):
             return PartialSample(
-                sample=self.restore_sample(sample_restore_key),
-                slice=sample_slice,
+                sample=self.restore_sample(restore_key.inner), slice=restore_key.slice
             )
         return self.dataset.restore_sample(restore_key)
 
@@ -109,6 +130,9 @@ class PackingDataset(
     ]
     final_packer_stateless: bool
     packer_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]]
+    pre_packer_failure_tolerance: int
+    sample_encoder_failure_tolerance: int
+    final_packer_failure_tolerance: int
 
     #: The buffer for collecting the samples that shall be packed.
     _reading_buffer: SavablePartialSampleBuffer[T_sample, T_slice]
@@ -137,7 +161,7 @@ class PackingDataset(
 
     #: The pack whose final packer generator is being emitted, and how many outputs were emitted.
     _generator_pack_idx: Optional[int]
-    _generator_sample_keys: Optional[tuple]
+    _generator_sample_keys: tuple[RestoreKey | None, ...] | None
     _generator_offset: Optional[int]
 
     #: Whether the state was restored since the last iteration started (not saved).
@@ -311,31 +335,23 @@ class PackingDataset(
 
     def _restore_pack(
         self,
-        pack_restore_keys: Sequence[Any],
+        pack_restore_keys: Sequence[RestoreKey | None],
     ) -> List[T_encoded_sample | T_sample | PartialSample[T_sample, Any]]:
         pack = []
-        for inner_idx in pack_restore_keys:
-            if self.sample_encoder is not None:
-                id, sample_idx, *inner_idx = inner_idx
-                assert id == type(self).__name__
-                assert isinstance(sample_idx, int)
-            sample = self._reading_buffer.restore_sample(inner_idx)
-            if self.sample_encoder is not None:
-                with handle_restore_errors(self.worker_config.restore_error_handler, sample):
-                    input_sample = sample
-                    input_restore_key = get_sample_restore_key(input_sample)
-                    with self._sample_encoder_sample_index.ctx(sample_idx):
-                        sample = self.sample_encoder(sample)
-                    assert not isinstance(sample, Generator), "Generator not supported"
-                    if isinstance(input_sample, PartialSample) and input_restore_key is not None:
-                        sample = set_sample_restore_key(
-                            sample,
-                            *input_restore_key[1:],
-                            src=input_sample,
-                        )
-                    sample = add_sample_restore_key(sample, sample_idx, src=self)
+        for restore_key in pack_restore_keys:
+            if restore_key is None:
+                raise ValueError("Cannot restore a pack containing a sample without a restore key")
+            if self.sample_encoder is None:
+                pack.append(self._reading_buffer.restore_sample(restore_key))
+                continue
 
-            pack.append(sample)
+            key = cast(EncodePackRestoreKey, restore_key)
+            sample = self._reading_buffer.restore_sample(key.inner)
+            with handle_restore_errors(self.worker_config.restore_error_handler, sample):
+                with self._sample_encoder_sample_index.ctx(key.sample_idx):
+                    encoded_sample = self.sample_encoder(sample)
+                assert not isinstance(encoded_sample, Generator), "Generator not supported"
+                pack.append(set_sample_restore_key(encoded_sample, key))
         return pack
 
     def _finalize_pack(
@@ -374,18 +390,15 @@ class PackingDataset(
                     self._final_pack_failure_handler.reset()
                     yield set_sample_restore_key(
                         inner_batch_sample,
-                        pack_idx,
-                        pack_sub_idx,
-                        *pack_restore_keys,
-                        src=self,
+                        PackingGenRestoreKey(
+                            pack_idx=pack_idx, gen_idx=pack_sub_idx, inner=pack_restore_keys
+                        ),
                     )
             else:
                 self._final_pack_failure_handler.reset()
                 yield set_sample_restore_key(
                     final_packed_sample,
-                    pack_idx,
-                    *pack_restore_keys,
-                    src=self,
+                    PackingRestoreKey(pack_idx=pack_idx, inner=pack_restore_keys),
                 )
         self._generator_pack_idx = None
         self._generator_sample_keys = None
@@ -432,18 +445,15 @@ class PackingDataset(
                     with self._sample_encoder_sample_index.ctx() as encode_idx:
                         encoded_sample = self.sample_encoder(sample)
                     assert not isinstance(encoded_sample, Generator), "Generator not supported"
-                    if isinstance(sample, PartialSample) and input_restore_key is not None:
-                        encoded_sample = set_sample_restore_key(
-                            encoded_sample,
-                            *input_restore_key[1:],
-                            src=sample,
-                        )
                     self._sample_encoder_failure_handler.reset()
                     encoded_pack.append(
-                        add_sample_restore_key(
+                        set_sample_restore_key(
                             encoded_sample,
-                            encode_idx,
-                            src=self,
+                            None
+                            if input_restore_key is None
+                            else EncodePackRestoreKey(
+                                sample_idx=encode_idx, inner=input_restore_key
+                            ),
                         )
                     )
             return encoded_pack
@@ -564,39 +574,23 @@ class PackingDataset(
         )
         super().assert_can_restore()
 
-    def restore_sample(self, restore_key: Any) -> T_sample:
-        # We need to store multiple indices to restore a batch.
+    def restore_sample(self, restore_key: RestoreKey) -> T_sample:
         self.assert_can_restore()
-        if inspect.isgeneratorfunction(self.final_packer):
-            id, pack_idx, pack_sub_idx, *pack_restore_keys = restore_key
-            assert id == type(self).__name__
-        else:
-            id, pack_idx, *pack_restore_keys = restore_key
-            assert id == type(self).__name__
-
-        pack = self._restore_pack(pack_restore_keys)
+        key = cast(PackingRestoreKey, restore_key)
+        pack = self._restore_pack(key.inner)
 
         with handle_restore_errors(self.worker_config.restore_error_handler, pack):
-            with self._final_packing_sample_index.ctx(pack_idx):
+            with self._final_packing_sample_index.ctx(key.pack_idx):
                 final_pack = self.final_packer(pack)
-            if isinstance(final_pack, Generator):
-                assert inspect.isgeneratorfunction(self.final_packer), (
-                    f"Generator in {self.final_packer} but not marked as such."
-                )
-                for cur_batch_sub_idx, (pack_idx, inner_batch_sample) in enumerate(
-                    self._final_packing_sample_index.iter_ctx(final_pack, pack_idx)
+            if isinstance(key, PackingGenRestoreKey):
+                assert isinstance(final_pack, Generator)
+                for idx, (_, sample) in enumerate(
+                    self._final_packing_sample_index.iter_ctx(final_pack, key.pack_idx)
                 ):
-                    if cur_batch_sub_idx == pack_sub_idx:
-                        return set_sample_restore_key(
-                            inner_batch_sample,
-                            pack_idx,
-                            pack_sub_idx,
-                            *pack_restore_keys,
-                            src=self,
-                        )
-                assert False, f"Pack sub-index {pack_sub_idx} not found in pack"
-            else:
-                return set_sample_restore_key(final_pack, pack_idx, *pack_restore_keys, src=self)
+                    if idx == key.gen_idx:
+                        return set_sample_restore_key(sample, key)
+                raise ValueError(f"Pack output {key.gen_idx} is missing for {key!r}")
+            return set_sample_restore_key(final_pack, key)
 
     def config(self) -> Dict[str, Any]:
         return {

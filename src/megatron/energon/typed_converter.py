@@ -18,6 +18,11 @@ from megatron.energon.tags import apply_config_aliases
 class JsonValueError(ValueError):
     """Internal error class, for better error messages."""
 
+    expected_type: Type
+    path: str
+    stage: Tuple[int, ...]
+    value: Any
+
     def __init__(
         self, msg: str, expected_type: Type, value: Any, path: str, stage: Tuple[int, ...]
     ) -> None:

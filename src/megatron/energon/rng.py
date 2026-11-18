@@ -177,25 +177,53 @@ class WorkerRng(Savable):
 
 
 class UserRng:
-    """Independent CPU random generators for task encoder code."""
+    """Independent random generators for task encoder code."""
+
+    _seed: int
+    _torch_cuda: torch.Generator | None
+    numpy: numpy.random.Generator
+    random: random.Random
+    torch: torch.Generator
 
     def __init__(self, seed: int):
+        self._seed = seed
+        self._torch_cuda = None
         self.torch = torch.Generator().manual_seed(seed)
         self.numpy = numpy.random.default_rng(seed)
         self.random = random.Random(seed)
 
+    @property
+    def torch_cuda(self) -> torch.Generator:
+        """Create the task encoder's CUDA RNG only if the encoder actually uses it."""
+        if self._torch_cuda is None:
+            self._torch_cuda = torch.Generator(device="cuda").manual_seed(self._seed)
+        return self._torch_cuda
+
     def seed_args(self, *args: Any) -> None:
         seed = SystemRng.get_seed_from_args(*args)
+        self._seed = seed
         self.torch.manual_seed(seed)
+        if self._torch_cuda is not None:
+            self._torch_cuda.manual_seed(seed)
         self.numpy.bit_generator.state = numpy.random.default_rng(seed).bit_generator.state
         self.random.seed(seed)
 
     def save_state(self):
-        return self.torch.get_state(), self.numpy.bit_generator.state, self.random.getstate()
+        return (
+            self._seed,
+            self.torch.get_state(),
+            None if self._torch_cuda is None else self._torch_cuda.get_state(),
+            self.numpy.bit_generator.state,
+            self.random.getstate(),
+        )
 
     def restore_state(self, state):
-        torch_state, numpy_state, python_state = state
+        self._seed, torch_state, cuda_state, numpy_state, python_state = state
         self.torch.set_state(torch_state)
+        if cuda_state is not None:
+            self.torch_cuda.set_state(cuda_state)
+        elif self._torch_cuda is not None:
+            self._torch_cuda.manual_seed(self._seed)
         self.numpy.bit_generator.state = numpy_state
         self.random.setstate(python_state)
 

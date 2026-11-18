@@ -1,30 +1,29 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
-from typing import Generic, TypeVar
+from contextlib import ExitStack
+from dataclasses import dataclass
+from typing import Generic, Iterator, TypeVar
 
 from megatron.energon.cache.base import CachePool
 from megatron.energon.dataloader.future import DoneFuture, ExceptionFuture, Future
 from megatron.energon.edataclass import edataclass
-from megatron.energon.flavors.base_dataset import SavableDataset
+from megatron.energon.flavors.base_dataset import SavableDataset, set_sample_restore_key
 from megatron.energon.rng import SystemRng, SystemRngState
 from megatron.energon.state import FlexState
 from megatron.energon.worker import WorkerConfig
-from megatron.energon.wrappers.base import get_sample_restore_key
+from megatron.energon.wrappers.base import WrappedRestoreKey, get_sample_restore_key
 
 TSample = TypeVar("TSample", covariant=True)
 
 DEBUG_LEVEL = 0
 
 
-WORKER_RESTORE_KEY = "DataLoaderWorker"
+@dataclass(frozen=True, slots=True, kw_only=True)
+class WorkerSampleRestoreKey(WrappedRestoreKey):
+    """Route a sample restore to its original worker and sample index."""
 
-
-def _set_worker_key(sample: TSample, key: tuple) -> TSample:
-    if isinstance(sample, dict):
-        sample["__restore_key__"] = key
-    else:
-        sample.__restore_key__ = key
-    return sample
+    worker_id: int
+    sample_idx: int
 
 
 @edataclass
@@ -62,8 +61,11 @@ class DataLoaderWorker(Generic[TSample]):
     _cache_pool: CachePool | None
     _sample_index: int = 0
     _exhausted: bool = True
-    _dataset_iter = None
+    #: Live iterator owned by this worker. Checkpoints save dataset progress separately.
+    _dataset_iter: Iterator[TSample] | None = None
     _uses_global_rng = True
+    #: Tracks whether teardown must call the worker resource hooks.
+    _resources_initialized: bool = False
 
     def __init__(
         self,
@@ -105,7 +107,24 @@ class DataLoaderWorker(Generic[TSample]):
             in_del: If True, the worker is being deleted.
         """
         if not in_del or WorkerConfig.active_worker_config is None:
-            self.close_iterator()
+            self.finish_worker()
+
+    def finish_worker(self, *, close_dataset: bool = False) -> None:
+        with ExitStack() as stack:
+            if close_dataset:
+                stack.callback(self.dataset.close)
+            if self._resources_initialized:
+                self._resources_initialized = False
+                self.worker_config.worker_activate(self._sample_index, cache_pool=self._cache_pool)
+                stack.callback(self.worker_config.worker_deactivate)
+                if self._cache_pool is not None:
+                    stack.callback(self._cache_pool.worker_close)
+                stack.callback(self.dataset.worker_close)
+                iterator, self._dataset_iter = self._dataset_iter, None
+                if hasattr(iterator, "close"):
+                    stack.callback(iterator.close)
+            else:
+                self.close_iterator()
 
     def close_iterator(self) -> None:
         iterator, self._dataset_iter = self._dataset_iter, None
@@ -149,6 +168,15 @@ class DataLoaderWorker(Generic[TSample]):
         assert self._seed == self.worker_config.worker_seed(self._rank_worker_id), "Seed mismatch"
         if DEBUG_LEVEL >= 1:
             print("dataset_init\n", end="")
+        if not self._resources_initialized:
+            self._resources_initialized = True
+            self.worker_config.worker_activate(self._sample_index, cache_pool=self._cache_pool)
+            try:
+                if self._cache_pool is not None:
+                    self._cache_pool.worker_init()
+                self.dataset.worker_init()
+            finally:
+                self.worker_config.worker_deactivate()
         self.dataset.reset_state_deep()
         if state is None:
             self._sample_index = 0
@@ -204,9 +232,11 @@ class DataLoaderWorker(Generic[TSample]):
             self._sample_index += 1
             inner_key = get_sample_restore_key(next_sample)
             if inner_key is not None:
-                next_sample = _set_worker_key(
+                next_sample = set_sample_restore_key(
                     next_sample,
-                    (WORKER_RESTORE_KEY, self._global_worker_id, sample_idx, *inner_key),
+                    WorkerSampleRestoreKey(
+                        worker_id=self._global_worker_id, sample_idx=sample_idx, inner=inner_key
+                    ),
                 )
         except StopIteration as e:
             self._exhausted = True
@@ -215,7 +245,7 @@ class DataLoaderWorker(Generic[TSample]):
             self.worker_config.worker_deactivate()
         return DoneFuture(next_sample)
 
-    def restore_sample(self, restore_key: tuple) -> Future[TSample]:
+    def restore_sample(self, restore_key: WorkerSampleRestoreKey) -> Future[TSample]:
         """
         Restore a sample from a restore key in the worker.
 
@@ -225,15 +255,14 @@ class DataLoaderWorker(Generic[TSample]):
         Returns:
             A future that will be resolved to the restored sample.
         """
-        kind, worker_id, sample_idx, *inner_key = restore_key
-        assert kind == WORKER_RESTORE_KEY and self._global_worker_id == worker_id
+        assert self._global_worker_id == restore_key.worker_id
         self.worker_config.worker_activate(
-            sample_idx,
+            restore_key.sample_idx,
             cache_pool=self._cache_pool,
         )
         try:
             return DoneFuture(
-                _set_worker_key(self.dataset.restore_sample(tuple(inner_key)), restore_key)
+                set_sample_restore_key(self.dataset.restore_sample(restore_key.inner), restore_key)
             )
         finally:
             self.worker_config.worker_deactivate()

@@ -1,6 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+import json
 from typing import (
     Any,
     Dict,
@@ -8,14 +9,12 @@ from typing import (
     Generic,
     Iterator,
     List,
-    Optional,
     Sequence,
-    Tuple,
     TypeVar,
     Union,
 )
 
-from megatron.energon.flavors.base_dataset import FlexState, SavableDataset
+from megatron.energon.flavors.base_dataset import FlexState, RestoreKey, SavableDataset
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset, get_sample_restore_key
 
@@ -28,7 +27,7 @@ class SavableSampleBuffer(BaseWrapperDataset[T_sample, T_sample], Generic[T_samp
     _worker_local_fields = {"_buffer": list, "_restore_pending": bool}
 
     _buffer: List[T_sample]
-    _restore_keys: List[Tuple[Union[str, int, tuple], ...]]
+    _restore_keys: list[RestoreKey | None]
 
     _savable_fields = ("_restore_keys",)
     _restore_pending: bool = False
@@ -46,20 +45,26 @@ class SavableSampleBuffer(BaseWrapperDataset[T_sample, T_sample], Generic[T_samp
             assert len(self._buffer) == 0
             self._restore_pending = False
             for restore_key in self._restore_keys:
+                if restore_key is None:
+                    raise ValueError("Cannot restore a buffered sample without a restore key")
                 self._buffer.append(self.restore_sample(restore_key))
         assert len(self._buffer) == len(self._restore_keys)
 
     def append(self, sample: T_sample) -> T_sample:
+        restore_key = get_sample_restore_key(sample)
         self._buffer.append(sample)
-        self._restore_keys.append(get_sample_restore_key(sample))
+        self._restore_keys.append(restore_key)
         return sample
 
-    def extend(self, samples: List[T_sample], restore_keys: Optional[Sequence[Any]] = None) -> None:
-        self._buffer.extend(samples)
+    def extend(
+        self, samples: list[T_sample], restore_keys: Sequence[RestoreKey | None] | None = None
+    ) -> None:
         if restore_keys is None:
-            self._restore_keys.extend(get_sample_restore_key(sample) for sample in samples)
+            keys = [get_sample_restore_key(sample) for sample in samples]
         else:
-            self._restore_keys.extend(restore_keys)
+            keys = restore_keys
+        self._buffer.extend(samples)
+        self._restore_keys.extend(keys)
 
     def prepend(self, samples: Sequence[T_sample]) -> None:
         self._buffer[:0] = samples
@@ -73,7 +78,7 @@ class SavableSampleBuffer(BaseWrapperDataset[T_sample, T_sample], Generic[T_samp
         self._restore_keys.pop(index)
         return self._buffer.pop(index)
 
-    def flush(self) -> Tuple[List[T_sample], Tuple[Any, ...]]:
+    def flush(self) -> tuple[list[T_sample], tuple[RestoreKey | None, ...]]:
         buffer = list(self._buffer)
         restore_key = tuple(self._restore_keys)
         self._buffer.clear()
@@ -123,12 +128,12 @@ class SavableSampleBuffer(BaseWrapperDataset[T_sample, T_sample], Generic[T_samp
 
         self._restore_pending = True
 
-    def restore_key(self) -> Tuple[Union[str, int], ...]:
+    def restore_key(self) -> tuple[RestoreKey | None, ...]:
         return tuple(self._restore_keys)
 
     def restore_samples(
-        self, index: Tuple[Union[str, int, tuple], ...]
-    ) -> Tuple[Tuple[Union[str, int, tuple], ...], List[T_sample]]:
+        self, index: tuple[RestoreKey, ...]
+    ) -> tuple[tuple[RestoreKey | None, ...], list[T_sample]]:
         buffer = []
         restore_keys = []
         for sub_index in index:
@@ -154,7 +159,8 @@ class SavableSampleBuffer(BaseWrapperDataset[T_sample, T_sample], Generic[T_samp
             end="",
         )
         for i, (sample, restore_key) in enumerate(zip(self._buffer, self._restore_keys)):
-            print(f"{indent}Sample {i} [{restore_key!r}]: {sample.__key__}\n", end="")
+            key = None if restore_key is None else restore_key.to_json_object()
+            print(f"{indent}Sample {i} [{json.dumps(key)}]: {sample.__key__}")
 
     def __str__(self):
         return f"SavableSampleBuffer(size={len(self._buffer)})"

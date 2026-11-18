@@ -140,11 +140,13 @@ class FileStoreCachePool(CachePool, ForkMixin):
     """
 
     cache_dir: Path
+    parent_cache_dir: Path | None
     max_cache_size: int
     max_cache_count: int
     current_cache_size: int
     current_cache_count: int
     method: Literal["raw", "pickle"]
+    num_workers: int
 
     # Thread pool for out-caching tasks
     _worker_pool: Optional[ThreadPoolExecutor] = None
@@ -278,9 +280,13 @@ class FileStoreCachePool(CachePool, ForkMixin):
     def _cache_out_task(self, ds: FileStore, fname: str, entry: _PendingTask) -> bool:
         with thread_worker_scope():
             try:
+                ds.worker_init()
                 return self._cache_out(ds, fname, entry)
             finally:
-                ds.close()
+                try:
+                    ds.worker_close()
+                finally:
+                    ds.close()
 
     def _cache_out(self, ds: FileStore, fname: str, entry: _PendingTask) -> bool:
         with self._lock:

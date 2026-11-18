@@ -9,11 +9,12 @@ from __future__ import annotations
 import contextlib
 from bisect import bisect_right
 from collections import OrderedDict
-from typing import TYPE_CHECKING, Any, BinaryIO, Callable, Generator, List, Sequence, Tuple
+from types import ModuleType
+from typing import TYPE_CHECKING, Any, BinaryIO, Callable, Generator, Sequence, Tuple
 
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.common.reader import SamplePartFileReader, SequentialSampleReader
-from megatron.energon.flavors.common.sample_record import FilteredSample
+from megatron.energon.flavors.common.sample_record import FilteredSample, IndexedRestoreKey
 from megatron.energon.flavors.parquet.prepare import ParquetLayout
 from megatron.energon.source_info import SourceInfo
 from megatron.energon.worker_local import WorkerLocalFields
@@ -61,20 +62,32 @@ class IParquetReader(
         read_columns: The columns to read.
         sample_filter: An optional filter function to select samples by their key.
         parquet_file_cache_size: The number of Parquet files to keep open at the same time.
-        disable_cache: If True, disables caching of open Parquet files and opens a fresh file
-            for every read. This mode avoids sharing Parquet file handles across threads and is
-            intended to be thread-safe. Streams from :meth:`iter_slice` always open their own
+        disable_cache: If True, opens a fresh file for each indexed read. Otherwise, each worker
+            thread caches its own open files. Streams from :meth:`iter_slice` always open their own
             file.
         stream_batch_rows: The number of rows :meth:`iter_slice` decodes at a time.
     """
-
-    _worker_local_fields = {"_parquet_cache": OrderedDict}
 
     dataset_root: EPath
     layout: ParquetLayout
     read_columns: list[str]
     sample_filter: Callable[[str], bool] | None
     disable_cache: bool
+    _parquet_cache_max: int
+    _stream_batch_rows: int
+
+    _pa: ModuleType
+    _pq: ModuleType
+
+    #: Row offsets used to translate a global row into a file and row group.
+    _file_rows: list[int]
+    _cumsum: list[int]
+    _row_group_starts: list[list[int]]
+    _total: int
+
+    #: Handles belong to the reading thread and are closed on eviction or teardown.
+    _parquet_cache: OrderedDict[int, tuple[BinaryIO, pyarrow.parquet.ParquetFile]]
+    _worker_local_fields = {"_parquet_cache": OrderedDict}
 
     def __init__(
         self,
@@ -96,14 +109,14 @@ class IParquetReader(
 
         files = layout.files
         self._file_rows = [f.num_rows for f in files]
-        self._cumsum: List[int] = []
+        self._cumsum = []
         s = 0
         for n in self._file_rows:
             self._cumsum.append(s)
             s += n
         self._total = s
         # For each file, the first row of each row group
-        self._row_group_starts: List[List[int]] = []
+        self._row_group_starts = []
         for f in files:
             starts = []
             s = 0
@@ -112,9 +125,7 @@ class IParquetReader(
                 s += n
             assert s == f.num_rows, f"Row group sizes of {f.rel_path} do not sum up to its rows"
             self._row_group_starts.append(starts)
-        self._parquet_cache: OrderedDict[int, Tuple[BinaryIO, pyarrow.parquet.ParquetFile]] = (
-            OrderedDict()
-        )
+        self._parquet_cache = OrderedDict()
         self._parquet_cache_max = max(1, parquet_file_cache_size)
         self._stream_batch_rows = stream_batch_rows
 
@@ -244,7 +255,7 @@ class IParquetReader(
         return dict(
             __key__=key,
             __shard__=shard_name,
-            __restore_key__=("Webdataset", idx),
+            __restore_key__=IndexedRestoreKey(kind="Webdataset", index=idx),
             __sources__=(
                 SourceInfo(
                     dataset_path=str(self.dataset_root),

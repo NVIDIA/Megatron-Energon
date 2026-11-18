@@ -123,7 +123,7 @@ workers, clears the exhausted flags, and resets round-robin selection to worker 
 - initialize or restore the dataset and RNG;
 - create the dataset iterator;
 - fetch the next sample;
-- wrap its restore key with a `DataLoaderWorker` tuple prefix; and
+- wrap its restore key with a `WorkerSampleRestoreKey`; and
 - save `WorkerState`.
 
 ### Implementation Classes
@@ -182,10 +182,10 @@ designated source rank before delegating to `restore_state_rank()`.
 
 ## Sample Restore Keys
 
-Every yielded sample is wrapped in a `DataLoaderWorker` tuple prefix, which records the global worker ID and
-worker-local sample index around the dataset's own restore key. `restore_sample()` maps that global
-worker ID back to a rank-local worker and executes the underlying dataset restore operation in the
-correct worker context.
+For a restorable sample, `WorkerSampleRestoreKey` records the global worker ID and worker-local
+sample index around the dataset's own restore key. `restore_sample()` maps that global worker ID
+back to a rank-local worker and executes the underlying dataset restore operation in that worker's
+context.
 
 Restore keys are part of the deterministic data-stream contract. Changes to wrapper nesting, worker
 mapping, batching, or sample-key semantics require compatibility tests for both checkpoint restore

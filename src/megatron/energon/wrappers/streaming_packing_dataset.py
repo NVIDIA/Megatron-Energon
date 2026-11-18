@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import inspect
+from dataclasses import dataclass
 from typing import (
     Any,
     Callable,
@@ -14,17 +15,24 @@ from typing import (
     Sequence,
     TypeVar,
     Union,
+    cast,
 )
 
 from megatron.energon.errors import ErrorContext, handle_restore_errors
 from megatron.energon.flavors.base_dataset import (
     FlexState,
+    RestoreKey,
     SavableDataset,
-    add_sample_restore_key,
     set_sample_restore_key,
 )
 from megatron.energon.worker import WorkerConfig
-from megatron.energon.wrappers.base import BaseWrapperDataset, SampleIndex, get_sample_restore_key
+from megatron.energon.wrappers.base import (
+    BaseWrapperDataset,
+    MultiWrappedRestoreKey,
+    SampleIndex,
+    WrappedRestoreKey,
+    get_sample_restore_key,
+)
 from megatron.energon.wrappers.packing_dataset import (
     PackedSamplesOutput,
     PartialSample,
@@ -35,6 +43,21 @@ T_sample = TypeVar("T_sample")
 T_encoded_sample = TypeVar("T_encoded_sample")
 T_batch_sample = TypeVar("T_batch_sample")
 T_slice = TypeVar("T_slice")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class StreamingEncodePackRestoreKey(WrappedRestoreKey):
+    sample_idx: int
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class StreamingPackingRestoreKey(MultiWrappedRestoreKey):
+    pack_idx: int
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class StreamingPackingGenRestoreKey(StreamingPackingRestoreKey):
+    gen_idx: int
 
 
 class StreamingPackingDataset(
@@ -63,6 +86,9 @@ class StreamingPackingDataset(
     ]
     final_packer_stateless: bool
     packer_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]]
+    select_failure_tolerance: int
+    sample_encoder_failure_tolerance: int
+    final_packer_failure_tolerance: int
 
     _carryover_buffer: SavablePartialSampleBuffer[T_sample, T_slice]
     _select_sample_index: SampleIndex
@@ -72,7 +98,7 @@ class StreamingPackingDataset(
     _source_exhausted: bool
     #: The pack whose final packer generator is being emitted, and how many outputs were emitted.
     _generator_pack_idx: Optional[int]
-    _generator_sample_keys: Optional[tuple]
+    _generator_sample_keys: tuple[RestoreKey | None, ...] | None
     _generator_offset: Optional[int]
     #: Whether the state was restored since the last iteration started (not saved).
     _state_restored: bool
@@ -225,49 +251,38 @@ class StreamingPackingDataset(
                 with self._sample_encoder_sample_index.ctx() as encode_idx:
                     encoded_sample = self.sample_encoder(sample)
                 assert not isinstance(encoded_sample, Generator), "Generator not supported"
-                if isinstance(sample, PartialSample) and input_restore_key is not None:
-                    encoded_sample = set_sample_restore_key(
-                        encoded_sample,
-                        *input_restore_key[1:],
-                        src=sample,
-                    )
                 self._sample_encoder_failure_handler.reset()
                 encoded_pack.append(
-                    add_sample_restore_key(
+                    set_sample_restore_key(
                         encoded_sample,
-                        encode_idx,
-                        src=self,
+                        None
+                        if input_restore_key is None
+                        else StreamingEncodePackRestoreKey(
+                            sample_idx=encode_idx, inner=input_restore_key
+                        ),
                     )
                 )
         return encoded_pack
 
     def _restore_pack(
         self,
-        pack_restore_keys: Sequence[Any],
+        pack_restore_keys: Sequence[RestoreKey | None],
     ) -> List[T_encoded_sample | T_sample | PartialSample[T_sample, Any]]:
         pack = []
-        for inner_idx in pack_restore_keys:
-            if self.sample_encoder is not None:
-                id, sample_idx, *inner_idx = inner_idx
-                assert id == type(self).__name__
-                assert isinstance(sample_idx, int)
-            sample = self._carryover_buffer.restore_sample(inner_idx)
-            if self.sample_encoder is not None:
-                with handle_restore_errors(self.worker_config.restore_error_handler, sample):
-                    input_sample = sample
-                    input_restore_key = get_sample_restore_key(input_sample)
-                    with self._sample_encoder_sample_index.ctx(sample_idx):
-                        sample = self.sample_encoder(sample)
-                    assert not isinstance(sample, Generator), "Generator not supported"
-                    if isinstance(input_sample, PartialSample) and input_restore_key is not None:
-                        sample = set_sample_restore_key(
-                            sample,
-                            *input_restore_key[1:],
-                            src=input_sample,
-                        )
-                    sample = add_sample_restore_key(sample, sample_idx, src=self)
+        for restore_key in pack_restore_keys:
+            if restore_key is None:
+                raise ValueError("Cannot restore a pack containing a sample without a restore key")
+            if self.sample_encoder is None:
+                pack.append(self._carryover_buffer.restore_sample(restore_key))
+                continue
 
-            pack.append(sample)
+            key = cast(StreamingEncodePackRestoreKey, restore_key)
+            sample = self._carryover_buffer.restore_sample(key.inner)
+            with handle_restore_errors(self.worker_config.restore_error_handler, sample):
+                with self._sample_encoder_sample_index.ctx(key.sample_idx):
+                    encoded_sample = self.sample_encoder(sample)
+                assert not isinstance(encoded_sample, Generator), "Generator not supported"
+                pack.append(set_sample_restore_key(encoded_sample, key))
         return pack
 
     def _finalize_pack(
@@ -306,18 +321,15 @@ class StreamingPackingDataset(
                     self._final_pack_failure_handler.reset()
                     yield set_sample_restore_key(
                         inner_batch_sample,
-                        pack_idx,
-                        pack_sub_idx,
-                        *pack_restore_keys,
-                        src=self,
+                        StreamingPackingGenRestoreKey(
+                            pack_idx=pack_idx, gen_idx=pack_sub_idx, inner=pack_restore_keys
+                        ),
                     )
             else:
                 self._final_pack_failure_handler.reset()
                 yield set_sample_restore_key(
                     final_packed_sample,
-                    pack_idx,
-                    *pack_restore_keys,
-                    src=self,
+                    StreamingPackingRestoreKey(pack_idx=pack_idx, inner=pack_restore_keys),
                 )
         self._generator_pack_idx = None
         self._generator_sample_keys = None
@@ -386,38 +398,23 @@ class StreamingPackingDataset(
         )
         super().assert_can_restore()
 
-    def restore_sample(self, restore_key: Any) -> T_batch_sample:
+    def restore_sample(self, restore_key: RestoreKey) -> T_batch_sample:
         self.assert_can_restore()
-        if inspect.isgeneratorfunction(self.final_packer):
-            id, pack_idx, pack_sub_idx, *pack_restore_keys = restore_key
-            assert id == type(self).__name__
-        else:
-            id, pack_idx, *pack_restore_keys = restore_key
-            assert id == type(self).__name__
-
-        pack = self._restore_pack(pack_restore_keys)
+        key = cast(StreamingPackingRestoreKey, restore_key)
+        pack = self._restore_pack(key.inner)
 
         with handle_restore_errors(self.worker_config.restore_error_handler, pack):
-            with self._final_packing_sample_index.ctx(pack_idx):
+            with self._final_packing_sample_index.ctx(key.pack_idx):
                 final_pack = self.final_packer(pack)
-            if isinstance(final_pack, Generator):
-                assert inspect.isgeneratorfunction(self.final_packer), (
-                    f"Generator in {self.final_packer} but not marked as such."
-                )
-                for cur_batch_sub_idx, (pack_idx, inner_batch_sample) in enumerate(
-                    self._final_packing_sample_index.iter_ctx(final_pack, pack_idx)
+            if isinstance(key, StreamingPackingGenRestoreKey):
+                assert isinstance(final_pack, Generator)
+                for idx, (_, sample) in enumerate(
+                    self._final_packing_sample_index.iter_ctx(final_pack, key.pack_idx)
                 ):
-                    if cur_batch_sub_idx == pack_sub_idx:
-                        return set_sample_restore_key(
-                            inner_batch_sample,
-                            pack_idx,
-                            pack_sub_idx,
-                            *pack_restore_keys,
-                            src=self,
-                        )
-                assert False, f"Pack sub-index {pack_sub_idx} not found in pack"
-            else:
-                return set_sample_restore_key(final_pack, pack_idx, *pack_restore_keys, src=self)
+                    if idx == key.gen_idx:
+                        return set_sample_restore_key(sample, key)
+                raise ValueError(f"Pack output {key.gen_idx} is missing for {key!r}")
+            return set_sample_restore_key(final_pack, key)
 
     def config(self) -> Dict[str, Any]:
         return {
@@ -443,6 +440,10 @@ class StreamingPackingDataset(
 
 
 class _StreamingSampleIterator(Generic[T_sample, T_slice]):
+    carryover_buffer: SavablePartialSampleBuffer[T_sample, T_slice]
+    source_exhausted: bool
+    source_iter: Iterator[T_sample]
+
     def __init__(
         self,
         carryover_buffer: SavablePartialSampleBuffer[T_sample, T_slice],

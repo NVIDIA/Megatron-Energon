@@ -22,6 +22,8 @@ T = TypeVar("T")
 
 
 class _classproperty:
+    getter: Callable[[type], Any]
+
     def __init__(self, getter):
         self.getter = getter
 

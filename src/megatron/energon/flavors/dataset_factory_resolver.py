@@ -35,8 +35,10 @@ class _ProviderRegistration:
 
 
 class DatasetFactoryResolver:
+    _providers: list[_ProviderRegistration]
+
     def __init__(self) -> None:
-        self._providers: list[_ProviderRegistration] = []
+        self._providers = []
 
     def register(
         self,

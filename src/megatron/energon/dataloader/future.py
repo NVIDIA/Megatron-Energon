@@ -41,6 +41,8 @@ class Future(Generic[R]):
 class DoneFuture(Future[R]):
     """Future that is already done."""
 
+    _result: R
+
     def __init__(self, result: R):
         self._result = result
 
@@ -101,6 +103,8 @@ class CallableFuture(Future[R]):
 
 class ExceptionFuture(Future[Any]):
     """Future that raises an exception."""
+
+    _exception: Exception
 
     def __init__(self, exception: Exception):
         self._exception = exception

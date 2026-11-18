@@ -41,7 +41,7 @@ from megatron.energon.flavors import (
     SampleDecoder,
     SavableDataset,
 )
-from megatron.energon.flavors.base_dataset import ExtendableDataclassMixin
+from megatron.energon.flavors.base_dataset import ExtendableDataclassMixin, RestoreKey
 from megatron.energon.recipe.loader_interface import DatasetBlendMode, LoadedDataset
 from megatron.energon.rng import SystemRng, UserRng
 from megatron.energon.source_info import SourceInfo
@@ -294,9 +294,8 @@ class Batch(SampleTagsAlias, PinMemoryMixin, ExtendableDataclassMixin):
 
     #: Uniquely identifies each sample in the dataset.
     __key__: list[str]
-    #: Key for restoring the sample. This is used to restore the sample from a checkpoint. It
-    # should be a (nested) tuple of strings and integers, which can be used to index the dataset.
-    __restore_key__: Tuple[Union[str, int, tuple], ...]
+    #: Typed address for reconstructing this batch. None if the batch has no restore address.
+    __restore_key__: RestoreKey | None
 
     #: A dataset may define tags to distinguish between samples of the same sample type.
     __tags__: Optional[list[Optional[Dict[str, Any]]]] = None
@@ -410,6 +409,8 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
     #: Floor added to size-deficit credits, so every active dataset keeps a non-zero selection
     #: probability when blending by a :func:`sample_size_metric`.
     blend_sample_size_epsilon: float = 1.0
+    #: Allocated lazily on first RNG access in a worker thread.
+    _rng_by_worker: threading.local
 
     def _is_overridden(
         self, bound_method: Callable[..., Any], bases: Optional[Sequence[Type[Any]]] = None
@@ -1584,6 +1585,8 @@ class AugmentTaskEncoder(
 ):
     """Augment a task encoder with additional functionality. By default, delegates everything to the
     original task encoder."""
+
+    _task_encoder: TaskEncoder[T_sample, T_encoded_sample, T_raw_batch, T_batch]
 
     def __init__(self, task_encoder: TaskEncoder[T_sample, T_encoded_sample, T_raw_batch, T_batch]):
         """Initialize the augmenting task encoder.

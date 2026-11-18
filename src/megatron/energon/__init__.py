@@ -80,6 +80,7 @@ from megatron.energon.flavors import (
     VQASample,
     VQAWebdataset,
 )
+from megatron.energon.flavors.base_dataset import RestoreKey
 from megatron.energon.flavors.common.filter_index import (
     FilterIndexWriter,
     FilterView,
@@ -248,6 +249,7 @@ __all__ = [
     "sample_size_metric",
     "DataLoader",
     "SavableDataLoader",
+    "RestoreKey",
     "SavableDataset",
     "traverse_metadataset",
     "traverse_recipe",

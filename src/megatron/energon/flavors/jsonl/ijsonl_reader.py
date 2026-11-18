@@ -12,7 +12,7 @@ from typing import (
 
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.common.reader import SamplePartFileReader
-from megatron.energon.flavors.common.sample_record import FilteredSample
+from megatron.energon.flavors.common.sample_record import FilteredSample, IndexedRestoreKey
 from megatron.energon.flavors.jsonl.ijsonl import (
     CachedIJsonlOffsetReader,
     IJsonlFile,
@@ -91,7 +91,7 @@ class IJsonlReader(WorkerLocalFields, ABC, SamplePartFileReader[FilteredSample])
         sample = FilteredSample(
             __key__=key,
             __shard__=self.jsonl_path.name,
-            __restore_key__=("Webdataset", sample_pointer.index),
+            __restore_key__=IndexedRestoreKey(kind="Webdataset", index=sample_pointer.index),
             __sources__=(
                 SourceInfo(
                     dataset_path=str(self.jsonl_path),

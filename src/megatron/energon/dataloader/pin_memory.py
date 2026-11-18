@@ -21,6 +21,8 @@ class PinMemory(Generic[TSample]):
     This class is used to pin memory of samples in the primary process.
     """
 
+    _device: str | torch.device
+
     def __init__(self, device: str | torch.device):
         self._device = device
 

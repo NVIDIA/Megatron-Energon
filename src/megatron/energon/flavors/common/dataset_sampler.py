@@ -1,14 +1,14 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from typing import Any, Dict, Generator, Iterator, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, Generator, Iterator, List, Optional, Sequence, cast
 
 import torch
 
 from megatron.energon.edataclass import edataclass
-from megatron.energon.flavors.base_dataset import SavableDataset
+from megatron.energon.flavors.base_dataset import RestoreKey, SavableDataset
 from megatron.energon.flavors.common.reader import IndexedSampleReader, SequentialSampleReader
-from megatron.energon.flavors.common.sample_record import SampleRecord
+from megatron.energon.flavors.common.sample_record import IndexedRestoreKey, SampleRecord
 from megatron.energon.rng import FeistelPermutation, WorkerRng
 from megatron.energon.worker import WorkerConfig
 
@@ -18,7 +18,7 @@ class RawSampleData:
     """Represents the iteration state of a single slice slice to the index."""
 
     #: Index of the sample. This is also the restore key
-    __restore_key__: Tuple[str, int]
+    __restore_key__: IndexedRestoreKey
     #: The sample data
     data: Optional[SampleRecord]
 
@@ -36,13 +36,18 @@ class SliceState:
 class DatasetSampler(SavableDataset[RawSampleData]):
     """Samples indexed dataset slices across workers and epochs."""
 
-    _worker_local_fields = {"slice_offsets": lambda: None, "_slice_iters": list}
-
     #: The indexed sample reader
     reader: IndexedSampleReader
+    _sequential_reader: SequentialSampleReader[SampleRecord] | None
+    restore_key_kind: str
 
-    #: The offsets of the slice slices to iterate over for the current worker
+    #: Shared slice boundaries indexed by rank-local worker ID.
+    workers_slice_offsets: Sequence[Sequence[int]]
+    #: The slice boundaries selected for the current worker.
     slice_offsets: Optional[Sequence[int]]
+    #: Open streams for the active slices. Checkpoint state stores positions instead.
+    _slice_iters: list[Generator[SampleRecord | None, None, None] | None]
+    _worker_local_fields = {"slice_offsets": lambda: None, "_slice_iters": list}
 
     # If = 1, every sample is seen exactly once per epoch. If > 1, samples
     # (or rather slice slices) are shuffled within this number of epochs (i.e. randomly
@@ -121,7 +126,7 @@ class DatasetSampler(SavableDataset[RawSampleData]):
         self.workers_slice_offsets = workers_sample_slice_offsets
         self.slice_offsets = None
         # Streams over the active slices, opened on their first read. Not part of the saved state.
-        self._slice_iters: List[Optional[Generator[Any, None, None]]] = []
+        self._slice_iters = []
 
         self.reset_state_own()
 
@@ -169,7 +174,7 @@ class DatasetSampler(SavableDataset[RawSampleData]):
 
     def _get_sample(self, index: int) -> RawSampleData:
         return RawSampleData(
-            __restore_key__=(self.restore_key_kind, index),
+            __restore_key__=IndexedRestoreKey(kind=self.restore_key_kind, index=index),
             data=self.reader[index],
         )
 
@@ -193,7 +198,9 @@ class DatasetSampler(SavableDataset[RawSampleData]):
             )
             self._slice_iters[slice_idx] = slice_iter
         return RawSampleData(
-            __restore_key__=(self.restore_key_kind, slice_state.current),
+            __restore_key__=IndexedRestoreKey(
+                kind=self.restore_key_kind, index=slice_state.current
+            ),
             data=next(slice_iter),
         )
 
@@ -406,7 +413,7 @@ class DatasetSampler(SavableDataset[RawSampleData]):
                             "t": "DatasetSampler._slices_iter.yield",
                             "r": self.worker_config.rank,
                             "w": self.worker_config.rank_worker_id(),
-                            "index": sample.__restore_key__[1],
+                            "index": sample.__restore_key__.index,
                             "key": sample.data["__key__"],
                             "shard": sample.data["__shard__"],
                             "count": self._sample_count,
@@ -480,12 +487,11 @@ class DatasetSampler(SavableDataset[RawSampleData]):
     def assert_can_restore(self) -> None:
         pass
 
-    def restore_sample(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> RawSampleData:
-        # Key is: (self.restore_key_kind, index)
-        id, index = restore_key
-        assert id == self.restore_key_kind
-        assert isinstance(index, int)
-        return self._get_sample(index)
+    def restore_sample(self, restore_key: RestoreKey) -> RawSampleData:
+        key = cast(IndexedRestoreKey, restore_key)
+        if key.kind != self.restore_key_kind:
+            raise ValueError(f"Expected an index key for {self.restore_key_kind}, got {key.kind}")
+        return self._get_sample(key.index)
 
     def config(self) -> Dict[str, Any]:
         return {

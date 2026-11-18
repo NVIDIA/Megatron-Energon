@@ -15,6 +15,7 @@ from megatron.energon.dataloader.asynchronous import (
 from megatron.energon.dataloader.future import Future
 from megatron.energon.dataloader.workers.base_worker import (
     DataLoaderWorker,
+    WorkerSampleRestoreKey,
     WorkerState,
 )
 from megatron.energon.flavors.base_dataset import SavableDataset
@@ -85,7 +86,7 @@ class DataLoaderAsynchronousWorker(DataLoaderWorker[TSample], Asynchronous, Gene
         # so immediately resolve the future to the result (get returns immediately).
         return super().prefetch_next().get()
 
-    def _wrk_restore_sample(self, restore_key: tuple) -> TSample:
+    def _wrk_restore_sample(self, restore_key: WorkerSampleRestoreKey) -> TSample:
         """Wraps the super class method to call it in the worker process."""
         # The super class implementation already returns a resolved future (to be interface compatible),
         # so immediately resolve the future to the result (get returns immediately).
@@ -109,7 +110,7 @@ class DataLoaderAsynchronousWorker(DataLoaderWorker[TSample], Asynchronous, Gene
             return super().prefetch_next()
         return self._worker_call(self._wrk_prefetch_next)
 
-    def restore_sample(self, restore_key: tuple) -> Future[TSample]:
+    def restore_sample(self, restore_key: WorkerSampleRestoreKey) -> Future[TSample]:
         # Do not resolve the future here, but return it.
         if self._in_worker():
             return super().restore_sample(restore_key)

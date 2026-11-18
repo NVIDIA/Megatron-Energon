@@ -8,8 +8,9 @@ from typing import BinaryIO, Callable, Generator, Optional, Tuple
 import numpy as np
 
 from megatron.energon.epathlib import EPath
+from megatron.energon.epathlib.mapped_array import EPathMappedArray
 from megatron.energon.flavors.common.reader import SamplePartFileReader
-from megatron.energon.flavors.common.sample_record import FilteredSample
+from megatron.energon.flavors.common.sample_record import FilteredSample, IndexedRestoreKey
 from megatron.energon.source_info import SourceInfo
 from megatron.energon.worker_local import WorkerLocalFields
 
@@ -92,6 +93,8 @@ class IdxReader(IIdxReader):
     Reader for .idx files that uses direct file access.
     """
 
+    _idx_file: BinaryIO
+
     def __init__(self, idx_path: EPath):
         self.idx_path = idx_path
         self._idx_file = idx_path.open("rb")
@@ -117,6 +120,10 @@ class MMapIdxReader(IIdxReader):
     """
     Reader for .idx files that uses memory mapping.
     """
+
+    _idx_file: BinaryIO
+    _sequence_lengths: EPathMappedArray
+    _sequence_pointers: EPathMappedArray
 
     def __init__(self, idx_path: EPath):
         self.idx_path = idx_path
@@ -158,6 +165,7 @@ class BinIdxReader(WorkerLocalFields, SamplePartFileReader[FilteredSample]):
     _worker_local_fields = {"_lazy_idx_reader": lambda: None, "_bin_file": lambda: None}
 
     bin_path: EPath
+    _bin_size: int
     sample_filter: Optional[Callable[[str], bool]]
     part_filter: Optional[Callable[[str], bool]]
 
@@ -223,7 +231,7 @@ class BinIdxReader(WorkerLocalFields, SamplePartFileReader[FilteredSample]):
         sample = FilteredSample(
             __key__=key,
             __shard__=self.bin_path.name,
-            __restore_key__=("Webdataset", idx),
+            __restore_key__=IndexedRestoreKey(kind="Webdataset", index=idx),
             __sources__=(source_info,),
         )
         if self.part_filter is None or self.part_filter("tokens"):
