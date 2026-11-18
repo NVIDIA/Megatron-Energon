@@ -172,9 +172,12 @@ sample index. Prefetched samples are represented by restore keys rather than ser
 3. Round-robin and exhaustion metadata are restored.
 4. The pending restore state is cleared.
 
-If the restored loader uses a smaller compatible micro-batch size, the loader splits
-batch restore keys while preserving their wrapper structure. Increasing the micro-batch
-size or using an incompatible size is rejected.
+If the restored loader uses a smaller micro-batch size that divides the saved size, it
+splits pending batch keys into chunks of the target size while preserving their wrapper
+structure. A short final chunk is kept unless the target loader drops incomplete batches.
+Checkpoint redistribution keeps short final chunks because it has no target recipe.
+Resizing with pending generator batches is rejected because the output index refers to
+the original batch.
 
 `save_state_global()` gathers rank states through the configured data-parallel group.
 `restore_state_global()` either selects the local entry from a state list or scatters entries from a

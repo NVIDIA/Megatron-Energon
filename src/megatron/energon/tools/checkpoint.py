@@ -7,7 +7,7 @@ import click
 import torch
 
 from megatron.energon.checkpoint import RankStateIterable, natural_sort_key
-from megatron.energon.dataloader.dataloader import RankState, _split_batch_restore_key
+from megatron.energon.dataloader.dataloader import RankState, _resize_rank_state
 from megatron.energon.epathlib import EPath
 from megatron.energon.savable_loader import SavableDataLoaderState
 
@@ -67,9 +67,6 @@ def command_redist(
     )
     new_workers_per_rank = total_num_workers // new_world_size
 
-    # Ensure output directory exists
-    output_path.mkdir(exist_ok=True, parents=True)
-
     new_rank_states = [list() for _ in range(new_world_size)]
     rsi_iter = iter(rsi)
     for rank_idx in range(new_world_size):
@@ -84,26 +81,22 @@ def command_redist(
     old_size = rsi.get_micro_batch_size()
     batch_size = old_size if new_micro_batch_size is None else new_micro_batch_size
     if isinstance(rsi.rank_states[0], RankState):
-        factor = 1
-        if old_size != batch_size:
-            if old_size is None or batch_size is None or old_size % batch_size:
-                raise click.ClickException("The new micro batch size must divide the original size")
-            factor = old_size // batch_size
-        new_states = [
-            RankState(
-                worker_states=[worker for worker, _, _ in rank],
-                prefetched_restore_keys=[
-                    keys
-                    if factor == 1
-                    else [piece for key in keys for piece in _split_batch_restore_key(key, factor)]
-                    for _, keys, _ in rank
-                ],
-                exhausted_workers=[exhausted for _, _, exhausted in rank],
-                next_worker_id=0,
-                micro_batch_size=batch_size,
-            )
-            for rank in new_rank_states
-        ]
+        try:
+            new_states = [
+                _resize_rank_state(
+                    RankState(
+                        worker_states=[worker for worker, _, _ in rank],
+                        prefetched_restore_keys=[keys for _, keys, _ in rank],
+                        exhausted_workers=[exhausted for _, _, exhausted in rank],
+                        next_worker_id=0,
+                        micro_batch_size=old_size,
+                    ),
+                    batch_size,
+                )
+                for rank in new_rank_states
+            ]
+        except ValueError as error:
+            raise click.ClickException(str(error)) from error
     else:
         if batch_size != old_size:
             raise click.ClickException(
@@ -114,7 +107,11 @@ def command_redist(
             for rank in new_rank_states
         ]
 
-    # Save the redistributed checkpoint
+    # torch.save needs a directory for local output paths.
+    if output_path.is_local():
+        output_path.local_path().mkdir(exist_ok=True, parents=True)
+    else:
+        output_path.mkdir(exist_ok=True, parents=True)
     if rsi.is_global_checkpoint:
         # Save as a single global checkpoint file
         output_file = output_path / input_file_list[0].name

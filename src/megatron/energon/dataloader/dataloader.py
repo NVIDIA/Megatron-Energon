@@ -1,5 +1,6 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
+import inspect
 import os
 import sys
 import warnings
@@ -31,13 +32,18 @@ from megatron.energon.dataloader.workers.fork_worker import ForkDataLoaderWorker
 from megatron.energon.dataloader.workers.thread_worker import ThreadDataLoaderWorker
 from megatron.energon.edataclass import edataclass
 from megatron.energon.flavors.base_dataset import RestoreKey, SavableDataset
+from megatron.energon.state import FlexState
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import (
     BaseWrapperDataset,
     WrappedRestoreKey,
     get_sample_restore_key,
 )
-from megatron.energon.wrappers.batch_dataset import BatchDataset, BatchRestoreKey
+from megatron.energon.wrappers.batch_dataset import (
+    BatchDataset,
+    BatchGenRestoreKey,
+    BatchRestoreKey,
+)
 from megatron.energon.wrappers.gc_dataset import GC_DEFAULT_EVERY_N_ITER, GcDataset
 from megatron.energon.wrappers.iter_map_dataset import IterMapRestoreKey
 from megatron.energon.wrappers.log_sample_dataset import default_get_batch_keys
@@ -66,28 +72,73 @@ class RankState:
     exhausted_workers: list[bool] | None = None
 
 
-def _split_batch_restore_key(key: RestoreKey | None, batch_split_factor: int) -> list[RestoreKey]:
-    if batch_split_factor < 1:
-        raise ValueError("The batch split factor must be positive")
+def _split_batch_restore_key(
+    key: RestoreKey | None, batch_size: int, *, drop_last: bool = False
+) -> list[RestoreKey]:
+    if batch_size < 1:
+        raise ValueError("The target batch size must be positive")
     if key is None:
         raise ValueError("Cannot split a batch without a restore key")
+    if isinstance(key, BatchGenRestoreKey):
+        raise ValueError("Cannot resize a checkpoint with prefetched generator batches")
     if isinstance(key, BatchRestoreKey):
         samples = key.inner
-        if not samples or len(samples) % batch_split_factor:
-            raise ValueError("Cannot split this batch restore key")
-        size = len(samples) // batch_split_factor
-        return [replace(key, inner=samples[i : i + size]) for i in range(0, len(samples), size)]
+        if not samples:
+            raise ValueError("Cannot split an empty batch restore key")
+        stop = len(samples) - len(samples) % batch_size if drop_last else len(samples)
+        return [
+            replace(key, inner=samples[start : start + batch_size])
+            for start in range(0, stop, batch_size)
+        ]
     if isinstance(key, WrappedRestoreKey):
         return [
             replace(key, inner=inner)
-            for inner in _split_batch_restore_key(key.inner, batch_split_factor)
+            for inner in _split_batch_restore_key(key.inner, batch_size, drop_last=drop_last)
         ]
     if isinstance(key, IterMapRestoreKey) and len(key.inner) == 1:
         return [
             replace(key, inner=(inner,))
-            for inner in _split_batch_restore_key(key.inner[0], batch_split_factor)
+            for inner in _split_batch_restore_key(key.inner[0], batch_size, drop_last=drop_last)
         ]
     raise ValueError(f"Unsupported restore key type for splitting batch: {type(key).__name__}")
+
+
+def _has_pending_generator_batch(state: FlexState) -> bool:
+    if state.get("__class__") == "BatchDataset" and state.get("_generator_sample_keys") is not None:
+        return True
+    return any(_has_pending_generator_batch(child) for child in state.get("datasets", ()))
+
+
+def _resize_rank_state(
+    state: RankState, batch_size: int | None, *, drop_last: bool = False
+) -> RankState:
+    old_size = state.micro_batch_size
+    if old_size == batch_size:
+        return state
+    if (
+        old_size is None
+        or batch_size is None
+        or not 0 < batch_size < old_size
+        or old_size % batch_size
+    ):
+        raise ValueError("The target micro-batch size must be a smaller divisor of the saved size")
+    if any(
+        worker is not None and _has_pending_generator_batch(worker.dataset)
+        for worker in state.worker_states
+    ):
+        raise ValueError("Cannot resize a checkpoint with an in-progress generator batch")
+    return replace(
+        state,
+        micro_batch_size=batch_size,
+        prefetched_restore_keys=[
+            [
+                piece
+                for key in worker_keys
+                for piece in _split_batch_restore_key(key, batch_size, drop_last=drop_last)
+            ]
+            for worker_keys in state.prefetched_restore_keys
+        ],
+    )
 
 
 class WorkerType(Protocol[TSample]):
@@ -268,8 +319,10 @@ class DataLoader(Generic[TSample]):
                 for prefetched_restore_keys in self._restore_state.prefetched_restore_keys
             ]
             self._next_worker_id = self._restore_state.next_worker_id
-            self._exhausted_workers = self._restore_state.exhausted_workers or [False] * len(
-                worker_states
+            self._exhausted_workers = (
+                self._restore_state.exhausted_workers.copy()
+                if self._restore_state.exhausted_workers is not None
+                else [False] * len(worker_states)
             )
             # State was restored, clear
             self._restore_state = None
@@ -500,16 +553,19 @@ class DataLoader(Generic[TSample]):
     def num_workers(self) -> int:
         return self._worker_config.num_workers
 
+    def _get_batch_dataset(self) -> BatchDataset | None:
+        if isinstance(self._dataset, BatchDataset):
+            return self._dataset
+        if isinstance(self._dataset, BaseWrapperDataset):
+            result = self._dataset._find_wrapped_dataset(BatchDataset)
+            assert result is None or isinstance(result, BatchDataset)
+            return result
+        return None
+
     def _get_batch_size(self) -> int | None:
-        """Try to infer micro batch size from the dataset"""
-        if (
-            isinstance(self._dataset, BaseWrapperDataset)
-            and (bds := self._dataset._find_wrapped_dataset(BatchDataset)) is not None
-        ):
-            assert isinstance(bds, BatchDataset)
-            return bds.batch_size
-        else:
-            return None
+        """Try to infer micro-batch size from the dataset."""
+        dataset = self._get_batch_dataset()
+        return dataset.batch_size if dataset is not None else None
 
     def save_state_rank(self) -> RankState:
         if self._restore_state is not None:
@@ -618,33 +674,17 @@ class DataLoader(Generic[TSample]):
             return
 
         assert isinstance(state, RankState)
-        micro_batch_size = self._get_batch_size()
-        if state.micro_batch_size != micro_batch_size:
-            assert (
-                state.micro_batch_size is not None
-                and micro_batch_size is not None
-                and state.micro_batch_size > micro_batch_size
-                and state.micro_batch_size % micro_batch_size == 0
-            ), "Micro batch size mismatch"
-            batch_split_factor = state.micro_batch_size // micro_batch_size
-            state = RankState(
-                prefetched_restore_keys=[
-                    [
-                        new_restore_key
-                        for restore_key in prefetched_restore_keys
-                        for new_restore_key in _split_batch_restore_key(
-                            restore_key, batch_split_factor
-                        )
-                    ]
-                    for prefetched_restore_keys in state.prefetched_restore_keys
-                ],
-                worker_states=state.worker_states,
-                next_worker_id=state.next_worker_id,
-                micro_batch_size=micro_batch_size,
-                exhausted_workers=state.exhausted_workers,
-            )
-
-        self._restore_state = state
+        batch_dataset = self._get_batch_dataset()
+        batch_size = batch_dataset.batch_size if batch_dataset is not None else None
+        if (
+            batch_size != state.micro_batch_size
+            and batch_dataset is not None
+            and inspect.isgeneratorfunction(batch_dataset.batcher)
+        ):
+            raise ValueError("Cannot resize a checkpoint for a generator batcher")
+        self._restore_state = _resize_rank_state(
+            state, batch_size, drop_last=batch_dataset is not None and batch_dataset.drop_last
+        )
 
     def restore_state_global(
         self,
