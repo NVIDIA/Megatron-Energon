@@ -621,7 +621,11 @@ class RecipeBlend(
                     assert loaded_dataset.weight is None
                     assert loaded_dataset.repetitions is None
                     loaded_dataset.weight = 1.0
-                loaded_dataset.weight = loaded_dataset.weight * dataset.weight / sum_weight
+                if sum_weight == 0:
+                    # All weights of this blend are zero, none of its datasets is used.
+                    loaded_dataset.weight = 0.0
+                else:
+                    loaded_dataset.weight = loaded_dataset.weight * dataset.weight / sum_weight
                 datasets.append(loaded_dataset)
         return LoadedDatasetList(
             blend_mode=DatasetBlendMode.DATASET_WEIGHT,
