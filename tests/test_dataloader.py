@@ -421,8 +421,8 @@ class TestDataLoader(unittest.TestCase):
             event = next(event for event in events if event["t"] == event_type)
             key = event["restore_key"]
             self.assertEqual(key["type"], "WorkerSampleRestoreKey")
-            self.assertEqual(key["fields"]["sample_idx"], first.__restore_key__.sample_idx)
-            self.assertEqual(key["fields"]["inner"]["type"], "MapGenRestoreKey")
+            self.assertEqual(key["sample_idx"], first.__restore_key__.sample_idx)
+            self.assertEqual(key["inner"]["type"], "MapGenRestoreKey")
 
         with io.BytesIO() as buffer:
             torch.save(checkpoint, buffer)
@@ -443,18 +443,19 @@ class TestDataLoader(unittest.TestCase):
         partial = PartialSampleRestoreKey(inner=leaf, slice=slice(1, 5))
         batch = BatchGenRestoreKey(sample_idx=3, gen_idx=1, inner=(partial, None))
 
-        fields = json.loads(json.dumps(batch.to_json_object(), allow_nan=False))["fields"]
+        fields = json.loads(json.dumps(batch.to_json_object(), allow_nan=False))
+        self.assertEqual(fields["type"], "BatchGenRestoreKey")
         self.assertEqual(fields["gen_idx"], 1)
         partial_json, missing = fields["inner"]
         self.assertIsNone(missing)
         self.assertEqual(partial_json["type"], "PartialSampleRestoreKey")
         self.assertEqual(
-            partial_json["fields"]["slice"],
+            partial_json["slice"],
             {"type": "slice", "start": 1, "stop": 5, "step": None},
         )
         self.assertEqual(
-            partial_json["fields"]["inner"],
-            {"type": "IndexedRestoreKey", "fields": {"kind": "Webdataset", "index": 7}},
+            partial_json["inner"],
+            {"type": "IndexedRestoreKey", "kind": "Webdataset", "index": 7},
         )
 
     def test_thread_workers_isolate_inherited_epoch_iterator_and_custom_fields(self):
