@@ -3,7 +3,7 @@
 
 import hashlib
 import random
-from typing import Any, List, Mapping, Optional, Sequence, TypeVar
+from typing import Any, List, Mapping, Optional, Sequence, TypeVar, overload
 
 import numpy
 import torch
@@ -16,30 +16,90 @@ from megatron.energon.worker import WorkerConfig
 
 T = TypeVar("T")
 
+_MASK64 = (1 << 64) - 1
+_GOLDEN_RATIO64 = 0x9E3779B97F4A7C15
 
-@edataclass
-class WorkerRngState:
-    rng: Any
 
-    def _hashable_value(self, value: Any) -> Any:
-        if isinstance(value, (int, float, bool, str)) or value is None:
-            return value
-        elif isinstance(value, torch.Tensor):
-            return self._hashable_value(value.tolist())
-        elif isinstance(value, numpy.ndarray):
-            return self._hashable_value(value.tolist())
-        elif isinstance(value, Mapping):
-            return tuple(
-                (self._hashable_value(k), self._hashable_value(v)) for k, v in value.items()
-            )
-        elif isinstance(value, Sequence):
-            return tuple(self._hashable_value(v) for v in value)
-        else:
-            raise ValueError(f"Cannot hash value of type {type(value)}: {value!r}")
+def _mix64(value: int) -> int:
+    """SplitMix64 finalizer used as the keyed Feistel round function."""
+    value = (value + _GOLDEN_RATIO64) & _MASK64
+    value = ((value ^ (value >> 30)) * 0xBF58476D1CE4E5B9) & _MASK64
+    value = ((value ^ (value >> 27)) * 0x94D049BB133111EB) & _MASK64
+    return value ^ (value >> 31)
 
-    def __repr__(self):
-        # If the hash is the same, the state is the same. Should suffice to identify the state.
-        return f"WorkerRngState(hash={hash(self._hashable_value((self.rng)))})"
+
+class FeistelPermutation(Sequence[int]):
+    """Memory-constant pseudorandom permutation over ``range(size)``.
+
+    The Feistel network permutes the next power-of-two domain. Cycle walking maps values outside
+    ``range(size)`` back into the requested domain without losing bijectivity.
+
+    Fewer than eight rounds leave a measurable bias for small sizes (e.g. adjacent inputs staying
+    adjacent too often), hence the default.
+    """
+
+    __slots__ = ("_keys", "_left_bits", "_right_bits", "_size")
+    _keys: tuple[int, ...]
+    _left_bits: int
+    _right_bits: int
+    _size: int
+
+    def __init__(self, size: int, seed: int, *, rounds: int = 8):
+        if size < 0:
+            raise ValueError("Permutation size must be non-negative")
+        if rounds < 4 or rounds % 2 != 0:
+            raise ValueError("Feistel rounds must be an even number greater than or equal to four")
+
+        block_bits = max(2, max(size - 1, 0).bit_length())
+        self._size = size
+        self._left_bits = block_bits // 2
+        self._right_bits = block_bits - self._left_bits
+        self._keys = tuple(
+            _mix64(seed + round_idx * _GOLDEN_RATIO64) for round_idx in range(rounds)
+        )
+
+    def __len__(self) -> int:
+        return self._size
+
+    @overload
+    def __getitem__(self, index: int) -> int: ...
+
+    @overload
+    def __getitem__(self, index: slice) -> list[int]: ...
+
+    def __getitem__(self, index: int | slice) -> int | list[int]:
+        if isinstance(index, slice):
+            return [self[item] for item in range(*index.indices(self._size))]
+        if index < 0:
+            index += self._size
+        if index < 0 or index >= self._size:
+            raise IndexError("Feistel permutation index out of range")
+        if self._size <= 1:
+            return index
+
+        value = index
+        while True:
+            value = self._permute_block(value)
+            if value < self._size:
+                return value
+
+    def _permute_block(self, value: int) -> int:
+        left_bits = self._left_bits
+        right_bits = self._right_bits
+        left = value >> right_bits
+        right = value & ((1 << right_bits) - 1)
+
+        for key in self._keys:
+            left, right = right, left ^ (_mix64(right ^ key) & ((1 << left_bits) - 1))
+            left_bits, right_bits = right_bits, left_bits
+
+        return (left << right_bits) | right
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> "FeistelPermutation":
+        return self
+
+    def __repr__(self) -> str:
+        return f"FeistelPermutation(size={self._size}, rounds={len(self._keys)})"
 
 
 class WorkerRng(Savable):
@@ -88,7 +148,9 @@ class WorkerRng(Savable):
             # 10 even on CPU.
             cdf = torch.cumsum(probs, dim=0)
             val = torch.rand(1, generator=self.rng) * cdf[-1]
-            return torch.searchsorted(cdf, val).item()
+            # Upper bound, such that entries with zero probability are never selected (a lower
+            # bound would return index 0 if val is exactly 0 and probs[0] is 0).
+            return torch.searchsorted(cdf, val, right=True).item()
 
     def choice(self, l: List[T], probs: Optional[torch.Tensor] = None) -> T:
         if probs is None:
@@ -104,57 +166,38 @@ class WorkerRng(Savable):
     def rand_pop(self, l: List[T]) -> T:
         return l.pop(self.randbelow(len(l)))
 
-    def save_state(self) -> WorkerRngState:
-        return WorkerRngState(
-            rng=None if self.rng is None else bytes(self.rng.get_state().tolist())
-        )
+    def save_state(self) -> FlexState:
+        return FlexState(rng=None if self.rng is None else bytes(self.rng.get_state().tolist()))
 
-    def restore_state(self, state: WorkerRngState):
-        if state.rng is None:
+    def restore_state(self, state: FlexState):
+        if state["rng"] is None:
             self._restore_state = None
         else:
-            self._restore_state = state.rng
+            self._restore_state = state["rng"]
 
 
 class UserRng:
-    """User random generators. To be used within the task encoder, providing local seeding."""
+    """Independent CPU random generators for task encoder code."""
 
     def __init__(self, seed: int):
-        self.torch = torch.Generator()
-        self.torch.manual_seed(seed)
-        if torch.cuda.is_available():
-            self.torch_cuda = torch.Generator(device="cuda")
-            self.torch_cuda.manual_seed(seed)
-
-        self.numpy = numpy.random.default_rng(seed=seed)
+        self.torch = torch.Generator().manual_seed(seed)
+        self.numpy = numpy.random.default_rng(seed)
         self.random = random.Random(seed)
 
-    def seed(self, seed: int) -> None:
+    def seed_args(self, *args: Any) -> None:
+        seed = SystemRng.get_seed_from_args(*args)
         self.torch.manual_seed(seed)
-        if torch.cuda.is_available():
-            self.torch_cuda.manual_seed(seed)
         self.numpy.bit_generator.state = numpy.random.default_rng(seed).bit_generator.state
         self.random.seed(seed)
 
-    def seed_args(self, *args: Any) -> None:
-        self.seed(SystemRng.get_seed_from_args(*args))
+    def save_state(self):
+        return self.torch.get_state(), self.numpy.bit_generator.state, self.random.getstate()
 
-    def save_state(self) -> FlexState:
-        state = FlexState(
-            torch=self.torch.get_state().tolist(),
-            numpy=self.numpy.bit_generator.state,
-            random=self.random.getstate(),
-        )
-        if torch.cuda.is_available():
-            state["torch_cuda"] = self.torch_cuda.get_state().tolist()
-        return state
-
-    def restore_state(self, state: FlexState):
-        self.torch.set_state(torch.as_tensor(state["torch"], dtype=torch.uint8))
-        if torch.cuda.is_available():
-            self.torch_cuda.set_state(torch.as_tensor(state["torch_cuda"], dtype=torch.uint8))
-        self.numpy.bit_generator.state = state["numpy"]
-        self.random.setstate(state["random"])
+    def restore_state(self, state):
+        torch_state, numpy_state, python_state = state
+        self.torch.set_state(torch_state)
+        self.numpy.bit_generator.state = numpy_state
+        self.random.setstate(python_state)
 
 
 @edataclass
@@ -200,8 +243,12 @@ class SystemRng:
 
     @staticmethod
     def seed(seed: int) -> None:
-        """Seeds the global random generators."""
-        torch.manual_seed(seed)
+        """Seeds the global random generators.
+
+        Only the CPU generators are seeded, which matches the state saved and restored by
+        SystemRng. Accelerator RNGs (e.g. CUDA) are not seeded.
+        """
+        torch.random.default_generator.manual_seed(seed)
         numpy.random.seed(seed)
         random.seed(seed)
 
@@ -237,5 +284,4 @@ class SystemRng:
     @staticmethod
     def seed_args(*args: Any) -> None:
         """Seeds the global random generators deterministically from the given arguments."""
-        # print(f"Seeding with args: {args}")
         SystemRng.seed(SystemRng.get_seed_from_args(*args))

@@ -35,7 +35,7 @@ basic/data_prep
 basic/data_decoding
 basic/basics_flow
 basic/task_encoder
-basic/metadataset
+basic/recipe
 basic/save_restore
 basic/glossary
 ```
@@ -48,17 +48,19 @@ maxdepth: 2
 ---
 advanced/remote_dataset
 advanced/crude_datasets
+advanced/data_processing
+advanced/filter_index
 advanced/custom_sample_loader
 advanced/repro_scaling
 advanced/packing
 advanced/grouping
-advanced/joining_datasets
 advanced/subsets
 advanced/epochized_blending
 advanced/custom_blending
 advanced/parallelism
 advanced/error_handling
 advanced/data_prep_api
+advanced/custom_dataset_factories
 ```
 
 
@@ -74,21 +76,18 @@ api/cli
 
 ```{toctree}
 ---
-caption: Migration Guides
-maxdepth: 2
----
-migration/energon_7_to_8
-```
-
-
-```{toctree}
----
 caption: Internals
 maxdepth: 2
 ---
-internals/contrib_guidelines
 internals/code_structure
+internals/dataset_formats
+internals/savability
 internals/dataloader
+internals/recipe_checkpoint
+internals/packing_blending
+internals/epath_storage
+internals/compatibility
+internals/contrib_guidelines
 ```
 
 # Indices and tables

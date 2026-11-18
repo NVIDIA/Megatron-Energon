@@ -51,7 +51,8 @@ def get_savable_loader(
         n_checkpoints: Deprecated compatibility argument; ignored by the custom loader.
         gc_freeze_at_start: If True, the garbage collector is frozen at the start of the loader.
         gc_collect_every_n_steps: The number of steps after which the garbage collector is called.
-        prefetch_factor: The factor by which to prefetch the dataset.
+        prefetch_factor: Number of pending samples per worker. Use zero for recipe migration.
+            Savable datasets without deterministic sample restoration use zero automatically.
         cache_pool: If set, the cache pool to use for the dataset.
         watchdog_timeout_seconds: The timeout in seconds. If None, the watchdog is disabled.
         watchdog_initial_timeout_seconds: The initial timeout in seconds. If None, the timeout is the same as watchdog_timeout_seconds.
@@ -77,14 +78,17 @@ def get_savable_loader(
     elif worker_type == "thread":
         worker_type = ThreadDataLoaderWorker
     elif worker_type == "main":
+        if dataset.worker_config.num_workers != 0:
+            raise ValueError("The main worker requires WorkerConfig.num_workers=0")
         worker_type = DataLoaderWorker
     elif not issubclass(worker_type, DataLoaderWorker):
         raise ValueError(f"Invalid worker type: {worker_type}")
     if dataset.worker_config.num_workers == 0:
-        assert prefetch_factor == 2
         prefetch_factor = 1
         pin_memory_arg = None
     else:
+        if not dataset.can_restore_sample():
+            prefetch_factor = 0
         pin_memory_arg = "automatic" if pin_memory else None
 
     loader = DataLoader(
@@ -139,7 +143,6 @@ def get_loader(
             )
 
     if dataset.worker_config.num_workers == 0:
-        assert prefetch_factor == 2
         prefetch_factor = 1
         pin_memory = None
     else:

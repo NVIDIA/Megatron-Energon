@@ -3,13 +3,17 @@
 
 import re
 
+from megatron.energon.deprecated import DEPRECATED_ATTRS, deprecated_dir, deprecated_getattr
+
 split_name_re = re.compile(r"^((?:.*/|)[^.]+)[.]([^/]*)$")
 skip_meta_re = re.compile(r"__[^/]*__($|/)")
-MAIN_FOLDER_NAME = ".nv-meta"
-JOIN_INDEX_FILENAME = "join_index.bin"
-INDEX_BATCH_SIZE = 4096
-INDEX_SQLITE_FILENAME = "index.sqlite"
-INDEX_UUID_FILENAME = "index.uuid"
-INFO_JSON_FILENAME = ".info.json"
-INFO_YAML_FILENAME = ".info.yaml"
-SPLIT_YAML_FILENAME = "split.yaml"
+
+__all__ = ["skip_meta_re", "split_name_re", *DEPRECATED_ATTRS[__name__]]
+
+
+def __getattr__(name: str):
+    return deprecated_getattr(__name__, name)
+
+
+def __dir__():
+    return deprecated_dir(__name__, ["skip_meta_re", "split_name_re"])

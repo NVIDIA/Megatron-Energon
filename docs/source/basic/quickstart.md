@@ -28,11 +28,12 @@ ds = get_train_dataset(
     worker_config=WorkerConfig.default_worker_config(),
 )
 
-with get_loader(ds) as loader:
-    for batch in loader:
-        # Do something with batch
-        # Infer, gradient step, ...
-        pass
+loader = get_loader(ds)
+
+for batch in loader:
+    # Do something with batch
+    # Infer, gradient step, ...
+    pass
 ```
 
 At first, we call {py:meth}`get_train_dataset <megatron.energon.get_train_dataset>` (click to see signature).
@@ -100,10 +101,11 @@ ds = get_train_dataset(
     worker_config=WorkerConfig.default_worker_config(),
 )
 
-with get_loader(ds) as loader:
-    for batch in loader:
-        print(batch)
-        break
+loader = get_loader(ds)
+
+for batch in loader:
+    print(batch)
+    break
 ```
 
 This prints
@@ -154,16 +156,17 @@ Actually, we would like to use a `batch_size` of more than one, let's go with 2 
 ```python
 from megatron.energon import get_train_dataset, get_loader, WorkerConfig
 
-with get_loader(get_train_dataset(
+loader = get_loader(get_train_dataset(
     '/path/to/your/dataset',
     batch_size=2,
     shuffle_buffer_size=100,
     max_samples_per_sequence=100,
     worker_config=WorkerConfig.default_worker_config(),
-)) as loader:
-    for batch in loader:
-        print(batch)
-        break
+))
+
+for batch in loader:
+    print(batch)
+    break
 ```
 
 The output will be similar to above but with different shapes and lengths:
@@ -180,17 +183,17 @@ Hence, we can
 - either use an existing task encoder
 - or define a custom one (see [](task_encoder))
 
-## Tutorial 3: Blending using Metadataset
+## Tutorial 3: Blending using Recipe
 
 A typical use case is to blend multiple datasets of the same (or similar type) together.
 For example, you may want to blend the COCO dataset with the COYO dataset.
-The easiest way to do this, is to use the metadataset pattern. 
+The easiest way to do this, is to use the recipe pattern.
 For this you need to create a new `yaml` file that defines the meta dataset:
 
 `coyo-coco-dataset.yaml`:
 ```yaml
 __module__: megatron.energon
-__class__: MetadatasetV2
+__class__: Recipe
 splits:
   # Train dataset, the datasets will be blended according to their weights 
   train:
@@ -212,21 +215,22 @@ Usage in your loader, simply use {py:func}`get_train_dataset <megatron.energon.g
 ```python
 from megatron.energon import get_train_dataset, get_loader, WorkerConfig
 
-with get_loader(get_train_dataset(
+loader = get_loader(get_train_dataset(
     'coyo-coco-dataset.yaml',
     batch_size=4,
     shuffle_buffer_size=100,
     max_samples_per_sequence=100,
     worker_config=WorkerConfig.default_worker_config(),
-)) as loader:
-    for batch in loader:
-        print(batch)
-        break
+))
+
+for batch in loader:
+    print(batch)
+    break
 
 ```
 
-If you need to handle samples from different datasets differently in your pipeline, you will want to use `subflavors`.
-For these and other details, check out the [](metadataset) section. Energon also supports blending by specifying the number of repetitions for each dataset using [](../advanced/epochized_blending).
+If you need to handle samples from different datasets differently in your pipeline, you will want to use `tags`.
+For these and other details, check out the [](recipe) section. Energon also supports blending by specifying the number of repetitions for each dataset using [](../advanced/epochized_blending).
 
 ## Tutorial 4: Distributed Loading
 
@@ -248,16 +252,17 @@ worker_config = WorkerConfig(
     num_workers=2,
 )
 
-with get_loader(get_train_dataset(
+loader = get_loader(get_train_dataset(
     'coyo-coco-dataset.yaml',
     batch_size=4,
     shuffle_buffer_size=100,
     max_samples_per_sequence=100,
     worker_config=worker_config,
-)) as loader:
-    for batch in loader:
-        print(batch)
-        break
+))
+
+for batch in loader:
+    print(batch)
+    break
 ```
 
 For a detailed discussion on parallelism, check out [](../advanced/parallelism).
@@ -278,14 +283,15 @@ ds = get_train_dataset(
 )
 
 # Must use the savable loader here. This provides methods to save
-# and load the state of the data loader.
-with get_savable_loader(ds) as loader:
-    for i, batch in zip(range(10), loader):
-        print(batch)
-        break
+# and load the state of the data loader
+loader = get_savable_loader(ds)
 
-    # Save the state before shutting down the loader.
-    state = loader.save_state_rank()
+for i, batch in zip(range(10), loader):
+    print(batch)
+    break
+
+# Save the state
+state = loader.save_state_rank()
 # Could save the state now using torch.save()
 
 # ... when loading:
@@ -300,13 +306,7 @@ ds = get_train_dataset(
     worker_config=WorkerConfig.default_worker_config(),
 )
 loader = get_savable_loader(ds)
-
-# Restore before entering the context because entering starts the workers.
 loader.restore_state_rank(state)
-with loader:
-    for batch in loader:
-        print(batch)
-        break
 ```
 
 We provide code for different scenarios for saving and loading in distributed settings especially in the section [](save_restore).

@@ -4,14 +4,16 @@
 from pathlib import Path
 from typing import Any, List, Literal, Optional, Tuple, TypeVar, Union
 
+from megatron.energon.decoders import SampleDecoder
 from megatron.energon.deprecation import warn_deprecated
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors import BaseCoreDatasetFactory, SavableDataset
-from megatron.energon.flavors.webdataset.sample_decoder import SampleDecoder
-from megatron.energon.metadataset import load_dataset
+from megatron.energon.recipe import load_dataset
+from megatron.energon.recipe.loader_interface import LoadedDataset
 from megatron.energon.task_encoder.base import DefaultTaskEncoder, TaskEncoder, WorkerConfig
 
 T = TypeVar("T", covariant=True)
+PackingBufferSize = int | Literal["stream"] | None
 
 
 def _split_kwargs(kwargs: dict) -> dict:
@@ -111,7 +113,7 @@ def get_train_dataset(
     worker_config: WorkerConfig,
     batch_size: Optional[int],
     batch_drop_last: bool = False,
-    packing_buffer_size: Optional[int] = None,
+    packing_buffer_size: PackingBufferSize = None,
     shuffle_buffer_size: Optional[int],
     max_samples_per_sequence: Optional[int],
     virtual_epoch_length: int = 0,
@@ -137,7 +139,10 @@ def get_train_dataset(
         worker_config: Worker configuration to use.
         batch_size: Size of a batch. If None, do not batch
         batch_drop_last: If true, drop the last batch if it is smaller than `batch_size`.
-        shuffle_buffer_size: Size of the sample shuffle buffer (before task encoding).
+        packing_buffer_size: Size of the packing buffer, or ``"stream"`` for pull-based packing
+            without a packing buffer. Used as the default by ``TaskEncoder.build_packing_groups``.
+        shuffle_buffer_size: Sample shuffle buffer size before task encoding. Used as the default
+            by ``TaskEncoder.build_packing_groups``.
         max_samples_per_sequence: If set, limit the number of samples per sample-sequence to this.
         virtual_epoch_length: If set, the dataset will be epochized to this length (=iterating
             will be suspended and the for-loop returns, next for-loop continues iterating).
@@ -146,7 +151,7 @@ def get_train_dataset(
         task_encoder: Task encoder to use.
         repeat: By default, the inner datasets will loop. If set to False, stop iteration after
             one epoch. Must only be set to False in conjunction with blend_epochized in the
-            metadataset if one is used.
+            recipe if one is used.
         cache_pool: If set, the cache pool to use for the dataset.
         **kwargs: Additional arguments to the dataset constructor.
 
@@ -175,6 +180,7 @@ def get_train_dataset(
         virtual_epoch_length=virtual_epoch_length,
         shuffle_buffer_size=shuffle_buffer_size,
         blend_mode=datasets.blend_mode,
+        blend_weight_unit=datasets.blend_weight_unit,
         repeat=repeat,
     )
 
@@ -186,7 +192,7 @@ def get_val_dataset(
     worker_config: WorkerConfig,
     batch_size: int,
     batch_drop_last: bool = False,
-    packing_buffer_size: Optional[int] = None,
+    packing_buffer_size: PackingBufferSize = None,
     limit: Optional[int] = None,
     task_encoder: TaskEncoder[Any, Any, Any, T] = DefaultTaskEncoder(),
     **kwargs,
@@ -208,6 +214,8 @@ def get_val_dataset(
         worker_config: Worker configuration to use.
         batch_size: Size of a batch
         batch_drop_last: If true, drop the last batch if it is smaller than `batch_size`.
+        packing_buffer_size: Size of the packing buffer, or ``"stream"`` for pull-based packing
+            without a packing buffer. Used as the default by ``TaskEncoder.build_packing_groups``.
         limit: If set, limit the number of batches loaded from the dataset to this.
         task_encoder: Task encoder to use.
         **kwargs: Additional arguments to the dataset constructor.
@@ -241,7 +249,7 @@ def get_val_datasets(
     worker_config: WorkerConfig,
     batch_size: int,
     batch_drop_last: bool = False,
-    packing_buffer_size: Optional[int] = None,
+    packing_buffer_size: PackingBufferSize = None,
     limit: Optional[int] = None,
     task_encoder: TaskEncoder[Any, Any, Any, T] = DefaultTaskEncoder(),
     **kwargs,
@@ -263,6 +271,8 @@ def get_val_datasets(
         worker_config: Worker configuration to use.
         batch_size: Size of a batch
         batch_drop_last: If true, drop the last batch if it is smaller than `batch_size`.
+        packing_buffer_size: Size of the packing buffer, or ``"stream"`` for pull-based packing
+            without a packing buffer. Used as the default by ``TaskEncoder.build_packing_groups``.
         limit: If set, limit the number of batches loaded from the dataset to this.
         task_encoder: Task encoder to use.
         **kwargs: Additional arguments to the dataset constructor.
@@ -292,4 +302,102 @@ def get_val_datasets(
             dataset.dataset,
         )
         for dataset in datasets.datasets
+    ]
+
+
+def _load_leaf_datasets(
+    path: Union[str, EPath, Path],
+    *,
+    split_part: str,
+    worker_config: WorkerConfig,
+    task_encoder: TaskEncoder,
+    kwargs: dict,
+) -> List[LoadedDataset]:
+    """Loads all resolved leaves of a dataset or recipe without training randomization."""
+    loader = load_dataset(path, **_split_kwargs(kwargs))
+    return loader.get_datasets(
+        training=False,
+        split_part=split_part,
+        worker_config=worker_config,
+        decoder=task_encoder.decoder,
+        **kwargs,
+    ).datasets
+
+
+def get_processing_dataset(
+    path: Union[str, EPath, Path],
+    *,
+    split_part: Union[Literal["train", "val", "test"], str] = "train",
+    worker_config: WorkerConfig,
+    task_encoder: TaskEncoder[Any, T, Any, Any] = DefaultTaskEncoder(),
+    **kwargs,
+) -> SavableDataset[T]:
+    """Build one finite processing pipeline from a dataset or recipe.
+
+    All resolved recipe leaves are concatenated in recipe order and traversed once. Recipe blend
+    weights and repetitions are ignored. Cooking, task encoding, and post-encoding are applied,
+    but the stream is not shuffled, packed, batched, or repeated.
+
+    Args:
+        path: Path to a prepared dataset or recipe.
+        split_part: Default split part to process.
+        worker_config: Worker configuration to use.
+        task_encoder: Task encoder to use.
+        **kwargs: Additional arguments to the dataset constructor.
+
+    Returns:
+        One processing pipeline containing all resolved recipe leaves.
+    """
+    datasets = _load_leaf_datasets(
+        path,
+        split_part=split_part,
+        worker_config=worker_config,
+        task_encoder=task_encoder,
+        kwargs=kwargs,
+    )
+    return task_encoder.build_processing_datasets(
+        datasets=datasets,
+        worker_config=worker_config,
+    )
+
+
+def get_processing_datasets(
+    path: Union[str, EPath, Path],
+    *,
+    split_part: Union[Literal["train", "val", "test"], str] = "train",
+    worker_config: WorkerConfig,
+    task_encoder: TaskEncoder[Any, T, Any, Any] = DefaultTaskEncoder(),
+    **kwargs,
+) -> List[Tuple[SavableDataset[T], BaseCoreDatasetFactory]]:
+    """Build one finite processing pipeline per resolved dataset or recipe leaf.
+
+    Each returned pipeline traverses one resolved leaf once. Recipe blend weights and repetitions
+    are ignored. The source factory paired with each pipeline identifies the corresponding leaf.
+
+    Args:
+        path: Path to a prepared dataset or recipe.
+        split_part: Default split part to process.
+        worker_config: Worker configuration to use.
+        task_encoder: Task encoder to use.
+        **kwargs: Additional arguments to the dataset constructor.
+
+    Returns:
+        Processing pipelines paired with their source dataset factories.
+    """
+    datasets = _load_leaf_datasets(
+        path,
+        split_part=split_part,
+        worker_config=worker_config,
+        task_encoder=task_encoder,
+        kwargs=kwargs,
+    )
+    return [
+        (
+            task_encoder.build_processing_datasets(
+                datasets=[dataset],
+                worker_config=worker_config,
+            ),
+            dataset.dataset,
+        )
+        for dataset in datasets
     ]

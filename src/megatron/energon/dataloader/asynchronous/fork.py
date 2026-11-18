@@ -34,7 +34,8 @@ class ForkAsynchronous(Asynchronous):
         self._spawning_process = os.getpid()
 
     def _queues(self) -> tuple[QueueProtocol[WorkerCommand], QueueProtocol[WorkerResult]]:
-        return torch.multiprocessing.Queue(), torch.multiprocessing.Queue()
+        context = torch.multiprocessing.get_context("fork")
+        return context.Queue(), context.Queue()
 
     def _check_parent_process(self, evt_exit: threading.Event) -> None:
         """Check if the parent process is alive. If it is dead, exit the worker process."""
@@ -100,19 +101,19 @@ class ForkAsynchronous(Asynchronous):
         return torch.multiprocessing.current_process() == self._process
 
     def start(self) -> None:
-        torch.multiprocessing.set_start_method("fork", force=True)
         orig_num_threads = torch.get_num_threads()
         # Disable torch internal multithreading, it may deadlock the forked process.
         torch.set_num_threads(1)
-        self._process = torch.multiprocessing.Process(
+        self._process = torch.multiprocessing.get_context("fork").Process(
             target=self._worker_run,
             args=(self._cmd_queue, self._result_queue),
             daemon=True,
             name=f"ForkDataLoaderWorker-{self._name}",
         )
-        self._process.start()
-        # Revert the original number of threads in the main process.
-        torch.set_num_threads(orig_num_threads)
+        try:
+            self._process.start()
+        finally:
+            torch.set_num_threads(orig_num_threads)
 
     def shutdown(self, in_del: bool = False) -> None:
         if self._spawning_process != os.getpid():

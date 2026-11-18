@@ -6,11 +6,11 @@ help:
 
 # Update the environment with the latest version of the dependencies
 dev-sync:
-    uv sync --all-extras --cache-dir .uv_cache
+    uv sync --all-extras
 
 # Update the environment but not with the development dependencies
 prod-sync:
-    uv sync --all-extras --no-dev --cache-dir .uv_cache
+    uv sync --all-extras --no-dev
 
 # Fix the code style and format
 fix: dev-sync
@@ -22,6 +22,11 @@ fix: dev-sync
 # Execute the ruff code linter and format checker
 check: dev-sync
     uv run ruff check
+    uv run ruff format --check
+
+# Check that all commits since the base are signed off and follow Conventional Commits
+check-commits base="origin/develop":
+    python3 scripts/check_commits.py {{base}}..HEAD
 
 # Execute all unit tests
 test: dev-sync
@@ -30,6 +35,10 @@ test: dev-sync
 # Build the docs
 docs: dev-sync
     uv run sphinx-build -b html docs/source docs/build
+
+# Serve the built docs locally
+docs-serve:
+    uv run python -m http.server --bind 127.0.0.1 --directory docs/build
 
 # Build the release package
 build:

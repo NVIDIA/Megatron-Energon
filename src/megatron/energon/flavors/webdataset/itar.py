@@ -1,14 +1,18 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+import contextlib
 import struct
 import tarfile
-from typing import Dict, Generator, Optional, Tuple, Union
+from types import TracebackType
+from typing import BinaryIO, Dict, Generator, Optional, Tuple, Type, Union
 
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
+from megatron.energon.retry_stream import RetryReadStream
+from megatron.energon.worker_local import WorkerLocalFields
 
-ITAR_SUFFIX = ".tar.idx"
+IDX_SUFFIX = ".idx"
 
 
 @edataclass
@@ -45,7 +49,7 @@ class ITarRawSamplePartPointer:
 class TarIndexReader:
     def __init__(self, tar_path: Union[EPath, str]):
         tar_path = EPath(tar_path)
-        index_path = tar_path.with_suffix(ITAR_SUFFIX)
+        index_path = tar_path.with_suffix(IDX_SUFFIX, replace=False)
         self._length = index_path.size() // 8
         self.itar = index_path.open("rb")
 
@@ -83,8 +87,8 @@ class TarIndexReader:
 class TarIndexWriter:
     def __init__(self, tar_path: EPath):
         self.tar_path = tar_path
-        self.final_name = tar_path.with_suffix(ITAR_SUFFIX)
-        self.tmp_name = tar_path.with_suffix(ITAR_SUFFIX + ".tmp")
+        self.final_name = tar_path.with_suffix(IDX_SUFFIX, replace=False)
+        self.tmp_name = tar_path.with_suffix(IDX_SUFFIX + ".tmp", replace=False)
         self.itar = self.tmp_name.open("wb")
 
     def append(self, offset: int):
@@ -114,6 +118,76 @@ class TarIndexWriter:
         self.close(finalize=exc_val is None)
 
 
+class SubFileReader(BinaryIO):
+    """A file-like object that reads a subfile (i.e. offset, size defined portion) of a larger
+    file."""
+
+    def __init__(self, stream: BinaryIO, offset: int, size: int):
+        self.offset = offset
+        self._pos = 0
+        self.size = size
+        self.stream = stream
+        self.stream.seek(self.offset)
+
+    def read(self, n: int = -1) -> bytes:
+        if n == -1:
+            n = self.size - self._pos
+        else:
+            n = min(n, self.size - self._pos)
+        if n == 0:
+            return b""
+        read = self.stream.read(n)
+        self._pos += len(read)
+        return read
+
+    def seek(self, offset: int, whence: int = 0) -> int:
+        if whence == 0:
+            self._pos = offset
+        elif whence == 1:
+            self._pos += offset
+        elif whence == 2:
+            self._pos = self.size + offset
+        else:
+            raise ValueError("Invalid whence value")
+        self._pos = max(0, min(self._pos, self.size))
+        self.stream.seek(self.offset + self._pos)
+        return self._pos
+
+    def tell(self) -> int:
+        return self._pos
+
+    def __enter__(self) -> BinaryIO:
+        return self
+
+    def __exit__(
+        self, exc_type: Type[BaseException], exc_val: BaseException, exc_tb: TracebackType
+    ) -> None:
+        self.close()
+
+    def close(self) -> None:
+        self.stream.close()
+
+    def isatty(self) -> bool:
+        return False
+
+    def seekable(self) -> bool:
+        return True
+
+    def writable(self) -> bool:
+        return False
+
+
+def get_itar_byte_offset(
+    path: Union[str, EPath],
+    sample_offset: int = 0,
+) -> int:
+    """Gets the byte offset from sample offsets."""
+    if sample_offset == 0:
+        return 0
+    with TarIndexReader(path) as itar:
+        return itar[sample_offset]
+
+
 @edataclass
 class CacheEntry:
     tar_index_reader: TarIndexReader
@@ -121,7 +195,7 @@ class CacheEntry:
     lookahead_byteoffset: Optional[int] = None
 
 
-class CachedItarOffsetReader:
+class CachedItarOffsetReader(WorkerLocalFields):
     """
     This class is a high-level wrapper around TarIndexReader that caches some
     of the recent lookups for faster access. It is designed for the case when
@@ -131,6 +205,8 @@ class CachedItarOffsetReader:
     Args:
         cache_size: The number of entries to keep in the cache. By default, we keep 32.
     """
+
+    _worker_local_fields = {"tar_index_reader_cache": dict}
 
     def __init__(self, cache_size: int = 32):
         # Maps (tar_file, current_offset) -> CacheEntry
@@ -246,10 +322,12 @@ class CachedItarOffsetReader:
 
         return result_byte_offset, length
 
-    def close(self):
-        for cache_entry in self.tar_index_reader_cache.values():
-            cache_entry.tar_index_reader.close()
-        self.tar_index_reader_cache.clear()
+    def close(self) -> None:
+        """Close all cached index readers, even if closing one of them fails."""
+        entries, self.tar_index_reader_cache = list(self.tar_index_reader_cache.values()), {}
+        with contextlib.ExitStack() as stack:
+            for entry in entries:
+                stack.callback(entry.tar_index_reader.close)
 
 
 class ITarFile(tarfile.TarFile):
@@ -284,3 +362,40 @@ class ITarFile(tarfile.TarFile):
             self.fileobj.seek(self.offset)
 
         return super().next()
+
+
+@contextlib.contextmanager
+def open_itar(path: Union[str, EPath], byte_offset: int = 0, byte_size: Optional[int] = None):
+    """
+    Open an indexed tarfile with offset and size.
+    Args:
+        path: Path to the tarfile to open
+        byte_offset: Byte offset within the file
+        byte_size: Size of the file to read
+
+    Returns:
+        The opened tarfile
+    """
+    path = EPath(path)
+
+    # TODO: if tar file startswith(b"\x1f\x8b\x08") -> Seekable gzip file
+    with path.open("rb") as f:
+        if f.read(3) == b"\x1f\x8b\x08":
+            # Open as seekable tgz
+            raise ValueError("Seekable tgz not supported yet")
+
+    if byte_offset != 0 or byte_size is not None:
+        if byte_size is None:
+            byte_size = path.size() - byte_offset
+        with RetryReadStream(path) as stream:
+            with SubFileReader(
+                stream,
+                offset=byte_offset,
+                size=byte_size,
+            ) as fileobj:
+                with ITarFile.open(fileobj=fileobj, mode="r:") as f:
+                    yield f
+    else:
+        with RetryReadStream(path) as fileobj:
+            with ITarFile.open(fileobj=fileobj, mode="r:") as f:
+                yield f

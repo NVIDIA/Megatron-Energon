@@ -3,7 +3,6 @@
 
 import dataclasses
 import inspect
-import threading
 import typing
 from abc import ABC, abstractmethod
 from copy import deepcopy
@@ -27,14 +26,18 @@ import torch
 from torch.utils.data import IterableDataset
 from typing_extensions import Self
 
-import megatron.energon
 from megatron.energon.cache import FileStore
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
 from megatron.energon.savable import Savable
 from megatron.energon.source_info import SourceInfo
 from megatron.energon.state import FlexState
+from megatron.energon.tags import SampleTagsAlias, TagsAlias, canonicalize_tag_kwargs
 from megatron.energon.worker import WorkerConfig
+from megatron.energon.worker_local import WorkerLocalFields
+
+if typing.TYPE_CHECKING:
+    from megatron.energon.flavors.common.manifest.types import ShardInfo
 
 T_sample = TypeVar("T_sample", covariant=True)
 T = TypeVar("T", covariant=True)
@@ -43,39 +46,32 @@ T = TypeVar("T", covariant=True)
 class PinMemoryMixin:
     """A mixin class providing a generic `pin_memory` function."""
 
-    @classmethod
-    def sample_pin_memory(cls, batch: T, device: Union[torch.device, str, None] = None) -> T:
+    def _pin_memory(self, batch: T, device: Union[torch.device, str, None] = None) -> T:
         """Pin memory of a batch. Uses recursion to handle nested structures. Supports nested
         structures of dicts, dataclasses, namedtuples, lists and tuples."""
-        if hasattr(batch, "pin_memory"):
+        if isinstance(batch, torch.Tensor):
             return batch.pin_memory(device)
-        if isinstance(batch, dict):
-            return {key: cls.sample_pin_memory(value, device) for key, value in batch.items()}
+        elif isinstance(batch, dict):
+            return {key: self._pin_memory(value, device) for key, value in batch.items()}
         elif dataclasses.is_dataclass(batch):
             return type(batch)(
                 **{
-                    field.name: cls.sample_pin_memory(getattr(batch, field.name), device)
+                    field.name: self._pin_memory(getattr(batch, field.name), device)
                     for field in dataclasses.fields(batch)
                 }
             )
-        elif not isinstance(batch, (str, bytes)) and isinstance(batch, (tuple, list)):
+        elif isinstance(batch, (tuple, list)):
             if hasattr(batch, "_fields"):
                 # NamedTuple
-                return type(batch)(*[cls.sample_pin_memory(val, device) for val in batch])
+                return type(batch)(*[self._pin_memory(val, device) for val in batch])
             else:
                 # list / tuple
-                return type(batch)(cls.sample_pin_memory(val, device) for val in batch)
+                return type(batch)(self._pin_memory(val, device) for val in batch)
         else:
             return batch
 
-    def pin_memory(self: Self, device: torch.device | str | None = None) -> Self:
-        assert dataclasses.is_dataclass(self), "Must be a dataclass"
-        return type(self)(
-            **{
-                field.name: self.sample_pin_memory(getattr(self, field.name), device)
-                for field in dataclasses.fields(self)
-            }
-        )
+    def pin_memory(self: Self) -> Self:
+        return self._pin_memory(self)
 
 
 class ExtendableDataclassMixin:
@@ -107,8 +103,9 @@ class ExtendableDataclassMixin:
         Returns:
             The extended dataclass instance.
         """
+        kwargs = canonicalize_tag_kwargs(kwargs)
         assert is_dataclass(cls), "Must be a dataclass"
-        # assert issubclass(cls, type(src)), "Cannot extend class of different type"
+        assert issubclass(cls, type(src)), "Cannot extend class of different type"
 
         for f in dataclasses.fields(src):
             if not f.init or f.type is ClassVar or typing.get_origin(f.type) is ClassVar:
@@ -120,7 +117,7 @@ class ExtendableDataclassMixin:
 
 
 @edataclass
-class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
+class Sample(SampleTagsAlias, ABC, PinMemoryMixin, ExtendableDataclassMixin):
     """An abstract base class for one element of a batch.
     Each task should derive a specific subclass as a `@dataclass`, like
     :class:`megatron.energon.CaptioningBatchSample`, and add the input and output fields as needed for
@@ -131,11 +128,10 @@ class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
     __key__: str
     #: Key for restoring the sample. This is used to restore the sample from a checkpoint. It
     # should be a (nested) tuple of strings and integers, which can be used to index the dataset.
-    # May be None in some cases, but it may then not be restorable.
-    __restore_key__: "RestoreKey | None"
+    __restore_key__: Tuple[Union[str, int, tuple], ...]
 
-    #: A dataset may define a subflavors to distinguish between samples of the same sample type.
-    __subflavors__: Optional[Dict[str, Any]] = None
+    #: A dataset may define tags to distinguish between samples of the same sample type.
+    __tags__: Optional[Dict[str, Any]] = None
 
     #: Information about the source of the sample, i.e. where the data was loaded from.
     __sources__: Optional[tuple[SourceInfo, ...]] = None
@@ -143,7 +139,7 @@ class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
     @classmethod
     def derive_from(cls: Type[T_sample], base_sample: "Sample", **kwargs) -> T_sample:
         """
-        Uses the base fields of `Sample` from base_sample (i.e. __key__, __restore_key__, __subflavors__, __sources__)
+        Uses the base fields of `Sample` from base_sample (i.e. __key__, __restore_key__, __tags__, __sources__)
         and creates a new sample with the kwargs as fields. This is useful for creating new samples, while keeping the
         metadata of the base sample.
 
@@ -154,6 +150,7 @@ class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
         Returns:
             The new sample.
         """
+        kwargs = canonicalize_tag_kwargs(kwargs)
         base_kwargs = {
             field.name: getattr(base_sample, field.name)
             for field in dataclasses.fields(Sample)
@@ -163,56 +160,6 @@ class Sample(ABC, PinMemoryMixin, ExtendableDataclassMixin):
             **base_kwargs,
             **kwargs,
         )
-
-    @classmethod
-    def from_joined(
-        cls: Type[T_sample], *args: "Optional[Sample]", **kwargs: "Optional[Sample]"
-    ) -> T_sample:
-        """
-        Creates a sample from joined samples. The samples are either passed as positional arguments or as keyword
-        arguments. The first sample is the primary sample, which is used to initialize the key and subflavors.
-
-        In the default implementation, the joined samples' fields will be joined together, such that latter joined
-        samples will update the fields last (i.e. take precedence), except for the key and subflavors. The restore key
-        is later set externally.
-
-        Args:
-            args: The samples to join (either this or kwargs is specified).
-            kwargs: The samples to join (either this or args is specified). Not supported for the default
-                implementation. Overwriting implementations may use this.
-
-        Returns:
-            The joined constructed sample.
-        """
-        assert len(kwargs) == 0, (
-            "Please specify joined datasets as list for the default joiner. Keyword arguments are confusing, because keys are ignored."
-        )
-        excluded_fields = set(field.name for field in dataclasses.fields(Sample))
-        init_args = {}
-        if len(args) > 0:
-            primary = args[0]
-            assert primary is not None, "Primary sample must not be None."
-            fields = dataclasses.fields(primary)
-            for field in fields:
-                init_args[field.name] = getattr(primary, field.name)
-            # Merge sources from all joined samples
-            init_args["__sources__"] = (
-                *(primary.__sources__ or ()),
-                *(
-                    src
-                    for arg in args
-                    if arg is not None and arg.__sources__ is not None
-                    for src in arg.__sources__
-                ),
-            )
-            for arg in args:
-                if arg is None:
-                    continue
-                fields = dataclasses.fields(arg)
-                for field in fields:
-                    if field.name not in excluded_fields:
-                        init_args[field.name] = getattr(arg, field.name)
-        return cls(**init_args)
 
 
 @edataclass
@@ -252,14 +199,14 @@ class State(ABC, ExtendableDataclassMixin):
     """
 
 
-class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC):
+class SavableDataset(WorkerLocalFields, IterableDataset[T_sample], Savable, Generic[T_sample], ABC):
     """A dataset that can be saved and restored (i.e. the random state, internal buffers, etc.).
     I.e. it can be resumed from a checkpoint.
 
     How dataset state saving works:
 
     1. The dataset state needs to be saved in all forked worker processes which contain a copy of
-       the main dataset instance (see :class:`megatron.energon.DataLoader`). Each worker returns
+       the main dataset instance (see :class:`megatron.energon.SavableDataLoader`). Each worker returns
        only its own state.
     2. The main process merges the states via the :meth:`megatron.energon.SavableDataset.merge_states`
        method in the main process on the main dataset instance (which doesn't hold the worker states,
@@ -273,12 +220,8 @@ class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC)
     #: List of names of the fields that are saved and restored in the state.
     _savable_fields: ClassVar[Tuple[str, ...]] = ()
 
-    #: List of names of the fields that are not saved, but are still part of the state (i.e. not shared between workers).
-    _worker_local_fields: ClassVar[Tuple[str, ...]] = ()
-
     def __init__(self, worker_config: WorkerConfig):
         self.worker_config = worker_config
-        self._thread_state = threading.local()
 
     @abstractmethod
     def len_worker(self, worker_idx: int | None = None) -> int:
@@ -302,6 +245,21 @@ class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC)
     def __len__(self) -> int:
         """Returns the length of the dataset for the current rank. Corresponds to `len_rank`."""
         return self.len_rank()
+
+    def close(self) -> None:
+        """Release resources owned by this dataset, such as open reader files.
+
+        Leaf datasets that own readers should override this method. Dataset wrappers
+        propagate closure to their children. Must be idempotent, and the dataset stays usable:
+        readers reopen their files on the next access, so the dataset can be iterated again,
+        e.g. by another loader.
+        """
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self.close()
 
     def save_state(self) -> FlexState:
         """
@@ -355,18 +313,14 @@ class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC)
             else:
                 setattr(self, key, value)
 
-    def reset_state(self) -> None:
-        """
-        Resets the state of the dataset. Called at least once in the worker process before iterating.
-        Recursively resets the state of all wrapped datasets as well.
-        """
-        pass
+    @abstractmethod
+    def reset_state_own(self) -> None:
+        """Resets the state of the dataset to the initial state. Can only be called in a worker process."""
+        ...
 
-    def worker_close(self) -> None:
-        """
-        Closes all worker-local resources.
-        """
-        pass
+    def reset_state_deep(self) -> None:
+        """Resets the state of the dataset to the initial state. Can only be called in a worker process."""
+        self.reset_state_own()
 
     @abstractmethod
     def worker_has_samples(self) -> bool:
@@ -400,62 +354,47 @@ class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC)
         """Asserts that the dataset can restore a sample from a key."""
         assert self.can_restore_sample(), "This dataset cannot restore samples."
 
-    def restore_sample(self, restore_key: "RestoreKey") -> T_sample:
+    def restore_sample(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> T_sample:
         """
-        Restores a sample from a restore key.
+        Generic key type, because it might be either an integer (for a core dataset), or something
+        more complex (e.g. for blended datasets).
 
-        Args:
-            restore_key: The restore key to restore the sample from.
-
-        Returns:
-            The restored sample.
+        Default raises an exception (assumed non-deterministic if not implemented, does not
+        guarantee determinism).
         """
         raise NotImplementedError(
-            "This dataset does not support restoring, because it is not safely deterministic."
+            "This dataset does not support indexing, because it is not safely deterministic."
         )
 
-    def close(self) -> None:
-        """Closes all shared resources."""
-        pass
 
-    def __getattribute__(self, name: str) -> Any:
-        if name in ("_savable_fields", "_worker_local_fields", "_thread_state", "worker_config"):
-            return object.__getattribute__(self, name)
-        elif name in self._savable_fields or name in self._worker_local_fields:
-            try:
-                return getattr(self._thread_state, name)
-            except AttributeError:
-                return object.__getattribute__(self, name)
-        else:
-            return object.__getattribute__(self, name)
-
-    def __delattr__(self, name: str) -> None:
-        if name in self._savable_fields or name in self._worker_local_fields:
-            delattr(self._thread_state, name)
-        else:
-            object.__delattr__(self, name)
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        if name in ("_savable_fields", "_worker_local_fields", "_thread_state", "worker_config"):
-            object.__setattr__(self, name, value)
-        elif name in self._savable_fields or name in self._worker_local_fields:
-            setattr(self._thread_state, name, value)
-        else:
-            object.__setattr__(self, name, value)
-
-
-class BaseCoreDatasetFactory(Generic[T_sample], ABC):
-    """Base type for an inner dataset sample loader. This factory can be used to construct a sample loader, or for
-    joining in a joined dataset."""
+class BaseCoreDatasetFactory(TagsAlias, Generic[T_sample], ABC):
+    """Base type for an inner dataset sample loader."""
 
     __sample_type__: Type[T_sample] = cast(Type[T_sample], None)
     paths: List[EPath]
 
-    subflavors: Dict[str, Any]
+    tags: Dict[str, Any]
+
+    @classmethod
+    @abstractmethod
+    def get_original_shards(cls, path: EPath) -> list["ShardInfo"]:
+        """Return shards in source order, before splits, subsets, or filters.
+
+        Each shard describes its name, primary file path, and original sample count.
+        This must be the order in which filters will apply to the dataset.
+        """
+        ...
 
     @abstractmethod
-    def build(self, worker_rotation_offset: int = 0) -> SavableDataset[T_sample]:
-        """Builds the dataset."""
+    def build(
+        self, worker_rotation_offset: int = 0, part_filter: Callable[[str], bool] | None = None
+    ) -> SavableDataset[T_sample]:
+        """Builds the dataset.
+
+        Args:
+            worker_rotation_offset: The offset of the worker rotation.
+            part_filter: A function to filter the parts of the dataset.
+        """
         ...
 
     @abstractmethod
@@ -469,60 +408,39 @@ class BaseCoreDatasetFactory(Generic[T_sample], ABC):
         ...
 
 
-@dataclasses.dataclass(kw_only=True, slots=True, frozen=True)
-class RestoreKey(ABC):
-    """Base class for restore keys."""
-
-    def _tupleify(self, value: Any) -> Any:
-        if isinstance(value, (int, str, float, bool)):
-            return value
-        elif isinstance(value, RestoreKey):
-            return value.as_tuple()
-        elif isinstance(value, (list, tuple)):
-            return tuple(self._tupleify(v) for v in value)
-        else:
-            return value
-
-    def as_tuple(self) -> tuple[Any, ...]:
-        return (
-            self.__class__.__name__,
-            *(self._tupleify(getattr(self, field.name)) for field in dataclasses.fields(self)),
+def add_sample_restore_key(
+    sample: T_sample, *key: Union[int, str], src: Any, fail_otherwise: bool = False
+) -> T_sample:
+    """Adds a key to a sample. The sample must be a valid `Sample` or dict containing
+    __restore_key__, which is a tuple of keys that can be used to restore the inner sample.
+    This restore key is prepended with the `key`."""
+    if isinstance(sample, Sample) or hasattr(sample, "__restore_key__"):
+        try:
+            sample.__restore_key__ = (type(src).__name__, *key, *sample.__restore_key__)
+        except KeyError:
+            pass
+    elif isinstance(sample, dict) and "__restore_key__" in sample:
+        sample["__restore_key__"] = (type(src).__name__, *key, *sample["__restore_key__"])
+    elif fail_otherwise:
+        raise RuntimeError(
+            "Did not yield a sample with a restore key, but is marked stateless/deterministic."
         )
-
-    @staticmethod
-    def _untupleify(value: Any) -> Any:
-        if isinstance(value, (int, str, float, bool)):
-            return value
-        elif isinstance(value, RestoreKey):
-            return value.from_tuple(value)
-        elif isinstance(value, (list, tuple)):
-            if isinstance(value[0], str) and hasattr(megatron.energon, value[0]):
-                return getattr(megatron.energon, value[0]).from_tuple(value[1:])
-            else:
-                return tuple(RestoreKey._untupleify(v) for v in value)
-
-    @staticmethod
-    def from_tuple(json: tuple[Any, ...]) -> "RestoreKey":
-        cls = getattr(megatron.energon, json[0])
-        kwargs = {}
-        for field in dataclasses.fields(cls):
-            kwargs[field.name] = RestoreKey._untupleify(json[1:])
-        return cls(**kwargs)
+    return sample
 
 
 def set_sample_restore_key(
-    sample: T_sample, restore_key: RestoreKey, fail_otherwise: bool = False
+    sample: T_sample, *key: Union[int, str], src: Any, fail_otherwise: bool = False
 ) -> T_sample:
     """Sets the restore key for a sample. The sample must be a valid `Sample` or dict containing
     __restore_key__, which is a tuple of keys that can be used to restore the inner sample.
     This restore key is prepended with the `key`."""
     if isinstance(sample, Sample) or hasattr(sample, "__restore_key__"):
         try:
-            sample.__restore_key__ = restore_key
+            sample.__restore_key__ = (type(src).__name__, *key)
         except KeyError:
             pass
     elif isinstance(sample, dict) and "__restore_key__" in sample:
-        sample["__restore_key__"] = restore_key
+        sample["__restore_key__"] = (type(src).__name__, *key)
     elif fail_otherwise:
         raise RuntimeError(
             "Did not yield a sample with a restore key, but is marked stateless/deterministic."

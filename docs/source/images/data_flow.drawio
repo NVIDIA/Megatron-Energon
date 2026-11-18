@@ -248,7 +248,7 @@
         <mxCell id="254" value="&lt;b&gt;my_cooker()&lt;/b&gt;&lt;br&gt;&lt;span style=&quot;color: rgb(255, 255, 255);&quot;&gt;or &lt;b&gt;field_map&lt;/b&gt;&lt;/span&gt;&lt;div&gt;&lt;span style=&quot;color: rgb(255, 255, 255);&quot;&gt;or &lt;b&gt;sample_loader.py&lt;/b&gt;&lt;/span&gt;&lt;/div&gt;" style="whiteSpace=wrap;strokeColor=none;fillColor=#2f5b7c;shadow=0;fontColor=#FFFFFF;fontFamily=Helvetica;fontStyle=0;html=1;fontSize=12;spacing=6;verticalAlign=middle;dashed=1;dashPattern=12 12;" parent="170" vertex="1">
           <mxGeometry x="160" y="441" width="160" height="60" as="geometry" />
         </mxCell>
-        <mxCell id="259" value="&lt;h1 style=&quot;line-height: 110%;&quot;&gt;Cooking&lt;/h1&gt;&lt;p style=&quot;line-height: 120%;&quot;&gt;For crude datasets, use the cooker function matching the subflavors in the TaskEncoder. Field map and sample loader are automatically converted to the sample type.&lt;/p&gt;" style="text;html=1;strokeColor=#6c8ebf;fillColor=#dae8fc;spacing=7;spacingTop=-20;whiteSpace=wrap;overflow=hidden;rounded=0;" parent="170" vertex="1">
+        <mxCell id="259" value="&lt;h1 style=&quot;line-height: 110%;&quot;&gt;Cooking&lt;/h1&gt;&lt;p style=&quot;line-height: 120%;&quot;&gt;For crude datasets, use the cooker function matching sample tags in the TaskEncoder. Field map and sample loader are automatically converted to the sample type.&lt;/p&gt;" style="text;html=1;strokeColor=#6c8ebf;fillColor=#dae8fc;spacing=7;spacingTop=-20;whiteSpace=wrap;overflow=hidden;rounded=0;" parent="170" vertex="1">
           <mxGeometry x="-90" y="410" width="240" height="130" as="geometry" />
         </mxCell>
         <mxCell id="255" value="&lt;h1 style=&quot;line-height: 110%;&quot;&gt;Loading Dataset&lt;/h1&gt;&lt;p style=&quot;line-height: 120%;&quot;&gt;Open the dataset using &lt;b&gt;get_dataset()&lt;/b&gt; and construct the corresponding Sample reader.&lt;/p&gt;" style="text;html=1;strokeColor=#6c8ebf;fillColor=#dae8fc;spacing=7;spacingTop=-20;whiteSpace=wrap;overflow=hidden;rounded=0;" parent="170" vertex="1">
@@ -325,7 +325,7 @@
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="260" value="&lt;h1 style=&quot;line-height: 110%;&quot;&gt;Blending&lt;/h1&gt;&lt;p style=&quot;line-height: 120%;&quot;&gt;Blend multiple datasets together as specified in the metadataset yaml file.&lt;/p&gt;" style="text;html=1;strokeColor=#6c8ebf;fillColor=#dae8fc;spacing=7;spacingTop=-20;whiteSpace=wrap;overflow=hidden;rounded=0;" parent="1" vertex="1">
+        <mxCell id="260" value="&lt;h1 style=&quot;line-height: 110%;&quot;&gt;Blending&lt;/h1&gt;&lt;p style=&quot;line-height: 120%;&quot;&gt;Blend multiple datasets together as specified in the recipe yaml file.&lt;/p&gt;" style="text;html=1;strokeColor=#6c8ebf;fillColor=#dae8fc;spacing=7;spacingTop=-20;whiteSpace=wrap;overflow=hidden;rounded=0;" parent="1" vertex="1">
           <mxGeometry x="-10" y="90" width="240" height="90" as="geometry" />
         </mxCell>
         <mxCell id="261" value="Other Datasets" style="swimlane;whiteSpace=wrap;fillColor=none;swimlaneFillColor=#BAC8D3;fontColor=#2F5B7C;fontFamily=Tahoma;html=1;strokeColor=none;opacity=50;align=right;" parent="1" vertex="1">

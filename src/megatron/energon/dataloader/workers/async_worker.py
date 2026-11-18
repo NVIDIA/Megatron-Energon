@@ -15,7 +15,6 @@ from megatron.energon.dataloader.asynchronous import (
 from megatron.energon.dataloader.future import Future
 from megatron.energon.dataloader.workers.base_worker import (
     DataLoaderWorker,
-    WorkerSampleRestoreKey,
     WorkerState,
 )
 from megatron.energon.flavors.base_dataset import SavableDataset
@@ -38,8 +37,11 @@ def torch_set_worker_info(id: int, num_workers: int, seed: int, dataset: Savable
     )
 
 
+_torch_get_worker_info = torch.utils.data.get_worker_info
+
+
 def _patch_get_worker_info():
-    return getattr(_thread_local_worker_info, "_worker_info", None)
+    return getattr(_thread_local_worker_info, "_worker_info", None) or _torch_get_worker_info()
 
 
 torch.utils.data.get_worker_info = _patch_get_worker_info
@@ -71,7 +73,8 @@ class DataLoaderAsynchronousWorker(DataLoaderWorker[TSample], Asynchronous, Gene
     def _worker_run(
         self, cmd_queue: QueueProtocol[WorkerCommand], result_queue: QueueProtocol[WorkerResult]
     ) -> None:
-        SystemRng.seed(self._seed)
+        if self._uses_global_rng:
+            SystemRng.seed(self._seed)
         self._global_worker_id = self.worker_config.global_worker_id()
 
         super()._worker_run(cmd_queue, result_queue)
@@ -82,7 +85,7 @@ class DataLoaderAsynchronousWorker(DataLoaderWorker[TSample], Asynchronous, Gene
         # so immediately resolve the future to the result (get returns immediately).
         return super().prefetch_next().get()
 
-    def _wrk_restore_sample(self, restore_key: WorkerSampleRestoreKey) -> TSample:
+    def _wrk_restore_sample(self, restore_key: tuple) -> TSample:
         """Wraps the super class method to call it in the worker process."""
         # The super class implementation already returns a resolved future (to be interface compatible),
         # so immediately resolve the future to the result (get returns immediately).
@@ -106,9 +109,8 @@ class DataLoaderAsynchronousWorker(DataLoaderWorker[TSample], Asynchronous, Gene
             return super().prefetch_next()
         return self._worker_call(self._wrk_prefetch_next)
 
-    def restore_sample(self, restore_key: WorkerSampleRestoreKey) -> Future[TSample]:
+    def restore_sample(self, restore_key: tuple) -> Future[TSample]:
         # Do not resolve the future here, but return it.
-        assert isinstance(restore_key, WorkerSampleRestoreKey)
         if self._in_worker():
             return super().restore_sample(restore_key)
         return self._worker_call(self._wrk_restore_sample, restore_key)

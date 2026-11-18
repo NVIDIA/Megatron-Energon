@@ -9,6 +9,9 @@ on:
     branches:
       - develop
 
+env:
+  UV_PYTHON: "3.11"
+
 jobs:
   ruff:
     runs-on: ubuntu-latest

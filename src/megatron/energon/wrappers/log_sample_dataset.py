@@ -5,7 +5,6 @@ from typing import Any, Callable, Dict, Generic, Iterator, Literal, TypeVar
 
 from megatron.energon.flavors.base_dataset import SavableDataset
 from megatron.energon.sample_utils import default_get_batch_keys
-from megatron.energon.state import FlexState
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset
 
@@ -16,7 +15,7 @@ class LogSampleDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]
     """This dataset logs every yielded sample to the debug logs."""
 
     get_keys_fn: Callable[[T_sample], list[str] | None]
-    mode: Literal["train", "val"]
+    mode: Literal["train", "val", "processing"]
     _step: int
 
     _savable_fields = ("_step",)
@@ -24,7 +23,7 @@ class LogSampleDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]
     def __init__(
         self,
         dataset: SavableDataset[T_sample],
-        mode: Literal["train", "val"],
+        mode: Literal["train", "val", "processing"],
         worker_config: WorkerConfig,
         get_keys_fn: Callable[[T_sample], list[str] | None] = default_get_batch_keys,
     ):
@@ -37,8 +36,13 @@ class LogSampleDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]
         self.get_keys_fn = get_keys_fn
         self.mode = mode
 
+        self.reset_state_own()
+
     def reset_state_own(self) -> None:
         self._step = 0
+
+    def len_worker(self, worker_idx: int | None = None) -> int:
+        return self.dataset.len_worker(worker_idx)
 
     def _log(self, sample: T_sample) -> None:
         if self.worker_config.should_log(level=1):
@@ -60,14 +64,6 @@ class LogSampleDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]
             self._log(sample)
             self._step += 1
             yield sample
-
-    def save_state(self) -> FlexState:
-        # Just delegate, make self transparent
-        return self.dataset.save_state()
-
-    def restore_state(self, state: FlexState):
-        # Just delegate, make self transparent
-        return self.dataset.restore_state(state)
 
     def config(self) -> Dict[str, Any]:
         # Transparent logger, it won't change the samples

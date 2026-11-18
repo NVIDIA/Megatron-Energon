@@ -1,26 +1,30 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
-from dataclasses import dataclass
 from typing import Generic, TypeVar
 
 from megatron.energon.cache.base import CachePool
 from megatron.energon.dataloader.future import DoneFuture, ExceptionFuture, Future
 from megatron.energon.edataclass import edataclass
-from megatron.energon.flavors.base_dataset import SavableDataset, set_sample_restore_key
+from megatron.energon.flavors.base_dataset import SavableDataset
 from megatron.energon.rng import SystemRng, SystemRngState
 from megatron.energon.state import FlexState
 from megatron.energon.worker import WorkerConfig
-from megatron.energon.wrappers.base import WrappedRestoreKey, wrap_sample_restore_key
+from megatron.energon.wrappers.base import get_sample_restore_key
 
 TSample = TypeVar("TSample", covariant=True)
 
 DEBUG_LEVEL = 0
 
 
-@dataclass(kw_only=True, slots=True, frozen=True)
-class WorkerSampleRestoreKey(WrappedRestoreKey):
-    worker_id: int
-    sample_idx: int
+WORKER_RESTORE_KEY = "DataLoaderWorker"
+
+
+def _set_worker_key(sample: TSample, key: tuple) -> TSample:
+    if isinstance(sample, dict):
+        sample["__restore_key__"] = key
+    else:
+        sample.__restore_key__ = key
+    return sample
 
 
 @edataclass
@@ -29,7 +33,7 @@ class WorkerState:
     State of a worker.
     """
 
-    rng: SystemRngState
+    rng: SystemRngState | None
     dataset: FlexState
     exhausted: bool
     sample_index: int
@@ -58,6 +62,8 @@ class DataLoaderWorker(Generic[TSample]):
     _cache_pool: CachePool | None
     _sample_index: int = 0
     _exhausted: bool = True
+    _dataset_iter = None
+    _uses_global_rng = True
 
     def __init__(
         self,
@@ -98,8 +104,17 @@ class DataLoaderWorker(Generic[TSample]):
         Args:
             in_del: If True, the worker is being deleted.
         """
-        self.dataset.worker_close()
-        self.dataset.close()
+        if not in_del or WorkerConfig.active_worker_config is None:
+            self.close_iterator()
+
+    def close_iterator(self) -> None:
+        iterator, self._dataset_iter = self._dataset_iter, None
+        if hasattr(iterator, "close"):
+            self.worker_config.worker_activate(self._sample_index, cache_pool=self._cache_pool)
+            try:
+                iterator.close()
+            finally:
+                self.worker_config.worker_deactivate()
 
     def running(self) -> bool:
         """
@@ -134,7 +149,7 @@ class DataLoaderWorker(Generic[TSample]):
         assert self._seed == self.worker_config.worker_seed(self._rank_worker_id), "Seed mismatch"
         if DEBUG_LEVEL >= 1:
             print("dataset_init\n", end="")
-        self.dataset.reset_state()
+        self.dataset.reset_state_deep()
         if state is None:
             self._sample_index = 0
             if DEBUG_LEVEL >= 1:
@@ -146,7 +161,8 @@ class DataLoaderWorker(Generic[TSample]):
             if DEBUG_LEVEL >= 1:
                 print(f"dataset_init restore_state: {state=}\n", end="")
             self._sample_index = state.sample_index
-            SystemRng.restore_state(state.rng)
+            if state.rng is not None and self._uses_global_rng:
+                SystemRng.restore_state(state.rng)
             self.dataset.restore_state(state.dataset)
             if not state.exhausted:
                 self.new_iter()
@@ -176,7 +192,6 @@ class DataLoaderWorker(Generic[TSample]):
             A future that will either be resolved to the next sample or raise StopIteration if the iterator is exhausted.
         """
         # This is called in the worker context (process/thread).
-        assert self._dataset_iter is not None, "start_iter must be called before prefetch_next"
         if self._exhausted:
             try:
                 raise StopIteration()
@@ -187,12 +202,12 @@ class DataLoaderWorker(Generic[TSample]):
         try:
             next_sample = next(self._dataset_iter)
             self._sample_index += 1
-            next_sample = wrap_sample_restore_key(
-                next_sample,
-                WorkerSampleRestoreKey,
-                worker_id=self._global_worker_id,
-                sample_idx=sample_idx,
-            )
+            inner_key = get_sample_restore_key(next_sample)
+            if inner_key is not None:
+                next_sample = _set_worker_key(
+                    next_sample,
+                    (WORKER_RESTORE_KEY, self._global_worker_id, sample_idx, *inner_key),
+                )
         except StopIteration as e:
             self._exhausted = True
             return ExceptionFuture(e)
@@ -200,7 +215,7 @@ class DataLoaderWorker(Generic[TSample]):
             self.worker_config.worker_deactivate()
         return DoneFuture(next_sample)
 
-    def restore_sample(self, restore_key: WorkerSampleRestoreKey) -> Future[TSample]:
+    def restore_sample(self, restore_key: tuple) -> Future[TSample]:
         """
         Restore a sample from a restore key in the worker.
 
@@ -210,15 +225,15 @@ class DataLoaderWorker(Generic[TSample]):
         Returns:
             A future that will be resolved to the restored sample.
         """
-        assert isinstance(restore_key, WorkerSampleRestoreKey)
-        assert self._global_worker_id == restore_key.worker_id, "Global worker ID mismatch"
+        kind, worker_id, sample_idx, *inner_key = restore_key
+        assert kind == WORKER_RESTORE_KEY and self._global_worker_id == worker_id
         self.worker_config.worker_activate(
-            restore_key.sample_idx,
+            sample_idx,
             cache_pool=self._cache_pool,
         )
         try:
             return DoneFuture(
-                set_sample_restore_key(self.dataset.restore_sample(restore_key.inner), restore_key)
+                _set_worker_key(self.dataset.restore_sample(tuple(inner_key)), restore_key)
             )
         finally:
             self.worker_config.worker_deactivate()
@@ -230,7 +245,7 @@ class DataLoaderWorker(Generic[TSample]):
         if DEBUG_LEVEL >= 1:
             print(f"save_state: {self._sample_index=}, {self._exhausted=}\n", end="")
         return WorkerState(
-            rng=SystemRng.save_state(),
+            rng=SystemRng.save_state() if self._uses_global_rng else None,
             dataset=self.dataset.save_state(),
             exhausted=self._exhausted,
             sample_index=self._sample_index,

@@ -6,8 +6,9 @@ from typing import BinaryIO, Dict, Generator, Optional, Tuple, Union
 
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
+from megatron.energon.worker_local import WorkerLocalFields
 
-IJSONL_SUFFIX = ".jsonl.idx"
+IDX_SUFFIX = ".idx"
 
 
 @edataclass
@@ -28,7 +29,7 @@ class IJsonlSamplePointer:
 class IJsonlIndexReader:
     def __init__(self, jsonl_path: Union[EPath, str]):
         jsonl_path = EPath(jsonl_path)
-        index_path = jsonl_path.with_suffix(IJSONL_SUFFIX)
+        index_path = jsonl_path.with_suffix(IDX_SUFFIX, replace=False)
         self._length = index_path.size() // 8
         self.ijsonl = index_path.open("rb")
 
@@ -64,19 +65,36 @@ class IJsonlIndexReader:
 
     @staticmethod
     def count_samples(jsonl_path: EPath | str) -> int:
-        return EPath(jsonl_path).with_suffix(IJSONL_SUFFIX).size() // 8 - 1
+        """Count samples from the offset-index size without opening the index.
+
+        Each sample has an 8-byte offset, followed by one terminal offset marking
+        the end of the data file. Reject truncated indexes instead of rounding down.
+        """
+        index_path = EPath(jsonl_path).with_suffix(IDX_SUFFIX, replace=False)
+        index_size = index_path.size()
+        if index_size < 8 or index_size % 8:
+            raise ValueError(f"Invalid JSONL offset index size for {index_path}: {index_size}")
+        return index_size // 8 - 1
 
     @staticmethod
     def size(jsonl_path: EPath) -> int:
         with IJsonlIndexReader(jsonl_path) as reader:
             return reader[len(reader) - 1]
 
+    @staticmethod
+    def is_current(jsonl_path: EPath) -> bool:
+        # Compare sizes only: copies and uploads do not preserve modification times.
+        index_path = jsonl_path.with_suffix(IDX_SUFFIX, replace=False)
+        if not index_path.is_file():
+            return False
+        return jsonl_path.size() == IJsonlIndexReader.size(jsonl_path)
+
 
 class IJsonlIndexWriter:
     def __init__(self, jsonl_path: EPath):
         self.jsonl_path = jsonl_path
-        self.final_name = jsonl_path.with_suffix(IJSONL_SUFFIX)
-        self.tmp_name = jsonl_path.with_suffix(IJSONL_SUFFIX + ".tmp")
+        self.final_name = jsonl_path.with_suffix(IDX_SUFFIX, replace=False)
+        self.tmp_name = jsonl_path.with_suffix(IDX_SUFFIX + ".tmp", replace=False)
         self.ijsonl = self.tmp_name.open("wb")
 
     def append(self, offset: int):
@@ -113,7 +131,7 @@ class CacheEntry:
     lookahead_byteoffset: Optional[int] = None
 
 
-class CachedIJsonlOffsetReader:
+class CachedIJsonlOffsetReader(WorkerLocalFields):
     """
     This class is a high-level wrapper around IJsonlIndexReader that caches some
     of the recent lookups for faster access. It is designed for the case when
@@ -123,13 +141,15 @@ class CachedIJsonlOffsetReader:
         cache_size: The number of entries to keep in the cache. By default, we keep 32.
     """
 
-    ijsonl_index_reader_cache: Dict[int, CacheEntry]
-    cache_size: int
-    jsonl_file: EPath
+    _worker_local_fields = {"ijsonl_index_reader_cache": dict}
 
-    def __init__(self, jsonl_file: Union[str, EPath], cache_size: int = 32):
+    def __init__(
+        self,
+        jsonl_file: Union[str, EPath],
+        cache_size: int = 32,
+    ):
         # Maps current_offset -> CacheEntry
-        self.ijsonl_index_reader_cache = {}
+        self.ijsonl_index_reader_cache: Dict[int, CacheEntry] = {}
         self.cache_size = cache_size
         self.jsonl_file = EPath(jsonl_file)
 
@@ -234,6 +254,11 @@ class CachedIJsonlOffsetReader:
 
         return result_byte_offset, length
 
+    def __len__(self) -> int:
+        if len(self.ijsonl_index_reader_cache) == 0:
+            return IJsonlIndexReader.count_samples(self.jsonl_file)
+        return len(next(iter(self.ijsonl_index_reader_cache.values())).ijsonl_index_reader) - 1
+
     def get_total_size(self) -> int:
         if len(self.ijsonl_index_reader_cache) == 0:
             self.ijsonl_index_reader_cache[0] = CacheEntry(
@@ -269,10 +294,6 @@ class IJsonlFile:
     """
 
     def __init__(self, fileobj: BinaryIO):
-        """
-        Args:
-            fileobj: The file object to read from. Takes ownership of the file object.
-        """
         self.fileobj = fileobj
 
     def seek(self, offset: int):

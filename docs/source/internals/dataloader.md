@@ -123,7 +123,7 @@ workers, clears the exhausted flags, and resets round-robin selection to worker 
 - initialize or restore the dataset and RNG;
 - create the dataset iterator;
 - fetch the next sample;
-- wrap its restore key with `WorkerSampleRestoreKey`; and
+- wrap its restore key with a `DataLoaderWorker` tuple prefix; and
 - save `WorkerState`.
 
 ### Implementation Classes
@@ -173,7 +173,7 @@ sample index. Prefetched samples are represented by restore keys rather than ser
 4. The pending restore state is cleared.
 
 If the restored loader uses a smaller compatible micro-batch size, the loader splits
-`BatchRestoreKey` instances while preserving their wrapper structure. Increasing the micro-batch
+batch restore keys while preserving their wrapper structure. Increasing the micro-batch
 size or using an incompatible size is rejected.
 
 `save_state_global()` gathers rank states through the configured data-parallel group.
@@ -182,7 +182,7 @@ designated source rank before delegating to `restore_state_rank()`.
 
 ## Sample Restore Keys
 
-Every yielded sample is wrapped in `WorkerSampleRestoreKey`, which records the global worker ID and
+Every yielded sample is wrapped in a `DataLoaderWorker` tuple prefix, which records the global worker ID and
 worker-local sample index around the dataset's own restore key. `restore_sample()` maps that global
 worker ID back to a rank-local worker and executes the underlying dataset restore operation in the
 correct worker context.

@@ -16,6 +16,24 @@ SPDX-License-Identifier: BSD-3-Clause -->
 
 ```
 
+# megatron.energon.checkpoint
+
+```{eval-rst}
+.. automodule:: megatron.energon.checkpoint
+    :members:
+    :undoc-members:
+    :show-inheritance:
+```
+
+# megatron.energon.flavors.dataset_factory_resolver
+
+```{eval-rst}
+.. automodule:: megatron.energon.flavors.dataset_factory_resolver
+    :members:
+    :undoc-members:
+    :show-inheritance:
+```
+
 # megatron.energon.av
 
 ```{eval-rst}

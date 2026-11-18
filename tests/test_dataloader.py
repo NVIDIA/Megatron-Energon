@@ -24,7 +24,6 @@ from megatron.energon.dataloader import DataLoader, ForkDataLoaderWorker, Thread
 from megatron.energon.dataloader.dataloader import _split_batch_restore_key
 from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
 from megatron.energon.task_encoder.base import DefaultTaskEncoder, stateless
-from megatron.energon.wrappers.batch_dataset import BatchGenRestoreKey
 
 
 class VerifyWorkerTaskEncoder(DefaultTaskEncoder):
@@ -80,7 +79,7 @@ def create_text_test_dataset(path: Path, txt_range: Iterable[int], key_range: It
                     "  __class__: TextSample",
                     "field_map:",
                     "  text: txt",
-                    "subflavors:",
+                    "tags:",
                     "  source: dataset.yaml",
                     "  dataset.yaml: true",
                     "  number: 42",
@@ -193,17 +192,11 @@ class TestDataLoader(unittest.TestCase):
         assert loader._workers is None
 
     def test_split_batch_generator_restore_key_preserves_subtype(self):
-        restore_key = BatchGenRestoreKey(
-            inner=(None, None, None, None),
-            sample_idx=12,
-            gen_idx=3,
-        )
-
-        split_restore_keys = _split_batch_restore_key(restore_key, 2)
-
-        assert split_restore_keys == [
-            BatchGenRestoreKey(inner=(None, None), sample_idx=12, gen_idx=3),
-            BatchGenRestoreKey(inner=(None, None), sample_idx=12, gen_idx=3),
+        keys = (("Webdataset", 1), ("Webdataset", 2), ("Webdataset", 3), ("Webdataset", 4))
+        restore_key = ("BatchDataset", 12, 3, *keys)
+        assert _split_batch_restore_key(restore_key, 2) == [
+            ("BatchDataset", 12, 3, *keys[:2]),
+            ("BatchDataset", 12, 3, *keys[2:]),
         ]
 
     def test_dataloader_fork(self):

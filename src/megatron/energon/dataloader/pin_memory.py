@@ -25,7 +25,7 @@ class PinMemory(Generic[TSample]):
         self._device = device
 
     def _pin_memory(self, sample: TSample) -> TSample:
-        return PinMemoryMixin.sample_pin_memory(sample, self._device)
+        return PinMemoryMixin()._pin_memory(sample, self._device)
 
     def __call__(self, sample: Future[TSample]) -> Future[TSample]:
         """Pin the memory of a sample. The default implementation runs in the main thread."""

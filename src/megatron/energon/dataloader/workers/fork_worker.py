@@ -37,5 +37,5 @@ class ForkDataLoaderWorker(
         try:
             super()._worker_run(cmd_queue, result_queue)
         finally:
-            self.dataset.worker_close()
+            self.close_iterator()
             self.dataset.close()

@@ -14,10 +14,10 @@ from pathlib import Path
 from typing import Any, Dict, Literal, Optional, Tuple, TypeVar
 
 from megatron.energon.cache.base import CachePool, FileStore, Lazy
-from megatron.energon.cache.no_cache import DirectLazy
 from megatron.energon.edataclass import edataclass
 from megatron.energon.fork_hook import ForkMixin
 from megatron.energon.source_info import SourceInfo, add_source_info
+from megatron.energon.worker_local import thread_worker_scope
 
 T = TypeVar("T")
 
@@ -158,8 +158,6 @@ class FileStoreCachePool(CachePool, ForkMixin):
     # Whether the pool is shutting down
     _shutting_down: bool = False
 
-    _workers_initialized: dict[int, bool] = {}
-
     def __init__(
         self,
         *,
@@ -199,7 +197,6 @@ class FileStoreCachePool(CachePool, ForkMixin):
         self._pending_tasks = {}
 
         # Cache size management
-        self._shutting_down = False
         self.max_cache_size = int(max_cache_size_gbytes * (1024**3))
         self.max_cache_count = max_cache_count
         self.current_cache_size = 0
@@ -279,12 +276,16 @@ class FileStoreCachePool(CachePool, ForkMixin):
             return result
 
     def _cache_out_task(self, ds: FileStore, fname: str, entry: _PendingTask) -> bool:
+        with thread_worker_scope():
+            try:
+                return self._cache_out(ds, fname, entry)
+            finally:
+                ds.close()
+
+    def _cache_out(self, ds: FileStore, fname: str, entry: _PendingTask) -> bool:
         with self._lock:
             if self._shutting_down:
                 return False
-        if not self._workers_initialized.get(threading.get_ident(), False):
-            ds.worker_init()
-            self._workers_initialized[threading.get_ident()] = True
 
         # Perform the data read
         if self.method == "raw":
@@ -342,7 +343,7 @@ class FileStoreCachePool(CachePool, ForkMixin):
         # Data is cached now, return True
         return True
 
-    def get_lazy(self, ds: FileStore, fname: str) -> FileCacheLazy | DirectLazy:
+    def get_lazy(self, ds: FileStore, fname: str) -> FileCacheLazy:
         """
         Schedule a background pre-fetch. If multiple calls come in for the same (ds, fname),
         they'll share the same Future and increment reference counts.
@@ -350,7 +351,7 @@ class FileStoreCachePool(CachePool, ForkMixin):
         key = (ds.get_path(), fname)
         with self._lock:
             if self._shutting_down:
-                return DirectLazy(ds=ds, fname=fname, pool=self)
+                raise RuntimeError("Cache pool is already shutting down")
             entry = self._pending_tasks.get(key)
             if entry:
                 # Already have a background task for this (ds, fname)
@@ -369,12 +370,6 @@ class FileStoreCachePool(CachePool, ForkMixin):
                 )
 
         return FileCacheLazy(ds=ds, fname=fname, pool=self, entry=entry)
-
-    def worker_init(self) -> None:
-        pass
-
-    def worker_close(self) -> None:
-        pass
 
     def to_cache(self, data: T, name: str) -> CacheFileLazy[T]:
         """
@@ -490,7 +485,6 @@ class FileStoreCachePool(CachePool, ForkMixin):
             )
         )
         assert self._worker_pool is None
-        self._shutting_down = False
         self._worker_pool = ThreadPoolExecutor(
             max_workers=self.num_workers, thread_name_prefix="CacheWorker"
         )

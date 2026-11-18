@@ -8,6 +8,8 @@ Please also take a look at [](basics_flow) to see the pipeline.
 
 If you don't specify any task encoder, a default version, the {py:class}`DefaultTaskEncoder <megatron.energon.DefaultTaskEncoder>` will be used.
 
+The Task Encoder's `decoder` class attribute controls automatic payload decoding before cooking and sample encoding. Set `decoder = None` when code needs the stored bytes—for example, for hashing, copying, validation, custom parsing, or linear offline data processing. See [](data_decoding) for the decoding contract and {ref}`linear-data-processing` for a complete example.
+
 For writing your own task encoder, create a class based on {py:class}`DefaultTaskEncoder <megatron.energon.DefaultTaskEncoder>`
 and override one or more of the following methods. The data flow of {py:func}`get_train_dataset <megatron.energon.get_train_dataset>` or {py:func}`get_val_dataset <megatron.energon.get_val_dataset>` is as follows:
 
@@ -19,12 +21,14 @@ and override one or more of the following methods. The data flow of {py:func}`ge
 - {py:meth}`def preencode_sample(self, sample: T_sample) -> T_sample <megatron.energon.TaskEncoder.preencode_sample>`
   - Can be used as a replacement to {py:func}`encode_sample <megatron.energon.DefaultTaskEncoder.encode_sample>`
   - Only used together with {py:meth}`postencode_sample <megatron.energon.TaskEncoder.postencode_sample>` (below). Use it if you need to instantiate lazy data before packing the selected samples. But it will also work when not using packing.
-- {py:meth}`def select_samples_to_pack(self, samples: List[T_encoded_sample]) -> List[List[T_encoded_sample]] <megatron.energon.TaskEncoder.select_samples_to_pack>`
-  - Optional. Allows for efficient sample packing. See [](../advanced/packing).
+- {py:meth}`def select_samples_to_pack(self, samples: List[T_encoded_sample]) -> Union[List[List[T_encoded_sample]], PackedSamplesOutput] <megatron.energon.TaskEncoder.select_samples_to_pack>`
+  - Optional. Allows for efficient sample packing. See [](../advanced/packing). May return {py:class}`PackedSamplesOutput <megatron.energon.PackedSamplesOutput>` to re-queue a pushback sequence onto the reading buffer.
+- {py:meth}`def select_next_pack(self, samples: Iterator[T_encoded_sample]) -> Union[List[List[T_encoded_sample]], PackedSamplesOutput] <megatron.energon.TaskEncoder.select_next_pack>`
+  - Optional. Enables streaming packing with `packing_buffer_size="stream"`. The method pulls just enough samples for the next pack and may return {py:class}`PackedSamplesOutput <megatron.energon.PackedSamplesOutput>` to carry remainders into the next pack.
 - {py:meth}`def postencode_sample(self, sample: T_sample) -> T_encoded_sample <megatron.energon.TaskEncoder.postencode_sample>`
   - Only used together with {py:meth}`preencode_sample <megatron.energon.TaskEncoder.preencode_sample>`. Use it if you need to instantiate lazy data before packing the selected samples. But it will also work when not using packing.
 - {py:meth}`def pack_selected_samples(self, samples: List[T_encoded_sample]) -> T_batch_sample] <megatron.energon.TaskEncoder.pack_selected_samples>`
-  - Required if select_samples_to_pack is used. Compresses a group of samples to a single sample.
+  - Required if `select_samples_to_pack` or `select_next_pack` is used. Compresses a group of samples to a single sample.
 - (samples are collected for a batch)
 - {py:meth}`def batch(self, batch: List[T_encoded_sample]) -> T_raw_batch <megatron.energon.DefaultTaskEncoder.batch>`
   - Collate the batch to a single sample, defaults to padded batching for tensors, lists for everything else.
@@ -38,48 +42,6 @@ and override one or more of the following methods. The data flow of {py:func}`ge
 If a sample or batch is to be ignored, any of these methods may raise {py:class}`IgnoreSample <megatron.energon.IgnoreSample>` to skip the sample being processed.
 
 The types `T_sample`, `T_encoded_sample`, `T_raw_batch` and `T_batch` are generics and depend on your task. You do not necessarily have to specify them, it's only used for proper typing in your IDE.
-
-## Deterministic Randomness
-
-Randomized task encoder methods must use reproducible RNG state so that restoring a sample or
-loader checkpoint produces the same output. The recommended API is the worker-local
-{py:attr}`TaskEncoder.rng <megatron.energon.TaskEncoder.rng>`:
-
-```python
-import torch
-
-from megatron.energon import DefaultTaskEncoder, stateless
-
-
-class RandomizedTaskEncoder(DefaultTaskEncoder):
-    @stateless(restore_task_encoder_seeds=True)
-    def encode_sample(self, sample):
-        sample.torch_value = torch.rand((), generator=self.rng.torch)
-        sample.numpy_value = self.rng.numpy.random()
-        sample.python_value = self.rng.random.random()
-        return sample
-```
-
-`TaskEncoder.rng` provides independent PyTorch, NumPy, and Python generators for each worker.
-Its compatibility by loader worker mode is:
-
-| Worker mode | Supported deterministic RNG handling |
-| --- | --- |
-| `worker_type="fork"` | `TaskEncoder.rng` or process-global RNGs |
-| `worker_type="main"` | `TaskEncoder.rng` or process-global RNGs |
-| `worker_type="thread"` | `TaskEncoder.rng` only |
-
-The legacy `@stateless(restore_seeds=True)` mode saves, seeds, and restores the process-global
-`torch`, `numpy.random`, and `random` state. It is not supported with thread workers: all worker
-threads share that state, so concurrent calls can consume or restore another worker's RNG state
-and make results scheduling-dependent. A passing concurrency test cannot establish that this is
-safe.
-
-Do not call process-global random APIs from a method using
-`restore_task_encoder_seeds=True`; pass `self.rng.torch` to PyTorch operations and use
-`self.rng.numpy` or `self.rng.random` directly. Switching an existing pipeline from global RNGs to
-`TaskEncoder.rng` may change its exact random sequence and should be treated as a data-stream
-change.
 
 ```python
 from dataclasses import dataclass
@@ -171,7 +133,7 @@ train_img_transform = transforms.Compose(
     ]
 )
 
-with get_loader(get_train_dataset(
+train_loader = get_loader(get_train_dataset(
     '/my/dataset/path',
     batch_size=32,
     shuffle_buffer_size=100,
@@ -180,9 +142,10 @@ with get_loader(get_train_dataset(
         tokenizer=AutoTokenizer.from_pretrained('gpt2'),
         image_transform=train_img_transform,
     ),
-)) as train_loader:
-    for data in train_loader:
-        # data is a CaptioningBatch
-        pass
+))
+
+for data in train_loader:
+    # data is a CaptioningBatch
+    pass
 
 ```

@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import inspect
-from dataclasses import dataclass
 from typing import (
     Any,
     Callable,
@@ -21,116 +20,34 @@ from typing import (
 from megatron.energon.edataclass import edataclass
 from megatron.energon.errors import ErrorContext, handle_restore_errors
 from megatron.energon.flavors.base_dataset import (
-    RestoreKey,
+    FlexState,
     SavableDataset,
     set_sample_restore_key,
 )
 from megatron.energon.savable import Savable
 from megatron.energon.worker import WorkerConfig
-from megatron.energon.wrappers.base import (
-    BaseWrapperDataset,
-    MultiWrappedRestoreKey,
-    SampleIndex,
-)
-from megatron.energon.wrappers.buffer import SavableSampleBuffer, SavableSampleBufferState
+from megatron.energon.wrappers.base import BaseWrapperDataset, SampleIndex
+from megatron.energon.wrappers.buffer import SavableSampleBuffer
 
 T_batch = TypeVar("T_batch", covariant=True)
 T_batch_sample = TypeVar("T_batch_sample", covariant=True)
 
 
 @edataclass
-class BucketState:
-    """State of a bucket. This is used to save and restore the bucket."""
-
-    batch_size: int
-    samples: SavableSampleBufferState
-
-
-@edataclass
-class BucketsState:
-    """State of the buckets. This is used to save and restore the buckets."""
-
-    buckets: Dict[Hashable, BucketState]
-
-
-@edataclass
 class Bucket(Savable, Generic[T_batch_sample]):
-    """A bucket for a GroupBatchDataset. It contains the samples."""
-
     batch_size: int
+
     samples: SavableSampleBuffer[T_batch_sample]
 
-    def save_state(self) -> BucketState:
-        return BucketState(
+    def save_state(self) -> FlexState:
+        return FlexState(
             batch_size=self.batch_size,
             samples=self.samples.save_state(),
         )
 
-    def restore_state(self, state: BucketState):
-        self.batch_size = state.batch_size
-        self.samples.restore_state(state.samples)
-
-
-class Buckets(Savable, Generic[T_batch_sample]):
-    """This class manages the buckets for a GroupBatchDataset. It is a savable object, which can be saved and restored."""
-
-    _dataset: SavableDataset[T_batch_sample]
-    _worker_config: WorkerConfig
-
-    _buckets: Dict[Hashable, Bucket[T_batch_sample]]
-
-    def __init__(self, dataset: SavableDataset[T_batch_sample], worker_config: WorkerConfig):
-        self._dataset = dataset
-        self._worker_config = worker_config
-        self._buckets = {}
-
-    def save_state(self) -> BucketsState:
-        return BucketsState(
-            buckets={key: bucket.save_state() for key, bucket in self._buckets.items()}
-        )
-
-    def restore_state(self, state: BucketsState):
-        self._buckets = {
-            key: Bucket(
-                batch_size=-1,
-                samples=SavableSampleBuffer(self._dataset, worker_config=self._worker_config),
-            )
-            for key, bucket in state.buckets.items()
-        }
-        for key, bucket in self._buckets.items():
-            bucket.restore_state(state.buckets[key])
-
-    def get(self, key: Hashable, batch_size: int | None) -> Bucket[T_batch_sample]:
-        """Get a bucket for a given key. If the bucket does not exist, create it."""
-        bucket = self._buckets.get(key)
-        if bucket is None:
-            assert batch_size is not None
-            self._buckets[key] = bucket = Bucket(
-                batch_size=batch_size,
-                samples=SavableSampleBuffer(self._dataset, worker_config=self._worker_config),
-            )
-        else:
-            assert bucket.batch_size == batch_size, (
-                f"Got different batch size for group {key}: {bucket.batch_size} != {batch_size}."
-            )
-        return bucket
-
-    def flush(self) -> Generator[Bucket[T_batch_sample], None, None]:
-        """Yield all buckets and clear afterwards."""
-        yield from self._buckets.values()
-        self._buckets.clear()
-
-    def clear(self):
-        self._buckets.clear()
-
-    def worker_start(self):
-        for bucket in self._buckets.values():
-            bucket.samples.worker_start()
-
-
-@dataclass(kw_only=True, slots=True, frozen=True)
-class GroupBatchRestoreKey(MultiWrappedRestoreKey):
-    sample_idx: int
+    def restore_state(self, state: FlexState):
+        self.batch_size = state["batch_size"]
+        self.samples.restore_state(state["samples"])
 
 
 class GroupBatchDataset(
@@ -143,18 +60,27 @@ class GroupBatchDataset(
     size categories (e.g. 128x128, 256x256, 512x512) for efficient augmentation and batching.
     """
 
+    _worker_local_fields = {
+        "_group_key_sample_index": None,
+        "_batch_sample_index": None,
+        "_buckets": dict,
+        "_source_exhausted": bool,
+        "_state_restored": bool,
+    }
+
     dataset: SavableDataset[T_batch_sample]
     sample_group_key: Callable[[T_batch_sample], Tuple[Hashable, Optional[int]]]
     batcher: Callable[[List[T_batch_sample]], T_batch]
     drop_last: bool
     _group_key_sample_index: SampleIndex
     _batch_sample_index: SampleIndex
-    _buckets: Buckets
+    _buckets: Dict[Hashable, Bucket[T_batch_sample]]
+    #: Set once the input dataset is exhausted, so that a restored state does not start a new pass.
+    _source_exhausted: bool
+    #: Whether the state was restored since the last iteration started (not saved).
+    _state_restored: bool
     _batch_failure_handler: ErrorContext
     _group_key_failure_handler: ErrorContext
-
-    _savable_fields = ("_group_key_sample_index", "_batch_sample_index", "_buckets")
-    _worker_local_fields = ("_last_batch_failures",)
 
     def __init__(
         self,
@@ -200,6 +126,8 @@ class GroupBatchDataset(
             tolerance=failure_tolerance,
         )
 
+        self.reset_state_own()
+
         assert not inspect.isgeneratorfunction(batcher), (
             f"Batcher {batcher} must not be a generator function for grouped batching."
         )
@@ -207,18 +135,32 @@ class GroupBatchDataset(
     def reset_state_own(self) -> None:
         self._group_key_sample_index = SampleIndex(self.worker_config, src=self)
         self._batch_sample_index = SampleIndex(self.worker_config, src=self)
-        self._buckets = Buckets(self.dataset, self.worker_config)
+        self._buckets = {}
+        self._source_exhausted = False
+        self._state_restored = False
 
     def len_worker(self, worker_idx: int | None = None) -> int:
         # Return an upper bound. This is for sure not correct.
         return self.dataset.len_worker(worker_idx)
 
     def __iter__(self) -> Iterator[T_batch]:
+        if not self._state_restored:
+            # A new iteration starts a new pass, even if the previous one was not iterated to its
+            # end (e.g. stopped right after the last batch).
+            self._source_exhausted = False
+        self._state_restored = False
+
+        buckets = self._buckets
+
+        if buckets is None:
+            buckets = self._buckets = dict()
+
         # Load saved state if available
-        self._buckets.worker_start()
+        for bucket in buckets.values():
+            bucket.samples.worker_start()
 
         # print(f"[wrk={worker_idx}, s={self._batch_sample_index.current_idx}] initial GroupBatchDataset state:\n", end="")
-        # for bucket_key, bucket in self._buckets._buckets.items():
+        # for bucket_key, bucket in buckets.items():
         #     print(f"[wrk={worker_idx}, s={self._batch_sample_index.current_idx}] - Bucket [{bucket_key}] (bs={bucket.batch_size}, len(samples)={len(bucket.samples)}):\n", end="")
         #     bucket.samples.debug_print("    ")
         # print(f"[wrk={worker_idx}, s={self._batch_sample_index.current_idx}] initial done\n", end="")
@@ -226,7 +168,7 @@ class GroupBatchDataset(
         def flush(bucket: Bucket[T_batch_sample]) -> Generator[T_batch, None, None]:
             # Debug print the state
             # print(f"[wrk={worker_idx}, s={self._batch_sample_index.current_idx}] flush GroupBatchDataset state:\n", end="")
-            # for dbg_bucket_key, dbg_bucket in self._buckets._buckets.items():
+            # for dbg_bucket_key, dbg_bucket in buckets.items():
             #     print(f"[wrk={worker_idx}, s={self._batch_sample_index.current_idx}] - Bucket [{dbg_bucket_key}{'*' if dbg_bucket_key == bucket_key else ''}] (bs={dbg_bucket.batch_size}, len(samples)={len(dbg_bucket.samples)}):\n", end="")
             #     dbg_bucket.samples.debug_print("    ")
             batch_items, sample_restore_keys = bucket.samples.flush()
@@ -238,14 +180,12 @@ class GroupBatchDataset(
                         f"Batcher {self.batcher} returned a generator, which is not supported for grouped batching yet."
                     )
                 self._batch_failure_handler.reset()
-                set_sample_restore_key(
-                    batch_sample,
-                    GroupBatchRestoreKey(sample_idx=sample_idx, inner=sample_restore_keys),
-                )
+                set_sample_restore_key(batch_sample, sample_idx, *sample_restore_keys, src=self)
                 yield batch_sample
 
-        # Add samples to the buckets
-        for sample in self.dataset:
+        # Add samples to the buckets. When restored after the input was exhausted, only flush the
+        # remaining buckets.
+        for sample in () if self._source_exhausted else self.dataset:
             with self._group_key_failure_handler.handle_errors(sample):
                 with self._group_key_sample_index.ctx():
                     bucket_key, batch_size = self.sample_group_key(sample)
@@ -255,17 +195,52 @@ class GroupBatchDataset(
                     )
                     if self.fixed_batch_size is not None:
                         batch_size = self.fixed_batch_size
-            bucket = self._buckets.get(bucket_key, batch_size)
+            bucket = buckets.get(bucket_key)
+            if bucket is None:
+                assert batch_size is not None
+                buckets[bucket_key] = bucket = Bucket(
+                    batch_size=batch_size,
+                    samples=SavableSampleBuffer(self.dataset, worker_config=self.worker_config),
+                )
+            else:
+                assert bucket.batch_size == batch_size, (
+                    f"Got different batch size for group {bucket_key}: {bucket.batch_size} != {batch_size}."
+                )
             bucket.samples.append(sample)
             if bucket.samples.len_worker() >= bucket.batch_size:
                 yield from flush(bucket)
+        self._source_exhausted = True
         # Flush out last samples
         if not self.drop_last:
-            for bucket in self._buckets.flush():
+            for bucket in buckets.values():
                 if bucket.samples.len_worker() > 0:
                     yield from flush(bucket)
         # Clear the buckets
         self._buckets.clear()
+        self._source_exhausted = False
+
+    def save_state(self) -> FlexState:
+        return FlexState(
+            bucket_sample_index=self._group_key_sample_index.save_state(),
+            batch_sample_index=self._batch_sample_index.save_state(),
+            buckets={key: bucket.save_state() for key, bucket in self._buckets.items()},
+            source_exhausted=self._source_exhausted,
+            **super().save_state(),
+        )
+
+    def restore_state(self, state: FlexState) -> None:
+        super().restore_state(state)
+
+        self._group_key_sample_index.restore_state(state["bucket_sample_index"])
+        self._batch_sample_index.restore_state(state["batch_sample_index"])
+        for key, bucket_state in state["buckets"].items():
+            self._buckets[key] = Bucket(
+                batch_size=-1,
+                samples=SavableSampleBuffer(self.dataset, worker_config=self.worker_config),
+            )
+            self._buckets[key].restore_state(bucket_state)
+        self._source_exhausted = state["source_exhausted"]
+        self._state_restored = True
 
     def can_restore_sample(self) -> bool:
         return super().can_restore_sample() and self.batcher_stateless
@@ -276,15 +251,16 @@ class GroupBatchDataset(
         )
         super().assert_can_restore()
 
-    def restore_sample(self, index: RestoreKey) -> T_batch:
-        super().assert_can_restore()
-        assert isinstance(index, GroupBatchRestoreKey)
-        batch = [self.dataset.restore_sample(inner_idx) for inner_idx in index.inner]
+    def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_batch:
+        self.assert_can_restore()
+        id, sample_idx, *sample_restore_keys = index
+        assert id == type(self).__name__
+        batch = [self.dataset.restore_sample(inner_idx) for inner_idx in sample_restore_keys]
 
         with handle_restore_errors(self.worker_config.restore_error_handler, batch):
-            with SampleIndex(self.worker_config, src=self).ctx(index.sample_idx):
+            with self._batch_sample_index.ctx(sample_idx):
                 batch_sample = self.batcher(batch)
-            set_sample_restore_key(batch_sample, index)
+            set_sample_restore_key(batch_sample, sample_idx, *sample_restore_keys, src=self)
 
         return batch_sample
 

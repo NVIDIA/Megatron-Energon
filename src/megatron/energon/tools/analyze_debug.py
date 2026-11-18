@@ -97,10 +97,28 @@ cpal = np.array(
 )
 
 
+class YieldBatchLogLine(TypedDict):
+    # Json example:
+    # {
+    #   "t": "yield_batch",
+    #   "r": 1,
+    #   "w": 1,
+    #   "m": "train",
+    #   "idx": 1,
+    #   "keys": ["parts/data-train-000051.tar/528866", ...],
+    # }
+    t: Literal["yield_batch"]
+    r: int
+    w: int
+    m: Literal["train", "val"]
+    idx: int
+    keys: List[str]
+
+
 class SampleLoaderYieldLogLine(TypedDict):
     # Json example:
     # {
-    #   "t": "WebdatasetSampleLoaderDataset._slices_iter.yield",
+    #   "t": "DatasetSampler._slices_iter.yield",
     #   "r": 1,
     #   "w": 1,
     #   "index": 528800,
@@ -110,7 +128,7 @@ class SampleLoaderYieldLogLine(TypedDict):
     #   "epoch": 0,
     #   "epoch_count": 633
     # }
-    t: Literal["WebdatasetSampleLoaderDataset._slices_iter.yield"]
+    t: Literal["DatasetSampler._slices_iter.yield"]
     r: int
     w: int
     #: The global index in the underlying dataset (concats of all shards)
@@ -375,8 +393,8 @@ def command(
             "  Shuffle buffer and batching will not be considered, only the loading order from disk"
         )
         log_iters = [
-            _iter_sl_log_line_keys(_iter_sl_log_samples(log_file), start_idx=skip)
-            for log_file in log_files
+            (src_idx, _iter_sl_log_line_keys(_iter_sl_log_samples(log_file), start_idx=skip))
+            for src_idx, log_file in enumerate(log_files)
         ]
         key_index = {}
         count = 0
@@ -384,23 +402,23 @@ def command(
         while len(log_iters) > 0:
             cur_count = 0
             # Iterate over all iterators for this count and put into heatmap
-            for log_iter in tuple(log_iters):
+            for src_idx, log_iter in tuple(log_iters):
                 # Iterate until None (=next count) is encountered
                 while True:
                     try:
                         log_key = next(log_iter)
                     except StopIteration:
-                        log_iters.remove(log_iter)
+                        log_iters.remove((src_idx, log_iter))
                         break
                     except OSError:
                         traceback.print_exc()
-                        log_iters.remove(log_iter)
+                        log_iters.remove((src_idx, log_iter))
                         break
                     else:
                         if log_key is None:
                             break
                         key_id = key_index.setdefault(log_key, len(key_index))
-                        heatmap.add(key_id, count)
+                        heatmap.add(key_id, count, src_idx)
                         cur_count += 1
             if cur_count == 0:
                 print(f"No data for step {count}")
@@ -424,7 +442,7 @@ def command(
 
 
 class LoaderInitLogLine(TypedDict):
-    t: Literal["DataLoader.__init__"]
+    t: Literal["SavableLoader.__init__", "BasicDataLoader.__init__"]
     r: int
     w: None
     id: int
@@ -432,32 +450,33 @@ class LoaderInitLogLine(TypedDict):
 
 
 class LoaderIterLogLine(TypedDict):
-    t: Literal["DataLoader.epoch_iter"]
+    t: Literal["SavableDataLoader.iter", "BasicDataLoader.iter"]
     r: int
     w: None
     id: int
-    epoch_id: int
+    iter_id: int
 
 
 class LoaderYieldLogLine(TypedDict):
-    t: Literal["DataLoader.epoch_iter.yield"]
+    t: Literal["SavableDataLoader.yield", "BasicDataLoader.yield"]
     r: int
     w: None
     id: int
-    epoch_id: int
+    iter_id: int
     worker_id: int
-    worker_sample_idx: int
-    epoch_sample_idx: int
-    global_sample_idx: int
+    worker_idx: int
+    idx: int
+    iter_idx: int
+    global_idx: int
     keys: Optional[List[str]]
 
 
 class LoaderStopLogLine(TypedDict):
-    t: Literal["DataLoader.epoch_iter.StopIteration"]
+    t: Literal["SavableDataLoader.StopIteration", "BasicDataLoader.StopIteration"]
     r: int
     w: None
     id: int
-    epoch_id: int
+    iter_id: int
 
 
 LoaderLines = Union[
@@ -468,10 +487,14 @@ LoaderLines = Union[
 ]
 
 LOADER_LOG_LINE_TYPES_T = (
-    "DataLoader.__init__",
-    "DataLoader.epoch_iter",
-    "DataLoader.epoch_iter.yield",
-    "DataLoader.epoch_iter.StopIteration",
+    "SavableLoader.__init__",
+    "BasicDataLoader.__init__",
+    "SavableDataLoader.iter",
+    "BasicDataLoader.iter",
+    "SavableDataLoader.yield",
+    "BasicDataLoader.yield",
+    "SavableDataLoader.StopIteration",
+    "BasicDataLoader.StopIteration",
 )
 
 
@@ -530,29 +553,34 @@ class LoaderLogIter:
         loaders = {}
         for log_line in self._iter_log_lines(
             (
-                "DataLoader.__init__",
-                "DataLoader.epoch_iter.yield",
+                "SavableLoader.__init__",
+                "BasicDataLoader.__init__",
+                "SavableDataLoader.yield",
+                "BasicDataLoader.yield",
             )
         ):
-            if log_line["t"] == "DataLoader.__init__":
+            if log_line["t"] in ("SavableLoader.__init__", "BasicDataLoader.__init__"):
                 loaders[log_line["id"]] = LoaderInfo(
                     id=log_line["id"],
                     modality=self._find_config_modality(log_line["config"]),
                     path=self._find_config_path(log_line["config"]),
                     global_count=0,
                 )
-            elif log_line["t"] == "DataLoader.epoch_iter.yield":
-                loaders[log_line["id"]].global_count = log_line["global_sample_idx"]
+            elif log_line["t"] in ("SavableDataLoader.yield", "BasicDataLoader.yield"):
+                loaders[log_line["id"]].global_count = log_line["global_idx"]
         return loaders
 
     def log_entries(self, loader_ids: Container[int]) -> Generator[Optional[List[str]], None, None]:
         idx = self._start_idx
-        for log_line in self._iter_log_lines(("DataLoader.epoch_iter.yield",)):
-            if log_line["t"] == "DataLoader.epoch_iter.yield" and log_line["id"] in loader_ids:
-                assert log_line["global_sample_idx"] >= idx, (
+        for log_line in self._iter_log_lines(("SavableDataLoader.yield", "BasicDataLoader.yield")):
+            if (
+                log_line["t"] in ("SavableDataLoader.yield", "BasicDataLoader.yield")
+                and log_line["id"] in loader_ids
+            ):
+                assert log_line["global_idx"] >= idx, (
                     f"Found entry {log_line} with wrong idx <{idx}"
                 )
-                while log_line["global_sample_idx"] != idx:
+                while log_line["global_idx"] != idx:
                     yield None
                     idx += 1
                 if "keys" in log_line:
@@ -584,7 +612,7 @@ def _iter_sl_log_line_keys(
 def _iter_sl_log_samples(path: Path) -> Generator[SampleLoaderYieldLogLine, None, None]:
     with path.open("r") as rf:
         for line in rf:
-            if '"t": "WebdatasetSampleLoaderDataset._slices_iter.yield"' in line:
+            if '"t": "DatasetSampler._slices_iter.yield"' in line:
                 try:
                     yield json.loads(line.strip())
                 except json.JSONDecodeError:

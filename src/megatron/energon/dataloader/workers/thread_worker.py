@@ -8,6 +8,7 @@ from megatron.energon.dataloader.workers.async_worker import (
     DataLoaderAsynchronousWorker,
     torch_set_worker_info,
 )
+from megatron.energon.worker_local import thread_worker_scope
 
 TSample = TypeVar("TSample", covariant=True)
 
@@ -19,6 +20,8 @@ class ThreadDataLoaderWorker(
     Implements the `DataLoaderWorker` interface using threads.
     """
 
+    _uses_global_rng = False
+
     def _worker_run(
         self, cmd_queue: QueueProtocol[WorkerCommand], result_queue: QueueProtocol[WorkerResult]
     ) -> None:
@@ -28,7 +31,9 @@ class ThreadDataLoaderWorker(
             seed=self._seed,
             dataset=self.dataset,
         )
-        try:
-            return super()._worker_run(cmd_queue, result_queue)
-        finally:
-            self.dataset.worker_close()
+        with thread_worker_scope():
+            try:
+                super()._worker_run(cmd_queue, result_queue)
+            finally:
+                self.close_iterator()
+                self.dataset.close()

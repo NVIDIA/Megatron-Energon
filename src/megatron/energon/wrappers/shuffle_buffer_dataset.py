@@ -1,9 +1,9 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from typing import Any, Dict, Generic, Iterator, TypeVar
+from typing import Any, Dict, Generic, Iterator, Tuple, TypeVar, Union
 
-from megatron.energon.flavors.base_dataset import SavableDataset
+from megatron.energon.flavors.base_dataset import FlexState, SavableDataset
 from megatron.energon.rng import WorkerRng
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset
@@ -15,11 +15,17 @@ T_sample = TypeVar("T_sample")
 class ShuffleBufferDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
     """Shuffle buffer for the dataset."""
 
+    _worker_local_fields = {"_state_restored": bool}
+
     size: int
     _worker_rng: WorkerRng
     _active_buffer: SavableSampleBuffer[T_sample]
+    #: Set once the input dataset is exhausted, so that a restored state does not start a new pass.
+    _source_exhausted: bool
+    #: Whether the state was restored since the last iteration started (not saved).
+    _state_restored: bool
 
-    _savable_fields = ("_worker_rng", "_active_buffer")
+    _savable_fields = ("_active_buffer", "_worker_rng", "_source_exhausted")
 
     def __init__(
         self,
@@ -31,26 +37,49 @@ class ShuffleBufferDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sam
         """Create a shuffle buffer for the dataset."""
         super().__init__(dataset, worker_config=worker_config)
         self.size = size
+        self.reset_state_own()
 
     def reset_state_own(self) -> None:
         self._worker_rng = WorkerRng(self.worker_config)
         self._active_buffer = SavableSampleBuffer(self.dataset, worker_config=self.worker_config)
+        self._source_exhausted = False
+        self._state_restored = False
+
+    def restore_state(self, state: FlexState) -> None:
+        super().restore_state(state)
+        self._state_restored = True
+
+    def len_worker(self, worker_idx: int | None = None) -> int:
+        return self.dataset.len_worker(worker_idx)
 
     def __iter__(self) -> Iterator[T_sample]:
+        if not self._state_restored:
+            # A new iteration starts a new pass, even if the previous one was not iterated to its
+            # end (e.g. stopped right after the last sample).
+            self._source_exhausted = False
+        self._state_restored = False
+
         self._active_buffer.worker_start()
-        it = iter(self._active_buffer.append_iter())
-        while True:
-            if self._active_buffer.len_worker() >= self.size:
-                pop_idx = self._worker_rng.randbelow(self._active_buffer.len_worker())
-                yield self._active_buffer.pop(pop_idx)
-            else:
-                try:
-                    next(it)
-                except StopIteration:
-                    break
+        # When restored after the input was exhausted, only drain the buffer.
+        if not self._source_exhausted:
+            it = iter(self._active_buffer.append_iter())
+            while True:
+                if self._active_buffer.len_worker() >= self.size:
+                    pop_idx = self._worker_rng.randbelow(self._active_buffer.len_worker())
+                    yield self._active_buffer.pop(pop_idx)
+                else:
+                    try:
+                        next(it)
+                    except StopIteration:
+                        break
+            self._source_exhausted = True
         while self._active_buffer.len_worker() > 0:
             pop_idx = self._worker_rng.randbelow(self._active_buffer.len_worker())
             yield self._active_buffer.pop(pop_idx)
+        self._source_exhausted = False
+
+    def restore_sample(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> T_sample:
+        return self._active_buffer.restore_sample(restore_key)
 
     def config(self) -> Dict[str, Any]:
         return {

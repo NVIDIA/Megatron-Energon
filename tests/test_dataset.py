@@ -9,6 +9,8 @@ import io
 import json
 import logging
 import math
+import multiprocessing
+import os
 import random
 import shutil
 import sys
@@ -18,7 +20,7 @@ import warnings
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Hashable, List, Tuple, Type, Union
+from typing import Generator, Hashable, Iterator, List, Tuple, Type, Union
 
 import numpy as np
 import torch
@@ -32,13 +34,18 @@ from megatron.energon import (
     BatchDataset,
     BlendDataset,
     CaptioningSample,
+    Cooker,
+    CrudeSample,
     DefaultTaskEncoder,
     MapDataset,
     MixBatchDataset,
+    PackedSamplesOutput,
+    PartialSample,
     Sample,
     SavableDataLoader,
     TaskEncoder,
     WorkerConfig,
+    basic_sample_keys,
     generic_batch,
     get_loader,
     get_savable_loader,
@@ -49,12 +56,12 @@ from megatron.energon import (
 from megatron.energon.dataset_config import get_dataset_from_config
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors import BaseWebdatasetFactory
-from megatron.energon.flavors.webdataset.config import INFO_JSON_FILENAME, MAIN_FOLDER_NAME
+from megatron.energon.flavors import BaseWebdatasetFactory, CrudeJsonlDatasetFactory
+from megatron.energon.flavors.common.dataset_sampler import DatasetSampler
+from megatron.energon.flavors.common.manifest.paths import INFO_JSON_FILENAME, MAIN_FOLDER_NAME
 from megatron.energon.task_encoder.base import stateless
 from megatron.energon.tools.analyze_debug import command as analyze_debug_command
 from megatron.energon.tools.info import command as info_command
-from megatron.energon.tools.lint import command as lint_command
 from megatron.energon.tools.prepare import command as prepare_command
 from megatron.energon.tools.preview import command as preview_command
 from tests.epath_s3_emulator import setup_s3_emulator
@@ -100,6 +107,20 @@ class ShouldRaiseException(Exception):
     pass
 
 
+@edataclass
+class JsonlTextSample(Sample):
+    text: str
+
+
+@stateless
+def cook_jsonl_text(sample: CrudeSample) -> JsonlTextSample:
+    return JsonlTextSample(**basic_sample_keys(sample), text=sample["json"]["txt"])
+
+
+class JsonlTextTaskEncoder(DefaultTaskEncoder):
+    cookers = [Cooker(cook_jsonl_text)]
+
+
 class TestDataset(unittest.TestCase):
     # Set up the test fixture
     def setUp(self):
@@ -115,6 +136,148 @@ class TestDataset(unittest.TestCase):
 
         # Create a small dummy captioning dataset
         self.samples = self.create_captioning_test_dataset(self.dataset_path, DATASET_SIZE)
+
+    def test_loader_close(self):
+        # Closing or garbage collecting a loader stops its workers and releases the open dataset
+        # files. The dataset stays usable for other loaders.
+        jsonl_path = self.dataset_path / "close.jsonl"
+        with open(jsonl_path, "w") as f:
+            for idx in range(DATASET_SIZE):
+                f.write(json.dumps({"txt": f"jsonl-{idx}"}) + "\n")
+        CrudeJsonlDatasetFactory.prepare_dataset(jsonl_path)
+
+        dataset_root = os.path.realpath(self.dataset_path)
+
+        def open_dataset_files():
+            files = []
+            for fd in os.listdir("/proc/self/fd"):
+                try:
+                    target = os.readlink(f"/proc/self/fd/{fd}")
+                except OSError:
+                    continue
+                if target.startswith(dataset_root):
+                    files.append(target)
+            return files
+
+        def all_keys(batches):
+            return sorted(key for batch in batches for key in batch.__key__)
+
+        for path, task_encoder in (
+            (self.dataset_path, DefaultTaskEncoder()),
+            (jsonl_path, JsonlTextTaskEncoder()),
+        ):
+            for num_workers in (0, 2):
+                with self.subTest(dataset=path.name, num_workers=num_workers):
+                    previous_children = set(multiprocessing.active_children())
+                    dataset = get_train_dataset(
+                        path,
+                        worker_config=WorkerConfig(rank=0, world_size=1, num_workers=num_workers),
+                        batch_size=1,
+                        shuffle_buffer_size=None,
+                        max_samples_per_sequence=None,
+                        task_encoder=task_encoder,
+                        repeat=False,
+                    )
+
+                    # The dataset can be reused after a loader is garbage collected
+                    keys = all_keys(get_loader(dataset))
+                    assert len(keys) == len(set(keys)) == DATASET_SIZE
+                    gc.collect()
+                    assert all_keys(get_loader(dataset)) == keys
+
+                    # Closing one loader does not break another loader of the same dataset
+                    other_loader = get_loader(dataset)
+                    loader = get_loader(dataset)
+                    batches = iter(loader)
+                    first_batch = next(batches)
+                    other_loader.close()
+                    assert all_keys([first_batch, *batches]) == keys
+                    loader.close()
+                    assert open_dataset_files() == [], open_dataset_files()
+
+                    # Stop in the middle of an epoch, by closing or garbage collecting the loader
+                    def start_epoch(loader):
+                        next(iter(loader))
+                        if num_workers == 0:
+                            assert open_dataset_files()
+                        else:
+                            assert set(multiprocessing.active_children()) != previous_children
+
+                    def assert_released():
+                        assert open_dataset_files() == [], open_dataset_files()
+                        assert set(multiprocessing.active_children()) <= previous_children
+
+                    with get_savable_loader(dataset) as loader:
+                        start_epoch(loader)
+                    assert_released()
+
+                    loader = get_savable_loader(dataset)
+                    start_epoch(loader)
+                    del loader
+                    gc.collect()
+                    assert_released()
+
+    def test_tags_backward_compatibility(self):
+        legacy_tags = {"source": "legacy"}
+        assert {field.name for field in dataclasses.fields(Sample)}.issuperset({"__tags__"})
+        assert "__subflavors__" not in {field.name for field in dataclasses.fields(Sample)}
+        assert isinstance(Sample.__subflavors__, property)
+
+        sample = CaptioningSample(
+            __key__="sample",
+            __restore_key__=(),
+            __subflavors__=legacy_tags,
+            image=torch.empty(0),
+            caption="caption",
+        )
+        assert sample.__tags__ is legacy_tags
+        assert sample.__subflavors__ is legacy_tags
+
+        sample.__subflavors__ = {"source": "updated"}
+        assert sample.__tags__ == {"source": "updated"}
+
+        canonical_sample = CaptioningSample(
+            __key__="sample",
+            __restore_key__=(),
+            __tags__=legacy_tags,
+            image=torch.empty(0),
+            caption="caption",
+        )
+        assert canonical_sample.__subflavors__ is legacy_tags
+
+        with self.assertRaisesRegex(ValueError, "Cannot set both"):
+            CaptioningSample(
+                __key__="sample",
+                __restore_key__=(),
+                __tags__={},
+                __subflavors__={},
+                image=torch.empty(0),
+                caption="caption",
+            )
+
+        cooker = Cooker(lambda value: value, has_subflavors=legacy_tags)
+        assert cooker.has_tags is legacy_tags
+        assert cooker.has_subflavors is legacy_tags
+
+        dataset = get_dataset_from_config(
+            self.dataset_path,
+            split_part="train",
+            training=False,
+            subflavors=legacy_tags,
+            worker_config=no_worker_config,
+        )
+        assert dataset.tags["source"] == "legacy"
+        assert dataset.subflavors is dataset.tags
+
+        with self.assertRaisesRegex(ValueError, "Cannot set both"):
+            get_dataset_from_config(
+                self.dataset_path,
+                split_part="train",
+                training=False,
+                tags={},
+                subflavors={},
+                worker_config=no_worker_config,
+            )
         print(self.dataset_path)
 
     def tearDown(self):
@@ -318,7 +481,7 @@ class TestDataset(unittest.TestCase):
             lambda x: CaptioningSample(
                 __key__=x.__key__,
                 __restore_key__=x.__restore_key__,
-                __subflavors__=x.__subflavors__,
+                __tags__=x.__tags__,
                 image=x.image,
                 caption=torch.tensor(np.frombuffer(x.caption.encode(), dtype=np.uint8)),
             ),
@@ -326,9 +489,7 @@ class TestDataset(unittest.TestCase):
         )
 
         def get_ld(ds):
-            loader = get_loader(ds)
-            self.addCleanup(loader.shutdown)
-            return loader
+            return get_loader(ds)
 
         # Check len operator
         assert len(ds) == 50
@@ -411,9 +572,8 @@ class TestDataset(unittest.TestCase):
             sample_type=CaptioningSample,
         )
         captions = set(sample["caption"] for sample in self.samples)
-        with get_loader(ds.build()) as loader:
-            for sample in loader:
-                captions.remove(sample.caption)
+        for sample in get_loader(ds.build()):
+            captions.remove(sample.caption)
         assert len(captions) == 0
 
     def test_sample_loader(self):
@@ -426,10 +586,9 @@ class TestDataset(unittest.TestCase):
             sample_type=CaptioningSample,
         )
         captions = set(sample["caption"] for sample in self.samples)
-        with get_loader(ds.build()) as loader:
-            for sample in loader:
-                assert sample.caption[:4] == "<SL>"
-                captions.remove(sample.caption[4:])
+        for sample in get_loader(ds.build()):
+            assert sample.caption[:4] == "<SL>"
+            captions.remove(sample.caption[4:])
         assert len(captions) == 0
 
     def test_sample_loader_key(self):
@@ -443,11 +602,10 @@ class TestDataset(unittest.TestCase):
         )
         captions = set(sample["caption"] for sample in self.samples)
         keys = set(f"<SL>{idx:06d}" for idx in range(len(self.samples)))
-        with get_loader(ds.build()) as loader:
-            for sample in loader:
-                assert sample.caption[:4] == "<SL>"
-                captions.remove(sample.caption[4:])
-                keys.remove(sample.__key__)
+        for sample in get_loader(ds.build()):
+            assert sample.caption[:4] == "<SL>"
+            captions.remove(sample.caption[4:])
+            keys.remove(sample.__key__)
         assert len(captions) == 0
         assert len(keys) == 0
 
@@ -461,8 +619,7 @@ class TestDataset(unittest.TestCase):
             sample_type=CaptioningSample,
         )
 
-        with get_loader(ds.build()) as loader:
-            keys = [entry.__key__ for entry in loader]
+        keys = [entry.__key__ for entry in get_loader(ds.build())]
         assert keys == [f"{i:06d}" for i in list(range(30, 35)) + list(range(40, 50))], keys
 
     def test_loader(self):
@@ -491,7 +648,6 @@ class TestDataset(unittest.TestCase):
                 task_encoder=TestTaskEncoder(),
             )
         )
-        self.addCleanup(loader.shutdown)
 
         assert len(loader) == 2
 
@@ -523,7 +679,6 @@ class TestDataset(unittest.TestCase):
                 task_encoder=TestTaskEncoder(),
             )
         )
-        self.addCleanup(loader2.shutdown)
         assert len(loader2) == 5
         # The order in the split is shuffled this way
         assert list(key for batch in loader2 for key in batch.__key__) == [
@@ -542,7 +697,6 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
             )
         )
-        self.addCleanup(train_loader.shutdown)
 
         val_loader = get_loader(
             get_val_dataset(
@@ -552,7 +706,6 @@ class TestDataset(unittest.TestCase):
                 worker_config=no_worker_config,
             )
         )
-        self.addCleanup(val_loader.shutdown)
 
         n_samples = 0
         for i, sample in zip(range(100), train_loader):
@@ -565,6 +718,64 @@ class TestDataset(unittest.TestCase):
             n_samples += sample.image.shape[0]
         assert n_samples == 50
 
+    def test_max_samples_per_sequence_one_uses_compact_indexes(self):
+        def new_dataset():
+            return get_train_dataset(
+                self.dataset_path,
+                batch_size=1,
+                worker_config=WorkerConfig(rank=0, world_size=1, num_workers=2),
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=1,
+            )
+
+        train_dataset = new_dataset()
+
+        sampler = train_dataset._find_wrapped_dataset(DatasetSampler)
+        assert isinstance(sampler, DatasetSampler)
+        assert all(isinstance(offsets, range) for offsets in sampler.workers_slice_offsets)
+
+        with get_savable_loader(train_dataset) as train_loader:
+            train_iterator = iter(train_loader)
+            first_batches = [next(train_iterator) for _ in range(10)]
+            state = train_loader.save_state_rank()
+            remaining_batches = [next(train_iterator) for _ in range(DATASET_SIZE - 10)]
+            next_epoch_batches = [next(train_iterator) for _ in range(DATASET_SIZE)]
+
+        with get_savable_loader(new_dataset()) as restored_loader:
+            restored_loader.restore_state_rank(state)
+            restored_iterator = iter(restored_loader)
+            restored_batches = [
+                next(restored_iterator) for _ in range(len(remaining_batches) + DATASET_SIZE)
+            ]
+
+        assert [batch.__key__[0] for batch in first_batches[:5]] == [
+            "000043",
+            "000010",
+            "000036",
+            "000009",
+            "000042",
+        ]
+
+        all_batches = first_batches + remaining_batches
+        assert sorted(batch.__key__[0] for batch in all_batches) == [
+            f"{sample_idx:06d}" for sample_idx in range(DATASET_SIZE)
+        ]
+        assert all(batch.image.shape == (1, 3, 100, 100) for batch in all_batches)
+
+        assert sorted(batch.__key__[0] for batch in next_epoch_batches) == [
+            f"{sample_idx:06d}" for sample_idx in range(DATASET_SIZE)
+        ]
+        assert [batch.__key__ for batch in next_epoch_batches] != [
+            batch.__key__ for batch in all_batches
+        ]
+
+        assert [batch.__key__ for batch in restored_batches[: len(remaining_batches)]] == [
+            batch.__key__ for batch in remaining_batches
+        ]
+        assert [batch.__key__ for batch in restored_batches[len(remaining_batches) :]] == [
+            batch.__key__ for batch in next_epoch_batches
+        ]
+
     def test_no_batching(self):
         train_loader = get_loader(
             get_train_dataset(
@@ -575,7 +786,6 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
             )
         )
-        self.addCleanup(train_loader.shutdown)
 
         one_sample = next(iter(train_loader))
 
@@ -601,7 +811,6 @@ class TestDataset(unittest.TestCase):
         assert len(train_dataset) == 12
         assert len(train_loader) == 12
         assert len(list(train_loader)) == 12
-        train_loader.shutdown()
 
         val_dataset = get_val_dataset(
             self.dataset_path, split_part="train", batch_size=1, worker_config=no_worker_config
@@ -609,7 +818,6 @@ class TestDataset(unittest.TestCase):
         val_loader = get_loader(val_dataset)
         assert len(val_loader) == 50
         assert len(list(val_loader)) == 50
-        val_loader.shutdown()
 
         val_dataset = get_val_dataset(
             self.dataset_path, split_part="train", batch_size=11, worker_config=worker_config
@@ -622,7 +830,6 @@ class TestDataset(unittest.TestCase):
         assert len(list(val_loader)) == 8
         assert [len(entry.__key__) for entry in val_loader] == [11, 11, 11, 11, 2, 1, 2, 1]
         assert sum(len(entry.__key__) for entry in val_loader) == 50
-        val_loader.shutdown()
 
     def test_multirank_dataset(self):
         torch.manual_seed(42)
@@ -643,7 +850,6 @@ class TestDataset(unittest.TestCase):
         assert len(train_dataset) == 12
         assert len(train_loader) == 12
         assert len(list(train_loader)) == 12
-        train_loader.shutdown()
 
         val_dataset0 = get_val_dataset(
             self.dataset_path, split_part="train", batch_size=1, worker_config=worker_config_r0
@@ -653,7 +859,6 @@ class TestDataset(unittest.TestCase):
         assert len(val_loader0) == 25
         keys0 = set(key for entry in val_loader0 for key in entry.__key__)
         assert len(keys0) == 25
-        val_loader0.shutdown()
 
         val_dataset0b11 = get_val_dataset(
             self.dataset_path, split_part="train", batch_size=11, worker_config=worker_config_r0
@@ -667,7 +872,6 @@ class TestDataset(unittest.TestCase):
         print([len(entry.__key__) for entry in val_loader0b11])
         assert [len(entry.__key__) for entry in val_loader0b11] == [11, 11, 2, 1]
         assert len(keys0b11) == 25
-        val_loader0b11.shutdown()
 
         assert keys0b11 == keys0
 
@@ -682,7 +886,6 @@ class TestDataset(unittest.TestCase):
         print(sorted(keys1))
         print(sorted(keys0))
         assert keys1.isdisjoint(keys0)
-        val_loader1.shutdown()
 
         val_dataset1b11 = get_val_dataset(
             self.dataset_path, split_part="train", batch_size=11, worker_config=worker_config_r1
@@ -699,7 +902,6 @@ class TestDataset(unittest.TestCase):
         assert keys1b11.isdisjoint(keys0b11)
 
         assert keys1b11 == keys1
-        val_loader1b11.shutdown()
 
     def test_weight_aug(self):
         class WeightAugmentTaskEncoder(AugmentTaskEncoder):
@@ -733,7 +935,6 @@ class TestDataset(unittest.TestCase):
                 ),
             )
         )
-        self.addCleanup(loader.shutdown)
 
         for data in loader:
             assert data.weight == [0.8] * 10
@@ -766,7 +967,6 @@ class TestDataset(unittest.TestCase):
                 worker_config=no_worker_config,
             )
         )
-        self.addCleanup(loader.shutdown)
 
         bs_hist = {10: 0, 20: 0}
         for i, sample in zip(range(1000), loader):
@@ -818,7 +1018,6 @@ class TestDataset(unittest.TestCase):
                 worker_config=no_worker_config,
             )
         )
-        self.addCleanup(loader.shutdown)
 
         source_hist = {0: 0, 1: 0}
         for i, sample in zip(range(1000), loader):
@@ -875,7 +1074,6 @@ class TestDataset(unittest.TestCase):
                 worker_config=no_worker_config,
             )
         )
-        self.addCleanup(loader.shutdown)
 
         source_hist = {0: 0, 1: 0}
         for i, samples in zip(range(1000), loader):
@@ -904,7 +1102,6 @@ class TestDataset(unittest.TestCase):
         samples = [[batch.__key__ for batch in loader] for _ in range(10)]
         print(samples)
         assert all(samples[0] == one_ep_samples for one_ep_samples in samples)
-        loader.shutdown()
 
         worker_config = WorkerConfig(rank=0, world_size=1, num_workers=2)
 
@@ -923,7 +1120,6 @@ class TestDataset(unittest.TestCase):
         samples_wrk2 = [[batch.__key__ for batch in loader] for _ in range(10)]
         print(samples)
         assert all(samples_wrk2[0] == one_ep_samples for one_ep_samples in samples_wrk2)
-        loader.shutdown()
 
     def test_current_batch_index(self):
         # Tests if the get_current_batch_index works properly
@@ -1008,7 +1204,6 @@ class TestDataset(unittest.TestCase):
         # For constructing the test data above:
         print("batch_rand_nums: ", batch_rand_nums)
         assert batch_rand_nums == ref_batch_rand_nums
-        loader.shutdown()
 
         # Now, test multi-worker loader with accessing get_current_batch_index
         worker_config_r0 = WorkerConfig(rank=0, world_size=2, num_workers=2)
@@ -1048,7 +1243,6 @@ class TestDataset(unittest.TestCase):
             )
             for batch_idx, batch in batches
         )
-        loader.shutdown()
 
         batches_r1 = list(zip(range(20), loader_r1))
         print("bir0", [batch.batch_index for batch_idx, batch in batches_r1])
@@ -1063,7 +1257,6 @@ class TestDataset(unittest.TestCase):
             )
             for batch_idx, batch in batches_r1
         )
-        loader_r1.shutdown()
 
         # Now, test multi-worker loader with accessing get_current_batch_index and save/restore state
         loader = get_savable_loader(
@@ -1098,10 +1291,6 @@ class TestDataset(unittest.TestCase):
             for batch_idx, batch in batches
         )
 
-        # Save before shutting down; rank 1 does not affect rank 0's state.
-        state = loader.save_state_rank()
-        loader.shutdown()
-
         batches_r1 = list(zip(range(20), loader_r1))
         print([batch.batch_index for batch_idx, batch in batches_r1])
         assert all(
@@ -1114,7 +1303,9 @@ class TestDataset(unittest.TestCase):
             )
             for batch_idx, batch in batches_r1
         )
-        loader_r1.shutdown()
+
+        # Save and restore state
+        state = loader.save_state_rank()
 
         # Restore state and check if the batch index is restored correctly
         loader = get_savable_loader(
@@ -1140,7 +1331,6 @@ class TestDataset(unittest.TestCase):
             )
             for batch_idx, batch in batches
         )
-        loader.shutdown()
 
     def test_current_batch_index_generator(self):
         # Tests if the get_current_batch_index works properly
@@ -1230,7 +1420,6 @@ class TestDataset(unittest.TestCase):
         # For constructing the test data above:
         print("batch_rand_nums: ", batch_rand_nums)
         assert batch_rand_nums == ref_batch_rand_nums
-        loader.shutdown()
 
         # Now, test multi-worker loader with accessing get_current_batch_index
         worker_config_r0 = WorkerConfig(rank=0, world_size=2, num_workers=2)
@@ -1270,7 +1459,6 @@ class TestDataset(unittest.TestCase):
             )
             for batch_idx, batch in batches
         )
-        loader.shutdown()
 
         batches_r1 = list(zip(range(20), loader_r1))
         print("bir0", [batch.batch_index for batch_idx, batch in batches_r1])
@@ -1285,7 +1473,6 @@ class TestDataset(unittest.TestCase):
             )
             for batch_idx, batch in batches_r1
         )
-        loader_r1.shutdown()
 
         # Now, test multi-worker loader with accessing get_current_batch_index and save/restore state
         loader = get_savable_loader(
@@ -1323,9 +1510,23 @@ class TestDataset(unittest.TestCase):
             for batch_idx, batch in batches
         )
 
-        # Save and consume rank 0 before starting rank 1's workers.
+        batches_r1 = list(zip(range(20), loader_r1))
+        print([batch.batch_index for batch_idx, batch in batches_r1])
+        assert all(
+            all(bi == batch_idx for bi in batch.batch_index) for batch_idx, batch in batches_r1
+        )
+        assert all(
+            all(
+                si == batch_idx + (batch_idx // 4 + ((batch_idx // 2 % 2) + sample_offset) // 2) * 2
+                for sample_offset, si in enumerate(batch.sample_index)
+            )
+            for batch_idx, batch in batches_r1
+        )
+
+        # Save and restore state
         state = loader.save_state_rank()
 
+        # Iter next 20 from the loader
         cmp_batches = list(zip(range(20, 40), loader))
         print("bi:", [batch.batch_index for batch_idx, batch in cmp_batches])
         print("si:", [batch.sample_index for batch_idx, batch in cmp_batches])
@@ -1340,21 +1541,6 @@ class TestDataset(unittest.TestCase):
             )
             for batch_idx, batch in cmp_batches
         )
-        loader.shutdown()
-
-        batches_r1 = list(zip(range(20), loader_r1))
-        print([batch.batch_index for batch_idx, batch in batches_r1])
-        assert all(
-            all(bi == batch_idx for bi in batch.batch_index) for batch_idx, batch in batches_r1
-        )
-        assert all(
-            all(
-                si == batch_idx + (batch_idx // 4 + ((batch_idx // 2 % 2) + sample_offset) // 2) * 2
-                for sample_offset, si in enumerate(batch.sample_index)
-            )
-            for batch_idx, batch in batches_r1
-        )
-        loader_r1.shutdown()
 
         # Restore state and check if the batch index is restored correctly
         loader = get_savable_loader(
@@ -1386,7 +1572,6 @@ class TestDataset(unittest.TestCase):
             all(b1s == b2s for b1s, b2s in zip(b1.rand_num, b2.rand_num))
             for (_b1idx, b1), (_b2idx, b2) in zip(batches, cmp_batches)
         )
-        loader.shutdown()
 
     def test_packing(self):
         torch.manual_seed(42)
@@ -1460,7 +1645,6 @@ class TestDataset(unittest.TestCase):
         restored_sample_1 = loader.restore_sample(samples[1].__restore_key__)
         assert restored_sample_1.__key__ == samples[1].__key__
         assert restored_sample_1.__restore_key__ == samples[1].__restore_key__
-        loader.shutdown()
 
         worker_config_r0 = WorkerConfig(rank=0, world_size=2, num_workers=2)
 
@@ -1493,7 +1677,6 @@ class TestDataset(unittest.TestCase):
         assert [
             [len(batch_key.split(",")) for batch_key in batch.__key__] for batch in samples_r0_cmp
         ] == [[16, 1], [16, 1], [4, 16], [4, 16], [1, 4], [1, 4], [16, 1], [16, 1]]
-        loader_r0.shutdown()
 
         loader_r0 = get_savable_loader(
             get_train_dataset(
@@ -1521,7 +1704,6 @@ class TestDataset(unittest.TestCase):
         ] == [[16, 1], [16, 1], [4, 16], [4, 16], [1, 4], [1, 4], [16, 1], [16, 1]]
 
         assert all(s0.__key__ == s1.__key__ for s0, s1 in zip(samples_r0_cmp, samples_r0_restored))
-        loader_r0.shutdown()
 
     def test_packing_val(self):
         torch.manual_seed(42)
@@ -1572,7 +1754,6 @@ class TestDataset(unittest.TestCase):
                 split_part="train",
             )
         )
-        self.addCleanup(loader.shutdown)
 
         assert len(loader) == 25, f"len(loader) == {len(loader)}"
 
@@ -1603,6 +1784,1075 @@ class TestDataset(unittest.TestCase):
         restored_sample_1 = loader.restore_sample(samples[1].__restore_key__)
         assert restored_sample_1.__key__ == samples[1].__key__
         assert restored_sample_1.__restore_key__ == samples[1].__restore_key__
+
+    def test_packing_pushback(self):
+        """Pushback must prepend deferred samples ahead of new iterator pulls.
+
+        With ``buffer_size`` 5, the first full buffer follows the dataset iterator order (not
+        necessarily sorted ``__key__``). We pack only the first sample and push the rest back; the
+        next pre-pack must see the four deferred samples first, then one newly drawn sample — i.e.
+        the second buffer's keys must start with the first buffer's keys at indices ``[1:5]``.
+        """
+        torch.manual_seed(42)
+
+        buf = 5
+
+        class TestTaskEncoder(DefaultTaskEncoder):
+            def __init__(self):
+                super().__init__(raw_batch_type=CaptioningBatch)
+                self.buffer_keys_per_call: list[list[str]] = []
+                self.first_fill_keys: list[str] | None = None
+
+            @stateless
+            def encode_sample(self, sample: CaptioningSample) -> EncodedCaptioningSample:
+                return EncodedCaptioningSample.derive_from(
+                    sample,
+                    image=sample.image,
+                    caption=torch.frombuffer(sample.caption.encode(), dtype=torch.uint8),
+                )
+
+            def select_samples_to_pack(
+                self, samples: list[EncodedCaptioningSample]
+            ) -> PackedSamplesOutput[EncodedCaptioningSample]:
+                keys = [s.__key__ for s in samples]
+                self.buffer_keys_per_call.append(keys.copy())
+                call = len(self.buffer_keys_per_call)
+                if call == 1:
+                    assert len(samples) == buf
+                    self.first_fill_keys = keys.copy()
+                    return PackedSamplesOutput(
+                        packs=[samples[:1]],
+                        pushback=tuple(samples[1:]),
+                    )
+                if call == 2:
+                    assert len(samples) == buf
+                    assert self.first_fill_keys is not None
+                    assert keys[: buf - 1] == self.first_fill_keys[1:buf], (
+                        "Pushback did not appear before new samples: "
+                        f"second_fill[:4]={keys[: buf - 1]!r} "
+                        f"expected first_fill[1:5]={self.first_fill_keys[1:buf]!r}"
+                    )
+                    return PackedSamplesOutput(
+                        packs=[[s] for s in samples],
+                        pushback=(),
+                    )
+                return PackedSamplesOutput(
+                    packs=[[s] for s in samples],
+                    pushback=(),
+                )
+
+            @stateless
+            def pack_selected_samples(
+                self, samples: list[EncodedCaptioningSample]
+            ) -> EncodedCaptioningSample:
+                return EncodedCaptioningSample(
+                    __key__=",".join(sample.__key__ for sample in samples),
+                    __restore_key__=(),
+                    image=torch.stack([sample.image for sample in samples]),
+                    caption=torch.cat([sample.caption for sample in samples]),
+                )
+
+        task_encoder = TestTaskEncoder()
+        loader = get_loader(
+            get_train_dataset(
+                self.dataset_path,
+                batch_size=2,
+                packing_buffer_size=buf,
+                worker_config=no_worker_config,
+                virtual_epoch_length=4,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                task_encoder=task_encoder,
+            )
+        )
+
+        out = list(loader)
+        assert len(out) == 4
+        assert task_encoder.first_fill_keys is not None
+        assert (
+            task_encoder.buffer_keys_per_call[1][: buf - 1] == task_encoder.first_fill_keys[1:buf]
+        )
+        restored = loader.restore_sample(out[0].__restore_key__)
+        assert restored.__key__ == out[0].__key__
+
+    def test_packing_partial_sample_carryover(self):
+        """Partial samples carry unconsumed token slices across packing rounds."""
+
+        torch.manual_seed(42)
+        max_tokens = 11
+        buffer_size = 4
+
+        class TestTaskEncoder(DefaultTaskEncoder):
+            def __init__(self):
+                super().__init__(raw_batch_type=CaptioningBatch)
+
+            @staticmethod
+            def _window(
+                sample: EncodedCaptioningSample
+                | PartialSample[EncodedCaptioningSample, tuple[int, int]],
+            ) -> tuple[EncodedCaptioningSample, int, int]:
+                if isinstance(sample, PartialSample):
+                    token_start, token_stop = sample.slice
+                    return sample.sample, token_start, token_stop
+                return sample, 0, len(sample.caption)
+
+            @stateless
+            def encode_sample(self, sample: CaptioningSample) -> EncodedCaptioningSample:
+                return EncodedCaptioningSample.derive_from(
+                    sample,
+                    image=sample.image,
+                    caption=torch.frombuffer(bytearray(sample.caption.encode()), dtype=torch.uint8),
+                )
+
+            def select_samples_to_pack(
+                self,
+                samples: List[
+                    EncodedCaptioningSample
+                    | PartialSample[EncodedCaptioningSample, tuple[int, int]]
+                ],
+            ) -> PackedSamplesOutput[
+                EncodedCaptioningSample | PartialSample[EncodedCaptioningSample, tuple[int, int]]
+            ]:
+                pack: list[
+                    EncodedCaptioningSample
+                    | PartialSample[EncodedCaptioningSample, tuple[int, int]]
+                ] = []
+                pushback: list[
+                    EncodedCaptioningSample
+                    | PartialSample[EncodedCaptioningSample, tuple[int, int]]
+                ] = []
+                remaining = max_tokens
+
+                for sample in samples:
+                    base_sample, token_start, token_stop = self._window(sample)
+                    token_count = token_stop - token_start
+                    if remaining == 0:
+                        pushback.append(sample)
+                    elif token_count <= remaining:
+                        pack.append(sample)
+                        remaining -= token_count
+                    else:
+                        pack.append(
+                            PartialSample(
+                                sample=base_sample,
+                                slice=(token_start, token_start + remaining),
+                            )
+                        )
+                        pushback.append(
+                            PartialSample(
+                                sample=base_sample,
+                                slice=(token_start + remaining, token_stop),
+                            )
+                        )
+                        remaining = 0
+
+                return PackedSamplesOutput(
+                    packs=[pack] if pack else [],
+                    pushback=tuple(pushback),
+                )
+
+            @stateless
+            def postencode_sample(
+                self,
+                sample: EncodedCaptioningSample
+                | PartialSample[EncodedCaptioningSample, tuple[int, int]],
+            ) -> EncodedCaptioningSample:
+                base_sample, token_start, token_stop = self._window(sample)
+                return EncodedCaptioningSample.derive_from(
+                    base_sample,
+                    __key__=f"{base_sample.__key__}:{token_start}:{token_stop}",
+                    image=base_sample.image,
+                    caption=base_sample.caption[token_start:token_stop],
+                )
+
+            @stateless
+            def pack_selected_samples(
+                self, samples: List[EncodedCaptioningSample]
+            ) -> EncodedCaptioningSample:
+                return EncodedCaptioningSample(
+                    __key__="|".join(sample.__key__ for sample in samples),
+                    __restore_key__=(),
+                    image=torch.stack([sample.image for sample in samples]),
+                    caption=torch.cat([sample.caption for sample in samples]),
+                )
+
+        class FinalPackerTaskEncoder(DefaultTaskEncoder):
+            def __init__(self):
+                super().__init__(raw_batch_type=CaptioningBatch)
+
+            @staticmethod
+            def _window(
+                sample: EncodedCaptioningSample
+                | PartialSample[EncodedCaptioningSample, tuple[int, int]],
+            ) -> tuple[EncodedCaptioningSample, int, int]:
+                return TestTaskEncoder._window(sample)
+
+            @stateless
+            def encode_sample(self, sample: CaptioningSample) -> EncodedCaptioningSample:
+                return EncodedCaptioningSample.derive_from(
+                    sample,
+                    image=sample.image,
+                    caption=torch.frombuffer(bytearray(sample.caption.encode()), dtype=torch.uint8),
+                )
+
+            def select_samples_to_pack(
+                self,
+                samples: List[
+                    EncodedCaptioningSample
+                    | PartialSample[EncodedCaptioningSample, tuple[int, int]]
+                ],
+            ) -> PackedSamplesOutput[
+                EncodedCaptioningSample | PartialSample[EncodedCaptioningSample, tuple[int, int]]
+            ]:
+                return TestTaskEncoder.select_samples_to_pack(self, samples)
+
+            @stateless
+            def pack_selected_samples(
+                self,
+                samples: List[
+                    EncodedCaptioningSample
+                    | PartialSample[EncodedCaptioningSample, tuple[int, int]]
+                ],
+            ) -> EncodedCaptioningSample:
+                parts = []
+                images = []
+                captions = []
+                for sample in samples:
+                    base_sample, token_start, token_stop = self._window(sample)
+                    parts.append(f"{base_sample.__key__}:{token_start}:{token_stop}")
+                    images.append(base_sample.image)
+                    captions.append(base_sample.caption[token_start:token_stop])
+                return EncodedCaptioningSample(
+                    __key__="|".join(parts),
+                    __restore_key__=(),
+                    image=torch.stack(images),
+                    caption=torch.cat(captions),
+                )
+
+        def assert_segments(samples: list[EncodedCaptioningSample]) -> None:
+            by_key: dict[str, list[tuple[int, int, bytes]]] = defaultdict(list)
+            for sample in samples:
+                caption_offset = 0
+                for part in sample.__key__.split("|"):
+                    key, raw_token_start, raw_token_stop = part.split(":")
+                    token_start = int(raw_token_start)
+                    token_stop = int(raw_token_stop)
+                    token_count = token_stop - token_start
+                    segment = bytes(
+                        sample.caption[caption_offset : caption_offset + token_count].tolist()
+                    )
+                    expected = self.samples[int(key)]["caption"].encode()[token_start:token_stop]
+                    assert segment == expected
+                    by_key[key].append((token_start, token_stop, segment))
+                    caption_offset += token_count
+                assert caption_offset == len(sample.caption)
+                assert caption_offset == max_tokens
+
+            complete_keys = 0
+            for key, segments in by_key.items():
+                expected = self.samples[int(key)]["caption"].encode()
+                if sum(token_stop - token_start for token_start, token_stop, _ in segments) != len(
+                    expected
+                ):
+                    continue
+                actual = bytearray(len(expected))
+                covered = [False] * len(expected)
+                for token_start, token_stop, segment in segments:
+                    actual[token_start:token_stop] = segment
+                    covered[token_start:token_stop] = [True] * (token_stop - token_start)
+                assert all(covered)
+                assert bytes(actual) == expected
+                complete_keys += 1
+            assert complete_keys > 0
+
+        def build_loader():
+            return get_savable_loader(
+                get_train_dataset(
+                    self.dataset_path,
+                    batch_size=None,
+                    packing_buffer_size=buffer_size,
+                    worker_config=no_worker_config,
+                    virtual_epoch_length=8,
+                    shuffle_buffer_size=None,
+                    max_samples_per_sequence=None,
+                    task_encoder=TestTaskEncoder(),
+                ),
+                checkpoint_every_min_n_samples=1,
+                checkpoint_every_sec=0,
+            )
+
+        loader = build_loader()
+        loader_iter = iter(loader)
+        first_sample = next(loader_iter)
+        rank_state = loader.save_state_rank()
+        cmp_samples = [next(loader_iter) for _ in range(5)]
+
+        restored_loader = build_loader()
+        restored_loader.restore_state_rank(rank_state)
+        restored_samples = [sample for _, sample in zip(range(5), restored_loader)]
+
+        assert loader.can_restore_sample()
+        restored_first_sample = loader.restore_sample(first_sample.__restore_key__)
+        assert restored_first_sample.__key__ == first_sample.__key__
+        assert torch.equal(restored_first_sample.caption, first_sample.caption)
+        assert [sample.__key__ for sample in restored_samples] == [
+            sample.__key__ for sample in cmp_samples
+        ]
+        assert all(
+            torch.equal(restored.caption, cmp.caption)
+            for restored, cmp in zip(restored_samples, cmp_samples)
+        )
+        assert_segments([first_sample, *cmp_samples])
+
+        final_packer_loader = get_loader(
+            get_train_dataset(
+                self.dataset_path,
+                batch_size=None,
+                packing_buffer_size=buffer_size,
+                worker_config=no_worker_config,
+                virtual_epoch_length=4,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                task_encoder=FinalPackerTaskEncoder(),
+            )
+        )
+        final_packer_samples = list(final_packer_loader)
+        assert final_packer_loader.can_restore_sample()
+        restored_final_packer_sample = final_packer_loader.restore_sample(
+            final_packer_samples[0].__restore_key__
+        )
+        assert restored_final_packer_sample.__key__ == final_packer_samples[0].__key__
+        assert torch.equal(
+            restored_final_packer_sample.caption,
+            final_packer_samples[0].caption,
+        )
+        assert_segments(final_packer_samples)
+
+    def test_packing_save_restore_every_step(self):
+        """Restoring after any output continues exactly like the uninterrupted loader.
+
+        Covers restoring in the middle of the outputs of a generator final packer, and after the
+        input was exhausted while filling the last packing buffer.
+        """
+
+        pack_size = 3
+
+        class TripletTaskEncoder(DefaultTaskEncoder):
+            def __init__(self):
+                super().__init__(raw_batch_type=CaptioningBatch)
+
+            def select_samples_to_pack(
+                self, samples: list[CaptioningSample]
+            ) -> list[list[CaptioningSample]]:
+                return [samples[idx : idx + pack_size] for idx in range(0, len(samples), pack_size)]
+
+            @stateless
+            def pack_selected_samples(
+                self, samples: list[CaptioningSample]
+            ) -> Generator[CaptioningSample, None, None]:
+                key = "|".join(sample.__key__ for sample in samples)
+                for part in ("first", "second"):
+                    yield CaptioningSample.derive_from(
+                        samples[0],
+                        __key__=f"{key}#{part}",
+                        image=samples[0].image,
+                        caption="|".join(sample.caption for sample in samples),
+                    )
+
+        # With workers, the loader cannot restore a non-repeating dataset after a worker already
+        # finished its input, so multiple workers are only covered with a repeating dataset.
+        for repeat, num_workers in ((False, 0), (True, 2)):
+            with self.subTest(repeat=repeat, num_workers=num_workers):
+                worker_config = WorkerConfig(rank=0, world_size=1, num_workers=num_workers)
+
+                def build_loader():
+                    return get_savable_loader(
+                        get_train_dataset(
+                            self.dataset_path,
+                            batch_size=None,
+                            # The last buffer of the 50 samples only holds 2 samples.
+                            packing_buffer_size=12,
+                            worker_config=worker_config,
+                            shuffle_buffer_size=None,
+                            max_samples_per_sequence=None,
+                            repeat=repeat,
+                            task_encoder=TripletTaskEncoder(),
+                        ),
+                        checkpoint_every_min_n_samples=1,
+                        checkpoint_every_sec=0,
+                    )
+
+                loader = build_loader()
+                outputs = []
+                states = []
+                for output in loader:
+                    outputs.append(output)
+                    states.append(loader.save_state_rank())
+                    if repeat and len(outputs) == 12:
+                        break
+
+                keys = [output.__key__ for output in outputs]
+                assert len(set(keys)) == len(keys)
+                if not repeat:
+                    sample_keys = {
+                        key for output in keys for key in output.split("#")[0].split("|")
+                    }
+                    assert len(sample_keys) == DATASET_SIZE
+                    # Stopping right after the last output and iterating again starts a new pass.
+                    for _ in range(2):
+                        restarted = [output.__key__ for _, output in zip(keys, loader)]
+                        assert len(restarted) == len(keys)
+                        assert {
+                            key for output in restarted for key in output.split("#")[0].split("|")
+                        } == sample_keys
+
+                for step, state in enumerate(states):
+                    expected = outputs[step + 1 :]
+                    restored_loader = build_loader()
+                    restored_loader.restore_state_rank(state)
+                    if repeat:
+                        restored = [output for _, output in zip(expected, restored_loader)]
+                    else:
+                        restored = list(restored_loader)
+                    assert [output.__key__ for output in restored] == keys[step + 1 :], (
+                        f"Restored after output {step}"
+                    )
+                    assert [output.__restore_key__ for output in restored] == [
+                        output.__restore_key__ for output in expected
+                    ], f"Restored after output {step}"
+
+    def test_stream_packing(self):
+        """Streaming packing pulls just enough samples for one pack and carries remainders."""
+
+        torch.manual_seed(42)
+        max_tokens = 11
+
+        class TestTaskEncoder(DefaultTaskEncoder):
+            def __init__(self):
+                super().__init__(raw_batch_type=CaptioningBatch)
+
+            @staticmethod
+            def _window(
+                sample: EncodedCaptioningSample
+                | PartialSample[EncodedCaptioningSample, tuple[int, int]],
+            ) -> tuple[EncodedCaptioningSample, int, int]:
+                if isinstance(sample, PartialSample):
+                    token_start, token_stop = sample.slice
+                    return sample.sample, token_start, token_stop
+                return sample, 0, len(sample.caption)
+
+            @stateless
+            def encode_sample(self, sample: CaptioningSample) -> EncodedCaptioningSample:
+                return EncodedCaptioningSample.derive_from(
+                    sample,
+                    image=sample.image,
+                    caption=torch.frombuffer(bytearray(sample.caption.encode()), dtype=torch.uint8),
+                )
+
+            def select_next_pack(
+                self,
+                samples: Iterator[
+                    EncodedCaptioningSample
+                    | PartialSample[EncodedCaptioningSample, tuple[int, int]]
+                ],
+            ) -> (
+                PackedSamplesOutput[
+                    EncodedCaptioningSample
+                    | PartialSample[EncodedCaptioningSample, tuple[int, int]]
+                ]
+                | list[
+                    list[
+                        EncodedCaptioningSample
+                        | PartialSample[EncodedCaptioningSample, tuple[int, int]]
+                    ]
+                ]
+            ):
+                pack: list[
+                    EncodedCaptioningSample
+                    | PartialSample[EncodedCaptioningSample, tuple[int, int]]
+                ] = []
+                remaining = max_tokens
+
+                for sample in samples:
+                    base_sample, token_start, token_stop = self._window(sample)
+                    token_count = token_stop - token_start
+                    if token_count <= remaining:
+                        pack.append(sample)
+                        remaining -= token_count
+                        if remaining == 0:
+                            return [pack]
+                        continue
+
+                    pack.append(
+                        PartialSample(
+                            sample=base_sample,
+                            slice=(token_start, token_start + remaining),
+                        )
+                    )
+                    return PackedSamplesOutput(
+                        packs=[pack],
+                        pushback=(
+                            PartialSample(
+                                sample=base_sample,
+                                slice=(token_start + remaining, token_stop),
+                            ),
+                        ),
+                    )
+
+                return [pack] if pack else []
+
+            @stateless
+            def postencode_sample(
+                self,
+                sample: EncodedCaptioningSample
+                | PartialSample[EncodedCaptioningSample, tuple[int, int]],
+            ) -> EncodedCaptioningSample:
+                base_sample, token_start, token_stop = self._window(sample)
+                return EncodedCaptioningSample.derive_from(
+                    base_sample,
+                    __key__=f"{base_sample.__key__}:{token_start}:{token_stop}",
+                    image=base_sample.image,
+                    caption=base_sample.caption[token_start:token_stop],
+                )
+
+            @stateless
+            def pack_selected_samples(
+                self, samples: List[EncodedCaptioningSample]
+            ) -> EncodedCaptioningSample:
+                return EncodedCaptioningSample(
+                    __key__="|".join(sample.__key__ for sample in samples),
+                    __restore_key__=(),
+                    image=torch.stack([sample.image for sample in samples]),
+                    caption=torch.cat([sample.caption for sample in samples]),
+                )
+
+        def assert_segments(samples: list[EncodedCaptioningSample]) -> None:
+            by_key: dict[str, list[tuple[int, int, bytes]]] = defaultdict(list)
+            for sample in samples:
+                caption_offset = 0
+                for part in sample.__key__.split("|"):
+                    key, raw_token_start, raw_token_stop = part.split(":")
+                    token_start = int(raw_token_start)
+                    token_stop = int(raw_token_stop)
+                    token_count = token_stop - token_start
+                    segment = bytes(
+                        sample.caption[caption_offset : caption_offset + token_count].tolist()
+                    )
+                    expected = self.samples[int(key)]["caption"].encode()[token_start:token_stop]
+                    assert segment == expected
+                    by_key[key].append((token_start, token_stop, segment))
+                    caption_offset += token_count
+                assert caption_offset == len(sample.caption)
+                assert caption_offset == max_tokens
+
+            complete_keys = 0
+            for key, segments in by_key.items():
+                expected = self.samples[int(key)]["caption"].encode()
+                if sum(token_stop - token_start for token_start, token_stop, _ in segments) != len(
+                    expected
+                ):
+                    continue
+                actual = bytearray(len(expected))
+                covered = [False] * len(expected)
+                for token_start, token_stop, segment in segments:
+                    actual[token_start:token_stop] = segment
+                    covered[token_start:token_stop] = [True] * (token_stop - token_start)
+                assert all(covered)
+                assert bytes(actual) == expected
+                complete_keys += 1
+            assert complete_keys > 0
+
+        def build_loader():
+            return get_savable_loader(
+                get_train_dataset(
+                    self.dataset_path,
+                    batch_size=None,
+                    packing_buffer_size="stream",
+                    worker_config=no_worker_config,
+                    virtual_epoch_length=8,
+                    shuffle_buffer_size=None,
+                    max_samples_per_sequence=None,
+                    task_encoder=TestTaskEncoder(),
+                ),
+                checkpoint_every_min_n_samples=1,
+                checkpoint_every_sec=0,
+            )
+
+        loader = build_loader()
+        loader_iter = iter(loader)
+        first_sample = next(loader_iter)
+        rank_state = loader.save_state_rank()
+        cmp_samples = [next(loader_iter) for _ in range(5)]
+
+        restored_loader = build_loader()
+        restored_loader.restore_state_rank(rank_state)
+        restored_samples = [sample for _, sample in zip(range(5), restored_loader)]
+
+        assert loader.can_restore_sample()
+        restored_first_sample = loader.restore_sample(first_sample.__restore_key__)
+        assert restored_first_sample.__key__ == first_sample.__key__
+        assert torch.equal(restored_first_sample.caption, first_sample.caption)
+        assert [sample.__key__ for sample in restored_samples] == [
+            sample.__key__ for sample in cmp_samples
+        ]
+        assert all(
+            torch.equal(restored.caption, cmp.caption)
+            for restored, cmp in zip(restored_samples, cmp_samples)
+        )
+        assert_segments([first_sample, *cmp_samples])
+
+    def test_stream_packing_discards_failed_and_empty_selections(self):
+        class RetryTaskEncoder(DefaultTaskEncoder):
+            def __init__(self):
+                super().__init__(raw_batch_type=CaptioningBatch)
+                self.calls = 0
+                self.failed_keys: list[str] | None = None
+                self.empty_keys: list[str] | None = None
+
+            @stateless
+            def encode_sample(self, sample: CaptioningSample) -> CaptioningSample:
+                return sample
+
+            def select_next_pack(
+                self, samples: Iterator[CaptioningSample]
+            ) -> list[list[CaptioningSample]]:
+                selected = [next(samples), next(samples)]
+                keys = [sample.__key__ for sample in selected]
+                self.calls += 1
+                if self.calls == 1:
+                    self.failed_keys = keys
+                    raise ValueError("discard this selection")
+                if self.calls == 2:
+                    self.empty_keys = keys
+                    return []
+                return [selected]
+
+            @stateless
+            def pack_selected_samples(self, samples: list[CaptioningSample]) -> CaptioningSample:
+                return CaptioningSample(
+                    __key__="|".join(sample.__key__ for sample in samples),
+                    __restore_key__=(),
+                    image=samples[0].image,
+                    caption="|".join(sample.caption for sample in samples),
+                )
+
+        task_encoder = RetryTaskEncoder()
+        loader = get_loader(
+            get_train_dataset(
+                self.dataset_path,
+                batch_size=None,
+                packing_buffer_size="stream",
+                worker_config=no_worker_config,
+                virtual_epoch_length=1,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                task_encoder=task_encoder,
+            )
+        )
+
+        sample = next(iter(loader))
+        assert task_encoder.failed_keys is not None
+        assert task_encoder.empty_keys is not None
+        sample_keys = set(sample.__key__.split("|"))
+        assert sample_keys.isdisjoint(task_encoder.failed_keys)
+        assert sample_keys.isdisjoint(task_encoder.empty_keys)
+
+    def test_stream_packing_pushback_precedes_carryover(self):
+        """Pushback of a partially consumed carryover sample comes before older carryover."""
+
+        chunk_size = 4
+
+        class ChunkTaskEncoder(DefaultTaskEncoder):
+            def __init__(self):
+                super().__init__(raw_batch_type=CaptioningBatch)
+
+            def select_next_pack(
+                self,
+                samples: Iterator[CaptioningSample | PartialSample[CaptioningSample, tuple]],
+            ) -> PackedSamplesOutput[CaptioningSample | PartialSample[CaptioningSample, tuple]]:
+                sample = next(samples)
+                if isinstance(sample, PartialSample):
+                    base_sample = sample.sample
+                    start, stop = sample.slice
+                    lookahead = ()
+                else:
+                    base_sample = sample
+                    start, stop = 0, len(sample.caption)
+                    # Pull one sample ahead and push it back, so that it stays in the carryover
+                    # while the remainder of the current sample is consumed.
+                    lookahead = (next(samples),)
+                split = min(start + chunk_size, stop)
+                remainder = (
+                    (PartialSample(sample=base_sample, slice=(split, stop)),)
+                    if split < stop
+                    else ()
+                )
+                return PackedSamplesOutput(
+                    packs=[[PartialSample(sample=base_sample, slice=(start, split))]],
+                    pushback=remainder + lookahead,
+                )
+
+            @stateless
+            def pack_selected_samples(
+                self, samples: list[PartialSample[CaptioningSample, tuple]]
+            ) -> CaptioningSample:
+                (part,) = samples
+                start, stop = part.slice
+                return CaptioningSample.derive_from(
+                    part.sample,
+                    __key__=f"{part.sample.__key__}:{start}:{stop}",
+                    image=part.sample.image,
+                    caption=part.sample.caption[start:stop],
+                )
+
+        def build_loader():
+            return get_savable_loader(
+                get_train_dataset(
+                    self.dataset_path,
+                    batch_size=None,
+                    packing_buffer_size="stream",
+                    worker_config=no_worker_config,
+                    shuffle_buffer_size=None,
+                    max_samples_per_sequence=None,
+                    task_encoder=ChunkTaskEncoder(),
+                ),
+                checkpoint_every_min_n_samples=1,
+                checkpoint_every_sec=0,
+            )
+
+        loader = build_loader()
+        loader_iter = iter(loader)
+        packs = [next(loader_iter) for _ in range(2)]
+        # The carryover now holds the remainder of the first sample and the lookahead sample.
+        rank_state = loader.save_state_rank()
+        cmp_packs = [next(loader_iter) for _ in range(30)]
+        packs.extend(cmp_packs)
+
+        # Every sample is emitted as one contiguous run of chunks, in source order.
+        emitted_keys = []
+        prev_stop = 0
+        for pack in packs:
+            key, start, stop = pack.__key__.rsplit(":", 2)
+            start, stop = int(start), int(stop)
+            if not emitted_keys or emitted_keys[-1] != key:
+                assert key not in emitted_keys, f"{key} was interrupted by another sample"
+                assert start == 0
+                if emitted_keys:
+                    assert prev_stop == len(self.samples[int(emitted_keys[-1])]["caption"])
+                emitted_keys.append(key)
+            else:
+                assert start == prev_stop
+            assert pack.caption == self.samples[int(key)]["caption"][start:stop]
+            prev_stop = stop
+        assert len(emitted_keys) > 2
+
+        restored_loader = build_loader()
+        restored_loader.restore_state_rank(rank_state)
+        restored_packs = [pack for _, pack in zip(range(30), restored_loader)]
+        assert [pack.__key__ for pack in restored_packs] == [pack.__key__ for pack in cmp_packs]
+
+    def test_stream_packing_discards_pushback_without_pack(self):
+        """Pushback returned without a pack is discarded, so an incomplete tail ends the epoch."""
+
+        pack_size = 3
+
+        class TripletTaskEncoder(DefaultTaskEncoder):
+            def __init__(self):
+                super().__init__(raw_batch_type=CaptioningBatch)
+
+            def select_next_pack(
+                self, samples: Iterator[CaptioningSample]
+            ) -> list[list[CaptioningSample]] | PackedSamplesOutput[CaptioningSample]:
+                pack = [sample for _, sample in zip(range(pack_size), samples)]
+                if len(pack) < pack_size:
+                    return PackedSamplesOutput(packs=[], pushback=pack)
+                return [pack]
+
+            @stateless
+            def pack_selected_samples(self, samples: list[CaptioningSample]) -> CaptioningSample:
+                return CaptioningSample.derive_from(
+                    samples[0],
+                    __key__="|".join(sample.__key__ for sample in samples),
+                    image=samples[0].image,
+                    caption="|".join(sample.caption for sample in samples),
+                )
+
+        loader = get_loader(
+            get_train_dataset(
+                self.dataset_path,
+                batch_size=None,
+                packing_buffer_size="stream",
+                worker_config=no_worker_config,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                repeat=False,
+                task_encoder=TripletTaskEncoder(),
+            )
+        )
+
+        packs = list(loader)
+        keys = [key for pack in packs for key in pack.__key__.split("|")]
+        assert len(packs) == DATASET_SIZE // pack_size
+        assert len(set(keys)) == len(keys) == len(packs) * pack_size
+
+    def test_stream_packing_save_restore_every_step(self):
+        """Restoring after any output continues exactly like the uninterrupted loader.
+
+        Covers restoring in the middle of the outputs of a generator final packer, and after the
+        last pack was selected from an exhausted input.
+        """
+
+        pack_size = 3
+
+        class TripletTaskEncoder(DefaultTaskEncoder):
+            def __init__(self):
+                super().__init__(raw_batch_type=CaptioningBatch)
+
+            def select_next_pack(
+                self, samples: Iterator[CaptioningSample]
+            ) -> list[list[CaptioningSample]]:
+                # The incomplete last pack is only found by reading past the end of the input.
+                pack = [sample for _, sample in zip(range(pack_size), samples)]
+                return [pack] if pack else []
+
+            @stateless
+            def pack_selected_samples(
+                self, samples: list[CaptioningSample]
+            ) -> Generator[CaptioningSample, None, None]:
+                key = "|".join(sample.__key__ for sample in samples)
+                for part in ("first", "second"):
+                    yield CaptioningSample.derive_from(
+                        samples[0],
+                        __key__=f"{key}#{part}",
+                        image=samples[0].image,
+                        caption="|".join(sample.caption for sample in samples),
+                    )
+
+        # With workers, the loader cannot restore a non-repeating dataset after a worker already
+        # finished its input, so multiple workers are only covered with a repeating dataset.
+        for repeat, num_workers in ((False, 0), (True, 2)):
+            with self.subTest(repeat=repeat, num_workers=num_workers):
+                worker_config = WorkerConfig(rank=0, world_size=1, num_workers=num_workers)
+
+                def build_loader():
+                    return get_savable_loader(
+                        get_train_dataset(
+                            self.dataset_path,
+                            batch_size=None,
+                            packing_buffer_size="stream",
+                            worker_config=worker_config,
+                            shuffle_buffer_size=None,
+                            max_samples_per_sequence=None,
+                            repeat=repeat,
+                            task_encoder=TripletTaskEncoder(),
+                        ),
+                        checkpoint_every_min_n_samples=1,
+                        checkpoint_every_sec=0,
+                    )
+
+                loader = build_loader()
+                outputs = []
+                states = []
+                for output in loader:
+                    outputs.append(output)
+                    states.append(loader.save_state_rank())
+                    if repeat and len(outputs) == 12:
+                        break
+
+                keys = [output.__key__ for output in outputs]
+                assert len(set(keys)) == len(keys)
+                if not repeat:
+                    sample_keys = {
+                        key for output in keys for key in output.split("#")[0].split("|")
+                    }
+                    assert len(sample_keys) == DATASET_SIZE
+                    # Stopping right after the last output and iterating again starts a new pass.
+                    for _ in range(2):
+                        restarted = [output.__key__ for _, output in zip(keys, loader)]
+                        assert len(restarted) == len(keys)
+                        assert {
+                            key for output in restarted for key in output.split("#")[0].split("|")
+                        } == sample_keys
+
+                for step, state in enumerate(states):
+                    expected = outputs[step + 1 :]
+                    restored_loader = build_loader()
+                    restored_loader.restore_state_rank(state)
+                    if repeat:
+                        restored = [output for _, output in zip(expected, restored_loader)]
+                    else:
+                        restored = list(restored_loader)
+                    assert [output.__key__ for output in restored] == keys[step + 1 :], (
+                        f"Restored after output {step}"
+                    )
+                    assert [output.__restore_key__ for output in restored] == [
+                        output.__restore_key__ for output in expected
+                    ], f"Restored after output {step}"
+
+    def test_batch_save_restore_every_step(self):
+        """Restoring after the incomplete last batch does not start a new pass over the input."""
+
+        class SplitBatchTaskEncoder(DefaultTaskEncoder):
+            """Emits every batch twice, to restore in the middle of the last batch."""
+
+            def __init__(self):
+                super().__init__(raw_batch_type=CaptioningBatch)
+
+            @stateless
+            def batch(self, samples: list[CaptioningSample]) -> Generator[Batch, None, None]:
+                for part in ("first", "second"):
+                    batch = super().batch(samples)
+                    batch.__key__ = [f"{key}#{part}" for key in batch.__key__]
+                    yield batch
+
+        for task_encoder in (DefaultTaskEncoder(), SplitBatchTaskEncoder()):
+            with self.subTest(task_encoder=type(task_encoder).__name__):
+
+                def build_loader():
+                    return get_savable_loader(
+                        get_train_dataset(
+                            self.dataset_path,
+                            batch_size=4,
+                            worker_config=no_worker_config,
+                            shuffle_buffer_size=None,
+                            max_samples_per_sequence=None,
+                            repeat=False,
+                            task_encoder=task_encoder,
+                        ),
+                        checkpoint_every_min_n_samples=1,
+                        checkpoint_every_sec=0,
+                    )
+
+                loader = build_loader()
+                keys = []
+                states = []
+                for batch in loader:
+                    keys.append(batch.__key__)
+                    states.append(loader.save_state_rank())
+                sample_keys = {key.split("#")[0] for batch_keys in keys for key in batch_keys}
+                assert len(sample_keys) == DATASET_SIZE
+                assert len(keys[-1]) == DATASET_SIZE % 4
+                # Stopping right after the last batch and iterating again starts a new pass.
+                for _ in range(2):
+                    restarted = [batch.__key__ for _, batch in zip(keys, loader)]
+                    assert len(restarted) == len(keys)
+                    assert {
+                        key.split("#")[0] for batch_keys in restarted for key in batch_keys
+                    } == sample_keys
+
+                for step, state in enumerate(states):
+                    restored_loader = build_loader()
+                    restored_loader.restore_state_rank(state)
+                    assert [batch.__key__ for batch in restored_loader] == keys[step + 1 :], (
+                        f"Restored after batch {step}"
+                    )
+
+    def _check_save_restore_every_step(self, build_loader) -> List[List[str]]:
+        """Restores after every batch and compares with the uninterrupted loader.
+
+        Also checks that stopping right after the last batch and iterating again yields a full new
+        pass. Returns the batch keys of the uninterrupted loader.
+        """
+        loader = build_loader()
+        keys = []
+        states = []
+        for batch in loader:
+            keys.append(batch.__key__)
+            states.append(loader.save_state_rank())
+        sample_keys = sorted(key for batch_keys in keys for key in batch_keys)
+        for _ in range(2):
+            restarted = [batch.__key__ for _, batch in zip(keys, loader)]
+            assert sorted(key for batch_keys in restarted for key in batch_keys) == sample_keys
+        for step, state in enumerate(states):
+            restored_loader = build_loader()
+            restored_loader.restore_state_rank(state)
+            restored_keys = [batch.__key__ for batch in restored_loader]
+            assert restored_keys == keys[step + 1 :], (
+                f"Restored after batch {step} of {len(keys)}: got {len(restored_keys)} batches, "
+                f"expected {len(keys) - step - 1}"
+            )
+        return keys
+
+    def test_shuffle_buffer_save_restore_every_step(self):
+        """Restoring while the shuffle buffer drains does not start a new pass over the input."""
+
+        def build_loader():
+            return get_savable_loader(
+                get_train_dataset(
+                    self.dataset_path,
+                    batch_size=1,
+                    worker_config=no_worker_config,
+                    shuffle_buffer_size=10,
+                    max_samples_per_sequence=None,
+                    repeat=False,
+                ),
+                checkpoint_every_min_n_samples=1,
+                checkpoint_every_sec=0,
+            )
+
+        keys = self._check_save_restore_every_step(build_loader)
+        assert len(keys) == DATASET_SIZE
+
+    def test_group_batch_save_restore_every_step(self):
+        """Restoring while the last incomplete group batches are flushed does not start a new pass."""
+
+        class GroupingTaskEncoder(
+            TaskEncoder[CaptioningSample, CaptioningSample, CaptioningSample, CaptioningSample]
+        ):
+            def batch_group_criterion(self, sample: CaptioningSample) -> Tuple[Hashable, int]:
+                # data-0.tar has 30 samples, data-1.tar has 20: both groups end incomplete.
+                shard_name = sample.__sources__[0].shard_name.split("/")[-1]
+                return shard_name, 4 if shard_name == "data-0.tar" else 8
+
+        def build_loader():
+            return get_savable_loader(
+                get_train_dataset(
+                    self.dataset_path,
+                    batch_size=None,
+                    batch_drop_last=False,
+                    worker_config=no_worker_config,
+                    shuffle_buffer_size=None,
+                    max_samples_per_sequence=None,
+                    repeat=False,
+                    task_encoder=GroupingTaskEncoder(),
+                ),
+                checkpoint_every_min_n_samples=1,
+                checkpoint_every_sec=0,
+            )
+
+        keys = self._check_save_restore_every_step(build_loader)
+        assert sum(len(batch_keys) for batch_keys in keys) == DATASET_SIZE
+        assert sorted(len(batch_keys) for batch_keys in keys[-2:]) == [2, 4]
+
+    def test_concat_save_restore_every_step(self):
+        """Restoring in a later dataset of a concatenation does not repeat the earlier datasets."""
+        recipe_path = self.dataset_path / "concat_recipe.yaml"
+        recipe_path.write_text(
+            "\n".join(
+                [
+                    "__module__: megatron.energon",
+                    "__class__: Recipe",
+                    "splits:",
+                    "  val:",
+                    "    blend:",
+                    "      - path: .",
+                    "        split_part: train",
+                    "      - path: .",
+                    "        split_part: train",
+                ]
+            )
+        )
+
+        # The last batch is incomplete, so it is emitted after both datasets are exhausted.
+        def build_loader():
+            return get_savable_loader(
+                get_val_dataset(recipe_path, batch_size=7, worker_config=no_worker_config),
+                checkpoint_every_min_n_samples=1,
+                checkpoint_every_sec=0,
+            )
+
+        keys = self._check_save_restore_every_step(build_loader)
+        assert len(keys) == math.ceil(2 * DATASET_SIZE / 7)
 
     def test_group_batch(self):
         class GroupingTaskEncoder(
@@ -1643,7 +2893,6 @@ class TestDataset(unittest.TestCase):
 
         assert all(isinstance(batch, CaptioningEncodedBatch) for idx, batch in batches)
         assert all(all(key == batch.caption[0] for key in batch.caption) for idx, batch in batches)
-        loader.shutdown()
 
         worker_config_r0 = WorkerConfig(rank=0, world_size=2, num_workers=2)
 
@@ -1671,7 +2920,6 @@ class TestDataset(unittest.TestCase):
 
         cmp_samples = list(zip(range(40, 80), loader_r0))
         print([batch.__key__ for idx, batch in cmp_samples])
-        loader_r0.shutdown()
 
         loader_r0 = get_savable_loader(
             get_train_dataset(
@@ -1702,7 +2950,6 @@ class TestDataset(unittest.TestCase):
             )
             for (idx, cmp_sample), (idx, cmp_sample_rest) in zip(cmp_samples, cmp_samples_rest)
         )
-        loader_r0.shutdown()
 
     def test_debug_dataset(self):
         torch.manual_seed(42)
@@ -1730,7 +2977,6 @@ class TestDataset(unittest.TestCase):
 
         samples = [[batch.__key__ for batch in loader] for _ in range(2)]
         print(samples)
-        loader.shutdown()
 
         debug_log_path = self.dataset_path / "worker_debug"
         assert (debug_log_path / "0.jsonl").is_file()
@@ -1770,14 +3016,23 @@ class TestDataset(unittest.TestCase):
         assert "Analyzing 3 logs" in result.stdout
         assert "Found 50 unique sample keys, 20 steps" in result.stdout
 
-    def test_validate_captioning_dataset(self):
-        runner = CliRunner()
+        # The fallback reads the sample loader logs instead of the batch logs
         result = runner.invoke(
-            lint_command,
-            [str(self.dataset_path), "--split-parts=train"],
+            analyze_debug_command,
+            [
+                str(debug_log_path),
+                "--include-modality",
+                "train,val",
+                "--force-loading-order",
+                "--heatmap-path",
+                str(self.dataset_path / "heatmap_loading_order.png"),
+            ],
             catch_exceptions=False,
         )
-        assert result.exit_code == 0, "Validation failed, see output"
+        print(result.stdout)
+        assert result.exit_code == 0, "Debug analysis failed, see output"
+        assert "Forcing to use sample loader logs" in result.stdout
+        assert "Found 50 unique sample keys" in result.stdout
 
     def test_prepare_dataset(self):
         runner = CliRunner()
@@ -1900,7 +3155,6 @@ class TestDataset(unittest.TestCase):
                 samples = list(d for _, d in zip(range(4), loader))
                 assert len(samples) == 4, f"len(samples) == {len(samples)}"
                 assert all(isinstance(sample, CaptioningSample) for sample in samples)
-                loader.shutdown()
 
     def test_preview_captioning_dataset(self):
         runner = CliRunner()
@@ -1996,7 +3250,6 @@ class TestDataset(unittest.TestCase):
         assert all(call["exception_type"] == "ValueError" for call in error_calls), (
             "All errors should be ValueError"
         )
-        loader.shutdown()
 
         print("Step 2: Reraise")
 
@@ -2022,7 +3275,7 @@ class TestDataset(unittest.TestCase):
             )
         )
 
-        with loader, self.assertRaises(ShouldRaiseException):
+        with self.assertRaises(ShouldRaiseException):
             batches = []
             for i, batch in enumerate(loader):
                 batches.append(batch)

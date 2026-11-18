@@ -5,9 +5,9 @@ import hashlib
 import json
 import multiprocessing
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, ClassVar, Dict, List, Optional, TextIO, TypeVar
+from typing import Any, Callable, ClassVar, Dict, Optional, TypeVar
 
 import torch.distributed
 import torch.utils.data
@@ -21,44 +21,7 @@ __all__ = ("WorkerConfig",)
 T = TypeVar("T")
 
 
-class ActiveWorkerState:
-    """
-    Thread local state for the active worker config.
-    """
-
-    _thread_local: threading.local
-
-    @property
-    def sample_index_stack(self) -> Optional[List[int]]:
-        """The current sample index stack for the worker."""
-        return getattr(self._thread_local, "sample_index_stack", None)
-
-    @property
-    def cache_pool(self) -> Optional[CachePool]:
-        """The current cache pool for the worker."""
-        return getattr(self._thread_local, "cache_pool", None)
-
-    @property
-    def worker_config(self) -> "WorkerConfig | None":
-        return getattr(self._thread_local, "worker_config", None)
-
-    @sample_index_stack.setter
-    def sample_index_stack(self, value: List[int]):
-        self._thread_local.sample_index_stack = value
-
-    @cache_pool.setter
-    def cache_pool(self, value: Optional[CachePool]):
-        self._thread_local.cache_pool = value
-
-    @worker_config.setter
-    def worker_config(self, value: "WorkerConfig | None"):
-        self._thread_local.worker_config = value
-
-    def __init__(self):
-        self._thread_local = threading.local()
-
-
-class classproperty:
+class _classproperty:
     def __init__(self, getter):
         self.getter = getter
 
@@ -106,9 +69,9 @@ class WorkerConfig:
     #: Log level for worker logging.
     worker_log_level: int = 0
     #: The opened file for the current worker. Should not be set from outside.
-    _worker_debug_file: Optional[TextIO] = None
-    #: worker_id of the opened worker debug file
-    _worker_debug_file_worker_id: Optional[int] = None
+    _worker_debug_state: threading.local = field(
+        default_factory=threading.local, init=False, repr=False
+    )
     #: The global error handler to use for the worker during normal iteration.
     global_error_handler: Callable[
         [Exception, Any | list[Any], Optional[list[SourceInfo]]], None
@@ -118,59 +81,66 @@ class WorkerConfig:
         [Exception, Any | list[Any], Optional[list[SourceInfo]]], None
     ] = reraise_exception
 
-    _active_state: ClassVar[ActiveWorkerState] = ActiveWorkerState()
+    #: Worker context is local to the current thread.
+    _active: ClassVar[threading.local] = threading.local()
 
-    @classproperty
-    def active_worker_config(cls) -> Optional["WorkerConfig"]:
-        """The current worker config within the current iterating worker"""
-        return cls._active_state.worker_config
+    @_classproperty
+    def active_worker_config(cls):
+        return getattr(cls._active, "config", None)
+
+    @property
+    def safe_num_workers(self) -> int:
+        return max(1, self.num_workers)
+
+    @property
+    def _cache_pool(self) -> CachePool | None:
+        return getattr(self._active, "cache_pool", None)
 
     def worker_activate(
         self,
         sample_index: int,
+        override_global_rank: Optional[int] = None,
         cache_pool: "Optional[CachePool]" = None,
     ):
         """Activates the worker config for the current worker and sets it as actively iterating.
         Must be called before next() call on the datasets."""
-        assert WorkerConfig._active_state.worker_config is None, (
-            f"Worker config already active for thread={threading.get_ident()}"
-        )
-        WorkerConfig._active_state.sample_index_stack = [sample_index]
-        WorkerConfig._active_state.worker_config = self
-        WorkerConfig._active_state.cache_pool = cache_pool
+        assert WorkerConfig.active_worker_config is None
+        WorkerConfig._active.sample_index_stack = [sample_index]
+        WorkerConfig._active.config = self
+        WorkerConfig._active.override_global_rank = override_global_rank
+        WorkerConfig._active.cache_pool = cache_pool
 
     def worker_push_sample_index(self, sample_index: int):
         """Pushes a new sample index to the sample index stack. Should be set by wrapping datasets
         before calling inners."""
-        assert WorkerConfig._active_state.sample_index_stack is not None
-        WorkerConfig._active_state.sample_index_stack.append(sample_index)
+        assert WorkerConfig.active_worker_config is not None
+        WorkerConfig._active.sample_index_stack.append(sample_index)
 
     def worker_pop_sample_index(self):
         """Pushes a new sample index to the sample index stack. Should be set by wrapping datasets
         before calling inners."""
-        assert WorkerConfig._active_state.sample_index_stack is not None
-        return WorkerConfig._active_state.sample_index_stack.pop()
+        assert WorkerConfig.active_worker_config is not None
+        return WorkerConfig._active.sample_index_stack.pop()
 
     def worker_deactivate(self):
         """Deactivates the worker config for the current worker and deactivates it for iterating.
         Must be called after next() call on the datasets."""
-        assert WorkerConfig._active_state.worker_config is self, "Worker config mismatch"
-        assert WorkerConfig._active_state.sample_index_stack is not None
-        assert len(WorkerConfig._active_state.sample_index_stack) == 1, (
-            f"Sample index stack not empty: {WorkerConfig._active_state.sample_index_stack}"
-        )
-        WorkerConfig._active_state.sample_index_stack = None
-        WorkerConfig._active_state.worker_config = None
-        WorkerConfig._active_state.cache_pool = None
+        if WorkerConfig.active_worker_config is not None:
+            assert len(WorkerConfig._active.sample_index_stack) == 1, (
+                f"Sample index stack not empty: {WorkerConfig._active.sample_index_stack}"
+            )
+            WorkerConfig._active.sample_index_stack = None
+            WorkerConfig._active.config = None
+            WorkerConfig._active.override_global_rank = None
+            WorkerConfig._active.cache_pool = None
 
     @property
     def active_worker_sample_index(self) -> int:
         """Returns the current sample index for the actively iterating worker."""
         # Internal sample index is for the local worker. If using multiple workers per rank, this
         # must be multiplied by the number of workers and offset by the local worker index.
-        assert WorkerConfig._active_state.sample_index_stack is not None
         return (
-            WorkerConfig._active_state.sample_index_stack[-1] * max(self.num_workers, 1)
+            WorkerConfig._active.sample_index_stack[-1] * max(self.num_workers, 1)
             + self.rank_worker_id()
         )
 
@@ -179,21 +149,10 @@ class WorkerConfig:
         """Returns the current batch index for the actively iterating worker."""
         # Internal batch index is for the local worker. If using multiple workers per rank, this
         # must be multiplied by the number of workers and offset by the local worker index.
-        assert WorkerConfig._active_state.sample_index_stack is not None
         return (
-            WorkerConfig._active_state.sample_index_stack[0] * max(self.num_workers, 1)
+            WorkerConfig._active.sample_index_stack[0] * max(self.num_workers, 1)
             + self.rank_worker_id()
         )
-
-    @staticmethod
-    def active_worker_cache_pool() -> Optional[CachePool]:
-        """Returns the current cache pool for the actively iterating worker."""
-        return WorkerConfig._active_state.cache_pool
-
-    @property
-    def safe_num_workers(self) -> int:
-        """Returns the number of workers, but at least 1."""
-        return max(self.num_workers, 1)
 
     def global_rank(self) -> int:
         """Returns the global rank of this worker config but as a global rank, not
@@ -236,6 +195,24 @@ class WorkerConfig:
             data_parallel_group=data_parallel_group,
         )
 
+    def rank_worker_id(self, override_global_worker_id: int | None = None) -> int:
+        """Returns the self worker id within the current rank."""
+        if override_global_worker_id is not None:
+            return override_global_worker_id - self.rank * self.safe_num_workers
+        override = getattr(self._active, "override_global_rank", None)
+        if override is not None:
+            return override % self.safe_num_workers
+        worker_info = torch.utils.data.get_worker_info()
+        if worker_info is None:
+            return self.worker_id_offset
+        assert worker_info.num_workers == self.num_workers
+        # Apply the worker_id_offset as a left rotation of the logical worker ids.
+        # This ensures that after restoring a checkpoint the first physical
+        # worker (id=0) corresponds to the logical worker that should emit the
+        # next sample. For example, if `worker_id_offset` is 1, logical worker
+        # 1 becomes the first to emit a sample, shifting the ordering forward.
+        return (worker_info.id + self.worker_id_offset) % worker_info.num_workers
+
     def assert_worker(self):
         """Checks if the current process is a worker (if configured so), and that the workers are
         properly configured."""
@@ -249,49 +226,23 @@ class WorkerConfig:
                 f"match the configured number of workers ({self.num_workers})"
             )
 
-    def rank_worker_id(self, override_global_worker_id: Optional[int] = None) -> int:
-        """Returns the self worker id within the current rank.
-        Optionally computes the worker id from a global worker id.
-
-        Args:
-            override_global_worker_id: The global worker id to compute the rank worker id from.
-                None means the current worker, which is the default. If not set, must be called
-                within the worker.
-        """
-        if override_global_worker_id is not None:
-            assert (
-                self.rank * self.safe_num_workers
-                <= override_global_worker_id
-                < (self.rank + 1) * self.safe_num_workers
-            ), f"Invalid global worker id: {override_global_worker_id}"
-            return override_global_worker_id - self.rank * self.safe_num_workers
-        worker_info = torch.utils.data.get_worker_info()
-        if worker_info is None:
-            return self.worker_id_offset
-        assert worker_info.num_workers == self.num_workers
-        # Apply the worker_id_offset as a left rotation of the logical worker ids.
-        # This ensures that after restoring a checkpoint the first physical
-        # worker (id=0) corresponds to the logical worker that should emit the
-        # next sample. For example, if `worker_id_offset` is 1, logical worker
-        # 1 becomes the first to emit a sample, shifting the ordering forward.
-        return (worker_info.id + self.worker_id_offset) % max(worker_info.num_workers, 1)
-
     def global_worker_id(self, override_local_worker_id: Optional[int] = None) -> int:
         """Returns the global worker index by multiplying the rank with the number of workers.
         Alternatively, you can override the local worker id.
 
         Args:
-            override_local_worker_id: The local worker id to override. None means
-                the current worker, which is the default. If not set, must be called
-                within the worker.
+            override_local_worker_id (int, optional): The local worker id to override. None means
+                the current worker, which is the default.
         """
+        if getattr(self._active, "override_global_rank", None) is not None:
+            assert override_local_worker_id is None
+            return self._active.override_global_rank
+
         if override_local_worker_id is not None:
-            assert 0 <= override_local_worker_id < self.safe_num_workers, (
-                f"Invalid local worker id: {override_local_worker_id}"
-            )
             return self.rank * self.safe_num_workers + override_local_worker_id
-        self.assert_worker()
-        return self.rank * self.safe_num_workers + self.rank_worker_id()
+        else:
+            self.assert_worker()
+            return self.rank * self.safe_num_workers + self.rank_worker_id()
 
     def worker_seed(self, override_local_worker_id: Optional[int] = None) -> int:
         """Returns the seed for the current worker (or a specified worker).
@@ -340,16 +291,17 @@ class WorkerConfig:
             worker_id = (
                 self.rank * (self.num_workers + 1) + self.rank_worker_id() + (1 if in_worker else 0)
             )
-            if self._worker_debug_file is None or self._worker_debug_file_worker_id != worker_id:
-                if self._worker_debug_file is not None:
-                    self._worker_debug_file.close()
+            state = self._worker_debug_state
+            if getattr(state, "file", None) is None or state.worker_id != worker_id:
+                if getattr(state, "file", None) is not None:
+                    state.file.close()
                 path = Path(
                     self.worker_debug_path.format(
                         worker_id=worker_id, pid=multiprocessing.current_process().ident
                     )
                 )
                 path.parent.mkdir(exist_ok=True, parents=True)
-                self._worker_debug_file = path.open("w")
-                self._worker_debug_file_worker_id = worker_id
-            self._worker_debug_file.write(json.dumps(data) + "\n")
-            self._worker_debug_file.flush()
+                state.file = path.open("w")
+                state.worker_id = worker_id
+            state.file.write(json.dumps(data) + "\n")
+            state.file.flush()
