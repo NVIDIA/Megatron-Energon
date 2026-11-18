@@ -60,6 +60,14 @@ class GroupBatchDataset(
     size categories (e.g. 128x128, 256x256, 512x512) for efficient augmentation and batching.
     """
 
+    _worker_local_fields = {
+        "_group_key_sample_index": None,
+        "_batch_sample_index": None,
+        "_buckets": dict,
+        "_source_exhausted": bool,
+        "_state_restored": bool,
+    }
+
     dataset: SavableDataset[T_batch_sample]
     sample_group_key: Callable[[T_batch_sample], Tuple[Hashable, Optional[int]]]
     batcher: Callable[[List[T_batch_sample]], T_batch]

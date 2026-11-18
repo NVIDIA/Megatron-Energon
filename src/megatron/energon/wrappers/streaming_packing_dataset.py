@@ -47,6 +47,8 @@ class StreamingPackingDataset(
     The selector receives an iterator and pulls only the samples it needs for the next pack.
     """
 
+    _worker_local_fields = {"_state_restored": bool}
+
     select_next_pack: Callable[
         [Iterator[T_sample | PartialSample[T_sample, T_slice]]],
         list[list[T_sample | PartialSample[T_sample, T_slice]]]

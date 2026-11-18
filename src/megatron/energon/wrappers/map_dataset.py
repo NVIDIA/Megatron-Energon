@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import inspect
+from contextlib import ExitStack
 from typing import (
     Any,
     Callable,
@@ -15,6 +16,7 @@ from typing import (
     Union,
 )
 
+from megatron.energon.cache.base import FileStore
 from megatron.energon.errors import (
     ErrorContext,
     handle_restore_errors,
@@ -83,6 +85,14 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
         )
 
         self.reset_state_own()
+
+    auxiliary_stores: tuple[FileStore, ...] = ()
+
+    def close(self) -> None:
+        with ExitStack() as stack:
+            stack.callback(super().close)
+            for store in self.auxiliary_stores:
+                stack.callback(store.close)
 
     def reset_state_own(self) -> None:
         self._sample_index = SampleIndex(self.worker_config, src=self)

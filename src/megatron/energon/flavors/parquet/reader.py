@@ -16,6 +16,7 @@ from megatron.energon.flavors.common.reader import SamplePartFileReader, Sequent
 from megatron.energon.flavors.common.sample_record import FilteredSample
 from megatron.energon.flavors.parquet.prepare import ParquetLayout
 from megatron.energon.source_info import SourceInfo
+from megatron.energon.worker_local import WorkerLocalFields
 
 if TYPE_CHECKING:
     import pyarrow
@@ -45,7 +46,9 @@ def _table_row_to_dict(
     return out
 
 
-class IParquetReader(SamplePartFileReader[FilteredSample], SequentialSampleReader[FilteredSample]):
+class IParquetReader(
+    WorkerLocalFields, SamplePartFileReader[FilteredSample], SequentialSampleReader[FilteredSample]
+):
     """
     Parquet access over rows described by a :class:`ParquetLayout`.
 
@@ -64,6 +67,8 @@ class IParquetReader(SamplePartFileReader[FilteredSample], SequentialSampleReade
             file.
         stream_batch_rows: The number of rows :meth:`iter_slice` decodes at a time.
     """
+
+    _worker_local_fields = {"_parquet_cache": OrderedDict}
 
     dataset_root: EPath
     layout: ParquetLayout

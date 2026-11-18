@@ -94,6 +94,8 @@ class PackingDataset(
     """This dataset wrapper transforms samples of a dataset into chunks/packs of samples, which are
     then combined into a batch."""
 
+    _worker_local_fields = {"_state_restored": bool}
+
     buffer_size: int
     pre_packer: Callable[
         [list[T_sample | PartialSample[T_sample, Any]]],

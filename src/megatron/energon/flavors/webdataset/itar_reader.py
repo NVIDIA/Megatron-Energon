@@ -32,11 +32,12 @@ from megatron.energon.flavors.webdataset.itar import (
     ITarSamplePointer,
 )
 from megatron.energon.source_info import SourceInfo
+from megatron.energon.worker_local import WorkerLocalFields
 
 T_index = TypeVar("T_index", covariant=False)
 
 
-class ITarReader(ABC, Generic[T_index]):
+class ITarReader(WorkerLocalFields, ABC, Generic[T_index]):
     """
     An abstract base class for reading a sequence of tar files containing samples.
 
@@ -53,6 +54,8 @@ class ITarReader(ABC, Generic[T_index]):
             for every read. This mode avoids sharing tar file handles across threads and is
             intended to be thread-safe.
     """
+
+    _worker_local_fields = {"itar_files_cache": dict}
 
     base_path: EPath
     tar_filenames: List[str]

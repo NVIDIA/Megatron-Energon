@@ -25,6 +25,8 @@ T_sample = TypeVar("T_sample")
 class SavableSampleBuffer(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
     """A buffer of samples, savable."""
 
+    _worker_local_fields = {"_buffer": list, "_restore_pending": bool}
+
     _buffer: List[T_sample]
     _restore_keys: List[Tuple[Union[str, int, tuple], ...]]
 

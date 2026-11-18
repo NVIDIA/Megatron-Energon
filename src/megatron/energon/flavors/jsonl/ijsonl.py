@@ -6,6 +6,7 @@ from typing import BinaryIO, Dict, Generator, Optional, Tuple, Union
 
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
+from megatron.energon.worker_local import WorkerLocalFields
 
 IDX_SUFFIX = ".idx"
 
@@ -130,7 +131,7 @@ class CacheEntry:
     lookahead_byteoffset: Optional[int] = None
 
 
-class CachedIJsonlOffsetReader:
+class CachedIJsonlOffsetReader(WorkerLocalFields):
     """
     This class is a high-level wrapper around IJsonlIndexReader that caches some
     of the recent lookups for faster access. It is designed for the case when
@@ -139,6 +140,8 @@ class CachedIJsonlOffsetReader:
     Args:
         cache_size: The number of entries to keep in the cache. By default, we keep 32.
     """
+
+    _worker_local_fields = {"ijsonl_index_reader_cache": dict}
 
     def __init__(
         self,

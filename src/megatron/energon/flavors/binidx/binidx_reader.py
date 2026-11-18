@@ -11,6 +11,7 @@ from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.common.reader import SamplePartFileReader
 from megatron.energon.flavors.common.sample_record import FilteredSample
 from megatron.energon.source_info import SourceInfo
+from megatron.energon.worker_local import WorkerLocalFields
 
 _INDEX_HEADER = b"MMIDIDX\x00\x00"
 
@@ -149,10 +150,12 @@ class MMapIdxReader(IIdxReader):
         self._idx_file.close()
 
 
-class BinIdxReader(SamplePartFileReader[FilteredSample]):
+class BinIdxReader(WorkerLocalFields, SamplePartFileReader[FilteredSample]):
     """
     Reader for Megatron-LM pre-tokenized binary dataset files (.bin + .idx).
     """
+
+    _worker_local_fields = {"_lazy_idx_reader": lambda: None, "_bin_file": lambda: None}
 
     bin_path: EPath
     sample_filter: Optional[Callable[[str], bool]]

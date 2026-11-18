@@ -21,6 +21,8 @@ class ConcatDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
     datasets.
     """
 
+    _worker_local_fields = {"_state_restored": bool}
+
     #: Index of the dataset currently iterated, so that a restored state continues there.
     _dataset_idx: int
     #: Whether the state was restored since the last iteration started (not saved).

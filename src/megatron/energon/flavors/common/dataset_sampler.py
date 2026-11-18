@@ -36,6 +36,8 @@ class SliceState:
 class DatasetSampler(SavableDataset[RawSampleData]):
     """Samples indexed dataset slices across workers and epochs."""
 
+    _worker_local_fields = {"slice_offsets": lambda: None, "_slice_iters": list}
+
     #: The indexed sample reader
     reader: IndexedSampleReader
 

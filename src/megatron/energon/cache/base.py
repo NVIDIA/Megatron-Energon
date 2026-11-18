@@ -40,6 +40,9 @@ class FileStore(Generic[T]):
         """Returns the path to the dataset."""
         ...
 
+    def close(self) -> None:
+        """Release any reader resources owned by the store."""
+
     def get_media_metadata(self, key: str) -> MediaMetadataBase:
         """Return the media metadata for the given key if available."""
 
@@ -55,6 +58,9 @@ class FileStoreWrapper(FileStore[T]):
     """
 
     _inner: FileStore[T]
+
+    def close(self) -> None:
+        self._inner.close()
 
     def __init__(self, inner: FileStore[T]):
         self._inner = inner

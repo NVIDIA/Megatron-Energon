@@ -34,6 +34,7 @@ from megatron.energon.source_info import SourceInfo
 from megatron.energon.state import FlexState
 from megatron.energon.tags import SampleTagsAlias, TagsAlias, canonicalize_tag_kwargs
 from megatron.energon.worker import WorkerConfig
+from megatron.energon.worker_local import WorkerLocalFields
 
 if typing.TYPE_CHECKING:
     from megatron.energon.flavors.common.manifest.types import ShardInfo
@@ -198,7 +199,7 @@ class State(ABC, ExtendableDataclassMixin):
     """
 
 
-class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC):
+class SavableDataset(WorkerLocalFields, IterableDataset[T_sample], Savable, Generic[T_sample], ABC):
     """A dataset that can be saved and restored (i.e. the random state, internal buffers, etc.).
     I.e. it can be resumed from a checkpoint.
 

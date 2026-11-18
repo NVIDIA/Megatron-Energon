@@ -176,6 +176,30 @@ class WorkerRng(Savable):
             self._restore_state = state["rng"]
 
 
+class UserRng:
+    """Independent CPU random generators for task encoder code."""
+
+    def __init__(self, seed: int):
+        self.torch = torch.Generator().manual_seed(seed)
+        self.numpy = numpy.random.default_rng(seed)
+        self.random = random.Random(seed)
+
+    def seed_args(self, *args: Any) -> None:
+        seed = SystemRng.get_seed_from_args(*args)
+        self.torch.manual_seed(seed)
+        self.numpy.bit_generator.state = numpy.random.default_rng(seed).bit_generator.state
+        self.random.seed(seed)
+
+    def save_state(self):
+        return self.torch.get_state(), self.numpy.bit_generator.state, self.random.getstate()
+
+    def restore_state(self, state):
+        torch_state, numpy_state, python_state = state
+        self.torch.set_state(torch_state)
+        self.numpy.bit_generator.state = numpy_state
+        self.random.setstate(python_state)
+
+
 @edataclass
 class SystemRngState:
     """The state of the global random generators.

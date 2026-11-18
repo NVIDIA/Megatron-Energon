@@ -6,6 +6,7 @@ from typing import List
 
 import torch
 
+from megatron.energon.dataloader.dataloader import RankState
 from megatron.energon.epathlib import EPath
 from megatron.energon.savable_loader import SavableDataLoaderState
 
@@ -95,7 +96,11 @@ class RankStateIterable:
     def __init__(self, state_files: List[EPath]):
         state_file_names = [state_file.name for state_file in state_files]
 
-        self.file_pattern_func = detect_and_replicate_pattern(state_file_names)
+        self.file_pattern_func = (
+            (lambda rank: str(rank) + "-" + state_file_names[0])
+            if len(state_files) == 1
+            else detect_and_replicate_pattern(state_file_names)
+        )
         self.num_states = len(state_files)
 
         first_state = torch.load(str(state_files[0]), weights_only=False)
@@ -106,7 +111,7 @@ class RankStateIterable:
         else:
             self.megatron_style = False
 
-        if isinstance(first_state, SavableDataLoaderState):
+        if isinstance(first_state, (SavableDataLoaderState, RankState)):
             if self.megatron_style:
                 self.rank_states = [first_state] + [
                     torch.load(str(state_file), weights_only=False)["dataloader_state_dict"]
@@ -120,7 +125,7 @@ class RankStateIterable:
             self.is_global_checkpoint = False
         elif isinstance(first_state, list):
             assert len(state_files) == 1, "Global checkpoint must contain exactly one file"
-            assert all(isinstance(state, SavableDataLoaderState) for state in first_state)
+            assert first_state and all(type(state) is type(first_state[0]) for state in first_state)
             self.rank_states = first_state
             self.is_global_checkpoint = True
         else:
@@ -135,7 +140,7 @@ class RankStateIterable:
         ), "All ranks must have the same number of workers."
 
     def write_new_states_to_folder(
-        self, output_folder: EPath, new_states: List[SavableDataLoaderState]
+        self, output_folder: EPath, new_states: List[SavableDataLoaderState | RankState]
     ):
         for rank_idx, rank_state in enumerate(new_states):
             output_file = output_folder / self.file_pattern_func(rank_idx)
@@ -158,6 +163,9 @@ class RankStateIterable:
 
     def __iter__(self):
         """Iterates the SavableDatasetCheckpoints of multiple ranks in a round-robin fashion."""
-        for rank, state in enumerate(self.rank_states):
-            for worker_state in state.worker_states:
-                yield worker_state
+        for state in self.rank_states:
+            if isinstance(state, RankState):
+                exhausted = state.exhausted_workers or [False] * len(state.worker_states)
+                yield from zip(state.worker_states, state.prefetched_restore_keys, exhausted)
+            else:
+                yield from state.worker_states

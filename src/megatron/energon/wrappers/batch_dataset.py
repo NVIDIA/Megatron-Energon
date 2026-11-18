@@ -32,6 +32,8 @@ T_batch_sample = TypeVar("T_batch_sample", covariant=True)
 class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_sample, T_batch]):
     """This dataset wrapper transforms a dataset of samples into a dataset of batches."""
 
+    _worker_local_fields = {"_state_restored": bool}
+
     batch_size: int
     batcher: Callable[[List[T_batch_sample]], T_batch]
     drop_last: bool

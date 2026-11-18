@@ -22,6 +22,7 @@ from megatron.energon.flavors.common.manifest.types import ShardInfo
 from megatron.energon.flavors.common.reader import IndexedSampleReader, SequentialSampleReader
 from megatron.energon.flavors.common.sample_record import SampleRecord
 from megatron.energon.typed_converter import JsonParser
+from megatron.energon.worker_local import WorkerLocalFields
 
 FILTER_FILENAME_PREFIX = "filter_"
 FILTER_JSON_SUFFIX = ".json"
@@ -76,12 +77,14 @@ class FilterTranslation:
     original_end: int
 
 
-class FilterView:
+class FilterView(WorkerLocalFields):
     """A named filter mapped to a reader's selected, ordered shards.
 
     Owns the metadata and lazy binary mapping. Translation needs only per-shard
     offsets, without copying the per-sample index table.
     """
+
+    _worker_local_fields = {"_index_map": lambda: None}
 
     dataset_path: EPath
     filter_name: str

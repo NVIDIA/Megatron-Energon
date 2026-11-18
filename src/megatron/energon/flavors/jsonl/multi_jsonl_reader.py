@@ -12,10 +12,13 @@ from megatron.energon.flavors.common.reader import IndexedSampleReader
 from megatron.energon.flavors.common.sample_record import FilteredSample
 from megatron.energon.flavors.jsonl.ijsonl import IJsonlIndexReader
 from megatron.energon.source_info import SourceInfo
+from megatron.energon.worker_local import WorkerLocalFields
 
 
-class MultiJsonlReader(IndexedSampleReader[FilteredSample]):
+class MultiJsonlReader(WorkerLocalFields, IndexedSampleReader[FilteredSample]):
     """Random-access reader over a prepared logical dataset of JSONL shards."""
+
+    _worker_local_fields = {"_validated_shards": set, "_readers": OrderedDict}
 
     def __init__(
         self,

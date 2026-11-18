@@ -271,3 +271,12 @@ See [](../advanced/error_handling) for details.
 
 In each of these scenarios, ensure that the logic for saving and restoring the state is appropriately synchronized across ranks to maintain consistency.
 If you encounter torch distributed errors, likely torch distributed calls are out of sync, or not all ranks are called correctly. If unsure, debug using the first scenario, saving each rank separately.
+
+### Migrating a custom loader checkpoint with workers
+
+If you expect to edit the recipe before restoring, construct the source loader with
+`prefetch_factor=0`. Otherwise workers can advance beyond the last batch delivered to
+training, and queued restore keys can refer to the old recipe. Migration rejects a
+changed recipe with pending batches. An unchanged recipe still supports exact replay
+with prefetching. The custom loader checkpoint has a different format from the
+previous PyTorch-backed loader checkpoint.

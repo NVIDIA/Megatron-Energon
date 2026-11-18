@@ -10,6 +10,7 @@ from typing import BinaryIO, Dict, Generator, Optional, Tuple, Type, Union
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
 from megatron.energon.retry_stream import RetryReadStream
+from megatron.energon.worker_local import WorkerLocalFields
 
 IDX_SUFFIX = ".idx"
 
@@ -194,7 +195,7 @@ class CacheEntry:
     lookahead_byteoffset: Optional[int] = None
 
 
-class CachedItarOffsetReader:
+class CachedItarOffsetReader(WorkerLocalFields):
     """
     This class is a high-level wrapper around TarIndexReader that caches some
     of the recent lookups for faster access. It is designed for the case when
@@ -204,6 +205,8 @@ class CachedItarOffsetReader:
     Args:
         cache_size: The number of entries to keep in the cache. By default, we keep 32.
     """
+
+    _worker_local_fields = {"tar_index_reader_cache": dict}
 
     def __init__(self, cache_size: int = 32):
         # Maps (tar_file, current_offset) -> CacheEntry

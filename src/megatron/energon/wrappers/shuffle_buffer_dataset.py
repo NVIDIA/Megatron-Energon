@@ -15,6 +15,8 @@ T_sample = TypeVar("T_sample")
 class ShuffleBufferDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
     """Shuffle buffer for the dataset."""
 
+    _worker_local_fields = {"_state_restored": bool}
+
     size: int
     _worker_rng: WorkerRng
     _active_buffer: SavableSampleBuffer[T_sample]

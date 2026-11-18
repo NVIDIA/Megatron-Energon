@@ -7,6 +7,7 @@ import click
 import torch
 
 from megatron.energon.checkpoint import RankStateIterable, natural_sort_key
+from megatron.energon.dataloader.dataloader import RankState, _split_batch_restore_key
 from megatron.energon.epathlib import EPath
 from megatron.energon.savable_loader import SavableDataLoaderState
 
@@ -25,8 +26,12 @@ from megatron.energon.savable_loader import SavableDataLoaderState
 @click.option(
     "--new-world-size", type=int, help="Number of ranks to redistribute to", required=False
 )
+@click.option("--new-micro-batch-size", type=click.IntRange(min=1))
 def command_redist(
-    input_files: List[EPath], output_path: EPath, new_world_size: Optional[int] = None
+    input_files: List[EPath],
+    output_path: EPath,
+    new_world_size: Optional[int] = None,
+    new_micro_batch_size: Optional[int] = None,
 ):
     """Redistribute a checkpoint.
 
@@ -76,14 +81,38 @@ def command_redist(
         len(new_rank_states[0]) == len(new_rank_states[rank]) for rank in range(1, new_world_size)
     ), "All ranks must have the same number of workers, also for the new distribution."
 
-    new_states = [
-        SavableDataLoaderState(
-            worker_states=new_rank_state,
-            next_worker_id=0,  # Reset the next worker ID
-            micro_batch_size=rsi.get_micro_batch_size(),
-        )
-        for new_rank_state in new_rank_states
-    ]
+    old_size = rsi.get_micro_batch_size()
+    batch_size = old_size if new_micro_batch_size is None else new_micro_batch_size
+    if isinstance(rsi.rank_states[0], RankState):
+        factor = 1
+        if old_size != batch_size:
+            if old_size is None or batch_size is None or old_size % batch_size:
+                raise click.ClickException("The new micro batch size must divide the original size")
+            factor = old_size // batch_size
+        new_states = [
+            RankState(
+                worker_states=[worker for worker, _, _ in rank],
+                prefetched_restore_keys=[
+                    keys
+                    if factor == 1
+                    else [piece for key in keys for piece in _split_batch_restore_key(key, factor)]
+                    for _, keys, _ in rank
+                ],
+                exhausted_workers=[exhausted for _, _, exhausted in rank],
+                next_worker_id=0,
+                micro_batch_size=batch_size,
+            )
+            for rank in new_rank_states
+        ]
+    else:
+        if batch_size != old_size:
+            raise click.ClickException(
+                "Micro batch size changes require a custom loader checkpoint"
+            )
+        new_states = [
+            SavableDataLoaderState(worker_states=rank, next_worker_id=0, micro_batch_size=old_size)
+            for rank in new_rank_states
+        ]
 
     # Save the redistributed checkpoint
     if rsi.is_global_checkpoint:

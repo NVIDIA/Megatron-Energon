@@ -20,11 +20,12 @@ from megatron.energon.flavors.jsonl.ijsonl import (
     IJsonlSamplePointer,
 )
 from megatron.energon.source_info import SourceInfo
+from megatron.energon.worker_local import WorkerLocalFields
 
 T_index = TypeVar("T_index", covariant=False)
 
 
-class IJsonlReader(ABC, SamplePartFileReader[FilteredSample]):
+class IJsonlReader(WorkerLocalFields, ABC, SamplePartFileReader[FilteredSample]):
     """
     Class for reading indexed jsonl files containing json samples.
 
@@ -38,6 +39,8 @@ class IJsonlReader(ABC, SamplePartFileReader[FilteredSample]):
         index_cache_size: The size of the index cache.
         part_filter: An optional filter function to select the json payload part.
     """
+
+    _worker_local_fields = {"ijsonl_file": lambda: None}
 
     jsonl_path: EPath
     sample_filter: Optional[Callable[[str], bool]]

@@ -33,6 +33,8 @@ from megatron.energon.cache import (
     PrimaryFileStore,
     SystemFileStore,
 )
+from megatron.energon.dataloader import DataLoader
+from megatron.energon.dataloader import DataLoader as SavableDataLoader
 from megatron.energon.edataclass import edataclass
 from megatron.energon.errors import SkipSample, log_exception, reraise_exception
 from megatron.energon.flavors import (
@@ -97,7 +99,6 @@ from megatron.energon.recipe import (
     register_aux_filestore_protocol,
     traverse_recipe,
 )
-from megatron.energon.savable_loader import SavableDataLoader
 from megatron.energon.source_info import SourceInfo
 from megatron.energon.task_encoder import (
     AugmentTaskEncoder,
@@ -245,6 +246,7 @@ __all__ = [
     "Sample",
     "SampleDecoder",
     "sample_size_metric",
+    "DataLoader",
     "SavableDataLoader",
     "SavableDataset",
     "traverse_metadataset",

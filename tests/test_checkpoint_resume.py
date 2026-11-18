@@ -125,6 +125,7 @@ class TestCheckpointResume(unittest.TestCase):
         batch_size: int = 1,
         repeat: bool = True,
         task_encoder: DefaultTaskEncoder | None = None,
+        prefetch_factor: int = 0,
     ):
         dataset = get_train_dataset(
             recipe_path,
@@ -135,7 +136,7 @@ class TestCheckpointResume(unittest.TestCase):
             repeat=repeat,
             **({} if task_encoder is None else {"task_encoder": task_encoder}),
         )
-        return get_savable_loader(dataset)
+        return get_savable_loader(dataset, prefetch_factor=prefetch_factor)
 
     def _checkpoint(self, num_batches: int, **loader_kwargs):
         """Iterates a loader of the current recipe and returns its state, metadata and samples."""
@@ -191,7 +192,7 @@ class TestCheckpointResume(unittest.TestCase):
         self._write_recipe(self.recipe_path, [("a", 1.0), ("b", 1.0), ("c", 1.0)])
         new_loader = self._loader(self.recipe_path)
         migrated_state = migrate_dataloader_state(new_loader, saved_state, saved_metadata)
-        migrated_root = migrated_state.worker_states[0]
+        migrated_root = migrated_state.worker_states[0].dataset
 
         sampler_counts = _sampler_counts(migrated_root)
         assert len(sampler_counts) == 3
@@ -208,6 +209,38 @@ class TestCheckpointResume(unittest.TestCase):
         assert seen_before_checkpoint["a"].isdisjoint(seen_after_resume["a"])
         assert seen_before_checkpoint["b"].isdisjoint(seen_after_resume["b"])
 
+    def test_recipe_reorder_with_workers_requires_no_pending_batches(self):
+        original = [("a", 1.0), ("b", 1.0)]
+        reordered = [("b", 1.0), ("a", 1.0)]
+        for prefetch in (0, 2):
+            with self.subTest(prefetch=prefetch):
+                self._write_recipe(self.recipe_path, original)
+                seen = {"a": set(), "b": set(), "c": set()}
+                with self._loader(
+                    self.recipe_path, num_workers=2, prefetch_factor=prefetch
+                ) as loader:
+                    it = iter(loader)
+                    for _ in range(12):
+                        _record_seen(seen, next(it))
+                    state = loader.save_state_rank()
+                    metadata = collect_resume_metadata(loader)
+                self._write_recipe(self.recipe_path, reordered)
+                target = self._loader(self.recipe_path, num_workers=2)
+                try:
+                    if prefetch:
+                        with self.assertRaisesRegex(ValueError, "pending prefetched batches"):
+                            migrate_dataloader_state(target, state, metadata)
+                        continue
+                    target.restore_state_rank(migrate_dataloader_state(target, state, metadata))
+                    resumed = {"a": set(), "b": set(), "c": set()}
+                    it = iter(target)
+                    for _ in range(12):
+                        _record_seen(resumed, next(it))
+                    for dataset in ("a", "b"):
+                        self.assertFalse(seen[dataset] & resumed[dataset])
+                finally:
+                    target.close()
+
     def test_recipe_blend_zero_weight_preserves_remaining_leaf_progress(self):
         self._write_recipe(self.recipe_path, [("a", 1.0), ("b", 1.0), ("c", 1.0)])
         old_loader = self._loader(self.recipe_path)
@@ -219,7 +252,7 @@ class TestCheckpointResume(unittest.TestCase):
         saved_state = old_loader.save_state_rank()
         saved_metadata = collect_resume_metadata(old_loader)
         assert saved_state is not None
-        saved_counts = _sampler_counts(saved_state.worker_states[0])
+        saved_counts = _sampler_counts(saved_state.worker_states[0].dataset)
 
         self._write_recipe(self.recipe_path, [("a", 1.0), ("b", 0.0), ("c", 1.0)])
         new_loader = self._loader(self.recipe_path)
@@ -227,7 +260,7 @@ class TestCheckpointResume(unittest.TestCase):
             warnings.simplefilter("error", UserWarning)
             migrated_state = migrate_dataloader_state(new_loader, saved_state, saved_metadata)
 
-        assert _sampler_counts(migrated_state.worker_states[0]) == [
+        assert _sampler_counts(migrated_state.worker_states[0].dataset) == [
             saved_counts[0],
             saved_counts[2],
         ]
@@ -260,7 +293,7 @@ class TestCheckpointResume(unittest.TestCase):
             migrated_state = migrate_dataloader_state(new_loader, saved_state, saved_metadata)
 
         # The two a leaves cannot be told apart, so none of them is matched.
-        assert _sampler_counts(migrated_state.worker_states[0]) == [0, 0, 0]
+        assert _sampler_counts(migrated_state.worker_states[0].dataset) == [0, 0, 0]
 
     def test_nested_recipe_split_override_migrates_leaf_progress(self):
         inner_recipe_path = self.dataset_path / "inner.yaml"
@@ -292,7 +325,7 @@ class TestCheckpointResume(unittest.TestCase):
         new_loader = self._loader(outer_recipe_path)
         migrated_state = migrate_dataloader_state(new_loader, saved_state, saved_metadata)
 
-        sampler_counts = _sampler_counts(migrated_state.worker_states[0])
+        sampler_counts = _sampler_counts(migrated_state.worker_states[0].dataset)
         assert len(sampler_counts) == 3
         assert sampler_counts[0] > 0
         assert sampler_counts[1] > 0
@@ -327,7 +360,7 @@ class TestCheckpointResume(unittest.TestCase):
         new_loader = self._loader(self.recipe_path)
         migrated_state = migrate_dataloader_state(new_loader, saved_state, saved_metadata)
 
-        assert _sampler_counts(migrated_state.worker_states[0]) == [0]
+        assert _sampler_counts(migrated_state.worker_states[0].dataset) == [0]
 
     def test_unsupported_resume_metadata_version_is_rejected(self):
         worker_config = WorkerConfig(rank=0, world_size=1, num_workers=0)
@@ -380,11 +413,11 @@ class TestCheckpointResume(unittest.TestCase):
         self._write_recipe(self.recipe_path, [("a", 1.0), ("b", 1.0)])
         new_loader = self._loader(self.recipe_path)
         migrated_state = migrate_dataloader_state(new_loader, saved_state, saved_metadata)
-        migrated_root = migrated_state.worker_states[0]
+        migrated_root = migrated_state.worker_states[0].dataset
 
         assert _sampler_counts(migrated_root) == [20, 0]
         # The sample index of the loader continues, as it does with worker processes.
-        assert migrated_root["_sample_index"] == saved_state.worker_states[0]["_sample_index"]
+        assert migrated_state.worker_states[0].sample_index == saved_state.worker_states[0].sample_index
 
         new_loader.restore_state_rank(migrated_state)
         new_iter = iter(new_loader)
@@ -396,7 +429,7 @@ class TestCheckpointResume(unittest.TestCase):
     def test_blend_to_single_used_dataset_preserves_progress(self):
         self._write_recipe(self.recipe_path, [("a", 1.0), ("b", 1.0)])
         saved_state, saved_metadata, _ = self._checkpoint(30)
-        saved_counts = _sampler_counts(saved_state.worker_states[0])
+        saved_counts = _sampler_counts(saved_state.worker_states[0].dataset)
         assert saved_counts[0] > 0
 
         # Only one dataset is left with a non-zero weight, so no blend is built anymore.
@@ -405,7 +438,7 @@ class TestCheckpointResume(unittest.TestCase):
             self._loader(self.recipe_path), saved_state, saved_metadata
         )
 
-        assert _sampler_counts(migrated_state.worker_states[0]) == saved_counts[:1]
+        assert _sampler_counts(migrated_state.worker_states[0].dataset) == saved_counts[:1]
 
     def test_replaced_dataset_does_not_reuse_progress(self):
         # The datasets b and c have the same size and shards, but are different datasets.
@@ -417,12 +450,12 @@ class TestCheckpointResume(unittest.TestCase):
             self._loader(self.recipe_path), saved_state, saved_metadata
         )
 
-        assert _sampler_counts(migrated_state.worker_states[0]) == [0]
+        assert _sampler_counts(migrated_state.worker_states[0].dataset) == [0]
 
     def test_recipe_blend_duplicate_in_new_recipe_stays_fresh(self):
         self._write_recipe(self.recipe_path, [("a", 1.0), ("b", 1.0)])
         saved_state, saved_metadata, _ = self._checkpoint(30)
-        saved_counts = _sampler_counts(saved_state.worker_states[0])
+        saved_counts = _sampler_counts(saved_state.worker_states[0].dataset)
 
         self._write_recipe(self.recipe_path, [("a", 1.0), ("a", 2.0), ("b", 1.0)])
         new_loader = self._loader(self.recipe_path)
@@ -430,7 +463,7 @@ class TestCheckpointResume(unittest.TestCase):
             migrated_state = migrate_dataloader_state(new_loader, saved_state, saved_metadata)
 
         # Neither of the two a leaves may take the progress of the single saved a leaf.
-        assert _sampler_counts(migrated_state.worker_states[0]) == [0, 0, saved_counts[1]]
+        assert _sampler_counts(migrated_state.worker_states[0].dataset) == [0, 0, saved_counts[1]]
 
     def test_epochized_blend_does_not_replay_finished_dataset(self):
         _create_text_dataset(self.dataset_path / "s", range(300, 305))
@@ -444,7 +477,7 @@ class TestCheckpointResume(unittest.TestCase):
             seen_before.extend(_batch_values(batch))
             saved_state = old_loader.save_state_rank()
             assert saved_state is not None
-            if any(_blend_exhausted(saved_state.worker_states[0])):
+            if any(_blend_exhausted(saved_state.worker_states[0].dataset)):
                 break
         else:
             self.fail("No dataset finished before the end of the epoch")
@@ -509,7 +542,7 @@ class TestCheckpointResume(unittest.TestCase):
         _create_text_dataset(self.dataset_path / "e", range(400, 455))
         self._write_recipe(self.recipe_path, [("d", 1.0), ("e", 1.0)])
         saved_state, saved_metadata, _ = self._checkpoint(30, world_size=2)
-        saved_counts = _sampler_counts(saved_state.worker_states[0])
+        saved_counts = _sampler_counts(saved_state.worker_states[0].dataset)
         assert all(count > 0 for count in saved_counts)
 
         def migrated_counts(entries: list[tuple[str, float]]) -> list[int]:
@@ -517,7 +550,7 @@ class TestCheckpointResume(unittest.TestCase):
             migrated_state = migrate_dataloader_state(
                 self._loader(self.recipe_path, world_size=2), saved_state, saved_metadata
             )
-            return _sampler_counts(migrated_state.worker_states[0])
+            return _sampler_counts(migrated_state.worker_states[0].dataset)
 
         with warnings.catch_warnings():
             warnings.simplefilter("error", UserWarning)
@@ -552,10 +585,9 @@ class TestCheckpointResume(unittest.TestCase):
             for saved_worker, migrated_worker in zip(
                 saved_state.worker_states, migrated_state.worker_states
             ):
-                saved_a, saved_b = _sampler_counts(saved_worker.state.dataset_state)
-                assert _sampler_counts(migrated_worker.state.dataset_state) == [saved_a, saved_b, 0]
-                assert migrated_worker.state.sample_index == saved_worker.state.sample_index
-                assert migrated_worker.offset == saved_worker.offset
+                saved_a, saved_b = _sampler_counts(saved_worker.dataset)
+                assert _sampler_counts(migrated_worker.dataset) == [saved_a, saved_b, 0]
+                assert migrated_worker.sample_index == saved_worker.sample_index
 
             new_loader.restore_state_rank(migrated_state)
             new_iter = iter(new_loader)
@@ -576,7 +608,8 @@ class TestCheckpointResume(unittest.TestCase):
         )
 
         # The recipe is unchanged, so the whole state is reused, not only the leaf progress.
-        assert migrated_state.worker_states == saved_state.worker_states
+        assert migrated_state.worker_states[0].dataset == saved_state.worker_states[0].dataset
+        assert migrated_state.worker_states[0].sample_index == saved_state.worker_states[0].sample_index
 
     def test_metadata_describes_datasets_with_split_part(self):
         self._write_recipe(self.recipe_path, [("a", 1.0), ("b", 1.0)])

@@ -4,6 +4,7 @@
 import dataclasses
 import functools
 import inspect
+import threading
 from abc import ABC
 from dataclasses import is_dataclass
 from types import MethodType
@@ -42,11 +43,12 @@ from megatron.energon.flavors import (
 )
 from megatron.energon.flavors.base_dataset import ExtendableDataclassMixin
 from megatron.energon.recipe.loader_interface import DatasetBlendMode, LoadedDataset
-from megatron.energon.rng import SystemRng
+from megatron.energon.rng import SystemRng, UserRng
 from megatron.energon.source_info import SourceInfo
 from megatron.energon.tags import SampleTagsAlias, canonicalize_tag_kwargs
 from megatron.energon.task_encoder.cooking import Cooker
 from megatron.energon.worker import WorkerConfig
+from megatron.energon.worker_local import in_thread_worker
 from megatron.energon.wrappers import (
     BatchDataset,
     BlendDataset,
@@ -145,7 +147,10 @@ P = ParamSpec("P")
 
 @overload
 def stateless(
-    *, restore_seeds: bool = False, failure_tolerance: Optional[int] = None
+    *,
+    restore_seeds: bool = False,
+    restore_task_encoder_seeds: bool = False,
+    failure_tolerance: Optional[int] = None,
 ) -> Callable[[Callable[P, T]], Callable[P, T]]: ...
 
 
@@ -194,111 +199,77 @@ def stateless(
     fn: Optional[Callable[..., T]] = None,
     *,
     restore_seeds: bool = False,
+    restore_task_encoder_seeds: bool = False,
     failure_tolerance: Optional[int] = None,
 ) -> Union[Callable[[Callable[..., T]], Callable[..., T]], Callable[..., T]]:
-    """Decorator to mark a function of the task encoder as restorable.
+    """Mark a task encoder function as restorable.
 
-    Args:
-        fn: The function to decorate.
-        restore_seeds: Whether to restore the seeds for the function. I.e. the seeds are set
-            from the sample index and the worker seed, such that they can be restored when a sample
-            is restored from that function.
-        failure_tolerance: The number of consecutive exceptions that are handled, after which a `FatalSampleError` is
-            raised for this function. Set to 0 to disable.
-
-    Usage:
-
-    .. code-block:: python
-
-        @stateless
-        def encode_sample(self, sample: T_sample) -> T_encoded_sample:
-            ...
-
-        # Or if randomness is used (e.g. for augmentations):
-        @stateless(restore_seeds=True)
-        def encode_sample(self, sample: T_sample) -> T_encoded_sample:
-            ...
-
+    ``restore_seeds`` scopes the process-global CPU RNGs to the sample and is
+    supported by main and fork workers. Use ``restore_task_encoder_seeds`` and
+    ``self.rng`` to scope independent RNGs in a thread worker.
     """
-
+    if restore_seeds and restore_task_encoder_seeds:
+        raise ValueError("Choose either process-global or task encoder RNGs")
     if fn is None:
         return lambda f: stateless(
-            f, restore_seeds=restore_seeds, failure_tolerance=failure_tolerance
+            f,
+            restore_seeds=restore_seeds,
+            restore_task_encoder_seeds=restore_task_encoder_seeds,
+            failure_tolerance=failure_tolerance,
         )
-    if restore_seeds:
-        worker_seed = None
+    if restore_seeds or restore_task_encoder_seeds:
+        original = fn
 
-        @functools.wraps(fn)
-        def seed_wrapper_generator(self, *args, **kwargs):
-            nonlocal worker_seed
-            if worker_seed is None:
-                worker_seed = WorkerConfig.active_worker_config.worker_seed()
+        def rng_for(encoder):
+            if restore_seeds and in_thread_worker():
+                raise ValueError("Thread workers require restore_task_encoder_seeds and self.rng")
+            return SystemRng if restore_seeds else encoder.rng
 
-            # Save the RNG states and set the new seed
-            outer_rng_state = SystemRng.save_state()
-
-            # Before constructing the generator and before the first
-            # iteration, set inner RNG based on seed computed
-            # from worker_seed and current sample index
-            SystemRng.seed_args(worker_seed, self.current_sample_index)
-
-            it = iter(fn(self, *args, **kwargs))
-
-            inner_rand_state = None
-
-            while True:
-                if inner_rand_state is not None:
-                    # Restore inner random state before calling the generator
-                    # This will not be done on the first iteration
-                    SystemRng.restore_state(inner_rand_state)
-
-                try:
-                    # Now call the generator. This will yield the sample
-                    # But note it may also throw an exception or a StopIteration
-                    sample = next(it)
-
-                    # Save inner random state after calling the generator
-                    inner_rand_state = SystemRng.save_state()
-                except StopIteration:
-                    # We're stopping here, but the outer random state
-                    # will be restored before returning (in finally below)
-                    break
-                finally:
-                    # Restore outer rand state before yielding or when an exception was raised
-                    SystemRng.restore_state(outer_rng_state)
-
-                # Now yield the sample.
-                # This will give control back to the caller who may
-                # change the random state.
-                yield sample
-
-                # Save outer random state after yielding
-                outer_rng_state = SystemRng.save_state()
-
-        @functools.wraps(fn)
-        def seed_wrapper(self, *args, **kwargs):
-            nonlocal worker_seed
-            if worker_seed is None:
-                worker_seed = WorkerConfig.active_worker_config.worker_seed()
-
-            # Save the RNG states and set the new seed
-            rng_state = SystemRng.save_state()
-
-            SystemRng.seed_args(worker_seed, self.current_sample_index)
-
+        @functools.wraps(original)
+        def wrap(encoder, *args, **kwargs):
+            rng = rng_for(encoder)
+            outer_state = rng.save_state()
             try:
-                return fn(self, *args, **kwargs)
+                rng.seed_args(
+                    WorkerConfig.active_worker_config.worker_seed(), encoder.current_sample_index
+                )
+                return original(encoder, *args, **kwargs)
             finally:
-                # Restore the RNGs
-                SystemRng.restore_state(rng_state)
+                rng.restore_state(outer_state)
 
-        if inspect.isgeneratorfunction(fn):
-            setattr(seed_wrapper_generator, "__stateless__", True)
-            return seed_wrapper_generator
-        else:
-            setattr(seed_wrapper, "__stateless__", True)
-            return seed_wrapper
+        @functools.wraps(original)
+        def wrap_generator(encoder, *args, **kwargs):
+            rng = rng_for(encoder)
+            outer_state = rng.save_state()
+            try:
+                rng.seed_args(
+                    WorkerConfig.active_worker_config.worker_seed(), encoder.current_sample_index
+                )
+                inner_state = rng.save_state()
+                iterator = iter(original(encoder, *args, **kwargs))
+            finally:
+                rng.restore_state(outer_state)
+            try:
+                while True:
+                    outer_state = rng.save_state()
+                    try:
+                        rng.restore_state(inner_state)
+                        sample = next(iterator)
+                        inner_state = rng.save_state()
+                    except StopIteration:
+                        return
+                    finally:
+                        rng.restore_state(outer_state)
+                    yield sample
+            finally:
+                outer_state = rng.save_state()
+                try:
+                    rng.restore_state(inner_state)
+                    iterator.close()
+                finally:
+                    rng.restore_state(outer_state)
 
+        fn = wrap_generator if inspect.isgeneratorfunction(original) else wrap
     setattr(fn, "__stateless__", True)
     if failure_tolerance is not None:
         setattr(fn, "__failure_tolerance__", failure_tolerance)
@@ -921,7 +892,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         cook_fn = functools.partial(self.cook_crude_sample, cooker=cooker, aux=aux)
         cooker.part_filter
 
-        return MapDataset(
+        mapped = MapDataset(
             dataset,
             cook_fn,
             worker_config=worker_config,
@@ -935,6 +906,9 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             ),
             failure_tolerance=get_failure_tolerance(cook_fn, self.__default_failure_tolerance__),
         )
+
+        mapped.auxiliary_stores = tuple(aux.values())
+        return mapped
 
     def _load_dataset(
         self, dataset: LoadedDataset, worker_rotation_offset: int, worker_config: WorkerConfig
@@ -1475,6 +1449,19 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             "The batch_index can only be fetched within the worker, and to be usable, you must use the get_(savable_)loader methods provided from the package."
         )
         return WorkerConfig.active_worker_config.active_worker_sample_index
+
+    @property
+    def rng(self) -> UserRng:
+        """Independent RNGs for the active task encoder worker."""
+        config = WorkerConfig.active_worker_config
+        if config is None:
+            raise RuntimeError("Task encoder RNGs require an active dataloader worker")
+        state = self.__dict__.setdefault("_rng_by_worker", threading.local())
+        seed = config.worker_seed()
+        if getattr(state, "seed", None) != seed:
+            state.seed = seed
+            state.rng = UserRng(seed)
+        return state.rng
 
     @property
     def cache(self) -> CachePool:
