@@ -4,12 +4,16 @@
 """This module defines tests for meta datasets."""
 
 import gc
+import io
+import json
 import logging
 import sys
 import tempfile
 import unittest
 import warnings
 from collections import Counter
+from contextlib import redirect_stdout
+from dataclasses import replace
 from pathlib import Path
 from typing import Iterable
 
@@ -22,11 +26,19 @@ from megatron.energon import (
 )
 from megatron.energon.dataloader import DataLoader, ForkDataLoaderWorker, ThreadDataLoaderWorker
 from megatron.energon.dataloader.dataloader import _split_batch_restore_key
+from megatron.energon.dataloader.workers.base_worker import WorkerSampleRestoreKey
+from megatron.energon.flavors.common.sample_record import IndexedRestoreKey
 from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
 from megatron.energon.task_encoder.base import DefaultTaskEncoder, stateless
+from megatron.energon.wrappers.batch_dataset import BatchGenRestoreKey
+from megatron.energon.wrappers.epochize_dataset import EpochizeDataset
+from megatron.energon.wrappers.map_dataset import MapGenRestoreKey
+from megatron.energon.wrappers.packing_dataset import PartialSampleRestoreKey
 
 
 class VerifyWorkerTaskEncoder(DefaultTaskEncoder):
+    expected_num_workers: int
+
     def __init__(self, expected_num_workers: int):
         self.expected_num_workers = expected_num_workers
         super().__init__()
@@ -88,7 +100,48 @@ def create_text_test_dataset(path: Path, txt_range: Iterable[int], key_range: It
         )
 
 
+class GeneratorTaskEncoder(DefaultTaskEncoder):
+    @stateless
+    def encode_sample(self, sample):
+        for output in range(3):
+            yield replace(sample, text=f"{sample.text}:{self.current_sample_index}:{output}")
+
+
+class ThreadedEpochDataset(EpochizeDataset):
+    calls: list[int]
+    worker_events: list[tuple[str, int]]
+
+    __hash__ = None
+    _worker_local_fields = ("calls",)
+
+    def __init__(self, dataset, length, worker_config):
+        super().__init__(dataset, length, worker_config)
+        self.calls = []
+        self.worker_events = []
+
+    def worker_init(self):
+        super().worker_init()
+        self.worker_events.append(("init", self.worker_config.rank_worker_id()))
+
+    def worker_close(self):
+        self.worker_events.append(("close", self.worker_config.rank_worker_id()))
+        del self.calls
+        super().worker_close()
+
+    def __iter__(self):
+        for sample in super().__iter__():
+            worker_id = self.worker_config.rank_worker_id()
+            self.calls.append(worker_id)
+            if any(previous != worker_id for previous in self.calls):
+                raise AssertionError("Worker-local fields are shared between threads")
+            yield sample
+
+
 class TestDataLoader(unittest.TestCase):
+    temp_dir: tempfile.TemporaryDirectory
+    dataset_path: Path
+    ds1_path: Path
+
     def setUp(self):
         logging.basicConfig(stream=sys.stderr, level=logging.INFO)
         warnings.simplefilter("ignore", ResourceWarning)
@@ -192,12 +245,115 @@ class TestDataLoader(unittest.TestCase):
         assert loader._workers is None
 
     def test_split_batch_generator_restore_key_preserves_subtype(self):
-        keys = (("Webdataset", 1), ("Webdataset", 2), ("Webdataset", 3), ("Webdataset", 4))
-        restore_key = ("BatchDataset", 12, 3, *keys)
-        assert _split_batch_restore_key(restore_key, 2) == [
-            ("BatchDataset", 12, 3, *keys[:2]),
-            ("BatchDataset", 12, 3, *keys[2:]),
-        ]
+        keys = tuple(IndexedRestoreKey(kind="Webdataset", index=i) for i in range(1, 5))
+        batch = BatchGenRestoreKey(sample_idx=12, gen_idx=3, inner=keys)
+        mapped = MapGenRestoreKey(sample_idx=7, gen_idx=11, inner=batch)
+        wrapped = WorkerSampleRestoreKey(worker_id=5, sample_idx=32, inner=mapped)
+        split = _split_batch_restore_key(wrapped, 2)
+        for idx, key in enumerate(split):
+            self.assertIsInstance(key, WorkerSampleRestoreKey)
+            self.assertIsInstance(key.inner, MapGenRestoreKey)
+            self.assertIsInstance(key.inner.inner, BatchGenRestoreKey)
+            self.assertEqual(key.inner.gen_idx, 11)
+            self.assertEqual(key.inner.inner.gen_idx, 3)
+            self.assertEqual(key.inner.inner.inner, keys[idx * 2 : idx * 2 + 2])
+
+    def test_generator_keys_resume_and_restore_at_the_original_index(self):
+        wc = WorkerConfig(rank=0, world_size=1, num_workers=0, worker_log_level=1)
+
+        def loader():
+            return DataLoader(
+                get_train_dataset(
+                    self.ds1_path,
+                    worker_config=wc,
+                    batch_size=None,
+                    shuffle_buffer_size=None,
+                    max_samples_per_sequence=None,
+                    task_encoder=GeneratorTaskEncoder(),
+                    repeat=False,
+                )
+            )
+
+        log = io.StringIO()
+        with redirect_stdout(log), loader() as source:
+            it = iter(source)
+            first = next(it)
+            checkpoint = source.save_state_rank()
+            expected = next(it)
+            self.assertIsInstance(first.__restore_key__, WorkerSampleRestoreKey)
+            self.assertIsInstance(first.__restore_key__.inner, MapGenRestoreKey)
+            self.assertEqual(source.restore_sample(expected.__restore_key__).text, expected.text)
+            self.assertEqual(first.pin_memory().__restore_key__, first.__restore_key__)
+            self.assertNotIsInstance(first.__restore_key__, tuple)
+            with self.assertRaisesRegex(TypeError, "Expected WorkerSampleRestoreKey"):
+                source.restore_sample(("DataLoaderWorker", 0, 0, "Webdataset", 0))
+
+        events = [json.loads(line) for line in log.getvalue().splitlines() if line.startswith("{")]
+        for event_type in ("DataLoader.epoch_iter.yield", "SavableDataLoader.yield"):
+            event = next(event for event in events if event["t"] == event_type)
+            key = event["restore_key"]
+            self.assertEqual(key["type"], "WorkerSampleRestoreKey")
+            self.assertEqual(key["fields"]["sample_idx"], first.__restore_key__.sample_idx)
+            self.assertEqual(key["fields"]["inner"]["type"], "MapGenRestoreKey")
+
+        with io.BytesIO() as buffer:
+            torch.save(checkpoint, buffer)
+            buffer.seek(0)
+            checkpoint = torch.load(buffer, weights_only=False)
+
+        with (
+            redirect_stdout(io.StringIO()),
+            loader().with_restored_state_rank(checkpoint) as target,
+        ):
+            actual = next(iter(target))
+            self.assertEqual(actual.text, expected.text)
+            self.assertEqual(actual.__restore_key__, expected.__restore_key__)
+            self.assertIsInstance(actual.__restore_key__.inner, MapGenRestoreKey)
+
+    def test_restore_key_json_preserves_nested_keys_and_slice(self):
+        leaf = IndexedRestoreKey(kind="Webdataset", index=7)
+        partial = PartialSampleRestoreKey(inner=leaf, slice=slice(1, 5))
+        batch = BatchGenRestoreKey(sample_idx=3, gen_idx=1, inner=(partial, None))
+
+        fields = json.loads(json.dumps(batch.to_json_object(), allow_nan=False))["fields"]
+        self.assertEqual(fields["gen_idx"], 1)
+        partial_json, missing = fields["inner"]
+        self.assertIsNone(missing)
+        self.assertEqual(partial_json["type"], "PartialSampleRestoreKey")
+        self.assertEqual(
+            partial_json["fields"]["slice"],
+            {"type": "slice", "start": 1, "stop": 5, "step": None},
+        )
+        self.assertEqual(
+            partial_json["fields"]["inner"],
+            {"type": "IndexedRestoreKey", "fields": {"kind": "Webdataset", "index": 7}},
+        )
+
+    def test_thread_workers_isolate_inherited_epoch_iterator_and_custom_fields(self):
+        def loader(worker_type):
+            wc = WorkerConfig(rank=0, world_size=1, num_workers=2)
+            dataset = get_train_dataset(
+                self.ds1_path,
+                worker_config=wc,
+                batch_size=None,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+            )
+            epoch = ThreadedEpochDataset(dataset, 12, wc)
+            return epoch, DataLoader(epoch, worker_type=worker_type, prefetch_factor=2)
+
+        _, reference = loader(ForkDataLoaderWorker)
+        with reference:
+            expected = [[sample.text for sample in reference] for _ in range(2)]
+        dataset, threaded = loader(ThreadDataLoaderWorker)
+        with threaded:
+            actual = [[sample.text for sample in threaded] for _ in range(2)]
+
+        self.assertEqual(actual, expected)
+        self.assertEqual(dataset.calls, [])
+        self.assertCountEqual(
+            dataset.worker_events, [("init", 0), ("init", 1), ("close", 0), ("close", 1)]
+        )
 
     def test_dataloader_fork(self):
         torch.manual_seed(42)

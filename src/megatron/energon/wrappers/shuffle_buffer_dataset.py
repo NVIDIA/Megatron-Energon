@@ -1,9 +1,9 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from typing import Any, Dict, Generic, Iterator, Tuple, TypeVar, Union
+from typing import Any, Dict, Generic, Iterator, TypeVar
 
-from megatron.energon.flavors.base_dataset import FlexState, SavableDataset
+from megatron.energon.flavors.base_dataset import FlexState, RestoreKey, SavableDataset
 from megatron.energon.rng import WorkerRng
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import BaseWrapperDataset
@@ -78,7 +78,7 @@ class ShuffleBufferDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sam
             yield self._active_buffer.pop(pop_idx)
         self._source_exhausted = False
 
-    def restore_sample(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> T_sample:
+    def restore_sample(self, restore_key: RestoreKey) -> T_sample:
         return self._active_buffer.restore_sample(restore_key)
 
     def config(self) -> Dict[str, Any]:

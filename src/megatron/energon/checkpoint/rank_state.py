@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import re
-from typing import List
+from typing import Callable, List
 
 import torch
 
@@ -92,6 +92,16 @@ def detect_and_replicate_pattern(file_list):
 
 class RankStateIterable:
     """Iterates the SavableDatasetCheckpoints of multiple ranks in a round-robin fashion."""
+
+    file_pattern_func: Callable[[int], str]
+    is_global_checkpoint: bool
+    megatron_style: bool
+    num_states: int
+    rank_cur_worker: list[int]
+    rank_num_workers: list[int]
+    #: Rank checkpoints in rank order, in either the custom or legacy loader format.
+    rank_states: list[SavableDataLoaderState | RankState]
+    rank_worker_offset: list[int]
 
     def __init__(self, state_files: List[EPath]):
         state_file_names = [state_file.name for state_file in state_files]

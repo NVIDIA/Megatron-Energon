@@ -3,6 +3,7 @@
 import os
 import sys
 import warnings
+from dataclasses import replace
 from typing import (
     Any,
     ClassVar,
@@ -21,22 +22,24 @@ from megatron.energon.cache.no_cache import NoCachePool
 from megatron.energon.dataloader.future import Future
 from megatron.energon.dataloader.pin_memory import NoPinMemory, PinMemory, PinMemoryThread
 from megatron.energon.dataloader.workers.base_worker import (
-    WORKER_RESTORE_KEY,
     DataLoaderNoWorker,
     DataLoaderWorker,
+    WorkerSampleRestoreKey,
     WorkerState,
 )
 from megatron.energon.dataloader.workers.fork_worker import ForkDataLoaderWorker
 from megatron.energon.dataloader.workers.thread_worker import ThreadDataLoaderWorker
 from megatron.energon.edataclass import edataclass
-from megatron.energon.flavors.base_dataset import SavableDataset
+from megatron.energon.flavors.base_dataset import RestoreKey, SavableDataset
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import (
     BaseWrapperDataset,
+    WrappedRestoreKey,
     get_sample_restore_key,
 )
-from megatron.energon.wrappers.batch_dataset import BatchDataset
+from megatron.energon.wrappers.batch_dataset import BatchDataset, BatchRestoreKey
 from megatron.energon.wrappers.gc_dataset import GC_DEFAULT_EVERY_N_ITER, GcDataset
+from megatron.energon.wrappers.iter_map_dataset import IterMapRestoreKey
 from megatron.energon.wrappers.log_sample_dataset import default_get_batch_keys
 from megatron.energon.wrappers.watchdog_dataset import WatchdogDataset
 
@@ -53,7 +56,7 @@ class RankState:
 
     #: This is a list (per worker) of lists of (batch) sample keys, which have been (asynchronously) prefetched from workers
     # but not been fetched yet by iterating.
-    prefetched_restore_keys: list[list[tuple | None]]
+    prefetched_restore_keys: list[list[RestoreKey]]
     #: This is a list of worker states, which have been saved from the workers (or `None` for the initial state).
     worker_states: list[WorkerState | None]
     #: The next worker ID to prefetch from (i.e. append to the prefetched samples).
@@ -63,32 +66,28 @@ class RankState:
     exhausted_workers: list[bool] | None = None
 
 
-def _split_batch_restore_key(restore_key: tuple | None, batch_split_factor: int) -> list[tuple]:
-    if restore_key is None:
+def _split_batch_restore_key(key: RestoreKey | None, batch_split_factor: int) -> list[RestoreKey]:
+    if batch_split_factor < 1:
+        raise ValueError("The batch split factor must be positive")
+    if key is None:
         raise ValueError("Cannot split a batch without a restore key")
-    kind, *fields = restore_key
-    if kind == "BatchDataset":
-        sample_idx, *keys = fields
-        prefix = (kind, sample_idx)
-        if keys and isinstance(keys[0], int):
-            prefix = (*prefix, keys.pop(0))
-        if not keys or len(keys) % batch_split_factor:
+    if isinstance(key, BatchRestoreKey):
+        samples = key.inner
+        if not samples or len(samples) % batch_split_factor:
             raise ValueError("Cannot split this batch restore key")
-        size = len(keys) // batch_split_factor
-        return [(*prefix, *keys[i : i + size]) for i in range(0, len(keys), size)]
-    if kind == WORKER_RESTORE_KEY:
-        worker_id, sample_idx, *inner = fields
+        size = len(samples) // batch_split_factor
+        return [replace(key, inner=samples[i : i + size]) for i in range(0, len(samples), size)]
+    if isinstance(key, WrappedRestoreKey):
         return [
-            (kind, worker_id, sample_idx, *key)
-            for key in _split_batch_restore_key(tuple(inner), batch_split_factor)
+            replace(key, inner=inner)
+            for inner in _split_batch_restore_key(key.inner, batch_split_factor)
         ]
-    if kind in ("MapDataset", "IterMapDataset", "ConcatDataset", "BlendDataset"):
-        index, *inner = fields
+    if isinstance(key, IterMapRestoreKey) and len(key.inner) == 1:
         return [
-            (kind, index, *key)
-            for key in _split_batch_restore_key(tuple(inner), batch_split_factor)
+            replace(key, inner=(inner,))
+            for inner in _split_batch_restore_key(key.inner[0], batch_split_factor)
         ]
-    raise ValueError(f"Unsupported restore key type for splitting batch: {kind}")
+    raise ValueError(f"Unsupported restore key type for splitting batch: {type(key).__name__}")
 
 
 class WorkerType(Protocol[TSample]):
@@ -122,6 +121,7 @@ class DataLoader(Generic[TSample]):
 
     _dataset: SavableDataset
     _worker_config: WorkerConfig
+    _cache_pool: CachePool
     _prefetch_factor: int
     _worker_type: WorkerType
     _prefetching_samples: list[list[Future[TSample]]]
@@ -430,7 +430,7 @@ class DataLoader(Generic[TSample]):
                     keys = default_get_batch_keys(sample)
                     restore_key = get_sample_restore_key(sample)
                     restore_key_payload = (
-                        {} if restore_key is None else {"restore_key": restore_key}
+                        {} if restore_key is None else {"restore_key": restore_key.to_json_object()}
                     )
                     self._worker_config.worker_log(
                         {
@@ -440,8 +440,8 @@ class DataLoader(Generic[TSample]):
                             "id": self._id,
                             "epoch_id": epoch_id,
                             "worker_id": worker_idx,
-                            "worker_sample_idx": restore_key[2]
-                            if restore_key and restore_key[0] == WORKER_RESTORE_KEY
+                            "worker_sample_idx": restore_key.sample_idx
+                            if isinstance(restore_key, WorkerSampleRestoreKey)
                             else None,
                             "epoch_sample_idx": epoch_sample_idx,
                             "global_sample_idx": self._global_sample_idx,
@@ -718,7 +718,7 @@ class DataLoader(Generic[TSample]):
 
         self.restore_state_rank(rank_state)
 
-    def _restore_sample(self, restore_key: tuple) -> Future[TSample]:
+    def _restore_sample(self, restore_key: RestoreKey) -> Future[TSample]:
         """
         Restore a sample from a restore key.
 
@@ -728,16 +728,17 @@ class DataLoader(Generic[TSample]):
         Returns:
             A future that will be resolved to the restored sample.
         """
+        if not isinstance(restore_key, WorkerSampleRestoreKey):
+            raise TypeError(f"Expected WorkerSampleRestoreKey, got {type(restore_key).__name__}")
         if self._workers is None:
             self.start()
         assert self._workers is not None
-        assert restore_key[0] == WORKER_RESTORE_KEY
         rank_worker_id = self._worker_config.rank_worker_id(
-            override_global_worker_id=restore_key[1]
+            override_global_worker_id=restore_key.worker_id
         )
         return self._workers[rank_worker_id].restore_sample(restore_key)
 
-    def restore_sample(self, restore_key: tuple) -> TSample:
+    def restore_sample(self, restore_key: RestoreKey) -> TSample:
         """
         Restore a sample from a restore key.
 

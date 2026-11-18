@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import multiprocessing
 from abc import ABC, abstractmethod
+from multiprocessing.queues import Queue
 from typing import Any, Callable, Generic, Iterable, List, Optional, TypeVar
 
 T_result = TypeVar("T_result")
@@ -62,6 +63,8 @@ class AggregatorPool(Generic[T_input_data, T_aggregation_data, T_result]):
 
     task_queue: multiprocessing.Queue[Optional[T_input_data]]
     result_queue: multiprocessing.Queue[Optional[List[T_aggregation_data]]]
+    _final_result_data_queue: Queue
+    _aggregator_final_result_data: T_result | None
 
     def __init__(
         self,
@@ -94,7 +97,7 @@ class AggregatorPool(Generic[T_input_data, T_aggregation_data, T_result]):
         self._final_result_data_queue = multiprocessing.Queue()
 
         # Will store whatever is pulled from _final_data_queue in close()
-        self._aggregator_final_result_data: Optional[Any] = None
+        self._aggregator_final_result_data = None
 
     def _worker(self, worker_id: int) -> None:
         """Function that runs inside each worker process."""

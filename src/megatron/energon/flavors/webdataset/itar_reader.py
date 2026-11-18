@@ -22,7 +22,7 @@ from megatron.energon.flavors.common.manifest.io import get_info_shard_files
 from megatron.energon.flavors.common.manifest.paths import INDEX_SQLITE_FILENAME
 from megatron.energon.flavors.common.manifest.types import ShardInfo
 from megatron.energon.flavors.common.reader import PartFileReader, SamplePartReader
-from megatron.energon.flavors.common.sample_record import FilteredSample
+from megatron.energon.flavors.common.sample_record import FilteredSample, IndexedRestoreKey
 from megatron.energon.flavors.webdataset.config import skip_meta_re, split_name_re
 from megatron.energon.flavors.webdataset.indexing import SqliteIndexReader
 from megatron.energon.flavors.webdataset.itar import (
@@ -60,6 +60,7 @@ class ITarReader(WorkerLocalFields, ABC, Generic[T_index]):
     base_path: EPath
     tar_filenames: List[str]
     tar_filepaths: List[EPath]
+    itar_cache_size: int
     part_filter: Optional[Callable[[str], bool]]
     itar_files_cache: Dict[int, ITarFile]
     sample_filter: Optional[Callable[[str], bool]]
@@ -259,7 +260,7 @@ class ITarReader(WorkerLocalFields, ABC, Generic[T_index]):
         return FilteredSample(
             __key__=sample_base_name,
             __shard__=self.tar_filenames[sample_pointer.tar_file_id],
-            __restore_key__=("Webdataset", restore_index),
+            __restore_key__=IndexedRestoreKey(kind="Webdataset", index=restore_index),
             __sources__=(
                 SourceInfo(
                     dataset_path=self.base_path,
@@ -392,6 +393,7 @@ class SqliteITarEntryReader(ITarReader[str], PartFileReader[bytes]):
 
     sqlite_reader: SqliteIndexReader
     db_has_sample_parts: int
+    key_is_full_entryname: bool
 
     def __init__(
         self,

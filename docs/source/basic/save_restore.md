@@ -280,3 +280,7 @@ training, and queued restore keys can refer to the old recipe. Migration rejects
 changed recipe with pending batches. An unchanged recipe still supports exact replay
 with prefetching. The custom loader checkpoint has a different format from the
 previous PyTorch-backed loader checkpoint.
+
+
+Restore keys are typed dataclasses. Checkpoints containing the earlier tuple keys must be
+restored with the version that wrote them.

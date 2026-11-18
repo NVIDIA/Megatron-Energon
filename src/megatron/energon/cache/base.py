@@ -43,6 +43,12 @@ class FileStore(Generic[T]):
     def close(self) -> None:
         """Release any reader resources owned by the store."""
 
+    def worker_init(self) -> None:
+        """Initialize reader resources for the active worker."""
+
+    def worker_close(self) -> None:
+        """Release reader resources for the active worker."""
+
     def get_media_metadata(self, key: str) -> MediaMetadataBase:
         """Return the media metadata for the given key if available."""
 
@@ -61,6 +67,12 @@ class FileStoreWrapper(FileStore[T]):
 
     def close(self) -> None:
         self._inner.close()
+
+    def worker_init(self) -> None:
+        self._inner.worker_init()
+
+    def worker_close(self) -> None:
+        self._inner.worker_close()
 
     def __init__(self, inner: FileStore[T]):
         self._inner = inner
@@ -161,6 +173,12 @@ class CachePool(ABC):
     Then, call `Lazy.get()` to get the data later on.
     """
 
+    def worker_init(self) -> None:
+        """Initialize cache resources for the active loader worker."""
+
+    def worker_close(self) -> None:
+        """Release cache resources for the active loader worker."""
+
     @abstractmethod
     def get(self, ds: FileStore, fname: str, sample: Any = None) -> Any:
         """
@@ -214,6 +232,8 @@ class FileStoreDecoder(ABC):
 class PrimaryFileStore(FileStoreWrapper[T]):
     """Same as the FileStore, but additionally uses the current sample's key as a prefix for the key,
     if the key passed to `__getitem__`, `.get` or `.get_media_metadata` starts with a '.'."""
+
+    _current_key: str
 
     def __init__(self, inner: FileStore[T], current_key: str):
         super().__init__(inner)

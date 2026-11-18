@@ -148,7 +148,7 @@ class GroupedSizeBlendTaskEncoder(DefaultTaskEncoder):
         return PackedTextSample.derive_from(
             samples[0],
             __key__=",".join(sample.__key__ for sample in samples),
-            __restore_key__=(),
+            __restore_key__=None,
             texts=[sample.text for sample in samples],
         )
 
@@ -628,7 +628,7 @@ class TestDataset(unittest.TestCase):
                 return TextSample.derive_from(
                     samples[0],
                     __key__=",".join(s.__key__ for s in samples),
-                    __restore_key__=(),
+                    __restore_key__=None,
                     text=f"{next(iter(packing_sources))}:" + " | ".join(s.text for s in samples),
                 )
 

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import inspect
+from dataclasses import dataclass
 from typing import (
     Any,
     Callable,
@@ -21,12 +22,13 @@ from megatron.energon.edataclass import edataclass
 from megatron.energon.errors import ErrorContext, handle_restore_errors
 from megatron.energon.flavors.base_dataset import (
     FlexState,
+    RestoreKey,
     SavableDataset,
     set_sample_restore_key,
 )
 from megatron.energon.savable import Savable
 from megatron.energon.worker import WorkerConfig
-from megatron.energon.wrappers.base import BaseWrapperDataset, SampleIndex
+from megatron.energon.wrappers.base import BaseWrapperDataset, MultiWrappedRestoreKey, SampleIndex
 from megatron.energon.wrappers.buffer import SavableSampleBuffer
 
 T_batch = TypeVar("T_batch", covariant=True)
@@ -50,6 +52,11 @@ class Bucket(Savable, Generic[T_batch_sample]):
         self.samples.restore_state(state["samples"])
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class GroupBatchRestoreKey(MultiWrappedRestoreKey):
+    sample_idx: int
+
+
 class GroupBatchDataset(
     BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_sample, T_batch]
 ):
@@ -69,8 +76,13 @@ class GroupBatchDataset(
     }
 
     dataset: SavableDataset[T_batch_sample]
+    #: If unset, the grouping function supplies each group’s batch size.
+    fixed_batch_size: int | None
     sample_group_key: Callable[[T_batch_sample], Tuple[Hashable, Optional[int]]]
     batcher: Callable[[List[T_batch_sample]], T_batch]
+    batcher_stateless: bool
+    batcher_config: dict[str, Any] | Callable[[], dict[str, Any]] | None
+    failure_tolerance: int
     drop_last: bool
     _group_key_sample_index: SampleIndex
     _batch_sample_index: SampleIndex
@@ -182,7 +194,10 @@ class GroupBatchDataset(
                         f"Batcher {self.batcher} returned a generator, which is not supported for grouped batching yet."
                     )
                 self._batch_failure_handler.reset()
-                set_sample_restore_key(batch_sample, sample_idx, *sample_restore_keys, src=self)
+                set_sample_restore_key(
+                    batch_sample,
+                    GroupBatchRestoreKey(sample_idx=sample_idx, inner=tuple(sample_restore_keys)),
+                )
                 yield batch_sample
 
         # Add samples to the buckets. When restored after the input was exhausted, only flush the
@@ -251,18 +266,19 @@ class GroupBatchDataset(
         )
         super().assert_can_restore()
 
-    def restore_sample(self, index: Tuple[Union[str, int, tuple], ...]) -> T_batch:
+    def restore_sample(self, restore_key: RestoreKey) -> T_batch:
         self.assert_can_restore()
-        id, sample_idx, *sample_restore_keys = index
-        assert id == type(self).__name__
-        batch = [self.dataset.restore_sample(inner_idx) for inner_idx in sample_restore_keys]
-
+        assert isinstance(restore_key, GroupBatchRestoreKey)
+        key = restore_key
+        batch = []
+        for inner in key.inner:
+            if inner is None:
+                raise ValueError("Cannot restore a batch containing a sample without a restore key")
+            batch.append(self.dataset.restore_sample(inner))
         with handle_restore_errors(self.worker_config.restore_error_handler, batch):
-            with self._batch_sample_index.ctx(sample_idx):
+            with self._batch_sample_index.ctx(key.sample_idx):
                 batch_sample = self.batcher(batch)
-            set_sample_restore_key(batch_sample, sample_idx, *sample_restore_keys, src=self)
-
-        return batch_sample
+            return set_sample_restore_key(batch_sample, key)
 
     def config(self) -> Dict[str, Any]:
         return {

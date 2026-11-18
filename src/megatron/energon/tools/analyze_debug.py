@@ -148,6 +148,13 @@ class SampleLoaderYieldLogLine(TypedDict):
 class AutosizingHeatmapWriter:
     """Writes a heatmap, automatically resizing it if necessary."""
 
+    colors_size: int
+    heatmap: np.ndarray
+    heatmap_sample_factor: int
+    heatmap_sample_max: int
+    heatmap_step_factor: int
+    heatmap_step_max: int
+
     def __init__(self, heatmap_samples: int, heatmap_steps: int, colorize: bool = True):
         self.heatmap = np.zeros((heatmap_samples, heatmap_steps, 3), dtype=np.int32)
         self.heatmap_sample_factor = 1
@@ -507,6 +514,9 @@ class LoaderInfo:
 
 
 class LoaderLogIter:
+    _path: Path
+    _start_idx: int
+
     def __init__(self, path: Path, start_idx: int = 0):
         self._path = path
         self._start_idx = start_idx

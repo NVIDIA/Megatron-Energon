@@ -27,6 +27,19 @@ try:
         Read-only filesystem that exposes an energon WebdatasetFileStore.
         """
 
+        _all_sample_parts: dict[str, int]
+        _all_samples: dict[str, int]
+        _gid: int
+        _mtime: float
+        _open_files: dict[str, bytes]
+        _print: int
+        _sample_folders: bool
+        _samples_with_multiple_tar_files: set[str]
+        _slow_mode: bool
+        _total_size: int | None
+        _uid: int
+        _wds_filestore: WebdatasetFileStore
+
         def __init__(
             self,
             db_path: EPath,

@@ -18,6 +18,8 @@ from megatron.energon.flavors.parquet.reader import IParquetReader
 class ParquetFileStore(IParquetReader, FileStore[Any]):
     """Random access to a single Parquet file or manifest Parquet shard list."""
 
+    dataset_path: EPath
+
     def __init__(
         self,
         dataset_path: EPath | str,

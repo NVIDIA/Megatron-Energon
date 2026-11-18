@@ -15,6 +15,10 @@ T_sample = TypeVar("T_sample")
 class WatchdogDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
     """This dataset wraps another dataset and watches the time it takes to yield samples."""
 
+    fail_on_timeout: bool
+    initial_timeout_seconds: float | None
+    timeout_seconds: float | None
+
     def __init__(
         self,
         dataset: SavableDataset[T_sample],

@@ -20,7 +20,7 @@ from megatron.energon.epathlib import EPath, EPathMappedArray
 from megatron.energon.flavors.common.manifest.paths import MAIN_FOLDER_NAME
 from megatron.energon.flavors.common.manifest.types import ShardInfo
 from megatron.energon.flavors.common.reader import IndexedSampleReader, SequentialSampleReader
-from megatron.energon.flavors.common.sample_record import SampleRecord
+from megatron.energon.flavors.common.sample_record import IndexedRestoreKey, SampleRecord
 from megatron.energon.typed_converter import JsonParser
 from megatron.energon.worker_local import WorkerLocalFields
 
@@ -275,6 +275,7 @@ class TranslatedIndexReader(IndexedSampleReader[SampleRecord]):
     """Reader wrapper that applies a filter translation before delegation."""
 
     inner: IndexedSampleReader[SampleRecord]
+    _sequential_inner: SequentialSampleReader[SampleRecord] | None
     filter_view: FilterView
 
     def __init__(
@@ -292,9 +293,11 @@ class TranslatedIndexReader(IndexedSampleReader[SampleRecord]):
     @staticmethod
     def _translate(sample: SampleRecord | None, filtered_index: int) -> SampleRecord | None:
         if isinstance(sample, dict) and "__restore_key__" in sample:
-            sample = dict(sample)
+            sample = sample.copy()
             restore_key = sample["__restore_key__"]
-            sample["__restore_key__"] = (restore_key[0], filtered_index)
+            sample["__restore_key__"] = IndexedRestoreKey(
+                kind=restore_key.kind, index=filtered_index
+            )
         return sample
 
     def __getitem__(self, filtered_index: int) -> SampleRecord | None:
@@ -337,6 +340,8 @@ class FilterIndexWriter:
     filter_name: str
     shard_order: tuple[str, ...]
     original_shard_counts: dict[str, int]
+    #: Byte sizes recorded against the same source layout as the shard counts.
+    _source_byte_sizes: dict[str, int]
     _original_shard_offsets: dict[str, int]
     _shard_ends: list[int]
     _total_original: int

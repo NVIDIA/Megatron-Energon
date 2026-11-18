@@ -35,5 +35,4 @@ class ThreadDataLoaderWorker(
             try:
                 super()._worker_run(cmd_queue, result_queue)
             finally:
-                self.close_iterator()
-                self.dataset.close()
+                self.finish_worker(close_dataset=True)

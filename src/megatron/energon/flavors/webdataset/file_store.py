@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import sqlite3
-from typing import Optional
 
 from megatron.energon.cache.base import FileStore
 from megatron.energon.epathlib import EPath
@@ -13,13 +12,17 @@ from megatron.energon.media.metadata import MediaMetadataBase, deserialize_media
 class WebdatasetFileStore(SqliteITarEntryReader, FileStore[bytes]):
     """Random access to files inside a prepared WebDataset tar dataset."""
 
+    _media_metadata_available: bool | None
+
+    _worker_local_fields = ("_media_metadata_available",)
+
     def __init__(self, dataset_path: EPath):
         super().__init__(
             base_path=dataset_path,
             key_is_full_entryname=True,
             disable_cache=True,
         )
-        self._media_metadata_available: Optional[bool] = None
+        self._media_metadata_available = None
 
     def get_path(self) -> str:
         return str(self.base_path)

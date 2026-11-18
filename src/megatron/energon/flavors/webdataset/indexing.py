@@ -21,6 +21,8 @@ if TYPE_CHECKING:
 class DuplicateSampleKeyError(RuntimeError):
     """Raised when attempting to insert a duplicate sample key into the index."""
 
+    sample_key: str
+
     def __init__(self, sample_key: str) -> None:
         super().__init__(f"Duplicate sample key encountered while indexing: {sample_key!r}")
         self.sample_key = sample_key

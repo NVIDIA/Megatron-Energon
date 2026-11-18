@@ -249,6 +249,8 @@ def deprecated_dir(module_name: str, names: list[str]) -> list[str]:
 
 
 class _DeprecatedModuleLoader(importlib.abc.Loader):
+    module_name: str
+
     def __init__(self, module_name: str):
         self.module_name = module_name
 

@@ -136,6 +136,10 @@ class ParquetDatasetFactory(
     path: EPath
     training: bool
     worker_config: WorkerConfig
+    parquet_read_order: ParquetReadOrder
+    _reader_base_path: EPath
+    _layout: ParquetLayout
+    _read_columns: list[str]
 
     @classmethod
     def get_original_shards(cls, path: EPath) -> list[ShardInfo]:
@@ -241,6 +245,12 @@ class ParquetDatasetFactory(
 class ParquetShardListDatasetFactory(BaseManifestShardListDatasetFactory[CrudeSample]):
     """Crude dataset over a manifest-defined list of Parquet shards."""
 
+    _layout: ParquetLayout
+    _read_columns: list[str]
+    parquet_read_order: ParquetReadOrder
+    split_config: str | ManifestSplits
+    split_part: str
+
     __sample_type__ = CrudeSample
 
     def __init__(
@@ -265,7 +275,7 @@ class ParquetShardListDatasetFactory(BaseManifestShardListDatasetFactory[CrudeSa
         shuffle_over_epochs, parallel_shard_iters = _resolve_read_order(
             parquet_read_order, shuffle_over_epochs, parallel_shard_iters
         )
-        self._read_columns: list[str] = []
+        self._read_columns = []
         super().__init__(
             path,
             split_part=split_part,
@@ -346,6 +356,10 @@ class ParquetShardListDatasetFactory(BaseManifestShardListDatasetFactory[CrudeSa
 
 
 class _DefaultParquetMixin:
+    _decode_map: dict[str, str]
+    _decoder: SampleDecoder | None
+    tags: dict[str, Any]
+
     def _init_default_parquet(
         self,
         *,

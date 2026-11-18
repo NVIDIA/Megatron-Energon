@@ -225,7 +225,7 @@ class TestDataset(unittest.TestCase):
 
         sample = CaptioningSample(
             __key__="sample",
-            __restore_key__=(),
+            __restore_key__=None,
             __subflavors__=legacy_tags,
             image=torch.empty(0),
             caption="caption",
@@ -238,7 +238,7 @@ class TestDataset(unittest.TestCase):
 
         canonical_sample = CaptioningSample(
             __key__="sample",
-            __restore_key__=(),
+            __restore_key__=None,
             __tags__=legacy_tags,
             image=torch.empty(0),
             caption="caption",
@@ -248,7 +248,7 @@ class TestDataset(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Cannot set both"):
             CaptioningSample(
                 __key__="sample",
-                __restore_key__=(),
+                __restore_key__=None,
                 __tags__={},
                 __subflavors__={},
                 image=torch.empty(0),
@@ -1606,7 +1606,7 @@ class TestDataset(unittest.TestCase):
             ) -> EncodedCaptioningSample:
                 return EncodedCaptioningSample(
                     __key__=",".join([sample.__key__ for sample in samples]),
-                    __restore_key__=(),
+                    __restore_key__=None,
                     image=torch.stack([sample.image for sample in samples]),
                     caption=torch.cat([sample.caption for sample in samples]),
                 )
@@ -1745,7 +1745,7 @@ class TestDataset(unittest.TestCase):
             ) -> EncodedCaptioningSample:
                 return EncodedCaptioningSample(
                     __key__=",".join([sample.__key__ for sample in samples]),
-                    __restore_key__=(),
+                    __restore_key__=None,
                     image=torch.stack([sample.image for sample in samples]),
                     caption=torch.cat([sample.caption for sample in samples]),
                 )
@@ -1853,7 +1853,7 @@ class TestDataset(unittest.TestCase):
             ) -> EncodedCaptioningSample:
                 return EncodedCaptioningSample(
                     __key__=",".join(sample.__key__ for sample in samples),
-                    __restore_key__=(),
+                    __restore_key__=None,
                     image=torch.stack([sample.image for sample in samples]),
                     caption=torch.cat([sample.caption for sample in samples]),
                 )
@@ -1977,7 +1977,7 @@ class TestDataset(unittest.TestCase):
             ) -> EncodedCaptioningSample:
                 return EncodedCaptioningSample(
                     __key__="|".join(sample.__key__ for sample in samples),
-                    __restore_key__=(),
+                    __restore_key__=None,
                     image=torch.stack([sample.image for sample in samples]),
                     caption=torch.cat([sample.caption for sample in samples]),
                 )
@@ -2030,7 +2030,7 @@ class TestDataset(unittest.TestCase):
                     captions.append(base_sample.caption[token_start:token_stop])
                 return EncodedCaptioningSample(
                     __key__="|".join(parts),
-                    __restore_key__=(),
+                    __restore_key__=None,
                     image=torch.stack(images),
                     caption=torch.cat(captions),
                 )
@@ -2188,38 +2188,39 @@ class TestDataset(unittest.TestCase):
                         checkpoint_every_sec=0,
                     )
 
-                loader = build_loader()
-                outputs = []
-                states = []
-                for output in loader:
-                    outputs.append(output)
-                    states.append(loader.save_state_rank())
-                    if repeat and len(outputs) == 12:
-                        break
+                with build_loader() as loader:
+                    outputs = []
+                    states = []
+                    for output in loader:
+                        outputs.append(output)
+                        states.append(loader.save_state_rank())
+                        if repeat and len(outputs) == 12:
+                            break
 
-                keys = [output.__key__ for output in outputs]
-                assert len(set(keys)) == len(keys)
-                if not repeat:
-                    sample_keys = {
-                        key for output in keys for key in output.split("#")[0].split("|")
-                    }
-                    assert len(sample_keys) == DATASET_SIZE
-                    # Stopping right after the last output and iterating again starts a new pass.
-                    for _ in range(2):
-                        restarted = [output.__key__ for _, output in zip(keys, loader)]
-                        assert len(restarted) == len(keys)
-                        assert {
-                            key for output in restarted for key in output.split("#")[0].split("|")
-                        } == sample_keys
+                    keys = [output.__key__ for output in outputs]
+                    assert len(set(keys)) == len(keys)
+                    if not repeat:
+                        sample_keys = {
+                            key for output in keys for key in output.split("#")[0].split("|")
+                        }
+                        assert len(sample_keys) == DATASET_SIZE
+                        # Each pass must observe StopIteration before the loader starts a new epoch.
+                        for _ in range(2):
+                            restarted = [output.__key__ for output in loader]
+                            assert len(restarted) == len(keys)
+                            assert {
+                                key
+                                for output in restarted
+                                for key in output.split("#")[0].split("|")
+                            } == sample_keys
 
                 for step, state in enumerate(states):
                     expected = outputs[step + 1 :]
-                    restored_loader = build_loader()
-                    restored_loader.restore_state_rank(state)
-                    if repeat:
-                        restored = [output for _, output in zip(expected, restored_loader)]
-                    else:
-                        restored = list(restored_loader)
+                    with build_loader().with_restored_state_rank(state) as restored_loader:
+                        if repeat:
+                            restored = [output for _, output in zip(expected, restored_loader)]
+                        else:
+                            restored = list(restored_loader)
                     assert [output.__key__ for output in restored] == keys[step + 1 :], (
                         f"Restored after output {step}"
                     )
@@ -2327,7 +2328,7 @@ class TestDataset(unittest.TestCase):
             ) -> EncodedCaptioningSample:
                 return EncodedCaptioningSample(
                     __key__="|".join(sample.__key__ for sample in samples),
-                    __restore_key__=(),
+                    __restore_key__=None,
                     image=torch.stack([sample.image for sample in samples]),
                     caption=torch.cat([sample.caption for sample in samples]),
                 )
@@ -2437,7 +2438,7 @@ class TestDataset(unittest.TestCase):
             def pack_selected_samples(self, samples: list[CaptioningSample]) -> CaptioningSample:
                 return CaptioningSample(
                     __key__="|".join(sample.__key__ for sample in samples),
-                    __restore_key__=(),
+                    __restore_key__=None,
                     image=samples[0].image,
                     caption="|".join(sample.caption for sample in samples),
                 )
@@ -2656,38 +2657,39 @@ class TestDataset(unittest.TestCase):
                         checkpoint_every_sec=0,
                     )
 
-                loader = build_loader()
-                outputs = []
-                states = []
-                for output in loader:
-                    outputs.append(output)
-                    states.append(loader.save_state_rank())
-                    if repeat and len(outputs) == 12:
-                        break
+                with build_loader() as loader:
+                    outputs = []
+                    states = []
+                    for output in loader:
+                        outputs.append(output)
+                        states.append(loader.save_state_rank())
+                        if repeat and len(outputs) == 12:
+                            break
 
-                keys = [output.__key__ for output in outputs]
-                assert len(set(keys)) == len(keys)
-                if not repeat:
-                    sample_keys = {
-                        key for output in keys for key in output.split("#")[0].split("|")
-                    }
-                    assert len(sample_keys) == DATASET_SIZE
-                    # Stopping right after the last output and iterating again starts a new pass.
-                    for _ in range(2):
-                        restarted = [output.__key__ for _, output in zip(keys, loader)]
-                        assert len(restarted) == len(keys)
-                        assert {
-                            key for output in restarted for key in output.split("#")[0].split("|")
-                        } == sample_keys
+                    keys = [output.__key__ for output in outputs]
+                    assert len(set(keys)) == len(keys)
+                    if not repeat:
+                        sample_keys = {
+                            key for output in keys for key in output.split("#")[0].split("|")
+                        }
+                        assert len(sample_keys) == DATASET_SIZE
+                        # Each pass must observe StopIteration before the loader starts a new epoch.
+                        for _ in range(2):
+                            restarted = [output.__key__ for output in loader]
+                            assert len(restarted) == len(keys)
+                            assert {
+                                key
+                                for output in restarted
+                                for key in output.split("#")[0].split("|")
+                            } == sample_keys
 
                 for step, state in enumerate(states):
                     expected = outputs[step + 1 :]
-                    restored_loader = build_loader()
-                    restored_loader.restore_state_rank(state)
-                    if repeat:
-                        restored = [output for _, output in zip(expected, restored_loader)]
-                    else:
-                        restored = list(restored_loader)
+                    with build_loader().with_restored_state_rank(state) as restored_loader:
+                        if repeat:
+                            restored = [output for _, output in zip(expected, restored_loader)]
+                        else:
+                            restored = list(restored_loader)
                     assert [output.__key__ for output in restored] == keys[step + 1 :], (
                         f"Restored after output {step}"
                     )
@@ -2729,50 +2731,47 @@ class TestDataset(unittest.TestCase):
                         checkpoint_every_sec=0,
                     )
 
-                loader = build_loader()
-                keys = []
-                states = []
-                for batch in loader:
-                    keys.append(batch.__key__)
-                    states.append(loader.save_state_rank())
-                sample_keys = {key.split("#")[0] for batch_keys in keys for key in batch_keys}
-                assert len(sample_keys) == DATASET_SIZE
-                assert len(keys[-1]) == DATASET_SIZE % 4
-                # Stopping right after the last batch and iterating again starts a new pass.
-                for _ in range(2):
-                    restarted = [batch.__key__ for _, batch in zip(keys, loader)]
-                    assert len(restarted) == len(keys)
-                    assert {
-                        key.split("#")[0] for batch_keys in restarted for key in batch_keys
-                    } == sample_keys
+                with build_loader() as loader:
+                    keys = []
+                    states = []
+                    for batch in loader:
+                        keys.append(batch.__key__)
+                        states.append(loader.save_state_rank())
+                    sample_keys = {key.split("#")[0] for batch_keys in keys for key in batch_keys}
+                    assert len(sample_keys) == DATASET_SIZE
+                    assert len(keys[-1]) == DATASET_SIZE % 4
+                    # Each pass must observe StopIteration before the loader starts a new epoch.
+                    for _ in range(2):
+                        restarted = [batch.__key__ for batch in loader]
+                        assert len(restarted) == len(keys)
+                        assert {
+                            key.split("#")[0] for batch_keys in restarted for key in batch_keys
+                        } == sample_keys
 
                 for step, state in enumerate(states):
-                    restored_loader = build_loader()
-                    restored_loader.restore_state_rank(state)
-                    assert [batch.__key__ for batch in restored_loader] == keys[step + 1 :], (
-                        f"Restored after batch {step}"
-                    )
+                    with build_loader().with_restored_state_rank(state) as restored_loader:
+                        restored_keys = [batch.__key__ for batch in restored_loader]
+                    assert restored_keys == keys[step + 1 :], f"Restored after batch {step}"
 
     def _check_save_restore_every_step(self, build_loader) -> List[List[str]]:
         """Restores after every batch and compares with the uninterrupted loader.
 
-        Also checks that stopping right after the last batch and iterating again yields a full new
-        pass. Returns the batch keys of the uninterrupted loader.
+        Also checks that each fully consumed epoch is followed by a full new pass. Returns the
+        batch keys of the uninterrupted loader.
         """
-        loader = build_loader()
-        keys = []
-        states = []
-        for batch in loader:
-            keys.append(batch.__key__)
-            states.append(loader.save_state_rank())
-        sample_keys = sorted(key for batch_keys in keys for key in batch_keys)
-        for _ in range(2):
-            restarted = [batch.__key__ for _, batch in zip(keys, loader)]
-            assert sorted(key for batch_keys in restarted for key in batch_keys) == sample_keys
+        with build_loader() as loader:
+            keys = []
+            states = []
+            for batch in loader:
+                keys.append(batch.__key__)
+                states.append(loader.save_state_rank())
+            sample_keys = sorted(key for batch_keys in keys for key in batch_keys)
+            for _ in range(2):
+                restarted = [batch.__key__ for batch in loader]
+                assert sorted(key for batch_keys in restarted for key in batch_keys) == sample_keys
         for step, state in enumerate(states):
-            restored_loader = build_loader()
-            restored_loader.restore_state_rank(state)
-            restored_keys = [batch.__key__ for batch in restored_loader]
+            with build_loader().with_restored_state_rank(state) as restored_loader:
+                restored_keys = [batch.__key__ for batch in restored_loader]
             assert restored_keys == keys[step + 1 :], (
                 f"Restored after batch {step} of {len(keys)}: got {len(restored_keys)} batches, "
                 f"expected {len(keys) - step - 1}"
