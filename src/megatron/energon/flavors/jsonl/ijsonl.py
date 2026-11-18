@@ -6,6 +6,7 @@ from typing import BinaryIO, Dict, Generator, Optional, Tuple, Union
 
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
+from megatron.energon.epathlib.index_io import open_sized_index
 
 IJSONL_SUFFIX = ".jsonl.idx"
 
@@ -29,8 +30,7 @@ class IJsonlIndexReader:
     def __init__(self, jsonl_path: Union[EPath, str]):
         jsonl_path = EPath(jsonl_path)
         index_path = jsonl_path.with_suffix(IJSONL_SUFFIX)
-        self._length = index_path.size() // 8
-        self.ijsonl = index_path.open("rb")
+        self.ijsonl, self._length = open_sized_index(index_path)
 
     def __getitem__(self, index: int) -> int:
         if index >= self._length or index < 0:
