@@ -38,6 +38,11 @@ Avoid sparse, extremely wide slices on remote storage when a narrower access pat
 Mapped arrays and readers are context managers and must be closed when the owner is finished. Do not put an
 open file, stream, or memory map into dataset configuration or checkpoint state.
 
+TAR and JSONL offset indexes obtain their size from the already-open file descriptor when using a
+plain MSC POSIX stream without a metadata provider. This avoids a full path-metadata lookup without
+reading the index payload. Metadata providers and other stream types retain their path-based size
+lookup. This behavior is automatic and requires no configuration.
+
 ## Worker and cache ownership
 
 Open storage resources inside the worker that consumes them. Forked or spawned workers must not rely on a
