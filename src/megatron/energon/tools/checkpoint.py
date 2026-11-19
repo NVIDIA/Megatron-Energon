@@ -6,8 +6,8 @@ from typing import List, Optional
 import click
 import torch
 
-from megatron.energon.checkpoint import RankStateIterable, natural_sort_key
-from megatron.energon.dataloader.dataloader import RankState, _resize_rank_state
+from megatron.energon.checkpoint import RankStateIterable, natural_sort_key, resize_rank_state
+from megatron.energon.dataloader.dataloader import RankState
 from megatron.energon.epathlib import EPath
 from megatron.energon.savable_loader import SavableDataLoaderState
 
@@ -83,7 +83,7 @@ def command_redist(
     if isinstance(rsi.rank_states[0], RankState):
         try:
             new_states = [
-                _resize_rank_state(
+                resize_rank_state(
                     RankState(
                         worker_states=[worker for worker, _, _ in rank],
                         prefetched_restore_keys=[keys for _, keys, _ in rank],

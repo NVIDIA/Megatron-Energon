@@ -29,13 +29,21 @@ TSample = TypeVar("TSample", covariant=True)
 _thread_local_worker_info = threading.local()
 
 
-def torch_set_worker_info(id: int, num_workers: int, seed: int, dataset: SavableDataset):
-    _thread_local_worker_info._worker_info = torch.utils.data._utils.worker.WorkerInfo(
+def torch_set_worker_info(
+    id: int, num_workers: int, seed: int, dataset: SavableDataset, *, process_local: bool = False
+) -> None:
+    info = torch.utils.data._utils.worker.WorkerInfo(
         id=id,
         num_workers=num_workers,
         seed=seed,
         dataset=dataset,
     )
+    if process_local:
+        # Also serve PyTorch's original get_worker_info, including references
+        # imported before Energon. This is safe in a dedicated fork worker.
+        torch.utils.data._utils.worker._worker_info = info
+    else:
+        _thread_local_worker_info._worker_info = info
 
 
 _torch_get_worker_info = torch.utils.data.get_worker_info

@@ -98,6 +98,22 @@ class WorkerConfig:
     def _cache_pool(self) -> CachePool | None:
         return getattr(self._active, "cache_pool", None)
 
+    def __getstate__(self) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+        # Debug handles belong to an active thread, not to the configuration.
+        attrs, slots = object.__getstate__(self)
+        slots.pop("_worker_debug_state", None)
+        return attrs, slots
+
+    def __setstate__(self, state: tuple[dict[str, Any] | None, dict[str, Any]]) -> None:
+        # Accept the default slot pickle layout used before debug state was thread-local.
+        attrs, slots = state
+        if attrs:
+            self.__dict__.update(attrs)
+        for name, value in slots.items():
+            if name not in {"_worker_debug_file", "_worker_debug_file_worker_id"}:
+                setattr(self, name, value)
+        self._worker_debug_state = threading.local()
+
     def worker_activate(
         self,
         sample_index: int,

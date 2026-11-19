@@ -392,7 +392,7 @@ def migrate_dataloader_state(
             saved_state,
             worker_states=workers,
             exhausted_workers=[worker is not None and worker.exhausted for worker in workers],
-            micro_batch_size=dataloader._get_batch_size(),
+            micro_batch_size=dataloader.micro_batch_size,
         )
 
     migrated_worker_states: list[FlexState] = []

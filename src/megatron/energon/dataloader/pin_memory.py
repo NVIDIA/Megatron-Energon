@@ -93,6 +93,9 @@ class PinMemoryThread(PinMemory[TSample], ThreadAsynchronous, Generic[TSample]):
             print(f"[{self._name}] Got sample data\n", end="")
         return self._pin_memory(sample_data)
 
+    def shutdown(self, in_del: bool = False) -> None:
+        ThreadAsynchronous.shutdown(self, in_del=in_del)
+
     def __call__(self, sample: Future[TSample]) -> Future[TSample]:
         """
         Pin the memory of a sample.

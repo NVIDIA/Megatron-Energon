@@ -70,7 +70,10 @@ class WatchdogDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample])
                 callback=self._watchdog_trigger,
                 enabled=False,
             )
-            yield from watchdog.watch_iter(self.dataset)
+            try:
+                yield from watchdog.watch_iter(self.dataset)
+            finally:
+                watchdog.finish()
 
     def config(self) -> Dict[str, Any]:
         # Watchdog is transparent, it won't change the samples

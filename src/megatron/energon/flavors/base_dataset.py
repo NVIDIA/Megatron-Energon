@@ -5,8 +5,8 @@ import dataclasses
 import inspect
 import typing
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
-from copy import deepcopy
+from collections.abc import Mapping, MutableMapping
+from copy import copy, deepcopy
 from dataclasses import is_dataclass
 from typing import (
     Any,
@@ -102,8 +102,20 @@ class PinMemoryMixin:
             return batch.pin_memory(device)
         elif isinstance(batch, RestoreKey):
             return batch
-        elif isinstance(batch, dict):
-            return {key: self._pin_memory(value, device) for key, value in batch.items()}
+        elif getattr(type(batch), "pin_memory", None) is not PinMemoryMixin.pin_memory and callable(
+            custom_pin := getattr(batch, "pin_memory", None)
+        ):
+            return custom_pin()
+        elif isinstance(batch, Mapping):
+            values = {key: self._pin_memory(value, device) for key, value in batch.items()}
+            try:
+                if isinstance(batch, MutableMapping):
+                    result = copy(batch)
+                    result.update(values)
+                    return result
+                return type(batch)(values)
+            except TypeError:
+                return values
         elif dataclasses.is_dataclass(batch):
             return type(batch)(
                 **{

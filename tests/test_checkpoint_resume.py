@@ -417,7 +417,10 @@ class TestCheckpointResume(unittest.TestCase):
 
         assert _sampler_counts(migrated_root) == [20, 0]
         # The sample index of the loader continues, as it does with worker processes.
-        assert migrated_state.worker_states[0].sample_index == saved_state.worker_states[0].sample_index
+        assert (
+            migrated_state.worker_states[0].sample_index
+            == saved_state.worker_states[0].sample_index
+        )
 
         new_loader.restore_state_rank(migrated_state)
         new_iter = iter(new_loader)
@@ -609,7 +612,10 @@ class TestCheckpointResume(unittest.TestCase):
 
         # The recipe is unchanged, so the whole state is reused, not only the leaf progress.
         assert migrated_state.worker_states[0].dataset == saved_state.worker_states[0].dataset
-        assert migrated_state.worker_states[0].sample_index == saved_state.worker_states[0].sample_index
+        assert (
+            migrated_state.worker_states[0].sample_index
+            == saved_state.worker_states[0].sample_index
+        )
 
     def test_metadata_describes_datasets_with_split_part(self):
         self._write_recipe(self.recipe_path, [("a", 1.0), ("b", 1.0)])

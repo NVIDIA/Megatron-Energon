@@ -2,13 +2,90 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import re
+from dataclasses import replace
 from typing import Callable, List
 
 import torch
 
 from megatron.energon.dataloader.dataloader import RankState
 from megatron.energon.epathlib import EPath
+from megatron.energon.flavors.base_dataset import RestoreKey
 from megatron.energon.savable_loader import SavableDataLoaderState
+from megatron.energon.state import FlexState
+from megatron.energon.wrappers.base import WrappedRestoreKey
+from megatron.energon.wrappers.batch_dataset import BatchGenRestoreKey, BatchRestoreKey
+from megatron.energon.wrappers.iter_map_dataset import IterMapRestoreKey
+from megatron.energon.wrappers.map_dataset import MapGenRestoreKey
+
+
+def _split_batch_restore_key(
+    key: RestoreKey | None, batch_size: int, *, drop_last: bool = False
+) -> list[RestoreKey]:
+    if batch_size < 1:
+        raise ValueError("The target batch size must be positive")
+    if key is None:
+        raise ValueError("Cannot split a batch without a restore key")
+    if isinstance(key, (BatchGenRestoreKey, MapGenRestoreKey, IterMapRestoreKey)):
+        raise ValueError("Cannot resize a checkpoint with prefetched generator batches")
+    if isinstance(key, BatchRestoreKey):
+        samples = key.inner
+        if not samples:
+            raise ValueError("Cannot split an empty batch restore key")
+        stop = len(samples) - len(samples) % batch_size if drop_last else len(samples)
+        return [
+            replace(key, inner=samples[start : start + batch_size])
+            for start in range(0, stop, batch_size)
+        ]
+    if isinstance(key, WrappedRestoreKey):
+        return [
+            replace(key, inner=inner)
+            for inner in _split_batch_restore_key(key.inner, batch_size, drop_last=drop_last)
+        ]
+    raise ValueError(f"Unsupported restore key type for splitting batch: {type(key).__name__}")
+
+
+def _has_pending_generator_batch(state: FlexState) -> bool:
+    if state.get("__class__") == "BatchDataset" and state.get("_generator_sample_keys") is not None:
+        return True
+    key = state.get("_generator_sample_key")
+    while isinstance(key, WrappedRestoreKey):
+        key = key.inner
+    if isinstance(key, BatchRestoreKey):
+        return True
+    return any(_has_pending_generator_batch(child) for child in state.get("datasets", ()))
+
+
+def resize_rank_state(
+    state: RankState, batch_size: int | None, *, drop_last: bool = False
+) -> RankState:
+    """Resize pending batch keys while preserving the worker snapshots."""
+    old_size = state.micro_batch_size
+    if old_size == batch_size:
+        return state
+    if (
+        old_size is None
+        or batch_size is None
+        or not 0 < batch_size < old_size
+        or old_size % batch_size
+    ):
+        raise ValueError("The target micro-batch size must be a smaller divisor of the saved size")
+    if any(
+        worker is not None and _has_pending_generator_batch(worker.dataset)
+        for worker in state.worker_states
+    ):
+        raise ValueError("Cannot resize a checkpoint with an in-progress generator batch")
+    return replace(
+        state,
+        micro_batch_size=batch_size,
+        prefetched_restore_keys=[
+            [
+                piece
+                for key in worker_keys
+                for piece in _split_batch_restore_key(key, batch_size, drop_last=drop_last)
+            ]
+            for worker_keys in state.prefetched_restore_keys
+        ],
+    )
 
 
 def natural_sort_key(s):
