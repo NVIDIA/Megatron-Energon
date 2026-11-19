@@ -85,6 +85,7 @@ class BaseIndexedDatasetFactory(
     """Common runtime pipeline for indexed datasets over virtual shards."""
 
     path: EPath
+    name: str
     paths: list[EPath]
     shards: list[ShardInfo]
     training: bool
@@ -93,8 +94,12 @@ class BaseIndexedDatasetFactory(
     parallel_shard_iters: Optional[int]
     max_samples_per_sequence: Optional[int]
     subset: Optional[DatasetSubset]
+    filter_name: str | None
+    sample_excludes: set[str]
+    split_part_files: list[str]
     part_filter: Optional[Callable[[str], bool]]
     filter_view: FilterView | None
+    restore_key_kind: str
 
     def __init__(
         self,

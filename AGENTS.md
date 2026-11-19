@@ -52,6 +52,11 @@ User documentation lives in `docs/source` (Sphinx, MyST markdown).
 
 - Clean, maintainable, readable code is the bar. Follow the conventions of the surrounding
   module; match its naming, structure and comment density.
+- Declare instance fields with type annotations at class scope, including fields assigned
+  after `__init__`. Group them with related configuration, state, or resources. Keep
+  initialization at the point where the value is created.
+- Add a short field comment when the type doesn't explain ownership, lifetime, an invariant,
+  or whether state is worker-local or checkpointed.
 - Keep diffs minimal and on-topic: no drive-by refactors, reformatting or renames outside the
   task, no commented-out code.
 - Never copy code from other repositories, packages or websites, even if it is permissively

@@ -1,0 +1,45 @@
+# Copyright (c) 2025, NVIDIA CORPORATION.
+# SPDX-License-Identifier: BSD-3-Clause
+from typing import Generic, TypeVar
+
+from megatron.energon.dataloader.asynchronous import (
+    ForkAsynchronous,
+    QueueProtocol,
+    WorkerCommand,
+    WorkerResult,
+)
+from megatron.energon.dataloader.workers.async_worker import (
+    DataLoaderAsynchronousWorker,
+    torch_set_worker_info,
+)
+from megatron.energon.wrappers.gc_dataset import gc_init_worker
+
+TSample = TypeVar("TSample", covariant=True)
+
+
+class ForkDataLoaderWorker(
+    ForkAsynchronous, DataLoaderAsynchronousWorker[TSample], Generic[TSample]
+):
+    """
+    Implements the `DataLoaderWorker` interface using processes.
+    """
+
+    def _worker_run(
+        self,
+        cmd_queue: QueueProtocol[WorkerCommand],
+        result_queue: QueueProtocol[WorkerResult],
+    ) -> None:
+        gc_init_worker(self._rank_worker_id)
+
+        torch_set_worker_info(
+            id=self._rank_worker_id,
+            num_workers=self.worker_config.num_workers,
+            seed=self._seed,
+            dataset=self.dataset,
+            process_local=True,
+        )
+
+        try:
+            super()._worker_run(cmd_queue, result_queue)
+        finally:
+            self.finish_worker(close_dataset=True)

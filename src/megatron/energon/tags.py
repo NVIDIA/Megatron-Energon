@@ -130,6 +130,8 @@ class _TagAliasMeta(ABCMeta):
 class TagsAlias(metaclass=_TagAliasMeta):
     """Compatibility alias for objects exposing ``tags``."""
 
+    tags: dict[str, Any] | None
+
     __slots__ = ()
     __config_aliases__ = {"subflavors": "tags"}
 
@@ -147,6 +149,8 @@ class TagsAlias(metaclass=_TagAliasMeta):
 class SampleTagsAlias(metaclass=_TagAliasMeta):
     """Compatibility alias for samples and batches exposing ``__tags__``."""
 
+    __tags__: dict[str, Any] | None
+
     __slots__ = ()
     __config_aliases__ = {"__subflavors__": "__tags__"}
 
@@ -163,6 +167,8 @@ class SampleTagsAlias(metaclass=_TagAliasMeta):
 
 class HasTagsAlias(metaclass=_TagAliasMeta):
     """Compatibility alias for cooker tag selectors."""
+
+    has_tags: dict[str, Any] | None
 
     __slots__ = ()
     __config_aliases__ = {"has_subflavors": "has_tags"}

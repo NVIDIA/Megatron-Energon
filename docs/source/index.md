@@ -82,6 +82,7 @@ maxdepth: 2
 internals/code_structure
 internals/dataset_formats
 internals/savability
+internals/dataloader
 internals/recipe_checkpoint
 internals/packing_blending
 internals/epath_storage

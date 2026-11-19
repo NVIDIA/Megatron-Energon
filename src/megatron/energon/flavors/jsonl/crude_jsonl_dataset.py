@@ -128,6 +128,9 @@ class CrudeJsonlShardListDatasetFactory(
     path: EPath
     training: bool
     worker_config: WorkerConfig
+    split_part: str
+    split_config: str | ManifestSplits
+    reader_cache_size: int
 
     def __init__(
         self,

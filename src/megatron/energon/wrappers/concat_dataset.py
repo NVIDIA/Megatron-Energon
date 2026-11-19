@@ -1,17 +1,30 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+from dataclasses import dataclass
 from typing import Any, Dict, Generic, Iterator, TypeVar
 
 from megatron.energon.flavors.base_dataset import (
     FlexState,
+    RestoreKey,
     SavableDataset,
-    add_sample_restore_key,
+    set_sample_restore_key,
 )
 from megatron.energon.worker import WorkerConfig
-from megatron.energon.wrappers.base import BaseWrapperDataset
+from megatron.energon.wrappers.base import (
+    BaseWrapperDataset,
+    WrappedRestoreKey,
+    get_sample_restore_key,
+)
 
 T_sample = TypeVar("T_sample")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ConcatRestoreKey(WrappedRestoreKey):
+    """A sample selected from one child of ConcatDataset."""
+
+    dataset_idx: int
 
 
 class ConcatDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
@@ -20,6 +33,8 @@ class ConcatDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
     finite, otherwise not all datasets can be sampled. This is only useful for validation / test
     datasets.
     """
+
+    _worker_local_fields = {"_state_restored": bool}
 
     #: Index of the dataset currently iterated, so that a restored state continues there.
     _dataset_idx: int
@@ -60,13 +75,19 @@ class ConcatDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
         while self._dataset_idx < len(self.datasets):
             ds_idx = self._dataset_idx
             for sample in self.datasets[ds_idx]:
-                yield add_sample_restore_key(
+                inner = get_sample_restore_key(sample)
+                yield set_sample_restore_key(
                     sample,
-                    ds_idx,
-                    src=self,
+                    None if inner is None else ConcatRestoreKey(dataset_idx=ds_idx, inner=inner),
                 )
             self._dataset_idx += 1
         self._dataset_idx = 0
+
+    def restore_sample(self, restore_key: RestoreKey) -> T_sample:
+        assert isinstance(restore_key, ConcatRestoreKey)
+        key = restore_key
+        sample = self.datasets[key.dataset_idx].restore_sample(key.inner)
+        return set_sample_restore_key(sample, key)
 
     def config(self) -> Dict[str, Any]:
         return {

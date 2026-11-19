@@ -12,7 +12,7 @@ from typing import (
 
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.common.reader import SamplePartFileReader
-from megatron.energon.flavors.common.sample_record import FilteredSample
+from megatron.energon.flavors.common.sample_record import FilteredSample, IndexedRestoreKey
 from megatron.energon.flavors.jsonl.ijsonl import (
     CachedIJsonlOffsetReader,
     IJsonlFile,
@@ -20,11 +20,12 @@ from megatron.energon.flavors.jsonl.ijsonl import (
     IJsonlSamplePointer,
 )
 from megatron.energon.source_info import SourceInfo
+from megatron.energon.worker_local import WorkerLocalFields
 
 T_index = TypeVar("T_index", covariant=False)
 
 
-class IJsonlReader(ABC, SamplePartFileReader[FilteredSample]):
+class IJsonlReader(WorkerLocalFields, ABC, SamplePartFileReader[FilteredSample]):
     """
     Class for reading indexed jsonl files containing json samples.
 
@@ -38,6 +39,8 @@ class IJsonlReader(ABC, SamplePartFileReader[FilteredSample]):
         index_cache_size: The size of the index cache.
         part_filter: An optional filter function to select the json payload part.
     """
+
+    _worker_local_fields = {"ijsonl_file": lambda: None}
 
     jsonl_path: EPath
     sample_filter: Optional[Callable[[str], bool]]
@@ -88,7 +91,7 @@ class IJsonlReader(ABC, SamplePartFileReader[FilteredSample]):
         sample = FilteredSample(
             __key__=key,
             __shard__=self.jsonl_path.name,
-            __restore_key__=("Webdataset", sample_pointer.index),
+            __restore_key__=IndexedRestoreKey(kind="Webdataset", index=sample_pointer.index),
             __sources__=(
                 SourceInfo(
                     dataset_path=str(self.jsonl_path),

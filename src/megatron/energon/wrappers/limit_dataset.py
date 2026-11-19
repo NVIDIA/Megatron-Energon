@@ -14,6 +14,7 @@ class LimitDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
     """Limits the length of the dataset."""
 
     length: int
+    reset_after_epoch: bool
 
     current_offset: int
     _savable_fields = ("current_offset",)

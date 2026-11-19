@@ -1,16 +1,28 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterator, Sequence, Tuple, TypeVar
 
 import torch
 
-from megatron.energon.flavors.base_dataset import SavableDataset, add_sample_restore_key
+from megatron.energon.flavors.base_dataset import RestoreKey, SavableDataset, set_sample_restore_key
 from megatron.energon.rng import WorkerRng
 from megatron.energon.worker import WorkerConfig
-from megatron.energon.wrappers.base import BaseWrapperDataset
+from megatron.energon.wrappers.base import (
+    BaseWrapperDataset,
+    WrappedRestoreKey,
+    get_sample_restore_key,
+)
 
 T_sample = TypeVar("T_sample")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class BlendRestoreKey(WrappedRestoreKey):
+    """A sample selected from one child of BlendDataset."""
+
+    dataset_idx: int
 
 
 class BlendDataset(BaseWrapperDataset[T_sample, T_sample]):
@@ -149,9 +161,19 @@ class BlendDataset(BaseWrapperDataset[T_sample, T_sample]):
                     assert size >= 0, "sample_size_fn must return a non-negative value"
                     self._emitted_sizes[ds_idx] += size
                     emitted[ds_idx] += size
-                yield add_sample_restore_key(sample, ds_idx, src=self)
+                inner = get_sample_restore_key(sample)
+                yield set_sample_restore_key(
+                    sample,
+                    None if inner is None else BlendRestoreKey(dataset_idx=ds_idx, inner=inner),
+                )
 
         self.exhausted = [False] * len(self.dataset_weights)
+
+    def restore_sample(self, restore_key: RestoreKey) -> T_sample:
+        assert isinstance(restore_key, BlendRestoreKey)
+        key = restore_key
+        sample = self.datasets[key.dataset_idx].restore_sample(key.inner)
+        return set_sample_restore_key(sample, key)
 
     def config(self) -> Dict[str, Any]:
         cfg: Dict[str, Any] = {

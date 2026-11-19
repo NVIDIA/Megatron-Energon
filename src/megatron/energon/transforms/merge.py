@@ -15,6 +15,8 @@ from megatron.energon.transforms.mappers import TransformMapper
 
 class MergeTransform(torch.nn.Module):
     transforms: List[TransformMapper]
+    interpolation: InterpolationMode
+    fill_value: int | float | list[int | float] | tuple[int | float, ...] | None
 
     def __init__(self, transforms: List[torch.nn.Module]):
         super().__init__()

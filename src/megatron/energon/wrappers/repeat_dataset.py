@@ -15,6 +15,7 @@ class RepeatDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
     """This dataset repeats the inner dataset indefinitely or a specific number of repeats."""
 
     repeats: Optional[Union[int, float]]
+    restart: bool
     _repetition: int
     _index: int
 
