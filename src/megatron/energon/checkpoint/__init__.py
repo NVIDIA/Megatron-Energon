@@ -5,6 +5,7 @@ from megatron.energon.checkpoint.rank_state import (
     RankStateIterable,
     detect_and_replicate_pattern,
     natural_sort_key,
+    resize_rank_state,
 )
 from megatron.energon.checkpoint.resume import (
     ResumeDatasetMetadata,
@@ -28,5 +29,6 @@ __all__ = [
     "make_resume_identity",
     "migrate_dataloader_state",
     "natural_sort_key",
+    "resize_rank_state",
     "resume_children",
 ]

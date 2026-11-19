@@ -7,13 +7,16 @@ import gc
 import io
 import json
 import logging
+import pickle
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 import warnings
-from collections import Counter
+from collections import Counter, OrderedDict
 from contextlib import redirect_stdout
+from copy import copy
 from dataclasses import replace
 from pathlib import Path
 from textwrap import dedent
@@ -25,11 +28,15 @@ from click.testing import CliRunner
 
 from megatron.energon import (
     WorkerConfig,
+    get_savable_loader,
     get_train_dataset,
 )
+from megatron.energon.checkpoint.rank_state import _split_batch_restore_key
 from megatron.energon.dataloader import DataLoader, ForkDataLoaderWorker, ThreadDataLoaderWorker
-from megatron.energon.dataloader.dataloader import _split_batch_restore_key
+from megatron.energon.dataloader.future import DoneFuture
+from megatron.energon.dataloader.pin_memory import PinMemoryThread
 from megatron.energon.dataloader.workers.base_worker import WorkerSampleRestoreKey
+from megatron.energon.errors import FatalSampleError
 from megatron.energon.flavors.common.sample_record import IndexedRestoreKey
 from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
 from megatron.energon.task_encoder.base import DefaultTaskEncoder, stateless
@@ -105,10 +112,13 @@ def create_text_test_dataset(path: Path, txt_range: Iterable[int], key_range: It
 
 
 class GeneratorTaskEncoder(DefaultTaskEncoder):
-    @stateless
+    @stateless(restore_task_encoder_seeds=True)
     def encode_sample(self, sample):
         for output in range(3):
-            yield replace(sample, text=f"{sample.text}:{self.current_sample_index}:{output}")
+            yield replace(
+                sample,
+                text=f"{sample.text}:{self.current_sample_index}:{output}:{self.rng.random.random()}",
+            )
 
 
 class ThreadedEpochDataset(EpochizeDataset):
@@ -324,6 +334,174 @@ class TestDataLoader(unittest.TestCase):
                 [source_tail[i : i + 4] for i in range(0, len(source_tail), 4)],
             )
 
+    def test_resize_rejects_generator_after_batching_before_replay(self):
+        class Encoder(DefaultTaskEncoder):
+            @stateless
+            def encode_batch(self, batch):
+                yield copy(batch)
+                if len(batch.text) > 2:
+                    yield copy(batch)
+
+        def loader(size):
+            wc = WorkerConfig(rank=0, world_size=1, num_workers=1)
+            return DataLoader(
+                get_train_dataset(
+                    self.ds1_path,
+                    worker_config=wc,
+                    batch_size=size,
+                    shuffle_buffer_size=None,
+                    max_samples_per_sequence=None,
+                    repeat=False,
+                    task_encoder=Encoder(),
+                ),
+                prefetch_factor=3,
+                pin_memory=None,
+            )
+
+        with loader(4) as source:
+            it = iter(source)
+            next(it)
+            next(it)
+            state = source.save_state_rank()
+        target = loader(2)
+        with self.assertRaisesRegex(ValueError, "generator batch"):
+            target.restore_state_rank(state)
+        self.assertIsNone(target._workers)
+        self.assertIsNone(target._restore_state)
+
+        checkpoint = self.dataset_path / "generator.pt"
+        output = self.dataset_path / "out"
+        torch.save([state], checkpoint)
+        result = CliRunner().invoke(
+            command_redist,
+            [str(checkpoint), str(output), "--new-world-size", "1", "--new-micro-batch-size", "2"],
+            catch_exceptions=False,
+        )
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("generator batch", result.output)
+        self.assertFalse(output.exists())
+
+    def test_in_process_restore_leaves_checkpoint_reusable(self):
+        for workers in (0, 2):
+            with self.subTest(workers=workers):
+                wc = WorkerConfig(rank=0, world_size=1, num_workers=workers, seed_offset=7)
+
+                def loader():
+                    return get_savable_loader(
+                        get_train_dataset(
+                            self.ds1_path,
+                            worker_config=wc,
+                            batch_size=4,
+                            shuffle_buffer_size=5,
+                            max_samples_per_sequence=7,
+                            repeat=False,
+                        ),
+                        worker_type="thread" if workers else "main",
+                        pin_memory=False,
+                    )
+
+                with loader() as source:
+                    it = iter(source)
+                    next(it)
+                    next(it)
+                    state = source.save_state_rank()
+                    expected = [tuple(batch.text) for batch in it]
+                snapshot = pickle.dumps(state)
+                for _ in range(2):
+                    with loader().with_restored_state_rank(state) as restored:
+                        self.assertEqual([tuple(batch.text) for batch in restored], expected)
+                    self.assertEqual(pickle.dumps(state), snapshot)
+
+    def test_task_encoder_rng_rejects_unscoped_access(self):
+        class Encoder(DefaultTaskEncoder):
+            def encode_sample(self, sample):
+                return replace(sample, text=f"{sample.text}/{self.rng.random.random()}")
+
+        encoder = Encoder()
+        with self.assertRaisesRegex(FatalSampleError, "restore_task_encoder_seeds=True"):
+            _ = encoder.rng
+
+        wc = WorkerConfig(rank=0, world_size=1, num_workers=2)
+        dataset = get_train_dataset(
+            self.ds1_path,
+            worker_config=wc,
+            batch_size=4,
+            shuffle_buffer_size=None,
+            max_samples_per_sequence=None,
+            repeat=False,
+            task_encoder=encoder,
+        )
+        with get_savable_loader(dataset, worker_type="thread", pin_memory=False) as loader:
+            with self.assertRaisesRegex(FatalSampleError, "restore_task_encoder_seeds=True"):
+                next(iter(loader))
+
+    def test_collective_checkpoint_preflight_propagates_local_failures(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                dedent("""
+                    import datetime
+                    import multiprocessing
+                    import sys
+                    from pathlib import Path
+
+                    import torch.distributed as dist
+                    from megatron.energon import WorkerConfig
+                    from megatron.energon.dataloader import DataLoader
+
+                    def run(rank, path):
+                        dist.init_process_group(
+                            "gloo", init_method=path.as_uri(), rank=rank, world_size=2,
+                            timeout=datetime.timedelta(seconds=6),
+                        )
+                        try:
+                            class Dataset:
+                                worker_config = WorkerConfig(rank=rank, world_size=2, num_workers=0)
+
+                            loader = DataLoader(
+                                Dataset(), pin_memory=None, watchdog_timeout_seconds=None,
+                                gc_collect_every_n_steps=0,
+                            )
+                            if rank == 0:
+                                def fail_save():
+                                    raise ValueError("local save failed")
+                                loader.save_state_rank = fail_save
+                            for operation, expected in (
+                                (lambda: loader.save_state_global(0), "local save failed"),
+                                (lambda: loader.restore_state_global(
+                                    [] if rank == 0 else None, src_rank=0,
+                                ), "rank-ordered list"),
+                            ):
+                                try:
+                                    operation()
+                                except (RuntimeError, ValueError) as error:
+                                    assert expected in str(error), error
+                                else:
+                                    raise AssertionError("Expected preparation error on both ranks")
+                            dist.barrier()
+                        finally:
+                            dist.destroy_process_group()
+
+                    context = multiprocessing.get_context("fork")
+                    processes = [
+                        context.Process(target=run, args=(rank, Path(sys.argv[1])))
+                        for rank in range(2)
+                    ]
+                    for process in processes:
+                        process.start()
+                    for process in processes:
+                        process.join(10)
+                    assert [process.exitcode for process in processes] == [0, 0]
+                """),
+                str(self.dataset_path / "checkpoint-gloo"),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_fork_worker_exit_fails_iteration_and_all_pending_requests(self):
         # Bound the subprocess in case failure detection regresses into a blocking queue read.
         result = subprocess.run(
@@ -385,6 +563,220 @@ class TestDataLoader(unittest.TestCase):
             timeout=15,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_fork_transport_reports_serialization_failure_and_partial_reply(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                dedent("""
+                    from concurrent.futures import ThreadPoolExecutor
+                    from megatron.energon.dataloader.asynchronous.base import (
+                        WorkerExitedError, WorkerSerializationError,
+                    )
+                    from megatron.energon.dataloader.asynchronous.fork import ForkAsynchronous
+
+                    class Worker(ForkAsynchronous):
+                        def __init__(self):
+                            self._asynchronous_init("probe")
+
+                        def echo(self, value):
+                            return value
+
+                        def unpicklable_result(self):
+                            return lambda: None
+
+                        def unpicklable_exception(self):
+                            raise RuntimeError(lambda: None)
+
+                        def large_reply(self):
+                            return b"x" * (8 * 1024 * 1024)
+
+                    worker, sibling, partial = Worker(), Worker(), Worker()
+                    with ThreadPoolExecutor(3) as pool:
+                        list(pool.map(lambda current: current.start(), (worker, sibling, partial)))
+                    try:
+                        with_error = (
+                            lambda: worker._worker_call(worker.echo, lambda: None),
+                            lambda: worker._worker_call(worker.unpicklable_result).get(2),
+                            lambda: worker._worker_call(worker.unpicklable_exception).get(2),
+                        )
+                        for call in with_error:
+                            try:
+                                call()
+                            except WorkerSerializationError:
+                                pass
+                            else:
+                                raise AssertionError("Serialization failure should reach the caller")
+                        assert worker._worker_call(worker.echo, 7).get(2) == 7
+
+                        reply = partial._worker_call(partial.large_reply)
+                        assert partial._result_queue._connection.poll(3)
+                        partial._process.kill()
+                        partial._process.join(3)
+                        try:
+                            reply.get(2)
+                        except WorkerExitedError as error:
+                            assert "exited with code -9" in str(error), error
+                        else:
+                            raise AssertionError("Expected failure after a partial reply")
+                        assert sibling._worker_call(sibling.echo, 8).get(2) == 8
+                    finally:
+                        worker.shutdown()
+                        sibling.shutdown()
+                        partial.shutdown()
+                """),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_fork_shutdown_deadline_covers_parent_reply_decoding(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                dedent("""
+                    import threading
+                    from megatron.energon.dataloader.asynchronous.fork import ForkAsynchronous
+
+                    entered, release = threading.Event(), threading.Event()
+
+                    def decode():
+                        entered.set()
+                        release.wait()
+                        return 1
+
+                    class Reply:
+                        def __reduce__(self):
+                            return decode, ()
+
+                    class Worker(ForkAsynchronous):
+                        _shutdown_timeout = 0.5
+                        def __init__(self): self._asynchronous_init("decode-probe")
+                        def reply(self): return Reply()
+
+                    worker = Worker()
+                    worker.start()
+                    pending = worker._worker_call(worker.reply)
+                    try:
+                        try:
+                            worker.shutdown()
+                        except TimeoutError:
+                            assert entered.is_set()
+                            assert pending.done()
+                            assert worker._process is None
+                        else:
+                            raise AssertionError("Expected a deadline while decoding")
+                    finally:
+                        release.set()
+                        worker.shutdown()
+                    assert not worker.running()
+                """),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_fork_loader_rolls_back_startup_and_stops_blocked_worker(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                dedent("""
+                    import multiprocessing
+                    from torch.utils.data import get_worker_info
+                    from megatron.energon import WorkerConfig
+                    from megatron.energon.dataloader import DataLoader, ForkDataLoaderWorker
+
+                    context = multiprocessing.get_context("fork")
+                    blocked = context.Event()
+                    release = context.Event()
+
+                    class Worker(ForkDataLoaderWorker):
+                        _shutdown_timeout = 0.5
+
+                    class Dataset:
+                        worker_config = WorkerConfig(rank=0, world_size=1, num_workers=1)
+                        def worker_init(self): pass
+                        def worker_close(self): pass
+                        def reset_state_deep(self): pass
+                        def close(self): pass
+
+                        def __iter__(self):
+                            yield get_worker_info().id
+                            blocked.set()
+                            release.wait()
+
+                    class FailingDataset(Dataset):
+                        worker_config = WorkerConfig(rank=0, world_size=1, num_workers=2)
+
+                        def worker_init(self):
+                            if get_worker_info().id == 1:
+                                raise RuntimeError("initialization failed")
+
+                    def loader(dataset):
+                        return DataLoader(
+                            dataset, worker_type=Worker, prefetch_factor=1, pin_memory=None,
+                            watchdog_timeout_seconds=None, gc_collect_every_n_steps=0,
+                        )
+
+                    failed = loader(FailingDataset())
+                    try:
+                        next(iter(failed))
+                    except RuntimeError as error:
+                        assert str(error) == "initialization failed", error
+                    else:
+                        raise AssertionError("Expected worker initialization failure")
+                    assert failed._workers is None and not multiprocessing.active_children()
+
+                    running = loader(Dataset())
+                    assert next(iter(running)) == 0 and blocked.wait(3)
+                    try:
+                        running.close()
+                    except TimeoutError:
+                        pass
+                    else:
+                        raise AssertionError("Expected forced shutdown to report a timeout")
+                    assert running._workers is None and not multiprocessing.active_children()
+                """),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_loader_joins_pinning_and_watchdog_threads(self):
+        class CustomBatch:
+            def pin_memory(self):
+                return "pinned"
+
+        wc = WorkerConfig(rank=0, world_size=1, num_workers=2)
+        self.assertEqual(pickle.loads(pickle.dumps(wc)).config(), wc.config())
+        dataset = get_train_dataset(
+            self.ds1_path,
+            worker_config=wc,
+            batch_size=None,
+            shuffle_buffer_size=None,
+            max_samples_per_sequence=None,
+            repeat=False,
+        )
+        pinning = PinMemoryThread("cpu")
+        existing = set(threading.enumerate())
+        with DataLoader(dataset, worker_type=ThreadDataLoaderWorker, pin_memory=pinning) as loader:
+            self.assertEqual(pinning(DoneFuture(CustomBatch())).get(), "pinned")
+            pinned = pinning(DoneFuture(OrderedDict(item=CustomBatch()))).get()
+            self.assertIsInstance(pinned, OrderedDict)
+            self.assertEqual(pinned, {"item": "pinned"})
+            for _ in range(2):
+                self.assertEqual(sum(1 for _ in loader), 55)
+        self.assertFalse(pinning.running())
+        self.assertEqual(set(threading.enumerate()) - existing, set())
 
     def test_generator_keys_resume_and_restore_at_the_original_index(self):
         wc = WorkerConfig(rank=0, world_size=1, num_workers=0, worker_log_level=1)

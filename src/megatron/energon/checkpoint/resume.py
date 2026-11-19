@@ -492,7 +492,7 @@ def migrate_dataloader_state(
             for worker in saved_state.worker_states
         ],
         exhausted_workers=None,
-        micro_batch_size=dataloader._get_batch_size(),
+        micro_batch_size=dataloader.micro_batch_size,
     )
 
 

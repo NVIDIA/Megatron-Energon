@@ -1,6 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 from contextlib import ExitStack
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Generic, Iterator, TypeVar
 
@@ -191,7 +192,7 @@ class DataLoaderWorker(Generic[TSample]):
             self._sample_index = state.sample_index
             if state.rng is not None and self._uses_global_rng:
                 SystemRng.restore_state(state.rng)
-            self.dataset.restore_state(state.dataset)
+            self.dataset.restore_state(deepcopy(state.dataset))
             if not state.exhausted:
                 self.new_iter()
             assert self._exhausted == state.exhausted, "Exhausted state mismatch"

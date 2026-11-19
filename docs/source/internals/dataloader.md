@@ -57,6 +57,7 @@ Construction does not start workers. Workers start in either of two ways:
 
 `start()` creates `safe_num_workers` worker objects, starts their execution backend, and calls
 `dataset_init()` in each worker. A pending restore state is applied during this initialization.
+If startup fails, the loader rolls back the workers it already started.
 
 Use the loader as a context manager whenever possible:
 
@@ -78,10 +79,10 @@ with loader:
         train_step(batch)
 ```
 
-`shutdown()` stops every worker, closes process or thread queues, shuts down the pin-memory helper,
-and closes the owned dataset. It is idempotent for an already-stopped loader. `__del__()` is only an
-emergency fallback: it emits a warning and may have to terminate process workers instead of shutting
-them down cooperatively.
+`shutdown()` stops the workers before joining the pin-memory helper, which may be waiting on their
+replies. It then closes the owned dataset. A blocked fork worker is terminated after a shutdown
+deadline. A blocked thread worker reports a timeout and retains ownership until it exits, because
+Python cannot safely terminate a running thread. `__del__()` is an emergency fallback.
 
 ### Fork Lifecycle Call Flow
 
@@ -91,7 +92,7 @@ The editable source for the flow diagram is
 {download}`dataloader_fork_flow.drawio <../images/dataloader_fork_flow.drawio>`.
 
 The worker-process lifeline represents each rank-local fork worker; those processes execute in
-parallel with independent command and result queues. Solid teal messages are commands submitted by
+parallel with independent command queues and reply pipes. Solid teal messages are commands submitted by
 `_worker_call()`, while dashed teal messages are `WorkerResult` values matched to `FutureImpl`
 instances by `future_id`. The flow also highlights that checkpoint state is staged before workers
 start, then applied through RPC when `start()` initializes each worker and reconstructs saved
@@ -149,9 +150,16 @@ lazily on the first sample.
 a method name, arguments, and a `future_id`. The worker loop executes the method and returns either a
 result or an exception tagged with the same ID.
 
-The process backend uses `torch.multiprocessing.Queue`, installs worker signal handlers, limits Torch
-to one thread in each child, and monitors the parent process. The thread backend uses `queue.Queue`
-and thread-local Torch worker information. Both expose the same worker protocol to the coordinator.
+The process backend serializes commands before enqueueing them and sends replies synchronously over
+a pipe whose only writer is the child. Fork launches are serialized so another loader cannot inherit
+the reply writer. A receiver thread decodes fork replies and settles futures. Its decoding work is
+outside the caller's shutdown deadline. If decoding is stuck, shutdown cancels the futures, stops
+the child, and reports a timeout. The receiver can exit when the decoder returns.
+
+The process backend installs worker signal handlers, limits Torch to one thread in each child, and
+monitors the parent process. The thread backend uses `queue.Queue` and thread-local worker
+information. Call `torch.utils.data.get_worker_info()` through the module in thread workers.
+References imported before Energon use PyTorch's original process-local implementation.
 
 ## Checkpoint State
 
@@ -164,6 +172,8 @@ and thread-local Torch worker information. Both expose the same worker protocol 
 
 Each `WorkerState` contains the worker RNG state, recursive dataset state, exhaustion flag, and next
 sample index. Prefetched samples are represented by restore keys rather than serialized sample data.
+Access to `TaskEncoder.rng` requires a transform decorated with
+`@stateless(restore_task_encoder_seeds=True)`. The property raises outside that scope.
 
 `restore_state_rank()` only records the state. Actual restoration happens later in `start()`:
 

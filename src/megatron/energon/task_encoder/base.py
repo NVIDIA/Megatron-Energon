@@ -6,6 +6,8 @@ import functools
 import inspect
 import threading
 from abc import ABC
+from contextlib import contextmanager, nullcontext
+from contextvars import ContextVar
 from dataclasses import is_dataclass
 from types import MethodType
 from typing import (
@@ -33,6 +35,7 @@ from typing_extensions import ParamSpec
 from megatron.energon.cache import CachePool, DecodeFileStore, FileStore
 from megatron.energon.cache.base import PrimaryFileStore
 from megatron.energon.edataclass import edataclass
+from megatron.energon.errors import FatalSampleError
 from megatron.energon.flavors import (
     CrudeSample,
     CrudeWebdataset,
@@ -195,6 +198,19 @@ def get_sample_size_metric_stage(fn: Callable) -> SampleSizeMetricStage | None:
     return getattr(fn, "__sample_size_metric_stage__", None)
 
 
+# Note: The ContextVar is always local to the current stacktrace.
+_seeded_task_encoder: ContextVar[object | None] = ContextVar("seeded_task_encoder", default=None)
+
+
+@contextmanager
+def _task_encoder_seed_scope(encoder):
+    token = _seeded_task_encoder.set(encoder)
+    try:
+        yield
+    finally:
+        _seeded_task_encoder.reset(token)
+
+
 def stateless(
     fn: Optional[Callable[..., T]] = None,
     *,
@@ -225,49 +241,60 @@ def stateless(
                 raise ValueError("Thread workers require restore_task_encoder_seeds and self.rng")
             return SystemRng if restore_seeds else encoder.rng
 
+        def scope(encoder):
+            return (
+                _task_encoder_seed_scope(encoder) if restore_task_encoder_seeds else nullcontext()
+            )
+
         @functools.wraps(original)
         def wrap(encoder, *args, **kwargs):
-            rng = rng_for(encoder)
-            outer_state = rng.save_state()
-            try:
-                rng.seed_args(
-                    WorkerConfig.active_worker_config.worker_seed(), encoder.current_sample_index
-                )
-                return original(encoder, *args, **kwargs)
-            finally:
-                rng.restore_state(outer_state)
+            with scope(encoder):
+                rng = rng_for(encoder)
+                outer_state = rng.save_state()
+                try:
+                    rng.seed_args(
+                        WorkerConfig.active_worker_config.worker_seed(),
+                        encoder.current_sample_index,
+                    )
+                    return original(encoder, *args, **kwargs)
+                finally:
+                    rng.restore_state(outer_state)
 
         @functools.wraps(original)
         def wrap_generator(encoder, *args, **kwargs):
-            rng = rng_for(encoder)
-            outer_state = rng.save_state()
-            try:
-                rng.seed_args(
-                    WorkerConfig.active_worker_config.worker_seed(), encoder.current_sample_index
-                )
-                inner_state = rng.save_state()
-                iterator = iter(original(encoder, *args, **kwargs))
-            finally:
-                rng.restore_state(outer_state)
+            with scope(encoder):
+                rng = rng_for(encoder)
+                outer_state = rng.save_state()
+                try:
+                    rng.seed_args(
+                        WorkerConfig.active_worker_config.worker_seed(),
+                        encoder.current_sample_index,
+                    )
+                    inner_state = rng.save_state()
+                    iterator = iter(original(encoder, *args, **kwargs))
+                finally:
+                    rng.restore_state(outer_state)
             try:
                 while True:
+                    with scope(encoder):
+                        outer_state = rng.save_state()
+                        try:
+                            rng.restore_state(inner_state)
+                            sample = next(iterator)
+                            inner_state = rng.save_state()
+                        except StopIteration:
+                            return
+                        finally:
+                            rng.restore_state(outer_state)
+                    yield sample
+            finally:
+                with scope(encoder):
                     outer_state = rng.save_state()
                     try:
                         rng.restore_state(inner_state)
-                        sample = next(iterator)
-                        inner_state = rng.save_state()
-                    except StopIteration:
-                        return
+                        iterator.close()
                     finally:
                         rng.restore_state(outer_state)
-                    yield sample
-            finally:
-                outer_state = rng.save_state()
-                try:
-                    rng.restore_state(inner_state)
-                    iterator.close()
-                finally:
-                    rng.restore_state(outer_state)
 
         fn = wrap_generator if inspect.isgeneratorfunction(original) else wrap
     setattr(fn, "__stateless__", True)
@@ -1443,7 +1470,11 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
 
     @property
     def rng(self) -> UserRng:
-        """Independent RNGs for the active task encoder worker."""
+        """Independent RNGs scoped to a transform using ``restore_task_encoder_seeds=True``."""
+        if _seeded_task_encoder.get() is not self:
+            raise FatalSampleError(
+                "TaskEncoder.rng requires @stateless(restore_task_encoder_seeds=True)"
+            )
         config = WorkerConfig.active_worker_config
         if config is None:
             raise RuntimeError("Task encoder RNGs require an active dataloader worker")

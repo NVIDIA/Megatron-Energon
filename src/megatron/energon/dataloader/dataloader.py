@@ -2,9 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 import inspect
 import os
-import sys
-import warnings
-from dataclasses import replace
+import pickle
 from typing import (
     Any,
     ClassVar,
@@ -32,20 +30,13 @@ from megatron.energon.dataloader.workers.fork_worker import ForkDataLoaderWorker
 from megatron.energon.dataloader.workers.thread_worker import ThreadDataLoaderWorker
 from megatron.energon.edataclass import edataclass
 from megatron.energon.flavors.base_dataset import RestoreKey, SavableDataset
-from megatron.energon.state import FlexState
 from megatron.energon.worker import WorkerConfig
 from megatron.energon.wrappers.base import (
     BaseWrapperDataset,
-    WrappedRestoreKey,
     get_sample_restore_key,
 )
-from megatron.energon.wrappers.batch_dataset import (
-    BatchDataset,
-    BatchGenRestoreKey,
-    BatchRestoreKey,
-)
+from megatron.energon.wrappers.batch_dataset import BatchDataset
 from megatron.energon.wrappers.gc_dataset import GC_DEFAULT_EVERY_N_ITER, GcDataset
-from megatron.energon.wrappers.iter_map_dataset import IterMapRestoreKey
 from megatron.energon.wrappers.log_sample_dataset import default_get_batch_keys
 from megatron.energon.wrappers.watchdog_dataset import WatchdogDataset
 
@@ -70,75 +61,6 @@ class RankState:
     #: The micro batch size of the dataset, or `None` if not known. Needed for redistributing the state.
     micro_batch_size: int | None
     exhausted_workers: list[bool] | None = None
-
-
-def _split_batch_restore_key(
-    key: RestoreKey | None, batch_size: int, *, drop_last: bool = False
-) -> list[RestoreKey]:
-    if batch_size < 1:
-        raise ValueError("The target batch size must be positive")
-    if key is None:
-        raise ValueError("Cannot split a batch without a restore key")
-    if isinstance(key, BatchGenRestoreKey):
-        raise ValueError("Cannot resize a checkpoint with prefetched generator batches")
-    if isinstance(key, BatchRestoreKey):
-        samples = key.inner
-        if not samples:
-            raise ValueError("Cannot split an empty batch restore key")
-        stop = len(samples) - len(samples) % batch_size if drop_last else len(samples)
-        return [
-            replace(key, inner=samples[start : start + batch_size])
-            for start in range(0, stop, batch_size)
-        ]
-    if isinstance(key, WrappedRestoreKey):
-        return [
-            replace(key, inner=inner)
-            for inner in _split_batch_restore_key(key.inner, batch_size, drop_last=drop_last)
-        ]
-    if isinstance(key, IterMapRestoreKey) and len(key.inner) == 1:
-        return [
-            replace(key, inner=(inner,))
-            for inner in _split_batch_restore_key(key.inner[0], batch_size, drop_last=drop_last)
-        ]
-    raise ValueError(f"Unsupported restore key type for splitting batch: {type(key).__name__}")
-
-
-def _has_pending_generator_batch(state: FlexState) -> bool:
-    if state.get("__class__") == "BatchDataset" and state.get("_generator_sample_keys") is not None:
-        return True
-    return any(_has_pending_generator_batch(child) for child in state.get("datasets", ()))
-
-
-def _resize_rank_state(
-    state: RankState, batch_size: int | None, *, drop_last: bool = False
-) -> RankState:
-    old_size = state.micro_batch_size
-    if old_size == batch_size:
-        return state
-    if (
-        old_size is None
-        or batch_size is None
-        or not 0 < batch_size < old_size
-        or old_size % batch_size
-    ):
-        raise ValueError("The target micro-batch size must be a smaller divisor of the saved size")
-    if any(
-        worker is not None and _has_pending_generator_batch(worker.dataset)
-        for worker in state.worker_states
-    ):
-        raise ValueError("Cannot resize a checkpoint with an in-progress generator batch")
-    return replace(
-        state,
-        micro_batch_size=batch_size,
-        prefetched_restore_keys=[
-            [
-                piece
-                for key in worker_keys
-                for piece in _split_batch_restore_key(key, batch_size, drop_last=drop_last)
-            ]
-            for worker_keys in state.prefetched_restore_keys
-        ],
-    )
 
 
 class WorkerType(Protocol[TSample]):
@@ -291,21 +213,36 @@ class DataLoader(Generic[TSample]):
     def start(self) -> None:
         """Start the workers and restore the state if available."""
         assert self._workers is None, "DataLoader workers are already running"
-        self._workers = [
-            self._worker_type(self._dataset, self._worker_config, local_worker_id, self._cache_pool)
-            for local_worker_id in range(self._worker_config.safe_num_workers)
-        ]
-        for worker in self._workers:
-            worker.start()
-
-        if self._restore_state is None:
-            worker_states = [None] * self._worker_config.safe_num_workers
-        else:
-            worker_states = self._restore_state.worker_states
-
-        assert len(worker_states) == self._worker_config.safe_num_workers, (
-            "Number of initial states must match number of workers"
+        worker_count = self._worker_config.safe_num_workers
+        worker_states = (
+            [None] * worker_count
+            if self._restore_state is None
+            else self._restore_state.worker_states
         )
+        if len(worker_states) != worker_count:
+            raise ValueError("Number of initial states must match number of workers")
+
+        self._workers = []
+        try:
+            self._start_workers(worker_states)
+        except BaseException as error:
+            try:
+                self._stop_workers(in_del=False)
+            except Exception as cleanup_error:
+                error.add_note(f"Worker startup cleanup failed: {cleanup_error}")
+            finally:
+                self._prefetching_samples = [[] for _ in self._prefetching_samples]
+                self._next_epoch_id = 0
+            raise
+
+    def _start_workers(self, worker_states: Sequence[WorkerState | None]) -> None:
+        assert self._workers is not None
+        for worker_id in range(len(worker_states)):
+            worker = self._worker_type(
+                self._dataset, self._worker_config, worker_id, self._cache_pool
+            )
+            self._workers.append(worker)
+            worker.start()
 
         for worker, worker_state in zip(self._workers, worker_states):
             worker.dataset_init(worker_state)
@@ -335,26 +272,37 @@ class DataLoader(Generic[TSample]):
             in_del: Whether the shutdown is called from the garbage collector (in __del__).
                 Users should not need to set this.
         """
-        self._pin_memory.shutdown(in_del=in_del)
-        if self._workers is not None:
-            if in_del:
-                warnings.warn(
-                    "Explicitly call DataLoader.shutdown() to avoid leaking workers or run as context manager.",
-                    ResourceWarning,
-                )
-                print(
-                    "WARNING: Explicitly call DataLoader.shutdown() to avoid leaking workers or run as context manager.\n",
-                    end="",
-                    file=sys.stderr,
-                )
-            for worker in self._workers:
+        try:
+            self._stop_workers(in_del=in_del)
+        finally:
+            if self._current_epoch_iter is not None:
+                self._current_epoch_iter.close()
+                self._current_epoch_iter = None
+            self._prefetching_samples = [[] for _ in self._prefetching_samples]
+            if self._workers is None:
+                self._dataset.close()
+
+    def _stop_workers(self, in_del: bool) -> None:
+        errors = []
+        running = []
+        for worker in self._workers or ():
+            try:
                 worker.shutdown(in_del=in_del)
-            self._workers = None
-        if self._current_epoch_iter is not None:
-            self._current_epoch_iter.close()
-            self._current_epoch_iter = None
-        self._prefetching_samples = [[] for _ in self._prefetching_samples]
-        self._dataset.close()
+            except Exception as error:
+                errors.append(error)
+                if worker.running():
+                    running.append(worker)
+        self._workers = running or None
+
+        # The pinning thread can be waiting for a worker reply.
+        try:
+            self._pin_memory.shutdown(in_del=in_del)
+        except Exception as error:
+            errors.append(error)
+        if len(errors) == 1:
+            raise errors[0]
+        if errors:
+            raise ExceptionGroup("Errors while shutting down the dataloader", errors)
 
     def close(self) -> None:
         """Release the loader workers and dataset resources."""
@@ -369,16 +317,16 @@ class DataLoader(Generic[TSample]):
             self.shutdown(in_del=True)
 
     def __enter__(self) -> "DataLoader[TSample]":
-        assert self._workers is None, "DataLoader workers are already running"
-        try:
-            self.start()
-        except BaseException:
-            self.shutdown()
-            raise
+        self.start()
         return self
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:
-        self.shutdown()
+        try:
+            self.shutdown()
+        except Exception as error:
+            if exc_value is None:
+                raise
+            exc_value.add_note(f"Dataloader shutdown failed: {error}")
 
     def _epoch_iter(self) -> Generator[TSample, None, None]:
         """Iterate over the dataset for one epoch (i.e. all workers StopIteration).
@@ -533,8 +481,12 @@ class DataLoader(Generic[TSample]):
                 print("DL: Continuing epoch iterator")
         assert self._current_epoch_iter is not None
         # Important: Do not use yield from here, as it will delegate .close to the inner generator.
-        for sample in self._current_epoch_iter:
-            yield sample
+        try:
+            for sample in self._current_epoch_iter:
+                yield sample
+        except Exception:
+            self._current_epoch_iter = None
+            raise
         # Reset the epoch iterator, it was exhausted.
         if DEBUG_LEVEL >= 1:
             print("DL: Closing epoch iterator")
@@ -562,7 +514,8 @@ class DataLoader(Generic[TSample]):
             return result
         return None
 
-    def _get_batch_size(self) -> int | None:
+    @property
+    def micro_batch_size(self) -> int | None:
         """Try to infer micro-batch size from the dataset."""
         dataset = self._get_batch_dataset()
         return dataset.batch_size if dataset is not None else None
@@ -595,7 +548,7 @@ class DataLoader(Generic[TSample]):
             prefetched_restore_keys=prefetched_restore_keys,
             worker_states=worker_states,
             next_worker_id=self._next_worker_id,
-            micro_batch_size=self._get_batch_size(),
+            micro_batch_size=self.micro_batch_size,
             exhausted_workers=self._exhausted_workers.copy(),
         )
 
@@ -618,39 +571,46 @@ class DataLoader(Generic[TSample]):
         Returns:
             The state of the dataset (or `None`, if not on `dst_rank`).
         """
-        # Fetch current rank's worker's state
-        merged_state = self.save_state_rank()
+        if self._worker_config.world_size == 1:
+            return [self.save_state_rank()]
 
-        # Gather the merged states
-        if self._worker_config.world_size > 1:
-            output: Sequence[RankState | None] | None
-            if self._worker_config.global_rank() == global_dst_rank:
-                output = [None] * self._worker_config.world_size
-            else:
-                # Check if the global_dst_rank is in the same group at all
-                if self._worker_config.data_parallel_group is not None:
-                    try:
-                        _ = torch.distributed.get_group_rank(
-                            self._worker_config.data_parallel_group, global_dst_rank
-                        )
-                    except RuntimeError:
-                        raise ValueError(
-                            f"global_dst_rank {global_dst_rank} is not in the group of the current rank's worker config"
-                        )
+        payload = None
+        error = None
+        group = self._worker_config.data_parallel_group
+        is_destination = self._worker_config.global_rank() == global_dst_rank
+        try:
+            if group is not None:
+                torch.distributed.get_group_rank(group, global_dst_rank)
+            payload = pickle.dumps(self.save_state_rank())
+        except Exception as exc:
+            error = exc
+        self._check_checkpoint_collective("save", error)
 
-                output = None
+        output = [None] * self._worker_config.world_size if is_destination else None
+        torch.distributed.gather_object(payload, output, global_dst_rank, group=group)
 
-            torch.distributed.gather_object(
-                merged_state,
-                output,
-                global_dst_rank,
-                group=self._worker_config.data_parallel_group,
-            )
+        states = None
+        error = None
+        try:
+            if output is not None:
+                states = [pickle.loads(item) for item in output]
+        except Exception as exc:
+            error = exc
+        self._check_checkpoint_collective("decode saved state", error)
+        return states
 
-            return output
-        else:
-            # Not distributed -> return the merged state
-            return [merged_state]
+    def _check_checkpoint_collective(self, operation: str, error: Exception | None) -> None:
+        """Share local preparation failures before peers enter the next collective."""
+        errors = [None] * self._worker_config.world_size
+        message = None if error is None else f"{type(error).__name__}: {error}"
+        torch.distributed.all_gather_object(
+            errors, message, group=self._worker_config.data_parallel_group
+        )
+        if error is not None:
+            raise error
+        failures = [f"rank {rank}: {failure}" for rank, failure in enumerate(errors) if failure]
+        if failures:
+            raise RuntimeError(f"Cannot {operation} dataloader checkpoint: {', '.join(failures)}")
 
     def restore_state_rank(self, state: RankState | None) -> None:
         """
@@ -682,7 +642,9 @@ class DataLoader(Generic[TSample]):
             and inspect.isgeneratorfunction(batch_dataset.batcher)
         ):
             raise ValueError("Cannot resize a checkpoint for a generator batcher")
-        self._restore_state = _resize_rank_state(
+        from megatron.energon.checkpoint.rank_state import resize_rank_state
+
+        self._restore_state = resize_rank_state(
             state, batch_size, drop_last=batch_dataset is not None and batch_dataset.drop_last
         )
 
@@ -706,57 +668,47 @@ class DataLoader(Generic[TSample]):
             src_rank: The rank from which the state is broadcasted (within the data parallel group, if using DP groups).
         """
 
-        assert self._current_epoch_iter is None, "Cannot restore state during iteration"
-        assert self._restore_state is None, "Restore state already set"
-
-        # Only restore multi-rank if state is actually a list and we are in a distributed setup.
-        # Otherwise treat as single rank state.
         if src_rank is None or self._worker_config.world_size == 1:
-            assert isinstance(state, list), "State must be a list in distributed setup"
-            assert len(state) == self._worker_config.world_size, (
-                "State must be a list of size world_size"
+            if not isinstance(state, list) or len(state) != self._worker_config.world_size:
+                raise ValueError("State must be a rank-ordered list of size world_size")
+            self.restore_state_rank(state[self._worker_config.rank])
+            return
+
+        group = self._worker_config.data_parallel_group
+        inputs = None
+        error = None
+        try:
+            if not 0 <= src_rank < self._worker_config.world_size:
+                raise ValueError("Checkpoint source rank is outside the data parallel group")
+            global_src_rank = (
+                src_rank if group is None else torch.distributed.get_global_rank(group, src_rank)
             )
-
-            # All ranks have the state
-            # Select the state of the current rank
-            rank_state = state[self._worker_config.rank]
-        else:
-            if self._worker_config.data_parallel_group is not None:
-                # Only the src_rank has the state within this dp group
-                try:
-                    global_src_rank = torch.distributed.get_global_rank(
-                        self._worker_config.data_parallel_group, src_rank
-                    )
-                except RuntimeError:
-                    raise ValueError(
-                        f"src_rank {src_rank} is not in the group of the current rank's worker config"
-                    )
-            else:
-                # If no DP group is given, we assume the global rank is
-                # the same as the data parallel rank
-                global_src_rank = src_rank
-
-            if self._worker_config.rank != src_rank:
-                # Send the state to all other ranks
-                assert state is None
-                # Must still be a list of Nones
-                state = [None] * self._worker_config.world_size
-            else:
-                assert isinstance(state, list), "State must be a list in distributed setup"
-                assert len(state) == self._worker_config.world_size, (
-                    "State must be a list of size world_size"
+            if self._current_epoch_iter is not None or self._restore_state is not None:
+                raise ValueError(
+                    "Cannot restore while iterating or when restore state is already set"
                 )
+            if self._worker_config.rank == src_rank:
+                if not isinstance(state, list) or len(state) != self._worker_config.world_size:
+                    raise ValueError("State must be a rank-ordered list of size world_size")
+                inputs = [pickle.dumps(rank_state) for rank_state in state]
+            elif state is not None:
+                raise ValueError("Only the source rank may supply checkpoint state")
+        except Exception as exc:
+            error = exc
+        self._check_checkpoint_collective("prepare to restore", error)
 
-            local_object = [None]
-            torch.distributed.scatter_object_list(
-                local_object,
-                state,
-                src=global_src_rank,
-                group=self._worker_config.data_parallel_group,
-            )
-            rank_state = local_object[0]
-
-        self.restore_state_rank(rank_state)
+        output = [None]
+        torch.distributed.scatter_object_list(output, inputs, src=global_src_rank, group=group)
+        error = None
+        try:
+            self.restore_state_rank(pickle.loads(output[0]))
+        except Exception as exc:
+            error = exc
+        try:
+            self._check_checkpoint_collective("restore", error)
+        except Exception:
+            self._restore_state = None
+            raise
 
     def _restore_sample(self, restore_key: RestoreKey) -> Future[TSample]:
         """

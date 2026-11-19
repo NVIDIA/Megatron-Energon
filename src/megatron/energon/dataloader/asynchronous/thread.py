@@ -4,6 +4,7 @@ import queue
 import sys
 import threading
 import warnings
+from time import monotonic
 
 from megatron.energon.dataloader.asynchronous.base import (
     Asynchronous,
@@ -17,6 +18,7 @@ from megatron.energon.dataloader.asynchronous.base import (
 class ThreadAsynchronous(Asynchronous):
     """Mixin for asynchronous workers that use threads."""
 
+    _shutdown_timeout = 5.0
     _thread: threading.Thread | None = None
 
     def _queues(self) -> tuple[QueueProtocol[WorkerCommand], QueueProtocol[WorkerResult]]:
@@ -26,13 +28,18 @@ class ThreadAsynchronous(Asynchronous):
         return threading.current_thread() == self._thread
 
     def start(self) -> None:
+        self._cmd_queue, self._result_queue = self._queues()
         self._thread = threading.Thread(
             target=self._worker_run,
             args=(self._cmd_queue, self._result_queue),
             daemon=True,
             name=f"{self._name}",
         )
-        self._thread.start()
+        try:
+            self._thread.start()
+        except BaseException:
+            self._thread = None
+            raise
 
     def shutdown(self, in_del: bool = False) -> None:
         if self._thread is not None:
@@ -56,18 +63,22 @@ class ThreadAsynchronous(Asynchronous):
                 self._cancel_futures()
                 self._thread = None
             else:
+                deadline = monotonic() + self._shutdown_timeout
                 try:
-                    self._shutdown_worker()
+                    self._shutdown_worker(timeout=self._shutdown_timeout)
                 except WorkerExitedError:
                     pass
                 finally:
-                    self._thread.join()
-                    self._thread = None
+                    self._cancel_futures()
+                    self._thread.join(max(0, deadline - monotonic()))
+                    if not self._thread.is_alive():
+                        self._thread = None
+                if self._thread is not None:
+                    raise TimeoutError(f"Worker {self._name} thread did not shut down")
 
     def running(self) -> bool:
         return self._thread is not None
 
     def _assert_running(self) -> None:
-        assert self._thread is not None, "Thread must be started first"
-        if not self._thread.is_alive():
+        if self._thread is None or not self._thread.is_alive():
             raise WorkerExitedError(f"Worker {self._name} thread exited")

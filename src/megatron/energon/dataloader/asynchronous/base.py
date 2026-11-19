@@ -4,6 +4,7 @@ import threading
 import traceback
 from abc import abstractmethod
 from queue import Empty
+from time import monotonic
 from typing import Any, Callable, ParamSpec, Protocol, TypeVar
 
 from megatron.energon.dataloader.future import CancelledError, Future
@@ -24,8 +25,6 @@ class QueueProtocol(Protocol[T]):
 
     def put(self, item: T, /) -> None: ...
 
-    def qsize(self, /) -> int: ...
-
 
 @edataclass
 class WorkerCommand:
@@ -44,29 +43,36 @@ class WorkerResult:
     future_id: int
     result: Any = None
     exception: Exception | None = None
+    shutdown: bool = False
 
 
 class WorkerExitedError(RuntimeError):
     """A worker exited before completing its requests."""
 
 
-class FutureImpl(Future[Any]):
+class WorkerSerializationError(RuntimeError):
+    """A worker command or result could not be serialized."""
+
+
+class FutureImpl(Future[T]):
     """Class for returning a future result from the worker.."""
 
-    __slots__ = ("_worker", "_future_id", "_result", "_exception", "_cancelled")
+    __slots__ = ("_worker", "_future_id", "_result", "_exception", "_ready")
 
     _worker: "Asynchronous"
     _future_id: int
-    _result: Any
+    _result: T
     _exception: Exception
+    _ready: threading.Event
 
     def __init__(self, worker: "Asynchronous", future_id: int):
         self._worker = worker
         self._future_id = future_id
+        self._ready = threading.Event()
 
-    def get(self) -> Any:
-        if not hasattr(self, "_result") and not hasattr(self, "_exception"):
-            self._worker._wait_for_worker_result(self)
+    def get(self, timeout: float | None = None) -> T:
+        if not self.done():
+            self._worker._wait_for_worker_result(self, timeout)
         if hasattr(self, "_exception"):
             raise self._exception
         return self._result
@@ -82,13 +88,15 @@ class FutureImpl(Future[Any]):
         return self._worker._cancel_future(self._future_id)
 
     def done(self) -> bool:
-        return hasattr(self, "_result") or hasattr(self, "_exception")
+        return self._ready.is_set()
 
-    def _set_result(self, result: Any) -> None:
+    def _set_result(self, result: T) -> None:
         self._result = result
+        self._ready.set()
 
     def _set_exception(self, exception: Exception) -> None:
         self._exception = exception
+        self._ready.set()
 
     def __str__(self) -> str:
         return f"FutureImpl(worker={self._worker._name!r}, future_id={self._future_id!r}, done={self.done()!r}, exception={getattr(self, '_exception', '<no exception>')})"
@@ -100,67 +108,62 @@ class Asynchronous:
     _cmd_queue: QueueProtocol[WorkerCommand]
     _result_queue: QueueProtocol[WorkerResult]
     _next_future_id: int
-    _pending_futures: dict[int, FutureImpl]
+    _pending_futures: dict[int, FutureImpl[Any]]
     _name: str
     _result_lock: threading.Lock
     _pending_lock: threading.Lock
 
     def _asynchronous_init(self, name: str) -> None:
-        self._cmd_queue, self._result_queue = self._queues()
         self._next_future_id = 0
         self._pending_futures = {}
         self._name = name
         self._result_lock = threading.Lock()
         self._pending_lock = threading.Lock()
 
-    @abstractmethod
-    def _queues(self) -> tuple[QueueProtocol[WorkerCommand], QueueProtocol[WorkerResult]]: ...
-
-    def _wait_for_worker_result(self, future: FutureImpl) -> None:
-        """
-        Wait for the result of a future.
-        If another result comes first, update the corresponding future.
-
-        Args:
-            future: The future to wait for.
-        """
-        if DEBUG_LEVEL >= 1:
-            print(f"[{self._name}, fut={future._future_id}] waiting for result\n", end="")
-        with self._result_lock:
-            if future.done():
-                # If calling get() from multiple threads, the future may be done now, because
-                # the other thread already set the result.
-                return
-            if DEBUG_LEVEL >= 2:
-                print(f"[{self._name}, fut={future._future_id}] got future\n", end="")
+    def _wait_for_worker_result(self, future: FutureImpl[Any], timeout: float | None) -> None:
+        """Dispatch queued replies until this request completes or its deadline expires."""
+        deadline = None if timeout is None else monotonic() + timeout
+        if not self._result_lock.acquire(timeout=-1 if timeout is None else timeout):
+            raise TimeoutError(f"Timed out waiting for worker {self._name}")
+        try:
             while not future.done():
+                interval = 0.1
+                if deadline is not None:
+                    remaining = deadline - monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError(f"Timed out waiting for worker {self._name}")
+                    interval = min(interval, remaining)
                 try:
-                    res = self._result_queue.get(timeout=0.1)
+                    reply = self._result_queue.get(timeout=interval)
                 except Empty:
-                    if not future.done():
-                        try:
-                            self._assert_running()
-                        except WorkerExitedError as error:
-                            self._fail_pending_futures(error)
+                    try:
+                        self._assert_running()
+                    except WorkerExitedError as error:
+                        self._fail_pending_futures(error)
                     continue
-                except (EOFError, OSError, ValueError):
-                    if not future.done():
-                        self._fail_pending_futures(
-                            WorkerExitedError(f"Result queue for worker {self._name} closed")
-                        )
+                except (EOFError, OSError, ValueError, WorkerSerializationError):
+                    self._fail_pending_futures(self._result_queue_error())
                     continue
-                with self._pending_lock:
-                    pending = self._pending_futures.pop(res.future_id, None)
-                    if pending is not None:
-                        if res.exception is not None:
-                            pending._set_exception(res.exception)
-                        else:
-                            pending._set_result(res.result)
+                self._dispatch_reply(reply)
+        finally:
+            self._result_lock.release()
 
-    def _fail_pending_futures(self, error: WorkerExitedError) -> None:
+    def _dispatch_reply(self, reply: WorkerResult) -> None:
+        with self._pending_lock:
+            pending = self._pending_futures.pop(reply.future_id, None)
+            if pending is not None:
+                if reply.exception is not None:
+                    pending._set_exception(reply.exception)
+                else:
+                    pending._set_result(reply.result)
+
+    def _result_queue_error(self) -> WorkerExitedError:
+        return WorkerExitedError(f"Result transport for worker {self._name} failed")
+
+    def _fail_pending_futures(self, error: WorkerExitedError | WorkerSerializationError) -> None:
         with self._pending_lock:
             for future in self._pending_futures.values():
-                future._set_exception(WorkerExitedError(*error.args))
+                future._set_exception(type(error)(*error.args))
             self._pending_futures.clear()
 
     def _cancel_future(self, future_id: int) -> bool:
@@ -178,7 +181,7 @@ class Asynchronous:
                 future._set_exception(CancelledError.with_current_traceback())
             self._pending_futures.clear()
 
-    def _worker_call(self, fn: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> Future[R]:
+    def _worker_call(self, fn: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> FutureImpl[R]:
         """
         Call a function in the worker and return a future for getting the result.
         The function must be an instance method of `self`. Uses the name to identify the function in the worker
@@ -195,8 +198,9 @@ class Asynchronous:
                 self._assert_running()
                 future_id = self._next_future_id
                 self._next_future_id += 1
-                self._pending_futures[future_id] = future = FutureImpl(self, future_id)
-        except WorkerExitedError as error:
+                future: FutureImpl[R] = FutureImpl(self, future_id)
+                self._pending_futures[future_id] = future
+        except (WorkerExitedError, WorkerSerializationError) as error:
             self._fail_pending_futures(error)
             raise
         if DEBUG_LEVEL >= 2:
@@ -204,11 +208,13 @@ class Asynchronous:
                 f"[{self._name}] worker_call {fn.__name__=} {future_id=}\n",
                 end="",
             )
-        self._cmd_queue.put(
-            WorkerCommand(cmd=fn.__name__, args=args, kwargs=kwargs, future_id=future_id)
-        )
-        if DEBUG_LEVEL >= 2:
-            print(f"[{self._name}] cmd_queue: {self._cmd_queue.qsize()=}\n", end="")
+        try:
+            self._cmd_queue.put(
+                WorkerCommand(cmd=fn.__name__, args=args, kwargs=kwargs, future_id=future_id)
+            )
+        except Exception:
+            self._cancel_future(future_id)
+            raise
         return future
 
     def _worker_run(
@@ -239,24 +245,25 @@ class Asynchronous:
                         f"[{self._name}, fut={cmd.future_id}] got command {cmd.cmd=}\n",
                         end="",
                     )
+                shutting_down = cmd.cmd == self._wrk_shutdown_worker.__name__
                 try:
                     fn = getattr(self, cmd.cmd)
                     result = fn(*cmd.args, **cmd.kwargs)
                 except Exception as e:
                     if DEBUG_LEVEL >= 2:
                         print(f"[{self._name}, fut={cmd.future_id}] send exception {e!r}\n", end="")
-                    result_queue.put(WorkerResult(future_id=cmd.future_id, exception=e))
-                    if DEBUG_LEVEL >= 2:
-                        print(f"[{self._name}] result_queue: {result_queue.qsize()=}\n", end="")
+                    result_queue.put(
+                        WorkerResult(future_id=cmd.future_id, exception=e, shutdown=shutting_down)
+                    )
                 else:
                     if DEBUG_LEVEL >= 2:
                         print(f"[{self._name}, fut={cmd.future_id}] send result\n", end="")
-                    result_queue.put(WorkerResult(future_id=cmd.future_id, result=result))
-                    if DEBUG_LEVEL >= 2:
-                        print(f"[{self._name}] result_queue: {result_queue.qsize()=}\n", end="")
+                    result_queue.put(
+                        WorkerResult(future_id=cmd.future_id, result=result, shutdown=shutting_down)
+                    )
                     del result
                 # cmd_queue.task_done()
-                if cmd.cmd == self._wrk_shutdown_worker.__name__:
+                if shutting_down:
                     if DEBUG_LEVEL >= 1:
                         print(
                             f"[{self._name}, fut={cmd.future_id}] got shutdown command, exit\n",
@@ -286,11 +293,11 @@ class Asynchronous:
         """Does nothing. The actual shutdown is handled in the _worker_run method."""
         assert self._in_worker(), "_wrk_shutdown_worker must be called in the worker"
 
-    def _shutdown_worker(self) -> None:
+    def _shutdown_worker(self, timeout: float | None = None) -> None:
         """Shutdown the worker. The actual shutdown is handled in the _worker_run method."""
         assert not self._in_worker(), "shutdown_worker must not be called in the worker"
         # This is not actually a recursive call, because the worker loop will exit before calling this method.
-        self._worker_call(self._wrk_shutdown_worker).get()
+        self._worker_call(self._wrk_shutdown_worker).get(timeout)
         self._cancel_futures()
         if DEBUG_LEVEL >= 1:
             print(f"[{self._name}] shutdown\n", end="")
