@@ -28,7 +28,7 @@ from megatron.energon.wrappers.group_batch_dataset import GroupBatchDataset
 
 RESUME_METADATA_VERSION = 1
 
-#: The saved states by config hash, each with its exhausted flag in the saved blend.
+#: Saved states by config hash, paired with whether the output finished this pass.
 _SavedNodes = dict[str, list[tuple[FlexState, bool]]]
 
 
@@ -214,6 +214,38 @@ def _matchable_hashes(meta: ResumeDatasetMetadata) -> Iterator[str]:
             yield from _matchable_hashes(child)
 
 
+def _saved_children_exhausted(
+    meta: ResumeDatasetMetadata, state: FlexState, output_exhausted: bool
+) -> list[bool]:
+    """Return which inputs are known to have finished the saved pass."""
+    if meta.type == "BlendDataset":
+        # A finished blend has already cleared its flags for the next pass.
+        return [output_exhausted or done for done in state["exhausted"]]
+
+    if meta.type in (
+        "BatchDataset",
+        "PackingDataset",
+        "StreamingPackingDataset",
+        "ShuffleBufferDataset",
+    ):
+        # A final batch or buffered output can still be pending after the source finished.
+        return [output_exhausted or state["_source_exhausted"]]
+    if meta.type == "GroupBatchDataset":
+        return [output_exhausted or state["source_exhausted"]]
+    if meta.type in (
+        "MapDataset",
+        "FilterDataset",
+        "LogSampleDataset",
+        "GcDataset",
+        "WatchdogDataset",
+        "MixBatchDataset",
+    ):
+        return [output_exhausted]
+
+    # Wrappers such as LimitDataset may finish before consuming all their input.
+    return [False] * len(meta.children)
+
+
 def _index_saved_nodes(
     saved_state: FlexState,
     saved_meta: ResumeDatasetMetadata,
@@ -225,10 +257,7 @@ def _index_saved_nodes(
         return
     saved_nodes.setdefault(saved_meta.config_hash, []).append((saved_state, exhausted))
     child_states = saved_state.get("datasets", ())
-    if saved_meta.type == BlendDataset.__name__:
-        children_exhausted = saved_state["exhausted"]
-    else:
-        children_exhausted = [False] * len(child_states)
+    children_exhausted = _saved_children_exhausted(saved_meta, saved_state, exhausted)
     for child_state, child_meta, child_exhausted in zip(
         child_states, saved_meta.children, children_exhausted
     ):
