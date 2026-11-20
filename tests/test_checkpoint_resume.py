@@ -464,6 +464,44 @@ class TestCheckpointResume(unittest.TestCase):
             *range(300, 305),
         ]
 
+    def test_append_after_final_short_batch(self):
+        _create_text_dataset(self.dataset_path / "short_a", range(5))
+        _create_text_dataset(self.dataset_path / "short_b", range(100, 105))
+        epochized = dict(blend="blend_epochized", weight_key="repetitions")
+        self._write_recipe(self.recipe_path, [("short_a", 1)], **epochized)
+        with self._loader(self.recipe_path, batch_size=2, repeat=False) as loader:
+            batches = iter(loader)
+            for expected in ([0, 1], [2, 3], [4]):
+                self.assertEqual([int(value) for value in next(batches).text], expected)
+            # Save while the batcher is suspended at its final yield.
+            state = loader.save_state_rank()
+            metadata = collect_resume_metadata(loader)
+
+        with self._loader(self.recipe_path, batch_size=2, repeat=False) as loader:
+            loader.restore_state_rank(state)
+            self.assertEqual(list(loader), [])
+
+        self._write_recipe(self.recipe_path, [("short_a", 1), ("short_b", 1)], **epochized)
+        with self._loader(self.recipe_path, batch_size=2, repeat=False) as loader:
+            loader.restore_state_rank(migrate_dataloader_state(loader, state, metadata))
+            self.assertCountEqual(
+                [int(value) for batch in loader for value in batch.text], range(100, 105)
+            )
+
+    def test_append_after_final_batch_with_no_new_samples_on_rank(self):
+        _create_text_dataset(self.dataset_path / "short_a", range(5))
+        _create_text_dataset(self.dataset_path / "short_b", [100])
+        epochized = dict(blend="blend_epochized", weight_key="repetitions")
+        self._write_recipe(self.recipe_path, [("short_a", 1)], **epochized)
+        # Rank 0 gets three samples from A. The sole sample from B goes to rank 1.
+        state, metadata, seen = self._checkpoint(2, batch_size=2, repeat=False, world_size=2)
+        self.assertEqual(seen, {0, 1, 2})
+
+        self._write_recipe(self.recipe_path, [("short_a", 1), ("short_b", 1)], **epochized)
+        with self._loader(self.recipe_path, batch_size=2, repeat=False, world_size=2) as loader:
+            loader.restore_state_rank(migrate_dataloader_state(loader, state, metadata))
+            self.assertEqual(list(loader), [])
+
     def test_zero_weight_keeps_worker_assignment_unlike_deleting(self):
         # With two ranks, the samples of these datasets are not split evenly, so the assignment of
         # their samples to workers depends on the datasets in front of them.

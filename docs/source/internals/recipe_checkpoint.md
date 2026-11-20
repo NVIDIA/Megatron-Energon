@@ -78,9 +78,10 @@ progress:
 An equal digest means that the whole subtree is configured identically. If nothing changed, this holds for
 the root, and the migrated state equals the saved state.
 
-A blend child continuing from a child of a saved blend keeps its exhausted flag, so that a child which
-already finished the current pass is not iterated again in it. The blend's random state and size
-accounting start fresh.
+A rebuilt blend skips children known to have finished the saved pass. A saved blend can record this
+per child, or a wrapper can record it for its source while yielding buffered samples. For example,
+appending a dataset after the final short batch of a finite pass leaves only the new dataset to read.
+The blend's random state and size accounting start fresh.
 
 Migration preserves loader-level worker state that is independent of the changed dataset tree, including
 worker random state, sample-index scopes, offsets, worker scheduling, and the current micro-batch. The
