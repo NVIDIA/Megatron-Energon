@@ -72,7 +72,7 @@ def _sampler_counts(state: FlexState) -> list[int]:
 def _blend_exhausted(state: FlexState) -> list[bool]:
     """Returns the exhausted flags of the outermost blend in the state."""
     if state.get("__class__") == "BlendDataset":
-        return state["exhausted"]
+        return state["_source_exhausted"]
     for child in state.get("datasets", []):
         exhausted = _blend_exhausted(child)
         if exhausted:

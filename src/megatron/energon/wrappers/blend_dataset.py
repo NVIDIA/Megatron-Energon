@@ -22,14 +22,14 @@ class BlendDataset(BaseWrapperDataset[T_sample, T_sample]):
     datasets: tuple[SavableDataset[T_sample], ...]
     weights: tuple[float, ...]
     dataset_weights: Sequence[tuple[SavableDataset[T_sample], float]]
-    exhausted: list[bool]
+    _source_exhausted: list[bool]
     _worker_rng: WorkerRng
     sample_size_fn: Callable[[T_sample], int | float] | None
     sample_size_alpha: float
     sample_size_epsilon: float
     _emitted_sizes: list[float]
 
-    _savable_fields = ("exhausted", "_worker_rng", "_emitted_sizes")
+    _savable_fields = ("_source_exhausted", "_worker_rng", "_emitted_sizes")
 
     def __init__(
         self,
@@ -66,7 +66,7 @@ class BlendDataset(BaseWrapperDataset[T_sample, T_sample]):
     def reset_state_own(self) -> None:
         self._worker_rng = WorkerRng(self.worker_config)
         n = len(self.weights)
-        self.exhausted = [False] * n
+        self._source_exhausted = [False] * n
         self._emitted_sizes = [0.0] * n
 
     def len_worker(self, worker_idx: int | None = None) -> int:
@@ -103,7 +103,7 @@ class BlendDataset(BaseWrapperDataset[T_sample, T_sample]):
             else:
                 dataset_iters.append(None)
                 weights_list.append(0)
-                self.exhausted[idx] = True
+                self._source_exhausted[idx] = True
 
         weights = torch.tensor(weights_list, dtype=torch.float32)
         if weights.sum() == 0:
@@ -114,7 +114,7 @@ class BlendDataset(BaseWrapperDataset[T_sample, T_sample]):
             )
 
         # Some may already be exhausted on this worker when restoring a state.
-        for idx, exhausted in enumerate(self.exhausted):
+        for idx, exhausted in enumerate(self._source_exhausted):
             if exhausted:
                 weights[idx] = 0
                 dataset_iters[idx] = None
@@ -140,7 +140,7 @@ class BlendDataset(BaseWrapperDataset[T_sample, T_sample]):
             except StopIteration:
                 dataset_iters[ds_idx] = None
                 weights[ds_idx] = 0
-                self.exhausted[ds_idx] = True
+                self._source_exhausted[ds_idx] = True
                 active_count -= 1
             else:
                 if self.sample_size_fn is not None:
@@ -150,7 +150,7 @@ class BlendDataset(BaseWrapperDataset[T_sample, T_sample]):
                     emitted[ds_idx] += size
                 yield add_sample_restore_key(sample, ds_idx, src=self)
 
-        self.exhausted = [False] * len(self.dataset_weights)
+        self._source_exhausted = [False] * len(self.dataset_weights)
 
     def config(self) -> Dict[str, Any]:
         cfg: Dict[str, Any] = {

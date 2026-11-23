@@ -198,7 +198,6 @@ def _fresh_dataset_state(dataset: SavableDataset[Any]) -> FlexState:
         state["bucket_sample_index"] = dataset._group_key_sample_index.save_state()
         state["batch_sample_index"] = dataset._batch_sample_index.save_state()
         state["buckets"] = {}
-        state["source_exhausted"] = False
     return state
 
 
@@ -220,18 +219,17 @@ def _saved_children_exhausted(
     """Return which inputs are known to have finished the saved pass."""
     if meta.type == "BlendDataset":
         # A finished blend has already cleared its flags for the next pass.
-        return [output_exhausted or done for done in state["exhausted"]]
+        return [output_exhausted or done for done in state["_source_exhausted"]]
 
     if meta.type in (
         "BatchDataset",
+        "GroupBatchDataset",
         "PackingDataset",
         "StreamingPackingDataset",
         "ShuffleBufferDataset",
     ):
         # A final batch or buffered output can still be pending after the source finished.
         return [output_exhausted or state["_source_exhausted"]]
-    if meta.type == "GroupBatchDataset":
-        return [output_exhausted or state["source_exhausted"]]
     if meta.type in (
         "MapDataset",
         "FilterDataset",
@@ -303,7 +301,7 @@ def _migrate_dataset_state(
         state["datasets"] = [child_state for child_state, _ in children]
         if isinstance(current_dataset, BlendDataset):
             # A child which already finished the current pass must not be iterated again in it.
-            state["exhausted"] = [child_exhausted for _, child_exhausted in children]
+            state["_source_exhausted"] = [child_exhausted for _, child_exhausted in children]
     return state, False
 
 
