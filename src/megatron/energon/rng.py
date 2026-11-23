@@ -167,10 +167,17 @@ class WorkerRng(Savable):
         return l.pop(self.randbelow(len(l)))
 
     def save_state(self) -> FlexState:
-        return FlexState(rng=None if self.rng is None else bytes(self.rng.get_state().tolist()))
+        # Do not create the generator here: an unused generator is saved as `None`, which restores
+        # to the initial seed, and a restored but unused state is saved as is.
+        if self._restore_state is not None:
+            return FlexState(rng=self._restore_state)
+        if self._rng is None:
+            return FlexState(rng=None)
+        return FlexState(rng=bytes(self._rng.get_state().tolist()))
 
     def restore_state(self, state: FlexState):
         if state["rng"] is None:
+            self._rng = None
             self._restore_state = None
         else:
             self._restore_state = state["rng"]
