@@ -122,7 +122,9 @@ class BlendDataset(BaseWrapperDataset[T_sample, T_sample]):
         if self.sample_size_fn is not None:
             emitted = torch.tensor(self._emitted_sizes, dtype=torch.float64)
 
-        while True:
+        # After migration, every child with samples on this worker may already be finished.
+        active_count = sum(it is not None for it in dataset_iters)
+        while active_count:
             if self.sample_size_fn is None:
                 ds_probs = weights
             else:
@@ -132,8 +134,6 @@ class BlendDataset(BaseWrapperDataset[T_sample, T_sample]):
 
             dataset_iter = dataset_iters[ds_idx]
             if dataset_iter is None:
-                if all(dataset_iter is None for dataset_iter in dataset_iters):
-                    break
                 continue
             try:
                 sample = next(dataset_iter)
@@ -141,8 +141,7 @@ class BlendDataset(BaseWrapperDataset[T_sample, T_sample]):
                 dataset_iters[ds_idx] = None
                 weights[ds_idx] = 0
                 self.exhausted[ds_idx] = True
-                if all(dataset_iter is None for dataset_iter in dataset_iters):
-                    break
+                active_count -= 1
             else:
                 if self.sample_size_fn is not None:
                     size = float(self.sample_size_fn(sample))
