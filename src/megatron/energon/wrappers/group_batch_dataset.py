@@ -74,6 +74,8 @@ class GroupBatchDataset(
     _batch_failure_handler: ErrorContext
     _group_key_failure_handler: ErrorContext
 
+    _savable_fields = ("_source_exhausted",)
+
     def __init__(
         self,
         dataset: SavableDataset[T_batch_sample],
@@ -216,7 +218,6 @@ class GroupBatchDataset(
             bucket_sample_index=self._group_key_sample_index.save_state(),
             batch_sample_index=self._batch_sample_index.save_state(),
             buckets={key: bucket.save_state() for key, bucket in self._buckets.items()},
-            source_exhausted=self._source_exhausted,
             **super().save_state(),
         )
 
@@ -231,7 +232,6 @@ class GroupBatchDataset(
                 samples=SavableSampleBuffer(self.dataset, worker_config=self.worker_config),
             )
             self._buckets[key].restore_state(bucket_state)
-        self._source_exhausted = state["source_exhausted"]
         self._state_restored = True
 
     def can_restore_sample(self) -> bool:
