@@ -19,7 +19,11 @@ from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath, EPathMappedArray
 from megatron.energon.flavors.common.manifest.paths import MAIN_FOLDER_NAME
 from megatron.energon.flavors.common.manifest.types import ShardInfo
-from megatron.energon.flavors.common.reader import IndexedSampleReader, SequentialSampleReader
+from megatron.energon.flavors.common.reader import (
+    IndexedSampleReader,
+    SequentialSampleReader,
+    WorkerLocalReader,
+)
 from megatron.energon.flavors.common.sample_record import IndexedRestoreKey, SampleRecord
 from megatron.energon.typed_converter import JsonParser
 from megatron.energon.worker_local import WorkerLocalFields
@@ -321,6 +325,13 @@ class TranslatedIndexReader(IndexedSampleReader[SampleRecord]):
                 yield self._translate(next(inner_iter), filtered_index)
         finally:
             inner_iter.close()
+
+    def worker_close(self) -> None:
+        try:
+            if isinstance(self.inner, WorkerLocalReader):
+                self.inner.worker_close()
+        finally:
+            self.filter_view.close()
 
     def close(self) -> None:
         if hasattr(self.inner, "close"):

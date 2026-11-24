@@ -1,6 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from copy import deepcopy
 from threading import local
@@ -101,3 +102,14 @@ class WorkerLocalFields:
             _fields_for(fields, self)[name] = _DELETED
         else:
             super().__delattr__(name)
+
+
+class WorkerLocalResource(WorkerLocalFields, ABC):
+    """Opt in when close() releases resources only in the active worker scope."""
+
+    @abstractmethod
+    def close(self) -> None:
+        """Release handles for the current scope."""
+
+    def worker_close(self) -> None:
+        self.close()

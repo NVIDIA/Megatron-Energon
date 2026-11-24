@@ -12,13 +12,13 @@ from megatron.energon.flavors.common.reader import IndexedSampleReader
 from megatron.energon.flavors.common.sample_record import FilteredSample, IndexedRestoreKey
 from megatron.energon.flavors.jsonl.ijsonl import IJsonlIndexReader
 from megatron.energon.source_info import SourceInfo
-from megatron.energon.worker_local import WorkerLocalFields
+from megatron.energon.worker_local import WorkerLocalResource
 
 if TYPE_CHECKING:
     from megatron.energon.flavors.jsonl.ijsonl_reader import IJsonlReader
 
 
-class MultiJsonlReader(WorkerLocalFields, IndexedSampleReader[FilteredSample]):
+class MultiJsonlReader(WorkerLocalResource, IndexedSampleReader[FilteredSample]):
     """Random-access reader over a prepared logical dataset of JSONL shards."""
 
     #: Exclusive end row of each shard in the shared dataset index.
@@ -189,3 +189,6 @@ class MultiJsonlFileStore(FileStore[bytes]):
 
     def close(self) -> None:
         self.reader.close()
+
+    def worker_close(self) -> None:
+        self.reader.worker_close()

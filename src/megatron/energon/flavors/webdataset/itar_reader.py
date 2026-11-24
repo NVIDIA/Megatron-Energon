@@ -32,7 +32,7 @@ from megatron.energon.flavors.webdataset.itar import (
     ITarSamplePointer,
 )
 from megatron.energon.source_info import SourceInfo
-from megatron.energon.worker_local import WorkerLocalFields
+from megatron.energon.worker_local import WorkerLocalFields, WorkerLocalResource
 
 T_index = TypeVar("T_index", covariant=False)
 
@@ -281,7 +281,7 @@ class ITarReader(WorkerLocalFields, ABC, Generic[T_index]):
         return self._get_item_by_sample_pointer(sample_pointer, idx)
 
 
-class ShardInfosITarReader(ITarReader[int], SamplePartReader[FilteredSample]):
+class ShardInfosITarReader(ITarReader[int], WorkerLocalResource, SamplePartReader[FilteredSample]):
     """
     A concrete ITarReader that constructs its internal sample list from a list of ShardInfos.
     """
@@ -552,6 +552,12 @@ class SqliteITarEntryReader(ITarReader[str], PartFileReader[bytes]):
             f"len(shards)={len(self.tar_filenames)}, "
             f"shards=[{self.tar_filenames[0] if self.tar_filenames else 'N/A'}, ...])"
         )
+
+    def worker_close(self) -> None:
+        try:
+            self.sqlite_reader.thread_close()
+        finally:
+            super().close()
 
     def close(self):
         """Close the SQLite reader and any open ITarFiles."""

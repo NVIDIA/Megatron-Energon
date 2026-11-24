@@ -283,10 +283,7 @@ class FileStoreCachePool(CachePool, ForkMixin):
                 ds.worker_init()
                 return self._cache_out(ds, fname, entry)
             finally:
-                try:
-                    ds.worker_close()
-                finally:
-                    ds.close()
+                ds.worker_close()
 
     def _cache_out(self, ds: FileStore, fname: str, entry: _PendingTask) -> bool:
         with self._lock:

@@ -1,7 +1,6 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from abc import ABC
 from typing import (
     Callable,
     Generator,
@@ -20,12 +19,12 @@ from megatron.energon.flavors.jsonl.ijsonl import (
     IJsonlSamplePointer,
 )
 from megatron.energon.source_info import SourceInfo
-from megatron.energon.worker_local import WorkerLocalFields
+from megatron.energon.worker_local import WorkerLocalResource
 
 T_index = TypeVar("T_index", covariant=False)
 
 
-class IJsonlReader(WorkerLocalFields, ABC, SamplePartFileReader[FilteredSample]):
+class IJsonlReader(WorkerLocalResource, SamplePartFileReader[FilteredSample]):
     """
     Class for reading indexed jsonl files containing json samples.
 

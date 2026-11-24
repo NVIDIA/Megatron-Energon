@@ -205,7 +205,8 @@ class TestDataset(unittest.TestCase):
 
                     def assert_released():
                         assert open_dataset_files() == [], open_dataset_files()
-                        assert set(multiprocessing.active_children()) <= previous_children
+                        leaked = set(multiprocessing.active_children()) - previous_children
+                        assert not leaked, leaked
 
                     with get_savable_loader(dataset) as loader:
                         start_epoch(loader)

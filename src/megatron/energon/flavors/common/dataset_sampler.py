@@ -1,13 +1,18 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+from contextlib import ExitStack
 from typing import Any, Dict, Generator, Iterator, List, Optional, Sequence, cast
 
 import torch
 
 from megatron.energon.edataclass import edataclass
 from megatron.energon.flavors.base_dataset import RestoreKey, SavableDataset
-from megatron.energon.flavors.common.reader import IndexedSampleReader, SequentialSampleReader
+from megatron.energon.flavors.common.reader import (
+    IndexedSampleReader,
+    SequentialSampleReader,
+    WorkerLocalReader,
+)
 from megatron.energon.flavors.common.sample_record import IndexedRestoreKey, SampleRecord
 from megatron.energon.rng import FeistelPermutation, WorkerRng
 from megatron.energon.worker import WorkerConfig
@@ -136,6 +141,12 @@ class DatasetSampler(SavableDataset[RawSampleData]):
     def close(self) -> None:
         self._close_slice_iters()
         self.reader.close()
+
+    def worker_close(self) -> None:
+        with ExitStack() as stack:
+            if isinstance(self.reader, WorkerLocalReader):
+                stack.callback(self.reader.worker_close)
+            stack.callback(self._close_slice_iters)
 
     def __del__(self) -> None:
         try:

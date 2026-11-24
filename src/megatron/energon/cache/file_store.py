@@ -11,7 +11,7 @@ from megatron.energon.flavors.common.sqlite import ThreadLocalSqlite
 from megatron.energon.local_copy import ensure_local_copy
 from megatron.energon.media.metadata import MediaMetadataBase, deserialize_media_metadata
 from megatron.energon.source_info import SourceInfo, add_source_info
-from megatron.energon.worker_local import WorkerLocalFields
+from megatron.energon.worker_local import WorkerLocalResource
 
 
 class DecodeFileStore(FileStoreWrapper[Any]):
@@ -41,7 +41,7 @@ class DecodeFileStore(FileStoreWrapper[Any]):
         return self._inner.get_media_metadata(key)
 
 
-class SystemFileStore(WorkerLocalFields, FileStore[bytes]):
+class SystemFileStore(WorkerLocalResource, FileStore[bytes]):
     """A FileStore that reads files directly from the file system."""
 
     base_dir: EPath | None
