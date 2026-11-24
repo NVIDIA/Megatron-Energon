@@ -38,6 +38,133 @@ Avoid sparse, extremely wide slices on remote storage when a narrower access pat
 Mapped arrays and readers are context managers and must be closed when the owner is finished. Do not put an
 open file, stream, or memory map into dataset configuration or checkpoint state.
 
+## Frozen construction metadata
+
+Use a snapshot to avoid repeating metadata reads while constructing loaders for
+the same frozen dataset revision. Both modes require a local or shared
+filesystem path, supplied as a string or `pathlib.Path`:
+
+- `create=True` performs the normal metadata I/O and records its results,
+  including repeated queries. It creates or replaces the snapshot after the
+  context exits successfully.
+- `create=False` (the default) reads the existing snapshot and serves recorded
+  values without repeating their original storage operations. A missing file is
+  an error; reading mode never creates or updates the snapshot.
+- `sha256` is optional and only checks the package in reading mode. It is ignored
+  when `create=True`, even if the supplied checksum does not match.
+
+### Create the snapshot
+
+This example uses a prepared text WebDataset. For another dataset, use its normal
+task encoder and constructor arguments. Create the destination directory first
+and enable INFO logging to see the snapshot path and checksum. The example below
+configures logging for a standalone preparation script.
+
+```python
+import logging
+from pathlib import Path
+
+from megatron.energon import WorkerConfig, get_savable_loader, get_train_dataset
+from megatron.energon.epathlib.metadata_snapshot import use_metadata_snapshot
+
+logging.basicConfig(level=logging.INFO)
+snapshot_path = Path("/local/loader-metadata.json")
+snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+worker_config = WorkerConfig(rank=0, world_size=1, num_workers=2)
+
+
+def build_dataset():
+    return get_train_dataset(
+        "/datasets/my-text-dataset",
+        worker_config=worker_config,
+        batch_size=8,
+        shuffle_buffer_size=1000,
+        max_samples_per_sequence=None,
+    )
+
+
+with use_metadata_snapshot(snapshot_path, create=True):
+    dataset = build_dataset()
+# The snapshot now exists. No iteration was needed to create it.
+```
+
+Creation records YAML/JSON contents, file checks, file sizes and JSONL terminal
+offsets encountered by the constructor. It does not reuse earlier query results
+during creation; repeated queries access storage and replace the recorded value.
+It does not store sample/media payloads or dataloader checkpoint state. Captured
+file contents are limited to 64 MiB, counting each recorded path once.
+If construction or publication fails, an existing snapshot is left unchanged.
+Creation writes `<snapshot path>.tmp`, closes it, and renames it to the snapshot
+path. The temporary file is cleaned up after success or a write/rename exception.
+
+Choose exactly one process to create each shared snapshot path. The context
+manager does not select a writer rank, lock the file, or synchronize processes.
+The simplest setup is one preparation process before launching training, followed
+by reading mode on every loader owner. If preparing inside a distributed job,
+the caller must select one global rank or controller, wait for its successful
+completion (for example, with a barrier), and only then start the readers.
+Selecting local rank zero on every node would create multiple writers. Concurrent
+jobs must also use separate paths or coordinate creation of a shared path.
+
+Full file contents are captured only for `.yaml`, `.yml`, and `.json` files opened
+with `r` or `rb`. Writes and other file extensions use storage normally. File
+checks and sizes can be recorded for any extension; JSONL terminal offsets are
+recorded separately without copying the full `.jsonl` or `.idx` file. Metadata
+stored under another extension is therefore not cached as full file contents.
+
+### Read the snapshot
+
+On subsequent constructions, use the same path with `create=False`. The shared
+setup and `build_dataset()` function above remain the same.
+
+```python
+with use_metadata_snapshot(snapshot_path, create=False):
+    dataset = build_dataset()
+
+# Start iteration and workers only after leaving the snapshot context.
+with get_savable_loader(dataset) as loader:
+    for batch in loader:
+        train_step(batch)  # Your training loop.
+```
+
+Recorded reads use independent streams. Unrecorded paths use storage normally
+and do not extend the snapshot. Each rank still constructs its own dataset with
+its normal sharding settings. Leaving either context restores the previous
+context, including after an exception.
+
+### Optional checksum
+
+Checksum validation applies only to reading mode; creation ignores `sha256`.
+After successfully writing the snapshot, the creating process logs its path and
+the full 64-character SHA-256 at INFO level:
+
+```text
+Created metadata snapshot /local/loader-metadata.json; sha256=<64-character digest>
+```
+
+Copy the value after `sha256=` into your job configuration and pass it when
+reading. No separate checksum calculation or file read is needed:
+
+```python
+expected_digest = "paste the 64-character digest from the creation log"
+with use_metadata_snapshot(snapshot_path, sha256=expected_digest):
+    dataset = build_dataset()
+```
+
+Omitting `sha256` skips only the checksum comparison; the package must still be
+valid JSON containing the required metadata maps. A checksum identifies a package, not the
+current contents of its source dataset. Recreate the snapshot after changing
+the recipe or dataset metadata. Keep those inputs immutable during capture and
+replay. Exit the context before starting workers, including forked workers.
+
+### Package format
+
+The JSON package contains four maps: `contents`, `file_checks`, `sizes`, and
+`jsonl_sizes`. Their keys are logical EPath strings. `contents` stores file bytes
+encoded as Base64, `file_checks` stores file-existence results, `sizes` stores
+file sizes in bytes, and `jsonl_sizes` stores terminal byte offsets from JSONL
+indexes.
+
 ## Worker and cache ownership
 
 Open storage resources inside the worker that consumes them. Forked or spawned workers must not rely on a

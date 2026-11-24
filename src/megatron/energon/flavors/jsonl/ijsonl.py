@@ -6,6 +6,7 @@ from typing import BinaryIO, Dict, Generator, Optional, Tuple, Union
 
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
+from megatron.energon.epathlib.metadata_snapshot import active_capture, active_snapshot
 
 IDX_SUFFIX = ".idx"
 
@@ -77,8 +78,13 @@ class IJsonlIndexReader:
 
     @staticmethod
     def size(jsonl_path: EPath) -> int:
+        if (snapshot := active_snapshot()) is not None and str(jsonl_path) in snapshot.jsonl_sizes:
+            return snapshot.jsonl_sizes[str(jsonl_path)]
         with IJsonlIndexReader(jsonl_path) as reader:
-            return reader[len(reader) - 1]
+            result = reader[len(reader) - 1]
+        if (capture := active_capture()) is not None:
+            capture.snapshot.jsonl_sizes[str(jsonl_path)] = result
+        return result
 
     @staticmethod
     def is_current(jsonl_path: EPath) -> bool:

@@ -21,6 +21,7 @@ from typing import (
 import multistorageclient as msc
 
 from megatron.energon.deprecation import warn_deprecated
+from megatron.energon.epathlib.metadata_snapshot import active_capture, active_snapshot
 
 if TYPE_CHECKING:
     from megatron.energon.epathlib.mapped_array import EPathMappedArray
@@ -207,6 +208,17 @@ class EPath:
         block_size: Optional[int] = None,
         prefetch_file: bool = False,
     ) -> Union[TextIO, BinaryIO]:
+        if (snapshot := active_snapshot()) is not None:
+            if (stream := snapshot.open(str(self), mode)) is not None:
+                return stream
+        if (
+            (capture := active_capture()) is not None
+            and mode in ("r", "rb")
+            and self.internal_path.suffix in (".yaml", ".yml", ".json")
+        ):
+            with self.fs.open(self._internal_str_path, "rb", prefetch_file=prefetch_file) as stream:
+                capture.record_contents(str(self), stream)
+            return capture.snapshot.open(str(self), mode)
         return self.fs.open(self._internal_str_path, mode, prefetch_file=prefetch_file)
 
     def map(
@@ -307,7 +319,12 @@ class EPath:
             return False
 
     def is_file(self) -> bool:
-        return self.fs.is_file(self._internal_str_path)
+        if (snapshot := active_snapshot()) is not None and str(self) in snapshot.file_checks:
+            return snapshot.file_checks[str(self)]
+        result = self.fs.is_file(self._internal_str_path)
+        if (capture := active_capture()) is not None:
+            capture.snapshot.file_checks[str(self)] = result
+        return result
 
     def mkdir(self, exist_ok: bool = True, parents: bool = False):
         pass
@@ -371,7 +388,12 @@ class EPath:
             yield new_path
 
     def size(self) -> int:
-        return self.fs.info(self._internal_str_path).content_length
+        if (snapshot := active_snapshot()) is not None and str(self) in snapshot.sizes:
+            return snapshot.sizes[str(self)]
+        result = self.fs.info(self._internal_str_path).content_length
+        if (capture := active_capture()) is not None:
+            capture.snapshot.sizes[str(self)] = result
+        return result
 
     def with_suffix(self, suffix: str, replace: bool = True) -> "EPath":
         """Create a new path with the given suffix.
