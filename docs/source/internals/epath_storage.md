@@ -94,7 +94,17 @@ during creation; repeated queries access storage and replace the recorded value.
 It does not store sample/media payloads or dataloader checkpoint state. Captured
 file contents are limited to 64 MiB, counting each recorded path once.
 If construction or publication fails, an existing snapshot is left unchanged.
-Choose one process to create the snapshot, then let other processes read it.
+Creation writes `<snapshot path>.tmp`, closes it, and renames it to the snapshot
+path. The temporary file is cleaned up after success or a write/rename exception.
+
+Choose exactly one process to create each shared snapshot path. The context
+manager does not select a writer rank, lock the file, or synchronize processes.
+The simplest setup is one preparation process before launching training, followed
+by reading mode on every loader owner. If preparing inside a distributed job,
+the caller must select one global rank or controller, wait for its successful
+completion (for example, with a barrier), and only then start the readers.
+Selecting local rank zero on every node would create multiple writers. Concurrent
+jobs must also use separate paths or coordinate creation of a shared path.
 
 Full file contents are captured only for `.yaml`, `.yml`, and `.json` files opened
 with `r` or `rb`. Writes and other file extensions use storage normally. File

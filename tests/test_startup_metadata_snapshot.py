@@ -244,6 +244,15 @@ class SnapshotTest(unittest.TestCase):
             self.assertEqual(package.read_bytes(), original_package)
             self.assertFalse((root / "new-snapshot.json").exists())
             with (
+                patch.object(Path, "replace", side_effect=OSError("publication failed")),
+                self.assertNoLogs("megatron.energon.epathlib.metadata_snapshot", level="INFO"),
+                self.assertRaisesRegex(OSError, "publication failed"),
+            ):
+                with use_metadata_snapshot(package, create=True):
+                    path.read_text()
+            self.assertEqual(package.read_bytes(), original_package)
+            self.assertFalse((root / "metadata.json.tmp").exists())
+            with (
                 self.assertNoLogs("megatron.energon.epathlib.metadata_snapshot", level="INFO"),
                 self.assertRaises(FileNotFoundError),
             ):

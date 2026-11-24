@@ -14,7 +14,6 @@ import hashlib
 import io
 import json
 import logging
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO, Iterator
@@ -64,16 +63,12 @@ class MetadataSnapshot:
         }
         payload = json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
         path = Path(path)
-        with tempfile.NamedTemporaryFile(
-            dir=path.parent, prefix=f".{path.name}.", delete=False
-        ) as f:
-            temporary = Path(f.name)
-            try:
-                f.write(payload)
-                f.close()
-                temporary.replace(path)
-            finally:
-                temporary.unlink(missing_ok=True)
+        temporary = path.with_name(path.name + ".tmp")
+        try:
+            temporary.write_bytes(payload)
+            temporary.replace(path)
+        finally:
+            temporary.unlink(missing_ok=True)
         logger.info(
             "Created metadata snapshot %s; sha256=%s", path, hashlib.sha256(payload).hexdigest()
         )
@@ -136,6 +131,8 @@ def use_metadata_snapshot(
     Otherwise, read the existing package at ``path``; a missing file is an error.
     An optional ``sha256`` checks only the package being read and is ignored
     when ``create=True``. Neither mode checks whether source metadata has changed.
+    Only one process may create a given snapshot at a time; the caller must
+    coordinate writers and wait for publication before starting readers.
     Exit before starting workers.
     """
     path = Path(path)
