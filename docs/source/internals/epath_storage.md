@@ -54,14 +54,18 @@ filesystem path:
 ### Create the snapshot
 
 This example uses a prepared text WebDataset. For another dataset, use its normal
-task encoder and constructor arguments. Create the destination directory first.
+task encoder and constructor arguments. Create the destination directory first
+and enable INFO logging to see the snapshot path and checksum. The example below
+configures logging for a standalone preparation script.
 
 ```python
+import logging
 from pathlib import Path
 
 from megatron.energon import WorkerConfig, get_savable_loader, get_train_dataset
 from megatron.energon.epathlib.metadata_snapshot import use_metadata_snapshot
 
+logging.basicConfig(level=logging.INFO)
 snapshot_path = Path("/local/loader-metadata.json")
 snapshot_path.parent.mkdir(parents=True, exist_ok=True)
 worker_config = WorkerConfig(rank=0, world_size=1, num_workers=2)
@@ -111,18 +115,18 @@ context, including after an exception.
 ### Optional checksum
 
 Checksum validation applies only to reading mode; creation ignores `sha256`.
-To select an exact package, calculate its checksum after creation and save that
-value with your job configuration:
+After successfully writing the snapshot, the creating process logs its path and
+the full 64-character SHA-256 at INFO level:
 
-```python
-import hashlib
-
-expected_digest = hashlib.sha256(snapshot_path.read_bytes()).hexdigest()
+```text
+Created metadata snapshot /local/loader-metadata.json; sha256=<64-character digest>
 ```
 
-Later, pass that saved value when reading:
+Copy the value after `sha256=` into your job configuration and pass it when
+reading. No separate checksum calculation or file read is needed:
 
 ```python
+expected_digest = "paste the 64-character digest from the creation log"
 with use_metadata_snapshot(snapshot_path, sha256=expected_digest):
     dataset = build_dataset()
 ```

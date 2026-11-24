@@ -13,11 +13,14 @@ import contextvars
 import hashlib
 import io
 import json
+import logging
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, Iterator, Literal, TypeVar
+
+logger = logging.getLogger(__name__)
 
 _Value = TypeVar("_Value", bool, int)
 _MetadataKind = Literal["file_checks", "sizes", "jsonl_sizes"]
@@ -65,7 +68,7 @@ class MetadataSnapshot:
         )
 
     def save(self, path: str | Path) -> None:
-        """Atomically publish the package."""
+        """Atomically publish the package and log its path and SHA256 at INFO level."""
         document = {
             "format_version": 1,
             "recipe_identity": self.recipe_identity,
@@ -88,6 +91,9 @@ class MetadataSnapshot:
                 temporary.replace(path)
             finally:
                 temporary.unlink(missing_ok=True)
+        logger.info(
+            "Created metadata snapshot %s; sha256=%s", path, hashlib.sha256(payload).hexdigest()
+        )
 
     def lookup(self, kind: _MetadataKind, path: str, read: Callable[[], _Value]) -> _Value:
         """Serve a recorded scalar, or perform the ordinary storage lookup."""
@@ -152,10 +158,11 @@ def use_metadata_snapshot(
     """Create or read a metadata package while constructing a dataset.
 
     With ``create=True``, record metadata from storage and write ``path`` only
-    after successful construction. Otherwise, read the existing package at
-    ``path``; a missing file is an error. An optional ``sha256`` checks only the
-    package being read and is ignored when ``create=True``. Neither mode
-    checks whether source metadata has changed. Exit before starting workers.
+    after successful construction, then log its path and SHA256 at INFO level.
+    Otherwise, read the existing package at ``path``; a missing file is an error.
+    An optional ``sha256`` checks only the package being read and is ignored
+    when ``create=True``. Neither mode checks whether source metadata has changed.
+    Exit before starting workers.
 
     Already loaded ``MetadataSnapshot`` objects remain supported for applications
     distributing snapshots in memory; omit ``create`` and ``sha256`` in that case.

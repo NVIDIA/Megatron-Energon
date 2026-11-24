@@ -94,14 +94,23 @@ class SnapshotTest(unittest.TestCase):
             samples_path = EPath(samples)
             index_path = samples_path.with_suffix(".idx", replace=False)
             package = root / "metadata.json"
-            with use_metadata_snapshot(package, create=True):
-                self.assertTrue(path.is_file())
-                self.assertFalse(missing.is_file())
-                expected_size = path.size()
-                self.assertEqual(path.read_text(), source.read_text())
-                self.assertEqual(IJsonlIndexReader.size(samples_path), samples.stat().st_size)
-            with use_metadata_snapshot(
-                package, sha256=hashlib.sha256(package.read_bytes()).hexdigest()
+            with self.assertLogs(
+                "megatron.energon.epathlib.metadata_snapshot", level="INFO"
+            ) as creation_log:
+                with use_metadata_snapshot(package, create=True):
+                    self.assertTrue(path.is_file())
+                    self.assertFalse(missing.is_file())
+                    expected_size = path.size()
+                    self.assertEqual(path.read_text(), source.read_text())
+                    self.assertEqual(IJsonlIndexReader.size(samples_path), samples.stat().st_size)
+            self.assertEqual(len(creation_log.records), 1)
+            message = creation_log.records[0].getMessage()
+            self.assertIn(str(package), message)
+            digest = message.split("sha256=", 1)[1]
+            self.assertEqual(digest, hashlib.sha256(package.read_bytes()).hexdigest())
+            with (
+                self.assertNoLogs("megatron.energon.epathlib.metadata_snapshot", level="INFO"),
+                use_metadata_snapshot(package, sha256=digest),
             ):
                 with (
                     patch.object(
@@ -179,13 +188,24 @@ class SnapshotTest(unittest.TestCase):
             source.write_text("new revision")
             with use_metadata_snapshot(package):
                 for target in (package, root / "new-snapshot.json"):
-                    with self.assertRaisesRegex(RuntimeError, "construction failed"):
+                    with (
+                        self.assertNoLogs(
+                            "megatron.energon.epathlib.metadata_snapshot", level="INFO"
+                        ),
+                        self.assertRaisesRegex(RuntimeError, "construction failed"),
+                    ):
                         with use_metadata_snapshot(target, create=True):
                             self.assertEqual(path.read_text(), "new revision")
                             raise RuntimeError("construction failed")
                     self.assertEqual(path.read_text(), "old revision")
             self.assertEqual(package.read_bytes(), original_package)
             self.assertFalse((root / "new-snapshot.json").exists())
+            with (
+                self.assertNoLogs("megatron.energon.epathlib.metadata_snapshot", level="INFO"),
+                self.assertRaises(FileNotFoundError),
+            ):
+                with use_metadata_snapshot(root / "missing-parent" / "metadata.json", create=True):
+                    path.read_text()
             self.assertEqual(path.read_text(), "new revision")
             # A supplied checksum also cannot prevent replacing an existing package.
             with use_metadata_snapshot(package):
