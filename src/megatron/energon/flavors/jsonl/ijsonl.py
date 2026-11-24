@@ -78,11 +78,14 @@ class IJsonlIndexReader:
 
     @staticmethod
     def size(jsonl_path: EPath) -> int:
+        def read_terminal_offset() -> int:
+            with IJsonlIndexReader(jsonl_path) as reader:
+                return reader[len(reader) - 1]
+
         snapshot = active_snapshot()
-        if snapshot is not None and str(jsonl_path) in snapshot.jsonl_sizes:
-            return snapshot.jsonl_sizes[str(jsonl_path)]
-        with IJsonlIndexReader(jsonl_path) as reader:
-            return reader[len(reader) - 1]
+        if snapshot is not None:
+            return snapshot.lookup("jsonl_sizes", str(jsonl_path), read_terminal_offset)
+        return read_terminal_offset()
 
     @staticmethod
     def is_current(jsonl_path: EPath) -> bool:

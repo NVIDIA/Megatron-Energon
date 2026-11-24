@@ -210,7 +210,13 @@ class EPath:
     ) -> Union[TextIO, BinaryIO]:
         snapshot = active_snapshot()
         if snapshot is not None:
-            stream = snapshot.open(str(self), mode)
+            stream = snapshot.open(
+                str(self),
+                mode,
+                lambda read_mode: self.fs.open(
+                    self._internal_str_path, read_mode, prefetch_file=prefetch_file
+                ),
+            )
             if stream is not None:
                 return stream
         return self.fs.open(self._internal_str_path, mode, prefetch_file=prefetch_file)
@@ -314,8 +320,10 @@ class EPath:
 
     def is_file(self) -> bool:
         snapshot = active_snapshot()
-        if snapshot is not None and str(self) in snapshot.file_checks:
-            return snapshot.file_checks[str(self)]
+        if snapshot is not None:
+            return snapshot.lookup(
+                "file_checks", str(self), lambda: self.fs.is_file(self._internal_str_path)
+            )
         return self.fs.is_file(self._internal_str_path)
 
     def mkdir(self, exist_ok: bool = True, parents: bool = False):
@@ -381,8 +389,10 @@ class EPath:
 
     def size(self) -> int:
         snapshot = active_snapshot()
-        if snapshot is not None and str(self) in snapshot.sizes:
-            return snapshot.sizes[str(self)]
+        if snapshot is not None:
+            return snapshot.lookup(
+                "sizes", str(self), lambda: self.fs.info(self._internal_str_path).content_length
+            )
         return self.fs.info(self._internal_str_path).content_length
 
     def with_suffix(self, suffix: str, replace: bool = True) -> "EPath":

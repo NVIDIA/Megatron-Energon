@@ -40,37 +40,110 @@ open file, stream, or memory map into dataset configuration or checkpoint state.
 
 ## Frozen construction metadata
 
-Applications may prepare a versioned metadata package for a frozen dataset
-revision and serve it while constructing a loader:
+Use a snapshot to avoid repeating metadata reads while constructing loaders for
+the same frozen dataset revision. Both modes use the same local or shared
+filesystem path:
+
+- `create=True` records metadata and creates or replaces the snapshot after
+  the context exits successfully.
+- `create=False` (the default) reads the existing snapshot. A missing file is
+  an error; reading mode never creates or updates the snapshot.
+- `sha256` is optional. When supplied, it checks the package being read, or the
+  newly created package before it replaces the destination.
+
+### Create the snapshot
+
+This example uses a prepared text WebDataset. For another dataset, use its normal
+task encoder and constructor arguments. Create the destination directory first.
 
 ```python
-from megatron.energon.epathlib.metadata_snapshot import (
-    MetadataSnapshot,
-    use_metadata_snapshot,
-)
+from pathlib import Path
 
-snapshot = MetadataSnapshot.load(
-    "/local/loader-metadata.json",
-    sha256=expected_digest,
-    recipe_identity=expected_recipe_identity,
-)
-with use_metadata_snapshot(snapshot):
+from megatron.energon import WorkerConfig, get_savable_loader, get_train_dataset
+from megatron.energon.epathlib.metadata_snapshot import use_metadata_snapshot
+
+snapshot_path = Path("/local/loader-metadata.json")
+snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+worker_config = WorkerConfig(rank=0, world_size=1, num_workers=2)
+
+
+def build_dataset():
+    return get_train_dataset(
+        "/datasets/my-text-dataset",
+        worker_config=worker_config,
+        batch_size=8,
+        shuffle_buffer_size=1000,
+        max_samples_per_sequence=None,
+    )
+
+
+with use_metadata_snapshot(snapshot_path, create=True):
     dataset = build_dataset()
-# Start iteration and workers only after leaving the context.
+# The snapshot now exists. No iteration was needed to create it.
 ```
 
-Version 1 packages contain `format_version`, `recipe_identity`, base64-encoded
-`contents`, and maps named `file_checks`, `sizes`, and `jsonl_sizes`. Keys are
-logical EPath strings; `jsonl_sizes` contains terminal byte offsets. A producer
-must capture these values from the intended immutable dataset revision. The
-loader rejects a mismatched package digest or recipe identity.
+Creation records YAML/JSON contents, file checks, file sizes and JSONL terminal
+offsets encountered by the constructor. It does not store sample/media payloads
+or dataloader checkpoint state. Captured file contents are limited to 64 MiB.
+If construction or publication fails, an existing snapshot is left unchanged.
+Choose one process to create the snapshot, then let other processes read it.
 
-Recorded reads receive independent streams. Unrecorded paths retain their normal
-storage backend. Leaving the context restores ordinary access, including after
-an exception. Keep media payloads outside the package and rebuild it after any
-metadata revision. Digest validation identifies the selected package; it does not
-check whether source files have changed. Applications own capture, distribution,
-and snapshot selection; this API does not provide an automatic cache or launcher.
+### Read the snapshot
+
+On subsequent constructions, use the same path with `create=False`. The shared
+setup and `build_dataset()` function above remain the same.
+
+```python
+with use_metadata_snapshot(snapshot_path, create=False):
+    dataset = build_dataset()
+
+# Start iteration and workers only after leaving the snapshot context.
+with get_savable_loader(dataset) as loader:
+    for batch in loader:
+        train_step(batch)  # Your training loop.
+```
+
+Recorded reads use independent streams. Unrecorded paths use storage normally
+and do not extend the snapshot. Each rank still constructs its own dataset with
+its normal sharding settings. Leaving either context restores the previous
+context, including after an exception.
+
+### Optional checksum
+
+To select an exact package, calculate its checksum after creation and save that
+value with your job configuration:
+
+```python
+import hashlib
+
+expected_digest = hashlib.sha256(snapshot_path.read_bytes()).hexdigest()
+```
+
+Later, pass that saved value when reading:
+
+```python
+with use_metadata_snapshot(snapshot_path, sha256=expected_digest):
+    dataset = build_dataset()
+```
+
+Omitting `sha256` skips only the checksum comparison; the package must still be
+valid and have a supported format. A checksum identifies a package, not the
+current contents of its source dataset. Recreate the snapshot after changing
+the recipe or dataset metadata. Keep those inputs immutable during capture and
+replay. Exit the context before starting workers, including forked workers.
+
+### Package format and in-memory use
+
+Version 1 packages retain `format_version`, `recipe_identity`, base64-encoded
+`contents`, and maps named `file_checks`, `sizes`, and `jsonl_sizes`. Keys are
+logical EPath strings; `jsonl_sizes` contains terminal byte offsets. Path-based
+creation writes an empty recipe identity and does not require a separate label.
+
+Applications that already distribute snapshots in memory can still pass a
+`MetadataSnapshot` object to `use_metadata_snapshot(snapshot)`. File-mode options
+are omitted for this form. `MetadataSnapshot.load(path, sha256=..., recipe_identity=...)`
+remains available; both expected values are optional. Existing labeled packages
+remain readable, and an explicitly requested recipe identity is still checked.
 
 ## Worker and cache ownership
 
