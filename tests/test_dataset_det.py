@@ -456,12 +456,12 @@ class TestDataset(unittest.TestCase):
         )
 
         # print("save state")
-        state_0 = loader.save_state_global(global_dst_rank=0)
+        state_0 = loader.save_state_rank()
         # print("save state done")
         order_1 = [data.text[0] for idx, data in zip(range(count1), loader)]
         assert len(order_1) == count1
         # print("save state")
-        state_1 = loader.save_state_global(global_dst_rank=0)
+        state_1 = loader.save_state_rank()
         # print("save state done")
         order_2 = [data.text[0] for idx, data in zip(range(count2), loader)]
         assert len(order_2) == count2
@@ -482,7 +482,7 @@ class TestDataset(unittest.TestCase):
                 parallel_shard_iters=psi,
             )
         )
-        loader.restore_state_global(state_0, src_rank=None)
+        loader.restore_state_rank(state_0)
         order_45 = [data.text[0] for idx, data in zip(range(count1 + count2), loader)]
         order_4 = order_45[:count1]
         order_5 = order_45[count1:]
@@ -507,7 +507,7 @@ class TestDataset(unittest.TestCase):
             )
         )
         # print("restore state")
-        loader.restore_state_global(state_1, src_rank=None)
+        loader.restore_state_rank(state_1)
         # print("restore state done")
         order_3 = [data.text[0] for idx, data in zip(range(count2), loader)]
         # print("order1", order_1)
@@ -517,8 +517,6 @@ class TestDataset(unittest.TestCase):
 
     def test_restore_state_dist(self):
         from multiprocessing import Manager, Process
-
-        import torch.distributed as dist
 
         world_size = 3
 
@@ -546,33 +544,28 @@ class TestDataset(unittest.TestCase):
                 )
             )
 
-            state_0 = loader.save_state_global(global_dst_rank=0)
+            state_0 = loader.save_state_rank()
             order_1 = [data.text[0] for idx, data in zip(range(count1), loader)]
             assert len(order_1) == count1
 
             # print(f"Rank {rank}: order_1", order_1)
 
-            state_1 = loader.save_state_global(global_dst_rank=0)
+            state_1 = loader.save_state_rank()
             order_2 = [data.text[0] for idx, data in zip(range(count2), loader)]
             assert len(order_2) == count2
 
             shared_dict[(rank, "order_1")] = order_1
             shared_dict[(rank, "order_2")] = order_2
 
-            if rank == 0:
-                shared_dict["state_0"] = state_0
-                shared_dict["state_1"] = state_1
+            shared_dict[(rank, "state_0")] = state_0
+            shared_dict[(rank, "state_1")] = state_1
 
         def phase2(rank: int, world_size: int, shared_dict: dict):
             order_1 = shared_dict[(rank, "order_1")]
             order_2 = shared_dict[(rank, "order_2")]
 
-            if rank == 0:
-                state_0 = shared_dict["state_0"]
-                state_1 = shared_dict["state_1"]
-            else:
-                state_0 = None
-                state_1 = None
+            state_0 = shared_dict[(rank, "state_0")]
+            state_1 = shared_dict[(rank, "state_1")]
 
             worker_config = WorkerConfig(rank=rank, world_size=world_size, num_workers=0)
 
@@ -589,7 +582,7 @@ class TestDataset(unittest.TestCase):
                     parallel_shard_iters=psi,
                 )
             )
-            loader.restore_state_global(state_0, src_rank=0)
+            loader.restore_state_rank(state_0)
 
             order_45 = [data.text[0] for idx, data in zip(range(count1 + count2), loader)]
             order_4 = order_45[:count1]
@@ -613,20 +606,9 @@ class TestDataset(unittest.TestCase):
                     parallel_shard_iters=psi,
                 )
             )
-            loader.restore_state_global(state_1, src_rank=0)
+            loader.restore_state_rank(state_1)
             order_3 = [data.text[0] for idx, data in zip(range(count2), loader)]
             assert order_2 == order_3
-
-        def init_process(rank, world_size, shared_dict, fn, backend="gloo"):
-            """Initializes the distributed environment."""
-            dist.init_process_group(
-                backend=backend,
-                init_method="tcp://127.0.0.1:12355",
-                world_size=world_size,
-                rank=rank,
-            )
-            fn(rank, world_size, shared_dict)
-            dist.destroy_process_group()
 
         with Manager() as manager:
             shared_dict = manager.dict()
@@ -634,22 +616,24 @@ class TestDataset(unittest.TestCase):
             # Phase 1 (save state)
             processes = []
             for rank in range(world_size):
-                p = Process(target=init_process, args=(rank, world_size, shared_dict, phase1))
+                p = Process(target=phase1, args=(rank, world_size, shared_dict))
                 p.start()
                 processes.append(p)
 
             for p in processes:
                 p.join()
+                self.assertEqual(p.exitcode, 0)
 
             # Phase 2 (restore state)
             processes = []
             for rank in range(world_size):
-                p = Process(target=init_process, args=(rank, world_size, shared_dict, phase2))
+                p = Process(target=phase2, args=(rank, world_size, shared_dict))
                 p.start()
                 processes.append(p)
 
             for p in processes:
                 p.join()
+                self.assertEqual(p.exitcode, 0)
 
     def test_restore_state_workers(self):
         worker_config = WorkerConfig(rank=0, world_size=1, num_workers=2)

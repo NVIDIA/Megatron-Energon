@@ -67,8 +67,7 @@ with get_loader(dataset) as loader:
         train_step(batch)
 ```
 
-For checkpoint restore, state must be installed before entering the context because entering starts
-the workers:
+Stage the rank checkpoint before entering the context so the workers apply it on startup.
 
 ```python
 loader = get_savable_loader(dataset)
@@ -201,10 +200,6 @@ Checkpoint redistribution keeps short final chunks because it has no target reci
 Resizing with pending generator batches is rejected because the output index refers to
 the original batch.
 
-`save_state_global()` gathers rank states through the configured data-parallel group.
-`restore_state_global()` either selects the local entry from a state list or scatters entries from a
-designated source rank before delegating to `restore_state_rank()`.
-
 ## Sample Restore Keys
 
 For a restorable sample, `WorkerSampleRestoreKey` records the global worker ID and worker-local
@@ -227,4 +222,4 @@ When modifying the loader, verify at least the following:
 - `num_workers == 0` remains a supported non-process path;
 - smaller compatible micro-batches restore through batch-key splitting;
 - context exit and explicit `shutdown()` leave no workers or helper threads alive; and
-- no loader is started before `restore_state_rank()` or `restore_state_global()` is called.
+- a restored loader resumes at the next undelivered sample on its rank.

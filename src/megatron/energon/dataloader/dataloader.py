@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 import inspect
 import os
-import pickle
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from threading import Condition, get_ident
@@ -19,7 +18,7 @@ from typing import (
 )
 from weakref import proxy
 
-import torch.distributed
+import torch
 
 from megatron.energon.cache.base import CachePool
 from megatron.energon.cache.no_cache import NoCachePool
@@ -121,8 +120,6 @@ class DataLoader(Generic[TSample]):
     _next_worker_id: int = 0
 
     _restore_state: RankState | None = None
-    #: A collective restore can start workers before the caller enters the context.
-    _started_for_global_restore: bool = False
 
     _dataset: SavableDataset
     _worker_config: WorkerConfig
@@ -309,7 +306,7 @@ class DataLoader(Generic[TSample]):
                 ]
                 for worker in self._restore_state.workers
             ]
-            # Surface failed replays during startup, including coordinated distributed restore.
+            # Surface failed replays before iteration starts.
             for pending in self._prefetching_samples:
                 for future in pending:
                     future.get_with_timeout(self._worker_request_timeout)
@@ -400,7 +397,6 @@ class DataLoader(Generic[TSample]):
                     ):
                         running.append(resource)
         self._workers = running or None
-        self._started_for_global_restore = False
         if len(errors) == 1:
             raise errors[0]
         if errors:
@@ -419,10 +415,7 @@ class DataLoader(Generic[TSample]):
             self.shutdown(in_del=True)
 
     def __enter__(self) -> "DataLoader[TSample]":
-        if self._started_for_global_restore:
-            self._started_for_global_restore = False
-        else:
-            self.start()
+        self.start()
         return self
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:
@@ -436,7 +429,6 @@ class DataLoader(Generic[TSample]):
     def _epoch_iter(self) -> Generator[TSample, None, None]:
         """Iterate over the dataset for one epoch (i.e. all workers StopIteration).
         One epoch may also be infinite (if looping the dataset)."""
-        self._started_for_global_restore = False
         epoch_id = self._next_epoch_id
         self._next_epoch_id += 1
 
@@ -686,66 +678,6 @@ class DataLoader(Generic[TSample]):
             prefetched_restore_keys.append(keys)
         return prefetched_restore_keys
 
-    def save_state_global(self, global_dst_rank: int) -> Sequence[RankState | None] | None:
-        """
-        Saves the state of the dataset globally, collecting the state from all ranks using torch
-        distributed. Allows for restoring the state later using `restore_state_global`, given the
-        result of this method.
-        Typical scenario: Save the state to disk only on the `dst_rank`, the other ranks do not
-        save the state. Later, restore the state either only loaded on the `dst_rank` or
-        loading on all ranks separately using `restore_state_global`.
-
-        Note: If you want to save/restore the state per rank separately, use `save_state_rank` and
-        the corresponding `restore_state_rank`. Also, these do not rely on torch distributed.
-
-        Args:
-            global_dst_rank: The state will be gathered to this rank. The rank refers to the
-                global rank, not the rank within the data parallel group.
-
-        Returns:
-            The state of the dataset (or `None`, if not on `dst_rank`).
-        """
-        if self._worker_config.world_size == 1:
-            return [self.save_state_rank()]
-
-        payload = None
-        error = None
-        group = self._worker_config.data_parallel_group
-        is_destination = self._worker_config.global_rank() == global_dst_rank
-        try:
-            if group is not None:
-                torch.distributed.get_group_rank(group, global_dst_rank)
-            payload = pickle.dumps(self.save_state_rank())
-        except Exception as exc:
-            error = exc
-        self._check_checkpoint_collective("save", error)
-
-        output = [None] * self._worker_config.world_size if is_destination else None
-        torch.distributed.gather_object(payload, output, global_dst_rank, group=group)
-
-        states = None
-        error = None
-        try:
-            if output is not None:
-                states = [pickle.loads(item) for item in output]
-        except Exception as exc:
-            error = exc
-        self._check_checkpoint_collective("decode saved state", error)
-        return states
-
-    def _check_checkpoint_collective(self, operation: str, error: Exception | None) -> None:
-        """Share local preparation failures before peers enter the next collective."""
-        errors = [None] * self._worker_config.world_size
-        message = None if error is None else f"{type(error).__name__}: {error}"
-        torch.distributed.all_gather_object(
-            errors, message, group=self._worker_config.data_parallel_group
-        )
-        if error is not None:
-            raise error
-        failures = [f"rank {rank}: {failure}" for rank, failure in enumerate(errors) if failure]
-        if failures:
-            raise RuntimeError(f"Cannot {operation} dataloader checkpoint: {', '.join(failures)}")
-
     def restore_state_rank(self, state: RankState | None) -> None:
         """
         Restore the state of the DataLoader on the current rank.
@@ -785,79 +717,6 @@ class DataLoader(Generic[TSample]):
             state, batch_size, drop_last=batch_dataset is not None and batch_dataset.drop_last
         )
 
-    def restore_state_global(
-        self,
-        state: Sequence[RankState | None] | None,
-        *,
-        src_rank: int | None = None,
-    ) -> None:
-        """
-        Restores the saved state from `save_state_global` (in torch distributed setup).
-        The global state needs be loaded on every rank that has a data loader instance.
-
-        Optionally, one can specify a src_rank and only provide the state once.
-        In case of multiple data parallel groups, you must provide the state once
-        in each data parallel group. In this case the `src_rank` is the rank within the
-        data parallel group.
-
-        Args:
-            state: The state to restore, as saved by `save_state_global`.
-            src_rank: The rank from which the state is broadcasted (within the data parallel group, if using DP groups).
-        """
-
-        if src_rank is None or self._worker_config.world_size == 1:
-            if not isinstance(state, list) or len(state) != self._worker_config.world_size:
-                raise ValueError("State must be a rank-ordered list of size world_size")
-            self.restore_state_rank(state[self._worker_config.rank])
-            return
-
-        group = self._worker_config.data_parallel_group
-        inputs = None
-        error = None
-        try:
-            if not 0 <= src_rank < self._worker_config.world_size:
-                raise ValueError("Checkpoint source rank is outside the data parallel group")
-            global_src_rank = (
-                src_rank if group is None else torch.distributed.get_global_rank(group, src_rank)
-            )
-            if self._current_epoch_iter is not None or self._restore_state is not None:
-                raise ValueError(
-                    "Cannot restore while iterating or when restore state is already set"
-                )
-            if self._worker_config.rank == src_rank:
-                if not isinstance(state, list) or len(state) != self._worker_config.world_size:
-                    raise ValueError("State must be a rank-ordered list of size world_size")
-                inputs = [pickle.dumps(rank_state) for rank_state in state]
-            elif state is not None:
-                raise ValueError("Only the source rank may supply checkpoint state")
-        except Exception as exc:
-            error = exc
-        self._check_checkpoint_collective("prepare to restore", error)
-
-        output = [None]
-        torch.distributed.scatter_object_list(output, inputs, src=global_src_rank, group=group)
-        error = None
-        try:
-            self.restore_state_rank(pickle.loads(output[0]))
-            if self._workers is None:
-                self.start()
-        except Exception as exc:
-            error = exc
-        try:
-            self._check_checkpoint_collective("restore", error)
-            self._started_for_global_restore = True
-        except Exception as error:
-            try:
-                self._stop_workers(in_del=False)
-            except Exception as cleanup_error:
-                error.add_note(f"Distributed restore cleanup failed: {cleanup_error}")
-            finally:
-                self._restore_state = None
-                self._prefetching_samples = [[] for _ in self._prefetching_samples]
-                self._next_worker_id = 0
-                self._exhausted_workers = [False] * self._worker_config.safe_num_workers
-            raise
-
     def _restore_sample(self, restore_key: RestoreKey) -> Future[TSample]:
         """
         Restore a sample from a restore key.
@@ -895,15 +754,6 @@ class DataLoader(Generic[TSample]):
         Use this data loader and restore the state. Useful for chaining commands. See `save_state_rank` for more details.
         """
         self.restore_state_rank(state)
-        return self
-
-    def with_restored_state_global(
-        self, state: Sequence[RankState | None] | None, src_rank: int | None = None
-    ) -> "DataLoader[TSample]":
-        """
-        Use this data loader and restore the state. Useful for chaining commands. See `save_state_global` for more details.
-        """
-        self.restore_state_global(state, src_rank=src_rank)
         return self
 
     def can_restore_sample(self) -> bool:
