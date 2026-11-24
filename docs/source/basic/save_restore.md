@@ -282,6 +282,28 @@ See [](../advanced/error_handling) for details.
 In each of these scenarios, ensure that the logic for saving and restoring the state is appropriately synchronized across ranks to maintain consistency.
 If you encounter torch distributed errors, likely torch distributed calls are out of sync, or not all ranks are called correctly. If unsure, debug using the first scenario, saving each rank separately.
 
+### Custom loader checkpoint timeouts and batch sizes
+
+Asynchronous worker startup and checkpoint requests wait up to 60 seconds per request
+by default. Pass `worker_request_timeout` to the loader factory to adjust that limit.
+The timeout applies to asynchronous workers. Main-process loading runs synchronously.
+
+With distributed `restore_state_global(..., src_rank=...)`, all ranks start their workers
+and replay pending outputs before the call returns. Worker startup and replay errors
+are reported to the other participating ranks. A rank that exits the job is handled
+by the distributed process group's timeout.
+
+A loader with zero workers uses the training process's random number generators.
+Save and restore those generators with the training checkpoint.
+
+Redistributing a checkpoint with the same world size preserves each rank's next worker.
+To change the world size, save a checkpoint with no pending prefetched samples.
+Set `prefetch_factor=0` on the source loader to avoid pending prefetch.
+The CLI also rejects checkpoints that would resume a generator partway through an input.
+When the CLI reduces the micro-batch size, the target loader applies its `drop_last`
+setting to the resized prefetched batches on restore. Keep the grouped batch size and
+tail policy the same when restoring grouped batches.
+
 ### Migrating a custom loader checkpoint with workers
 
 If you expect to edit the recipe before restoring, construct the source loader with

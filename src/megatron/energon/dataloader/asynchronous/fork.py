@@ -5,7 +5,9 @@ import os
 import sys
 import threading
 import warnings
+from ctypes import c_bool
 from multiprocessing.connection import Connection, wait
+from multiprocessing.context import BaseContext
 from multiprocessing.queues import Queue
 from multiprocessing.reduction import ForkingPickler
 from queue import Empty
@@ -18,6 +20,7 @@ from megatron.energon.dataloader.asynchronous.base import (
     Asynchronous,
     FutureImpl,
     QueueProtocol,
+    ReplyWriter,
     WorkerCommand,
     WorkerExitedError,
     WorkerResult,
@@ -25,6 +28,7 @@ from megatron.energon.dataloader.asynchronous.base import (
 )
 
 DEBUG_LEVEL = 0
+_SHUTDOWN_ACK = "_acknowledge_shutdown"
 _fork_lock = threading.Lock()
 
 
@@ -98,14 +102,30 @@ class _ReplyPipe:
             self._connection.close()
 
 
+class _ForkShutdownEvent:
+    """One-way flag that remains writable if the worker is killed while reading it."""
+
+    _flag: c_bool
+
+    def __init__(self, context: BaseContext):
+        self._flag = context.RawValue(c_bool, False)
+
+    def set(self) -> None:
+        self._flag.value = True
+
+    def is_set(self) -> bool:
+        return self._flag.value
+
+
 class ForkAsynchronous(Asynchronous):
     """Mixin for asynchronous workers that use processes."""
 
-    _shutdown_timeout = 5.0
+    stop_concurrently = True
 
     _process: multiprocessing.Process | None = None
     _cmd_queue: _CommandQueue
     _result_queue: _ReplyPipe
+    _result_lock: threading.Lock
     _spawning_process: int
     _receiver: threading.Thread | None
     _receiver_stop: threading.Event
@@ -128,9 +148,7 @@ class ForkAsynchronous(Asynchronous):
                 os._exit(-1)
 
     def _worker_run(
-        self,
-        cmd_queue: QueueProtocol[WorkerCommand],
-        result_queue: QueueProtocol[WorkerResult],
+        self, cmd_queue: QueueProtocol[WorkerCommand], result_queue: ReplyWriter
     ) -> None:
         try:
             from torch.utils.data._utils import signal_handling
@@ -154,6 +172,10 @@ class ForkAsynchronous(Asynchronous):
         parent_check_thread.start()
         try:
             super()._worker_run(cmd_queue, result_queue)
+            # Torch may need this process to transfer tensor storage for replies still in flight.
+            # Keep its descriptor broker alive until the parent reads the terminal reply.
+            while cmd_queue.get().cmd != _SHUTDOWN_ACK:
+                pass
         finally:
             if DEBUG_LEVEL >= 1:
                 print(f"[{self._name}] shutting down\n", end="")
@@ -184,10 +206,13 @@ class ForkAsynchronous(Asynchronous):
     def _start_process(self) -> None:
         if self._process is not None or getattr(self, "_receiver", None) is not None:
             raise RuntimeError(f"Worker {self._name} is already started or still shutting down")
+        self._shutdown_future = None
         self._receiver = None
         self._receiver_stop = threading.Event()
+        self._result_lock = threading.Lock()
         self._receive_error = None
         context = torch.multiprocessing.get_context("fork")
+        self._shutdown_requested = _ForkShutdownEvent(context)
         # Allocate each worker's pipes right before forking. Later children must never
         # inherit another worker's reply writer, or a dead worker won't produce EOF.
         self._cmd_queue = _CommandQueue(context.Queue())
@@ -264,10 +289,9 @@ class ForkAsynchronous(Asynchronous):
         finally:
             self._result_lock.release()
         remaining = None if deadline is None else max(0.0, deadline - monotonic())
-        if not future._ready.wait(remaining):
-            raise TimeoutError(f"Timed out waiting for worker {self._name}")
+        super()._wait_for_worker_result(future, remaining)
 
-    def shutdown(self, in_del: bool = False) -> None:
+    def shutdown(self, in_del: bool = False, *, deadline: float | None = None) -> None:
         if self._spawning_process != os.getpid():
             return
         process = self._process
@@ -275,26 +299,42 @@ class ForkAsynchronous(Asynchronous):
         if process is None and receiver is None:
             return
 
-        deadline = monotonic() + self._shutdown_timeout
+        if deadline is None:
+            deadline = monotonic() + self._shutdown_timeout
+        # A short, shared allowance lets killed children and reply receivers exit.
+        reap_deadline = deadline + 0.25
         timed_out = False
+        cleanup_error = None
         if process is not None:
             try:
                 if in_del:
                     warnings.warn(f"Terminating unclosed worker {self._name}", ResourceWarning)
                     if process.is_alive():
                         process.kill()
-                elif process.is_alive():
+                elif self._shutdown_future is not None or process.is_alive():
                     try:
                         self._shutdown_worker(timeout=max(0.0, deadline - monotonic()))
                     except TimeoutError:
                         timed_out = True
-                    except (WorkerExitedError, WorkerSerializationError, OSError):
+                    except WorkerExitedError:
                         pass
+                    except Exception as error:
+                        cleanup_error = error
+                    if not timed_out and process.is_alive():
+                        try:
+                            self._cmd_queue.put(
+                                WorkerCommand(cmd=_SHUTDOWN_ACK, args=(), kwargs={}, future_id=-1)
+                            )
+                        except Exception as error:
+                            if cleanup_error is None:
+                                cleanup_error = error
+                            else:
+                                cleanup_error.add_note(f"Could not acknowledge shutdown: {error}")
                 process.join(max(0.0, deadline - monotonic()))
                 if process.is_alive():
                     timed_out = True
                     process.kill()
-                    process.join(self._shutdown_timeout)
+                    process.join(max(0, reap_deadline - monotonic()))
             finally:
                 self._receiver_stop.set()
                 self._cancel_futures()
@@ -307,13 +347,17 @@ class ForkAsynchronous(Asynchronous):
         if receiver is not None:
             # Let EOF wake the receiver after a forced process exit, even
             # when the acknowledgement already used the full grace period.
-            receiver.join(max(0.1, deadline - monotonic()))
+            receiver.join(max(0, reap_deadline - monotonic()))
             if receiver.is_alive():
                 timed_out = True
             else:
                 self._receiver = None
         if timed_out:
-            raise TimeoutError(f"Worker {self._name} did not shut down within the deadline")
+            raise TimeoutError(
+                f"Worker {self._name} did not shut down within the deadline"
+            ) from cleanup_error
+        if cleanup_error is not None:
+            raise cleanup_error
 
     def running(self) -> bool:
         return self._process is not None or (
@@ -338,4 +382,4 @@ class ForkAsynchronous(Asynchronous):
             self._assert_running()
         except WorkerExitedError as error:
             return error
-        return super()._result_queue_error()
+        return WorkerExitedError(f"Result transport for worker {self._name} failed")

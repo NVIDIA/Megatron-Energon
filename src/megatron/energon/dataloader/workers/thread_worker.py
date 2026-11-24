@@ -2,8 +2,12 @@
 # SPDX-License-Identifier: BSD-3-Clause
 from typing import Generic, TypeVar
 
-from megatron.energon.dataloader.asynchronous import ThreadAsynchronous, WorkerCommand, WorkerResult
-from megatron.energon.dataloader.asynchronous.base import QueueProtocol
+from megatron.energon.dataloader.asynchronous import (
+    QueueProtocol,
+    ReplyWriter,
+    ThreadAsynchronous,
+    WorkerCommand,
+)
 from megatron.energon.dataloader.workers.async_worker import (
     DataLoaderAsynchronousWorker,
     torch_set_worker_info,
@@ -23,7 +27,7 @@ class ThreadDataLoaderWorker(
     _uses_global_rng = False
 
     def _worker_run(
-        self, cmd_queue: QueueProtocol[WorkerCommand], result_queue: QueueProtocol[WorkerResult]
+        self, cmd_queue: QueueProtocol[WorkerCommand], result_queue: ReplyWriter
     ) -> None:
         torch_set_worker_info(
             id=self._rank_worker_id,
@@ -32,7 +36,4 @@ class ThreadDataLoaderWorker(
             dataset=self.dataset,
         )
         with thread_worker_scope():
-            try:
-                super()._worker_run(cmd_queue, result_queue)
-            finally:
-                self.finish_worker(close_dataset=True)
+            super()._worker_run(cmd_queue, result_queue)

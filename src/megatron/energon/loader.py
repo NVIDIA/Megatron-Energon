@@ -33,6 +33,8 @@ def get_savable_loader(
     watchdog_timeout_seconds: Optional[float] = 60,
     watchdog_initial_timeout_seconds: Optional[float] = None,
     fail_on_timeout: bool = False,
+    worker_request_timeout: float | None = 60,
+    worker_shutdown_timeout: float | None = None,
     pin_memory: bool = True,
 ) -> DataLoader[T]:
     """
@@ -57,6 +59,10 @@ def get_savable_loader(
         watchdog_timeout_seconds: The timeout in seconds. If None, the watchdog is disabled.
         watchdog_initial_timeout_seconds: The initial timeout in seconds. If None, the timeout is the same as watchdog_timeout_seconds.
         fail_on_timeout: If True, stops the whole process upon timeout, after printing a stack trace.
+        worker_request_timeout: Seconds to wait for an asynchronous startup or checkpoint request.
+            Set to None to wait without a deadline.
+        worker_shutdown_timeout: Seconds to allow in-flight work and cleanup during shutdown.
+            The built-in async workers use a 15-second grace period by default.
         pin_memory: If True, the data iterated by the dataset is pinned to memory, such that it can be quickly used by CUDA.
 
     Returns:
@@ -101,6 +107,8 @@ def get_savable_loader(
         watchdog_timeout_seconds=watchdog_timeout_seconds,
         watchdog_initial_timeout_seconds=watchdog_initial_timeout_seconds,
         fail_on_timeout=fail_on_timeout,
+        worker_request_timeout=worker_request_timeout,
+        worker_shutdown_timeout=worker_shutdown_timeout,
         pin_memory=pin_memory_arg,
     )
     loader._config_pin_memory = pin_memory
@@ -116,6 +124,8 @@ def get_loader(
     watchdog_timeout_seconds: Optional[float] = 60,
     watchdog_initial_timeout_seconds: Optional[float] = None,
     fail_on_timeout: bool = False,
+    worker_request_timeout: float | None = 60,
+    worker_shutdown_timeout: float | None = None,
 ) -> DataLoader[T]:
     """
     Get a dataloader for the given dataset.
@@ -127,6 +137,10 @@ def get_loader(
         watchdog_timeout_seconds: The timeout in seconds. If None, the watchdog is disabled.
         watchdog_initial_timeout_seconds: The initial timeout in seconds. If None, the timeout is the same as watchdog_timeout_seconds.
         fail_on_timeout: If True, stops the whole process upon timeout, after printing a stack trace.
+        worker_request_timeout: Seconds to wait for an asynchronous startup or checkpoint request.
+            Set to None to wait without a deadline.
+        worker_shutdown_timeout: Seconds to allow in-flight work and cleanup during shutdown.
+            The built-in async workers use a 15-second grace period by default.
 
     Returns:
         The instantiated :class:`DataLoader`, yielding batches from the dataset.
@@ -155,5 +169,7 @@ def get_loader(
         watchdog_timeout_seconds=watchdog_timeout_seconds,
         watchdog_initial_timeout_seconds=watchdog_initial_timeout_seconds,
         fail_on_timeout=fail_on_timeout,
+        worker_request_timeout=worker_request_timeout,
+        worker_shutdown_timeout=worker_shutdown_timeout,
         pin_memory=pin_memory,
     )

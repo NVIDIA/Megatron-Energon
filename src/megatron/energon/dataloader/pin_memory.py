@@ -1,7 +1,6 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
-import threading
-from typing import Generic, TypeVar, cast
+from typing import Generic, TypeVar
 
 import torch
 
@@ -64,9 +63,7 @@ class PinMemoryThread(PinMemory[TSample], ThreadAsynchronous, Generic[TSample]):
     Creates the thread on first use.
     """
 
-    _SHUTDOWN = cast(Future[TSample], object())
-
-    _thread: threading.Thread | None = None
+    _cancel_on_shutdown = ("_wrk_pin_memory",)
 
     def __init__(
         self,
@@ -93,8 +90,8 @@ class PinMemoryThread(PinMemory[TSample], ThreadAsynchronous, Generic[TSample]):
             print(f"[{self._name}] Got sample data\n", end="")
         return self._pin_memory(sample_data)
 
-    def shutdown(self, in_del: bool = False) -> None:
-        ThreadAsynchronous.shutdown(self, in_del=in_del)
+    def shutdown(self, in_del: bool = False, *, deadline: float | None = None) -> None:
+        ThreadAsynchronous.shutdown(self, in_del=in_del, deadline=deadline)
 
     def __call__(self, sample: Future[TSample]) -> Future[TSample]:
         """

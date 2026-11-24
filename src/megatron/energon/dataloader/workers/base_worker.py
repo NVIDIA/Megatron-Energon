@@ -65,6 +65,8 @@ class DataLoaderWorker(Generic[TSample]):
     #: Live iterator owned by this worker. Checkpoints save dataset progress separately.
     _dataset_iter: Iterator[TSample] | None = None
     _uses_global_rng = True
+    #: Parent-side deadline allowance for startup and checkpoint RPCs.
+    request_timeout: float | None = 60
     #: Tracks whether teardown must call the worker resource hooks.
     _resources_initialized: bool = False
 

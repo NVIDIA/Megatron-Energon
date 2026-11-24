@@ -79,10 +79,15 @@ with loader:
         train_step(batch)
 ```
 
-`shutdown()` stops the workers before joining the pin-memory helper, which may be waiting on their
-replies. It then closes the owned dataset. A blocked fork worker is terminated after a shutdown
-deadline. A blocked thread worker reports a timeout and retains ownership until it exits, because
-Python cannot safely terminate a running thread. `__del__()` is an emergency fallback.
+`shutdown()` cancels queued prefetch and requests cleanup from all workers under one deadline.
+The built-in workers have 15 seconds by default to finish in-flight work and clean up.
+Pass `worker_shutdown_timeout` to either loader factory to adjust that grace period.
+Workers acknowledge after
+releasing their resources, and cleanup errors reach the caller. The loader reaps fork workers
+before joining the pin-memory helper, which may be waiting on their replies. It then closes the
+owned dataset. Blocked fork workers are terminated when their grace period expires. A blocked
+thread worker reports a timeout and retains ownership until it exits, because Python cannot
+safely terminate a running thread. `__del__()` is an emergency fallback.
 
 ### Fork Lifecycle Call Flow
 
@@ -111,8 +116,8 @@ fills every list to `prefetch_factor`. It then repeats the following sequence:
 6. Yield the sample and update rank-local debug counters.
 
 This gives deterministic worker interleaving even when worker completion times differ. Results may
-arrive out of order on asynchronous result queues; `FutureImpl` matches each result by `future_id`
-and stores results for other pending futures while waiting for the requested one.
+arrive out of order. The transport matches each reply by `future_id` and completes its future.
+Callers wait on their own futures independently.
 
 When every worker returns `StopIteration`, the epoch ends. The next epoch calls `new_iter()` on all
 workers, clears the exhausted flags, and resets round-robin selection to worker 0.
@@ -157,23 +162,30 @@ outside the caller's shutdown deadline. If decoding is stuck, shutdown cancels t
 the child, and reports a timeout. The receiver can exit when the decoder returns.
 
 The process backend installs worker signal handlers, limits Torch to one thread in each child, and
-monitors the parent process. The thread backend uses `queue.Queue` and thread-local worker
-information. Call `torch.utils.data.get_worker_info()` through the module in thread workers.
+monitors the parent process. The thread backend queues commands and completes futures directly
+from the worker thread. It uses thread-local worker information. Call `torch.utils.data.get_worker_info()` through the module in thread workers.
 References imported before Energon use PyTorch's original process-local implementation.
 
 ## Checkpoint State
 
 `save_state_rank()` captures all information needed to continue the same rank-local stream:
 
-- restore keys for samples already inside each prefetch window;
-- one `WorkerState` per worker;
+- one record per worker with its execution snapshot, keys for undelivered prefetched samples,
+  and whether the loader observed EOF;
 - the next worker selected by round-robin interleaving; and
-- the inferred micro-batch size.
+- the batch settings used to validate restore.
+
+A checkpoint waits for any in-flight `next()` to record delivery. The loader takes the checkpoint
+at that boundary before the next advance.
 
 Each `WorkerState` contains the worker RNG state, recursive dataset state, exhaustion flag, and next
-sample index. Prefetched samples are represented by restore keys rather than serialized sample data.
+sample index. That index includes work completed during prefetch. The loader's delivery cursor and
+the pending restore keys identify the outputs the caller still needs to receive.
 Access to `TaskEncoder.rng` requires a transform decorated with
 `@stateless(restore_task_encoder_seeds=True)`. The property raises outside that scope.
+The seed combines the global worker seed with the worker-local invocation index, so a replayed
+invocation makes the same random choices when the same workers are regrouped across ranks.
+`current_sample_index` still describes rank-local interleaving.
 
 `restore_state_rank()` only records the state. Actual restoration happens later in `start()`:
 

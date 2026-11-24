@@ -9,8 +9,8 @@ from megatron.energon.cache.base import CachePool
 from megatron.energon.dataloader.asynchronous import (
     Asynchronous,
     QueueProtocol,
+    ReplyWriter,
     WorkerCommand,
-    WorkerResult,
 )
 from megatron.energon.dataloader.future import Future
 from megatron.energon.dataloader.workers.base_worker import (
@@ -65,6 +65,8 @@ class DataLoaderAsynchronousWorker(DataLoaderWorker[TSample], Asynchronous, Gene
     - :class:`ThreadDataLoaderWorker` - A worker that uses threads to execute the commands.
     """
 
+    _cancel_on_shutdown = ("_wrk_prefetch_next",)
+
     def __init__(
         self,
         dataset: SavableDataset,
@@ -80,13 +82,16 @@ class DataLoaderAsynchronousWorker(DataLoaderWorker[TSample], Asynchronous, Gene
     # Section: Worker methods - now calling to workers via queues.
 
     def _worker_run(
-        self, cmd_queue: QueueProtocol[WorkerCommand], result_queue: QueueProtocol[WorkerResult]
+        self, cmd_queue: QueueProtocol[WorkerCommand], result_queue: ReplyWriter
     ) -> None:
         if self._uses_global_rng:
             SystemRng.seed(self._seed)
         self._global_worker_id = self.worker_config.global_worker_id()
 
         super()._worker_run(cmd_queue, result_queue)
+
+    def _finish_worker(self) -> None:
+        self.finish_worker()
 
     def _wrk_prefetch_next(self) -> TSample:
         """Wraps the super class method to call it in the worker process."""
@@ -104,7 +109,7 @@ class DataLoaderAsynchronousWorker(DataLoaderWorker[TSample], Asynchronous, Gene
         if self._in_worker():
             return super().dataset_init(initial_state)
         else:
-            return self._worker_call(self.dataset_init, initial_state).get()
+            return self._worker_call(self.dataset_init, initial_state).get(self.request_timeout)
 
     def new_iter(self) -> None:
         if self._in_worker():
@@ -128,4 +133,4 @@ class DataLoaderAsynchronousWorker(DataLoaderWorker[TSample], Asynchronous, Gene
         if self._in_worker():
             return super().save_state()
         else:
-            return self._worker_call(self.save_state).get()
+            return self._worker_call(self.save_state).get(self.request_timeout)

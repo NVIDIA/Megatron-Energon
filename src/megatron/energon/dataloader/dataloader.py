@@ -3,8 +3,10 @@
 import inspect
 import os
 import pickle
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from threading import Condition, get_ident
+from time import monotonic
 from typing import (
     Any,
     ClassVar,
@@ -21,6 +23,10 @@ import torch.distributed
 
 from megatron.energon.cache.base import CachePool
 from megatron.energon.cache.no_cache import NoCachePool
+from megatron.energon.dataloader.asynchronous.base import (
+    Asynchronous,
+    WorkerExitedError,
+)
 from megatron.energon.dataloader.future import Future
 from megatron.energon.dataloader.pin_memory import NoPinMemory, PinMemory, PinMemoryThread
 from megatron.energon.dataloader.workers.base_worker import (
@@ -115,15 +121,19 @@ class DataLoader(Generic[TSample]):
     _next_worker_id: int = 0
 
     _restore_state: RankState | None = None
+    #: A collective restore can start workers before the caller enters the context.
+    _started_for_global_restore: bool = False
 
     _dataset: SavableDataset
     _worker_config: WorkerConfig
     _cache_pool: CachePool
     _prefetch_factor: int
+    _worker_request_timeout: float | None
     #: Checkpoint callers take priority over the next delivery once they are waiting.
     _delivery_condition: Condition
     _delivery_thread_id: int | None
     _checkpoint_waiters: int
+    _worker_shutdown_timeout: float | None
     _worker_type: WorkerType
     _prefetching_samples: list[list[Future[TSample]]]
     _pin_memory: PinMemory[TSample]
@@ -142,6 +152,8 @@ class DataLoader(Generic[TSample]):
         prefetch_factor: int = 1,
         worker_type: WorkerType = ForkDataLoaderWorker,
         cache_pool: CachePool | None = None,
+        worker_request_timeout: float | None = 60,
+        worker_shutdown_timeout: float | None = None,
         # Garbage collection configuration
         gc_collect_every_n_steps: int = GC_DEFAULT_EVERY_N_ITER,
         gc_freeze_at_start: bool = True,
@@ -169,6 +181,10 @@ class DataLoader(Generic[TSample]):
                 processes. This improves the garbage collection performance by a lot.
                 In rare cases, this may cause issues and can be disabled. Keep enabled if you
                 experience no issues.
+            worker_request_timeout: Seconds to wait for an asynchronous startup or checkpoint
+                request. Set to None to wait without a deadline.
+            worker_shutdown_timeout: Seconds to allow in-flight work and cleanup during shutdown.
+                The built-in async workers use a 15-second grace period by default.
             watchdog_timeout_seconds: The timeout in seconds. If `None`, the watchdog is disabled.
             watchdog_initial_timeout_seconds: The initial timeout in seconds. If `None`, the timeout is the same as `watchdog_timeout_seconds`.
             fail_on_timeout: If True, stops the whole process upon timeout, after printing a stack trace.
@@ -176,9 +192,15 @@ class DataLoader(Generic[TSample]):
                 If "automatic", the memory is pinned automatically if cuda is available.
                 If a `PinMemory` instance, the instance may only be used for one `DataLoader`.
         """
+        if worker_request_timeout is not None and not 0 < worker_request_timeout < float("inf"):
+            raise ValueError("worker_request_timeout must be a finite positive number or None")
+        if worker_shutdown_timeout is not None and not 0 < worker_shutdown_timeout < float("inf"):
+            raise ValueError("worker_shutdown_timeout must be a finite positive number or None")
         self._delivery_condition = Condition()
         self._delivery_thread_id = None
         self._checkpoint_waiters = 0
+        self._worker_request_timeout = worker_request_timeout
+        self._worker_shutdown_timeout = worker_shutdown_timeout
         self._id = DataLoader._next_id
         DataLoader._next_id += 1
 
@@ -272,6 +294,7 @@ class DataLoader(Generic[TSample]):
             worker = self._worker_type(
                 self._dataset, self._worker_config, worker_id, self._cache_pool
             )
+            worker.request_timeout = self._worker_request_timeout
             self._workers.append(worker)
             worker.start()
 
@@ -286,6 +309,10 @@ class DataLoader(Generic[TSample]):
                 ]
                 for worker in self._restore_state.workers
             ]
+            # Surface failed replays during startup, including coordinated distributed restore.
+            for pending in self._prefetching_samples:
+                for future in pending:
+                    future.get_with_timeout(self._worker_request_timeout)
             self._next_worker_id = self._restore_state.next_worker_id
             self._exhausted_workers = [
                 worker.observed_eof for worker in self._restore_state.workers
@@ -303,31 +330,77 @@ class DataLoader(Generic[TSample]):
         """
         try:
             self._stop_workers(in_del=in_del)
+        except Exception as error:
+            try:
+                self._close_dataset()
+            except Exception as cleanup_error:
+                error.add_note(f"Dataset cleanup failed: {cleanup_error}")
+            raise
+        else:
+            self._close_dataset()
+
+    def _close_dataset(self) -> None:
+        iterator, self._current_epoch_iter = self._current_epoch_iter, None
+        self._prefetching_samples = [[] for _ in self._prefetching_samples]
+        try:
+            if iterator is not None:
+                iterator.close()
         finally:
-            if self._current_epoch_iter is not None:
-                self._current_epoch_iter.close()
-                self._current_epoch_iter = None
-            self._prefetching_samples = [[] for _ in self._prefetching_samples]
             if self._workers is None:
                 self._dataset.close()
 
     def _stop_workers(self, in_del: bool) -> None:
         errors = []
         running = []
-        for worker in self._workers or ():
-            try:
-                worker.shutdown(in_del=in_del)
-            except Exception as error:
-                errors.append(error)
-                if worker.running():
-                    running.append(worker)
+        workers = self._workers or []
+        resources = [*workers, self._pin_memory]
+        async_resources = [
+            resource
+            for resource in resources
+            if isinstance(resource, Asynchronous) and resource.running()
+        ]
+        grace_period = self._worker_shutdown_timeout
+        if grace_period is None:
+            grace_period = max(
+                (resource.shutdown_grace_period for resource in async_resources), default=0
+            )
+        deadline = monotonic() + grace_period
+        if not in_del:
+            for resource in async_resources:
+                try:
+                    resource.begin_shutdown()
+                except WorkerExitedError:
+                    pass
+                except Exception as error:
+                    errors.append(error)
+        # Interrupt blocked processes concurrently so each can be reaped within the same deadline.
+        concurrent_resources = [
+            worker for worker in async_resources if not in_del and worker.stop_concurrently
+        ]
+        with ThreadPoolExecutor(max_workers=max(1, len(concurrent_resources))) as shutdown_pool:
+            pending_shutdowns = {
+                id(worker): shutdown_pool.submit(worker.shutdown, in_del=in_del, deadline=deadline)
+                for worker in concurrent_resources
+            }
+            # The pinning thread can be waiting for a worker reply. Reap the workers first.
+            for resource in resources:
+                try:
+                    if pending := pending_shutdowns.get(id(resource)):
+                        pending.result()
+                    elif isinstance(resource, Asynchronous):
+                        resource.shutdown(in_del=in_del, deadline=deadline)
+                    else:
+                        resource.shutdown(in_del=in_del)
+                except Exception as error:
+                    errors.append(error)
+                    if (
+                        isinstance(resource, DataLoaderWorker)
+                        and isinstance(resource, Asynchronous)
+                        and resource.running()
+                    ):
+                        running.append(resource)
         self._workers = running or None
-
-        # The pinning thread can be waiting for a worker reply.
-        try:
-            self._pin_memory.shutdown(in_del=in_del)
-        except Exception as error:
-            errors.append(error)
+        self._started_for_global_restore = False
         if len(errors) == 1:
             raise errors[0]
         if errors:
@@ -346,7 +419,10 @@ class DataLoader(Generic[TSample]):
             self.shutdown(in_del=True)
 
     def __enter__(self) -> "DataLoader[TSample]":
-        self.start()
+        if self._started_for_global_restore:
+            self._started_for_global_restore = False
+        else:
+            self.start()
         return self
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:
@@ -360,6 +436,7 @@ class DataLoader(Generic[TSample]):
     def _epoch_iter(self) -> Generator[TSample, None, None]:
         """Iterate over the dataset for one epoch (i.e. all workers StopIteration).
         One epoch may also be infinite (if looping the dataset)."""
+        self._started_for_global_restore = False
         epoch_id = self._next_epoch_id
         self._next_epoch_id += 1
 
@@ -597,7 +674,7 @@ class DataLoader(Generic[TSample]):
             keys = []
             for future in pending:
                 try:
-                    sample = future.get()
+                    sample = future.get_with_timeout(self._worker_request_timeout)
                 except StopIteration:
                     break
                 key = get_sample_restore_key(sample)
@@ -680,7 +757,7 @@ class DataLoader(Generic[TSample]):
             and self._current_epoch_iter is None
         ):
             # A context manager may have started idle workers before restore_state_rank().
-            self.shutdown()
+            self._stop_workers(in_del=False)
         assert self._workers is None and self._current_epoch_iter is None, (
             "Cannot restore state after iteration has started"
         )
@@ -762,12 +839,23 @@ class DataLoader(Generic[TSample]):
         error = None
         try:
             self.restore_state_rank(pickle.loads(output[0]))
+            if self._workers is None:
+                self.start()
         except Exception as exc:
             error = exc
         try:
             self._check_checkpoint_collective("restore", error)
-        except Exception:
-            self._restore_state = None
+            self._started_for_global_restore = True
+        except Exception as error:
+            try:
+                self._stop_workers(in_del=False)
+            except Exception as cleanup_error:
+                error.add_note(f"Distributed restore cleanup failed: {cleanup_error}")
+            finally:
+                self._restore_state = None
+                self._prefetching_samples = [[] for _ in self._prefetching_samples]
+                self._next_worker_id = 0
+                self._exhausted_workers = [False] * self._worker_config.safe_num_workers
             raise
 
     def _restore_sample(self, restore_key: RestoreKey) -> Future[TSample]:

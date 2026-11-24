@@ -5,8 +5,8 @@ from typing import Generic, TypeVar
 from megatron.energon.dataloader.asynchronous import (
     ForkAsynchronous,
     QueueProtocol,
+    ReplyWriter,
     WorkerCommand,
-    WorkerResult,
 )
 from megatron.energon.dataloader.workers.async_worker import (
     DataLoaderAsynchronousWorker,
@@ -24,10 +24,11 @@ class ForkDataLoaderWorker(
     Implements the `DataLoaderWorker` interface using processes.
     """
 
+    def _finish_worker(self) -> None:
+        self.finish_worker(close_dataset=True)
+
     def _worker_run(
-        self,
-        cmd_queue: QueueProtocol[WorkerCommand],
-        result_queue: QueueProtocol[WorkerResult],
+        self, cmd_queue: QueueProtocol[WorkerCommand], result_queue: ReplyWriter
     ) -> None:
         gc_init_worker(self._rank_worker_id)
 
@@ -39,7 +40,4 @@ class ForkDataLoaderWorker(
             process_local=True,
         )
 
-        try:
-            super()._worker_run(cmd_queue, result_queue)
-        finally:
-            self.finish_worker(close_dataset=True)
+        super()._worker_run(cmd_queue, result_queue)

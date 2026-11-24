@@ -35,6 +35,7 @@ from megatron.energon import (
 )
 from megatron.energon.checkpoint.rank_state import _split_batch_restore_key
 from megatron.energon.dataloader import DataLoader, ForkDataLoaderWorker, ThreadDataLoaderWorker
+from megatron.energon.dataloader.asynchronous import ThreadAsynchronous
 from megatron.energon.dataloader.future import DoneFuture
 from megatron.energon.dataloader.pin_memory import PinMemory, PinMemoryThread
 from megatron.energon.dataloader.workers.base_worker import WorkerSampleRestoreKey
@@ -551,6 +552,55 @@ class TestDataLoader(unittest.TestCase):
         with loader(None).with_restored_state_rank(state) as restored:
             self.assertEqual(next(iter(restored)).text, expected[1])
 
+    def test_thread_replies_complete_independently_of_other_waiters(self):
+        release_first = threading.Event()
+        release_second = threading.Event()
+        first_waiting = threading.Event()
+        second_waiting = threading.Event()
+        second_running = threading.Event()
+
+        class Worker(ThreadAsynchronous):
+            def _wrk_first(self):
+                if not release_first.wait(5):
+                    raise TimeoutError("First request was not released")
+                return "first"
+
+            def _wrk_second(self):
+                second_running.set()
+                if not release_second.wait(5):
+                    raise TimeoutError("Second request was not released")
+                return "second"
+
+            def _wait_for_worker_result(self, future, timeout):
+                if future is first:
+                    first_waiting.set()
+                if future is second:
+                    second_waiting.set()
+                super()._wait_for_worker_result(future, timeout)
+
+        worker = Worker()
+        worker._asynchronous_init(name="test-thread-replies")
+        worker.start()
+        try:
+            first = worker._worker_call(worker._wrk_first)
+            second = worker._worker_call(worker._wrk_second)
+            with ThreadPoolExecutor(2) as executor:
+                second_wait = executor.submit(second.get, 5)
+                try:
+                    self.assertTrue(second_waiting.wait(5))
+                    first_wait = executor.submit(first.get, 5)
+                    self.assertTrue(first_waiting.wait(5))
+                    release_first.set()
+                    self.assertTrue(second_running.wait(5))
+                    self.assertEqual(first_wait.result(timeout=2), "first")
+                    self.assertFalse(second_wait.done())
+                finally:
+                    release_first.set()
+                    release_second.set()
+                self.assertEqual(second_wait.result(timeout=5), "second")
+        finally:
+            worker.shutdown()
+
     def test_thread_workers_surface_unsupported_process_rng(self):
         class Encoder(DefaultTaskEncoder):
             @stateless(restore_seeds=True)
@@ -791,9 +841,20 @@ class TestDataLoader(unittest.TestCase):
                         try:
                             class Dataset:
                                 worker_config = WorkerConfig(rank=rank, world_size=2, num_workers=0)
+                                fail_init = True
 
+                                def worker_init(self):
+                                    if rank == 0 and self.fail_init:
+                                        raise ValueError("local restore startup failed")
+
+                                def worker_close(self): pass
+                                def reset_state_deep(self): pass
+                                def close(self): pass
+                                def __iter__(self): return iter([rank])
+
+                            dataset = Dataset()
                             loader = DataLoader(
-                                Dataset(), pin_memory=None, watchdog_timeout_seconds=None,
+                                dataset, pin_memory=None, watchdog_timeout_seconds=None,
                                 gc_collect_every_n_steps=0,
                             )
                             if rank == 0:
@@ -805,6 +866,9 @@ class TestDataLoader(unittest.TestCase):
                                 (lambda: loader.restore_state_global(
                                     [] if rank == 0 else None, src_rank=0,
                                 ), "rank-ordered list"),
+                                (lambda: loader.restore_state_global(
+                                    [None, None] if rank == 0 else None, src_rank=0,
+                                ), "local restore startup failed"),
                             ):
                                 try:
                                     operation()
@@ -812,6 +876,12 @@ class TestDataLoader(unittest.TestCase):
                                     assert expected in str(error), error
                                 else:
                                     raise AssertionError("Expected preparation error on both ranks")
+                            dataset.fail_init = False
+                            loader.restore_state_global(
+                                [None, None] if rank == 0 else None, src_rank=0,
+                            )
+                            with loader:
+                                assert next(iter(loader)) == rank
                             dist.barrier()
                         finally:
                             dist.destroy_process_group()
@@ -904,10 +974,20 @@ class TestDataLoader(unittest.TestCase):
                 "-c",
                 dedent("""
                     from concurrent.futures import ThreadPoolExecutor
+                    from time import sleep
+
+                    import torch
                     from megatron.energon.dataloader.asynchronous.base import (
                         WorkerExitedError, WorkerSerializationError,
                     )
                     from megatron.energon.dataloader.asynchronous.fork import ForkAsynchronous
+
+                    def delay_tensor_decode():
+                        sleep(0.2)
+
+                    class SlowReply:
+                        def __reduce__(self):
+                            return delay_tensor_decode, ()
 
                     class Worker(ForkAsynchronous):
                         def __init__(self):
@@ -924,6 +1004,9 @@ class TestDataLoader(unittest.TestCase):
 
                         def large_reply(self):
                             return b"x" * (8 * 1024 * 1024)
+
+                        def tensor_reply(self):
+                            return SlowReply(), torch.tensor(17)
 
                     worker, sibling, partial = Worker(), Worker(), Worker()
                     with ThreadPoolExecutor(3) as pool:
@@ -954,6 +1037,9 @@ class TestDataLoader(unittest.TestCase):
                         else:
                             raise AssertionError("Expected failure after a partial reply")
                         assert sibling._worker_call(sibling.echo, 8).get(2) == 8
+                        pending_tensor = sibling._worker_call(sibling.tensor_reply)
+                        sibling.shutdown()
+                        assert pending_tensor.get()[1].item() == 17
                     finally:
                         worker.shutdown()
                         sibling.shutdown()
@@ -1022,27 +1108,27 @@ class TestDataLoader(unittest.TestCase):
                 "-c",
                 dedent("""
                     import multiprocessing
+                    from time import monotonic
                     from torch.utils.data import get_worker_info
                     from megatron.energon import WorkerConfig
-                    from megatron.energon.dataloader import DataLoader, ForkDataLoaderWorker
+                    from megatron.energon.dataloader import DataLoader
+                    from megatron.energon.dataloader.pin_memory import PinMemory
 
                     context = multiprocessing.get_context("fork")
-                    blocked = context.Event()
+                    blocked = [context.Event() for _ in range(3)]
                     release = context.Event()
 
-                    class Worker(ForkDataLoaderWorker):
-                        _shutdown_timeout = 0.5
-
                     class Dataset:
-                        worker_config = WorkerConfig(rank=0, world_size=1, num_workers=1)
+                        worker_config = WorkerConfig(rank=0, world_size=1, num_workers=3)
                         def worker_init(self): pass
                         def worker_close(self): pass
                         def reset_state_deep(self): pass
                         def close(self): pass
 
                         def __iter__(self):
-                            yield get_worker_info().id
-                            blocked.set()
+                            worker_id = get_worker_info().id
+                            yield worker_id
+                            blocked[worker_id].set()
                             release.wait()
 
                     class FailingDataset(Dataset):
@@ -1052,10 +1138,23 @@ class TestDataLoader(unittest.TestCase):
                             if get_worker_info().id == 1:
                                 raise RuntimeError("initialization failed")
 
-                    def loader(dataset):
+                    class StalledStartup(FailingDataset):
+                        def worker_init(self):
+                            if get_worker_info().id == 1:
+                                release.wait()
+
+                    class FailingCleanup(FailingDataset):
+                        def worker_init(self): pass
+
+                        def worker_close(self):
+                            if get_worker_info().id == 1:
+                                raise RuntimeError("worker cleanup failed")
+
+                    def loader(dataset, pin_memory=None):
                         return DataLoader(
-                            dataset, worker_type=Worker, prefetch_factor=1, pin_memory=None,
+                            dataset, prefetch_factor=1, pin_memory=pin_memory,
                             watchdog_timeout_seconds=None, gc_collect_every_n_steps=0,
+                            worker_request_timeout=1, worker_shutdown_timeout=0.5,
                         )
 
                     failed = loader(FailingDataset())
@@ -1067,15 +1166,106 @@ class TestDataLoader(unittest.TestCase):
                         raise AssertionError("Expected worker initialization failure")
                     assert failed._workers is None and not multiprocessing.active_children()
 
-                    running = loader(Dataset())
-                    assert next(iter(running)) == 0 and blocked.wait(3)
+                    stalled = loader(StalledStartup())
                     try:
-                        running.close()
+                        stalled.start()
                     except TimeoutError:
                         pass
                     else:
-                        raise AssertionError("Expected forced shutdown to report a timeout")
+                        raise AssertionError("Expected a startup timeout")
+                    assert not multiprocessing.active_children()
+
+                    cleanup = loader(FailingCleanup())
+                    cleanup.start()
+                    try:
+                        cleanup.close()
+                    except RuntimeError as error:
+                        assert str(error) == "worker cleanup failed", error
+                    else:
+                        raise AssertionError("Expected worker cleanup failure")
+                    assert not multiprocessing.active_children()
+
+                    running = loader(Dataset(), pin_memory=PinMemory("cpu"))
+                    it = iter(running)
+                    assert [next(it) for _ in range(3)] == [0, 1, 2]
+                    assert all(event.wait(3) for event in blocked)
+                    try:
+                        running.save_state_rank()
+                    except TimeoutError:
+                        pass
+                    else:
+                        raise AssertionError("Expected checkpoint timeout")
+                    started = monotonic()
+                    try:
+                        running.close()
+                    except ExceptionGroup as error:
+                        assert len(error.exceptions) == 3
+                        assert all(isinstance(exc, TimeoutError) for exc in error.exceptions)
+                    else:
+                        raise AssertionError("Expected forced shutdown to report timeouts")
+                    assert monotonic() - started < 1.25
                     assert running._workers is None and not multiprocessing.active_children()
+                """),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_early_close_finishes_active_work_and_cancels_queued_prefetch(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                dedent("""
+                    import multiprocessing
+                    from megatron.energon import WorkerConfig
+                    from megatron.energon.dataloader import DataLoader, ForkDataLoaderWorker, ThreadDataLoaderWorker
+                    from megatron.energon.dataloader.pin_memory import PinMemoryThread
+
+                    context = multiprocessing.get_context("fork")
+                    for backend in (ForkDataLoaderWorker, ThreadDataLoaderWorker):
+                        entered = context.Event()
+                        release = context.Event()
+                        finished = context.Event()
+                        queued_work_started = context.Event()
+                        closed = context.Event()
+
+                        class Worker(backend):
+                            def begin_shutdown(self):
+                                super().begin_shutdown()
+                                release.set()
+
+                        class Dataset:
+                            worker_config = WorkerConfig(rank=0, world_size=1, num_workers=1)
+                            def worker_init(self): pass
+                            def worker_close(self): closed.set()
+                            def reset_state_deep(self): pass
+                            def close(self): pass
+
+                            def __iter__(self):
+                                yield 0
+                                entered.set()
+                                assert release.wait(4)
+                                finished.set()
+                                yield 1
+                                queued_work_started.set()
+                                yield 2
+
+                        pinner = PinMemoryThread("cpu")
+                        with DataLoader(
+                            Dataset(), worker_type=Worker, prefetch_factor=3, pin_memory=pinner,
+                            gc_collect_every_n_steps=0, watchdog_timeout_seconds=None,
+                            worker_shutdown_timeout=3,
+                        ) as loader:
+                            assert next(iter(loader)) == 0
+                            assert entered.wait(4)
+                        assert finished.is_set()
+                        assert closed.is_set()
+                        assert not queued_work_started.is_set()
+                        assert not pinner.running()
+                        assert not multiprocessing.active_children()
                 """),
             ],
             capture_output=True,

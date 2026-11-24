@@ -28,6 +28,10 @@ class Future(Generic[R]):
         """Get the result of the future. Waits until the future is done."""
         ...
 
+    def get_with_timeout(self, timeout: float | None) -> R:
+        """Wait up to the timeout for asynchronous work. Synchronous work runs inline."""
+        return self.get()
+
     @abstractmethod
     def cancel(self) -> bool:
         """Cancel the future.
@@ -56,15 +60,22 @@ class DoneFuture(Future[R]):
 class CallableFuture(Future[R]):
     """Future that calls a callable to get the result."""
 
-    __slots__ = ("_callable", "_value", "_exception", "_cancelled")
+    __slots__ = ("_callable", "_value", "_exception", "_cancelled", "_source")
 
     _callable: Callable[[], R]
     _value: R
     _exception: Exception
     _cancelled: bool
+    _source: Future[Any] | None
 
-    def __init__(self, callable: Callable[[], R]):
+    def __init__(self, callable: Callable[[], R], *, source: Future[Any] | None = None):
         self._callable = callable
+        self._source = source
+
+    def get_with_timeout(self, timeout: float | None) -> R:
+        if self._source is not None and not getattr(self, "_cancelled", False):
+            self._source.get_with_timeout(timeout)
+        return self.get()
 
     def get(self) -> R:
         if getattr(self, "_cancelled", False):
@@ -98,7 +109,7 @@ class CallableFuture(Future[R]):
         Returns:
             A future that will be resolved to the result of the function given the result of the future.
         """
-        return CallableFuture(lambda: fn(future))
+        return CallableFuture(lambda: fn(future), source=future)
 
 
 class ExceptionFuture(Future[Any]):

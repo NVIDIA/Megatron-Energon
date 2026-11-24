@@ -3,9 +3,7 @@
 import threading
 import traceback
 from abc import abstractmethod
-from queue import Empty
-from time import monotonic
-from typing import Any, Callable, ParamSpec, Protocol, TypeVar
+from typing import Any, Callable, ClassVar, ParamSpec, Protocol, TypeVar
 
 from megatron.energon.dataloader.future import CancelledError, Future
 from megatron.energon.edataclass import edataclass
@@ -24,6 +22,18 @@ class QueueProtocol(Protocol[T]):
     def get(self, *, timeout: float | None = None) -> T: ...
 
     def put(self, item: T, /) -> None: ...
+
+
+class ReplyWriter(Protocol):
+    def put(self, reply: "WorkerResult", /) -> None: ...
+
+
+class ShutdownEvent(Protocol):
+    """Shutdown signal shared by a worker and its caller."""
+
+    def set(self) -> None: ...
+
+    def is_set(self) -> bool: ...
 
 
 @edataclass
@@ -77,6 +87,9 @@ class FutureImpl(Future[T]):
             raise self._exception
         return self._result
 
+    def get_with_timeout(self, timeout: float | None) -> T:
+        return self.get(timeout)
+
     def cancel(self) -> bool:
         if hasattr(self, "_result") or hasattr(self, "_exception"):
             if DEBUG_LEVEL >= 1:
@@ -106,47 +119,29 @@ class Asynchronous:
     """Asynchronous base class."""
 
     _cmd_queue: QueueProtocol[WorkerCommand]
-    _result_queue: QueueProtocol[WorkerResult]
     _next_future_id: int
     _pending_futures: dict[int, FutureImpl[Any]]
     _name: str
-    _result_lock: threading.Lock
     _pending_lock: threading.Lock
+    _shutdown_future: FutureImpl[None] | None = None
+    _shutdown_timeout: float = 15.0
+    _shutdown_requested: ShutdownEvent
+    _cancel_on_shutdown: ClassVar[tuple[str, ...]] = ()
+    stop_concurrently: ClassVar[bool] = False
+
+    @property
+    def shutdown_grace_period(self) -> float:
+        return self._shutdown_timeout
 
     def _asynchronous_init(self, name: str) -> None:
         self._next_future_id = 0
         self._pending_futures = {}
         self._name = name
-        self._result_lock = threading.Lock()
         self._pending_lock = threading.Lock()
 
     def _wait_for_worker_result(self, future: FutureImpl[Any], timeout: float | None) -> None:
-        """Dispatch queued replies until this request completes or its deadline expires."""
-        deadline = None if timeout is None else monotonic() + timeout
-        if not self._result_lock.acquire(timeout=-1 if timeout is None else timeout):
+        if not future._ready.wait(timeout):
             raise TimeoutError(f"Timed out waiting for worker {self._name}")
-        try:
-            while not future.done():
-                interval = 0.1
-                if deadline is not None:
-                    remaining = deadline - monotonic()
-                    if remaining <= 0:
-                        raise TimeoutError(f"Timed out waiting for worker {self._name}")
-                    interval = min(interval, remaining)
-                try:
-                    reply = self._result_queue.get(timeout=interval)
-                except Empty:
-                    try:
-                        self._assert_running()
-                    except WorkerExitedError as error:
-                        self._fail_pending_futures(error)
-                    continue
-                except (EOFError, OSError, ValueError, WorkerSerializationError):
-                    self._fail_pending_futures(self._result_queue_error())
-                    continue
-                self._dispatch_reply(reply)
-        finally:
-            self._result_lock.release()
 
     def _dispatch_reply(self, reply: WorkerResult) -> None:
         with self._pending_lock:
@@ -156,9 +151,6 @@ class Asynchronous:
                     pending._set_exception(reply.exception)
                 else:
                     pending._set_result(reply.result)
-
-    def _result_queue_error(self) -> WorkerExitedError:
-        return WorkerExitedError(f"Result transport for worker {self._name} failed")
 
     def _fail_pending_futures(self, error: WorkerExitedError | WorkerSerializationError) -> None:
         with self._pending_lock:
@@ -218,27 +210,19 @@ class Asynchronous:
         return future
 
     def _worker_run(
-        self, cmd_queue: QueueProtocol[WorkerCommand], result_queue: QueueProtocol[WorkerResult]
+        self, cmd_queue: QueueProtocol[WorkerCommand], result_queue: ReplyWriter
     ) -> None:
         """
         The worker main loop.
         It waits for commands via the command queue and executes them.
         The functions to call are identified by their name.
-        The result of the call is put into the result queue.
+        Replies are written to the backend's result sink.
         The worker exits when the command `_shutdown_worker` is received.
-
-        Args:
-            cmd_queue: The command queue to wait for commands.
-            result_queue: The result queue to put the results into.
         """
         assert self._in_worker(), "_worker_run must be called in the worker"
+        shutting_down = False
         try:
             while True:
-                if DEBUG_LEVEL >= 2:
-                    print(
-                        f"[{self._name}] waiting for command {cmd_queue.qsize()=}\n",
-                        end="",
-                    )
                 cmd = cmd_queue.get()
                 if DEBUG_LEVEL >= 2:
                     print(
@@ -247,6 +231,8 @@ class Asynchronous:
                     )
                 shutting_down = cmd.cmd == self._wrk_shutdown_worker.__name__
                 try:
+                    if cmd.cmd in self._cancel_on_shutdown and self._shutdown_requested.is_set():
+                        raise CancelledError("Queued prefetch cancelled during shutdown")
                     fn = getattr(self, cmd.cmd)
                     result = fn(*cmd.args, **cmd.kwargs)
                 except Exception as e:
@@ -262,7 +248,6 @@ class Asynchronous:
                         WorkerResult(future_id=cmd.future_id, result=result, shutdown=shutting_down)
                     )
                     del result
-                # cmd_queue.task_done()
                 if shutting_down:
                     if DEBUG_LEVEL >= 1:
                         print(
@@ -275,9 +260,12 @@ class Asynchronous:
                         f"[{self._name}, fut={cmd.future_id}] processed, waiting for next command\n",
                         end="",
                     )
-        except:
+        except BaseException:
             traceback.print_exc()
             raise
+        finally:
+            if not shutting_down:
+                self._finish_worker()
 
     @abstractmethod
     def _assert_running(self) -> None:
@@ -289,15 +277,23 @@ class Asynchronous:
         """Check if the execution is within the worker."""
         ...
 
+    def _finish_worker(self) -> None:
+        """Release resources in the worker execution context."""
+
     def _wrk_shutdown_worker(self) -> None:
-        """Does nothing. The actual shutdown is handled in the _worker_run method."""
         assert self._in_worker(), "_wrk_shutdown_worker must be called in the worker"
+        self._finish_worker()
+
+    def begin_shutdown(self) -> None:
+        """Ask the worker to release its resources before acknowledging shutdown."""
+        if self._shutdown_future is None:
+            self._shutdown_requested.set()
+            self._shutdown_future = self._worker_call(self._wrk_shutdown_worker)
 
     def _shutdown_worker(self, timeout: float | None = None) -> None:
-        """Shutdown the worker. The actual shutdown is handled in the _worker_run method."""
-        assert not self._in_worker(), "shutdown_worker must not be called in the worker"
-        # This is not actually a recursive call, because the worker loop will exit before calling this method.
-        self._worker_call(self._wrk_shutdown_worker).get(timeout)
+        self.begin_shutdown()
+        assert self._shutdown_future is not None
+        self._shutdown_future.get(timeout)
         self._cancel_futures()
         if DEBUG_LEVEL >= 1:
             print(f"[{self._name}] shutdown\n", end="")
@@ -306,7 +302,7 @@ class Asynchronous:
     def start(self) -> None: ...
 
     @abstractmethod
-    def shutdown(self) -> None: ...
+    def shutdown(self, in_del: bool = False, *, deadline: float | None = None) -> None: ...
 
     @abstractmethod
     def running(self) -> bool: ...
