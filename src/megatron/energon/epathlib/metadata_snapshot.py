@@ -31,30 +31,18 @@ def _check_digest(payload: bytes, sha256: str | None) -> None:
 
 @dataclass(frozen=True)
 class MetadataSnapshot:
-    recipe_identity: str
     contents: dict[str, bytes]
     file_checks: dict[str, bool]
     sizes: dict[str, int]
     jsonl_sizes: dict[str, int]
 
     @classmethod
-    def load(
-        cls,
-        path: str | Path,
-        *,
-        sha256: str | None = None,
-        recipe_identity: str | None = None,
-    ) -> "MetadataSnapshot":
-        """Read one package; check its digest and recipe identity when supplied."""
+    def load(cls, path: str | Path, *, sha256: str | None = None) -> "MetadataSnapshot":
+        """Read one package and check its digest when supplied."""
         payload = Path(path).read_bytes()
         _check_digest(payload, sha256)
         document = json.loads(payload)
-        if document["format_version"] != 1:
-            raise ValueError("Unsupported metadata snapshot format")
-        if recipe_identity is not None and document["recipe_identity"] != recipe_identity:
-            raise ValueError("Metadata snapshot recipe identity mismatch")
         return cls(
-            recipe_identity=document["recipe_identity"],
             contents={
                 key: base64.b64decode(value, validate=True)
                 for key, value in document["contents"].items()
@@ -67,8 +55,6 @@ class MetadataSnapshot:
     def save(self, path: str | Path) -> None:
         """Atomically publish the package and log its path and SHA256 at INFO level."""
         document = {
-            "format_version": 1,
-            "recipe_identity": self.recipe_identity,
             "contents": {
                 key: base64.b64encode(value).decode("ascii") for key, value in self.contents.items()
             },
@@ -104,7 +90,7 @@ class _MetadataCapture:
     """Collect construction metadata while ordinary storage operations run."""
 
     def __init__(self) -> None:
-        self.snapshot = MetadataSnapshot("", {}, {}, {}, {})
+        self.snapshot = MetadataSnapshot({}, {}, {}, {})
         self.captured_bytes = 0
 
     def record_contents(self, path: str, stream: BinaryIO) -> None:

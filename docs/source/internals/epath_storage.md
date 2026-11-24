@@ -142,17 +142,18 @@ with use_metadata_snapshot(snapshot_path, sha256=expected_digest):
 ```
 
 Omitting `sha256` skips only the checksum comparison; the package must still be
-valid and have a supported format. A checksum identifies a package, not the
+valid JSON containing the required metadata maps. A checksum identifies a package, not the
 current contents of its source dataset. Recreate the snapshot after changing
 the recipe or dataset metadata. Keep those inputs immutable during capture and
 replay. Exit the context before starting workers, including forked workers.
 
 ### Package format
 
-Version 1 packages retain `format_version`, `recipe_identity`, base64-encoded
-`contents`, and maps named `file_checks`, `sizes`, and `jsonl_sizes`. Keys are
-logical EPath strings; `jsonl_sizes` contains terminal byte offsets. Path-based
-creation writes an empty recipe identity and does not require a separate label.
+The JSON package contains four maps: `contents`, `file_checks`, `sizes`, and
+`jsonl_sizes`. Their keys are logical EPath strings. `contents` stores file bytes
+encoded as Base64, `file_checks` stores file-existence results, `sizes` stores
+file sizes in bytes, and `jsonl_sizes` stores terminal byte offsets from JSONL
+indexes.
 
 ## Worker and cache ownership
 

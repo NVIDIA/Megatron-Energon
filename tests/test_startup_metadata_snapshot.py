@@ -195,6 +195,10 @@ class SnapshotTest(unittest.TestCase):
             # Creation ignores a supplied checksum, even when it is incorrect.
             with use_metadata_snapshot(str(package), create=True, sha256="wrong"):
                 pass
+            self.assertEqual(
+                set(json.loads(package.read_bytes())),
+                {"contents", "file_checks", "sizes", "jsonl_sizes"},
+            )
             digest = hashlib.sha256(package.read_bytes()).hexdigest()
             for path in (package, str(package)):
                 for checksum in (None, digest):
@@ -203,19 +207,15 @@ class SnapshotTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "SHA256"):
                 with use_metadata_snapshot(package, sha256="wrong"):
                     self.fail("Checksum must be checked before construction")
-            with self.assertRaisesRegex(ValueError, "identity"):
-                MetadataSnapshot.load(package, sha256=digest, recipe_identity="wrong")
-            snapshot = MetadataSnapshot.load(package, sha256=digest, recipe_identity="")
+            snapshot = MetadataSnapshot.load(package, sha256=digest)
             for create in (False, True):
                 with self.assertRaises(TypeError):
                     with use_metadata_snapshot(snapshot, create=create):
                         self.fail("Both modes require a path before construction starts")
-            document = json.loads(package.read_bytes())
-            document["format_version"] = 999
-            package.write_text(json.dumps(document))
-            with self.assertRaisesRegex(ValueError, "format"):
+            package.write_text("not a JSON document")
+            with self.assertRaises(json.JSONDecodeError):
                 with use_metadata_snapshot(package):
-                    self.fail("Format validation is independent of checksum validation")
+                    self.fail("Reading still requires valid JSON when no checksum is supplied")
 
     def test_failed_creation_preserves_snapshot_and_nested_context(self):
         with tempfile.TemporaryDirectory() as directory:
