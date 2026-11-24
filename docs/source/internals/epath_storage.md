@@ -41,8 +41,8 @@ open file, stream, or memory map into dataset configuration or checkpoint state.
 ## Frozen construction metadata
 
 Use a snapshot to avoid repeating metadata reads while constructing loaders for
-the same frozen dataset revision. Both modes use the same local or shared
-filesystem path:
+the same frozen dataset revision. Both modes require a local or shared
+filesystem path, supplied as a string or `pathlib.Path`:
 
 - `create=True` performs the normal metadata I/O and records its results,
   including repeated queries. It creates or replaces the snapshot after the
@@ -147,18 +147,12 @@ current contents of its source dataset. Recreate the snapshot after changing
 the recipe or dataset metadata. Keep those inputs immutable during capture and
 replay. Exit the context before starting workers, including forked workers.
 
-### Package format and in-memory use
+### Package format
 
 Version 1 packages retain `format_version`, `recipe_identity`, base64-encoded
 `contents`, and maps named `file_checks`, `sizes`, and `jsonl_sizes`. Keys are
 logical EPath strings; `jsonl_sizes` contains terminal byte offsets. Path-based
 creation writes an empty recipe identity and does not require a separate label.
-
-Applications that already distribute snapshots in memory can still pass a
-`MetadataSnapshot` object to `use_metadata_snapshot(snapshot)`. File-mode options
-are omitted for this form. `MetadataSnapshot.load(path, sha256=..., recipe_identity=...)`
-remains available; both expected values are optional. Existing labeled packages
-remain readable, and an explicitly requested recipe identity is still checked.
 
 ## Worker and cache ownership
 

@@ -137,12 +137,12 @@ def active_capture() -> _MetadataCapture | None:
 
 @contextlib.contextmanager
 def use_metadata_snapshot(
-    path: str | Path | MetadataSnapshot,
+    path: str | Path,
     *,
     create: bool = False,
     sha256: str | None = None,
 ) -> Iterator[MetadataSnapshot]:
-    """Create or read a metadata package while constructing a dataset.
+    """Create or read a metadata package at a filesystem path during construction.
 
     With ``create=True``, perform ordinary storage reads and record their results,
     including repeated queries. Write ``path`` only after successful construction,
@@ -151,16 +151,9 @@ def use_metadata_snapshot(
     An optional ``sha256`` checks only the package being read and is ignored
     when ``create=True``. Neither mode checks whether source metadata has changed.
     Exit before starting workers.
-
-    Already loaded ``MetadataSnapshot`` objects remain supported for applications
-    distributing snapshots in memory; omit ``create`` and ``sha256`` in that case.
     """
-    if isinstance(path, MetadataSnapshot):
-        if create or sha256 is not None:
-            raise ValueError("create and sha256 require a snapshot file path")
-        active = path
-        snapshot = path
-    elif create:
+    path = Path(path)
+    if create:
         active = _MetadataCapture()
         snapshot = active.snapshot
     else:

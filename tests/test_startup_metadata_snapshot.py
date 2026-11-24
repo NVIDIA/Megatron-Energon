@@ -193,25 +193,23 @@ class SnapshotTest(unittest.TestCase):
                 with use_metadata_snapshot(package):
                     self.fail("Reading a missing snapshot must not create it")
             # Creation ignores a supplied checksum, even when it is incorrect.
-            with use_metadata_snapshot(package, create=True, sha256="wrong"):
+            with use_metadata_snapshot(str(package), create=True, sha256="wrong"):
                 pass
             digest = hashlib.sha256(package.read_bytes()).hexdigest()
-            for checksum in (None, digest):
-                with use_metadata_snapshot(package, sha256=checksum):
-                    pass
+            for path in (package, str(package)):
+                for checksum in (None, digest):
+                    with use_metadata_snapshot(path, sha256=checksum):
+                        pass
             with self.assertRaisesRegex(ValueError, "SHA256"):
                 with use_metadata_snapshot(package, sha256="wrong"):
                     self.fail("Checksum must be checked before construction")
             with self.assertRaisesRegex(ValueError, "identity"):
                 MetadataSnapshot.load(package, sha256=digest, recipe_identity="wrong")
-            # Existing applications can still distribute a decoded snapshot in memory.
             snapshot = MetadataSnapshot.load(package, sha256=digest, recipe_identity="")
-            with use_metadata_snapshot(snapshot):
-                pass
-            for options in ({"create": True}, {"sha256": digest}):
-                with self.assertRaisesRegex(ValueError, "file path"):
-                    with use_metadata_snapshot(snapshot, **options):
-                        self.fail("File-mode options need a path")
+            for create in (False, True):
+                with self.assertRaises(TypeError):
+                    with use_metadata_snapshot(snapshot, create=create):
+                        self.fail("Both modes require a path before construction starts")
             document = json.loads(package.read_bytes())
             document["format_version"] = 999
             package.write_text(json.dumps(document))
