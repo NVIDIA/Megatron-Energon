@@ -213,9 +213,8 @@ class EPath:
             stream = snapshot.open(str(self), mode)
             if stream is not None:
                 return stream
-        capture = active_capture()
         if (
-            capture is not None
+            (capture := active_capture()) is not None
             and mode in ("r", "rb")
             and self.internal_path.suffix in (".yaml", ".yml", ".json")
         ):
@@ -326,8 +325,7 @@ class EPath:
         if snapshot is not None and str(self) in snapshot.file_checks:
             return snapshot.file_checks[str(self)]
         result = self.fs.is_file(self._internal_str_path)
-        capture = active_capture()
-        if capture is not None:
+        if (capture := active_capture()) is not None:
             capture.snapshot.file_checks[str(self)] = result
         return result
 
@@ -397,8 +395,7 @@ class EPath:
         if snapshot is not None and str(self) in snapshot.sizes:
             return snapshot.sizes[str(self)]
         result = self.fs.info(self._internal_str_path).content_length
-        capture = active_capture()
-        if capture is not None:
+        if (capture := active_capture()) is not None:
             capture.snapshot.sizes[str(self)] = result
         return result
 

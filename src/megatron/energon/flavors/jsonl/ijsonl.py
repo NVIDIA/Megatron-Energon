@@ -83,8 +83,7 @@ class IJsonlIndexReader:
             return snapshot.jsonl_sizes[str(jsonl_path)]
         with IJsonlIndexReader(jsonl_path) as reader:
             result = reader[len(reader) - 1]
-        capture = active_capture()
-        if capture is not None:
+        if (capture := active_capture()) is not None:
             capture.snapshot.jsonl_sizes[str(jsonl_path)] = result
         return result
 

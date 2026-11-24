@@ -96,6 +96,12 @@ file contents are limited to 64 MiB, counting each recorded path once.
 If construction or publication fails, an existing snapshot is left unchanged.
 Choose one process to create the snapshot, then let other processes read it.
 
+Full file contents are captured only for `.yaml`, `.yml`, and `.json` files opened
+with `r` or `rb`. Writes and other file extensions use storage normally. File
+checks and sizes can be recorded for any extension; JSONL terminal offsets are
+recorded separately without copying the full `.jsonl` or `.idx` file. Metadata
+stored under another extension is therefore not cached as full file contents.
+
 ### Read the snapshot
 
 On subsequent constructions, use the same path with `create=False`. The shared
