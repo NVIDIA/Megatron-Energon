@@ -34,7 +34,12 @@ from megatron.energon import (
     get_train_dataset,
 )
 from megatron.energon.checkpoint.rank_state import _split_batch_restore_key
-from megatron.energon.dataloader import DataLoader, ForkDataLoaderWorker, ThreadDataLoaderWorker
+from megatron.energon.dataloader import (
+    DataLoader,
+    DataLoaderWorker,
+    ForkDataLoaderWorker,
+    ThreadDataLoaderWorker,
+)
 from megatron.energon.dataloader.asynchronous import ThreadAsynchronous
 from megatron.energon.dataloader.future import DoneFuture
 from megatron.energon.dataloader.pin_memory import PinMemory, PinMemoryThread
@@ -227,6 +232,20 @@ class TestDataLoader(unittest.TestCase):
                 text for idx, data in zip(range(55 * 10), train_loader) for text in data.text
             ]
             assert train_order2 == cmp_order2, (train_order1, cmp_order2)
+
+    def test_worker_type_requires_a_concrete_backend(self):
+        dataset = get_train_dataset(
+            self.ds1_path,
+            worker_config=WorkerConfig(rank=0, world_size=1, num_workers=0),
+            batch_size=1,
+            shuffle_buffer_size=None,
+            max_samples_per_sequence=None,
+        )
+        self.addCleanup(dataset.close)
+        for worker_type in ("main", DataLoaderWorker):
+            with self.subTest(worker_type=worker_type):
+                with self.assertRaisesRegex(ValueError, "Invalid worker type"):
+                    get_savable_loader(dataset, worker_type=worker_type)
 
     def test_context_manager_keeps_running_workers(self):
         worker_config = WorkerConfig(
@@ -753,7 +772,7 @@ class TestDataLoader(unittest.TestCase):
                             max_samples_per_sequence=7,
                             repeat=False,
                         ),
-                        worker_type="thread" if workers else "main",
+                        worker_type="thread",
                         pin_memory=False,
                     )
 

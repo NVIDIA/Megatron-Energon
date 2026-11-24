@@ -1,5 +1,6 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
+from abc import ABC, abstractmethod
 from contextlib import ExitStack
 from copy import deepcopy
 from dataclasses import dataclass
@@ -45,12 +46,11 @@ class WorkerState:
         return f"WorkerState(dataset={self.dataset}, exhausted={self.exhausted}, sample_index={self.sample_index}, rng_hash={rng_hash})"
 
 
-class DataLoaderWorker(Generic[TSample]):
+class DataLoaderWorker(ABC, Generic[TSample]):
     """
-    A worker for a :class:`DataLoader`.
+    Abstract base for :class:`DataLoader` workers.
 
-    The basic implementation iterates the dataset.
-    The async extension implements the main commands via a command and results queue.
+    Implements dataset iteration and checkpointing. Each backend supplies its own startup.
     """
 
     dataset: SavableDataset[TSample]
@@ -96,11 +96,9 @@ class DataLoaderWorker(Generic[TSample]):
     # ------------------------------------------------------------------------------------------------
     # Section: Main control methods
 
+    @abstractmethod
     def start(self) -> None:
-        """
-        Start the worker.
-        """
-        pass
+        """Start this worker's execution backend."""
 
     def shutdown(self, in_del: bool = False) -> None:
         """
@@ -292,5 +290,5 @@ class DataLoaderNoWorker(DataLoaderWorker[TSample], Generic[TSample]):
     # The training process owns the system RNG when loading inline.
     _uses_global_rng = False
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def start(self) -> None:
+        """Inline operations run directly in the caller."""

@@ -1,6 +1,7 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+from inspect import isabstract
 from typing import Literal, Optional, TypeVar
 
 from megatron.energon.cache import CachePool
@@ -22,7 +23,7 @@ def get_savable_loader(
     dataset: SavableDataset[T],
     *,
     worker_config: Optional[WorkerConfig] = None,
-    worker_type: Literal["main", "fork", "thread"] | type[DataLoaderWorker] = "fork",
+    worker_type: Literal["fork", "thread"] | type[DataLoaderWorker] = "fork",
     checkpoint_every_sec: Optional[float] = None,
     checkpoint_every_min_n_samples: Optional[int] = None,
     n_checkpoints: Optional[int] = None,
@@ -44,10 +45,8 @@ def get_savable_loader(
     Args:
         dataset: The dataset to create a loader for.
         worker_config: Deprecated. Please pass this to the dataset instead.
-        worker_type: The type of worker to use. Options:
-          "fork": forked workers (default),
-          "thread": threaded workers (should be used with free-threaded python),
-          "main": iterate data in the main process without parallelization.
+        worker_type: Use "fork" (default) for processes, "thread" for threads, or a concrete
+            worker class. Set ``WorkerConfig.num_workers=0`` to iterate in the calling process.
         checkpoint_every_sec: Deprecated compatibility argument; ignored by the custom loader.
         checkpoint_every_min_n_samples: Deprecated compatibility argument; ignored by the custom loader.
         n_checkpoints: Deprecated compatibility argument; ignored by the custom loader.
@@ -83,11 +82,11 @@ def get_savable_loader(
         worker_type = ForkDataLoaderWorker
     elif worker_type == "thread":
         worker_type = ThreadDataLoaderWorker
-    elif worker_type == "main":
-        if dataset.worker_config.num_workers != 0:
-            raise ValueError("The main worker requires WorkerConfig.num_workers=0")
-        worker_type = DataLoaderWorker
-    elif not issubclass(worker_type, DataLoaderWorker):
+    elif (
+        not isinstance(worker_type, type)
+        or not issubclass(worker_type, DataLoaderWorker)
+        or isabstract(worker_type)
+    ):
         raise ValueError(f"Invalid worker type: {worker_type}")
     if dataset.worker_config.num_workers == 0:
         prefetch_factor = 1

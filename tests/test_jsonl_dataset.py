@@ -615,8 +615,8 @@ class TestJsonlDataset(unittest.TestCase):
         )
         self.prepare_jsonl_shard_dir(shard_dir)
 
-        for worker_type, num_workers in (("main", 0), ("thread", 2)):
-            with self.subTest(worker_type=worker_type):
+        for num_workers in (0, 2):
+            with self.subTest(num_workers=num_workers):
                 with get_savable_loader(
                     get_train_dataset(
                         shard_dir,
@@ -628,7 +628,7 @@ class TestJsonlDataset(unittest.TestCase):
                         max_samples_per_sequence=None,
                         task_encoder=SimpleCookingTaskEncoder(),
                     ),
-                    worker_type=worker_type,
+                    worker_type="thread",
                 ) as loader:
                     batches = [batch for _, batch in zip(range(4), loader)]
                     assert loader.can_restore_sample()

@@ -40,9 +40,8 @@ The factory derives the effective execution mode from `WorkerConfig.num_workers`
 | Configuration | Worker implementation | Execution location |
 | --- | --- | --- |
 | `num_workers == 0` | `DataLoaderNoWorker` | Calling process |
-| `worker_type="fork"` | `ForkDataLoaderWorker` | One forked process per worker |
-| `worker_type="thread"` | `ThreadDataLoaderWorker` | One thread per worker |
-| `worker_type="main"` | `DataLoaderWorker` | Calling process |
+| `num_workers > 0`, `worker_type="fork"` (default) | `ForkDataLoaderWorker` | One forked process per worker |
+| `num_workers > 0`, `worker_type="thread"` | `ThreadDataLoaderWorker` | One thread per worker |
 
 The loader wraps the dataset with `WatchdogDataset` and `GcDataset` when those features are enabled.
 For worker-backed loaders, automatic pinning creates a lazy `PinMemoryThread` when CUDA is available.
@@ -141,9 +140,8 @@ The editable source for the class diagram is
 The asynchronous implementations use multiple inheritance. `DataLoaderAsynchronousWorker`
 combines the dataset-facing `DataLoaderWorker` API with the `Asynchronous` command/future
 mechanism. `ThreadDataLoaderWorker` then adds `ThreadAsynchronous`, while
-`ForkDataLoaderWorker` adds `ForkAsynchronous`. The direct path uses the base worker operations in
-the caller process; the default fork configuration is replaced by `DataLoaderNoWorker` when
-`num_workers` is zero.
+`ForkDataLoaderWorker` adds `ForkAsynchronous`. With zero workers, `DataLoaderNoWorker` runs
+the shared dataset operations directly in the calling process.
 
 The related pin-memory hierarchy follows the same pattern. `NoPinMemory` returns the input future
 unchanged,
