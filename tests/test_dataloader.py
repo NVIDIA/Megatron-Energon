@@ -15,11 +15,13 @@ import threading
 import unittest
 import warnings
 from collections import Counter, OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import redirect_stdout
 from copy import copy
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from textwrap import dedent
+from time import monotonic, sleep
 from typing import Iterable
 
 import torch
@@ -34,7 +36,7 @@ from megatron.energon import (
 from megatron.energon.checkpoint.rank_state import _split_batch_restore_key
 from megatron.energon.dataloader import DataLoader, ForkDataLoaderWorker, ThreadDataLoaderWorker
 from megatron.energon.dataloader.future import DoneFuture
-from megatron.energon.dataloader.pin_memory import PinMemoryThread
+from megatron.energon.dataloader.pin_memory import PinMemory, PinMemoryThread
 from megatron.energon.dataloader.workers.base_worker import WorkerSampleRestoreKey
 from megatron.energon.errors import FatalSampleError
 from megatron.energon.flavors.common.sample_record import IndexedRestoreKey
@@ -494,6 +496,60 @@ class TestDataLoader(unittest.TestCase):
         for rank, checkpoint_state in enumerate(converted):
             with loader(rank, 2, 1).with_restored_state_rank(checkpoint_state) as restored:
                 self.assertEqual([list(batch.text) for batch in restored], expected[rank])
+
+    def test_checkpoint_waits_for_delivery_before_the_next_advance(self):
+        entered = threading.Event()
+        release = threading.Event()
+
+        class GatePinMemory(PinMemory):
+            def _pin_memory(self, sample):
+                if not entered.is_set():
+                    entered.set()
+                    if not release.wait(5):
+                        raise TimeoutError("Pinning was not released")
+                return sample
+
+        def loader(pinning):
+            dataset = get_train_dataset(
+                self.ds1_path,
+                worker_config=WorkerConfig(rank=0, world_size=1, num_workers=1),
+                batch_size=None,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                repeat=False,
+            )
+            return DataLoader(dataset, prefetch_factor=0, pin_memory=pinning)
+
+        with loader(None) as baseline:
+            expected = [sample.text for _, sample in zip(range(2), baseline)]
+
+        with loader(GatePinMemory("cpu")) as source, ThreadPoolExecutor(2) as executor:
+            iterator = iter(source)
+
+            def advance_twice():
+                return [next(iterator).text, next(iterator).text]
+
+            delivery = executor.submit(advance_twice)
+            try:
+                self.assertTrue(entered.wait(5))
+                checkpoint = executor.submit(source.save_state_rank)
+                deadline = monotonic() + 5
+                while not checkpoint.done() and monotonic() < deadline:
+                    with source._delivery_condition:
+                        if source._checkpoint_waiters:
+                            break
+                    sleep(0.01)
+                else:
+                    self.fail("Checkpoint did not wait for delivery")
+                self.assertFalse(checkpoint.done())
+            finally:
+                release.set()
+
+            state = checkpoint.result(timeout=5)
+            self.assertEqual(delivery.result(timeout=5), expected)
+
+        with loader(None).with_restored_state_rank(state) as restored:
+            self.assertEqual(next(iter(restored)).text, expected[1])
 
     def test_thread_workers_surface_unsupported_process_rng(self):
         class Encoder(DefaultTaskEncoder):

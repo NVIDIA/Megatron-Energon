@@ -4,6 +4,7 @@ import inspect
 import os
 import pickle
 from dataclasses import dataclass
+from threading import Condition, get_ident
 from typing import (
     Any,
     ClassVar,
@@ -14,6 +15,7 @@ from typing import (
     Sequence,
     TypeVar,
 )
+from weakref import proxy
 
 import torch.distributed
 
@@ -118,6 +120,10 @@ class DataLoader(Generic[TSample]):
     _worker_config: WorkerConfig
     _cache_pool: CachePool
     _prefetch_factor: int
+    #: Checkpoint callers take priority over the next delivery once they are waiting.
+    _delivery_condition: Condition
+    _delivery_thread_id: int | None
+    _checkpoint_waiters: int
     _worker_type: WorkerType
     _prefetching_samples: list[list[Future[TSample]]]
     _pin_memory: PinMemory[TSample]
@@ -170,6 +176,9 @@ class DataLoader(Generic[TSample]):
                 If "automatic", the memory is pinned automatically if cuda is available.
                 If a `PinMemory` instance, the instance may only be used for one `DataLoader`.
         """
+        self._delivery_condition = Condition()
+        self._delivery_thread_id = None
+        self._checkpoint_waiters = 0
         self._id = DataLoader._next_id
         DataLoader._next_id += 1
 
@@ -490,28 +499,28 @@ class DataLoader(Generic[TSample]):
                 yield sample
 
     def __iter__(self) -> Generator[TSample, None, None]:
-        # Restart the epoch iterator if was not created yet. Otherwise, the existing epoch iterator will be continued.
-        # That happens e.g. when iteration was interrupted.
-        if self._current_epoch_iter is None:
-            if DEBUG_LEVEL >= 1:
-                print("DL: Starting epoch iterator")
-            self._current_epoch_iter = self._epoch_iter()
-        else:
-            if DEBUG_LEVEL >= 1:
-                print("DL: Continuing epoch iterator")
-        assert self._current_epoch_iter is not None
-        # Important: Do not use yield from here, as it will delegate .close to the inner generator.
-        try:
-            for sample in self._current_epoch_iter:
-                yield sample
-        except Exception:
-            self._current_epoch_iter = None
-            raise
-        # Reset the epoch iterator, it was exhausted.
-        if DEBUG_LEVEL >= 1:
-            print("DL: Closing epoch iterator")
-        self._current_epoch_iter.close()
-        self._current_epoch_iter = None
+        while True:
+            with self._delivery_condition:
+                self._delivery_condition.wait_for(
+                    lambda: self._delivery_thread_id is None and not self._checkpoint_waiters
+                )
+                self._delivery_thread_id = get_ident()
+            try:
+                if self._current_epoch_iter is None:
+                    # The public iterator keeps the loader alive while in use.
+                    self._current_epoch_iter = type(self)._epoch_iter(proxy(self))
+                sample = next(self._current_epoch_iter)
+            except StopIteration:
+                self._current_epoch_iter = None
+                return
+            except BaseException:
+                self._current_epoch_iter = None
+                raise
+            finally:
+                with self._delivery_condition:
+                    self._delivery_thread_id = None
+                    self._delivery_condition.notify_all()
+            yield sample
 
     def __len__(self):
         return len(self._dataset)
@@ -547,23 +556,23 @@ class DataLoader(Generic[TSample]):
         return dataset.batch_size if dataset is not None else None
 
     def save_state_rank(self) -> RankState:
+        """Save at the next delivery boundary before allowing iteration to advance."""
+        with self._delivery_condition:
+            if self._delivery_thread_id == get_ident():
+                raise RuntimeError("Cannot save a checkpoint from inside sample delivery")
+            self._checkpoint_waiters += 1
+            try:
+                self._delivery_condition.wait_for(lambda: self._delivery_thread_id is None)
+                return self._save_state_at_delivery_boundary()
+            finally:
+                self._checkpoint_waiters -= 1
+                self._delivery_condition.notify_all()
+
+    def _save_state_at_delivery_boundary(self) -> RankState:
         if self._restore_state is not None:
             return self._restore_state
-        prefetched_restore_keys = []
-        for pending in self._prefetching_samples:
-            keys = []
-            for future in pending:
-                try:
-                    sample = future.get()
-                except StopIteration:
-                    break
-                key = get_sample_restore_key(sample)
-                if key is None or not self.can_restore_sample():
-                    raise ValueError(
-                        "Cannot checkpoint prefetched samples without deterministic restore keys"
-                    )
-                keys.append(key)
-            prefetched_restore_keys.append(keys)
+        # Detect failures from any worker's pending outputs before asking workers to snapshot.
+        prefetched_restore_keys = self._collect_pending_restore_keys()
         worker_states: list[WorkerState | None]
         if self._workers is None:
             worker_states = [None] * self._worker_config.safe_num_workers
@@ -581,6 +590,24 @@ class DataLoader(Generic[TSample]):
             micro_batch_size=self.micro_batch_size,
             grouped_batch_config=self._grouped_batch_config,
         )
+
+    def _collect_pending_restore_keys(self) -> list[list[RestoreKey]]:
+        prefetched_restore_keys = []
+        for pending in self._prefetching_samples:
+            keys = []
+            for future in pending:
+                try:
+                    sample = future.get()
+                except StopIteration:
+                    break
+                key = get_sample_restore_key(sample)
+                if key is None or not self.can_restore_sample():
+                    raise ValueError(
+                        "Cannot checkpoint prefetched samples without deterministic restore keys"
+                    )
+                keys.append(key)
+            prefetched_restore_keys.append(keys)
+        return prefetched_restore_keys
 
     def save_state_global(self, global_dst_rank: int) -> Sequence[RankState | None] | None:
         """
