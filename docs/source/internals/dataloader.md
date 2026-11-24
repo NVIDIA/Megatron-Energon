@@ -94,12 +94,11 @@ safely terminate a running thread. `__del__()` is an emergency fallback.
 The editable source for the flow diagram is
 {download}`dataloader_fork_flow.drawio <../images/dataloader_fork_flow.drawio>`.
 
-The worker-process lifeline represents each rank-local fork worker; those processes execute in
-parallel with independent command queues and reply pipes. Solid teal messages are commands submitted by
-`_worker_call()`, while dashed teal messages are `WorkerResult` values matched to `FutureImpl`
-instances by `future_id`. The flow also highlights that checkpoint state is staged before workers
-start, then applied through RPC when `start()` initializes each worker and reconstructs saved
-prefetched samples.
+The diagram follows one fork worker. In the parent process, the loader calls a
+`ForkDataLoaderWorker` object, which sends commands to the child through that worker's queue.
+The child runs the dataset operation and writes a `WorkerResult` to its reply pipe. A receiver
+thread in the parent uses the reply's `future_id` to complete the corresponding future.
+Each fork worker has its own command queue, reply pipe, and receiver thread.
 
 ## Steady-State Iteration
 
