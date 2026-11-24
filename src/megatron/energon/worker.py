@@ -151,6 +151,11 @@ class WorkerConfig:
             WorkerConfig._active.cache_pool = None
 
     @property
+    def active_worker_invocation_index(self) -> int:
+        """Index within the worker, independent of how workers are grouped into ranks."""
+        return WorkerConfig._active.sample_index_stack[-1]
+
+    @property
     def active_worker_sample_index(self) -> int:
         """Returns the current sample index for the actively iterating worker."""
         # Internal sample index is for the local worker. If using multiple workers per rank, this

@@ -246,16 +246,17 @@ def stateless(
                 _task_encoder_seed_scope(encoder) if restore_task_encoder_seeds else nullcontext()
             )
 
+        def seed_rng(rng: type[SystemRng] | UserRng) -> None:
+            worker_config = WorkerConfig.active_worker_config
+            rng.seed_args(worker_config.worker_seed(), worker_config.active_worker_invocation_index)
+
         @functools.wraps(original)
         def wrap(encoder, *args, **kwargs):
             with scope(encoder):
                 rng = rng_for(encoder)
                 outer_state = rng.save_state()
                 try:
-                    rng.seed_args(
-                        WorkerConfig.active_worker_config.worker_seed(),
-                        encoder.current_sample_index,
-                    )
+                    seed_rng(rng)
                     return original(encoder, *args, **kwargs)
                 finally:
                     rng.restore_state(outer_state)
@@ -266,10 +267,7 @@ def stateless(
                 rng = rng_for(encoder)
                 outer_state = rng.save_state()
                 try:
-                    rng.seed_args(
-                        WorkerConfig.active_worker_config.worker_seed(),
-                        encoder.current_sample_index,
-                    )
+                    seed_rng(rng)
                     inner_state = rng.save_state()
                     iterator = iter(original(encoder, *args, **kwargs))
                 finally:
