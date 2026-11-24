@@ -32,6 +32,8 @@ class BaseWebdatasetFactory(
     Base class for all webdataset sample loader factories. Applies proper sharding across workers.
     """
 
+    split_part: str
+
     def __init__(
         self,
         path: EPath,
