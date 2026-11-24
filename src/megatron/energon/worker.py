@@ -105,13 +105,11 @@ class WorkerConfig:
         return attrs, slots
 
     def __setstate__(self, state: tuple[dict[str, Any] | None, dict[str, Any]]) -> None:
-        # Accept the default slot pickle layout used before debug state was thread-local.
         attrs, slots = state
         if attrs:
             self.__dict__.update(attrs)
         for name, value in slots.items():
-            if name not in {"_worker_debug_file", "_worker_debug_file_worker_id"}:
-                setattr(self, name, value)
+            setattr(self, name, value)
         self._worker_debug_state = threading.local()
 
     def worker_activate(

@@ -59,6 +59,10 @@ User documentation lives in `docs/source` (Sphinx, MyST markdown).
   or whether state is worker-local or checkpointed.
 - Keep diffs minimal and on-topic: no drive-by refactors, reformatting or renames outside the
   task, no commented-out code.
+- Assume dataloader checkpoints are written and read by the same Energon version or Git
+  revision. Test same-version round trips and supported recipe or topology changes. Add
+  cross-version compatibility only when explicitly requested. See
+  [checkpoint version compatibility](docs/source/basic/save_restore.md#checkpoint-version-compatibility).
 - Never copy code from other repositories, packages or websites, even if it is permissively
   licensed. Everything you write must be original and contributable under this project's
   BSD-3-Clause license. If reusing third-party code seems necessary, stop and ask the human.

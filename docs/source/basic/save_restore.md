@@ -9,6 +9,16 @@ One of energon's unqiue features is the deterministic save and restore capabilit
 At any iteration, you'll be able to store the overall state of the data loader across all ranks and accurately resume it later on, to continue where it left off.
 Below, we list a few different ways to achieve that.
 
+(checkpoint-version-compatibility)=
+## Checkpoint version compatibility
+
+Save and restore dataloader checkpoints with the same Energon version. For a source
+checkout, use the same Git revision. Pin that version for training runs that may need
+to resume.
+
+Recipe migration and checkpoint redistribution also operate within the version that
+wrote the checkpoint.
+
 ## Scenarios
 
 All these scenarios work in distributed and non-distributed settings.
@@ -280,7 +290,3 @@ training, and queued restore keys can refer to the old recipe. Migration rejects
 changed recipe with pending batches. An unchanged recipe still supports exact replay
 with prefetching. The custom loader checkpoint has a different format from the
 previous PyTorch-backed loader checkpoint.
-
-
-Restore keys are typed dataclasses. Checkpoints containing the earlier tuple keys must be
-restored with the version that wrote them.
