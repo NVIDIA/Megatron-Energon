@@ -244,7 +244,7 @@ def _saved_children_exhausted(
     ):
         return [output_exhausted]
 
-    # Wrappers such as LimitDataset may finish before consuming all their input.
+    # Loader-owned boundary wrappers may finish before consuming all their input.
     return [False] * len(meta.children)
 
 
@@ -393,10 +393,19 @@ def migrate_dataloader_state(
                 workers.append(checkpoint)
                 continue
             dataset, exhausted = migrate(worker.dataset, worker.exhausted)
+            history = None
+            if checkpoint.history is not None:
+                history = {}
+                for index, previous in checkpoint.history.items():
+                    dataset_state, was_exhausted = migrate(previous.dataset, previous.exhausted)
+                    history[index] = replace(
+                        previous, dataset=dataset_state, exhausted=was_exhausted
+                    )
             workers.append(
                 replace(
                     checkpoint,
                     state=replace(worker, dataset=dataset, exhausted=exhausted),
+                    history=history,
                     observed_eof=exhausted,
                 )
             )

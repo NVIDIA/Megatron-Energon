@@ -52,6 +52,12 @@ def _split_deprecated_dataset_kwargs(
     video_decode_audio: bool = False,
     handler: Callable[[Exception, Any, list[SourceInfo] | None], None] = None,
     """
+    for old_name, new_name in (("virtual_epoch_length", "epochize"), ("limit", "limit")):
+        if old_name in kwargs:
+            raise TypeError(
+                f"Pass {new_name}= to get_loader/get_savable_loader, not {old_name}= to a dataset builder"
+            )
+
     auto_decode = True
 
     decoder_kwargs = {}
@@ -116,7 +122,6 @@ def get_train_dataset(
     packing_buffer_size: PackingBufferSize = None,
     shuffle_buffer_size: Optional[int],
     max_samples_per_sequence: Optional[int],
-    virtual_epoch_length: int = 0,
     shuffle_over_epochs_multiplier: Optional[int] = 1,
     task_encoder: TaskEncoder[Any, Any, Any, T] = DefaultTaskEncoder(),
     repeat: bool = True,
@@ -131,7 +136,6 @@ def get_train_dataset(
       - (:class:`megatron.energon.MixDataset` if mixing)
       - :class:`megatron.energon.BatchDataset` with `task_encoder.batch` for collation
       - `task_encoder.encode_batch`
-      - :class:`megatron.energon.EpochizeDataset` (if `virtual_epoch_length` is set)
 
     Args:
         path: Path to the dataset.
@@ -144,9 +148,6 @@ def get_train_dataset(
         shuffle_buffer_size: Sample shuffle buffer size before task encoding. Used as the default
             by ``TaskEncoder.build_packing_groups``.
         max_samples_per_sequence: If set, limit the number of samples per sample-sequence to this.
-        virtual_epoch_length: If set, the dataset will be epochized to this length (=iterating
-            will be suspended and the for-loop returns, next for-loop continues iterating).
-            Otherwise, the dataset will loop indefinitely.
         shuffle_over_epochs_multiplier: Shuffle the shards over this many epochs.
         task_encoder: Task encoder to use.
         repeat: By default, the inner datasets will loop. If set to False, stop iteration after
@@ -177,7 +178,6 @@ def get_train_dataset(
         batch_size=batch_size,
         batch_drop_last=batch_drop_last,
         packing_buffer_size=packing_buffer_size,
-        virtual_epoch_length=virtual_epoch_length,
         shuffle_buffer_size=shuffle_buffer_size,
         blend_mode=datasets.blend_mode,
         blend_weight_unit=datasets.blend_weight_unit,
@@ -193,7 +193,6 @@ def get_val_dataset(
     batch_size: int,
     batch_drop_last: bool = False,
     packing_buffer_size: PackingBufferSize = None,
-    limit: Optional[int] = None,
     task_encoder: TaskEncoder[Any, Any, Any, T] = DefaultTaskEncoder(),
     **kwargs,
 ) -> SavableDataset[T]:
@@ -205,7 +204,6 @@ def get_val_dataset(
       - `task_encoder.encode_sample`
       - (:class:`megatron.energon.MixDataset` if mixing)
       - :class:`megatron.energon.BatchDataset` with `task_encoder.batch` for collation
-      - :class:`megatron.energon.LimitDataset` (if `limit` is set)
       - `task_encoder.encode_batch`
 
     Args:
@@ -216,7 +214,6 @@ def get_val_dataset(
         batch_drop_last: If true, drop the last batch if it is smaller than `batch_size`.
         packing_buffer_size: Size of the packing buffer, or ``"stream"`` for pull-based packing
             without a packing buffer. Used as the default by ``TaskEncoder.build_packing_groups``.
-        limit: If set, limit the number of batches loaded from the dataset to this.
         task_encoder: Task encoder to use.
         **kwargs: Additional arguments to the dataset constructor.
 
@@ -238,7 +235,6 @@ def get_val_dataset(
         batch_size=batch_size,
         batch_drop_last=batch_drop_last,
         packing_buffer_size=packing_buffer_size,
-        limit=limit,
     )
 
 
@@ -250,7 +246,6 @@ def get_val_datasets(
     batch_size: int,
     batch_drop_last: bool = False,
     packing_buffer_size: PackingBufferSize = None,
-    limit: Optional[int] = None,
     task_encoder: TaskEncoder[Any, Any, Any, T] = DefaultTaskEncoder(),
     **kwargs,
 ) -> List[Tuple[SavableDataset[T], BaseCoreDatasetFactory]]:
@@ -262,7 +257,6 @@ def get_val_datasets(
       - `task_encoder.encode_sample`
       - (:class:`megatron.energon.MixDataset` if mixing)
       - :class:`megatron.energon.BatchDataset` with `task_encoder.batch` for collation
-      - :class:`megatron.energon.LimitDataset` (if `limit` is set)
       - `task_encoder.encode_batch`
 
     Args:
@@ -273,7 +267,6 @@ def get_val_datasets(
         batch_drop_last: If true, drop the last batch if it is smaller than `batch_size`.
         packing_buffer_size: Size of the packing buffer, or ``"stream"`` for pull-based packing
             without a packing buffer. Used as the default by ``TaskEncoder.build_packing_groups``.
-        limit: If set, limit the number of batches loaded from the dataset to this.
         task_encoder: Task encoder to use.
         **kwargs: Additional arguments to the dataset constructor.
 
@@ -297,7 +290,6 @@ def get_val_datasets(
                 batch_size=batch_size,
                 batch_drop_last=batch_drop_last,
                 packing_buffer_size=packing_buffer_size,
-                limit=limit,
             ),
             dataset.dataset,
         )

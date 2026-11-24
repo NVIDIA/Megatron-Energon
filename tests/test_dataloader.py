@@ -50,7 +50,7 @@ from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
 from megatron.energon.task_encoder.base import DefaultTaskEncoder, stateless
 from megatron.energon.tools.checkpoint import command_redist
 from megatron.energon.wrappers.batch_dataset import BatchGenRestoreKey, BatchRestoreKey
-from megatron.energon.wrappers.epochize_dataset import EpochizeDataset
+from megatron.energon.wrappers.bounded_dataset import BoundedDataset
 from megatron.energon.wrappers.group_batch_dataset import GroupBatchDataset
 from megatron.energon.wrappers.map_dataset import MapGenRestoreKey, MapRestoreKey
 from megatron.energon.wrappers.packing_dataset import PartialSampleRestoreKey
@@ -130,7 +130,7 @@ class GeneratorTaskEncoder(DefaultTaskEncoder):
             )
 
 
-class ThreadedEpochDataset(EpochizeDataset):
+class ThreadedEpochDataset(BoundedDataset):
     calls: list[int]
     worker_events: list[tuple[str, int]]
 
@@ -138,7 +138,7 @@ class ThreadedEpochDataset(EpochizeDataset):
     _worker_local_fields = ("calls",)
 
     def __init__(self, dataset, length, worker_config):
-        super().__init__(dataset, length, worker_config)
+        super().__init__(dataset, length=length, reset_source=False, worker_config=worker_config)
         self.calls = []
         self.worker_events = []
 

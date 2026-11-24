@@ -59,6 +59,9 @@ class LogSampleDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]
 
             self.worker_config.worker_log(log_entry)
 
+    def set_skip_mode(self, active: bool) -> None:
+        self.dataset.set_skip_mode(active and not self.worker_config.should_log(level=1))
+
     def __iter__(self) -> Iterator[T_sample]:
         for sample in self.dataset:
             self._log(sample)

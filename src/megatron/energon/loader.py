@@ -23,6 +23,8 @@ def get_savable_loader(
     dataset: SavableDataset[T],
     *,
     worker_config: Optional[WorkerConfig] = None,
+    epochize: int | None = None,
+    limit: int | None = None,
     worker_type: Literal["fork", "thread"] | type[DataLoaderWorker] = "fork",
     gc_freeze_at_start: bool = True,
     gc_collect_every_n_steps: int = GC_DEFAULT_EVERY_N_ITER,
@@ -41,6 +43,8 @@ def get_savable_loader(
 
     Args:
         dataset: The dataset to create a loader for.
+        epochize: Positive output budget per rank; continue the source on the next pass.
+        limit: Positive output budget per rank; reset the source when the pass completes.
         worker_config: Deprecated. Please pass this to the dataset instead.
         worker_type: Use "fork" (default) for processes, "thread" for threads, or a concrete
             worker class. Set ``WorkerConfig.num_workers=0`` to iterate in the calling process.
@@ -93,6 +97,8 @@ def get_savable_loader(
     loader = DataLoader(
         dataset,
         prefetch_factor=prefetch_factor,
+        epochize=epochize,
+        limit=limit,
         worker_type=worker_type,
         cache_pool=cache_pool,
         gc_collect_every_n_steps=gc_collect_every_n_steps,
@@ -112,6 +118,8 @@ def get_loader(
     dataset: SavableDataset[T],
     *,
     worker_config: Optional[WorkerConfig] = None,
+    epochize: int | None = None,
+    limit: int | None = None,
     prefetch_factor: int = 2,
     cache_pool: Optional[CachePool] = None,
     watchdog_timeout_seconds: Optional[float] = 60,
@@ -125,6 +133,8 @@ def get_loader(
 
     Args:
         dataset: The dataset to create a loader for.
+        epochize: Positive output budget per rank; continue the source on the next pass.
+        limit: Positive output budget per rank; reset the source when the pass completes.
         worker_config: Deprecated. Please pass this to the dataset instead.
         cache_pool: If set, the cache pool to use for the dataset.
         watchdog_timeout_seconds: The timeout in seconds. If None, the watchdog is disabled.
@@ -158,6 +168,8 @@ def get_loader(
     return DataLoader(
         dataset,
         prefetch_factor=prefetch_factor,
+        epochize=epochize,
+        limit=limit,
         cache_pool=cache_pool,
         watchdog_timeout_seconds=watchdog_timeout_seconds,
         watchdog_initial_timeout_seconds=watchdog_initial_timeout_seconds,

@@ -98,6 +98,10 @@ class BlendDataset(BaseWrapperDataset[T_sample, T_sample]):
             probs = weights
         return probs
 
+    def set_skip_mode(self, active: bool) -> None:
+        for dataset in self.datasets:
+            dataset.set_skip_mode(active and self.sample_size_fn is None)
+
     def __iter__(self) -> Iterator[T_sample]:
         assert self.worker_has_samples(), "Cannot blend all empty datasets"
 
