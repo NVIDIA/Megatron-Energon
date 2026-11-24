@@ -23,11 +23,6 @@ logger = logging.getLogger(__name__)
 _MAX_CONTENT_BYTES = 64 * 1024 * 1024
 
 
-def _check_digest(payload: bytes, sha256: str | None) -> None:
-    if sha256 is not None and hashlib.sha256(payload).hexdigest() != sha256:
-        raise ValueError("Metadata snapshot SHA256 mismatch")
-
-
 @dataclass(frozen=True)
 class MetadataSnapshot:
     contents: dict[str, bytes]
@@ -39,7 +34,8 @@ class MetadataSnapshot:
     def load(cls, path: str | Path, *, sha256: str | None = None) -> "MetadataSnapshot":
         """Read one package and check its digest when supplied."""
         payload = Path(path).read_bytes()
-        _check_digest(payload, sha256)
+        if sha256 is not None and hashlib.sha256(payload).hexdigest() != sha256:
+            raise ValueError("Metadata snapshot SHA256 mismatch")
         document = json.loads(payload)
         return cls(
             contents={

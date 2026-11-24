@@ -209,8 +209,7 @@ class EPath:
         prefetch_file: bool = False,
     ) -> Union[TextIO, BinaryIO]:
         if (snapshot := active_snapshot()) is not None:
-            stream = snapshot.open(str(self), mode)
-            if stream is not None:
+            if (stream := snapshot.open(str(self), mode)) is not None:
                 return stream
         if (
             (capture := active_capture()) is not None
