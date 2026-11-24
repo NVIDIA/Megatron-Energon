@@ -719,6 +719,32 @@ class TestDataLoader(unittest.TestCase):
                         self.assertEqual([tuple(batch.text) for batch in restored], expected)
                     self.assertEqual(pickle.dumps(state), snapshot)
 
+    def test_inline_restore_preserves_the_training_rng(self):
+        def loader():
+            return get_savable_loader(
+                get_train_dataset(
+                    self.ds1_path,
+                    worker_config=WorkerConfig(rank=0, world_size=1, num_workers=0),
+                    batch_size=None,
+                    shuffle_buffer_size=None,
+                    max_samples_per_sequence=None,
+                    repeat=False,
+                )
+            )
+
+        with torch.random.fork_rng(devices=[]):
+            with loader() as source:
+                iterator = iter(source)
+                next(iterator)
+                torch.manual_seed(111)
+                state = source.save_state_rank()
+                expected = next(iterator).text
+            torch.manual_seed(222)
+            training_rng = torch.get_rng_state()
+            with loader().with_restored_state_rank(state) as restored:
+                self.assertEqual(next(iter(restored)).text, expected)
+            self.assertTrue(torch.equal(torch.get_rng_state(), training_rng))
+
     def test_task_encoder_rng_rejects_unscoped_access(self):
         class Encoder(DefaultTaskEncoder):
             def encode_sample(self, sample):

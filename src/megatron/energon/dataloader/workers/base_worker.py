@@ -287,5 +287,8 @@ class DataLoaderNoWorker(DataLoaderWorker[TSample], Generic[TSample]):
     DataLoader without async worker.
     """
 
+    # The training process owns the system RNG when loading inline.
+    _uses_global_rng = False
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
