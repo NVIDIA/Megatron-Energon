@@ -238,7 +238,9 @@ def stateless(
 
         def rng_for(encoder):
             if restore_seeds and in_thread_worker():
-                raise ValueError("Thread workers require restore_task_encoder_seeds and self.rng")
+                raise FatalSampleError(
+                    "Thread workers require restore_task_encoder_seeds and self.rng"
+                )
             return SystemRng if restore_seeds else encoder.rng
 
         def scope(encoder):

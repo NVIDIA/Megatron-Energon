@@ -334,6 +334,25 @@ class TestDataLoader(unittest.TestCase):
                 [source_tail[i : i + 4] for i in range(0, len(source_tail), 4)],
             )
 
+    def test_thread_workers_surface_unsupported_process_rng(self):
+        class Encoder(DefaultTaskEncoder):
+            @stateless(restore_seeds=True)
+            def encode_sample(self, sample):
+                return sample
+
+        dataset = get_train_dataset(
+            self.ds1_path,
+            worker_config=WorkerConfig(rank=0, world_size=1, num_workers=1),
+            task_encoder=Encoder(),
+            batch_size=None,
+            shuffle_buffer_size=None,
+            max_samples_per_sequence=None,
+            repeat=False,
+        )
+        with get_savable_loader(dataset, worker_type="thread", pin_memory=False) as loader:
+            with self.assertRaisesRegex(FatalSampleError, "Thread workers require"):
+                next(iter(loader))
+
     def test_resize_rejects_generator_after_batching_before_replay(self):
         class Encoder(DefaultTaskEncoder):
             @stateless
