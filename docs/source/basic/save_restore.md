@@ -192,8 +192,9 @@ A loader with zero workers uses the training process's random number generators.
 Save and restore those generators with the training checkpoint.
 
 Redistributing a checkpoint with the same world size preserves each rank's next worker.
-To change the world size, save a checkpoint with no pending prefetched samples.
-Set `prefetch_factor=0` on the source loader to avoid pending prefetch.
+To change the world size, set `prefetch_factor=0` on the source loader to avoid pending
+batches, or pass `--discard-prefetched-batches` to `energon checkpoint redist` to skip
+the undelivered batches and resume from each worker's saved position.
 The CLI also rejects checkpoints that would resume a generator partway through an input.
 When the CLI reduces the micro-batch size, the target loader applies its `drop_last`
 setting to the resized prefetched batches on restore. Keep the grouped batch size and
@@ -201,9 +202,10 @@ tail policy the same when restoring grouped batches.
 
 ### Migrating a custom loader checkpoint with workers
 
-If you expect to edit the recipe before restoring, construct the source loader with
-`prefetch_factor=0`. Otherwise workers can advance beyond the last batch delivered to
-training, and queued restore keys can refer to the old recipe. Migration rejects a
-changed recipe with pending batches. An unchanged recipe still supports exact replay
+By default, migration rejects a changed recipe with pending prefetched batches.
+Set `prefetch_factor=0` on the source loader to avoid them, or pass
+`discard_prefetched_batches=True` to `migrate_dataloader_state()` to skip the
+undelivered batches. Both migration options report how many batches each affected
+source rank discards. An unchanged recipe still supports exact replay
 with prefetching. The custom loader checkpoint has a different format from the
 previous PyTorch-backed loader checkpoint.

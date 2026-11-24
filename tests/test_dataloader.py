@@ -410,12 +410,16 @@ class TestDataLoader(unittest.TestCase):
                     self.assertEqual([list(batch.text) for batch in restored], expected)
 
     def test_world_size_change_rejects_pending_sample_replay(self):
-        for prefetch_factor, generator, error_message in (
-            (2, True, "prefetch_factor=0"),
-            (0, True, "in-progress generator"),
-            (0, False, None),
+        for prefetch_factor, generator, discard, error_message in (
+            (2, True, False, "prefetch_factor=0"),
+            (0, True, False, "in-progress generator"),
+            (2, True, True, "in-progress generator"),
+            (2, False, True, None),
+            (0, False, False, None),
         ):
-            with self.subTest(prefetch_factor=prefetch_factor, generator=generator):
+            with self.subTest(
+                prefetch_factor=prefetch_factor, generator=generator, discard=discard
+            ):
                 dataset = get_train_dataset(
                     self.ds1_path,
                     worker_config=WorkerConfig(rank=0, world_size=1, num_workers=2),
@@ -437,7 +441,8 @@ class TestDataLoader(unittest.TestCase):
                 output = self.dataset_path / f"redistributed-{prefetch_factor}-{generator}"
                 result = CliRunner().invoke(
                     command_redist,
-                    [str(checkpoint), str(output), "--new-world-size", "2"],
+                    [str(checkpoint), str(output), "--new-world-size", "2"]
+                    + (["--discard-prefetched-batches"] if discard else []),
                     catch_exceptions=False,
                 )
                 if error_message:
@@ -448,6 +453,11 @@ class TestDataLoader(unittest.TestCase):
                     self.assertEqual(result.exit_code, 0, result.output)
                     converted = torch.load(output / checkpoint.name, weights_only=False)
                     self.assertEqual([len(rank.worker_states) for rank in converted], [1, 1])
+                    for rank, original in zip(converted, state.workers, strict=True):
+                        self.assertEqual(rank.prefetched_restore_keys, [[]])
+                        self.assertEqual(
+                            rank.worker_states[0].sample_index, original.state.sample_index
+                        )
 
     def test_grouped_buffers_replay_scoped_rng_after_worker_regrouping(self):
         class Encoder(DefaultTaskEncoder):

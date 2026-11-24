@@ -11,6 +11,7 @@ from copy import deepcopy
 from dataclasses import dataclass, replace
 from typing import Any, Iterator
 
+from megatron.energon.checkpoint.rank_state import without_prefetched_batches
 from megatron.energon.dataloader.dataloader import DataLoader, RankState
 from megatron.energon.flavors.base_dataset import FlexState, SavableDataset
 from megatron.energon.rng import WorkerRng
@@ -327,6 +328,8 @@ def migrate_dataloader_state(
     dataloader: DataLoader[Any] | SavableDataLoader[Any],
     saved_state: RankState | SavableDataLoaderState | None,
     saved_metadata: ResumeMetadata | dict[str, Any],
+    *,
+    discard_prefetched_batches: bool = False,
 ) -> RankState | SavableDataLoaderState | None:
     """Build a state for the loader of a changed recipe, reusing the saved dataset progress.
 
@@ -339,6 +342,7 @@ def migrate_dataloader_state(
         saved_state: The state saved by ``save_state_rank`` of the previous loader. May be None,
             if that loader had nothing to save yet.
         saved_metadata: The resume metadata collected from the previous loader.
+        discard_prefetched_batches: Skip undelivered custom-loader batches if the recipe changes.
 
     Returns:
         The state to pass to ``restore_state_rank`` of the given loader. None, if no state was
@@ -375,10 +379,12 @@ def migrate_dataloader_state(
             raise ValueError("Checkpoint migration requires the same number of workers")
         if current_root_meta == saved_root_meta:
             return deepcopy(saved_state)
-        if any(saved_state.prefetched_restore_keys):
+        if discard_prefetched_batches:
+            saved_state = without_prefetched_batches(saved_state, root.worker_config.rank)
+        elif any(saved_state.prefetched_restore_keys):
             raise ValueError(
                 "Cannot migrate pending prefetched batches after a recipe change; "
-                "use prefetch_factor=0 on the source loader"
+                "use prefetch_factor=0 on the source loader or pass discard_prefetched_batches=True"
             )
         workers = []
         for checkpoint in saved_state.workers:

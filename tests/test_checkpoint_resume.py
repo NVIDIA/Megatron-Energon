@@ -224,14 +224,24 @@ class TestCheckpointResume(unittest.TestCase):
                         _record_seen(seen, next(it))
                     state = loader.save_state_rank()
                     metadata = collect_resume_metadata(loader)
+                    for _ in range(sum(map(len, state.prefetched_restore_keys))):
+                        _record_seen(seen, next(it))
                 self._write_recipe(self.recipe_path, reordered)
                 target = self._loader(self.recipe_path, num_workers=2)
                 try:
                     if prefetch:
                         with self.assertRaisesRegex(ValueError, "pending prefetched batches"):
                             migrate_dataloader_state(target, state, metadata)
-                        continue
-                    target.restore_state_rank(migrate_dataloader_state(target, state, metadata))
+                        with self.assertWarnsRegex(
+                            UserWarning, "Discarding 4 prefetched batches from rank 0"
+                        ):
+                            migrated = migrate_dataloader_state(
+                                target, state, metadata, discard_prefetched_batches=True
+                            )
+                        self.assertEqual(sum(map(len, state.prefetched_restore_keys)), 4)
+                    else:
+                        migrated = migrate_dataloader_state(target, state, metadata)
+                    target.restore_state_rank(migrated)
                     resumed = {"a": set(), "b": set(), "c": set()}
                     it = iter(target)
                     for _ in range(12):

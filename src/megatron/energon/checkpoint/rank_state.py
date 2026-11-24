@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import re
+import warnings
 from dataclasses import replace
 from typing import Callable, List
 
@@ -73,12 +74,23 @@ def _has_pending_generator_output(state: FlexState) -> bool:
     )
 
 
+def without_prefetched_batches(state: RankState, rank: int) -> RankState:
+    """Keep worker progress and skip the batches still queued for this rank."""
+    count = sum(len(keys) for keys in state.prefetched_restore_keys)
+    if not count:
+        return state
+    warnings.warn(f"Discarding {count} prefetched batches from rank {rank}", stacklevel=2)
+    return replace(
+        state, workers=[replace(worker, prefetched_restore_keys=[]) for worker in state.workers]
+    )
+
+
 def validate_world_size_change(state: RankState) -> None:
     """Reject replay of outputs that were started under a different worker layout."""
     if any(state.prefetched_restore_keys):
         raise ValueError(
             "Cannot change the world size with pending prefetched samples. "
-            "Save the checkpoint with prefetch_factor=0."
+            "Save with prefetch_factor=0 or pass --discard-prefetched-batches."
         )
     if any(
         worker is not None and _has_pending_generator_output(worker.dataset)

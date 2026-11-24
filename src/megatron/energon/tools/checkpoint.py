@@ -8,7 +8,10 @@ import click
 import torch
 
 from megatron.energon.checkpoint import RankStateIterable, natural_sort_key, resize_rank_state
-from megatron.energon.checkpoint.rank_state import validate_world_size_change
+from megatron.energon.checkpoint.rank_state import (
+    validate_world_size_change,
+    without_prefetched_batches,
+)
 from megatron.energon.dataloader.dataloader import RankState
 from megatron.energon.epathlib import EPath
 from megatron.energon.savable_loader import SavableDataLoaderState
@@ -29,11 +32,17 @@ from megatron.energon.savable_loader import SavableDataLoaderState
     "--new-world-size", type=int, help="Number of ranks to redistribute to", required=False
 )
 @click.option("--new-micro-batch-size", type=click.IntRange(min=1))
+@click.option(
+    "--discard-prefetched-batches",
+    is_flag=True,
+    help="Skip undelivered custom-loader batches when changing the world size.",
+)
 def command_redist(
     input_files: List[EPath],
     output_path: EPath,
     new_world_size: Optional[int] = None,
     new_micro_batch_size: Optional[int] = None,
+    discard_prefetched_batches: bool = False,
 ):
     """Redistribute a checkpoint.
 
@@ -68,6 +77,11 @@ def command_redist(
         "New DP world size must be a multiple of the current DP world size"
     )
     new_workers_per_rank = total_num_workers // new_world_size
+
+    if discard_prefetched_batches and new_world_size != rsi.get_num_ranks():
+        for rank, state in enumerate(rsi.rank_states):
+            if isinstance(state, RankState):
+                rsi.rank_states[rank] = without_prefetched_batches(state, rank)
 
     new_rank_states = [list() for _ in range(new_world_size)]
     rsi_iter = iter(rsi)
