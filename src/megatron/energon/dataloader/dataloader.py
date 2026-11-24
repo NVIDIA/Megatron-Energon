@@ -3,6 +3,7 @@
 import inspect
 import os
 import pickle
+from dataclasses import dataclass
 from typing import (
     Any,
     ClassVar,
@@ -37,30 +38,51 @@ from megatron.energon.wrappers.base import (
 )
 from megatron.energon.wrappers.batch_dataset import BatchDataset
 from megatron.energon.wrappers.gc_dataset import GC_DEFAULT_EVERY_N_ITER, GcDataset
+from megatron.energon.wrappers.group_batch_dataset import GroupBatchDataset
 from megatron.energon.wrappers.log_sample_dataset import default_get_batch_keys
 from megatron.energon.wrappers.watchdog_dataset import WatchdogDataset
 
 TSample = TypeVar("TSample", covariant=True)
+TBatchDataset = TypeVar("TBatchDataset", BatchDataset, GroupBatchDataset)
 
 DEBUG_LEVEL = 0
 
 
 @edataclass
-class RankState:
-    """
-    State of a rank.
-    """
+class WorkerCheckpoint:
+    """One worker's execution snapshot and the loader's progress through its outputs."""
 
-    #: This is a list (per worker) of lists of (batch) sample keys, which have been (asynchronously) prefetched from workers
-    # but not been fetched yet by iterating.
-    prefetched_restore_keys: list[list[RestoreKey]]
-    #: This is a list of worker states, which have been saved from the workers (or `None` for the initial state).
-    worker_states: list[WorkerState | None]
-    #: The next worker ID to prefetch from (i.e. append to the prefetched samples).
+    state: WorkerState | None
+    prefetched_restore_keys: list[RestoreKey]
+    observed_eof: bool
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class GroupedBatchCheckpointConfig:
+    """The grouped batch settings that must agree at save and restore."""
+
+    fixed_batch_size: int | None
+    drop_last: bool
+
+
+@edataclass
+class RankState:
+    """State of a rank at a delivery boundary."""
+
+    workers: list[WorkerCheckpoint]
     next_worker_id: int
-    #: The micro batch size of the dataset, or `None` if not known. Needed for redistributing the state.
     micro_batch_size: int | None
-    exhausted_workers: list[bool] | None = None
+    grouped_batch_config: GroupedBatchCheckpointConfig | None = None
+
+    @property
+    def worker_states(self) -> list[WorkerState | None]:
+        """Execution snapshots in rank-local worker order."""
+        return [worker.state for worker in self.workers]
+
+    @property
+    def prefetched_restore_keys(self) -> list[list[RestoreKey]]:
+        """Undelivered outputs in rank-local worker order."""
+        return [worker.prefetched_restore_keys for worker in self.workers]
 
 
 class WorkerType(Protocol[TSample]):
@@ -251,16 +273,14 @@ class DataLoader(Generic[TSample]):
             self._prefetching_samples = [
                 [
                     self._pin_memory(self._restore_sample(restore_key))
-                    for restore_key in prefetched_restore_keys
+                    for restore_key in worker.prefetched_restore_keys
                 ]
-                for prefetched_restore_keys in self._restore_state.prefetched_restore_keys
+                for worker in self._restore_state.workers
             ]
             self._next_worker_id = self._restore_state.next_worker_id
-            self._exhausted_workers = (
-                self._restore_state.exhausted_workers.copy()
-                if self._restore_state.exhausted_workers is not None
-                else [False] * len(worker_states)
-            )
+            self._exhausted_workers = [
+                worker.observed_eof for worker in self._restore_state.workers
+            ]
             # State was restored, clear
             self._restore_state = None
 
@@ -505,19 +525,25 @@ class DataLoader(Generic[TSample]):
     def num_workers(self) -> int:
         return self._worker_config.num_workers
 
-    def _get_batch_dataset(self) -> BatchDataset | None:
-        if isinstance(self._dataset, BatchDataset):
-            return self._dataset
-        if isinstance(self._dataset, BaseWrapperDataset):
-            result = self._dataset._find_wrapped_dataset(BatchDataset)
-            assert result is None or isinstance(result, BatchDataset)
-            return result
+    def _find_batch_dataset(self, dataset_type: type[TBatchDataset]) -> TBatchDataset | None:
+        dataset = self._dataset
+        if isinstance(dataset, BaseWrapperDataset) and not isinstance(dataset, dataset_type):
+            dataset = dataset._find_wrapped_dataset(dataset_type)
+        return dataset if isinstance(dataset, dataset_type) else None
+
+    @property
+    def _grouped_batch_config(self) -> GroupedBatchCheckpointConfig | None:
+        dataset = self._find_batch_dataset(GroupBatchDataset)
+        if dataset is not None:
+            return GroupedBatchCheckpointConfig(
+                fixed_batch_size=dataset.fixed_batch_size, drop_last=dataset.drop_last
+            )
         return None
 
     @property
     def micro_batch_size(self) -> int | None:
         """Try to infer micro-batch size from the dataset."""
-        dataset = self._get_batch_dataset()
+        dataset = self._find_batch_dataset(BatchDataset)
         return dataset.batch_size if dataset is not None else None
 
     def save_state_rank(self) -> RankState:
@@ -545,11 +571,15 @@ class DataLoader(Generic[TSample]):
             worker_states = [worker.save_state() for worker in self._workers]
 
         return RankState(
-            prefetched_restore_keys=prefetched_restore_keys,
-            worker_states=worker_states,
+            workers=[
+                WorkerCheckpoint(state=state, prefetched_restore_keys=keys, observed_eof=eof)
+                for state, keys, eof in zip(
+                    worker_states, prefetched_restore_keys, self._exhausted_workers, strict=True
+                )
+            ],
             next_worker_id=self._next_worker_id,
             micro_batch_size=self.micro_batch_size,
-            exhausted_workers=self._exhausted_workers.copy(),
+            grouped_batch_config=self._grouped_batch_config,
         )
 
     def save_state_global(self, global_dst_rank: int) -> Sequence[RankState | None] | None:
@@ -634,7 +664,10 @@ class DataLoader(Generic[TSample]):
             return
 
         assert isinstance(state, RankState)
-        batch_dataset = self._get_batch_dataset()
+        grouped_config = self._grouped_batch_config
+        if state.grouped_batch_config is not None and state.grouped_batch_config != grouped_config:
+            raise ValueError("Cannot change grouped batch size or drop_last on checkpoint restore")
+        batch_dataset = self._find_batch_dataset(BatchDataset)
         batch_size = batch_dataset.batch_size if batch_dataset is not None else None
         if (
             batch_size != state.micro_batch_size

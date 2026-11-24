@@ -940,7 +940,8 @@ class TestDataset(unittest.TestCase):
                     batch_size=scenario["micro_batch_size"],
                     shuffle_buffer_size=42,
                     max_samples_per_sequence=2,
-                )
+                ),
+                prefetch_factor=0,
             )
 
             # Throw away some samples to advance the loader state

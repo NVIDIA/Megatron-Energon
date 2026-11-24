@@ -1,12 +1,14 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+from dataclasses import replace
 from typing import List, Optional
 
 import click
 import torch
 
 from megatron.energon.checkpoint import RankStateIterable, natural_sort_key, resize_rank_state
+from megatron.energon.checkpoint.rank_state import validate_world_size_change
 from megatron.energon.dataloader.dataloader import RankState
 from megatron.energon.epathlib import EPath
 from megatron.energon.savable_loader import SavableDataLoaderState
@@ -82,19 +84,29 @@ def command_redist(
     batch_size = old_size if new_micro_batch_size is None else new_micro_batch_size
     if isinstance(rsi.rank_states[0], RankState):
         try:
-            new_states = [
-                resize_rank_state(
-                    RankState(
-                        worker_states=[worker for worker, _, _ in rank],
-                        prefetched_restore_keys=[keys for _, keys, _ in rank],
-                        exhausted_workers=[exhausted for _, _, exhausted in rank],
-                        next_worker_id=0,
-                        micro_batch_size=old_size,
-                    ),
-                    batch_size,
-                )
-                for rank in new_rank_states
-            ]
+            if new_world_size == rsi.get_num_ranks():
+                new_states = [resize_rank_state(state, batch_size) for state in rsi.rank_states]
+            else:
+                for state in rsi.rank_states:
+                    validate_world_size_change(state)
+                template = rsi.rank_states[0]
+                if any(
+                    (state.micro_batch_size, state.grouped_batch_config)
+                    != (template.micro_batch_size, template.grouped_batch_config)
+                    for state in rsi.rank_states
+                ):
+                    raise ValueError("Checkpoint ranks have different batch configurations")
+                new_states = [
+                    resize_rank_state(
+                        replace(
+                            template,
+                            workers=rank,
+                            next_worker_id=0,
+                        ),
+                        batch_size,
+                    )
+                    for rank in new_rank_states
+                ]
         except ValueError as error:
             raise click.ClickException(str(error)) from error
     else:
@@ -102,10 +114,15 @@ def command_redist(
             raise click.ClickException(
                 "Micro batch size changes require a custom loader checkpoint"
             )
-        new_states = [
-            SavableDataLoaderState(worker_states=rank, next_worker_id=0, micro_batch_size=old_size)
-            for rank in new_rank_states
-        ]
+        if new_world_size == rsi.get_num_ranks():
+            new_states = rsi.rank_states
+        else:
+            new_states = [
+                SavableDataLoaderState(
+                    worker_states=rank, next_worker_id=0, micro_batch_size=old_size
+                )
+                for rank in new_rank_states
+            ]
 
     # torch.save needs a directory for local output paths.
     if output_path.is_local():

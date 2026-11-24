@@ -71,7 +71,6 @@ class GroupBatchDataset(
         "_group_key_sample_index": None,
         "_batch_sample_index": None,
         "_buckets": dict,
-        "_source_exhausted": bool,
         "_state_restored": bool,
     }
 
@@ -250,6 +249,11 @@ class GroupBatchDataset(
         self._group_key_sample_index.restore_state(state["bucket_sample_index"])
         self._batch_sample_index.restore_state(state["batch_sample_index"])
         for key, bucket_state in state["buckets"].items():
+            if (
+                self.fixed_batch_size is not None
+                and bucket_state["batch_size"] != self.fixed_batch_size
+            ):
+                raise ValueError("Cannot change grouped batch size on checkpoint restore")
             self._buckets[key] = Bucket(
                 batch_size=-1,
                 samples=SavableSampleBuffer(self.dataset, worker_config=self.worker_config),

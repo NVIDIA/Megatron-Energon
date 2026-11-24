@@ -381,17 +381,23 @@ def migrate_dataloader_state(
                 "use prefetch_factor=0 on the source loader"
             )
         workers = []
-        for worker in saved_state.worker_states:
+        for checkpoint in saved_state.workers:
+            worker = checkpoint.state
             if worker is None:
-                workers.append(None)
+                workers.append(checkpoint)
                 continue
             dataset, exhausted = migrate(worker.dataset, worker.exhausted)
-            workers.append(replace(worker, dataset=dataset, exhausted=exhausted))
+            workers.append(
+                replace(
+                    checkpoint,
+                    state=replace(worker, dataset=dataset, exhausted=exhausted),
+                    observed_eof=exhausted,
+                )
+            )
         _warn_lost_progress(lost)
         return replace(
             saved_state,
-            worker_states=workers,
-            exhausted_workers=[worker is not None and worker.exhausted for worker in workers],
+            workers=workers,
             micro_batch_size=dataloader.micro_batch_size,
         )
 

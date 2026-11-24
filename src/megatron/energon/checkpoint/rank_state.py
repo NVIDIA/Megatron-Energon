@@ -44,6 +44,18 @@ def _split_batch_restore_key(
     raise ValueError(f"Unsupported restore key type for splitting batch: {type(key).__name__}")
 
 
+def _is_short_batch(key: RestoreKey, batch_size: int) -> bool:
+    while isinstance(key, WrappedRestoreKey):
+        if isinstance(key, MapGenRestoreKey):
+            return False
+        key = key.inner
+    return (
+        isinstance(key, BatchRestoreKey)
+        and not isinstance(key, BatchGenRestoreKey)
+        and len(key.inner) < batch_size
+    )
+
+
 def _has_pending_generator_batch(state: FlexState) -> bool:
     if state.get("__class__") == "BatchDataset" and state.get("_generator_sample_keys") is not None:
         return True
@@ -55,13 +67,48 @@ def _has_pending_generator_batch(state: FlexState) -> bool:
     return any(_has_pending_generator_batch(child) for child in state.get("datasets", ()))
 
 
+def _has_pending_generator_output(state: FlexState) -> bool:
+    return state.get("_generator_offset") is not None or any(
+        _has_pending_generator_output(child) for child in state.get("datasets", ())
+    )
+
+
+def validate_world_size_change(state: RankState) -> None:
+    """Reject replay of outputs that were started under a different worker layout."""
+    if any(state.prefetched_restore_keys):
+        raise ValueError(
+            "Cannot change the world size with pending prefetched samples. "
+            "Save the checkpoint with prefetch_factor=0."
+        )
+    if any(
+        worker is not None and _has_pending_generator_output(worker.dataset)
+        for worker in state.worker_states
+    ):
+        raise ValueError("Cannot change the world size with an in-progress generator output.")
+
+
 def resize_rank_state(
     state: RankState, batch_size: int | None, *, drop_last: bool = False
 ) -> RankState:
     """Resize pending batch keys while preserving the worker snapshots."""
     old_size = state.micro_batch_size
     if old_size == batch_size:
-        return state
+        if not drop_last or batch_size is None:
+            return state
+        return replace(
+            state,
+            workers=[
+                replace(
+                    worker,
+                    prefetched_restore_keys=[
+                        key
+                        for key in worker.prefetched_restore_keys
+                        if not _is_short_batch(key, batch_size)
+                    ],
+                )
+                for worker in state.workers
+            ],
+        )
     if (
         old_size is None
         or batch_size is None
@@ -77,13 +124,16 @@ def resize_rank_state(
     return replace(
         state,
         micro_batch_size=batch_size,
-        prefetched_restore_keys=[
-            [
-                piece
-                for key in worker_keys
-                for piece in _split_batch_restore_key(key, batch_size, drop_last=drop_last)
-            ]
-            for worker_keys in state.prefetched_restore_keys
+        workers=[
+            replace(
+                worker,
+                prefetched_restore_keys=[
+                    piece
+                    for key in worker.prefetched_restore_keys
+                    for piece in _split_batch_restore_key(key, batch_size, drop_last=drop_last)
+                ],
+            )
+            for worker in state.workers
         ],
     )
 
@@ -176,7 +226,7 @@ class RankStateIterable:
     num_states: int
     rank_cur_worker: list[int]
     rank_num_workers: list[int]
-    #: Rank checkpoints in rank order, in either the custom or legacy loader format.
+    #: Checkpoints produced by either loader implementation, in rank order.
     rank_states: list[SavableDataLoaderState | RankState]
     rank_worker_offset: list[int]
 
@@ -252,7 +302,6 @@ class RankStateIterable:
         """Iterates the SavableDatasetCheckpoints of multiple ranks in a round-robin fashion."""
         for state in self.rank_states:
             if isinstance(state, RankState):
-                exhausted = state.exhausted_workers or [False] * len(state.worker_states)
-                yield from zip(state.worker_states, state.prefetched_restore_keys, exhausted)
+                yield from state.workers
             else:
                 yield from state.worker_states

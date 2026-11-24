@@ -43,6 +43,7 @@ from megatron.energon.task_encoder.base import DefaultTaskEncoder, stateless
 from megatron.energon.tools.checkpoint import command_redist
 from megatron.energon.wrappers.batch_dataset import BatchGenRestoreKey, BatchRestoreKey
 from megatron.energon.wrappers.epochize_dataset import EpochizeDataset
+from megatron.energon.wrappers.group_batch_dataset import GroupBatchDataset
 from megatron.energon.wrappers.map_dataset import MapGenRestoreKey, MapRestoreKey
 from megatron.energon.wrappers.packing_dataset import PartialSampleRestoreKey
 
@@ -334,6 +335,166 @@ class TestDataLoader(unittest.TestCase):
                 [source_tail[i : i + 4] for i in range(0, len(source_tail), 4)],
             )
 
+    def test_redistribution_preserves_order_and_applies_target_tail_policy(self):
+        def loader(batch_size, drop_last=False):
+            return get_savable_loader(
+                get_train_dataset(
+                    self.ds1_path,
+                    worker_config=WorkerConfig(rank=0, world_size=1, num_workers=2),
+                    batch_size=batch_size,
+                    batch_drop_last=drop_last,
+                    shuffle_buffer_size=None,
+                    max_samples_per_sequence=None,
+                    repeat=False,
+                ),
+                prefetch_factor=8,
+                pin_memory=False,
+            )
+
+        with loader(8) as source:
+            next(iter(source))
+            state = source.save_state_rank()
+            self.assertEqual(state.next_worker_id, 1)
+            uninterrupted = [list(batch.text) for batch in source]
+        checkpoint = self.dataset_path / "state.pt"
+        torch.save([state], checkpoint)
+        state = torch.load(checkpoint, weights_only=False)[0]
+
+        for size, drop_last in ((8, False), (4, True)):
+            with self.subTest(batch_size=size):
+                output = self.dataset_path / str(size)
+                result = CliRunner().invoke(
+                    command_redist,
+                    [
+                        str(checkpoint),
+                        str(output),
+                        "--new-world-size",
+                        "1",
+                        "--new-micro-batch-size",
+                        str(size),
+                    ],
+                    catch_exceptions=False,
+                )
+                self.assertEqual(result.exit_code, 0, result.output)
+                converted = torch.load(output / checkpoint.name, weights_only=False)[0]
+                with loader(size, drop_last).with_restored_state_rank(state) as direct:
+                    expected = [list(batch.text) for batch in direct]
+                if size == 8:
+                    self.assertEqual(expected, uninterrupted)
+                else:
+                    self.assertTrue(any(len(batch) % size for batch in uninterrupted))
+                    self.assertTrue(all(len(batch) == size for batch in expected))
+                with loader(size, drop_last).with_restored_state_rank(converted) as restored:
+                    self.assertEqual([list(batch.text) for batch in restored], expected)
+
+    def test_world_size_change_rejects_pending_sample_replay(self):
+        for prefetch_factor, generator, error_message in (
+            (2, True, "prefetch_factor=0"),
+            (0, True, "in-progress generator"),
+            (0, False, None),
+        ):
+            with self.subTest(prefetch_factor=prefetch_factor, generator=generator):
+                dataset = get_train_dataset(
+                    self.ds1_path,
+                    worker_config=WorkerConfig(rank=0, world_size=1, num_workers=2),
+                    task_encoder=GeneratorTaskEncoder() if generator else DefaultTaskEncoder(),
+                    batch_size=None,
+                    shuffle_buffer_size=None,
+                    max_samples_per_sequence=None,
+                    repeat=False,
+                )
+                with get_savable_loader(
+                    dataset, prefetch_factor=prefetch_factor, pin_memory=False
+                ) as loader:
+                    next(iter(loader))
+                    state = loader.save_state_rank()
+                self.assertEqual(bool(any(state.prefetched_restore_keys)), bool(prefetch_factor))
+
+                checkpoint = self.dataset_path / f"checkpoint-{prefetch_factor}-{generator}.pt"
+                torch.save([state], checkpoint)
+                output = self.dataset_path / f"redistributed-{prefetch_factor}-{generator}"
+                result = CliRunner().invoke(
+                    command_redist,
+                    [str(checkpoint), str(output), "--new-world-size", "2"],
+                    catch_exceptions=False,
+                )
+                if error_message:
+                    self.assertEqual(result.exit_code, 1, result.output)
+                    self.assertIn(error_message, result.output)
+                    self.assertFalse(output.exists())
+                else:
+                    self.assertEqual(result.exit_code, 0, result.output)
+                    converted = torch.load(output / checkpoint.name, weights_only=False)
+                    self.assertEqual([len(rank.worker_states) for rank in converted], [1, 1])
+
+    def test_grouped_buffers_replay_scoped_rng_after_worker_regrouping(self):
+        class Encoder(DefaultTaskEncoder):
+            @stateless(restore_task_encoder_seeds=True)
+            def encode_sample(self, sample):
+                return replace(sample, text=f"{sample.text}:{self.rng.random.random()}")
+
+        def loader(rank, world_size, workers):
+            config = WorkerConfig(rank=rank, world_size=world_size, num_workers=workers)
+            encoder = Encoder()
+            dataset = get_train_dataset(
+                self.ds1_path,
+                worker_config=config,
+                task_encoder=encoder,
+                batch_size=None,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                repeat=False,
+            )
+            return get_savable_loader(
+                GroupBatchDataset(
+                    dataset,
+                    worker_config=config,
+                    fixed_batch_size=3,
+                    sample_group_key=lambda sample: (int(sample.text.split(":")[0]) % 2, None),
+                    batcher=encoder.batch,
+                    batcher_stateless=True,
+                ),
+                prefetch_factor=0,
+                pin_memory=False,
+            )
+
+        def buffered_keys(state):
+            if state["__class__"] == "GroupBatchDataset":
+                return [
+                    key
+                    for bucket in state["buckets"].values()
+                    for key in bucket["samples"]["_restore_keys"]
+                ]
+            return [key for child in state.get("datasets", ()) for key in buffered_keys(child)]
+
+        with loader(0, 1, 2) as source:
+            iterator = iter(source)
+            for _ in range(12):
+                next(iterator)
+                state = source.save_state_rank()
+                worker = state.workers[1].state
+                if buffered_keys(worker.dataset):
+                    break
+            else:
+                self.fail("Expected buffered samples on the worker that changes rank")
+            expected = [[], []]
+            for batch in iterator:
+                expected[batch.__restore_key__.worker_id].append(list(batch.text))
+
+        checkpoint = self.dataset_path / "buffered.pt"
+        output = self.dataset_path / "regrouped"
+        torch.save([state], checkpoint)
+        result = CliRunner().invoke(
+            command_redist,
+            [str(checkpoint), str(output), "--new-world-size", "2"],
+            catch_exceptions=False,
+        )
+        self.assertEqual(result.exit_code, 0, result.output)
+        converted = torch.load(output / checkpoint.name, weights_only=False)
+        for rank, checkpoint_state in enumerate(converted):
+            with loader(rank, 2, 1).with_restored_state_rank(checkpoint_state) as restored:
+                self.assertEqual([list(batch.text) for batch in restored], expected[rank])
+
     def test_thread_workers_surface_unsupported_process_rng(self):
         class Encoder(DefaultTaskEncoder):
             @stateless(restore_seeds=True)
@@ -385,6 +546,44 @@ class TestDataLoader(unittest.TestCase):
             self.assertEqual(initialized, [batch, custom])
         finally:
             pinning.shutdown()
+
+    def test_grouped_resize_fails_before_replaying_prefetched_batches(self):
+        def loader(size, drop_last=False):
+            config = WorkerConfig(rank=0, world_size=1, num_workers=1)
+            dataset = get_train_dataset(
+                self.ds1_path,
+                worker_config=config,
+                batch_size=None,
+                shuffle_buffer_size=None,
+                max_samples_per_sequence=None,
+                repeat=False,
+            )
+            return get_savable_loader(
+                GroupBatchDataset(
+                    dataset,
+                    worker_config=config,
+                    fixed_batch_size=size,
+                    sample_group_key=lambda sample: ("all", None),
+                    batcher=DefaultTaskEncoder().batch,
+                    batcher_stateless=True,
+                    drop_last=drop_last,
+                ),
+                pin_memory=False,
+            )
+
+        with loader(4) as source:
+            next(iter(source))
+            state = source.save_state_rank()
+            self.assertTrue(state.prefetched_restore_keys[0])
+            expected = [list(batch.text) for batch in source]
+        state = pickle.loads(pickle.dumps(state))
+        for size, drop_last in ((2, False), (4, True)):
+            with self.subTest(size=size, drop_last=drop_last):
+                target = loader(size, drop_last)
+                with self.assertRaisesRegex(ValueError, "Cannot change grouped batch"):
+                    target.restore_state_rank(state)
+        with loader(4).with_restored_state_rank(state) as target:
+            self.assertEqual([list(batch.text) for batch in target], expected)
 
     def test_resize_rejects_generator_after_batching_before_replay(self):
         class Encoder(DefaultTaskEncoder):
