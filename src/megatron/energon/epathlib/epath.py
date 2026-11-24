@@ -208,8 +208,7 @@ class EPath:
         block_size: Optional[int] = None,
         prefetch_file: bool = False,
     ) -> Union[TextIO, BinaryIO]:
-        snapshot = active_snapshot()
-        if snapshot is not None:
+        if (snapshot := active_snapshot()) is not None:
             stream = snapshot.open(str(self), mode)
             if stream is not None:
                 return stream
@@ -321,8 +320,7 @@ class EPath:
             return False
 
     def is_file(self) -> bool:
-        snapshot = active_snapshot()
-        if snapshot is not None and str(self) in snapshot.file_checks:
+        if (snapshot := active_snapshot()) is not None and str(self) in snapshot.file_checks:
             return snapshot.file_checks[str(self)]
         result = self.fs.is_file(self._internal_str_path)
         if (capture := active_capture()) is not None:
@@ -391,8 +389,7 @@ class EPath:
             yield new_path
 
     def size(self) -> int:
-        snapshot = active_snapshot()
-        if snapshot is not None and str(self) in snapshot.sizes:
+        if (snapshot := active_snapshot()) is not None and str(self) in snapshot.sizes:
             return snapshot.sizes[str(self)]
         result = self.fs.info(self._internal_str_path).content_length
         if (capture := active_capture()) is not None:

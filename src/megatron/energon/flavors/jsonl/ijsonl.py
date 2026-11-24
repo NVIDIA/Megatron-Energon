@@ -78,8 +78,7 @@ class IJsonlIndexReader:
 
     @staticmethod
     def size(jsonl_path: EPath) -> int:
-        snapshot = active_snapshot()
-        if snapshot is not None and str(jsonl_path) in snapshot.jsonl_sizes:
+        if (snapshot := active_snapshot()) is not None and str(jsonl_path) in snapshot.jsonl_sizes:
             return snapshot.jsonl_sizes[str(jsonl_path)]
         with IJsonlIndexReader(jsonl_path) as reader:
             result = reader[len(reader) - 1]
