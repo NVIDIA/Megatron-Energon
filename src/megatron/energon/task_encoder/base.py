@@ -4,11 +4,11 @@
 import dataclasses
 import functools
 import inspect
-import threading
 from abc import ABC
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from dataclasses import is_dataclass
+from threading import local
 from types import MethodType
 from typing import (
     Any,
@@ -437,7 +437,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
     #: probability when blending by a :func:`sample_size_metric`.
     blend_sample_size_epsilon: float = 1.0
     #: Allocated lazily on first RNG access in a worker thread.
-    _rng_by_worker: threading.local
+    _rng_by_worker: local
 
     def _is_overridden(
         self, bound_method: Callable[..., Any], bases: Optional[Sequence[Type[Any]]] = None
@@ -1488,7 +1488,10 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         config = WorkerConfig.active_worker_config
         if config is None:
             raise RuntimeError("Task encoder RNGs require an active dataloader worker")
-        state = self.__dict__.setdefault("_rng_by_worker", threading.local())
+        state = self.__dict__.get("_rng_by_worker")
+        if state is None:
+            # Concurrent first accesses must share the same thread-local container.
+            state = self.__dict__.setdefault("_rng_by_worker", local())
         seed = config.worker_seed()
         if getattr(state, "seed", None) != seed:
             state.seed = seed
