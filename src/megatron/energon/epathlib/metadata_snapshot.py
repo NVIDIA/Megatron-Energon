@@ -64,8 +64,8 @@ class MetadataSnapshot:
             jsonl_sizes=document["jsonl_sizes"],
         )
 
-    def save(self, path: str | Path, *, sha256: str | None = None) -> None:
-        """Atomically publish the package, optionally checking its digest first."""
+    def save(self, path: str | Path) -> None:
+        """Atomically publish the package."""
         document = {
             "format_version": 1,
             "recipe_identity": self.recipe_identity,
@@ -77,7 +77,6 @@ class MetadataSnapshot:
             "jsonl_sizes": self.jsonl_sizes,
         }
         payload = json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
-        _check_digest(payload, sha256)
         path = Path(path)
         with tempfile.NamedTemporaryFile(
             dir=path.parent, prefix=f".{path.name}.", delete=False
@@ -154,8 +153,8 @@ def use_metadata_snapshot(
 
     With ``create=True``, record metadata from storage and write ``path`` only
     after successful construction. Otherwise, read the existing package at
-    ``path``; a missing file is an error. An optional ``sha256`` checks the read
-    package, or the newly created package before publication. Neither mode
+    ``path``; a missing file is an error. An optional ``sha256`` checks only the
+    package being read and is ignored when ``create=True``. Neither mode
     checks whether source metadata has changed. Exit before starting workers.
 
     Already loaded ``MetadataSnapshot`` objects remain supported for applications
@@ -175,6 +174,6 @@ def use_metadata_snapshot(
     try:
         yield snapshot
         if create:
-            snapshot.save(path, sha256=sha256)
+            snapshot.save(path)
     finally:
         _ACTIVE_SNAPSHOT.reset(token)

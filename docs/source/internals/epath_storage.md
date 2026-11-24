@@ -48,8 +48,8 @@ filesystem path:
   the context exits successfully.
 - `create=False` (the default) reads the existing snapshot. A missing file is
   an error; reading mode never creates or updates the snapshot.
-- `sha256` is optional. When supplied, it checks the package being read, or the
-  newly created package before it replaces the destination.
+- `sha256` is optional and only checks the package in reading mode. It is ignored
+  when `create=True`, even if the supplied checksum does not match.
 
 ### Create the snapshot
 
@@ -110,6 +110,7 @@ context, including after an exception.
 
 ### Optional checksum
 
+Checksum validation applies only to reading mode; creation ignores `sha256`.
 To select an exact package, calculate its checksum after creation and save that
 value with your job configuration:
 

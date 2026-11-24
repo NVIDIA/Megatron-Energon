@@ -138,7 +138,8 @@ class SnapshotTest(unittest.TestCase):
             with self.assertRaises(FileNotFoundError):
                 with use_metadata_snapshot(package):
                     self.fail("Reading a missing snapshot must not create it")
-            with use_metadata_snapshot(package, create=True):
+            # Creation ignores a supplied checksum, even when it is incorrect.
+            with use_metadata_snapshot(package, create=True, sha256="wrong"):
                 pass
             digest = hashlib.sha256(package.read_bytes()).hexdigest()
             for checksum in (None, digest):
@@ -183,18 +184,14 @@ class SnapshotTest(unittest.TestCase):
                             self.assertEqual(path.read_text(), "new revision")
                             raise RuntimeError("construction failed")
                     self.assertEqual(path.read_text(), "old revision")
-                with self.assertRaisesRegex(ValueError, "SHA256"):
-                    with use_metadata_snapshot(package, create=True, sha256="wrong"):
-                        path.read_text()
-                self.assertEqual(path.read_text(), "old revision")
             self.assertEqual(package.read_bytes(), original_package)
             self.assertFalse((root / "new-snapshot.json").exists())
             self.assertEqual(path.read_text(), "new revision")
-            with use_metadata_snapshot(package, create=True):
-                path.read_text()
-            digest = hashlib.sha256(package.read_bytes()).hexdigest()
-            with use_metadata_snapshot(package, create=True, sha256=digest):
-                path.read_text()
+            # A supplied checksum also cannot prevent replacing an existing package.
+            with use_metadata_snapshot(package):
+                with use_metadata_snapshot(package, create=True, sha256="wrong"):
+                    self.assertEqual(path.read_text(), "new revision")
+                self.assertEqual(path.read_text(), "old revision")
             with use_metadata_snapshot(package):
                 self.assertEqual(path.read_text(), "new revision")
             self.assertEqual(
