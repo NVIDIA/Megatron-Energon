@@ -15,15 +15,12 @@ import io
 import json
 import logging
 import tempfile
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import IO, Iterator, Literal, TypeVar
+from typing import BinaryIO, Iterator
 
 logger = logging.getLogger(__name__)
 
-_Value = TypeVar("_Value", bool, int)
-_MetadataKind = Literal["file_checks", "sizes", "jsonl_sizes"]
 _MAX_CONTENT_BYTES = 64 * 1024 * 1024
 
 
@@ -95,12 +92,7 @@ class MetadataSnapshot:
             "Created metadata snapshot %s; sha256=%s", path, hashlib.sha256(payload).hexdigest()
         )
 
-    def lookup(self, kind: _MetadataKind, path: str, read: Callable[[], _Value]) -> _Value:
-        """Serve a recorded scalar, or perform the ordinary storage lookup."""
-        values = getattr(self, kind)
-        return values[path] if path in values else read()
-
-    def open(self, path: str, mode: str, opener: Callable[[str], IO] | None = None):
+    def open(self, path: str, mode: str):
         """Return an independent stream; binary data and cursor state aren't shared."""
         if mode not in ("r", "rb") or path not in self.contents:
             return None
@@ -109,34 +101,21 @@ class MetadataSnapshot:
 
 
 class _MetadataCapture:
-    """Record through the same scoped I/O hooks used for replay."""
+    """Collect construction metadata while ordinary storage operations run."""
 
     def __init__(self) -> None:
         self.snapshot = MetadataSnapshot("", {}, {}, {}, {})
-        self.contents = self.snapshot.contents
-        self.file_checks = self.snapshot.file_checks
-        self.sizes = self.snapshot.sizes
-        self.jsonl_sizes = self.snapshot.jsonl_sizes
         self.captured_bytes = 0
 
-    def lookup(self, kind: _MetadataKind, path: str, read: Callable[[], _Value]) -> _Value:
-        values = getattr(self, kind)
-        if path not in values:
-            values[path] = read()
-        return values[path]
-
-    def open(self, path: str, mode: str, opener: Callable[[str], IO]):
-        if mode not in ("r", "rb") or Path(path).suffix not in (".yaml", ".yml", ".json"):
-            return None
-        if path not in self.contents:
-            remaining = _MAX_CONTENT_BYTES - self.captured_bytes
-            with opener("rb") as stream:
-                payload = stream.read(remaining + 1)
-            if len(payload) > remaining:
-                raise ValueError("Metadata capture exceeded 64 MiB; narrow the construction scope")
-            self.contents[path] = payload
-            self.captured_bytes += len(payload)
-        return self.snapshot.open(path, mode)
+    def record_contents(self, path: str, stream: BinaryIO) -> None:
+        """Read an opened metadata file, bounding the total stored contents."""
+        previous_size = len(self.snapshot.contents.get(path, b""))
+        remaining = _MAX_CONTENT_BYTES - self.captured_bytes + previous_size
+        payload = stream.read(remaining + 1)
+        if len(payload) > remaining:
+            raise ValueError("Metadata capture exceeded 64 MiB; narrow the construction scope")
+        self.snapshot.contents[path] = payload
+        self.captured_bytes += len(payload) - previous_size
 
 
 _ACTIVE_SNAPSHOT: contextvars.ContextVar[MetadataSnapshot | _MetadataCapture | None] = (
@@ -144,8 +123,16 @@ _ACTIVE_SNAPSHOT: contextvars.ContextVar[MetadataSnapshot | _MetadataCapture | N
 )
 
 
-def active_snapshot() -> MetadataSnapshot | _MetadataCapture | None:
-    return _ACTIVE_SNAPSHOT.get()
+def active_snapshot() -> MetadataSnapshot | None:
+    """Return the snapshot only when reading mode is active."""
+    active = _ACTIVE_SNAPSHOT.get()
+    return active if isinstance(active, MetadataSnapshot) else None
+
+
+def active_capture() -> _MetadataCapture | None:
+    """Return the recorder only when creation mode is active."""
+    active = _ACTIVE_SNAPSHOT.get()
+    return active if isinstance(active, _MetadataCapture) else None
 
 
 @contextlib.contextmanager
@@ -157,8 +144,9 @@ def use_metadata_snapshot(
 ) -> Iterator[MetadataSnapshot]:
     """Create or read a metadata package while constructing a dataset.
 
-    With ``create=True``, record metadata from storage and write ``path`` only
-    after successful construction, then log its path and SHA256 at INFO level.
+    With ``create=True``, perform ordinary storage reads and record their results,
+    including repeated queries. Write ``path`` only after successful construction,
+    then log its path and SHA256 at INFO level.
     Otherwise, read the existing package at ``path``; a missing file is an error.
     An optional ``sha256`` checks only the package being read and is ignored
     when ``create=True``. Neither mode checks whether source metadata has changed.

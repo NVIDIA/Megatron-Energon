@@ -44,9 +44,11 @@ Use a snapshot to avoid repeating metadata reads while constructing loaders for
 the same frozen dataset revision. Both modes use the same local or shared
 filesystem path:
 
-- `create=True` records metadata and creates or replaces the snapshot after
-  the context exits successfully.
-- `create=False` (the default) reads the existing snapshot. A missing file is
+- `create=True` performs the normal metadata I/O and records its results,
+  including repeated queries. It creates or replaces the snapshot after the
+  context exits successfully.
+- `create=False` (the default) reads the existing snapshot and serves recorded
+  values without repeating their original storage operations. A missing file is
   an error; reading mode never creates or updates the snapshot.
 - `sha256` is optional and only checks the package in reading mode. It is ignored
   when `create=True`, even if the supplied checksum does not match.
@@ -87,8 +89,10 @@ with use_metadata_snapshot(snapshot_path, create=True):
 ```
 
 Creation records YAML/JSON contents, file checks, file sizes and JSONL terminal
-offsets encountered by the constructor. It does not store sample/media payloads
-or dataloader checkpoint state. Captured file contents are limited to 64 MiB.
+offsets encountered by the constructor. It does not reuse earlier query results
+during creation; repeated queries access storage and replace the recorded value.
+It does not store sample/media payloads or dataloader checkpoint state. Captured
+file contents are limited to 64 MiB, counting each recorded path once.
 If construction or publication fails, an existing snapshot is left unchanged.
 Choose one process to create the snapshot, then let other processes read it.
 

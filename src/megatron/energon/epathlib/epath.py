@@ -21,7 +21,7 @@ from typing import (
 import multistorageclient as msc
 
 from megatron.energon.deprecation import warn_deprecated
-from megatron.energon.epathlib.metadata_snapshot import active_snapshot
+from megatron.energon.epathlib.metadata_snapshot import active_capture, active_snapshot
 
 if TYPE_CHECKING:
     from megatron.energon.epathlib.mapped_array import EPathMappedArray
@@ -210,15 +210,18 @@ class EPath:
     ) -> Union[TextIO, BinaryIO]:
         snapshot = active_snapshot()
         if snapshot is not None:
-            stream = snapshot.open(
-                str(self),
-                mode,
-                lambda read_mode: self.fs.open(
-                    self._internal_str_path, read_mode, prefetch_file=prefetch_file
-                ),
-            )
+            stream = snapshot.open(str(self), mode)
             if stream is not None:
                 return stream
+        capture = active_capture()
+        if (
+            capture is not None
+            and mode in ("r", "rb")
+            and self.internal_path.suffix in (".yaml", ".yml", ".json")
+        ):
+            with self.fs.open(self._internal_str_path, "rb", prefetch_file=prefetch_file) as stream:
+                capture.record_contents(str(self), stream)
+            return capture.snapshot.open(str(self), mode)
         return self.fs.open(self._internal_str_path, mode, prefetch_file=prefetch_file)
 
     def map(
@@ -320,11 +323,13 @@ class EPath:
 
     def is_file(self) -> bool:
         snapshot = active_snapshot()
-        if snapshot is not None:
-            return snapshot.lookup(
-                "file_checks", str(self), lambda: self.fs.is_file(self._internal_str_path)
-            )
-        return self.fs.is_file(self._internal_str_path)
+        if snapshot is not None and str(self) in snapshot.file_checks:
+            return snapshot.file_checks[str(self)]
+        result = self.fs.is_file(self._internal_str_path)
+        capture = active_capture()
+        if capture is not None:
+            capture.snapshot.file_checks[str(self)] = result
+        return result
 
     def mkdir(self, exist_ok: bool = True, parents: bool = False):
         pass
@@ -389,11 +394,13 @@ class EPath:
 
     def size(self) -> int:
         snapshot = active_snapshot()
-        if snapshot is not None:
-            return snapshot.lookup(
-                "sizes", str(self), lambda: self.fs.info(self._internal_str_path).content_length
-            )
-        return self.fs.info(self._internal_str_path).content_length
+        if snapshot is not None and str(self) in snapshot.sizes:
+            return snapshot.sizes[str(self)]
+        result = self.fs.info(self._internal_str_path).content_length
+        capture = active_capture()
+        if capture is not None:
+            capture.snapshot.sizes[str(self)] = result
+        return result
 
     def with_suffix(self, suffix: str, replace: bool = True) -> "EPath":
         """Create a new path with the given suffix.

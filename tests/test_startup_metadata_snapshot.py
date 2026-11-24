@@ -19,6 +19,51 @@ from tests import test_jsonl_dataset
 
 
 class SnapshotTest(unittest.TestCase):
+    def test_creation_performs_normal_io_and_reading_reuses_results(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            metadata = root / "recipe.yaml"
+            metadata.write_text("dataset: test\n")
+            path = EPath(metadata)
+            missing = EPath(root / "absent.yaml")
+            samples = root / "samples.jsonl"
+            test_jsonl_dataset.TestJsonlDataset.create_text_test_dataset(
+                samples, range(4), range(4)
+            )
+            samples_path = EPath(samples)
+            package = root / "metadata.json"
+
+            def query_metadata():
+                for _ in range(2):
+                    self.assertTrue(path.is_file())
+                    self.assertFalse(missing.is_file())
+                    self.assertEqual(path.size(), metadata.stat().st_size)
+                    self.assertEqual(path.read_text(), "dataset: test\n")
+                    self.assertEqual(IJsonlIndexReader.size(samples_path), samples.stat().st_size)
+
+            with (
+                patch.object(path.fs, "open", wraps=path.fs.open) as opened,
+                patch.object(path.fs, "is_file", wraps=path.fs.is_file) as checked,
+                patch.object(path.fs, "info", wraps=path.fs.info) as info,
+            ):
+                query_metadata()
+                normal_calls = (opened.call_count, checked.call_count, info.call_count)
+                self.assertTrue(all(count > 0 for count in normal_calls))
+                for operation in (opened, checked, info):
+                    operation.reset_mock()
+                with use_metadata_snapshot(package, create=True):
+                    query_metadata()
+                self.assertEqual(
+                    (opened.call_count, checked.call_count, info.call_count), normal_calls
+                )
+                for operation in (opened, checked, info):
+                    operation.reset_mock()
+                with use_metadata_snapshot(package):
+                    query_metadata()
+                self.assertEqual(
+                    (opened.call_count, checked.call_count, info.call_count), (0, 0, 0)
+                )
+
     def test_public_loader_order_and_resume_with_snapshot(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -228,7 +273,15 @@ class SnapshotTest(unittest.TestCase):
             media.write_bytes(b"first media")
             unseen.write_text("not captured")
             package = root / "metadata.json"
-            with use_metadata_snapshot(package, create=True):
+            with (
+                patch(
+                    "megatron.energon.epathlib.metadata_snapshot._MAX_CONTENT_BYTES",
+                    len(metadata.read_bytes()),
+                ),
+                use_metadata_snapshot(package, create=True),
+            ):
+                # Repeated reads replace an entry; they do not consume extra package space.
+                EPath(metadata).read_text()
                 EPath(metadata).read_text()
                 with EPath(media).open("rb") as stream:
                     self.assertEqual(stream.read(), b"first media")
