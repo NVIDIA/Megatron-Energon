@@ -117,12 +117,12 @@ class PinMemoryMixin:
             except TypeError:
                 return values
         elif dataclasses.is_dataclass(batch):
-            return type(batch)(
-                **{
-                    field.name: self._pin_memory(getattr(batch, field.name), device)
-                    for field in dataclasses.fields(batch)
-                }
-            )
+            result = copy(batch)
+            for field in dataclasses.fields(batch):
+                if hasattr(batch, field.name):
+                    value = self._pin_memory(getattr(batch, field.name), device)
+                    object.__setattr__(result, field.name, value)
+            return result
         elif isinstance(batch, (tuple, list)):
             if hasattr(batch, "_fields"):
                 # NamedTuple

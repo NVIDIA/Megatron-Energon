@@ -17,7 +17,7 @@ import warnings
 from collections import Counter, OrderedDict
 from contextlib import redirect_stdout
 from copy import copy
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from textwrap import dedent
 from typing import Iterable
@@ -352,6 +352,39 @@ class TestDataLoader(unittest.TestCase):
         with get_savable_loader(dataset, worker_type="thread", pin_memory=False) as loader:
             with self.assertRaisesRegex(FatalSampleError, "Thread workers require"):
                 next(iter(loader))
+
+    def test_pin_memory_copies_frozen_slotted_dataclass_without_constructor(self):
+        class Custom:
+            def pin_memory(self):
+                return "pinned"
+
+        initialized = []
+
+        @dataclass(frozen=True, slots=True)
+        class Batch:
+            item: object = field(init=False)
+
+            def __post_init__(self):
+                initialized.append(self)
+                object.__setattr__(self, "item", Custom())
+
+        @dataclass(frozen=True, slots=True)
+        class CustomBatch(Batch):
+            def pin_memory(self):
+                return "custom"
+
+        batch = Batch()
+        custom = CustomBatch()
+        pinning = PinMemoryThread("cpu")
+        try:
+            pinned = pinning(DoneFuture(batch)).get(timeout=5)
+            self.assertIsNot(pinned, batch)
+            self.assertEqual(pinned.item, "pinned")
+            self.assertIsInstance(batch.item, Custom)
+            self.assertEqual(pinning(DoneFuture(custom)).get(timeout=5), "custom")
+            self.assertEqual(initialized, [batch, custom])
+        finally:
+            pinning.shutdown()
 
     def test_resize_rejects_generator_after_batching_before_replay(self):
         class Encoder(DefaultTaskEncoder):
