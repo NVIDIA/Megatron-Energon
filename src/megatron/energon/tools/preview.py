@@ -12,8 +12,8 @@ import torch
 from megatron.energon import Sample, StandardWebdatasetFactory
 from megatron.energon.dataset_config import load_config
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
-from megatron.energon.flavors.webdataset.empty_dataset_error import EmptyDatasetError
+from megatron.energon.flavors.common.manifest.empty_dataset_error import EmptyDatasetError
+from megatron.energon.flavors.common.manifest.paths import MAIN_FOLDER_NAME
 from megatron.energon.loader import get_loader
 from megatron.energon.worker import WorkerConfig
 
@@ -88,7 +88,7 @@ def to_str(value: Any, indent: str) -> str:
 def pprint(idx: int, sample: Sample):
     click.echo(f"Sample {idx}")
     for field in dataclasses.fields(sample):
-        if field.name in ("__restore_key__", "__subflavors__", "__sources__"):
+        if field.name in ("__restore_key__", "__tags__", "__sources__"):
             continue
         click.echo(f" - {field.name} ({field.type}): {to_str(getattr(sample, field.name), '')}")
 

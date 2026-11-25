@@ -29,7 +29,10 @@ class MyTaskEncoder(DefaultTaskEncoder):
 ```
 
 Typically, you will just instantiate a {py:class}`SampleDecoder <megatron.energon.SampleDecoder>` and provide the arguments to configure it, as shown above.
-If you do **not** want automatic decoding at all, you have to explicitely set `decoder = None` in your TaskEncoder.
+If you do **not** want automatic decoding at all, explicitly set `decoder = None` in your TaskEncoder.
+Payload parts then remain bytes: text is not converted to a string, JSON is not parsed, and images are not converted to PIL images or tensors. Primary and auxiliary {py:class}`FileStore <megatron.energon.FileStore>` results also remain undecoded.
+
+This is useful for byte-preserving copying and hashing, selective or custom decoding, validation, metadata extraction, and offline dataset transformation. It does not prevent the selected payload from being read; combine it with a cooker `part_filter` when unused parts should not be loaded. See {ref}`linear-data-processing` for a complete finite, one-pass processing example.
 
 Here are the different options you can pass to {py:class}`SampleDecoder <megatron.energon.SampleDecoder>`:
 

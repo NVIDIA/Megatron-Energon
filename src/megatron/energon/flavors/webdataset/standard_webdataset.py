@@ -34,7 +34,7 @@ class StandardWebdatasetFactory(DefaultDecoderWebdatasetFactory[T_sample], Gener
             auto_decode: If true, use the default webdataset sample decoder.
             image_decode: This defines the decoding results.
             ignore_decoder_errors: If true, ignore errors when decoding.
-            subflavors: Subflavors dictionary to set for all loaded samples.
+            tags: Tags dictionary to set for all loaded samples.
             field_map: Mapping from the webdataset fields to the sample fields.
             sample_loader: Function to load the sample from the webdataset fields. May be a string
                 in order to load a function from a module, or a callable directly.

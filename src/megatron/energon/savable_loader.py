@@ -30,23 +30,47 @@ import torch.multiprocessing
 from torch.utils.data import DataLoader, IterableDataset
 
 from megatron.energon.cache import CachePool
+from megatron.energon.dataloader.workers.base_worker import WorkerSampleRestoreKey
 from megatron.energon.deprecation import deprecated
 from megatron.energon.edataclass import edataclass
 from megatron.energon.flavors.base_dataset import (
     FlexState,
+    RestoreKey,
     SavableDataset,
     State,
-    add_sample_restore_key,
+    set_sample_restore_key,
 )
 from megatron.energon.rng import SystemRng, SystemRngState
 from megatron.energon.worker import WorkerConfig
-from megatron.energon.wrappers.base import BaseWrapperDataset
+from megatron.energon.wrappers.base import BaseWrapperDataset, get_sample_restore_key
 from megatron.energon.wrappers.batch_dataset import BatchDataset
 from megatron.energon.wrappers.gc_dataset import GC_DEFAULT_EVERY_N_ITER, GcDataset, gc_init_worker
 from megatron.energon.wrappers.log_sample_dataset import default_get_batch_keys
 from megatron.energon.wrappers.watchdog_dataset import WatchdogDataset
 
 T = TypeVar("T")
+
+
+def _close_data_loader(loader: DataLoader[Any]) -> None:
+    """Shut down worker processes before closing the main-process dataset tree."""
+    epoch_iterator = getattr(loader, "_epoch_iterator", None)
+    if epoch_iterator is not None:
+        close_iterator = getattr(epoch_iterator, "close", None)
+        if close_iterator is not None:
+            close_iterator()
+        loader._epoch_iterator = None
+
+    data_iterator = getattr(loader, "_iterator", None)
+    if data_iterator is not None:
+        shutdown_workers = getattr(data_iterator, "_shutdown_workers", None)
+        if shutdown_workers is not None:
+            shutdown_workers()
+        loader._iterator = None
+
+    dataset = getattr(loader, "dataset", None)
+    close_dataset = getattr(dataset, "close", None)
+    if close_dataset is not None:
+        close_dataset()
 
 
 def _init_worker(seed_per_worker: List[int], worker_id: int):
@@ -112,9 +136,14 @@ class SimpleSavableDatasetWrapper(BaseWrapperDataset[T, Tuple[int, int, T]], Gen
                     self.worker_config.worker_deactivate()
                     worker_active = False
                     sample_index = self._sample_index
-                    src_data = add_sample_restore_key(
-                        src_data, global_worker_id, sample_index, src=self
-                    )
+                    inner = get_sample_restore_key(src_data)
+                    if inner is not None:
+                        src_data = set_sample_restore_key(
+                            src_data,
+                            WorkerSampleRestoreKey(
+                                worker_id=global_worker_id, sample_idx=sample_index, inner=inner
+                            ),
+                        )
                     self._sample_index += 1
                     yield worker_id, sample_index, src_data
                     if self._state_restored:
@@ -128,20 +157,15 @@ class SimpleSavableDatasetWrapper(BaseWrapperDataset[T, Tuple[int, int, T]], Gen
                 if worker_active:
                     self.worker_config.worker_deactivate()
 
-    def restore_sample(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> T:
-        id, global_worker_id, sample_idx = restore_key[:3]
-        assert id == type(self).__name__
-        restore_key = restore_key[3:]
+    def restore_sample(self, restore_key: RestoreKey) -> T:
+        if not isinstance(restore_key, WorkerSampleRestoreKey):
+            raise TypeError(f"Expected WorkerSampleRestoreKey, got {type(restore_key).__name__}")
+        key = restore_key
         self.worker_config.worker_activate(
-            sample_idx, override_global_rank=global_worker_id, cache_pool=self.cache_pool
+            key.sample_idx, override_global_rank=key.worker_id, cache_pool=self.cache_pool
         )
         try:
-            return add_sample_restore_key(
-                self.dataset.restore_sample(restore_key),
-                global_worker_id,
-                sample_idx,
-                src=self,
-            )
+            return set_sample_restore_key(self.dataset.restore_sample(key.inner), key)
         finally:
             self.worker_config.worker_deactivate()
 
@@ -220,6 +244,7 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
 
     _sample_index: int = 0
     _worker_offset: int = 0
+    _worker_id: int
     _last_checkpoints: List[SavableCheckpoint]
 
     _workers_restore_from: List[Optional[SavableDatasetState]] = list()
@@ -320,14 +345,23 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
         # Note: This disables hasattr(self, "__len__"), because that attr will
         raise AttributeError("Disabled direct length access to avoid DataLoader warnings.")
 
-    def __del__(self):
+    def close(self) -> None:
         if self._cmd_thread is not None:
             # print(f"{id(self)}:{multiprocessing.current_process().ident} Closing cmd thread")
             self._running = False
-            self._cmd_thread.join()
+            if self._cmd_thread is not threading.current_thread():
+                self._cmd_thread.join()
             self._command_lock = None
             self._cmd_thread = None
             # print(f"{id(self)}:{multiprocessing.current_process().ident} Cmd thread closed")
+        self.dataset.close()
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            # Destructors may run during interpreter shutdown.
+            pass
 
     def __iter__(self):
         # First: Set the worker offset globally for the current worker
@@ -389,9 +423,16 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
                                 continue
                             last_was_skip = False
                             sample_index = self._sample_index
-                            add_sample_restore_key(
-                                src_data, global_worker_id, sample_index, src=self
-                            )
+                            inner = get_sample_restore_key(src_data)
+                            if inner is not None:
+                                set_sample_restore_key(
+                                    src_data,
+                                    WorkerSampleRestoreKey(
+                                        worker_id=global_worker_id,
+                                        sample_idx=sample_index,
+                                        inner=inner,
+                                    ),
+                                )
                             self._sample_index += 1
                             self._store_checkpoint()
                             try:
@@ -562,18 +603,13 @@ class SavableDatasetWrapper(IterableDataset[Tuple[int, int, T]], Generic[T]):
     def can_restore_sample(self) -> bool:
         return self.dataset.can_restore_sample()
 
-    def restore_sample(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> T:
-        id, global_worker_id, sample_idx = restore_key[:3]
-        assert id == type(self).__name__
-        restore_key = restore_key[3:]
-        self.worker_config.worker_activate(sample_idx, override_global_rank=global_worker_id)
+    def restore_sample(self, restore_key: RestoreKey) -> T:
+        if not isinstance(restore_key, WorkerSampleRestoreKey):
+            raise TypeError(f"Expected WorkerSampleRestoreKey, got {type(restore_key).__name__}")
+        key = restore_key
+        self.worker_config.worker_activate(key.sample_idx, override_global_rank=key.worker_id)
         try:
-            return add_sample_restore_key(
-                self.dataset.restore_sample(restore_key),
-                global_worker_id,
-                sample_idx,
-                src=self,
-            )
+            return set_sample_restore_key(self.dataset.restore_sample(key.inner), key)
         finally:
             self.worker_config.worker_deactivate()
 
@@ -817,6 +853,22 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
     def __len__(self):
         # We override this, because otherwise we'll see warnings
         return self.dataset.len_rank()
+
+    def close(self) -> None:
+        _close_data_loader(self)
+
+    def __enter__(self) -> "SavableDataLoader[T]":
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self.close()
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            # Destructors may run during interpreter shutdown.
+            pass
 
     def _epoch_iter(self):
         """Iterator for one epoch, i.e. until the inner dataset raises StopIteration."""
@@ -1184,7 +1236,7 @@ class SavableDataLoader(DataLoader[T], Generic[T]):
     def can_restore_sample(self) -> bool:
         return self.dataset.can_restore_sample()
 
-    def restore_sample(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> T:
+    def restore_sample(self, restore_key: RestoreKey) -> T:
         """Restores a sample from a key. This is useful to debug the dataset."""
         return self.dataset.restore_sample(restore_key)
 
@@ -1211,6 +1263,7 @@ class BasicDataLoader(DataLoader[T], Generic[T]):
 
     id: int
     _sample_idx: int = 0
+    _worker_sample_counters: list[int]
 
     def __init__(
         self,
@@ -1305,6 +1358,22 @@ class BasicDataLoader(DataLoader[T], Generic[T]):
         # We override this, because otherwise we'll see warnings
         return self.dataset.len_rank()
 
+    def close(self) -> None:
+        _close_data_loader(self)
+
+    def __enter__(self) -> "BasicDataLoader[T]":
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self.close()
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            # Destructors may run during interpreter shutdown.
+            pass
+
     def __iter__(self):
         def _inner_generator(iterator):
             iter_idx = 0
@@ -1375,7 +1444,7 @@ class BasicDataLoader(DataLoader[T], Generic[T]):
     def can_restore_sample(self) -> bool:
         return self.dataset.can_restore_sample()
 
-    def restore_sample(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> T:
+    def restore_sample(self, restore_key: RestoreKey) -> T:
         """Restores a sample from a key. This is useful to debug the dataset."""
         return self.dataset.restore_sample(restore_key)
 

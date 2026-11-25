@@ -12,10 +12,9 @@ authors = [
 description = "Megatron's multi-modal data loader"
 readme = "README.md"
 license = "BSD-3-Clause"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 classifiers = [
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Operating System :: OS Independent",
@@ -43,8 +42,12 @@ dev = [
   "sphinx",
   "myst-parser",
   "soundfile",
-  "sphinx-rtd-theme",
+  "nvidia-sphinx-theme",
   "sphinx-click",
+]
+# Optional dependency for the Parquet flavor.
+parquet = [
+  "pyarrow>=14.0.0",
 ]
 transforms = [
   "torchvision",  # Needed for megatron.energon.transforms
@@ -80,7 +83,7 @@ tar_patcher = [
 ]
 
 all = [
-  "megatron-energon[av_decode,aistore,azure-storage-blob,dev,google-cloud-storage,huggingface,oci,s3,tar_patcher,transforms]",
+  "megatron-energon[av_decode,aistore,azure-storage-blob,dev,google-cloud-storage,huggingface,oci,parquet,s3,tar_patcher,transforms]",
 ]
 
 [project.urls]
@@ -99,12 +102,12 @@ energon = "megatron.energon.cli.main:main"
 source = "vcs"
 
 [tool.ruff.lint]
-extend-select = ["I"]
+select = ["E4", "E7", "E9", "F", "I"]
 ignore = ["E741", "E731"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py311"
 include = ["**/*.py", "**/*.pyi"]
 exclude = [
   ".idea",

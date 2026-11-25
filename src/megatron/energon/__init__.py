@@ -1,5 +1,6 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
+# ruff: noqa: E402
 
 try:
     from importlib.metadata import version
@@ -9,7 +10,16 @@ except Exception:
     # Fallback for development mode when package is not installed
     __version__ = "unknown"
 
+from megatron.energon.deprecated import (
+    deprecated_dir,
+    deprecated_getattr,
+    install_deprecated_imports,
+)
+
+install_deprecated_imports()
+
 from megatron.energon.cache import (
+    ByteRangeStore,
     CachePool,
     DecodeFileStore,
     DirectLazy,
@@ -23,30 +33,39 @@ from megatron.energon.cache import (
     PrimaryFileStore,
     SystemFileStore,
 )
+from megatron.energon.dataloader import DataLoader
+from megatron.energon.dataloader import DataLoader as SavableDataLoader
 from megatron.energon.edataclass import edataclass
 from megatron.energon.errors import SkipSample, log_exception, reraise_exception
 from megatron.energon.flavors import (
     BaseCoreDatasetFactory,
     BaseWebdatasetFactory,
+    BinIdxDatasetFactory,
     CaptioningSample,
     CaptioningWebdataset,
     CrudeJsonlDatasetFactory,
+    CrudeJsonlShardListDatasetFactory,
     CrudeSample,
     CrudeWebdataset,
+    DefaultBinIdxDatasetFactory,
     DefaultCrudeJsonlDatasetFactory,
+    DefaultCrudeJsonlShardListDatasetFactory,
     DefaultDecoderWebdatasetFactory,
     DefaultGenericWebdatasetFactory,
+    DefaultParquetDatasetFactory,
+    DefaultParquetShardListDatasetFactory,
     ImageClassificationSample,
     ImageClassificationWebdataset,
     ImageSample,
     ImageWebdataset,
     InterleavedSample,
     InterleavedWebdataset,
-    JoinedWebdatasetFactory,
     MultiChoiceVQASample,
     MultiChoiceVQAWebdataset,
     OCRSample,
     OCRWebdataset,
+    ParquetDatasetFactory,
+    ParquetShardListDatasetFactory,
     Sample,
     SampleDecoder,
     SavableDataset,
@@ -61,23 +80,33 @@ from megatron.energon.flavors import (
     VQASample,
     VQAWebdataset,
 )
+from megatron.energon.flavors.base_dataset import RestoreKey
+from megatron.energon.flavors.common.filter_index import (
+    FilterIndexWriter,
+    FilterView,
+    build_filter_index,
+    build_filter_index_from_global_indexes,
+    build_filter_index_from_shard_indexes,
+)
 from megatron.energon.loader import get_loader, get_savable_loader
-from megatron.energon.metadataset import (
+from megatron.energon.recipe import (
+    AuxFileStoreProtocolFactory,
+    AuxFileStoreReference,
     DatasetLoader,
     DatasetLoaderInterface,
-    Metadataset,
-    MetadatasetV2,
+    Recipe,
     load_dataset,
-    prepare_metadataset,
-    traverse_metadataset,
+    prepare_recipe,
+    register_aux_filestore_protocol,
+    traverse_recipe,
 )
-from megatron.energon.savable_loader import SavableDataLoader
 from megatron.energon.source_info import SourceInfo
 from megatron.energon.task_encoder import (
     AugmentTaskEncoder,
     Batch,
     Cooker,
     DefaultTaskEncoder,
+    PackingGroupConfig,
     TaskEncoder,
     basic_sample_keys,
     batch_list,
@@ -85,9 +114,13 @@ from megatron.energon.task_encoder import (
     batch_stack,
     cooker,
     generic_batch,
+    get_processing_dataset,
+    get_processing_datasets,
     get_train_dataset,
     get_val_dataset,
     get_val_datasets,
+    sample_size_metric,
+    skip_safe,
     stateless,
 )
 from megatron.energon.worker import WorkerConfig
@@ -95,18 +128,19 @@ from megatron.energon.wrappers import (
     BatchDataset,
     BlendDataset,
     ConcatDataset,
-    EpochizeDataset,
     FilterDataset,
     GcDataset,
     GroupBatchDataset,
     IterMapDataset,
-    LimitDataset,
     LogSampleDataset,
     MapDataset,
     MixBatchDataset,
+    PackedSamplesOutput,
     PackingDataset,
+    PartialSample,
     RepeatDataset,
     ShuffleBufferDataset,
+    StreamingPackingDataset,
     concat_pad,
     generic_concat,
     homogeneous_concat_mix,
@@ -115,15 +149,22 @@ from megatron.energon.wrappers import (
 __all__ = [
     "__version__",
     "AugmentTaskEncoder",
+    "AuxFileStoreProtocolFactory",
+    "AuxFileStoreReference",
     "BaseCoreDatasetFactory",
     "BaseWebdatasetFactory",
     "basic_sample_keys",
+    "BinIdxDatasetFactory",
     "batch_list",
     "batch_pad_stack",
     "batch_stack",
     "Batch",
     "BatchDataset",
     "BlendDataset",
+    "build_filter_index",
+    "build_filter_index_from_global_indexes",
+    "build_filter_index_from_shard_indexes",
+    "ByteRangeStore",
     "CachePool",
     "CaptioningSample",
     "CaptioningWebdataset",
@@ -132,27 +173,35 @@ __all__ = [
     "cooker",
     "Cooker",
     "CrudeJsonlDatasetFactory",
+    "CrudeJsonlShardListDatasetFactory",
     "CrudeSample",
     "CrudeWebdataset",
     "DatasetLoader",
     "DatasetLoaderInterface",
     "DecodeFileStore",
+    "DefaultBinIdxDatasetFactory",
     "DefaultCrudeJsonlDatasetFactory",
+    "DefaultCrudeJsonlShardListDatasetFactory",
     "DefaultDecoderWebdatasetFactory",
     "DefaultGenericWebdatasetFactory",
+    "DefaultParquetDatasetFactory",
+    "DefaultParquetShardListDatasetFactory",
     "DefaultTaskEncoder",
     "DirectLazy",
     "edataclass",
-    "EpochizeDataset",
     "FileCacheLazy",
     "FileStore",
     "FileStoreCachePool",
     "FileStoreDecoder",
+    "FilterView",
     "FilterDataset",
+    "FilterIndexWriter",
     "GcDataset",
     "generic_batch",
     "generic_concat",
     "get_loader",
+    "get_processing_dataset",
+    "get_processing_datasets",
     "get_savable_loader",
     "get_train_dataset",
     "get_val_dataset",
@@ -166,15 +215,14 @@ __all__ = [
     "InterleavedSample",
     "InterleavedWebdataset",
     "IterMapDataset",
-    "JoinedWebdatasetFactory",
     "Lazy",
-    "LimitDataset",
     "load_dataset",
     "log_exception",
     "LogSampleDataset",
     "MapDataset",
-    "Metadataset",
     "MetadatasetV2",
+    "Recipe",
+    "register_aux_filestore_protocol",
     "MixBatchDataset",
     "MockLazy",
     "MultiChoiceVQASample",
@@ -182,23 +230,35 @@ __all__ = [
     "NoCachePool",
     "OCRSample",
     "OCRWebdataset",
+    "ParquetDatasetFactory",
+    "ParquetShardListDatasetFactory",
+    "PackingGroupConfig",
+    "PartialSample",
     "PackingDataset",
     "PrimaryFileStore",
     "prepare_metadataset",
+    "prepare_recipe",
     "RepeatDataset",
+    "PackedSamplesOutput",
     "reraise_exception",
     "Sample",
     "SampleDecoder",
+    "sample_size_metric",
+    "DataLoader",
     "SavableDataLoader",
+    "RestoreKey",
     "SavableDataset",
     "traverse_metadataset",
+    "traverse_recipe",
     "ShuffleBufferDataset",
     "SimilarityInterleavedSample",
     "SimilarityInterleavedWebdataset",
     "SkipSample",
     "SourceInfo",
     "StandardWebdatasetFactory",
+    "StreamingPackingDataset",
     "stateless",
+    "skip_safe",
     "SystemFileStore",
     "TaskEncoder",
     "TextSample",
@@ -210,3 +270,11 @@ __all__ = [
     "VQAWebdataset",
     "WorkerConfig",
 ]
+
+
+def __getattr__(name: str):
+    return deprecated_getattr(__name__, name)
+
+
+def __dir__() -> list[str]:
+    return deprecated_dir(__name__, __all__)

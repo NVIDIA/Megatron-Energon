@@ -10,18 +10,18 @@ from pathlib import Path
 from typing import Callable, Iterator
 
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.webdataset.aggregator_pool import AggregatorPool
-from megatron.energon.flavors.webdataset.config import (
+from megatron.energon.flavors.common.aggregator_pool import AggregatorPool
+from megatron.energon.flavors.common.manifest.paths import (
     INDEX_BATCH_SIZE,
     INDEX_SQLITE_FILENAME,
     MAIN_FOLDER_NAME,
 )
+from megatron.energon.flavors.common.manifest.types import ShardInfo
 from megatron.energon.flavors.webdataset.prepare import (
     IndexAggregatable,
     IndexMediaMetadata,
     SqliteIndexWriterAggregator,
 )
-from megatron.energon.flavors.webdataset.structs import ShardInfo
 from megatron.energon.media.extractor import MediaFilterConfig
 from megatron.energon.media.metadata import serialize_media_metadata
 

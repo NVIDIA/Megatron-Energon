@@ -12,10 +12,16 @@ from typing import Any, Callable, Dict, Literal, Optional, Tuple, Type, TypeVar,
 
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
+from megatron.energon.tags import apply_config_aliases
 
 
 class JsonValueError(ValueError):
     """Internal error class, for better error messages."""
+
+    expected_type: Type
+    path: str
+    stage: Tuple[int, ...]
+    value: Any
 
     def __init__(
         self, msg: str, expected_type: Type, value: Any, path: str, stage: Tuple[int, ...]
@@ -94,6 +100,8 @@ class JsonParser:
         inst_type: Type[TType],
         _path: str = "root",
         _stage: Tuple[int, ...] = (),
+        *,
+        default_kwargs: Optional[dict] = None,
     ) -> TType:
         """
         Try to import and instantiate a class from a dict with "__module__" and "__class__"/"__function__" keys.
@@ -105,6 +113,8 @@ class JsonParser:
             _path: (internal for recursive call) The path to the object being converted from the root
             _stage: (internal for recursive call) Numbers representing the position of the current
                 object being converted from the root
+            default_kwargs: Default constructor arguments. Aliases are normalized before the
+                config values override these defaults.
 
         Returns:
             Instantiated class
@@ -184,6 +194,9 @@ class JsonParser:
                     raise JsonValueError(
                         f"Expected {inst_type}, got {cls}", inst_type, cls, _path, _stage
                     )
+        kwargs = apply_config_aliases(cls, kwargs)
+        if default_kwargs is not None:
+            kwargs = {**apply_config_aliases(cls, default_kwargs), **kwargs}
         if is_type or is_callable:
             inst = cls
         else:
@@ -226,6 +239,7 @@ class JsonParser:
         Returns:
             The input data as `inst_type`.
         """
+        raw_data = apply_config_aliases(inst_type, raw_data)
         type_name = getattr(inst_type, "__name__", repr(inst_type))
         if raw_data is _missing_value:
             raise JsonValueError(
@@ -367,6 +381,7 @@ class JsonParser:
                     _path,
                     _stage,
                 )
+            field_types = typing.get_type_hints(inst_type)
             kwargs = {
                 field.name: self.raw_to_typed(
                     raw_data.get(
@@ -381,7 +396,7 @@ class JsonParser:
                             else field.default
                         ),
                     ),
-                    field.type,
+                    field_types[field.name],
                     allow_imports,
                     f"{_path} -> {type_name}:{field.name}",
                     _stage + (idx,),
@@ -567,17 +582,24 @@ class JsonParser:
         Returns:
             The return value of `fn`
         """
+        if inspect.isclass(fn):
+            raw_data = apply_config_aliases(fn, raw_data)
         parameters = list(inspect.signature(fn).parameters.items())
+        parameter_types = {}
         if inspect.isclass(fn):
             init_sig = getattr(fn, "__init__", None)
             if init_sig is not None:
                 parameters = list(inspect.signature(init_sig).parameters.items())[1:]
+            if dataclasses.is_dataclass(fn):
+                # Resolve recursive field annotations in the class's module namespace.
+                parameter_types = typing.get_type_hints(fn)
         args = []
         kwargs = {}
         if isinstance(raw_data, dict):
             unused_args = raw_data.copy()
             for idx, (key, param) in enumerate(parameters):
-                t = Any if param.annotation is inspect.Parameter.empty else param.annotation
+                annotation = parameter_types.get(key, param.annotation)
+                t = Any if annotation is inspect.Parameter.empty else annotation
                 if param.kind in (
                     inspect.Parameter.POSITIONAL_OR_KEYWORD,
                     inspect.Parameter.KEYWORD_ONLY,
@@ -610,7 +632,8 @@ class JsonParser:
         elif isinstance(raw_data, list):
             unused_args = raw_data.copy()
             for idx, (key, param) in enumerate(parameters):
-                t = Any if param.annotation is inspect.Parameter.empty else param.annotation
+                annotation = parameter_types.get(key, param.annotation)
+                t = Any if annotation is inspect.Parameter.empty else annotation
                 if param.kind == inspect.Parameter.POSITIONAL_ONLY:
                     if param.default is inspect.Parameter.empty and len(unused_args) == 0:
                         raise ValueError(

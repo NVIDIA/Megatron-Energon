@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and usage help
+    url: https://github.com/NVIDIA/Megatron-Energon/discussions
+    about: Ask questions about using Energon in GitHub Discussions.
+  - name: Documentation
+    url: https://nvidia.github.io/Megatron-Energon/
+    about: Check the documentation before opening an issue.
+  - name: Security vulnerabilities
+    url: https://www.nvidia.com/en-us/security/
+    about: Report security vulnerabilities through NVIDIA's security process, not as a public issue.

@@ -4,6 +4,9 @@ on:
   release:
     types: [published]
 
+env:
+  UV_PYTHON: "3.11"
+
 jobs:
   deploy:
     name: Upload release to PyPI

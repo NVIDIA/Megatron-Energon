@@ -18,26 +18,26 @@ from typing import (
 )
 
 from megatron.energon.epathlib import EPath
-from megatron.energon.flavors.webdataset.config import (
-    INDEX_SQLITE_FILENAME,
-    skip_meta_re,
-    split_name_re,
-)
-from megatron.energon.flavors.webdataset.indexing import JoinIndexReader, SqliteIndexReader
+from megatron.energon.flavors.common.manifest.io import get_info_shard_files
+from megatron.energon.flavors.common.manifest.paths import INDEX_SQLITE_FILENAME
+from megatron.energon.flavors.common.manifest.types import ShardInfo
+from megatron.energon.flavors.common.reader import PartFileReader, SamplePartReader
+from megatron.energon.flavors.common.sample_record import FilteredSample, IndexedRestoreKey
+from megatron.energon.flavors.webdataset.config import skip_meta_re, split_name_re
+from megatron.energon.flavors.webdataset.indexing import SqliteIndexReader
 from megatron.energon.flavors.webdataset.itar import (
     CachedItarOffsetReader,
     ITarFile,
     ITarRawSamplePartPointer,
     ITarSamplePointer,
 )
-from megatron.energon.flavors.webdataset.metadata import get_info_shard_files
-from megatron.energon.flavors.webdataset.structs import FilteredSample, ShardInfo
 from megatron.energon.source_info import SourceInfo
+from megatron.energon.worker_local import WorkerLocalFields, WorkerLocalResource
 
 T_index = TypeVar("T_index", covariant=False)
 
 
-class ITarReader(ABC, Generic[T_index]):
+class ITarReader(WorkerLocalFields, ABC, Generic[T_index]):
     """
     An abstract base class for reading a sequence of tar files containing samples.
 
@@ -55,9 +55,12 @@ class ITarReader(ABC, Generic[T_index]):
             intended to be thread-safe.
     """
 
+    _worker_local_fields = {"itar_files_cache": dict}
+
     base_path: EPath
     tar_filenames: List[str]
     tar_filepaths: List[EPath]
+    itar_cache_size: int
     part_filter: Optional[Callable[[str], bool]]
     itar_files_cache: Dict[int, ITarFile]
     sample_filter: Optional[Callable[[str], bool]]
@@ -99,10 +102,13 @@ class ITarReader(ABC, Generic[T_index]):
         raise NotImplementedError
 
     def close(self):
-        for tar_file in self.itar_files_cache.values():
-            tar_file.fileobj.close()
-            tar_file.close()
-        self.itar_files_cache.clear()
+        """Close all cached tar files, even if closing one of them fails."""
+        tar_files, self.itar_files_cache = list(self.itar_files_cache.values()), {}
+        with contextlib.ExitStack() as stack:
+            for tar_file in tar_files:
+                # Callbacks run in reverse order: first the file object, then the tar file
+                stack.callback(tar_file.close)
+                stack.callback(tar_file.fileobj.close)
 
     @abstractmethod
     def _get_itar_sample_pointer(self, idx: T_index) -> ITarSamplePointer:
@@ -254,7 +260,7 @@ class ITarReader(ABC, Generic[T_index]):
         return FilteredSample(
             __key__=sample_base_name,
             __shard__=self.tar_filenames[sample_pointer.tar_file_id],
-            __restore_key__=("Webdataset", restore_index),
+            __restore_key__=IndexedRestoreKey(kind="Webdataset", index=restore_index),
             __sources__=(
                 SourceInfo(
                     dataset_path=self.base_path,
@@ -275,110 +281,7 @@ class ITarReader(ABC, Generic[T_index]):
         return self._get_item_by_sample_pointer(sample_pointer, idx)
 
 
-class JoinIndexFileITarReader(ITarReader[int]):
-    """
-    A concrete ITarReader that reads samples from a join index file (via JoinIndexReader).
-    """
-
-    index_file: EPath
-    column: int
-    index_reader_cache: Dict[int, JoinIndexReader]
-    index_reader_cache_size: int
-
-    def __init__(
-        self,
-        index_file: EPath,
-        column: int,
-        tar_filenames: List[str],
-        base_path: EPath,
-        part_filter: Optional[Callable[[str], bool]] = None,
-        itar_cache_size: int = 5,
-        sample_filter: Optional[Callable[[str], bool]] = None,
-        disable_cache: bool = False,
-    ):
-        if disable_cache:
-            raise NotImplementedError(
-                "disable_cache is not supported for JoinIndexFileITarReader yet"
-            )
-        self.index_file = index_file
-        self.column = column
-
-        # Create the full path to each tar file
-        tar_filepaths = [base_path / fn for fn in tar_filenames]
-
-        self.index_reader_cache = {}
-        self.index_reader_cache_size = itar_cache_size
-
-        super().__init__(
-            base_path=base_path,
-            tar_filenames=tar_filenames,
-            tar_filepaths=tar_filepaths,
-            part_filter=part_filter,
-            itar_cache_size=itar_cache_size,
-            sample_filter=sample_filter,
-            disable_cache=disable_cache,
-        )
-
-    def _get_join_index_reader_cached(self, sample_idx: int) -> JoinIndexReader:
-        """
-        Get the JoinIndexReader object for the given sample index, or create it if it doesn't exist.
-        """
-
-        if sample_idx not in self.index_reader_cache:
-            index_reader = JoinIndexReader(self.index_file, column=self.column)
-            self.index_reader_cache[sample_idx] = index_reader
-
-        # If we hit the limit of open files, close the least recently used file
-        while len(self.index_reader_cache) > self.index_reader_cache_size:
-            # Get the oldest file
-            lru_key = next(iter(self.index_reader_cache))
-
-            self.index_reader_cache[lru_key].close()
-            del self.index_reader_cache[lru_key]
-
-        return self.index_reader_cache[sample_idx]
-
-    def _get_itar_sample_pointer(self, sample_idx: int) -> ITarSamplePointer:
-        """
-        Get the ITarSample object for the given index.
-        """
-        index_reader = self._get_join_index_reader_cached(sample_idx)
-        row = index_reader[sample_idx]
-
-        # Update cache entry
-        new_offset = index_reader.tell_row()
-        del self.index_reader_cache[sample_idx]
-        self.index_reader_cache[new_offset] = index_reader
-
-        assert len(row) == 1
-        shard_idx, byte_offset, byte_size = row[0]
-
-        return ITarSamplePointer(
-            tar_file_id=shard_idx,
-            byte_offset=byte_offset,
-            byte_size=byte_size,
-        )
-
-    def __len__(self) -> int:
-        try:
-            # Get any reader, they will all work
-            index_reader = next(iter(self.index_reader_cache.values()))
-        except StopIteration:
-            # If there's no reader yet, we need to create one to get the length
-            index_reader = self._get_join_index_reader_cached(0)
-
-        return len(index_reader)
-
-    def __str__(self) -> str:
-        return (
-            f"JoinIndexFileITarReader("
-            f"len={len(self)}, base_path={self.base_path}, "
-            f"len(shards)={len(self.tar_filenames)}, "
-            f"shards=[{self.tar_filenames[0] if self.tar_filenames else 'N/A'}, ...])"
-        )
-
-
-class ShardInfosITarReader(ITarReader[int]):
+class ShardInfosITarReader(ITarReader[int], WorkerLocalResource, SamplePartReader[FilteredSample]):
     """
     A concrete ITarReader that constructs its internal sample list from a list of ShardInfos.
     """
@@ -469,6 +372,11 @@ class ShardInfosITarReader(ITarReader[int]):
     def __len__(self) -> int:
         return self.shard_count_cumsum[-1]
 
+    def close(self):
+        with contextlib.ExitStack() as stack:
+            stack.callback(super().close)
+            stack.callback(self.cached_offset_reader.close)
+
     def __str__(self) -> str:
         return (
             f"ShardInfosITarReader("
@@ -478,13 +386,14 @@ class ShardInfosITarReader(ITarReader[int]):
         )
 
 
-class SqliteITarEntryReader(ITarReader[str]):
+class SqliteITarEntryReader(ITarReader[str], PartFileReader[bytes]):
     """
     A concrete ITarReader that constructs its internal sample list from a SQLite database.
     """
 
     sqlite_reader: SqliteIndexReader
     db_has_sample_parts: int
+    key_is_full_entryname: bool
 
     def __init__(
         self,
@@ -495,7 +404,7 @@ class SqliteITarEntryReader(ITarReader[str]):
         key_is_full_entryname: bool = False,
         disable_cache: bool = False,
     ):
-        from megatron.energon.flavors.webdataset.config import MAIN_FOLDER_NAME
+        from megatron.energon.flavors.common.manifest.paths import MAIN_FOLDER_NAME
         from megatron.energon.flavors.webdataset.indexing import SqliteIndexReader
 
         # shard_name_to_info_idx = {name: i for i, name in enumerate(wds_meta.info_shard_files)}
@@ -643,6 +552,12 @@ class SqliteITarEntryReader(ITarReader[str]):
             f"len(shards)={len(self.tar_filenames)}, "
             f"shards=[{self.tar_filenames[0] if self.tar_filenames else 'N/A'}, ...])"
         )
+
+    def worker_close(self) -> None:
+        try:
+            self.sqlite_reader.thread_close()
+        finally:
+            super().close()
 
     def close(self):
         """Close the SQLite reader and any open ITarFiles."""

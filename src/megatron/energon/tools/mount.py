@@ -10,8 +10,8 @@ from typing import Generator, Optional
 
 import click
 
-from megatron.energon.cache.file_store import WebdatasetFileStore
 from megatron.energon.epathlib import EPath
+from megatron.energon.flavors.webdataset.file_store import WebdatasetFileStore
 
 MULTI_WARN = "WARNING_SAME_KEY_IN_MULTIPLE_TAR_FILES"
 
@@ -26,6 +26,19 @@ try:
         """
         Read-only filesystem that exposes an energon WebdatasetFileStore.
         """
+
+        _all_sample_parts: dict[str, int]
+        _all_samples: dict[str, int]
+        _gid: int
+        _mtime: float
+        _open_files: dict[str, bytes]
+        _print: int
+        _sample_folders: bool
+        _samples_with_multiple_tar_files: set[str]
+        _slow_mode: bool
+        _total_size: int | None
+        _uid: int
+        _wds_filestore: WebdatasetFileStore
 
         def __init__(
             self,

@@ -50,6 +50,10 @@ class FilterDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]):
     def len_worker(self, worker_idx: int | None = None) -> int:
         return self.dataset.len_worker(worker_idx)
 
+    def set_skip_mode(self, active: bool) -> None:
+        # The predicate determines stream cardinality and needs real inputs.
+        self.dataset.set_skip_mode(False)
+
     def __iter__(self) -> Iterator[T_sample]:
         for sample in self.dataset:
             with self._sample_index.ctx():

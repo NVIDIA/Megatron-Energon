@@ -17,6 +17,7 @@ from megatron.energon.cache.base import CachePool, FileStore, Lazy
 from megatron.energon.edataclass import edataclass
 from megatron.energon.fork_hook import ForkMixin
 from megatron.energon.source_info import SourceInfo, add_source_info
+from megatron.energon.worker_local import thread_worker_scope
 
 T = TypeVar("T")
 
@@ -139,11 +140,13 @@ class FileStoreCachePool(CachePool, ForkMixin):
     """
 
     cache_dir: Path
+    parent_cache_dir: Path | None
     max_cache_size: int
     max_cache_count: int
     current_cache_size: int
     current_cache_count: int
     method: Literal["raw", "pickle"]
+    num_workers: int
 
     # Thread pool for out-caching tasks
     _worker_pool: Optional[ThreadPoolExecutor] = None
@@ -275,6 +278,14 @@ class FileStoreCachePool(CachePool, ForkMixin):
             return result
 
     def _cache_out_task(self, ds: FileStore, fname: str, entry: _PendingTask) -> bool:
+        with thread_worker_scope():
+            try:
+                ds.worker_init()
+                return self._cache_out(ds, fname, entry)
+            finally:
+                ds.worker_close()
+
+    def _cache_out(self, ds: FileStore, fname: str, entry: _PendingTask) -> bool:
         with self._lock:
             if self._shutting_down:
                 return False

@@ -5,7 +5,10 @@ import dataclasses
 import functools
 import inspect
 from abc import ABC
+from contextlib import contextmanager, nullcontext
+from contextvars import ContextVar
 from dataclasses import is_dataclass
+from threading import local
 from types import MethodType
 from typing import (
     Any,
@@ -14,7 +17,9 @@ from typing import (
     Generator,
     Generic,
     Hashable,
+    Iterator,
     List,
+    Literal,
     Optional,
     Sequence,
     Tuple,
@@ -30,6 +35,7 @@ from typing_extensions import ParamSpec
 from megatron.energon.cache import CachePool, DecodeFileStore, FileStore
 from megatron.energon.cache.base import PrimaryFileStore
 from megatron.energon.edataclass import edataclass
+from megatron.energon.errors import FatalSampleError
 from megatron.energon.flavors import (
     CrudeSample,
     CrudeWebdataset,
@@ -38,24 +44,27 @@ from megatron.energon.flavors import (
     SampleDecoder,
     SavableDataset,
 )
-from megatron.energon.flavors.base_dataset import ExtendableDataclassMixin
-from megatron.energon.metadataset.loader_interface import DatasetBlendMode, LoadedDataset
-from megatron.energon.rng import SystemRng
+from megatron.energon.flavors.base_dataset import ExtendableDataclassMixin, RestoreKey
+from megatron.energon.recipe.loader_interface import DatasetBlendMode, LoadedDataset
+from megatron.energon.rng import SystemRng, UserRng
 from megatron.energon.source_info import SourceInfo
+from megatron.energon.tags import SampleTagsAlias, canonicalize_tag_kwargs
 from megatron.energon.task_encoder.cooking import Cooker
 from megatron.energon.worker import WorkerConfig
+from megatron.energon.worker_local import in_thread_worker
 from megatron.energon.wrappers import (
     BatchDataset,
     BlendDataset,
     ConcatDataset,
-    EpochizeDataset,
     GroupBatchDataset,
-    LimitDataset,
     LogSampleDataset,
     MapDataset,
     PackingDataset,
+    PartialSample,
     ShuffleBufferDataset,
+    StreamingPackingDataset,
 )
+from megatron.energon.wrappers.packing_dataset import PackedSamplesOutput
 from megatron.energon.wrappers.repeat_dataset import RepeatDataset
 
 T = TypeVar("T")
@@ -67,6 +76,22 @@ T_batch = TypeVar("T_batch")
 
 
 FeatureBatcher = Callable[[List[Any]], Any]
+PackingBufferSize = int | Literal["stream"] | None
+
+DEFAULT_BLEND_WEIGHT_UNIT = "samples"
+
+#: Blend a sample size metric is evaluated in: ``"sample"`` for the blend of datasets, ``"encoded"``
+#: for the blend of packing group streams.
+SampleSizeMetricStage = Literal["sample", "encoded"]
+
+
+@dataclasses.dataclass(frozen=True)
+class PackingGroupConfig:
+    """Datasets that should share one packing stage."""
+
+    datasets: List[LoadedDataset]
+    packing_buffer_size: PackingBufferSize
+    shuffle_buffer_size: Optional[int] = None
 
 
 def generic_batch(batch: List[Any]) -> Any:
@@ -123,7 +148,11 @@ P = ParamSpec("P")
 
 @overload
 def stateless(
-    *, restore_seeds: bool = False, failure_tolerance: Optional[int] = None
+    *,
+    restore_seeds: bool = False,
+    restore_task_encoder_seeds: bool = False,
+    failure_tolerance: Optional[int] = None,
+    skip_safe: Optional[bool] = None,
 ) -> Callable[[Callable[P, T]], Callable[P, T]]: ...
 
 
@@ -131,116 +160,168 @@ def stateless(
 def stateless(fn: Callable[P, T]) -> Callable[P, T]: ...
 
 
+@overload
+def stateless(
+    fn: Callable[P, T],
+    *,
+    restore_seeds: bool = False,
+    restore_task_encoder_seeds: bool = False,
+    failure_tolerance: Optional[int] = None,
+    skip_safe: Optional[bool] = None,
+) -> Callable[P, T]: ...
+
+
+def skip_safe(fn: Callable[P, T]) -> Callable[P, T]:
+    """Decorator to mark a task encoder function as safe to elide in skip mode."""
+    if inspect.isgeneratorfunction(fn):
+        raise ValueError("Generator functions cannot be skip-safe")
+    setattr(fn, "__skip_safe__", True)
+    return fn
+
+
+def sample_size_metric(
+    name: str, *, stage: SampleSizeMetricStage = "sample"
+) -> Callable[[Callable[P, int | float]], Callable[P, int | float]]:
+    """Decorator to register a named sample size metric for blend weighting.
+
+    Args:
+        name: The unit the metric measures, selected in the recipe with ``blend_weight_unit``.
+        stage: ``"sample"`` registers the metric for blending datasets. It receives the loaded or
+            cooked samples before encoding. ``"encoded"`` registers the metric for blending the
+            streams of multiple packing groups. It receives the samples yielded by the groups: the
+            packed samples, or the encoded samples of a group without packing.
+    """
+    if not name:
+        raise ValueError("Sample size metric names must not be empty.")
+    if name == DEFAULT_BLEND_WEIGHT_UNIT:
+        raise ValueError(f"{DEFAULT_BLEND_WEIGHT_UNIT!r} is reserved for sample-count blending.")
+    if stage not in ("sample", "encoded"):
+        raise ValueError(f"Sample size metric stage must be 'sample' or 'encoded', got {stage!r}.")
+
+    def decorator(fn: Callable[P, int | float]) -> Callable[P, int | float]:
+        setattr(fn, "__sample_size_metric__", name)
+        setattr(fn, "__sample_size_metric_stage__", stage)
+        return fn
+
+    return decorator
+
+
+def get_sample_size_metric(fn: Callable) -> str | None:
+    """Get the sample size metric of a function."""
+    return getattr(fn, "__sample_size_metric__", None)
+
+
+def get_sample_size_metric_stage(fn: Callable) -> SampleSizeMetricStage | None:
+    """Get the stage of the sample size metric of a function."""
+    return getattr(fn, "__sample_size_metric_stage__", None)
+
+
+# Note: The ContextVar is always local to the current stacktrace.
+_seeded_task_encoder: ContextVar[object | None] = ContextVar("seeded_task_encoder", default=None)
+
+
+@contextmanager
+def _task_encoder_seed_scope(encoder):
+    token = _seeded_task_encoder.set(encoder)
+    try:
+        yield
+    finally:
+        _seeded_task_encoder.reset(token)
+
+
 def stateless(
     fn: Optional[Callable[..., T]] = None,
     *,
     restore_seeds: bool = False,
+    restore_task_encoder_seeds: bool = False,
     failure_tolerance: Optional[int] = None,
+    skip_safe: Optional[bool] = None,
 ) -> Union[Callable[[Callable[..., T]], Callable[..., T]], Callable[..., T]]:
-    """Decorator to mark a function of the task encoder as restorable.
+    """Mark a task encoder function as restorable.
 
-    Args:
-        fn: The function to decorate.
-        restore_seeds: Whether to restore the seeds for the function. I.e. the seeds are set
-            from the sample index and the worker seed, such that they can be restored when a sample
-            is restored from that function.
-        failure_tolerance: The number of consecutive exceptions that are handled, after which a `FatalSampleError` is
-            raised for this function. Set to 0 to disable.
-
-    Usage:
-
-    .. code-block:: python
-
-        @stateless
-        def encode_sample(self, sample: T_sample) -> T_encoded_sample:
-            ...
-
-        # Or if randomness is used (e.g. for augmentations):
-        @stateless(restore_seeds=True)
-        def encode_sample(self, sample: T_sample) -> T_encoded_sample:
-            ...
-
+    ``restore_seeds`` scopes the process-global CPU RNGs to the sample and is
+    supported by main and fork workers. Use ``restore_task_encoder_seeds`` and
+    ``self.rng`` to scope independent RNGs in a thread worker.
     """
-
+    if restore_seeds and restore_task_encoder_seeds:
+        raise ValueError("Choose either process-global or task encoder RNGs")
     if fn is None:
         return lambda f: stateless(
-            f, restore_seeds=restore_seeds, failure_tolerance=failure_tolerance
+            f,
+            restore_seeds=restore_seeds,
+            restore_task_encoder_seeds=restore_task_encoder_seeds,
+            failure_tolerance=failure_tolerance,
+            skip_safe=skip_safe,
         )
-    if restore_seeds:
-        worker_seed = None
+    if restore_seeds or restore_task_encoder_seeds:
+        original = fn
 
-        @functools.wraps(fn)
-        def seed_wrapper_generator(self, *args, **kwargs):
-            nonlocal worker_seed
-            if worker_seed is None:
-                worker_seed = WorkerConfig.active_worker_config.worker_seed()
+        def rng_for(encoder):
+            if restore_seeds and in_thread_worker():
+                raise FatalSampleError(
+                    "Thread workers require restore_task_encoder_seeds and self.rng"
+                )
+            return SystemRng if restore_seeds else encoder.rng
 
-            # Save the RNG states and set the new seed
-            outer_rng_state = SystemRng.save_state()
+        def scope(encoder):
+            return (
+                _task_encoder_seed_scope(encoder) if restore_task_encoder_seeds else nullcontext()
+            )
 
-            # Before constructing the generator and before the first
-            # iteration, set inner RNG based on seed computed
-            # from worker_seed and current sample index
-            SystemRng.seed_args(worker_seed, self.current_sample_index)
+        def seed_rng(rng: type[SystemRng] | UserRng) -> None:
+            worker_config = WorkerConfig.active_worker_config
+            rng.seed_args(worker_config.worker_seed(), worker_config.active_worker_invocation_index)
 
-            it = iter(fn(self, *args, **kwargs))
-
-            inner_rand_state = None
-
-            while True:
-                if inner_rand_state is not None:
-                    # Restore inner random state before calling the generator
-                    # This will not be done on the first iteration
-                    SystemRng.restore_state(inner_rand_state)
-
+        @functools.wraps(original)
+        def wrap(encoder, *args, **kwargs):
+            with scope(encoder):
+                rng = rng_for(encoder)
+                outer_state = rng.save_state()
                 try:
-                    # Now call the generator. This will yield the sample
-                    # But note it may also throw an exception or a StopIteration
-                    sample = next(it)
-
-                    # Save inner random state after calling the generator
-                    inner_rand_state = SystemRng.save_state()
-                except StopIteration:
-                    # We're stopping here, but the outer random state
-                    # will be restored before returning (in finally below)
-                    break
+                    seed_rng(rng)
+                    return original(encoder, *args, **kwargs)
                 finally:
-                    # Restore outer rand state before yielding or when an exception was raised
-                    SystemRng.restore_state(outer_rng_state)
+                    rng.restore_state(outer_state)
 
-                # Now yield the sample.
-                # This will give control back to the caller who may
-                # change the random state.
-                yield sample
-
-                # Save outer random state after yielding
-                outer_rng_state = SystemRng.save_state()
-
-        @functools.wraps(fn)
-        def seed_wrapper(self, *args, **kwargs):
-            nonlocal worker_seed
-            if worker_seed is None:
-                worker_seed = WorkerConfig.active_worker_config.worker_seed()
-
-            # Save the RNG states and set the new seed
-            rng_state = SystemRng.save_state()
-
-            SystemRng.seed_args(worker_seed, self.current_sample_index)
-
+        @functools.wraps(original)
+        def wrap_generator(encoder, *args, **kwargs):
+            with scope(encoder):
+                rng = rng_for(encoder)
+                outer_state = rng.save_state()
+                try:
+                    seed_rng(rng)
+                    inner_state = rng.save_state()
+                    iterator = iter(original(encoder, *args, **kwargs))
+                finally:
+                    rng.restore_state(outer_state)
             try:
-                return fn(self, *args, **kwargs)
+                while True:
+                    with scope(encoder):
+                        outer_state = rng.save_state()
+                        try:
+                            rng.restore_state(inner_state)
+                            sample = next(iterator)
+                            inner_state = rng.save_state()
+                        except StopIteration:
+                            return
+                        finally:
+                            rng.restore_state(outer_state)
+                    yield sample
             finally:
-                # Restore the RNGs
-                SystemRng.restore_state(rng_state)
+                with scope(encoder):
+                    outer_state = rng.save_state()
+                    try:
+                        rng.restore_state(inner_state)
+                        iterator.close()
+                    finally:
+                        rng.restore_state(outer_state)
 
-        if inspect.isgeneratorfunction(fn):
-            setattr(seed_wrapper_generator, "__stateless__", True)
-            return seed_wrapper_generator
-        else:
-            setattr(seed_wrapper, "__stateless__", True)
-            return seed_wrapper
-
+        fn = wrap_generator if inspect.isgeneratorfunction(original) else wrap
     setattr(fn, "__stateless__", True)
+    if skip_safe is not None:
+        if skip_safe and inspect.isgeneratorfunction(fn):
+            raise ValueError("Generator functions cannot be skip-safe")
+        setattr(fn, "__skip_safe__", skip_safe)
     if failure_tolerance is not None:
         setattr(fn, "__failure_tolerance__", failure_tolerance)
     return fn
@@ -251,25 +332,29 @@ def get_stateless(fn: Callable) -> bool:
     return getattr(fn, "__stateless__", False)
 
 
+def get_skip_safe(fn: Callable) -> bool:
+    """Get whether a function can be elided while advancing skipped outputs."""
+    return getattr(fn, "__skip_safe__", False)
+
+
 def get_failure_tolerance(fn: Callable, default_failure_tolerance: Optional[int] = None) -> int:
     """Get the failure tolerance of a function."""
     return getattr(fn, "__failure_tolerance__", default_failure_tolerance) or 0
 
 
 @edataclass
-class Batch(PinMemoryMixin, ExtendableDataclassMixin):
+class Batch(SampleTagsAlias, PinMemoryMixin, ExtendableDataclassMixin):
     """Base class for a batch dataclass. Provides a default implementation for pinning memory.
     Additionally, it provides a future safe implementation for creating an instance from another
     batch `Batch.derive_from`."""
 
     #: Uniquely identifies each sample in the dataset.
     __key__: list[str]
-    #: Key for restoring the sample. This is used to restore the sample from a checkpoint. It
-    # should be a (nested) tuple of strings and integers, which can be used to index the dataset.
-    __restore_key__: Tuple[Union[str, int, tuple], ...]
+    #: Typed address for reconstructing this batch. None if the batch has no restore address.
+    __restore_key__: RestoreKey | None
 
-    #: A dataset may define a subflavors to distinguish between samples of the same sample type.
-    __subflavors__: Optional[list[Optional[Dict[str, Any]]]] = None
+    #: A dataset may define tags to distinguish between samples of the same sample type.
+    __tags__: Optional[list[Optional[Dict[str, Any]]]] = None
 
     #: Information about the source of the sample, i.e. where the data was loaded from.
     __sources__: Optional[tuple[SourceInfo, ...]] = None
@@ -277,7 +362,7 @@ class Batch(PinMemoryMixin, ExtendableDataclassMixin):
     @classmethod
     def derive_from(cls: Type[T_batch], base_batch: "Batch", **kwargs) -> T_batch:
         """
-        Uses the base fields of `Batch` from base_batch (i.e. __key__, __restore_key__, __subflavors__, __sources__)
+        Uses the base fields of `Batch` from base_batch (i.e. __key__, __restore_key__, __tags__, __sources__)
         and creates a new batch with the kwargs as fields. This is useful for creating new batches, while keeping the
         metadata of the base batch.
 
@@ -295,6 +380,7 @@ class Batch(PinMemoryMixin, ExtendableDataclassMixin):
         Returns:
             The new batch.
         """
+        kwargs = canonicalize_tag_kwargs(kwargs)
         base_kwargs = {
             field.name: getattr(base_batch, field.name) for field in dataclasses.fields(Batch)
         }
@@ -334,10 +420,10 @@ class Batch(PinMemoryMixin, ExtendableDataclassMixin):
                         if sample.__sources__
                         for source in sample.__sources__
                     )
-            elif field.name == "__subflavors__":
-                if any(sample.__subflavors__ is not None for sample in samples):
+            elif field.name == "__tags__":
+                if any(sample.__tags__ is not None for sample in samples):
                     init_args[field.name] = [
-                        sample.__subflavors__ for sample in samples if sample.__subflavors__
+                        sample.__tags__ for sample in samples if sample.__tags__
                     ]
             else:
                 value = [getattr(sample, field.name) for sample in samples]
@@ -373,6 +459,15 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
     #: The decoder to use for decoding samples. Set manually as needed to override options.
     decoder: Optional[SampleDecoder] = SampleDecoder()
 
+    #: Exponent for size-deficit credits when blending by a :func:`sample_size_metric`. Higher
+    #: values favor datasets furthest behind their target size share.
+    blend_sample_size_alpha: float = 1.0
+    #: Floor added to size-deficit credits, so every active dataset keeps a non-zero selection
+    #: probability when blending by a :func:`sample_size_metric`.
+    blend_sample_size_epsilon: float = 1.0
+    #: Allocated lazily on first RNG access in a worker thread.
+    _rng_by_worker: local
+
     def _is_overridden(
         self, bound_method: Callable[..., Any], bases: Optional[Sequence[Type[Any]]] = None
     ) -> bool:
@@ -401,6 +496,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         return not any(getattr(base, func.__name__) is func for base in bases)
 
     @stateless
+    @skip_safe
     def cook_crude_sample(
         self,
         sample: CrudeSample,
@@ -425,9 +521,12 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             aux["cache"] = self.cache
         if cooker.need_primary:
             aux["primary"] = PrimaryFileStore(aux["primary"], current_key=sample["__key__"])
+        # Legacy cookers may still read `__subflavors__`. `basic_sample_keys` only forwards `__tags__`.
+        sample["__subflavors__"] = sample.get("__tags__")
         return cooker.cook(sample, **aux)
 
     @stateless
+    @skip_safe
     def encode_sample(
         self, sample: T_sample
     ) -> Union[T_encoded_sample, Generator[T_encoded_sample, None, None]]:
@@ -438,6 +537,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         return sample
 
     @stateless
+    @skip_safe
     def preencode_sample(
         self, sample: T_sample
     ) -> Union[T_sample, Generator[T_sample, None, None]]:
@@ -449,15 +549,69 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         return sample
 
     @stateless
-    def postencode_sample(self, sample: T_sample) -> T_encoded_sample:
+    @skip_safe
+    def postencode_sample(
+        self, sample: T_sample | PartialSample[T_sample, Any]
+    ) -> T_encoded_sample:
         """Post-encode a single sample. May raise :exc:`megatron.energon.SkipSample` to skip a sample.
         Alternatively, this can be a generator that yields (or ignores) new samples.
         Use in conjunction with packing and caching.
+        When partial samples are returned by :meth:`select_samples_to_pack`, this method must
+        handle both full samples and :class:`PartialSample` inputs.
         If this is defined, :func:`encode_sample` must not be defined.
         """
         return sample
 
+    def _resolve_sample_size_metric(
+        self, blend_weight_unit: str, stage: SampleSizeMetricStage
+    ) -> Callable[[Any], int | float] | None:
+        """Return the registered sample size function for a blend weight unit and stage."""
+        if blend_weight_unit == DEFAULT_BLEND_WEIGHT_UNIT:
+            return None
+
+        matches: list[str] = []
+        for attr_name, attr in inspect.getmembers(type(self), predicate=inspect.isfunction):
+            if (
+                get_sample_size_metric(attr) == blend_weight_unit
+                and get_sample_size_metric_stage(attr) == stage
+            ):
+                matches.append(attr_name)
+
+        if not matches:
+            raise ValueError(
+                f"Recipe requested blend_weight_unit={blend_weight_unit!r}, but "
+                f"{type(self).__name__} does not register that sample size metric with "
+                f"stage={stage!r}."
+            )
+        if len(matches) > 1:
+            raise ValueError(
+                f"{type(self).__name__} registers multiple sample size metrics named "
+                f"{blend_weight_unit!r} with stage={stage!r}: {', '.join(sorted(matches))}"
+            )
+        return getattr(self, matches[0])
+
+    def build_packing_groups(
+        self,
+        datasets: List[LoadedDataset],
+        packing_buffer_size: PackingBufferSize,
+        shuffle_buffer_size: Optional[int],
+    ) -> List[PackingGroupConfig]:
+        """Return packing groups for the loaded datasets.
+
+        The default keeps all datasets in a single group using the global ``packing_buffer_size``
+        and ``shuffle_buffer_size``. Override this to split datasets into independently
+        blended/shuffled/packed streams.
+        """
+        return [
+            PackingGroupConfig(
+                datasets=datasets,
+                packing_buffer_size=packing_buffer_size,
+                shuffle_buffer_size=shuffle_buffer_size,
+            )
+        ]
+
     @stateless
+    @skip_safe
     def batch(self, samples: List[T_encoded_sample]) -> T_raw_batch:
         """Move a batch to a device. May raise :exc:`megatron.energon.SkipSample` to skip a batch."""
         return self._batch(samples, type(samples[0]))
@@ -474,6 +628,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         return None, None
 
     @stateless
+    @skip_safe
     def encode_batch(self, batch: T_raw_batch) -> Union[T_batch, Generator[T_batch, None, None]]:
         """Encode a batch of samples. May raise :exc:`megatron.energon.SkipSample` to skip a batch.
         Alternatively, this can be a generator that yields (or ignores) new batches."""
@@ -535,32 +690,170 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             raise ValueError("Unrecognized result type.")
 
     def select_samples_to_pack(
-        self, samples: List[T_encoded_sample]
-    ) -> List[List[T_encoded_sample]]:
+        self, samples: List[T_encoded_sample | PartialSample[T_encoded_sample, Any]]
+    ) -> (
+        list[list[T_encoded_sample | PartialSample[T_encoded_sample, Any]]]
+        | PackedSamplesOutput[T_encoded_sample | PartialSample[T_encoded_sample, Any]]
+    ):
         """
         For packing, selects the samples to be packed together.
         Packing is only active when packing_buffer_size is set.
         Internally this stage is called "pre_packing".
 
         Args:
-            samples: The samples to pre-pack. A full buffer will be passed into the function.
+            samples: The samples to pre-pack (a full reading buffer per call when ``packing_buffer_size`` is set).
 
-        Returns: The pre-packed samples as a list of lists of samples.
+        Returns:
+            Either a ``list[list[T]]`` of packs, or :class:`PackedSamplesOutput`
+            to attach a ``pushback`` sequence reapplied to the reading buffer before the next fill.
+            Packs and pushback may contain :class:`PartialSample` values for user-defined slices.
         """
         raise NotImplementedError("Packing only effective when overridden.")
 
-    def pack_selected_samples(self, samples: List[T_encoded_sample]) -> T_encoded_sample:
+    def select_next_pack(
+        self, samples: Iterator[T_encoded_sample | PartialSample[T_encoded_sample, Any]]
+    ) -> (
+        list[list[T_encoded_sample | PartialSample[T_encoded_sample, Any]]]
+        | PackedSamplesOutput[T_encoded_sample | PartialSample[T_encoded_sample, Any]]
+    ):
+        """
+        For streaming packing, selects the next pack by pulling samples from an iterator.
+        Streaming packing is active when ``packing_buffer_size="stream"`` is set.
+
+        Args:
+            samples: Iterator of samples to pull from. Carryover returned via
+                :class:`PackedSamplesOutput` will be yielded first on the next call.
+
+        Returns:
+            Either a ``list[list[T]]`` containing at most one pack, or
+            :class:`PackedSamplesOutput` containing at most one pack plus pushback. Pushback is
+            only kept if a pack is returned.
+        """
+        raise NotImplementedError("Streaming packing only effective when overridden.")
+
+    def pack_selected_samples(
+        self, samples: List[T_encoded_sample | PartialSample[T_encoded_sample, Any]]
+    ) -> T_encoded_sample:
         """
         Given one set of samples to pack, returns the final packed sample.
         Packing is only active when packing_buffer_size is set.
         Internally this stage is called "final_packing".
 
         Args:
-            samples: The samples to pack into a single sample
+            samples: The samples to pack into a single sample. If partial samples were selected
+                and no post-encoding step is configured, this list may contain
+                :class:`PartialSample` values.
 
         Returns: The final packed sample.
         """
         raise NotImplementedError("Packing only effective when overridden.")
+
+    def _build_packing_postencode(
+        self,
+        dataset: SavableDataset[T_encoded_sample],
+        *,
+        packing_buffer_size: PackingBufferSize,
+        worker_config: WorkerConfig,
+    ) -> SavableDataset[T_encoded_sample]:
+        """Builds the (packing +) post-encode stage after encoding.
+
+        Args:
+            dataset: Encoded sample stream.
+            packing_buffer_size: Buffer size, ``None`` to disable buffered packing, or ``"stream"``
+                to select pull-based one-pack-at-a-time packing.
+            worker_config: Worker configuration for wrapped datasets.
+        """
+        if packing_buffer_size == "stream":
+            select_next_pack_provided = self._is_overridden(self.select_next_pack)
+            pack_selected_samples_provided = self._is_overridden(self.pack_selected_samples)
+
+            assert select_next_pack_provided and pack_selected_samples_provided, (
+                "Both select_next_pack and pack_selected_samples methods must be provided in the TaskEncoder when using packing_buffer_size='stream'"
+            )
+
+            if self._is_overridden(self.postencode_sample):
+                post_encode_fn = self.postencode_sample
+                post_encode_stateless = get_stateless(self.postencode_sample)
+                post_encode_failure_tolerance = get_failure_tolerance(
+                    self.postencode_sample, self.__default_failure_tolerance__
+                )
+            else:
+                post_encode_fn = None
+                post_encode_stateless = True
+                post_encode_failure_tolerance = 0
+
+            return StreamingPackingDataset(
+                dataset,
+                select_next_pack=self.select_next_pack,
+                final_packer=self.pack_selected_samples,
+                final_packer_stateless=get_stateless(self.pack_selected_samples),
+                final_packer_skip_safe=get_skip_safe(self.pack_selected_samples),
+                sample_encoder=post_encode_fn,
+                sample_encoder_stateless=post_encode_stateless,
+                sample_encoder_skip_safe=post_encode_fn is None or get_skip_safe(post_encode_fn),
+                worker_config=worker_config,
+                select_failure_tolerance=get_failure_tolerance(
+                    self.select_next_pack, self.__default_failure_tolerance__
+                ),
+                final_packer_failure_tolerance=get_failure_tolerance(
+                    self.pack_selected_samples, self.__default_failure_tolerance__
+                ),
+                sample_encoder_failure_tolerance=post_encode_failure_tolerance,
+            )
+
+        if packing_buffer_size is None:
+            if self._is_overridden(self.postencode_sample):
+                dataset = MapDataset(
+                    dataset,
+                    self.postencode_sample,
+                    worker_config=worker_config,
+                    stateless_map_fn=get_stateless(self.postencode_sample),
+                    failure_tolerance=get_failure_tolerance(
+                        self.postencode_sample, self.__default_failure_tolerance__
+                    ),
+                )
+            return dataset
+
+        if not isinstance(packing_buffer_size, int):
+            raise ValueError(f"Unsupported packing_buffer_size: {packing_buffer_size!r}")
+
+        select_samples_to_pack_provided = self._is_overridden(self.select_samples_to_pack)
+        pack_selected_samples_provided = self._is_overridden(self.pack_selected_samples)
+
+        assert select_samples_to_pack_provided and pack_selected_samples_provided, (
+            "Both select_samples_to_pack and pack_selected_samples methods must be provided in the TaskEncoder when using packing_buffer_size"
+        )
+
+        if self._is_overridden(self.postencode_sample):
+            post_encode_fn = self.postencode_sample
+            post_encode_stateless = get_stateless(self.postencode_sample)
+            post_encode_failure_tolerance = get_failure_tolerance(
+                self.postencode_sample, self.__default_failure_tolerance__
+            )
+        else:
+            post_encode_fn = None
+            post_encode_stateless = True
+            post_encode_failure_tolerance = 0
+
+        return PackingDataset(
+            dataset,
+            buffer_size=packing_buffer_size,
+            pre_packer=self.select_samples_to_pack,
+            final_packer=self.pack_selected_samples,
+            final_packer_stateless=get_stateless(self.pack_selected_samples),
+            final_packer_skip_safe=get_skip_safe(self.pack_selected_samples),
+            sample_encoder=post_encode_fn,
+            sample_encoder_stateless=post_encode_stateless,
+            sample_encoder_skip_safe=post_encode_fn is None or get_skip_safe(post_encode_fn),
+            worker_config=worker_config,
+            pre_packer_failure_tolerance=get_failure_tolerance(
+                self.select_samples_to_pack, self.__default_failure_tolerance__
+            ),
+            final_packer_failure_tolerance=get_failure_tolerance(
+                self.pack_selected_samples, self.__default_failure_tolerance__
+            ),
+            sample_encoder_failure_tolerance=post_encode_failure_tolerance,
+        )
 
     def build_batch(
         self,
@@ -568,57 +861,10 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         *,
         batch_size: Optional[int],
         batch_drop_last: bool = False,
-        packing_buffer_size: Optional[int] = None,
         worker_config: WorkerConfig,
     ) -> SavableDataset[T_raw_batch]:
         """Applies the batcher to the dataset."""
-
         dataset: SavableDataset[Any]
-
-        if packing_buffer_size is not None:
-            select_samples_to_pack_provided = self._is_overridden(self.select_samples_to_pack)
-            pack_selected_samples_provided = self._is_overridden(self.pack_selected_samples)
-
-            assert select_samples_to_pack_provided and pack_selected_samples_provided, (
-                "Both select_samples_to_pack and pack_selected_samples methods must be provided in the TaskEncoder when using packing_buffer_size"
-            )
-
-            if self._is_overridden(self.postencode_sample):
-                post_encode_fn = self.postencode_sample
-            else:
-                post_encode_fn = None
-
-            dataset = PackingDataset(
-                dataset,
-                buffer_size=packing_buffer_size,
-                pre_packer=self.select_samples_to_pack,
-                final_packer=self.pack_selected_samples,
-                final_packer_stateless=get_stateless(self.pack_selected_samples),
-                sample_encoder=post_encode_fn,
-                sample_encoder_stateless=True
-                if post_encode_fn is None
-                else get_stateless(post_encode_fn),
-                worker_config=worker_config,
-                pre_packer_failure_tolerance=get_failure_tolerance(
-                    self.select_samples_to_pack, self.__default_failure_tolerance__
-                ),
-                final_packer_failure_tolerance=get_failure_tolerance(
-                    self.pack_selected_samples, self.__default_failure_tolerance__
-                ),
-                sample_encoder_failure_tolerance=0
-                if post_encode_fn is None
-                else get_failure_tolerance(post_encode_fn, self.__default_failure_tolerance__),
-            )
-        elif self._is_overridden(self.postencode_sample):
-            dataset = MapDataset(
-                dataset,
-                self.postencode_sample,
-                worker_config=worker_config,
-                stateless_map_fn=get_stateless(self.postencode_sample),
-                failure_tolerance=get_failure_tolerance(
-                    self.postencode_sample, self.__default_failure_tolerance__
-                ),
-            )
 
         if self._is_overridden(self.batch_group_criterion):
             dataset = GroupBatchDataset(
@@ -639,6 +885,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                     self.encode_batch,
                     worker_config=worker_config,
                     stateless_map_fn=get_stateless(self.encode_batch),
+                    map_fn_skip_safe=get_skip_safe(self.encode_batch),
                     failure_tolerance=get_failure_tolerance(
                         self.encode_batch, self.__default_failure_tolerance__
                     ),
@@ -652,6 +899,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                     batch_size=batch_size,
                     batcher=self.batch,
                     batcher_stateless=get_stateless(self.batch),
+                    batcher_skip_safe=get_skip_safe(self.batch),
                     drop_last=batch_drop_last,
                     worker_config=worker_config,
                     failure_tolerance=get_failure_tolerance(
@@ -665,6 +913,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                         self.encode_batch,
                         worker_config=worker_config,
                         stateless_map_fn=get_stateless(self.encode_batch),
+                        map_fn_skip_safe=get_skip_safe(self.encode_batch),
                         failure_tolerance=get_failure_tolerance(
                             self.encode_batch, self.__default_failure_tolerance__
                         ),
@@ -672,12 +921,18 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
 
         return dataset
 
+    def _find_cooker(self, tags: dict) -> Cooker[T_sample]:
+        for cooker in self.cookers:
+            if cooker.is_match(tags):
+                return cooker
+        raise ValueError(f"No cooker found for tags: {tags}")
+
     def build_cook_crude_sample(
         self,
         dataset: SavableDataset[Union[T_sample, dict]],
         *,
         worker_config: WorkerConfig,
-        subflavors: Dict[str, Any],
+        tags: Dict[str, Any],
         get_primary_aux: Callable[[], FileStore],
         aux: Optional[Dict[str, FileStore]] = None,
     ) -> SavableDataset[T_sample]:
@@ -691,11 +946,7 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
         if self.decoder is not None:
             aux = {k: DecodeFileStore(v, decoder=self.decoder) for k, v in aux.items()}
 
-        for cooker in self.cookers:
-            if cooker.is_match(subflavors):
-                break
-        else:
-            raise ValueError(f"No cooker found for subflavors: {subflavors}")
+        cooker = self._find_cooker(tags)
 
         if cooker.need_primary and "primary" not in aux:
             try:
@@ -709,31 +960,39 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 raise SystemError("Error getting primary auxiliary dataset") from e
 
         cook_fn = functools.partial(self.cook_crude_sample, cooker=cooker, aux=aux)
+        cooker.part_filter
 
-        return MapDataset(
+        mapped = MapDataset(
             dataset,
             cook_fn,
             worker_config=worker_config,
             stateless_map_fn=get_stateless(self.cook_crude_sample),
+            map_fn_skip_safe=get_skip_safe(self.cook_crude_sample) and get_skip_safe(cooker.cook),
             map_fn_config=dict(
                 cooker=dict(
                     cook=SavableDataset._function_config(cooker.cook),
-                    has_subflavors=cooker.has_subflavors,
+                    has_tags=cooker.has_tags,
                     aux={k: {"_path": str(v.get_path())} for k, v in aux.items()},
                 ),
             ),
             failure_tolerance=get_failure_tolerance(cook_fn, self.__default_failure_tolerance__),
         )
 
+        mapped.auxiliary_stores = tuple(aux.values())
+        return mapped
+
     def _load_dataset(
         self, dataset: LoadedDataset, worker_rotation_offset: int, worker_config: WorkerConfig
     ) -> SavableDataset[T_sample]:
         """Loads a train dataset, optionally cooking the samples."""
         if dataset.dataset.__sample_type__ == CrudeSample:
+            cooker = self._find_cooker(dataset.dataset.tags)
             return self.build_cook_crude_sample(
-                dataset.dataset.build(worker_rotation_offset=worker_rotation_offset),
+                dataset.dataset.build(
+                    worker_rotation_offset=worker_rotation_offset, part_filter=cooker.part_filter
+                ),
                 worker_config=worker_config,
-                subflavors=dataset.dataset.subflavors,
+                tags=dataset.dataset.tags,
                 get_primary_aux=dataset.dataset.as_file_store,
                 aux=dataset.aux,
             )
@@ -763,39 +1022,44 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 pre_encode_fn,
                 worker_config=worker_config,
                 stateless_map_fn=get_stateless(pre_encode_fn),
+                map_fn_skip_safe=get_skip_safe(pre_encode_fn),
                 failure_tolerance=get_failure_tolerance(
                     pre_encode_fn, self.__default_failure_tolerance__
                 ),
             )
         return dataset
 
-    def build_train_datasets(
+    def _group_weight(
+        self,
+        group_ds: List[LoadedDataset],
+        blend_mode: DatasetBlendMode,
+        *,
+        repeat: bool,
+    ) -> float:
+        """Blend weight for one dataset group when merging packed streams after grouping."""
+        if blend_mode == DatasetBlendMode.DATASET_WEIGHT:
+            return sum(float(d.weight) for d in group_ds)
+        if blend_mode == DatasetBlendMode.SAMPLE_REPETITIONS or (
+            not repeat and blend_mode == DatasetBlendMode.NONE
+        ):
+            return sum(
+                len(d.dataset) * (1 if d.repetitions is None else float(d.repetitions))
+                for d in group_ds
+            )
+        return float(len(group_ds))
+
+    def _build_train_blend_shuffle_encode_branch(
         self,
         *,
         datasets: List[LoadedDataset],
+        worker_rotation_offsets: List[int],
+        blend_mode: DatasetBlendMode,
+        repeat: bool,
+        shuffle_buffer_size: Optional[int],
         worker_config: WorkerConfig,
-        batch_size: Optional[int],
-        batch_drop_last: bool = False,
-        packing_buffer_size: Optional[int] = None,
-        virtual_epoch_length: int = 0,
-        shuffle_buffer_size: Optional[int] = None,
-        blend_mode: DatasetBlendMode = DatasetBlendMode.NONE,
-        repeat: bool = True,
-    ) -> SavableDataset[T_batch]:
-        """Combines train datasets to a single dataset."""
-
-        # Check if there's a CrudeWebdataset but no cookers
-        for dataset in datasets:
-            if isinstance(dataset.dataset, CrudeWebdataset):
-                assert self.cookers, "CrudeWebdataset found, but no cookers registered."
-
-        global_workers = max(1, worker_config.num_workers) * worker_config.world_size
-        rotation_lengths = [len(dataset.dataset) for dataset in datasets]
-        for i in range(1, len(rotation_lengths)):
-            rotation_lengths[i] += rotation_lengths[i - 1]
-        worker_rotation_offsets = [
-            rotation_length % global_workers for rotation_length in [0] + rotation_lengths[:-1]
-        ]
+        sample_size_fn: Callable[[Any], int | float] | None,
+    ) -> SavableDataset[T_encoded_sample]:
+        """Builds the (blend) → (repeat/shuffle) → (preencode/encode) pipeline."""
 
         if blend_mode == DatasetBlendMode.DATASET_WEIGHT:
             assert repeat, (
@@ -860,6 +1124,9 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             dataset = BlendDataset(
                 *[inner_dataset[:2] for inner_dataset in inner_datasets],
                 worker_config=worker_config,
+                sample_size_fn=sample_size_fn,
+                sample_size_epsilon=self.blend_sample_size_epsilon,
+                sample_size_alpha=self.blend_sample_size_alpha,
             )
         elif len(datasets) == 1:
             dataset = inner_datasets[0][0]
@@ -874,50 +1141,198 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
                 size=shuffle_buffer_size,
                 worker_config=worker_config,
             )
-        dataset = self.build_encode_sample(dataset, worker_config=worker_config)
-        dataset = self.build_batch(
-            dataset,
-            batch_size=batch_size,
-            batch_drop_last=batch_drop_last,
-            packing_buffer_size=packing_buffer_size,
-            worker_config=worker_config,
+        return self.build_encode_sample(dataset, worker_config=worker_config)
+
+    def _compute_rotation_offsets(
+        self, datasets: List[LoadedDataset], worker_config: WorkerConfig
+    ) -> List[int]:
+        global_workers = worker_config.logical_worker_count()
+        rotation_lengths = [len(d.dataset) for d in datasets]
+        for i in range(1, len(rotation_lengths)):
+            rotation_lengths[i] += rotation_lengths[i - 1]
+        return [rotation_length % global_workers for rotation_length in [0] + rotation_lengths[:-1]]
+
+    def _build_validated_packing_groups(
+        self,
+        datasets: List[LoadedDataset],
+        packing_buffer_size: PackingBufferSize,
+        shuffle_buffer_size: Optional[int],
+    ) -> List[PackingGroupConfig]:
+        packing_groups = self.build_packing_groups(
+            datasets, packing_buffer_size, shuffle_buffer_size
         )
-        if virtual_epoch_length > 0:
-            dataset = EpochizeDataset(
+        if len(packing_groups) == 0:
+            raise ValueError("build_packing_groups must return at least one group.")
+
+        expected_ids = {id(dataset) for dataset in datasets}
+        seen_ids: set[int] = set()
+        for packing_group in packing_groups:
+            if len(packing_group.datasets) == 0:
+                raise ValueError("Packing groups must not be empty.")
+            for dataset in packing_group.datasets:
+                dataset_id = id(dataset)
+                if dataset_id not in expected_ids:
+                    raise ValueError(
+                        "Packing groups must only contain loaded datasets from the input list."
+                    )
+                if dataset_id in seen_ids:
+                    raise ValueError(
+                        "Packing groups must contain each loaded dataset at most once."
+                    )
+                seen_ids.add(dataset_id)
+
+        if seen_ids != expected_ids:
+            raise ValueError("Packing groups must contain each loaded dataset exactly once.")
+        return packing_groups
+
+    def _build_train_blend_shuffle_encode_packing_groups(
+        self,
+        datasets: List[LoadedDataset],
+        packing_buffer_size: PackingBufferSize,
+        blend_mode: DatasetBlendMode,
+        repeat: bool,
+        shuffle_buffer_size: Optional[int],
+        worker_config: WorkerConfig,
+        blend_weight_unit: str,
+    ) -> SavableDataset[T_encoded_sample]:
+        """Builds the train pipeline with optional task-defined packing group isolation.
+
+        Each packing group runs blend → optional shuffle → encode → packing/postencode. When
+        multiple groups exist, their resulting streams are blended with weights from
+        :meth:`_group_weight`.
+
+        Pipeline per group:
+        ``blend → shuffle → encode → select_samples_to_pack → postencode → pack_selected_samples``.
+        Multiple groups: ``(... per group ...) → blend``.
+        """
+        rotation_offsets = self._compute_rotation_offsets(datasets, worker_config)
+        rotation_offsets_by_dataset_id = {
+            id(dataset): rotation_offset
+            for dataset, rotation_offset in zip(datasets, rotation_offsets)
+        }
+        packing_groups = self._build_validated_packing_groups(
+            datasets, packing_buffer_size, shuffle_buffer_size
+        )
+        # Datasets with a zero weight are not used. They still count for the rotation offsets
+        # above, so that setting a weight to zero keeps the worker assignment of all other datasets.
+        used_groups = [
+            (packing_group, [dataset for dataset in packing_group.datasets if dataset.weight != 0])
+            for packing_group in packing_groups
+        ]
+        used_groups = [
+            (packing_group, group_ds) for packing_group, group_ds in used_groups if group_ds
+        ]
+        if len(used_groups) == 0:
+            raise ValueError("All datasets have a zero weight.")
+        # Only the blends that are built need a sample size metric.
+        sample_size_fn = None
+        if any(len(group_ds) > 1 for _, group_ds in used_groups):
+            sample_size_fn = self._resolve_sample_size_metric(blend_weight_unit, "sample")
+        group_sample_size_fn = None
+        if len(used_groups) > 1:
+            group_sample_size_fn = self._resolve_sample_size_metric(blend_weight_unit, "encoded")
+
+        streams: List[tuple[SavableDataset[Any], float]] = []
+        for packing_group, group_ds in used_groups:
+            group_rotation_offsets = [
+                rotation_offsets_by_dataset_id[id(dataset)] for dataset in group_ds
+            ]
+
+            dataset = self._build_train_blend_shuffle_encode_branch(
+                datasets=group_ds,
+                worker_rotation_offsets=group_rotation_offsets,
+                blend_mode=blend_mode,
+                repeat=repeat,
+                shuffle_buffer_size=packing_group.shuffle_buffer_size,
+                worker_config=worker_config,
+                sample_size_fn=sample_size_fn,
+            )
+            # Post-encode is included
+            dataset = self._build_packing_postencode(
                 dataset,
-                length=virtual_epoch_length,
+                packing_buffer_size=packing_group.packing_buffer_size,
                 worker_config=worker_config,
             )
-        if worker_config.should_log(level=1):
-            dataset = LogSampleDataset(dataset, mode="train", worker_config=worker_config)
+            streams.append(
+                (
+                    dataset,
+                    self._group_weight(group_ds, blend_mode, repeat=repeat),
+                )
+            )
 
-        return dataset
+        if len(streams) > 1:
+            return BlendDataset(
+                *streams,
+                worker_config=worker_config,
+                sample_size_fn=group_sample_size_fn,
+                sample_size_epsilon=self.blend_sample_size_epsilon,
+                sample_size_alpha=self.blend_sample_size_alpha,
+            )
+        else:
+            return streams[0][0]
 
-    def build_val_datasets(
+    def build_train_datasets(
         self,
         *,
         datasets: List[LoadedDataset],
         worker_config: WorkerConfig,
-        batch_size: int,
+        batch_size: Optional[int],
         batch_drop_last: bool = False,
-        packing_buffer_size: Optional[int] = None,
-        limit: Optional[int] = None,
+        packing_buffer_size: PackingBufferSize = None,
+        shuffle_buffer_size: Optional[int] = None,
+        blend_mode: DatasetBlendMode = DatasetBlendMode.NONE,
+        blend_weight_unit: str = DEFAULT_BLEND_WEIGHT_UNIT,
+        repeat: bool = True,
     ) -> SavableDataset[T_batch]:
-        """Combines val datasets to a single dataset."""
+        """Combines train datasets into one batched dataset pipeline.
+
+        Args:
+            datasets: Loaded leaf datasets.
+            worker_config: Worker configuration for wrapped datasets.
+            batch_size: Batch dimension; ``None`` skips batching.
+            batch_drop_last: If true, drop the last batch when smaller than ``batch_size``.
+            packing_buffer_size: Packing buffer size, ``"stream"`` for pull-based packing, or
+                ``None`` to disable packing. Used as the default by :meth:`build_packing_groups`.
+            shuffle_buffer_size: Shuffle buffer before encoding. Used as the default by
+                :meth:`build_packing_groups`.
+            blend_mode: How leaf weights map to the inner :class:`~megatron.energon.BlendDataset`.
+            blend_weight_unit: Unit the blend weights target. ``"samples"`` uses sample-count
+                blending; any other value must be registered with :func:`sample_size_metric`.
+            repeat: Whether inner datasets loop indefinitely.
+
+        Returns:
+            The full train :class:`~megatron.energon.flavors.SavableDataset` pipeline.
+        """
 
         # Check if there's a CrudeWebdataset but no cookers
         for dataset in datasets:
-            if isinstance(dataset, CrudeWebdataset):
+            if isinstance(dataset.dataset, CrudeWebdataset):
                 assert self.cookers, "CrudeWebdataset found, but no cookers registered."
 
-        global_workers = max(1, worker_config.num_workers) * worker_config.world_size
-        rotation_lengths = [len(dataset.dataset) for dataset in datasets]
-        for i in range(1, len(rotation_lengths)):
-            rotation_lengths[i] += rotation_lengths[i - 1]
-        worker_rotation_offsets = [
-            rotation_length % global_workers for rotation_length in [0] + rotation_lengths[:-1]
-        ]
+        dataset = self._build_train_blend_shuffle_encode_packing_groups(
+            datasets=datasets,
+            packing_buffer_size=packing_buffer_size,
+            blend_mode=blend_mode,
+            repeat=repeat,
+            shuffle_buffer_size=shuffle_buffer_size,
+            worker_config=worker_config,
+            blend_weight_unit=blend_weight_unit,
+        )
+        dataset = self.build_batch(
+            dataset,
+            batch_size=batch_size,
+            batch_drop_last=batch_drop_last,
+            worker_config=worker_config,
+        )
+        return dataset
 
+    def _build_val_concat_encode_branch(
+        self,
+        datasets: List[LoadedDataset],
+        worker_rotation_offsets: List[int],
+        worker_config: WorkerConfig,
+    ) -> SavableDataset[T_encoded_sample]:
+        """Builds the (concat) → (preencode/encode) pipeline."""
         if len(datasets) > 1:
             dataset = ConcatDataset(
                 *[
@@ -930,24 +1345,133 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             dataset = self._load_dataset(datasets[0], worker_rotation_offsets[0], worker_config)
         else:
             raise ValueError("No datasets given.")
-        dataset = self.build_encode_sample(dataset, worker_config=worker_config)
+        return self.build_encode_sample(dataset, worker_config=worker_config)
+
+    def _build_val_concat_encode_packing_groups(
+        self,
+        datasets: List[LoadedDataset],
+        packing_buffer_size: PackingBufferSize,
+        worker_config: WorkerConfig,
+    ) -> SavableDataset[T_encoded_sample]:
+        """Builds the validation pipeline with optional task-defined packing group isolation.
+
+        Like :meth:`_build_train_blend_shuffle_encode_packing_groups`, but concatenates leaves
+        instead of blending, and omits shuffle/repeat.
+
+        Pipeline per group:
+        ``concat loaded leaves → encode → select_samples_to_pack → postencode → pack_selected_samples``.
+        Multiple groups: ``(... per group ...) → concat``.
+        """
+        rotation_offsets = self._compute_rotation_offsets(datasets, worker_config)
+        rotation_offsets_by_dataset_id = {
+            id(dataset): rotation_offset
+            for dataset, rotation_offset in zip(datasets, rotation_offsets)
+        }
+        packing_groups = self._build_validated_packing_groups(datasets, packing_buffer_size, None)
+
+        streams: List[SavableDataset[Any]] = []
+        for packing_group in packing_groups:
+            group_ds = packing_group.datasets
+            group_rotation_offsets = [
+                rotation_offsets_by_dataset_id[id(dataset)] for dataset in group_ds
+            ]
+            branch = self._build_val_concat_encode_branch(
+                datasets=group_ds,
+                worker_rotation_offsets=group_rotation_offsets,
+                worker_config=worker_config,
+            )
+            # Post-encode is included
+            branch = self._build_packing_postencode(
+                branch,
+                packing_buffer_size=packing_group.packing_buffer_size,
+                worker_config=worker_config,
+            )
+            streams.append(branch)
+        if len(streams) > 1:
+            return ConcatDataset(*streams, worker_config=worker_config)
+        else:
+            return streams[0]
+
+    def build_val_datasets(
+        self,
+        *,
+        datasets: List[LoadedDataset],
+        worker_config: WorkerConfig,
+        batch_size: int,
+        batch_drop_last: bool = False,
+        packing_buffer_size: PackingBufferSize = None,
+    ) -> SavableDataset[T_batch]:
+        """Combines validation datasets into one batched dataset pipeline.
+
+        Args:
+            datasets: Loaded leaf datasets.
+            worker_config: Worker configuration for wrapped datasets.
+            batch_size: Batch dimension.
+            batch_drop_last: If true, drop the last batch when smaller than ``batch_size``.
+            packing_buffer_size: Packing buffer size, ``"stream"`` for pull-based packing, or
+                ``None`` to disable packing. Used as the default by :meth:`build_packing_groups`.
+
+        Returns:
+            The full validation :class:`~megatron.energon.flavors.SavableDataset` pipeline.
+        """
+
+        # Check if there's a CrudeWebdataset but no cookers
+        for dataset in datasets:
+            if isinstance(dataset.dataset, CrudeWebdataset):
+                assert self.cookers, "CrudeWebdataset found, but no cookers registered."
+
+        dataset = self._build_val_concat_encode_packing_groups(
+            datasets=datasets,
+            packing_buffer_size=packing_buffer_size,
+            worker_config=worker_config,
+        )
         dataset = self.build_batch(
             dataset,
             batch_size=batch_size,
             batch_drop_last=batch_drop_last,
-            packing_buffer_size=packing_buffer_size,
             worker_config=worker_config,
         )
-        if limit is not None and limit > 0:
-            dataset = LimitDataset(
-                dataset,
-                length=limit,
-                worker_config=worker_config,
-                reset_after_epoch=True,
-            )
+        return dataset
+
+    def build_processing_datasets(
+        self,
+        *,
+        datasets: List[LoadedDataset],
+        worker_config: WorkerConfig,
+    ) -> SavableDataset[T_encoded_sample]:
+        """Combines dataset leaves into one finite, unbatched processing pipeline.
+
+        Each loaded leaf is traversed once in input order. Blend weights and repetitions are
+        intentionally ignored. Cooking, pre-encoding/encoding, and post-encoding are applied,
+        while shuffling, packing, and batching are disabled.
+
+        Args:
+            datasets: Loaded leaf datasets.
+            worker_config: Worker configuration for wrapped datasets.
+
+        Returns:
+            The processing :class:`~megatron.energon.flavors.SavableDataset` pipeline.
+        """
+
+        # Check if there's a CrudeWebdataset but no cookers
+        for dataset in datasets:
+            if isinstance(dataset.dataset, CrudeWebdataset):
+                assert self.cookers, "CrudeWebdataset found, but no cookers registered."
+
+        rotation_offsets = self._compute_rotation_offsets(datasets, worker_config)
+        dataset = self._build_val_concat_encode_branch(
+            datasets=datasets,
+            worker_rotation_offsets=rotation_offsets,
+            worker_config=worker_config,
+        )
+        dataset = self._build_packing_postencode(
+            dataset,
+            packing_buffer_size=None,
+            worker_config=worker_config,
+        )
 
         if worker_config.should_log(level=2):
-            dataset = LogSampleDataset(dataset, mode="val", worker_config=worker_config)
+            dataset = LogSampleDataset(dataset, mode="processing", worker_config=worker_config)
 
         return dataset
 
@@ -973,6 +1497,26 @@ class TaskEncoder(ABC, Generic[T_sample, T_encoded_sample, T_raw_batch, T_batch]
             "The batch_index can only be fetched within the worker, and to be usable, you must use the get_(savable_)loader methods provided from the package."
         )
         return WorkerConfig.active_worker_config.active_worker_sample_index
+
+    @property
+    def rng(self) -> UserRng:
+        """Independent RNGs scoped to a transform using ``restore_task_encoder_seeds=True``."""
+        if _seeded_task_encoder.get() is not self:
+            raise FatalSampleError(
+                "TaskEncoder.rng requires @stateless(restore_task_encoder_seeds=True)"
+            )
+        config = WorkerConfig.active_worker_config
+        if config is None:
+            raise RuntimeError("Task encoder RNGs require an active dataloader worker")
+        state = self.__dict__.get("_rng_by_worker")
+        if state is None:
+            # Concurrent first accesses must share the same thread-local container.
+            state = self.__dict__.setdefault("_rng_by_worker", local())
+        seed = config.worker_seed()
+        if getattr(state, "seed", None) != seed:
+            state.seed = seed
+            state.rng = UserRng(seed)
+        return state.rng
 
     @property
     def cache(self) -> CachePool:
@@ -1034,6 +1578,7 @@ class DefaultTaskEncoder(
         self._batch_type = batch_type
 
     @stateless
+    @skip_safe
     def encode_sample(
         self, sample: T_sample
     ) -> Union[T_encoded_sample, Generator[T_encoded_sample, None, None]]:
@@ -1062,13 +1607,14 @@ class DefaultTaskEncoder(
             raise ValueError("Unrecognized encoded sample type.")
 
     @stateless
+    @skip_safe
     def batch(self, samples: List[T_encoded_sample]) -> T_raw_batch:
         """Batch a list of samples. The default implementation uses default batching to convert
         to _batch_type."""
         actions = None
         if isinstance(samples[0], Sample):
             actions = {
-                "__subflavors__": lambda x: x,
+                "__tags__": lambda x: x,
             }
         return self._batch(
             samples,
@@ -1077,6 +1623,7 @@ class DefaultTaskEncoder(
         )
 
     @stateless
+    @skip_safe
     def encode_batch(self, batch: T_raw_batch) -> Union[T_batch, Generator[T_batch, None, None]]:
         """Encode a batch of samples. The default implementation converts to the
         _encoded_batch_type."""
@@ -1105,6 +1652,8 @@ class AugmentTaskEncoder(
 ):
     """Augment a task encoder with additional functionality. By default, delegates everything to the
     original task encoder."""
+
+    _task_encoder: TaskEncoder[T_sample, T_encoded_sample, T_raw_batch, T_batch]
 
     def __init__(self, task_encoder: TaskEncoder[T_sample, T_encoded_sample, T_raw_batch, T_batch]):
         """Initialize the augmenting task encoder.

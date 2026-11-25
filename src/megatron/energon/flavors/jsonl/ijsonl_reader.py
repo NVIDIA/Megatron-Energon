@@ -1,7 +1,6 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from abc import ABC
 from typing import (
     Callable,
     Generator,
@@ -11,19 +10,21 @@ from typing import (
 )
 
 from megatron.energon.epathlib import EPath
+from megatron.energon.flavors.common.reader import SamplePartFileReader
+from megatron.energon.flavors.common.sample_record import FilteredSample, IndexedRestoreKey
 from megatron.energon.flavors.jsonl.ijsonl import (
     CachedIJsonlOffsetReader,
     IJsonlFile,
     IJsonlIndexReader,
     IJsonlSamplePointer,
 )
-from megatron.energon.flavors.webdataset.structs import FilteredSample
 from megatron.energon.source_info import SourceInfo
+from megatron.energon.worker_local import WorkerLocalResource
 
 T_index = TypeVar("T_index", covariant=False)
 
 
-class IJsonlReader(ABC):
+class IJsonlReader(WorkerLocalResource, SamplePartFileReader[FilteredSample]):
     """
     Class for reading indexed jsonl files containing json samples.
 
@@ -35,10 +36,14 @@ class IJsonlReader(ABC):
         jsonl_filename: The jsonl file name.
         sample_filter: An optional filter function to select samples by their key.
         index_cache_size: The size of the index cache.
+        part_filter: An optional filter function to select the json payload part.
     """
+
+    _worker_local_fields = {"ijsonl_file": lambda: None}
 
     jsonl_path: EPath
     sample_filter: Optional[Callable[[str], bool]]
+    part_filter: Optional[Callable[[str], bool]]
 
     cached_offset_reader: CachedIJsonlOffsetReader
     ijsonl_file: IJsonlFile | None = None
@@ -48,9 +53,11 @@ class IJsonlReader(ABC):
         jsonl_path: EPath,
         sample_filter: Optional[Callable[[str], bool]] = None,
         index_cache_size: int = 5,
+        part_filter: Optional[Callable[[str], bool]] = None,
     ):
         self.jsonl_path = jsonl_path
         self.sample_filter = sample_filter
+        self.part_filter = part_filter
         self.cached_offset_reader = CachedIJsonlOffsetReader(
             jsonl_path, cache_size=index_cache_size
         )
@@ -80,17 +87,10 @@ class IJsonlReader(ABC):
         if self.sample_filter is not None and not self.sample_filter(key):
             return None
 
-        if self.ijsonl_file is None:
-            self.ijsonl_file = IJsonlFile(self.jsonl_path.open("rb"))
-
-        json_data = self.ijsonl_file.next(sample_pointer.byte_offset, sample_pointer.byte_size)
-        if json_data is None:
-            return None
-
-        return FilteredSample(
+        sample = FilteredSample(
             __key__=key,
             __shard__=self.jsonl_path.name,
-            __restore_key__=("Webdataset", sample_pointer.index),
+            __restore_key__=IndexedRestoreKey(kind="Webdataset", index=sample_pointer.index),
             __sources__=(
                 SourceInfo(
                     dataset_path=str(self.jsonl_path),
@@ -99,8 +99,16 @@ class IJsonlReader(ABC):
                     file_names=(f"{key}.json",),
                 ),
             ),
-            json=json_data,
         )
+        if self.part_filter is None or self.part_filter("json"):
+            if self.ijsonl_file is None:
+                self.ijsonl_file = IJsonlFile(self.jsonl_path.open("rb"))
+
+            json_data = self.ijsonl_file.next(sample_pointer.byte_offset, sample_pointer.byte_size)
+            if json_data is None:
+                return None
+            sample["json"] = json_data
+        return sample
 
     def __getitem__(self, idx: int | str) -> FilteredSample | tuple[bytes, SourceInfo] | None:
         """
@@ -187,4 +195,5 @@ class IJsonlReader(ABC):
     def close(self):
         if self.ijsonl_file is not None:
             self.ijsonl_file.close()
+            self.ijsonl_file = None
         self.cached_offset_reader.close()

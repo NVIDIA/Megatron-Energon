@@ -15,7 +15,7 @@ class LogSampleDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]
     """This dataset logs every yielded sample to the debug logs."""
 
     get_keys_fn: Callable[[T_sample], list[str] | None]
-    mode: Literal["train", "val"]
+    mode: Literal["train", "val", "processing"]
     _step: int
 
     _savable_fields = ("_step",)
@@ -23,7 +23,7 @@ class LogSampleDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]
     def __init__(
         self,
         dataset: SavableDataset[T_sample],
-        mode: Literal["train", "val"],
+        mode: Literal["train", "val", "processing"],
         worker_config: WorkerConfig,
         get_keys_fn: Callable[[T_sample], list[str] | None] = default_get_batch_keys,
     ):
@@ -58,6 +58,9 @@ class LogSampleDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample]
                 log_entry["keys"] = keys
 
             self.worker_config.worker_log(log_entry)
+
+    def set_skip_mode(self, active: bool) -> None:
+        self.dataset.set_skip_mode(active and not self.worker_config.should_log(level=1))
 
     def __iter__(self) -> Iterator[T_sample]:
         for sample in self.dataset:
