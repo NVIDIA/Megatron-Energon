@@ -21,7 +21,9 @@ These three concepts serve different purposes:
 
 Do not derive mutable iteration state from `config()`, and do not assume a restore key is an ordinal index.
 A wrapper may add its own component to a child's restore key so that the key remains meaningful through a
-composed graph.
+composed graph. Restore keys are frozen dataclasses. Concrete key types live next to the reader,
+wrapper, or worker that creates them. A worker key carries the original worker ID, sample index,
+and the child's key. The loader requires typed keys when restoring a sample.
 
 ## `SavableDataset`
 
@@ -38,6 +40,13 @@ A complete implementation also defines:
 
 State is per worker. The loader merges or distributes worker state at its process boundary; an
 individual dataset should not invent a second global-worker aggregation scheme.
+
+With the threaded loader, entries in `_savable_fields` are worker-local as well as checkpointed.
+Use `_worker_local_fields` for transient fields such as open readers, active iterators, or caches.
+Declare a tuple of field names for copyable defaults, or use a mapping from names to factories for
+fields that need fresh initialization. Subclasses inherit their parent’s transient declarations.
+Open and release worker-owned resources using `worker_init()` and `worker_close()`. The loader keeps
+these lifecycle calls in the worker context.
 
 ## Wrapper datasets
 

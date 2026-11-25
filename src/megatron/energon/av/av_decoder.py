@@ -668,6 +668,9 @@ class AVWebdatasetDecoder:
         >>> result = decoder("video.mp4", video_bytes)
     """
 
+    av_decode: Literal["torch", "AVDecoder", "pyav"]
+    video_decode_audio: bool
+
     def __init__(
         self,
         video_decode_audio: bool,

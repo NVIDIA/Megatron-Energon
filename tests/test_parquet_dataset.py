@@ -33,6 +33,7 @@ from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.common.filter_index import FilterIndexWriter
 from megatron.energon.flavors.common.manifest.types import ShardInfo
 from megatron.energon.flavors.common.manifest.write import write_manifest_dataset_metadata
+from megatron.energon.flavors.common.sample_record import IndexedRestoreKey
 from megatron.energon.flavors.parquet.dataset import (
     DefaultParquetDatasetFactory,
     DefaultParquetShardListDatasetFactory,
@@ -44,6 +45,7 @@ from megatron.energon.flavors.parquet.prepare import (
 )
 from megatron.energon.flavors.parquet.reader import IParquetReader
 from megatron.energon.tools.prepare import command as prepare_command
+from megatron.energon.wrappers.map_dataset import MapRestoreKey
 
 
 @edataclass
@@ -533,7 +535,13 @@ class TestParquetRowGroupShuffle(unittest.TestCase):
         finally:
             wc.worker_deactivate()
         assert sorted(sample["id"] for sample in samples) == kept
-        assert sorted(sample["__restore_key__"][-1] for sample in samples) == list(range(len(kept)))
+        indices = []
+        for sample in samples:
+            key = sample["__restore_key__"]
+            assert isinstance(key, MapRestoreKey)
+            assert isinstance(key.inner, IndexedRestoreKey)
+            indices.append(key.inner.index)
+        assert sorted(indices) == list(range(len(kept)))
         assert decoded.rows <= self.ROWS
 
     def test_invalid_read_order(self):
@@ -579,19 +587,23 @@ class TestParquetRowGroupShuffle(unittest.TestCase):
                 task_encoder=ParquetIdEncoder(),
             )
 
-        with get_savable_loader(new_dataset()) as loader:
-            iterator = iter(loader)
-            first = [int(next(iterator).row_id[0]) for _ in range(5)]
-            state = loader.save_state_rank()
-            remaining = [int(next(iterator).row_id[0]) for _ in range(self.ROWS - 5)]
+        for worker_type in ("fork", "thread"):
+            with self.subTest(worker_type=worker_type):
+                with get_savable_loader(new_dataset(), worker_type=worker_type) as loader:
+                    iterator = iter(loader)
+                    first = [int(next(iterator).row_id[0]) for _ in range(5)]
+                    state = loader.save_state_rank()
+                    remaining = [int(next(iterator).row_id[0]) for _ in range(self.ROWS - 5)]
 
-        with get_savable_loader(new_dataset()) as restored_loader:
-            restored_loader.restore_state_rank(state)
-            restored_iterator = iter(restored_loader)
-            restored = [int(next(restored_iterator).row_id[0]) for _ in range(self.ROWS - 5)]
+                with get_savable_loader(new_dataset(), worker_type=worker_type) as restored_loader:
+                    restored_loader.restore_state_rank(state)
+                    restored_iterator = iter(restored_loader)
+                    restored = [
+                        int(next(restored_iterator).row_id[0]) for _ in range(self.ROWS - 5)
+                    ]
 
-        assert restored == remaining
-        assert sorted(first + remaining) == list(range(self.ROWS))
+                assert restored == remaining
+                assert sorted(first + remaining) == list(range(self.ROWS))
 
 
 class TestParquetManifestDataset(unittest.TestCase):

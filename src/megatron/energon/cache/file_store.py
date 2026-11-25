@@ -11,10 +11,13 @@ from megatron.energon.flavors.common.sqlite import ThreadLocalSqlite
 from megatron.energon.local_copy import ensure_local_copy
 from megatron.energon.media.metadata import MediaMetadataBase, deserialize_media_metadata
 from megatron.energon.source_info import SourceInfo, add_source_info
+from megatron.energon.worker_local import WorkerLocalResource
 
 
 class DecodeFileStore(FileStoreWrapper[Any]):
     """Wrap a FileStore and decode data on access."""
+
+    decoder: FileStoreDecoder
 
     def __init__(self, inner: FileStore[bytes], *, decoder: FileStoreDecoder):
         super().__init__(inner)
@@ -38,12 +41,19 @@ class DecodeFileStore(FileStoreWrapper[Any]):
         return self._inner.get_media_metadata(key)
 
 
-class SystemFileStore(FileStore[bytes]):
+class SystemFileStore(WorkerLocalResource, FileStore[bytes]):
     """A FileStore that reads files directly from the file system."""
+
+    base_dir: EPath | None
+    #: Opened lazily in the thread reading media metadata and released by close().
+    _media_metadata_reader: ThreadLocalSqlite | None
+    _media_metadata_checked: bool
+
+    _worker_local_fields = {"_media_metadata_reader": lambda: None, "_media_metadata_checked": bool}
 
     def __init__(self, base_dir: Optional[Union[EPath, str]] = None):
         self.base_dir = EPath(base_dir) if base_dir is not None else None
-        self._media_metadata_reader: Optional[ThreadLocalSqlite] = None
+        self._media_metadata_reader = None
         self._media_metadata_checked = False
 
     def __getitem__(self, key: str) -> tuple[bytes, SourceInfo]:
@@ -63,6 +73,12 @@ class SystemFileStore(FileStore[bytes]):
 
     def __str__(self):
         return f"SystemFileStore(base_dir={self.base_dir})"
+
+    def close(self) -> None:
+        reader, self._media_metadata_reader = self._media_metadata_reader, None
+        self._media_metadata_checked = False
+        if reader is not None:
+            reader.thread_close()
 
     def get_media_metadata(self, key: str) -> MediaMetadataBase:
         if self.base_dir is None:
@@ -117,6 +133,8 @@ class SystemFileStore(FileStore[bytes]):
 
 class ByteRangeStore(FileStore[bytes]):
     """A FileStore that reads byte ranges from files under a root path."""
+
+    root: EPath
 
     _KEY_SEPARATOR = "#bytes="
     _RE_KEY = re.compile(r"^(?P<path>.+)#bytes=(?P<offset>\d+):(?P<size>\d+)$")

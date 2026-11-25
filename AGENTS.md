@@ -52,8 +52,17 @@ User documentation lives in `docs/source` (Sphinx, MyST markdown).
 
 - Clean, maintainable, readable code is the bar. Follow the conventions of the surrounding
   module; match its naming, structure and comment density.
+- Declare instance fields with type annotations at class scope, including fields assigned
+  after `__init__`. Group them with related configuration, state, or resources. Keep
+  initialization at the point where the value is created.
+- Add a short field comment when the type doesn't explain ownership, lifetime, an invariant,
+  or whether state is worker-local or checkpointed.
 - Keep diffs minimal and on-topic: no drive-by refactors, reformatting or renames outside the
   task, no commented-out code.
+- Assume dataloader checkpoints are written and read by the same Energon version or Git
+  revision. Test same-version round trips and supported recipe or topology changes. Add
+  cross-version compatibility only when explicitly requested. See
+  [checkpoint version compatibility](docs/source/basic/save_restore.md#checkpoint-version-compatibility).
 - Never copy code from other repositories, packages or websites, even if it is permissively
   licensed. Everything you write must be original and contributable under this project's
   BSD-3-Clause license. If reusing third-party code seems necessary, stop and ask the human.

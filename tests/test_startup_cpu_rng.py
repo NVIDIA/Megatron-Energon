@@ -3,6 +3,7 @@
 
 import random
 import unittest
+from threading import local
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -10,7 +11,7 @@ import numpy as np
 import torch
 
 from megatron.energon.rng import SystemRng
-from megatron.energon.task_encoder.base import stateless
+from megatron.energon.task_encoder.base import DefaultTaskEncoder, stateless
 from megatron.energon.worker import WorkerConfig
 
 
@@ -40,8 +41,6 @@ class OptimizationsTest(unittest.TestCase):
 
     def test_stateless_cpu_rng_function_generator_and_exception(self):
         class Encoder:
-            current_sample_index = 7
-
             @stateless(restore_seeds=True)
             def normal(self):
                 return (torch.rand(5), np.random.rand(5), random.random())
@@ -59,7 +58,7 @@ class OptimizationsTest(unittest.TestCase):
         with patch.object(
             WorkerConfig,
             "active_worker_config",
-            SimpleNamespace(worker_seed=lambda: 42),
+            SimpleNamespace(worker_seed=lambda: 42, active_worker_invocation_index=7),
         ):
             encoder = Encoder()
             before = repr(SystemRng.save_state())
@@ -81,6 +80,21 @@ class OptimizationsTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "expected"):
                     encoder.fail()
                 self.assertEqual(before, repr(SystemRng.save_state()))
+
+    def test_task_encoder_reuses_lazy_rng_storage(self):
+        class Encoder(DefaultTaskEncoder):
+            @stateless(restore_task_encoder_seeds=True)
+            def draw(self):
+                return self.rng.random.random()
+
+        config = WorkerConfig(rank=0, world_size=1, num_workers=0)
+        config.worker_activate(sample_index=7)
+        self.addCleanup(config.worker_deactivate)
+        with patch("megatron.energon.task_encoder.base.local", wraps=local) as allocate:
+            encoder = Encoder()
+            allocate.assert_not_called()
+            self.assertEqual(encoder.draw(), encoder.draw())
+            allocate.assert_called_once_with()
 
 
 if __name__ == "__main__":

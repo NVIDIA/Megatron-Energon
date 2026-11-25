@@ -42,6 +42,8 @@ AVDecoderType = Literal["torch", "AVDecoder", "pyav"]
 class GuessingHandlerWrapper:
     """A wrapper that guesses the extension of the file using the `filetype` package."""
 
+    handler: Callable[[str, bytes], Any]
+
     def __init__(self, handler: Callable[[str, bytes], Any]):
         """
         Wraps a handler to guess the extension of the file using the `filetype` package.
@@ -81,6 +83,9 @@ class GuessingHandlerWrapper:
 
 class SampleDecoder(FileStoreDecoder):
     """Default decoder for byte-valued sample parts."""
+
+    _config: dict[str, Any]
+    _decoder: webdataset.autodecode.Decoder
 
     def __init__(
         self,

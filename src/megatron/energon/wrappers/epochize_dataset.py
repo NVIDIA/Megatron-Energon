@@ -22,6 +22,7 @@ class EpochizeDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample])
     _offset: int
 
     _savable_fields = ("_offset",)
+    _worker_local_fields = ("_active_iter",)
 
     def __init__(
         self,
@@ -46,7 +47,19 @@ class EpochizeDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sample])
         self.reset_state_own()
 
     def reset_state_own(self) -> None:
+        self._close_active_iter()
         self._offset = 0
+
+    def _close_active_iter(self) -> None:
+        iterator, self._active_iter = self._active_iter, None
+        if hasattr(iterator, "close"):
+            iterator.close()
+
+    def close(self) -> None:
+        try:
+            self._close_active_iter()
+        finally:
+            super().close()
 
     def __iter__(self) -> Iterator[T_sample]:
         # Compute the local length for this worker, i.e. all worker's lengths sum up to the total

@@ -1,12 +1,18 @@
 # Copyright (c) 2025, NVIDIA CORPORATION.
 # SPDX-License-Identifier: BSD-3-Clause
 
+from dataclasses import replace
 from typing import List, Optional
 
 import click
 import torch
 
-from megatron.energon.checkpoint import RankStateIterable, natural_sort_key
+from megatron.energon.checkpoint import RankStateIterable, natural_sort_key, resize_rank_state
+from megatron.energon.checkpoint.rank_state import (
+    validate_world_size_change,
+    without_prefetched_batches,
+)
+from megatron.energon.dataloader.dataloader import RankState
 from megatron.energon.epathlib import EPath
 from megatron.energon.savable_loader import SavableDataLoaderState
 
@@ -25,8 +31,18 @@ from megatron.energon.savable_loader import SavableDataLoaderState
 @click.option(
     "--new-world-size", type=int, help="Number of ranks to redistribute to", required=False
 )
+@click.option("--new-micro-batch-size", type=click.IntRange(min=1))
+@click.option(
+    "--discard-prefetched-batches",
+    is_flag=True,
+    help="Skip undelivered custom-loader batches when changing the world size.",
+)
 def command_redist(
-    input_files: List[EPath], output_path: EPath, new_world_size: Optional[int] = None
+    input_files: List[EPath],
+    output_path: EPath,
+    new_world_size: Optional[int] = None,
+    new_micro_batch_size: Optional[int] = None,
+    discard_prefetched_batches: bool = False,
 ):
     """Redistribute a checkpoint.
 
@@ -62,8 +78,10 @@ def command_redist(
     )
     new_workers_per_rank = total_num_workers // new_world_size
 
-    # Ensure output directory exists
-    output_path.mkdir(exist_ok=True, parents=True)
+    if discard_prefetched_batches and new_world_size != rsi.get_num_ranks():
+        for rank, state in enumerate(rsi.rank_states):
+            if isinstance(state, RankState):
+                rsi.rank_states[rank] = without_prefetched_batches(state, rank)
 
     new_rank_states = [list() for _ in range(new_world_size)]
     rsi_iter = iter(rsi)
@@ -76,16 +94,55 @@ def command_redist(
         len(new_rank_states[0]) == len(new_rank_states[rank]) for rank in range(1, new_world_size)
     ), "All ranks must have the same number of workers, also for the new distribution."
 
-    new_states = [
-        SavableDataLoaderState(
-            worker_states=new_rank_state,
-            next_worker_id=0,  # Reset the next worker ID
-            micro_batch_size=rsi.get_micro_batch_size(),
-        )
-        for new_rank_state in new_rank_states
-    ]
+    old_size = rsi.get_micro_batch_size()
+    batch_size = old_size if new_micro_batch_size is None else new_micro_batch_size
+    if isinstance(rsi.rank_states[0], RankState):
+        try:
+            if new_world_size == rsi.get_num_ranks():
+                new_states = [resize_rank_state(state, batch_size) for state in rsi.rank_states]
+            else:
+                for state in rsi.rank_states:
+                    validate_world_size_change(state)
+                template = rsi.rank_states[0]
+                if any(
+                    (state.micro_batch_size, state.grouped_batch_config)
+                    != (template.micro_batch_size, template.grouped_batch_config)
+                    for state in rsi.rank_states
+                ):
+                    raise ValueError("Checkpoint ranks have different batch configurations")
+                new_states = [
+                    resize_rank_state(
+                        replace(
+                            template,
+                            workers=rank,
+                            next_worker_id=0,
+                        ),
+                        batch_size,
+                    )
+                    for rank in new_rank_states
+                ]
+        except ValueError as error:
+            raise click.ClickException(str(error)) from error
+    else:
+        if batch_size != old_size:
+            raise click.ClickException(
+                "Micro batch size changes require a custom loader checkpoint"
+            )
+        if new_world_size == rsi.get_num_ranks():
+            new_states = rsi.rank_states
+        else:
+            new_states = [
+                SavableDataLoaderState(
+                    worker_states=rank, next_worker_id=0, micro_batch_size=old_size
+                )
+                for rank in new_rank_states
+            ]
 
-    # Save the redistributed checkpoint
+    # torch.save needs a directory for local output paths.
+    if output_path.is_local():
+        output_path.local_path().mkdir(exist_ok=True, parents=True)
+    else:
+        output_path.mkdir(exist_ok=True, parents=True)
     if rsi.is_global_checkpoint:
         # Save as a single global checkpoint file
         output_file = output_path / input_file_list[0].name

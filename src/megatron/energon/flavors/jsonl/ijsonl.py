@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import struct
-from typing import BinaryIO, Dict, Generator, Optional, Tuple, Union
+from typing import BinaryIO, Generator, Optional, Tuple, Union
 
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
+from megatron.energon.worker_local import WorkerLocalFields
 
 IDX_SUFFIX = ".idx"
 
@@ -26,6 +27,9 @@ class IJsonlSamplePointer:
 
 
 class IJsonlIndexReader:
+    _length: int
+    ijsonl: BinaryIO
+
     def __init__(self, jsonl_path: Union[EPath, str]):
         jsonl_path = EPath(jsonl_path)
         index_path = jsonl_path.with_suffix(IDX_SUFFIX, replace=False)
@@ -90,6 +94,11 @@ class IJsonlIndexReader:
 
 
 class IJsonlIndexWriter:
+    final_name: EPath
+    ijsonl: BinaryIO
+    jsonl_path: EPath
+    tmp_name: EPath
+
     def __init__(self, jsonl_path: EPath):
         self.jsonl_path = jsonl_path
         self.final_name = jsonl_path.with_suffix(IDX_SUFFIX, replace=False)
@@ -130,7 +139,7 @@ class CacheEntry:
     lookahead_byteoffset: Optional[int] = None
 
 
-class CachedIJsonlOffsetReader:
+class CachedIJsonlOffsetReader(WorkerLocalFields):
     """
     This class is a high-level wrapper around IJsonlIndexReader that caches some
     of the recent lookups for faster access. It is designed for the case when
@@ -140,13 +149,19 @@ class CachedIJsonlOffsetReader:
         cache_size: The number of entries to keep in the cache. By default, we keep 32.
     """
 
+    cache_size: int
+    ijsonl_index_reader_cache: dict[int, CacheEntry]
+    jsonl_file: EPath
+
+    _worker_local_fields = {"ijsonl_index_reader_cache": dict}
+
     def __init__(
         self,
         jsonl_file: Union[str, EPath],
         cache_size: int = 32,
     ):
         # Maps current_offset -> CacheEntry
-        self.ijsonl_index_reader_cache: Dict[int, CacheEntry] = {}
+        self.ijsonl_index_reader_cache = {}
         self.cache_size = cache_size
         self.jsonl_file = EPath(jsonl_file)
 
@@ -289,6 +304,8 @@ class IJsonlFile:
                 for data in f:
                     json.loads(data)
     """
+
+    fileobj: BinaryIO
 
     def __init__(self, fileobj: BinaryIO):
         self.fileobj = fileobj

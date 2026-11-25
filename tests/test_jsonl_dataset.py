@@ -615,22 +615,27 @@ class TestJsonlDataset(unittest.TestCase):
         )
         self.prepare_jsonl_shard_dir(shard_dir)
 
-        loader = get_savable_loader(
-            get_train_dataset(
-                shard_dir,
-                worker_config=WorkerConfig(rank=0, world_size=1, num_workers=0, seed_offset=42),
-                batch_size=2,
-                shuffle_buffer_size=None,
-                max_samples_per_sequence=None,
-                task_encoder=SimpleCookingTaskEncoder(),
-            )
-        )
-        batches = [batch for _, batch in zip(range(4), loader)]
-        assert loader.can_restore_sample()
-        for batch in batches:
-            restored = loader.restore_sample(batch.__restore_key__)
-            assert restored.idx == batch.idx
-            assert restored.text == batch.text
+        for num_workers in (0, 2):
+            with self.subTest(num_workers=num_workers):
+                with get_savable_loader(
+                    get_train_dataset(
+                        shard_dir,
+                        worker_config=WorkerConfig(
+                            rank=0, world_size=1, num_workers=num_workers, seed_offset=42
+                        ),
+                        batch_size=2,
+                        shuffle_buffer_size=None,
+                        max_samples_per_sequence=None,
+                        task_encoder=SimpleCookingTaskEncoder(),
+                    ),
+                    worker_type="thread",
+                ) as loader:
+                    batches = [batch for _, batch in zip(range(4), loader)]
+                    assert loader.can_restore_sample()
+                    for batch in batches:
+                        restored = loader.restore_sample(batch.__restore_key__)
+                        assert restored.idx == batch.idx
+                        assert restored.text == batch.text
 
     def test_prepare_prefers_tars_over_jsonl_files(self):
         mixed_dir = self.dataset_path / "tars_with_jsonl"

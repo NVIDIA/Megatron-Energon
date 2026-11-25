@@ -3,19 +3,36 @@
 
 from bisect import bisect_right
 from collections import OrderedDict
-from typing import Any, Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 from megatron.energon.cache import FileStore
 from megatron.energon.epathlib import EPath
 from megatron.energon.flavors.common.manifest.types import ShardInfo
 from megatron.energon.flavors.common.reader import IndexedSampleReader
-from megatron.energon.flavors.common.sample_record import FilteredSample
+from megatron.energon.flavors.common.sample_record import FilteredSample, IndexedRestoreKey
 from megatron.energon.flavors.jsonl.ijsonl import IJsonlIndexReader
 from megatron.energon.source_info import SourceInfo
+from megatron.energon.worker_local import WorkerLocalResource
+
+if TYPE_CHECKING:
+    from megatron.energon.flavors.jsonl.ijsonl_reader import IJsonlReader
 
 
-class MultiJsonlReader(IndexedSampleReader[FilteredSample]):
+class MultiJsonlReader(WorkerLocalResource, IndexedSampleReader[FilteredSample]):
     """Random-access reader over a prepared logical dataset of JSONL shards."""
+
+    #: Exclusive end row of each shard in the shared dataset index.
+    cumulative_counts: list[int]
+    #: Per-thread validation and reader cache for JSONL shards opened on demand.
+    _validated_shards: set[int]
+    _readers: OrderedDict[int, "IJsonlReader"]
+    path: EPath
+    shards: list[ShardInfo]
+    index_cache_size: int
+    reader_cache_size: int
+    part_filter: Callable[[str], bool] | None
+
+    _worker_local_fields = {"_validated_shards": set, "_readers": OrderedDict}
 
     def __init__(
         self,
@@ -33,13 +50,13 @@ class MultiJsonlReader(IndexedSampleReader[FilteredSample]):
         self.reader_cache_size = reader_cache_size
         self.part_filter = part_filter
         # Counts come from the manifest; shard indexes are only opened when a shard is first read.
-        self.cumulative_counts: list[int] = []
+        self.cumulative_counts = []
         running = 0
         for shard in shards:
             running += shard.count
             self.cumulative_counts.append(running)
-        self._validated_shards: set[int] = set()
-        self._readers: OrderedDict[int, Any] = OrderedDict()
+        self._validated_shards = set()
+        self._readers = OrderedDict()
 
     def __len__(self) -> int:
         return self.cumulative_counts[-1] if self.cumulative_counts else 0
@@ -101,7 +118,7 @@ class MultiJsonlReader(IndexedSampleReader[FilteredSample]):
         sample["__key__"] = str(global_idx)
         sample["__shard__"] = shard_name
         # Must match the restore_key_kind of the DatasetSampler built by the factory.
-        sample["__restore_key__"] = ("Webdataset", global_idx)
+        sample["__restore_key__"] = IndexedRestoreKey(kind="Webdataset", index=global_idx)
         sample["__sources__"] = (
             SourceInfo(
                 dataset_path=str(self.path),
@@ -143,6 +160,9 @@ class MultiJsonlReader(IndexedSampleReader[FilteredSample]):
 class MultiJsonlFileStore(FileStore[bytes]):
     """FileStore view over a prepared logical dataset of JSONL shards."""
 
+    path: EPath
+    reader: MultiJsonlReader
+
     def __init__(
         self,
         path: EPath,
@@ -169,3 +189,6 @@ class MultiJsonlFileStore(FileStore[bytes]):
 
     def close(self) -> None:
         self.reader.close()
+
+    def worker_close(self) -> None:
+        self.reader.worker_close()

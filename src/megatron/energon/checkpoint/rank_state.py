@@ -2,12 +2,152 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import re
-from typing import List
+import warnings
+from dataclasses import replace
+from typing import Callable, List
 
 import torch
 
+from megatron.energon.dataloader.dataloader import RankState
 from megatron.energon.epathlib import EPath
+from megatron.energon.flavors.base_dataset import RestoreKey
 from megatron.energon.savable_loader import SavableDataLoaderState
+from megatron.energon.state import FlexState
+from megatron.energon.wrappers.base import WrappedRestoreKey
+from megatron.energon.wrappers.batch_dataset import BatchGenRestoreKey, BatchRestoreKey
+from megatron.energon.wrappers.iter_map_dataset import IterMapRestoreKey
+from megatron.energon.wrappers.map_dataset import MapGenRestoreKey
+
+
+def _split_batch_restore_key(
+    key: RestoreKey | None, batch_size: int, *, drop_last: bool = False
+) -> list[RestoreKey]:
+    if batch_size < 1:
+        raise ValueError("The target batch size must be positive")
+    if key is None:
+        raise ValueError("Cannot split a batch without a restore key")
+    if isinstance(key, (BatchGenRestoreKey, MapGenRestoreKey, IterMapRestoreKey)):
+        raise ValueError("Cannot resize a checkpoint with prefetched generator batches")
+    if isinstance(key, BatchRestoreKey):
+        samples = key.inner
+        if not samples:
+            raise ValueError("Cannot split an empty batch restore key")
+        stop = len(samples) - len(samples) % batch_size if drop_last else len(samples)
+        return [
+            replace(key, inner=samples[start : start + batch_size])
+            for start in range(0, stop, batch_size)
+        ]
+    if isinstance(key, WrappedRestoreKey):
+        return [
+            replace(key, inner=inner)
+            for inner in _split_batch_restore_key(key.inner, batch_size, drop_last=drop_last)
+        ]
+    raise ValueError(f"Unsupported restore key type for splitting batch: {type(key).__name__}")
+
+
+def _is_short_batch(key: RestoreKey, batch_size: int) -> bool:
+    while isinstance(key, WrappedRestoreKey):
+        if isinstance(key, MapGenRestoreKey):
+            return False
+        key = key.inner
+    return (
+        isinstance(key, BatchRestoreKey)
+        and not isinstance(key, BatchGenRestoreKey)
+        and len(key.inner) < batch_size
+    )
+
+
+def _has_pending_generator_batch(state: FlexState) -> bool:
+    if state.get("__class__") == "BatchDataset" and state.get("_generator_sample_keys") is not None:
+        return True
+    key = state.get("_generator_sample_key")
+    while isinstance(key, WrappedRestoreKey):
+        key = key.inner
+    if isinstance(key, BatchRestoreKey):
+        return True
+    return any(_has_pending_generator_batch(child) for child in state.get("datasets", ()))
+
+
+def _has_pending_generator_output(state: FlexState) -> bool:
+    return state.get("_generator_offset") is not None or any(
+        _has_pending_generator_output(child) for child in state.get("datasets", ())
+    )
+
+
+def without_prefetched_batches(state: RankState, rank: int) -> RankState:
+    """Keep worker progress and skip the batches still queued for this rank."""
+    count = sum(len(keys) for keys in state.prefetched_restore_keys)
+    if not count:
+        return state
+    warnings.warn(f"Discarding {count} prefetched batches from rank {rank}", stacklevel=2)
+    return replace(
+        state, workers=[replace(worker, prefetched_restore_keys=[]) for worker in state.workers]
+    )
+
+
+def validate_world_size_change(state: RankState) -> None:
+    """Reject replay of outputs that were started under a different worker layout."""
+    if any(state.prefetched_restore_keys):
+        raise ValueError(
+            "Cannot change the world size with pending prefetched samples. "
+            "Save with prefetch_factor=0 or pass --discard-prefetched-batches."
+        )
+    if any(
+        worker is not None and _has_pending_generator_output(worker.dataset)
+        for worker in state.worker_states
+    ):
+        raise ValueError("Cannot change the world size with an in-progress generator output.")
+
+
+def resize_rank_state(
+    state: RankState, batch_size: int | None, *, drop_last: bool = False
+) -> RankState:
+    """Resize pending batch keys while preserving the worker snapshots."""
+    old_size = state.micro_batch_size
+    if old_size == batch_size:
+        if not drop_last or batch_size is None:
+            return state
+        return replace(
+            state,
+            workers=[
+                replace(
+                    worker,
+                    prefetched_restore_keys=[
+                        key
+                        for key in worker.prefetched_restore_keys
+                        if not _is_short_batch(key, batch_size)
+                    ],
+                )
+                for worker in state.workers
+            ],
+        )
+    if (
+        old_size is None
+        or batch_size is None
+        or not 0 < batch_size < old_size
+        or old_size % batch_size
+    ):
+        raise ValueError("The target micro-batch size must be a smaller divisor of the saved size")
+    if any(
+        worker is not None and _has_pending_generator_batch(worker.dataset)
+        for worker in state.worker_states
+    ):
+        raise ValueError("Cannot resize a checkpoint with an in-progress generator batch")
+    return replace(
+        state,
+        micro_batch_size=batch_size,
+        workers=[
+            replace(
+                worker,
+                prefetched_restore_keys=[
+                    piece
+                    for key in worker.prefetched_restore_keys
+                    for piece in _split_batch_restore_key(key, batch_size, drop_last=drop_last)
+                ],
+            )
+            for worker in state.workers
+        ],
+    )
 
 
 def natural_sort_key(s):
@@ -92,10 +232,24 @@ def detect_and_replicate_pattern(file_list):
 class RankStateIterable:
     """Iterates the SavableDatasetCheckpoints of multiple ranks in a round-robin fashion."""
 
+    file_pattern_func: Callable[[int], str]
+    is_global_checkpoint: bool
+    megatron_style: bool
+    num_states: int
+    rank_cur_worker: list[int]
+    rank_num_workers: list[int]
+    #: Checkpoints produced by either loader implementation, in rank order.
+    rank_states: list[SavableDataLoaderState | RankState]
+    rank_worker_offset: list[int]
+
     def __init__(self, state_files: List[EPath]):
         state_file_names = [state_file.name for state_file in state_files]
 
-        self.file_pattern_func = detect_and_replicate_pattern(state_file_names)
+        self.file_pattern_func = (
+            (lambda rank: str(rank) + "-" + state_file_names[0])
+            if len(state_files) == 1
+            else detect_and_replicate_pattern(state_file_names)
+        )
         self.num_states = len(state_files)
 
         first_state = torch.load(str(state_files[0]), weights_only=False)
@@ -106,7 +260,7 @@ class RankStateIterable:
         else:
             self.megatron_style = False
 
-        if isinstance(first_state, SavableDataLoaderState):
+        if isinstance(first_state, (SavableDataLoaderState, RankState)):
             if self.megatron_style:
                 self.rank_states = [first_state] + [
                     torch.load(str(state_file), weights_only=False)["dataloader_state_dict"]
@@ -120,7 +274,7 @@ class RankStateIterable:
             self.is_global_checkpoint = False
         elif isinstance(first_state, list):
             assert len(state_files) == 1, "Global checkpoint must contain exactly one file"
-            assert all(isinstance(state, SavableDataLoaderState) for state in first_state)
+            assert first_state and all(type(state) is type(first_state[0]) for state in first_state)
             self.rank_states = first_state
             self.is_global_checkpoint = True
         else:
@@ -135,7 +289,7 @@ class RankStateIterable:
         ), "All ranks must have the same number of workers."
 
     def write_new_states_to_folder(
-        self, output_folder: EPath, new_states: List[SavableDataLoaderState]
+        self, output_folder: EPath, new_states: List[SavableDataLoaderState | RankState]
     ):
         for rank_idx, rank_state in enumerate(new_states):
             output_file = output_folder / self.file_pattern_func(rank_idx)
@@ -158,6 +312,8 @@ class RankStateIterable:
 
     def __iter__(self):
         """Iterates the SavableDatasetCheckpoints of multiple ranks in a round-robin fashion."""
-        for rank, state in enumerate(self.rank_states):
-            for worker_state in state.worker_states:
-                yield worker_state
+        for state in self.rank_states:
+            if isinstance(state, RankState):
+                yield from state.workers
+            else:
+                yield from state.worker_states

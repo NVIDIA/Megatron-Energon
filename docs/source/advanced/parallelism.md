@@ -101,11 +101,6 @@ if data_parallel_rank is not None:
         # E.g. save to disk with torch
         torch.save(state, f"dataloader_rank{data_parallel_rank}.pt")
 
-        # Alternatively, save once for the whole dp group:
-        # state = loader.save_state_global(global_dst_rank=0)
-        # if state is not None:
-        #     torch.save(state, "dataloader.pt")
-
 
 # ... when loading:
 if data_parallel_rank is not None:
@@ -121,20 +116,8 @@ if data_parallel_rank is not None:
     ))
 
     # E.g. load from disk as saved above
-    state = torch.load(f"dataloader_rank{data_parallel_rank}.pt")
+    state = torch.load(f"dataloader_rank{data_parallel_rank}.pt", weights_only=False)
     # Restore the state
     loader.restore_state_rank(state)
-
-    # Alternatively, when using a global checkpoint,
-    # load the checkpoint from disk on every dp rank:
-    # state = torch.load("dataloader.pt")
-    # loader.restore_state_global(state)
-
-    # Or load only once from disk for each dp group:
-    # if data_parallel_rank == 0:
-    #     state = torch.load("dataloader.pt")
-    # else:
-    #     state = None
-    # loader.restore_state_global(state, src_rank=0)
 
 ```

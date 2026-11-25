@@ -8,9 +8,11 @@ import json
 import warnings
 from collections import Counter
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Iterator
 
+from megatron.energon.checkpoint.rank_state import without_prefetched_batches
+from megatron.energon.dataloader.dataloader import DataLoader, RankState
 from megatron.energon.flavors.base_dataset import FlexState, SavableDataset
 from megatron.energon.rng import WorkerRng
 from megatron.energon.savable import Savable
@@ -151,8 +153,10 @@ def _metadata_for_dataset(dataset: SavableDataset[Any]) -> ResumeDatasetMetadata
 
 
 def _dataloader_root_dataset(
-    dataloader_or_dataset: SavableDataLoader[object] | SavableDataset[object],
+    dataloader_or_dataset: DataLoader[object] | SavableDataLoader[object] | SavableDataset[object],
 ) -> SavableDataset[object]:
+    if isinstance(dataloader_or_dataset, DataLoader):
+        return dataloader_or_dataset.dataset
     if isinstance(dataloader_or_dataset, SavableDataLoader):
         dataset = dataloader_or_dataset.dataset
         if isinstance(dataset, SavableDatasetWrapper):
@@ -166,7 +170,7 @@ def _dataloader_root_dataset(
 
 
 def collect_resume_metadata(
-    loader_or_dataset: SavableDataLoader[object] | SavableDataset[object],
+    loader_or_dataset: DataLoader[object] | SavableDataLoader[object] | SavableDataset[object],
 ) -> ResumeMetadata:
     """Collect checkpoint resume metadata from a dataloader or runtime dataset tree."""
 
@@ -321,10 +325,12 @@ def _warn_lost_progress(lost: set[str]) -> None:
 
 
 def migrate_dataloader_state(
-    dataloader: SavableDataLoader[Any],
-    saved_state: SavableDataLoaderState | None,
+    dataloader: DataLoader[Any] | SavableDataLoader[Any],
+    saved_state: RankState | SavableDataLoaderState | None,
     saved_metadata: ResumeMetadata | dict[str, Any],
-) -> SavableDataLoaderState | None:
+    *,
+    discard_prefetched_batches: bool = False,
+) -> RankState | SavableDataLoaderState | None:
     """Build a state for the loader of a changed recipe, reusing the saved dataset progress.
 
     The supported recipe changes are adding datasets and setting the weight of datasets to 0.
@@ -336,6 +342,7 @@ def migrate_dataloader_state(
         saved_state: The state saved by ``save_state_rank`` of the previous loader. May be None,
             if that loader had nothing to save yet.
         saved_metadata: The resume metadata collected from the previous loader.
+        discard_prefetched_batches: Skip undelivered custom-loader batches if the recipe changes.
 
     Returns:
         The state to pass to ``restore_state_rank`` of the given loader. None, if no state was
@@ -345,6 +352,11 @@ def migrate_dataloader_state(
     if saved_state is None:
         return None
 
+    is_custom_loader = isinstance(dataloader, DataLoader)
+    expected_type = RankState if is_custom_loader else SavableDataLoaderState
+    if not isinstance(saved_state, expected_type):
+        raise TypeError("The checkpoint and target dataloader must use the same format")
+
     root = _dataloader_root_dataset(dataloader)
     saved_root_meta = _normalize_metadata(saved_metadata).root
     current_root_meta = collect_resume_metadata(root).root
@@ -352,22 +364,55 @@ def migrate_dataloader_state(
     expected = set(_datasets(current_root_meta)) & set(_datasets(saved_root_meta))
     lost: set[str] = set()
 
-    def migrate(saved_dataset_state: FlexState) -> FlexState:
+    def migrate(saved_dataset_state: FlexState, exhausted: bool = False) -> tuple[FlexState, bool]:
         saved_nodes: _SavedNodes = {}
-        _index_saved_nodes(saved_dataset_state, saved_root_meta, saved_nodes)
+        _index_saved_nodes(saved_dataset_state, saved_root_meta, saved_nodes, exhausted)
         retained: set[str] = set()
-        migrated_dataset_state, _ = _migrate_dataset_state(
+        migrated_dataset_state, migrated_exhausted = _migrate_dataset_state(
             root, current_root_meta, current_hashes, saved_nodes, retained
         )
         lost.update(expected - retained)
-        return migrated_dataset_state
+        return migrated_dataset_state, migrated_exhausted
+
+    if isinstance(saved_state, RankState):
+        if len(saved_state.worker_states) != max(1, dataloader.num_workers):
+            raise ValueError("Checkpoint migration requires the same number of workers")
+        if current_root_meta == saved_root_meta:
+            return deepcopy(saved_state)
+        if discard_prefetched_batches:
+            saved_state = without_prefetched_batches(saved_state, root.worker_config.rank)
+        elif any(saved_state.prefetched_restore_keys):
+            raise ValueError(
+                "Cannot migrate pending prefetched batches after a recipe change; "
+                "use prefetch_factor=0 on the source loader or pass discard_prefetched_batches=True"
+            )
+        workers = []
+        for checkpoint in saved_state.workers:
+            worker = checkpoint.state
+            if worker is None:
+                workers.append(checkpoint)
+                continue
+            dataset, exhausted = migrate(worker.dataset, worker.exhausted)
+            workers.append(
+                replace(
+                    checkpoint,
+                    state=replace(worker, dataset=dataset, exhausted=exhausted),
+                    observed_eof=exhausted,
+                )
+            )
+        _warn_lost_progress(lost)
+        return replace(
+            saved_state,
+            workers=workers,
+            micro_batch_size=dataloader.micro_batch_size,
+        )
 
     migrated_worker_states: list[FlexState] = []
 
     if dataloader.num_workers == 0:
         assert len(saved_state.worker_states) == 1
         saved_root_state = saved_state.worker_states[0]
-        migrated_root_state = migrate(saved_root_state)
+        migrated_root_state, _ = migrate(saved_root_state)
         # As for worker processes, the sample index of the loader does not depend on the dataset
         # tree and continues.
         migrated_root_state["_sample_index"] = saved_root_state["_sample_index"]
@@ -378,7 +423,7 @@ def migrate_dataloader_state(
             if worker_state.state is None:
                 migrated_worker_states.append(worker_state)
                 continue
-            migrated_dataset_state = migrate(worker_state.state.dataset_state)
+            migrated_dataset_state, _ = migrate(worker_state.state.dataset_state)
             migrated_worker_states.append(
                 SavableDatasetCheckpoint(
                     state=SavableDatasetState(

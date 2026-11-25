@@ -148,6 +148,13 @@ class SampleLoaderYieldLogLine(TypedDict):
 class AutosizingHeatmapWriter:
     """Writes a heatmap, automatically resizing it if necessary."""
 
+    colors_size: int
+    heatmap: np.ndarray
+    heatmap_sample_factor: int
+    heatmap_sample_max: int
+    heatmap_step_factor: int
+    heatmap_step_max: int
+
     def __init__(self, heatmap_samples: int, heatmap_steps: int, colorize: bool = True):
         self.heatmap = np.zeros((heatmap_samples, heatmap_steps, 3), dtype=np.int32)
         self.heatmap_sample_factor = 1
@@ -442,7 +449,7 @@ def command(
 
 
 class LoaderInitLogLine(TypedDict):
-    t: Literal["SavableLoader.__init__", "BasicDataLoader.__init__"]
+    t: Literal["SavableLoader.__init__", "BasicDataLoader.__init__", "DataLoader.__init__"]
     r: int
     w: None
     id: int
@@ -486,9 +493,14 @@ LoaderLines = Union[
     LoaderStopLogLine,
 ]
 
-LOADER_LOG_LINE_TYPES_T = (
+LOADER_INIT_LOG_LINE_TYPES = (
     "SavableLoader.__init__",
     "BasicDataLoader.__init__",
+    "DataLoader.__init__",
+)
+
+LOADER_LOG_LINE_TYPES_T = (
+    *LOADER_INIT_LOG_LINE_TYPES,
     "SavableDataLoader.iter",
     "BasicDataLoader.iter",
     "SavableDataLoader.yield",
@@ -507,6 +519,9 @@ class LoaderInfo:
 
 
 class LoaderLogIter:
+    _path: Path
+    _start_idx: int
+
     def __init__(self, path: Path, start_idx: int = 0):
         self._path = path
         self._start_idx = start_idx
@@ -553,13 +568,12 @@ class LoaderLogIter:
         loaders = {}
         for log_line in self._iter_log_lines(
             (
-                "SavableLoader.__init__",
-                "BasicDataLoader.__init__",
+                *LOADER_INIT_LOG_LINE_TYPES,
                 "SavableDataLoader.yield",
                 "BasicDataLoader.yield",
             )
         ):
-            if log_line["t"] in ("SavableLoader.__init__", "BasicDataLoader.__init__"):
+            if log_line["t"] in LOADER_INIT_LOG_LINE_TYPES:
                 loaders[log_line["id"]] = LoaderInfo(
                     id=log_line["id"],
                     modality=self._find_config_modality(log_line["config"]),
