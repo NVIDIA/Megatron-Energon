@@ -9,10 +9,12 @@ import warnings
 from collections import Counter
 from copy import deepcopy
 from dataclasses import dataclass, replace
-from typing import Any, Iterator
+from typing import Any, Iterable, Iterator, Mapping
 
 from megatron.energon.checkpoint.rank_state import without_prefetched_batches
 from megatron.energon.dataloader.dataloader import DataLoader, RankState
+from megatron.energon.dataloader.logical import LogicalCheckpoint
+from megatron.energon.dataloader.workers.base_worker import WorkerState
 from megatron.energon.flavors.base_dataset import FlexState, SavableDataset
 from megatron.energon.rng import WorkerRng
 from megatron.energon.savable import Savable
@@ -27,11 +29,15 @@ from megatron.energon.savable_loader import (
 from megatron.energon.wrappers.base import BaseWrapperDataset
 from megatron.energon.wrappers.blend_dataset import BlendDataset
 from megatron.energon.wrappers.group_batch_dataset import GroupBatchDataset
+from megatron.energon.wrappers.stride_dataset import StrideDataset
 
 RESUME_METADATA_VERSION = 1
 
 #: Saved states by config hash, paired with whether the output finished this pass.
 _SavedNodes = dict[str, list[tuple[FlexState, bool]]]
+
+#: The checkpoints of ``save_state_logical_rank`` by logical ID, as a mapping or as pairs.
+LogicalCheckpoints = Mapping[int, LogicalCheckpoint] | Iterable[tuple[int, LogicalCheckpoint]]
 
 
 @dataclass(frozen=True)
@@ -309,6 +315,19 @@ def _migrate_dataset_state(
     return state, False
 
 
+def _logical_stream(
+    meta: ResumeDatasetMetadata, dataset: SavableDataset[Any] | None = None
+) -> tuple[ResumeDatasetMetadata, SavableDataset[Any] | None]:
+    """Descend through the backend wrappers to the stream which logical checkpoints hold."""
+    while meta.type != StrideDataset.__name__:
+        if len(meta.children) != 1:
+            raise ValueError("Logical checkpoints require an explicit logical_workers count")
+        (meta,) = meta.children
+        if dataset is not None:
+            (dataset,) = dataset.datasets
+    return meta, dataset
+
+
 def _warn_lost_progress(lost: set[str]) -> None:
     if not lost:
         return
@@ -326,40 +345,48 @@ def _warn_lost_progress(lost: set[str]) -> None:
 
 def migrate_dataloader_state(
     dataloader: DataLoader[Any] | SavableDataLoader[Any],
-    saved_state: RankState | SavableDataLoaderState | None,
+    saved_state: RankState | SavableDataLoaderState | LogicalCheckpoints | None,
     saved_metadata: ResumeMetadata | dict[str, Any],
     *,
     discard_prefetched_batches: bool = False,
-) -> RankState | SavableDataLoaderState | None:
+) -> RankState | SavableDataLoaderState | dict[int, LogicalCheckpoint] | None:
     """Build a state for the loader of a changed recipe, reusing the saved dataset progress.
 
     The supported recipe changes are adding datasets and setting the weight of datasets to 0.
     Emits a :class:`UserWarning` naming the datasets which are still part of the recipe, but whose
     saved progress could not be reused.
 
+    Physical workers sharing a logical stream each save their own position in it. Migrate their
+    logical checkpoints, which hold the consumed progress of the whole stream.
+
     Args:
         dataloader: The newly constructed loader to migrate the state to.
-        saved_state: The state saved by ``save_state_rank`` of the previous loader. May be None,
-            if that loader had nothing to save yet.
+        saved_state: The state saved by ``save_state_rank`` of the previous loader, or the
+            checkpoints saved by ``save_state_logical_rank``. May be None, if that loader had
+            nothing to save yet.
         saved_metadata: The resume metadata collected from the previous loader.
         discard_prefetched_batches: Skip undelivered custom-loader batches if the recipe changes.
 
     Returns:
-        The state to pass to ``restore_state_rank`` of the given loader. None, if no state was
-        saved.
+        The state to pass to ``restore_state_rank`` of the given loader, or the checkpoints to
+        pass to its ``restore_state_logical_rank``. None, if no state was saved.
     """
 
     if saved_state is None:
         return None
 
     is_custom_loader = isinstance(dataloader, DataLoader)
+    is_logical = is_custom_loader and isinstance(saved_state, (dict, tuple, list))
     expected_type = RankState if is_custom_loader else SavableDataLoaderState
-    if not isinstance(saved_state, expected_type):
+    if not is_logical and not isinstance(saved_state, expected_type):
         raise TypeError("The checkpoint and target dataloader must use the same format")
 
     root = _dataloader_root_dataset(dataloader)
     saved_root_meta = _normalize_metadata(saved_metadata).root
     current_root_meta = collect_resume_metadata(root).root
+    if is_logical:
+        saved_root_meta, _ = _logical_stream(saved_root_meta)
+        current_root_meta, root = _logical_stream(current_root_meta, root)
     current_hashes = Counter(_matchable_hashes(current_root_meta))
     expected = set(_datasets(current_root_meta)) & set(_datasets(saved_root_meta))
     lost: set[str] = set()
@@ -374,11 +401,39 @@ def migrate_dataloader_state(
         lost.update(expected - retained)
         return migrated_dataset_state, migrated_exhausted
 
+    def migrate_worker(worker: WorkerState) -> WorkerState:
+        dataset, exhausted = migrate(worker.dataset, worker.exhausted)
+        return replace(worker, dataset=dataset, exhausted=exhausted)
+
+    def migrate_checkpoint(checkpoint):
+        """Migrate the checkpoint of a worker or of a logical stream."""
+        if checkpoint.state is None:
+            return checkpoint
+        worker = migrate_worker(checkpoint.state)
+        return replace(checkpoint, state=worker, observed_eof=worker.exhausted)
+
+    if is_logical:
+        checkpoints = dict(saved_state)
+        if current_root_meta == saved_root_meta:
+            return deepcopy(checkpoints)
+        checkpoints = {
+            logical_id: migrate_checkpoint(checkpoint)
+            for logical_id, checkpoint in checkpoints.items()
+        }
+        _warn_lost_progress(lost)
+        return checkpoints
+
     if isinstance(saved_state, RankState):
         if len(saved_state.worker_states) != max(1, dataloader.num_workers):
             raise ValueError("Checkpoint migration requires the same number of workers")
         if current_root_meta == saved_root_meta:
             return deepcopy(saved_state)
+        worker_config = root.worker_config
+        if worker_config.physical_worker_count() != worker_config.logical_worker_count():
+            raise ValueError(
+                "Cannot migrate the rank checkpoint of workers sharing a logical stream after a "
+                "recipe change; pass the checkpoints of save_state_logical_rank() instead"
+            )
         if discard_prefetched_batches:
             saved_state = without_prefetched_batches(saved_state, root.worker_config.rank)
         elif any(saved_state.prefetched_restore_keys):
@@ -388,27 +443,14 @@ def migrate_dataloader_state(
             )
         workers = []
         for checkpoint in saved_state.workers:
-            worker = checkpoint.state
-            if worker is None:
-                workers.append(checkpoint)
-                continue
-            dataset, exhausted = migrate(worker.dataset, worker.exhausted)
-            history = None
+            checkpoint = migrate_checkpoint(checkpoint)
             if checkpoint.history is not None:
-                history = {}
-                for index, previous in checkpoint.history.items():
-                    dataset_state, was_exhausted = migrate(previous.dataset, previous.exhausted)
-                    history[index] = replace(
-                        previous, dataset=dataset_state, exhausted=was_exhausted
-                    )
-            workers.append(
-                replace(
-                    checkpoint,
-                    state=replace(worker, dataset=dataset, exhausted=exhausted),
-                    history=history,
-                    observed_eof=exhausted,
-                )
-            )
+                history = {
+                    index: migrate_worker(previous)
+                    for index, previous in checkpoint.history.items()
+                }
+                checkpoint = replace(checkpoint, history=history)
+            workers.append(checkpoint)
         _warn_lost_progress(lost)
         return replace(
             saved_state,

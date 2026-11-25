@@ -237,8 +237,23 @@ checkpoint; its owning rank can change after every delivered batch. Call
 All ranks must have matching delivered counts and boundary phases. Prefetch does not count
 as delivery. Initial saves and saves partway through a worker round are supported.
 
-For recipe migration with explicit logical workers, save with `prefetch_factor=0`.
-Discarding queued batches independently can break the shared logical stream's delivery order.
+To change the recipe while several physical workers share a logical stream, pass the
+logical checkpoints to `migrate_dataloader_state()`. It rejects the rank checkpoint of
+these workers, because each of them saves its own position in the stream:
+
+```python
+states = dict(loader.save_state_logical_rank())
+metadata = collect_resume_metadata(loader)
+
+# Build a loader of the changed recipe with the same physical topology.
+states = migrate_dataloader_state(new_loader, states, metadata)
+new_loader.restore_state_logical_rank(states)
+```
+
+Pass the metadata collected on the same rank. Logical checkpoints hold no undelivered
+batches, so the source loader may prefetch. Change the physical topology in a separate
+logical restore. A rank checkpoint with explicit logical workers cannot discard prefetched
+batches; save it with `prefetch_factor=0`, or migrate the logical checkpoints.
 
 For a single checkpoint file, gather the per-rank contributions in the training framework
 and save the combined mapping by logical ID.
