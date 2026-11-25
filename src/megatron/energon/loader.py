@@ -24,9 +24,6 @@ def get_savable_loader(
     *,
     worker_config: Optional[WorkerConfig] = None,
     worker_type: Literal["fork", "thread"] | type[DataLoaderWorker] = "fork",
-    checkpoint_every_sec: Optional[float] = None,
-    checkpoint_every_min_n_samples: Optional[int] = None,
-    n_checkpoints: Optional[int] = None,
     gc_freeze_at_start: bool = True,
     gc_collect_every_n_steps: int = GC_DEFAULT_EVERY_N_ITER,
     prefetch_factor: int = 2,
@@ -47,9 +44,6 @@ def get_savable_loader(
         worker_config: Deprecated. Please pass this to the dataset instead.
         worker_type: Use "fork" (default) for processes, "thread" for threads, or a concrete
             worker class. Set ``WorkerConfig.num_workers=0`` to iterate in the calling process.
-        checkpoint_every_sec: Deprecated compatibility argument; ignored by the custom loader.
-        checkpoint_every_min_n_samples: Deprecated compatibility argument; ignored by the custom loader.
-        n_checkpoints: Deprecated compatibility argument; ignored by the custom loader.
         gc_freeze_at_start: If True, the garbage collector is frozen at the start of the loader.
         gc_collect_every_n_steps: The number of steps after which the garbage collector is called.
         prefetch_factor: Number of pending samples per worker. Use zero for recipe migration.

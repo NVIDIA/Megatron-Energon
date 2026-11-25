@@ -1666,8 +1666,6 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
                 task_encoder=TestTaskEncoder(),
             ),
-            checkpoint_every_min_n_samples=1,
-            checkpoint_every_sec=0,
         )
 
         samples_r0 = list(loader_r0)
@@ -1696,8 +1694,6 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
                 task_encoder=TestTaskEncoder(),
             ),
-            checkpoint_every_min_n_samples=1,
-            checkpoint_every_sec=0,
         )
 
         loader_r0.restore_state_rank(rank_state_r0)
@@ -2084,8 +2080,6 @@ class TestDataset(unittest.TestCase):
                     max_samples_per_sequence=None,
                     task_encoder=TestTaskEncoder(),
                 ),
-                checkpoint_every_min_n_samples=1,
-                checkpoint_every_sec=0,
             )
 
         loader = build_loader()
@@ -2185,8 +2179,6 @@ class TestDataset(unittest.TestCase):
                             repeat=repeat,
                             task_encoder=TripletTaskEncoder(),
                         ),
-                        checkpoint_every_min_n_samples=1,
-                        checkpoint_every_sec=0,
                     )
 
                 with build_loader() as loader:
@@ -2382,8 +2374,6 @@ class TestDataset(unittest.TestCase):
                     max_samples_per_sequence=None,
                     task_encoder=TestTaskEncoder(),
                 ),
-                checkpoint_every_min_n_samples=1,
-                checkpoint_every_sec=0,
             )
 
         loader = build_loader()
@@ -2524,8 +2514,6 @@ class TestDataset(unittest.TestCase):
                     max_samples_per_sequence=None,
                     task_encoder=ChunkTaskEncoder(),
                 ),
-                checkpoint_every_min_n_samples=1,
-                checkpoint_every_sec=0,
             )
 
         loader = build_loader()
@@ -2654,8 +2642,6 @@ class TestDataset(unittest.TestCase):
                             repeat=repeat,
                             task_encoder=TripletTaskEncoder(),
                         ),
-                        checkpoint_every_min_n_samples=1,
-                        checkpoint_every_sec=0,
                     )
 
                 with build_loader() as loader:
@@ -2728,8 +2714,6 @@ class TestDataset(unittest.TestCase):
                             repeat=False,
                             task_encoder=task_encoder,
                         ),
-                        checkpoint_every_min_n_samples=1,
-                        checkpoint_every_sec=0,
                     )
 
                 with build_loader() as loader:
@@ -2792,8 +2776,6 @@ class TestDataset(unittest.TestCase):
                     max_samples_per_sequence=None,
                     repeat=False,
                 ),
-                checkpoint_every_min_n_samples=1,
-                checkpoint_every_sec=0,
             )
 
         keys = self._check_save_restore_every_step(build_loader)
@@ -2822,8 +2804,6 @@ class TestDataset(unittest.TestCase):
                     repeat=False,
                     task_encoder=GroupingTaskEncoder(),
                 ),
-                checkpoint_every_min_n_samples=1,
-                checkpoint_every_sec=0,
             )
 
         keys = self._check_save_restore_every_step(build_loader)
@@ -2853,8 +2833,6 @@ class TestDataset(unittest.TestCase):
         def build_loader():
             return get_savable_loader(
                 get_val_dataset(recipe_path, batch_size=7, worker_config=no_worker_config),
-                checkpoint_every_min_n_samples=1,
-                checkpoint_every_sec=0,
             )
 
         keys = self._check_save_restore_every_step(build_loader)
@@ -2891,8 +2869,6 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
                 task_encoder=GroupingTaskEncoder(),
             ),
-            checkpoint_every_min_n_samples=1,
-            checkpoint_every_sec=0,
         )
         batches = list(zip(range(40), loader))
         print([batch.__key__ for idx, batch in batches])
@@ -2911,8 +2887,6 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
                 task_encoder=GroupingTaskEncoder(),
             ),
-            checkpoint_every_min_n_samples=1,
-            checkpoint_every_sec=0,
         )
 
         batches = list(zip(range(40), loader_r0))
@@ -2936,8 +2910,6 @@ class TestDataset(unittest.TestCase):
                 max_samples_per_sequence=None,
                 task_encoder=GroupingTaskEncoder(),
             ),
-            checkpoint_every_min_n_samples=1,
-            checkpoint_every_sec=0,
         )
         loader_r0.restore_state_rank(state)
 
