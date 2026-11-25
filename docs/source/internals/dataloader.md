@@ -87,18 +87,20 @@ owned dataset. Blocked fork workers are terminated when their grace period expir
 thread worker reports a timeout and retains ownership until it exits, because Python cannot
 safely terminate a running thread. `__del__()` is an emergency fallback.
 
-### Fork Lifecycle Call Flow
+(fork-lifecycle-call-flow)=
+### Asynchronous Worker Lifecycle
 
-![Fork DataLoader lifecycle and RPC flow](../images/dataloader_fork_flow.png)
+![Asynchronous DataLoader worker lifecycle](../images/dataloader_fork_flow.png)
 
-The editable source for the flow diagram is
-{download}`dataloader_fork_flow.drawio <../images/dataloader_fork_flow.drawio>`.
+The editable source is the {download}`asynchronous worker lifecycle diagram <../images/dataloader_fork_flow.drawio>`.
 
-The diagram follows one fork worker. In the parent process, the loader calls a
-`ForkDataLoaderWorker` object, which sends commands to the child through that worker's queue.
-The child runs the dataset operation and writes a `WorkerResult` to its reply pipe. A receiver
-thread in the parent uses the reply's `future_id` to complete the corresponding future.
-Each fork worker has its own command queue, reply pipe, and receiver thread.
+The diagram follows one worker. Both backends queue commands and match replies to futures by
+ID. Fork workers send replies over a pipe to a receiver thread in the rank process. Thread
+workers complete futures directly in the worker thread.
+
+On shutdown, each backend releases worker-owned resources before replying. The rank process
+acknowledges a fork worker's terminal reply before reaping it. For a thread worker, it joins the
+thread and reports a timeout if the thread is still running.
 
 ## Steady-State Iteration
 

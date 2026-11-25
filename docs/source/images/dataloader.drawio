@@ -57,55 +57,58 @@
         <mxCell id="coordinator" value="&lt;b&gt;DataLoader&lt;/b&gt;&#xa;&#xa;Owns wrapped dataset&#xa;Starts safe_num_workers&#xa;Per-worker FIFO future windows&#xa;Deterministic round-robin selection&#xa;Epoch and restore coordination" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#23497D;strokeColor=#17365D;fontColor=#FFFFFF;fontFamily=Helvetica;fontSize=14;spacing=10;" parent="main-plane" vertex="1">
           <mxGeometry x="360" y="45" width="420" height="190" as="geometry" />
         </mxCell>
-        <mxCell id="pin" value="&lt;b&gt;PinMemory&lt;/b&gt;&#xa;&#xa;NoPinMemory&#xa;or lazy PinMemoryThread&#xa;(CUDA available)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;fontColor=#274E13;fontFamily=Helvetica;fontSize=13;spacing=8;" parent="main-plane" vertex="1">
+        <mxCell id="pin" value="&lt;b&gt;PinMemory&lt;/b&gt;&#xa;&#xa;NoPinMemory or lazy PinMemoryThread&#xa;Automatic pinning requires CUDA" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;fontColor=#274E13;fontFamily=Helvetica;fontSize=13;spacing=8;" parent="main-plane" vertex="1">
           <mxGeometry x="875" y="70" width="245" height="140" as="geometry" />
         </mxCell>
-        <mxCell id="caller" value="&lt;b&gt;Training loop&lt;/b&gt;&#xa;&#xa;next(loader)&#xa;receives deterministic batch" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D0E0E3;strokeColor=#5B9BD5;fontColor=#1F4E79;fontFamily=Helvetica;fontSize=13;spacing=8;" parent="main-plane" vertex="1">
+        <mxCell id="caller" value="&lt;b&gt;Training loop&lt;/b&gt;&#xa;&#xa;Iterates over the loader&#xa;Receives batches in worker order" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D0E0E3;strokeColor=#5B9BD5;fontColor=#1F4E79;fontFamily=Helvetica;fontSize=13;spacing=8;" parent="main-plane" vertex="1">
           <mxGeometry x="1230" y="80" width="250" height="120" as="geometry" />
         </mxCell>
 
         <mxCell id="edge-api" value="constructs" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#6C8EBF;strokeWidth=2;endArrow=block;endFill=1;fontFamily=Helvetica;fontSize=12;fontColor=#17365D;" parent="main-plane" source="api" target="coordinator" edge="1">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="edge-coordinate-pin" value="sample Future" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#0097A7;strokeWidth=3;endArrow=block;endFill=1;fontFamily=Helvetica;fontSize=12;fontColor=#006064;" parent="main-plane" source="coordinator" target="pin" edge="1">
+        <mxCell id="edge-coordinate-pin" value="sample future" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#0097A7;strokeWidth=3;endArrow=block;endFill=1;startArrow=block;startFill=1;fontFamily=Helvetica;fontSize=12;fontColor=#006064;" parent="main-plane" source="coordinator" target="pin" edge="1">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="edge-pin-caller" value="pinned batch" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#0097A7;strokeWidth=3;endArrow=block;endFill=1;fontFamily=Helvetica;fontSize=12;fontColor=#006064;" parent="main-plane" source="pin" target="caller" edge="1">
-          <mxGeometry relative="1" as="geometry" />
+        <mxCell id="edge-pin-caller" value="delivered sample" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#0097A7;strokeWidth=3;endArrow=block;endFill=1;fontFamily=Helvetica;fontSize=12;fontColor=#006064;exitX=0.8;exitY=1;entryX=0.5;entryY=1;" parent="main-plane" source="coordinator" target="caller" edge="1">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="696" y="256" /><mxPoint x="1355" y="256" /></Array></mxGeometry>
         </mxCell>
 
         <mxCell id="worker-plane" value="WORKER EXECUTION BACKENDS" style="swimlane;html=1;rounded=0;startSize=32;horizontal=1;fillColor=#FBFBFB;swimlaneFillColor=#E8E8E8;strokeColor=#808080;fontColor=#333333;fontFamily=Helvetica;fontSize=14;fontStyle=1;" parent="1" vertex="1">
           <mxGeometry x="30" y="400" width="1540" height="330" as="geometry" />
         </mxCell>
-        <mxCell id="rpc" value="&lt;b&gt;Asynchronous RPC&lt;/b&gt;&#xa;&#xa;WorkerCommand queue&#xa;WorkerResult queue&#xa;future_id matching&#xa;exception propagation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E1D5E7;strokeColor=#9673A6;fontColor=#4A235A;fontFamily=Helvetica;fontSize=13;spacing=8;" parent="worker-plane" vertex="1">
+        <mxCell id="inline-worker" value="&lt;b&gt;DataLoaderNoWorker&lt;/b&gt;&#xa;&#xa;Single inline worker (ID 0)&#xa;Direct calls in the rank process&#xa;Uses the training process RNG" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;fontColor=#274E13;fontFamily=Helvetica;fontSize=13;spacing=8;" parent="worker-plane" vertex="1">
+          <mxGeometry x="45" y="95" width="235" height="145" as="geometry" />
+        </mxCell>
+        <mxCell id="rpc" value="&lt;b&gt;Asynchronous RPC&lt;/b&gt;&#xa;&#xa;Per-worker command queue&#xa;Fork replies: pipe + receiver&#xa;Thread replies: direct completion&#xa;Futures matched by ID" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E1D5E7;strokeColor=#9673A6;fontColor=#4A235A;fontFamily=Helvetica;fontSize=13;spacing=8;" parent="worker-plane" vertex="1">
           <mxGeometry x="355" y="85" width="250" height="165" as="geometry" />
         </mxCell>
-        <mxCell id="worker0" value="&lt;b&gt;Worker 0&lt;/b&gt;&#xa;&#xa;ForkDataLoaderWorker&#xa;ThreadDataLoaderWorker&#xa;or DataLoaderNoWorker" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#12AAB5;strokeColor=#087F8C;fontColor=#FFFFFF;fontFamily=Helvetica;fontSize=13;spacing=8;" parent="worker-plane" vertex="1">
+        <mxCell id="worker0" value="&lt;b&gt;Async worker 0&lt;/b&gt;&#xa;&#xa;ForkDataLoaderWorker&#xa;or ThreadDataLoaderWorker" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#12AAB5;strokeColor=#087F8C;fontColor=#FFFFFF;fontFamily=Helvetica;fontSize=13;spacing=8;" parent="worker-plane" vertex="1">
           <mxGeometry x="700" y="55" width="270" height="115" as="geometry" />
         </mxCell>
-        <mxCell id="workerN" value="&lt;b&gt;Worker N&lt;/b&gt;&#xa;&#xa;Same protocol&#xa;Independent iterator and RNG" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#12AAB5;strokeColor=#087F8C;fontColor=#FFFFFF;fontFamily=Helvetica;fontSize=13;spacing=8;" parent="worker-plane" vertex="1">
+        <mxCell id="workerN" value="&lt;b&gt;Worker N&lt;/b&gt;&#xa;&#xa;Same backend&#xa;Own iterator and worker state" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#12AAB5;strokeColor=#087F8C;fontColor=#FFFFFF;fontFamily=Helvetica;fontSize=13;spacing=8;" parent="worker-plane" vertex="1">
           <mxGeometry x="700" y="190" width="270" height="100" as="geometry" />
         </mxCell>
-        <mxCell id="dataset0" value="&lt;b&gt;Dataset pipeline copy&lt;/b&gt;&#xa;&#xa;reset / restore state&#xa;iter(dataset) / next()&#xa;WorkerConfig activation&#xa;CachePool access&#xa;WorkerSampleRestoreKey" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#B85450;fontColor=#6B1F1A;fontFamily=Helvetica;fontSize=13;spacing=8;" parent="worker-plane" vertex="1">
+        <mxCell id="dataset0" value="&lt;b&gt;Dataset execution&lt;/b&gt;&#xa;&#xa;Fork: process-local copy&#xa;Thread: shared dataset object&#xa;Worker-local state and handles" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#B85450;fontColor=#6B1F1A;fontFamily=Helvetica;fontSize=13;spacing=8;" parent="worker-plane" vertex="1">
           <mxGeometry x="1080" y="50" width="360" height="125" as="geometry" />
         </mxCell>
-        <mxCell id="datasetN" value="&lt;b&gt;Dataset pipeline copy&lt;/b&gt;&#xa;&#xa;Own worker-local state&#xa;Close in worker context" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#B85450;fontColor=#6B1F1A;fontFamily=Helvetica;fontSize=13;spacing=8;" parent="worker-plane" vertex="1">
+        <mxCell id="datasetN" value="&lt;b&gt;Dataset execution&lt;/b&gt;&#xa;&#xa;Iterate or restore samples&#xa;Release worker-owned resources" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#B85450;fontColor=#6B1F1A;fontFamily=Helvetica;fontSize=13;spacing=8;" parent="worker-plane" vertex="1">
           <mxGeometry x="1080" y="195" width="360" height="90" as="geometry" />
         </mxCell>
-        <mxCell id="more-workers" value="... one lane per rank-local worker ..." style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;fontStyle=2;fontColor=#666666;" parent="worker-plane" vertex="1">
+        <mxCell id="more-workers" value="... one lane per async worker ..." style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;fontStyle=2;fontColor=#666666;" parent="worker-plane" vertex="1">
           <mxGeometry x="705" y="165" width="260" height="25" as="geometry" />
         </mxCell>
 
-        <mxCell id="edge-coordinator-rpc" value="start / init / prefetch / save / restore" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#6C8EBF;strokeWidth=2;endArrow=block;endFill=1;fontFamily=Helvetica;fontSize=12;fontColor=#17365D;" parent="1" source="coordinator" target="rpc" edge="1">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="edge-rpc-coordinator" value="Future result / exception" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#0097A7;strokeWidth=3;endArrow=block;endFill=1;fontFamily=Helvetica;fontSize=12;fontColor=#006064;exitX=0;exitY=0.35;entryX=0;entryY=0.8;" parent="1" source="rpc" target="coordinator" edge="1">
-          <mxGeometry relative="1" as="geometry">
-            <Array as="points">
-              <mxPoint x="340" y="540" />
-              <mxPoint x="340" y="255" />
-            </Array>
+        <mxCell id="edge-coordinator-inline" value="num_workers = 0" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#548235;strokeWidth=2;endArrow=block;endFill=1;fontFamily=Helvetica;fontSize=12;fontColor=#274E13;labelBackgroundColor=#F6F8FB;exitX=0.07;exitY=1;entryX=0.5;entryY=0;" parent="1" source="coordinator" target="inline-worker" edge="1">
+          <mxGeometry x="-0.6" relative="1" as="geometry">
+            <Array as="points"><mxPoint x="419.4" y="352" /><mxPoint x="192.5" y="352" /></Array>
           </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-coordinator-rpc" value="Commands" style="edgeStyle=none;rounded=0;html=1;strokeColor=#6C8EBF;strokeWidth=2;endArrow=block;endFill=1;fontFamily=Helvetica;fontSize=12;fontColor=#17365D;labelBackgroundColor=#F6F8FB;exitX=0.262;exitY=1;entryX=0.46;entryY=0;" parent="1" source="coordinator" target="rpc" edge="1">
+          <mxGeometry x="-0.6" relative="1" as="geometry"><mxPoint x="42" y="0" as="offset" /></mxGeometry>
+        </mxCell>
+        <mxCell id="edge-rpc-coordinator" value="Future result or exception" style="edgeStyle=none;rounded=0;html=1;strokeColor=#0097A7;strokeWidth=3;endArrow=block;endFill=1;fontFamily=Helvetica;fontSize=12;fontColor=#006064;labelBackgroundColor=#FBFBFB;exitX=0.832;exitY=0;entryX=0.4833;entryY=1;" parent="1" source="rpc" target="coordinator" edge="1">
+          <mxGeometry x="-0.55" relative="1" as="geometry"><mxPoint x="90" y="0" as="offset" /></mxGeometry>
         </mxCell>
         <mxCell id="edge-rpc-worker0" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#6C8EBF;strokeWidth=2;endArrow=block;endFill=1;fontFamily=Helvetica;fontSize=11;fontColor=#17365D;exitX=1;exitY=0.25;entryX=0;entryY=0.25;" parent="worker-plane" source="rpc" target="worker0" edge="1">
           <mxGeometry relative="1" as="geometry" />
@@ -129,17 +132,20 @@
         <mxCell id="state-plane" value="CHECKPOINT AND LIFECYCLE CONTROL" style="swimlane;html=1;rounded=0;startSize=32;horizontal=1;fillColor=#FFFCF4;swimlaneFillColor=#FCE5CD;strokeColor=#D6B656;fontColor=#7F6000;fontFamily=Helvetica;fontSize=14;fontStyle=1;" parent="1" vertex="1">
           <mxGeometry x="30" y="755" width="1540" height="195" as="geometry" />
         </mxCell>
-        <mxCell id="shutdown" value="&lt;b&gt;shutdown() / __exit__&lt;/b&gt;&#xa;&#xa;Workers and queues&#xa;Pin-memory thread&#xa;Owned dataset" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F4CCCC;strokeColor=#CC0000;fontColor=#990000;fontFamily=Helvetica;fontSize=13;spacing=8;" parent="state-plane" vertex="1">
+        <mxCell id="shutdown" value="&lt;b&gt;shutdown() / __exit__&lt;/b&gt;&#xa;&#xa;Stop workers first&#xa;Join pin-memory helper&#xa;Close owned dataset" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F4CCCC;strokeColor=#CC0000;fontColor=#990000;fontFamily=Helvetica;fontSize=13;spacing=8;" parent="state-plane" vertex="1">
           <mxGeometry x="45" y="55" width="230" height="105" as="geometry" />
         </mxCell>
-        <mxCell id="rankstate" value="&lt;b&gt;RankState&lt;/b&gt;&#xa;&lt;i&gt;restore before start()&lt;/i&gt;&#xa;&#xa;prefetched restore keys per worker&#xa;WorkerState per worker&#xa;next_worker_id&#xa;micro_batch_size" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE6A1;strokeColor=#D79B00;fontColor=#7F6000;fontFamily=Helvetica;fontSize=13;spacing=8;" parent="state-plane" vertex="1">
-          <mxGeometry x="370" y="48" width="360" height="120" as="geometry" />
+        <mxCell id="rankstate" value="&lt;b&gt;RankState&lt;/b&gt;&#xa;&#xa;Save at a delivery boundary&#xa;Restore before iteration&#xa;Next worker and batch settings" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE6A1;strokeColor=#D79B00;fontColor=#7F6000;fontFamily=Helvetica;fontSize=13;spacing=8;" parent="state-plane" vertex="1">
+          <mxGeometry x="335" y="48" width="235" height="120" as="geometry" />
         </mxCell>
-        <mxCell id="workerstate" value="&lt;b&gt;WorkerState&lt;/b&gt;&#xa;&#xa;SystemRng state&#xa;recursive dataset state&#xa;exhausted flag&#xa;sample_index" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;fontColor=#7F6000;fontFamily=Helvetica;fontSize=13;spacing=8;" parent="state-plane" vertex="1">
-          <mxGeometry x="820" y="48" width="300" height="120" as="geometry" />
+        <mxCell id="workerstate" value="&lt;b&gt;WorkerCheckpoint&lt;/b&gt;&#xa;&#xa;WorkerState (if started)&#xa;Undelivered restore keys&#xa;Observed EOF" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;fontColor=#7F6000;fontFamily=Helvetica;fontSize=13;spacing=8;" parent="state-plane" vertex="1">
+          <mxGeometry x="637" y="48" width="235" height="120" as="geometry" />
         </mxCell>
-        <mxCell id="globalstate" value="&lt;b&gt;Global checkpoint&lt;/b&gt;&#xa;&#xa;gather_object on save&#xa;select or scatter_object_list on restore&#xa;data-parallel group aware" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E1D5E7;strokeColor=#9673A6;fontColor=#4A235A;fontFamily=Helvetica;fontSize=13;spacing=8;" parent="state-plane" vertex="1">
-          <mxGeometry x="1210" y="48" width="285" height="120" as="geometry" />
+        <mxCell id="worker-snapshot" value="&lt;b&gt;WorkerState&lt;/b&gt;&#xa;&#xa;Process RNG when applicable&#xa;Worker exhaustion flag&#xa;Next sample index" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E1D5E7;strokeColor=#9673A6;fontColor=#4A235A;fontFamily=Helvetica;fontSize=13;spacing=8;" parent="state-plane" vertex="1">
+          <mxGeometry x="955" y="48" width="235" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="dataset-state" value="&lt;b&gt;Dataset state (FlexState)&lt;/b&gt;&#xa;&#xa;Saved dataset fields&#xa;Nested child dataset state" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;fontColor=#274E13;fontFamily=Helvetica;fontSize=13;spacing=8;" parent="state-plane" vertex="1">
+          <mxGeometry x="1255" y="48" width="235" height="120" as="geometry" />
         </mxCell>
 
         <mxCell id="edge-coordinator-state" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#D79B00;strokeWidth=3;dashed=1;dashPattern=8 6;endArrow=block;endFill=1;startArrow=block;startFill=1;fontFamily=Helvetica;fontSize=12;fontColor=#7F6000;exitX=0.9;exitY=1;entryX=0.5;entryY=0;" parent="1" source="coordinator" target="rankstate" edge="1">
@@ -148,18 +154,21 @@
               <mxPoint x="790" y="385" />
               <mxPoint x="1515" y="385" />
               <mxPoint x="1515" y="745" />
-              <mxPoint x="580" y="745" />
-              <mxPoint x="580" y="803" />
+              <mxPoint x="482.5" y="745" />
+              <mxPoint x="482.5" y="803" />
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="edge-rank-workerstate" value="contains" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#D79B00;strokeWidth=2;dashed=1;dashPattern=8 6;endArrow=block;endFill=1;fontFamily=Helvetica;fontSize=11;fontColor=#7F6000;" parent="state-plane" source="rankstate" target="workerstate" edge="1">
+        <mxCell id="edge-rank-workerstate" value="workers" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#D79B00;strokeWidth=2;dashed=1;dashPattern=8 6;endArrow=block;endFill=1;fontFamily=Helvetica;fontSize=11;fontColor=#7F6000;" parent="state-plane" source="rankstate" target="workerstate" edge="1">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="edge-rank-global" value="rank list" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#D79B00;strokeWidth=2;dashed=1;dashPattern=8 6;endArrow=block;endFill=1;startArrow=block;startFill=1;fontFamily=Helvetica;fontSize=11;fontColor=#7F6000;" parent="state-plane" source="workerstate" target="globalstate" edge="1">
+        <mxCell id="edge-checkpoint-snapshot" value="state (0..1)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#D79B00;strokeWidth=2;dashed=1;dashPattern=8 6;endArrow=block;endFill=1;fontFamily=Helvetica;fontSize=11;fontColor=#7F6000;" parent="state-plane" source="workerstate" target="worker-snapshot" edge="1">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="edge-coordinator-shutdown" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#CC0000;strokeWidth=3;dashed=1;dashPattern=6 4;endArrow=block;endFill=1;fontFamily=Helvetica;fontSize=12;fontColor=#990000;" parent="1" source="coordinator" target="shutdown" edge="1">
+        <mxCell id="edge-worker-dataset-state" value="dataset" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#D79B00;strokeWidth=2;dashed=1;dashPattern=8 6;endArrow=block;endFill=1;fontFamily=Helvetica;fontSize=11;fontColor=#7F6000;labelBackgroundColor=#FFFFFF;" parent="state-plane" source="worker-snapshot" target="dataset-state" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-coordinator-shutdown" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#CC0000;strokeWidth=3;dashed=1;dashPattern=6 4;endArrow=block;endFill=1;fontFamily=Helvetica;fontSize=12;fontColor=#990000;exitX=0.18;exitY=1;" parent="1" source="coordinator" target="shutdown" edge="1">
           <mxGeometry relative="1" as="geometry">
             <Array as="points">
               <mxPoint x="320" y="385" />
