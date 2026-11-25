@@ -26,6 +26,7 @@ class WorkerSampleRestoreKey(WrappedRestoreKey):
 
     worker_id: int
     sample_idx: int
+    logical_worker_id: int | None = None
 
 
 @edataclass
@@ -38,6 +39,7 @@ class WorkerState:
     dataset: FlexState
     exhausted: bool
     sample_index: int
+    logical_skip: int | None = None
 
     def __str__(self):
         from hashlib import sha256
@@ -53,6 +55,9 @@ class DataLoaderWorker(ABC, Generic[TSample]):
     Implements dataset iteration and checkpointing. Each backend supplies its own startup.
     """
 
+    #: Bounded snapshots covering the loader prefetch window.
+    history_limit: int = 4
+    _history: dict[int, WorkerState]
     dataset: SavableDataset[TSample]
     worker_config: WorkerConfig
 
@@ -86,6 +91,7 @@ class DataLoaderWorker(ABC, Generic[TSample]):
             rank_worker_id: The rank of the worker.
             cache_pool: The cache pool to use.
         """
+        self._history = {}
         self.dataset = dataset
         self.worker_config = worker_config
         self._rank_worker_id = rank_worker_id
@@ -193,9 +199,21 @@ class DataLoaderWorker(ABC, Generic[TSample]):
             if state.rng is not None and self._uses_global_rng:
                 SystemRng.restore_state(state.rng)
             self.dataset.restore_state(deepcopy(state.dataset))
+            if state.logical_skip is not None:
+                from megatron.energon.wrappers.stride_dataset import StrideDataset
+
+                stride = (
+                    self.dataset
+                    if isinstance(self.dataset, StrideDataset)
+                    else self.dataset._find_wrapped_dataset(StrideDataset)
+                )
+                stride._restore_skip = state.logical_skip
             if not state.exhausted:
                 self.new_iter()
             assert self._exhausted == state.exhausted, "Exhausted state mismatch"
+
+        if self.worker_config.logical_workers is not None:
+            self._history = {self._sample_index: self.save_state()}
 
     def new_iter(self) -> None:
         """
@@ -209,6 +227,8 @@ class DataLoaderWorker(ABC, Generic[TSample]):
             print("new_iter\n", end="")
         self._dataset_iter = iter(self.dataset)
         self._exhausted = False
+        if self.worker_config.logical_workers is not None:
+            self._history = {self._sample_index: self.save_state()}
         if DEBUG_LEVEL >= 1:
             print("new_iter done\n", end="")
 
@@ -236,7 +256,14 @@ class DataLoaderWorker(ABC, Generic[TSample]):
                 next_sample = set_sample_restore_key(
                     next_sample,
                     WorkerSampleRestoreKey(
-                        worker_id=self._global_worker_id, sample_idx=sample_idx, inner=inner_key
+                        worker_id=self._global_worker_id,
+                        sample_idx=sample_idx,
+                        inner=inner_key,
+                        logical_worker_id=(
+                            self.worker_config.logical_global_worker_id()
+                            if self.worker_config.logical_workers is not None
+                            else None
+                        ),
                     ),
                 )
         except StopIteration as e:
@@ -244,6 +271,10 @@ class DataLoaderWorker(ABC, Generic[TSample]):
             return ExceptionFuture(e)
         finally:
             self.worker_config.worker_deactivate()
+        if self.worker_config.logical_workers is not None:
+            self._history[self._sample_index] = self.save_state()
+            while len(self._history) > self.history_limit:
+                del self._history[next(iter(self._history))]
         return DoneFuture(next_sample)
 
     def restore_sample(self, restore_key: WorkerSampleRestoreKey) -> Future[TSample]:
@@ -256,7 +287,10 @@ class DataLoaderWorker(ABC, Generic[TSample]):
         Returns:
             A future that will be resolved to the restored sample.
         """
-        assert self._global_worker_id == restore_key.worker_id
+        if restore_key.logical_worker_id is None:
+            assert self._global_worker_id == restore_key.worker_id
+        else:
+            assert self.worker_config.logical_global_worker_id() == restore_key.logical_worker_id
         self.worker_config.worker_activate(
             restore_key.sample_idx,
             cache_pool=self._cache_pool,
@@ -268,17 +302,36 @@ class DataLoaderWorker(ABC, Generic[TSample]):
         finally:
             self.worker_config.worker_deactivate()
 
+    def checkpoint_history(
+        self, states: dict[int, WorkerState] | None = None
+    ) -> dict[int, WorkerState]:
+        """Read or install snapshots at output boundaries, independent of queued prefetch."""
+        if states is not None:
+            self._history = deepcopy(states)
+        return deepcopy(self._history)
+
     def save_state(self) -> WorkerState:
         """
         Save the state of the worker.
         """
         if DEBUG_LEVEL >= 1:
             print(f"save_state: {self._sample_index=}, {self._exhausted=}\n", end="")
+        logical_skip = None
+        if self.worker_config.logical_workers is not None:
+            from megatron.energon.wrappers.stride_dataset import StrideDataset
+
+            stride = (
+                self.dataset
+                if isinstance(self.dataset, StrideDataset)
+                else self.dataset._find_wrapped_dataset(StrideDataset)
+            )
+            logical_skip = stride._restore_skip
         return WorkerState(
             rng=SystemRng.save_state() if self._uses_global_rng else None,
             dataset=self.dataset.save_state(),
             exhausted=self._exhausted,
             sample_index=self._sample_index,
+            logical_skip=logical_skip,
         )
 
 

@@ -121,3 +121,32 @@ if data_parallel_rank is not None:
     loader.restore_state_rank(state)
 
 ```
+
+
+## Logical workers
+
+Set `WorkerConfig(logical_workers=L, ...)` to keep `L` global dataset streams while using
+more physical workers. The global physical count is `world_size * max(1, num_workers)`;
+it must be a positive multiple of `L`. Each physical member advances its group's complete
+pipeline and retains a different stride of final outputs. Sharding and worker seeds use
+the logical identity. Without an explicit count, existing physical partitioning is unchanged.
+
+For example, `world_size=2, num_workers=4, logical_workers=2` gives four physical members
+per logical stream. Ranks advance synchronously. Members retain outputs in local-worker,
+then rank order within each stream; different streams may interleave differently after a
+topology change. Finite streams are not padded or balanced across ranks.
+
+Use `@skip_safe` or `@stateless(skip_safe=True)` for pure transforms whose work may be
+omitted for discarded outputs. An unsafe outer stage blocks skipping its inputs. Packing
+selection, filtering decisions, generators, and size metrics still execute. Shuffle buffers
+retain real inputs. A skip-safe callable must preserve output cardinality, have no required
+side effects or validation, and use isolated randomness. Exceptions, including `SkipSample`,
+from a skip-safe callable are fatal when logical workers are enabled. Cooking is skipped only when both the cooking hook
+and the selected cooker are marked safe. Fanout still advances all source positions;
+it does not promise reduced source I/O.
+
+Keep the recipe, logical count, seed, and TaskEncoder fixed for exact logical replay.
+Use `@stateless(restore_task_encoder_seeds=True)` with `self.rng` for reproducible transforms
+in thread workers. `current_sample_index` follows logical identities. Physical worker IDs and
+`current_batch_index` are execution details and
+may change with topology.

@@ -14,6 +14,7 @@ import torch.utils.data
 
 from megatron.energon.cache import CachePool
 from megatron.energon.errors import log_exception, reraise_exception
+from megatron.energon.logical_worker import LogicalWorkerAssignment
 from megatron.energon.source_info import SourceInfo
 
 __all__ = ("WorkerConfig",)
@@ -47,6 +48,8 @@ class WorkerConfig:
     world_size: int
     #: The number of workers per rank. May be 0 to disable worker processes.
     num_workers: int
+    #: Stable global stream count; physical workers must be a multiple of this count.
+    logical_workers: int | None = None
 
     #: If not using all ranks for data parallel, set this to the corresponding group.
     data_parallel_group: Optional[torch.distributed.ProcessGroup] = None
@@ -97,6 +100,135 @@ class WorkerConfig:
     @property
     def _cache_pool(self) -> CachePool | None:
         return getattr(self._active, "cache_pool", None)
+
+    def __post_init__(self) -> None:
+        physical = self.physical_worker_count()
+        logical = self.logical_worker_count()
+        if not isinstance(logical, int) or isinstance(logical, bool) or logical <= 0:
+            raise ValueError(f"logical_workers ({logical}) must be greater than zero")
+        if logical > physical:
+            raise ValueError(
+                f"logical_workers ({logical}) must be less than or equal to "
+                f"physical_workers ({physical})"
+            )
+        if physical % logical != 0:
+            raise ValueError(
+                f"physical_workers ({physical}) must be divisible by logical_workers ({logical})"
+            )
+
+    def physical_workers_per_rank(self) -> int:
+        """PyTorch DataLoader worker processes per rank (0 means main process only)."""
+        return max(1, self.num_workers) if self.num_workers > 0 else 1
+
+    def physical_worker_count(self) -> int:
+        """Total physical workers across all ranks."""
+        if self.num_workers == 0:
+            return self.world_size
+        return self.world_size * self.num_workers
+
+    def logical_worker_count(self) -> int:
+        """Total logical dataset partitions across all ranks."""
+        if self.logical_workers is None:
+            return self.physical_worker_count()
+        return self.logical_workers
+
+    def logical_assignment_for_physical(
+        self, physical_global_worker_id: int
+    ) -> LogicalWorkerAssignment:
+        """Map a physical global worker id to logical partition and striding."""
+        physical_count = self.physical_worker_count()
+        logical_count = self.logical_worker_count()
+        assert 0 <= physical_global_worker_id < physical_count
+
+        fanout = physical_count // logical_count
+        logical_id = physical_global_worker_id // fanout
+        start = logical_id * fanout
+        end = start + fanout
+        workers_per_rank = self.physical_workers_per_rank()
+        local_worker = physical_global_worker_id % workers_per_rank
+        start_rank, start_local = divmod(start, workers_per_rank)
+        end_rank, end_local = divmod(end, workers_per_rank)
+        # Count group members with smaller local worker ids, then members with
+        # the same local id on earlier ranks. Partial first/last ranks are included.
+        stride_offset = (
+            (end_rank - start_rank) * local_worker
+            + min(end_local, local_worker)
+            - min(start_local, local_worker)
+            + (physical_global_worker_id - start) // workers_per_rank
+        )
+        return LogicalWorkerAssignment(
+            logical_global_worker_id=logical_id,
+            stride_offset=stride_offset,
+            stride=fanout,
+        )
+
+    def logical_worker_last_physical_worker(
+        self, logical_worker_id: int, iteration_index: int
+    ) -> int:
+        """Last contributor to a logical group after synchronized dataloader calls.
+
+        iteration_index is the number of completed next() calls per rank. Only its phase
+        modulo physical_workers_per_rank() matters, so the loader may pass next_worker_id.
+        At zero calls, return the end-of-round member to select an initial checkpoint.
+        Logical membership and physical ids remain unchanged.
+        """
+        assert iteration_index >= 0
+        assert 0 <= logical_worker_id < self.logical_worker_count()
+        fanout = self.physical_worker_count() // self.logical_worker_count()
+        start = logical_worker_id * fanout
+        last = start + fanout - 1
+        workers_per_rank = self.physical_workers_per_rank()
+        last_local_worker = (iteration_index - 1) % workers_per_rank
+        # Last physical member with the requested local id. If that local id is
+        # absent, the group's final physical member is the latest eligible one.
+        candidate = last - (last - last_local_worker) % workers_per_rank
+        return candidate if candidate >= start else last
+
+    def logical_worker_next_offset(
+        self, physical_global_worker_id: int, previous_worker_id: Optional[int] = None
+    ) -> int:
+        """Outputs to skip before this worker's next output in its logical stream.
+
+        With no previous worker, count from the start of a logical round. Otherwise,
+        count from just after previous_worker_id's output; both must belong to the same
+        logical group. Passing the same worker gives the ordinary stride minus one.
+        """
+        assignment = self.logical_assignment_for_physical(physical_global_worker_id)
+        if previous_worker_id is None:
+            return assignment.stride_offset
+        previous = self.logical_assignment_for_physical(previous_worker_id)
+        if previous.logical_global_worker_id != assignment.logical_global_worker_id:
+            raise ValueError("Previous worker must belong to the same logical group")
+        return (assignment.stride_offset - previous.stride_offset - 1) % assignment.stride
+
+    def logical_worker_length(self, length: int, worker_idx: Optional[int] = None) -> int:
+        """Full logical outputs needed for a per-rank post-stride output budget.
+
+        All physical replicas of a logical worker receive the same budget. Remainders
+        follow the synchronized delivery order: local worker id first, then rank.
+        """
+        physical = self.physical_global_worker_id(worker_idx)
+        assignment = self.logical_assignment_for_physical(physical)
+        workers = self.physical_workers_per_rank()
+        rounds, remainder = divmod(length, workers)
+        start = assignment.logical_global_worker_id * assignment.stride
+        end = start + assignment.stride
+        # Count group members whose local worker id receives an extra output.
+        extras = (
+            end // workers * remainder
+            + min(end % workers, remainder)
+            - start // workers * remainder
+            - min(start % workers, remainder)
+        )
+        return rounds * assignment.stride + extras
+
+    def physical_global_worker_id(self, override_local_worker_id: int | None = None) -> int:
+        return self.global_worker_id(override_local_worker_id)
+
+    def logical_global_worker_id(self, override_local_worker_id: int | None = None) -> int:
+        return self.logical_assignment_for_physical(
+            self.physical_global_worker_id(override_local_worker_id)
+        ).logical_global_worker_id
 
     def __getstate__(self) -> tuple[dict[str, Any] | None, dict[str, Any]]:
         # Debug handles belong to an active thread, not to the configuration.
@@ -158,6 +290,11 @@ class WorkerConfig:
     @property
     def active_worker_sample_index(self) -> int:
         """Returns the current sample index for the actively iterating worker."""
+        if self.logical_workers is not None:
+            return (
+                WorkerConfig._active.sample_index_stack[-1] * self.logical_worker_count()
+                + self.logical_global_worker_id()
+            )
         # Internal sample index is for the local worker. If using multiple workers per rank, this
         # must be multiplied by the number of workers and offset by the local worker index.
         return (
@@ -193,6 +330,7 @@ class WorkerConfig:
                 self.rank == other.rank,
                 self.world_size == other.world_size,
                 self.num_workers == other.num_workers,
+                self.logical_workers == other.logical_workers,
             ]
         )
 
@@ -276,11 +414,7 @@ class WorkerConfig:
                 the current worker, which is the default.
         """
 
-        if self.num_workers == 0:
-            # If we are not using workers, different ranks should still get a different seed
-            global_worker_id = self.rank
-        else:
-            global_worker_id = self.global_worker_id(override_local_worker_id)
+        global_worker_id = self.logical_global_worker_id(override_local_worker_id)
 
         seed_offset = self.seed_offset
 
@@ -293,6 +427,7 @@ class WorkerConfig:
             "rank": self.rank,
             "world_size": self.world_size,
             "num_workers": self.num_workers,
+            "logical_workers": self.logical_workers,
             "data_parallel_group": (
                 self.data_parallel_group.size() if self.data_parallel_group else None
             ),

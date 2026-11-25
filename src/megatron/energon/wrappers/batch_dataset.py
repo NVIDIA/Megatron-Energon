@@ -51,7 +51,7 @@ class BatchGenRestoreKey(BatchRestoreKey):
 class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_sample, T_batch]):
     """This dataset wrapper transforms a dataset of samples into a dataset of batches."""
 
-    _worker_local_fields = {"_state_restored": bool}
+    _worker_local_fields = {"_skip_mode": bool, "_state_restored": bool}
 
     batch_size: int
     batcher: Callable[[List[T_batch_sample]], T_batch]
@@ -66,6 +66,8 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
     _source_exhausted: bool
     #: Whether the state was restored since the last iteration started (not saved).
     _state_restored: bool
+    batcher_skip_safe: bool
+    _skip_mode: bool
     _batch_failure_handler: ErrorContext
 
     _savable_fields = (
@@ -82,6 +84,7 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
         batcher: Callable[[List[T_batch_sample]], T_batch],
         *,
         batcher_stateless: bool = False,
+        batcher_skip_safe: bool = False,
         batcher_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]] = None,
         drop_last: bool = False,
         failure_tolerance: int = 100,
@@ -96,6 +99,7 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
                 :exc:`megatron.energon.SkipSample` to skip a sample.
             batcher_stateless: If True, the batcher is stateless, thus samples can be stored/
                 restored.
+            batcher_skip_safe: If True, the batcher is skip-safe, thus samples can be skipped.
             batcher_config: Configuration for the batcher function. If callable, it should return the
                 configuration. Defaults to None.
             drop_last: If True, the last batch is dropped if it is smaller than the batch size.
@@ -106,6 +110,7 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
         self.batch_size = batch_size
         self.batcher = batcher
         self.batcher_stateless = batcher_stateless
+        self.batcher_skip_safe = batcher_skip_safe
         self.batcher_config = batcher_config
         self.drop_last = drop_last
         self.failure_tolerance = failure_tolerance
@@ -123,6 +128,7 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
         self._generator_offset = None
         self._source_exhausted = False
         self._state_restored = False
+        self._skip_mode = False
 
     def restore_state(self, state: FlexState) -> None:
         super().restore_state(state)
@@ -135,6 +141,12 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
             n_batches += 1
         return n_batches
 
+    def set_skip_mode(self, active: bool) -> None:
+        """Set whether to skip heavy computations for discarded outputs."""
+        if self.batcher_skip_safe:
+            self.dataset.set_skip_mode(active)
+        self._skip_mode = active
+
     def __iter__(self) -> Iterator[T_batch]:
         batch: List[T_batch_sample] = []
         sample_restore_keys = []
@@ -146,6 +158,7 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
         self._state_restored = False
 
         if self._generator_sample_keys is not None:
+            assert not self.batcher_skip_safe, "A generator batcher cannot be skip-safe"
             sample_restore_keys = self._generator_sample_keys
             assert self._generator_offset is not None
             batch = self._restore_batch(sample_restore_keys)
@@ -177,7 +190,16 @@ class BatchDataset(BaseWrapperDataset[T_batch_sample, T_batch], Generic[T_batch_
             sample_restore_keys = []
 
         def flush() -> Generator[T_batch, None, None]:
-            with self._batch_failure_handler.handle_errors(batch):
+            if self._skip_mode and self.batcher_skip_safe:
+                self._sample_index.skip()
+                yield cast(T_batch, None)
+                sample_restore_keys.clear()
+                return
+            with self._batch_failure_handler.handle_errors(
+                batch,
+                skip_safe=self.batcher_skip_safe
+                and (self._skip_mode or self.worker_config.logical_workers is not None),
+            ):
                 with self._sample_index.ctx() as sample_idx:
                     batch_sample = self.batcher(batch)
                 if isinstance(batch_sample, Generator):

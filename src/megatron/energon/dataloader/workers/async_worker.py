@@ -129,6 +129,13 @@ class DataLoaderAsynchronousWorker(DataLoaderWorker[TSample], Asynchronous, Gene
             return super().restore_sample(restore_key)
         return self._worker_call(self._wrk_restore_sample, restore_key)
 
+    def checkpoint_history(
+        self, states: dict[int, WorkerState] | None = None
+    ) -> dict[int, WorkerState]:
+        if self._in_worker():
+            return super().checkpoint_history(states)
+        return self._worker_call(self.checkpoint_history, states).get(self.request_timeout)
+
     def save_state(self) -> WorkerState:
         if self._in_worker():
             return super().save_state()

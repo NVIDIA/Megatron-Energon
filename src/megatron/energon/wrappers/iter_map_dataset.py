@@ -101,6 +101,10 @@ class IterMapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sampl
     def len_worker(self, worker_idx: int | None = None) -> int:
         return self.len_map_fn(self.dataset.len_worker(worker_idx))
 
+    def set_skip_mode(self, active: bool) -> None:
+        # This stage needs materialized inputs to decide routing or buffer future outputs.
+        self.dataset.set_skip_mode(False)
+
     def __iter__(self) -> Iterator[T_sample_out]:
         last_sample_wrapper = _LastSampleWrapper(self.dataset)
         # The iter_map_fn is stateless. Thus we need to know which inner sample created the

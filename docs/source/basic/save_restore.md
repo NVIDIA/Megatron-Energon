@@ -209,3 +209,86 @@ undelivered batches. Both migration options report how many batches each affecte
 source rank discards. An unchanged recipe still supports exact replay
 with prefetching. The custom loader checkpoint has a different format from the
 previous PyTorch-backed loader checkpoint.
+
+
+## Logical checkpoints and physical topology changes
+
+Configure an explicit `WorkerConfig.logical_workers` before constructing the dataset.
+The ordinary `save_state_rank` and `restore_state_rank` methods preserve physical execution
+state, including prefetch. Use logical checkpoints to change the number of ranks or workers:
+
+```python
+states = dict(loader.save_state_logical_rank())
+# Store each logical ID with its checkpoint, and record which file contains it.
+torch.save(states, checkpoint_file)
+
+# Build a fresh loader using the saved logical count and the new physical topology.
+required_ids = new_loader.get_logical_worker_group_ids()
+# Load the files covering required_ids into states.
+new_loader.restore_state_logical_rank(states)
+with new_loader:
+    for batch in new_loader:
+        train_step(batch)
+```
+
+Rank-local logical saves use no collectives. Each logical group contributes exactly one
+checkpoint; its owning rank can change after every delivered batch. Call
+`get_logical_worker_group_ids(for_save=True)` at save time to find the contributions.
+All ranks must have matching delivered counts and boundary phases. Prefetch does not count
+as delivery. Initial saves and saves partway through a worker round are supported.
+
+To change the recipe while several physical workers share a logical stream, pass the
+logical checkpoints to `migrate_dataloader_state()`. It rejects the rank checkpoint of
+these workers, because each of them saves its own position in the stream:
+
+```python
+states = dict(loader.save_state_logical_rank())
+metadata = collect_resume_metadata(loader)
+
+# Build a loader of the changed recipe with the same physical topology.
+states = migrate_dataloader_state(new_loader, states, metadata)
+new_loader.restore_state_logical_rank(states)
+```
+
+Pass the metadata collected on the same rank. Logical checkpoints hold no undelivered
+batches, so the source loader may prefetch. Change the physical topology in a separate
+logical restore. A rank checkpoint with explicit logical workers cannot discard prefetched
+batches; save it with `prefetch_factor=0`, or migrate the logical checkpoints.
+
+For a single checkpoint file, gather the per-rank contributions in the training framework
+and save the combined mapping by logical ID.
+
+Restore requires the same logical count and a new physical count that is a multiple of it.
+The micro-batch size may stay unchanged or be reduced to a divisor of the saved size.
+Resizing generator batches and changing grouped batch settings are rejected. Use a logical
+checkpoint to resize batches when logical workers are configured. Missing or duplicate group checkpoints are errors.
+The sample order within each logical stream is retained; rank ownership and interleaving
+between streams may change. Explicit logical workers retain a bounded history of pipeline
+snapshots covering the prefetch window so saving selects consumed progress rather than
+prefetched progress. This uses additional CPU time and checkpoint memory.
+
+## Loader iteration boundaries
+
+Pass `epochize` and `limit` to `get_loader`, `get_savable_loader`, or `DataLoader`:
+
+```python
+train_loader = get_savable_loader(train_dataset, epochize=1000)
+val_loader = get_loader(val_dataset, limit=100)
+```
+
+Both are positive integer output budgets per rank, after packing, batching, and physical
+striding. `epochize` ends an iteration and continues the source on the next iteration.
+`limit` resets the source when the iteration completes. If both are supplied, the smaller
+budget applies and completion resets the source. A finite source can finish before its
+budget; budgets do not pad streams. `len(loader)` reports an epochization budget when
+configured; with `limit` alone, it caps the source length estimate.
+
+Partial iteration resumes the current pass. The final yield and the following observed
+`StopIteration` are distinct checkpoint boundaries. Observe `StopIteration` to finish the
+pass before starting the next one. Save/restore preserves that distinction.
+
+Dataset builders and TaskEncoder builders no longer accept `virtual_epoch_length` or
+`limit`. Replace `get_train_dataset(..., virtual_epoch_length=N)` with
+`get_savable_loader(get_train_dataset(...), epochize=N)`, and move validation `limit` to
+the loader in the same way. The public `EpochizeDataset` and `LimitDataset` wrappers have
+been replaced by loader-owned boundaries.

@@ -79,6 +79,11 @@ def without_prefetched_batches(state: RankState, rank: int) -> RankState:
     count = sum(len(keys) for keys in state.prefetched_restore_keys)
     if not count:
         return state
+    if state.physical_layout is not None:
+        raise ValueError(
+            "Cannot discard prefetched batches with logical workers. "
+            "Save with prefetch_factor=0 before migrating the recipe."
+        )
     warnings.warn(f"Discarding {count} prefetched batches from rank {rank}", stacklevel=2)
     return replace(
         state, workers=[replace(worker, prefetched_restore_keys=[]) for worker in state.workers]
@@ -87,6 +92,8 @@ def without_prefetched_batches(state: RankState, rank: int) -> RankState:
 
 def validate_world_size_change(state: RankState) -> None:
     """Reject replay of outputs that were started under a different worker layout."""
+    if state.physical_layout is not None:
+        raise ValueError("Use logical checkpoints to change the physical topology")
     if any(state.prefetched_restore_keys):
         raise ValueError(
             "Cannot change the world size with pending prefetched samples. "
@@ -104,6 +111,8 @@ def resize_rank_state(
 ) -> RankState:
     """Resize pending batch keys while preserving the worker snapshots."""
     old_size = state.micro_batch_size
+    if old_size != batch_size and state.physical_layout is not None:
+        raise ValueError("Use a logical checkpoint to resize batches with logical workers")
     if old_size == batch_size:
         if not drop_last or batch_size is None:
             return state

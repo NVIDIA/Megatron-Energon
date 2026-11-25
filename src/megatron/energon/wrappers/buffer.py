@@ -118,8 +118,8 @@ class SavableSampleBuffer(BaseWrapperDataset[T_sample, T_sample], Generic[T_samp
 
     def save_state(self) -> FlexState:
         # Don't call super().save_state() because we don't want to save the wrapped datasets
-        # Just save the own state
-        return SavableDataset.save_state(self)
+        # Just save the own state. The restore keys are immutable and need no deep copy.
+        return FlexState(__class__=type(self).__name__, _restore_keys=list(self._restore_keys))
 
     def restore_state(self, state: FlexState) -> None:
         # Don't call super().restore_state() because we don't want to restore the wrapped datasets

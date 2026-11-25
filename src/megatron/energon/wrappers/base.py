@@ -89,6 +89,10 @@ class BaseWrapperDataset(SavableDataset[T_sample_out], Generic[T_sample_in, T_sa
     def worker_has_samples(self) -> bool:
         return any(ds.worker_has_samples() for ds in self.datasets)
 
+    def set_skip_mode(self, active: bool) -> None:
+        for ds in self.datasets:
+            ds.set_skip_mode(active)
+
     def close(self) -> None:
         """Close all child datasets, even if closing one of them fails."""
         with ExitStack() as stack:
@@ -131,6 +135,18 @@ class BaseWrapperDataset(SavableDataset[T_sample_out], Generic[T_sample_in, T_sa
             dataset.restore_state(dstate)
 
         super().restore_state(state)
+
+    @classmethod
+    def _wrap_child_state(cls, child: FlexState, **fields: Any) -> FlexState:
+        """Build a checkpoint for a single-child wrapper from its saved fields."""
+        assert fields.keys() == set(cls._savable_fields)
+        return FlexState(__class__=cls.__name__, datasets=[child], **fields)
+
+    @classmethod
+    def _unwrap_child_state(cls, state: FlexState) -> FlexState:
+        assert state["__class__"] == cls.__name__
+        (child,) = state["datasets"]
+        return child
 
     def reset_state_deep(self) -> None:
         """Resets the state of the inner datasets and then the own state."""
@@ -196,6 +212,10 @@ class SampleIndex(Savable):
         finally:
             if hasattr(it, "close"):
                 it.close()
+
+    def skip(self, n: int = 1) -> None:
+        """Advance the sample index as if ``n`` outputs had been yielded."""
+        self.current_idx += n
 
     def save_state(self) -> int:
         return self.current_idx

@@ -52,6 +52,10 @@ class ShuffleBufferDataset(BaseWrapperDataset[T_sample, T_sample], Generic[T_sam
     def len_worker(self, worker_idx: int | None = None) -> int:
         return self.dataset.len_worker(worker_idx)
 
+    def set_skip_mode(self, active: bool) -> None:
+        # This stage needs materialized inputs to decide routing or buffer future outputs.
+        self.dataset.set_skip_mode(False)
+
     def __iter__(self) -> Iterator[T_sample]:
         if not self._state_restored:
             # A new iteration starts a new pass, even if the previous one was not iterated to its

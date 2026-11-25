@@ -222,3 +222,17 @@ When modifying the loader, verify at least the following:
 - smaller compatible micro-batches restore through batch-key splitting;
 - context exit and explicit `shutdown()` leave no workers or helper threads alive; and
 - a restored loader resumes at the next undelivered sample on its rank.
+
+
+## Logical stream execution
+
+Logical assignment is separate from physical RPC routing. `StrideDataset` advances full
+logical streams; `BoundedDataset` owns pass progress before striding. The worker retains
+at most `prefetch_factor + 2` output-boundary snapshots (at least two) when logical workers
+are explicit. Physical checkpoints include those snapshots so a restored prefetch queue
+can subsequently be saved as a logical checkpoint at any delivery boundary.
+
+Logical checkpoints select the consumed snapshot of each group's last contributor and
+strip backend housekeeping wrappers. Restore installs the logical pipeline under the new
+backend wrappers and computes its first stride from the destination delivery phase.
+Serialized logical entries contain no physical worker assignment or source fanout.

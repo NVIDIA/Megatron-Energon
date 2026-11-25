@@ -5,6 +5,7 @@ import json
 import tempfile
 import unittest
 import warnings
+from collections import Counter
 from pathlib import Path
 from typing import Iterable
 
@@ -122,6 +123,7 @@ class TestCheckpointResume(unittest.TestCase):
         *,
         world_size: int = 1,
         num_workers: int = 0,
+        logical_workers: int | None = None,
         batch_size: int = 1,
         repeat: bool = True,
         task_encoder: DefaultTaskEncoder | None = None,
@@ -129,7 +131,12 @@ class TestCheckpointResume(unittest.TestCase):
     ):
         dataset = get_train_dataset(
             recipe_path,
-            worker_config=WorkerConfig(rank=0, world_size=world_size, num_workers=num_workers),
+            worker_config=WorkerConfig(
+                rank=0,
+                world_size=world_size,
+                num_workers=num_workers,
+                logical_workers=logical_workers,
+            ),
             batch_size=batch_size,
             shuffle_buffer_size=None,
             max_samples_per_sequence=None,
@@ -610,6 +617,40 @@ class TestCheckpointResume(unittest.TestCase):
             assert all(seen_after.values())
         finally:
             new_loader.close()
+
+    def test_shared_logical_stream_migrates_from_logical_checkpoints(self):
+        entries = [("a", 1), ("b", 1), ("c", 1)]
+        recipe = dict(blend="blend_epochized", weight_key="repetitions")
+        loader_kwargs = dict(num_workers=2, logical_workers=1, repeat=False)
+        self._write_recipe(self.recipe_path, entries, **recipe)
+        seen: Counter[int] = Counter()
+        old_loader = self._loader(self.recipe_path, **loader_kwargs)
+        try:
+            old_iter = iter(old_loader)
+            for _ in range(20):
+                seen.update(_batch_values(next(old_iter)))
+            rank_state = old_loader.save_state_rank()
+            logical_states = dict(old_loader.save_state_logical_rank())
+            saved_metadata = collect_resume_metadata(old_loader)
+        finally:
+            old_loader.close()
+
+        self._write_recipe(self.recipe_path, entries[:2], **recipe)
+        new_loader = self._loader(self.recipe_path, **loader_kwargs)
+        try:
+            # Each worker saved its own position in the stream, which only one of them continues.
+            with self.assertRaisesRegex(ValueError, "sharing a logical stream"):
+                migrate_dataloader_state(new_loader, rank_state, saved_metadata)
+
+            new_loader.restore_state_logical_rank(
+                migrate_dataloader_state(new_loader, logical_states, saved_metadata)
+            )
+            for batch in new_loader:
+                seen.update(_batch_values(batch))
+        finally:
+            new_loader.close()
+
+        assert all(seen[value] == 1 for value in (*range(50), *range(100, 150))), seen
 
     def test_json_metadata_round_trip_keeps_exact_state(self):
         self._write_recipe(self.recipe_path, [("a", 1.0), ("b", 1.0)])
