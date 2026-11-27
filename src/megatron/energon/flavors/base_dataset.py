@@ -5,7 +5,8 @@ import dataclasses
 import inspect
 import typing
 from abc import ABC, abstractmethod
-from copy import deepcopy
+from collections.abc import Mapping, MutableMapping
+from copy import copy, deepcopy
 from dataclasses import is_dataclass
 from typing import (
     Any,
@@ -34,12 +35,61 @@ from megatron.energon.source_info import SourceInfo
 from megatron.energon.state import FlexState
 from megatron.energon.tags import SampleTagsAlias, TagsAlias, canonicalize_tag_kwargs
 from megatron.energon.worker import WorkerConfig
+from megatron.energon.worker_local import WorkerLocalFields
 
 if typing.TYPE_CHECKING:
     from megatron.energon.flavors.common.manifest.types import ShardInfo
 
 T_sample = TypeVar("T_sample", covariant=True)
 T = TypeVar("T", covariant=True)
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class RestoreKey:
+    """A typed address used to reconstruct a sample or batch."""
+
+    def to_json_object(self) -> dict:
+        """Return the key's type and fields for structured debug logging."""
+        return {
+            "type": type(self).__qualname__,
+            **{
+                field.name: _restore_key_json_value(getattr(self, field.name))
+                for field in dataclasses.fields(self)
+            },
+        }
+
+
+def _restore_key_json_value(value: Any) -> Any:
+    if isinstance(value, RestoreKey):
+        return value.to_json_object()
+    if value is None or isinstance(value, (str, int, bool, float)):
+        return value
+    if isinstance(value, slice):
+        return {
+            "type": "slice",
+            "start": _restore_key_json_value(value.start),
+            "stop": _restore_key_json_value(value.stop),
+            "step": _restore_key_json_value(value.step),
+        }
+    if isinstance(value, (tuple, list)):
+        return [_restore_key_json_value(item) for item in value]
+    if isinstance(value, Mapping):
+        if all(isinstance(key, str) for key in value):
+            return {key: _restore_key_json_value(item) for key, item in value.items()}
+        return {
+            "type": "mapping",
+            "entries": [
+                [_restore_key_json_value(key), _restore_key_json_value(item)]
+                for key, item in value.items()
+            ],
+        }
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return {
+            field.name: _restore_key_json_value(getattr(value, field.name))
+            for field in dataclasses.fields(value)
+        }
+    # A custom packing slice may contain an opaque Python object.
+    return {"type": f"{type(value).__module__}.{type(value).__qualname__}"}
 
 
 class PinMemoryMixin:
@@ -50,15 +100,29 @@ class PinMemoryMixin:
         structures of dicts, dataclasses, namedtuples, lists and tuples."""
         if isinstance(batch, torch.Tensor):
             return batch.pin_memory(device)
-        elif isinstance(batch, dict):
-            return {key: self._pin_memory(value, device) for key, value in batch.items()}
+        elif isinstance(batch, RestoreKey):
+            return batch
+        elif getattr(type(batch), "pin_memory", None) is not PinMemoryMixin.pin_memory and callable(
+            custom_pin := getattr(batch, "pin_memory", None)
+        ):
+            return custom_pin()
+        elif isinstance(batch, Mapping):
+            values = {key: self._pin_memory(value, device) for key, value in batch.items()}
+            try:
+                if isinstance(batch, MutableMapping):
+                    result = copy(batch)
+                    result.update(values)
+                    return result
+                return type(batch)(values)
+            except TypeError:
+                return values
         elif dataclasses.is_dataclass(batch):
-            return type(batch)(
-                **{
-                    field.name: self._pin_memory(getattr(batch, field.name), device)
-                    for field in dataclasses.fields(batch)
-                }
-            )
+            result = copy(batch)
+            for field in dataclasses.fields(batch):
+                if hasattr(batch, field.name):
+                    value = self._pin_memory(getattr(batch, field.name), device)
+                    object.__setattr__(result, field.name, value)
+            return result
         elif isinstance(batch, (tuple, list)):
             if hasattr(batch, "_fields"):
                 # NamedTuple
@@ -125,9 +189,8 @@ class Sample(SampleTagsAlias, ABC, PinMemoryMixin, ExtendableDataclassMixin):
 
     #: Uniquely identifies each sample in the dataset.
     __key__: str
-    #: Key for restoring the sample. This is used to restore the sample from a checkpoint. It
-    # should be a (nested) tuple of strings and integers, which can be used to index the dataset.
-    __restore_key__: Tuple[Union[str, int, tuple], ...]
+    #: Typed address for reconstructing this sample. None if the sample has no restore address.
+    __restore_key__: RestoreKey | None
 
     #: A dataset may define tags to distinguish between samples of the same sample type.
     __tags__: Optional[Dict[str, Any]] = None
@@ -198,7 +261,7 @@ class State(ABC, ExtendableDataclassMixin):
     """
 
 
-class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC):
+class SavableDataset(WorkerLocalFields, IterableDataset[T_sample], Savable, Generic[T_sample], ABC):
     """A dataset that can be saved and restored (i.e. the random state, internal buffers, etc.).
     I.e. it can be resumed from a checkpoint.
 
@@ -241,6 +304,15 @@ class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC)
         """
         return sum(self.len_worker(i) for i in range(self.worker_config.num_workers or 1))
 
+    def set_skip_mode(self, active: bool) -> None:
+        """Toggle best-effort fast-forward mode for the next iterator outputs on the active worker.
+
+        Wrappers may use this transient flag to avoid expensive work for outputs
+        that an outer wrapper will discard. Implementations must still advance
+        iterator state as if the output had been produced.
+        """
+        ...
+
     def __len__(self) -> int:
         """Returns the length of the dataset for the current rank. Corresponds to `len_rank`."""
         return self.len_rank()
@@ -253,6 +325,12 @@ class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC)
         readers reopen their files on the next access, so the dataset can be iterated again,
         e.g. by another loader.
         """
+
+    def worker_init(self) -> None:
+        """Initialize resources owned by the active loader worker."""
+
+    def worker_close(self) -> None:
+        """Release resources owned by the active loader worker."""
 
     def __enter__(self) -> Self:
         return self
@@ -353,7 +431,7 @@ class SavableDataset(IterableDataset[T_sample], Savable, Generic[T_sample], ABC)
         """Asserts that the dataset can restore a sample from a key."""
         assert self.can_restore_sample(), "This dataset cannot restore samples."
 
-    def restore_sample(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> T_sample:
+    def restore_sample(self, restore_key: RestoreKey) -> T_sample:
         """
         Generic key type, because it might be either an integer (for a core dataset), or something
         more complex (e.g. for blended datasets).
@@ -407,39 +485,14 @@ class BaseCoreDatasetFactory(TagsAlias, Generic[T_sample], ABC):
         ...
 
 
-def add_sample_restore_key(
-    sample: T_sample, *key: Union[int, str], src: Any, fail_otherwise: bool = False
-) -> T_sample:
-    """Adds a key to a sample. The sample must be a valid `Sample` or dict containing
-    __restore_key__, which is a tuple of keys that can be used to restore the inner sample.
-    This restore key is prepended with the `key`."""
-    if isinstance(sample, Sample) or hasattr(sample, "__restore_key__"):
-        try:
-            sample.__restore_key__ = (type(src).__name__, *key, *sample.__restore_key__)
-        except KeyError:
-            pass
-    elif isinstance(sample, dict) and "__restore_key__" in sample:
-        sample["__restore_key__"] = (type(src).__name__, *key, *sample["__restore_key__"])
-    elif fail_otherwise:
-        raise RuntimeError(
-            "Did not yield a sample with a restore key, but is marked stateless/deterministic."
-        )
-    return sample
-
-
 def set_sample_restore_key(
-    sample: T_sample, *key: Union[int, str], src: Any, fail_otherwise: bool = False
+    sample: T_sample, restore_key: RestoreKey | None, *, fail_otherwise: bool = False
 ) -> T_sample:
-    """Sets the restore key for a sample. The sample must be a valid `Sample` or dict containing
-    __restore_key__, which is a tuple of keys that can be used to restore the inner sample.
-    This restore key is prepended with the `key`."""
-    if isinstance(sample, Sample) or hasattr(sample, "__restore_key__"):
-        try:
-            sample.__restore_key__ = (type(src).__name__, *key)
-        except KeyError:
-            pass
-    elif isinstance(sample, dict) and "__restore_key__" in sample:
-        sample["__restore_key__"] = (type(src).__name__, *key)
+    """Attach a typed restore address to a sample or batch."""
+    if isinstance(sample, dict) and "__restore_key__" in sample:
+        sample["__restore_key__"] = restore_key
+    elif hasattr(sample, "__restore_key__"):
+        sample.__restore_key__ = restore_key
     elif fail_otherwise:
         raise RuntimeError(
             "Did not yield a sample with a restore key, but is marked stateless/deterministic."

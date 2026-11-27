@@ -19,9 +19,14 @@ from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath, EPathMappedArray
 from megatron.energon.flavors.common.manifest.paths import MAIN_FOLDER_NAME
 from megatron.energon.flavors.common.manifest.types import ShardInfo
-from megatron.energon.flavors.common.reader import IndexedSampleReader, SequentialSampleReader
-from megatron.energon.flavors.common.sample_record import SampleRecord
+from megatron.energon.flavors.common.reader import (
+    IndexedSampleReader,
+    SequentialSampleReader,
+    WorkerLocalReader,
+)
+from megatron.energon.flavors.common.sample_record import IndexedRestoreKey, SampleRecord
 from megatron.energon.typed_converter import JsonParser
+from megatron.energon.worker_local import WorkerLocalFields
 
 FILTER_FILENAME_PREFIX = "filter_"
 FILTER_JSON_SUFFIX = ".json"
@@ -76,12 +81,14 @@ class FilterTranslation:
     original_end: int
 
 
-class FilterView:
+class FilterView(WorkerLocalFields):
     """A named filter mapped to a reader's selected, ordered shards.
 
     Owns the metadata and lazy binary mapping. Translation needs only per-shard
     offsets, without copying the per-sample index table.
     """
+
+    _worker_local_fields = {"_index_map": lambda: None}
 
     dataset_path: EPath
     filter_name: str
@@ -272,6 +279,7 @@ class TranslatedIndexReader(IndexedSampleReader[SampleRecord]):
     """Reader wrapper that applies a filter translation before delegation."""
 
     inner: IndexedSampleReader[SampleRecord]
+    _sequential_inner: SequentialSampleReader[SampleRecord] | None
     filter_view: FilterView
 
     def __init__(
@@ -289,9 +297,11 @@ class TranslatedIndexReader(IndexedSampleReader[SampleRecord]):
     @staticmethod
     def _translate(sample: SampleRecord | None, filtered_index: int) -> SampleRecord | None:
         if isinstance(sample, dict) and "__restore_key__" in sample:
-            sample = dict(sample)
+            sample = sample.copy()
             restore_key = sample["__restore_key__"]
-            sample["__restore_key__"] = (restore_key[0], filtered_index)
+            sample["__restore_key__"] = IndexedRestoreKey(
+                kind=restore_key.kind, index=filtered_index
+            )
         return sample
 
     def __getitem__(self, filtered_index: int) -> SampleRecord | None:
@@ -316,6 +326,13 @@ class TranslatedIndexReader(IndexedSampleReader[SampleRecord]):
         finally:
             inner_iter.close()
 
+    def worker_close(self) -> None:
+        try:
+            if isinstance(self.inner, WorkerLocalReader):
+                self.inner.worker_close()
+        finally:
+            self.filter_view.close()
+
     def close(self) -> None:
         if hasattr(self.inner, "close"):
             self.inner.close()
@@ -334,6 +351,8 @@ class FilterIndexWriter:
     filter_name: str
     shard_order: tuple[str, ...]
     original_shard_counts: dict[str, int]
+    #: Byte sizes recorded against the same source layout as the shard counts.
+    _source_byte_sizes: dict[str, int]
     _original_shard_offsets: dict[str, int]
     _shard_ends: list[int]
     _total_original: int

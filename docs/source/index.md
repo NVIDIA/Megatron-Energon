@@ -48,6 +48,7 @@ maxdepth: 2
 ---
 advanced/remote_dataset
 advanced/crude_datasets
+advanced/data_processing
 advanced/filter_index
 advanced/custom_sample_loader
 advanced/repro_scaling
@@ -81,6 +82,7 @@ maxdepth: 2
 internals/code_structure
 internals/dataset_formats
 internals/savability
+internals/dataloader
 internals/recipe_checkpoint
 internals/packing_blending
 internals/epath_storage

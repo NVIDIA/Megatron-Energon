@@ -5,11 +5,12 @@ import contextlib
 import struct
 import tarfile
 from types import TracebackType
-from typing import BinaryIO, Dict, Generator, Optional, Tuple, Type, Union
+from typing import BinaryIO, Generator, Optional, Tuple, Type, Union
 
 from megatron.energon.edataclass import edataclass
 from megatron.energon.epathlib import EPath
 from megatron.energon.retry_stream import RetryReadStream
+from megatron.energon.worker_local import WorkerLocalFields
 
 IDX_SUFFIX = ".idx"
 
@@ -46,6 +47,9 @@ class ITarRawSamplePartPointer:
 
 
 class TarIndexReader:
+    _length: int
+    itar: BinaryIO
+
     def __init__(self, tar_path: Union[EPath, str]):
         tar_path = EPath(tar_path)
         index_path = tar_path.with_suffix(IDX_SUFFIX, replace=False)
@@ -84,6 +88,11 @@ class TarIndexReader:
 
 
 class TarIndexWriter:
+    final_name: EPath
+    itar: BinaryIO
+    tar_path: EPath
+    tmp_name: EPath
+
     def __init__(self, tar_path: EPath):
         self.tar_path = tar_path
         self.final_name = tar_path.with_suffix(IDX_SUFFIX, replace=False)
@@ -120,6 +129,11 @@ class TarIndexWriter:
 class SubFileReader(BinaryIO):
     """A file-like object that reads a subfile (i.e. offset, size defined portion) of a larger
     file."""
+
+    _pos: int
+    offset: int
+    size: int
+    stream: BinaryIO
 
     def __init__(self, stream: BinaryIO, offset: int, size: int):
         self.offset = offset
@@ -194,7 +208,7 @@ class CacheEntry:
     lookahead_byteoffset: Optional[int] = None
 
 
-class CachedItarOffsetReader:
+class CachedItarOffsetReader(WorkerLocalFields):
     """
     This class is a high-level wrapper around TarIndexReader that caches some
     of the recent lookups for faster access. It is designed for the case when
@@ -205,9 +219,14 @@ class CachedItarOffsetReader:
         cache_size: The number of entries to keep in the cache. By default, we keep 32.
     """
 
+    cache_size: int
+    tar_index_reader_cache: dict[tuple[str, int], CacheEntry]
+
+    _worker_local_fields = {"tar_index_reader_cache": dict}
+
     def __init__(self, cache_size: int = 32):
         # Maps (tar_file, current_offset) -> CacheEntry
-        self.tar_index_reader_cache: Dict[Tuple[str, int], CacheEntry] = {}
+        self.tar_index_reader_cache = {}
         self.cache_size = cache_size
 
     def _find_or_create_entry(
@@ -341,6 +360,8 @@ class ITarFile(tarfile.TarFile):
 
                 # Read more offsets here ...
     """
+
+    in_init: bool
 
     def __init__(self, *args, **kwargs):
         self.in_init = True

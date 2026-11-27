@@ -90,9 +90,12 @@ all = [
 Homepage = "https://github.com/NVIDIA/Megatron-Energon"
 
 [tool.hatch.build.targets.wheel]
+# Pin until the PyPI publish action accepts newer core metadata versions.
+core-metadata-version = "2.4"
 packages = ["src/megatron"]
 
 [tool.hatch.build.targets.sdist]
+core-metadata-version = "2.4"
 packages = ["src/megatron"]
 
 [project.scripts]

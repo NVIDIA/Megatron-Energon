@@ -26,6 +26,13 @@ class IndexedSampleReader(Protocol[T_sample_record]):
 
 
 @runtime_checkable
+class WorkerLocalReader(Protocol):
+    """Reader with resources that can be closed for the active worker only."""
+
+    def worker_close(self) -> None: ...
+
+
+@runtime_checkable
 class SequentialSampleReader(Protocol[T_sample_record]):
     """Reader that can stream a consecutive range of samples cheaper than random access, e.g.
     because random access needs to decode a whole block of samples."""

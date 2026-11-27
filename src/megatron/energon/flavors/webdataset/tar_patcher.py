@@ -474,6 +474,8 @@ split_name_re_bytes = re.compile(rb"^((?:.*/|)[^.]+)[.]([^/]*)$")
 class TarPatcher:
     """Utility for scanning and renaming tar archive entries in place."""
 
+    _show_progress: bool
+
     def __init__(self, *, show_progress: bool = True) -> None:
         self._show_progress = show_progress
 

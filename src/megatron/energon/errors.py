@@ -6,6 +6,7 @@ from typing import Any, Callable, Generator, Type, TypeVar
 
 from megatron.energon.sample_utils import format_sample_compact, format_sample_detailed
 from megatron.energon.source_info import SourceInfo, get_source_info
+from megatron.energon.worker_local import WorkerLocalFields
 
 T = TypeVar("T")
 
@@ -48,7 +49,7 @@ SYSTEM_EXCEPTIONS = (
 )
 
 
-class ErrorContext:
+class ErrorContext(WorkerLocalFields):
     """Tracks consecutive errors and enforces error tolerance limits.
 
     This class helps prevent infinite error loops by tracking consecutive failures
@@ -64,6 +65,8 @@ class ErrorContext:
         with error_ctx.handle_errors(sample):
             result = process_sample(sample)
     """
+
+    _worker_local_fields = {"_consecutive_failures": int}
 
     name: str
     tolerance: int
@@ -98,6 +101,8 @@ class ErrorContext:
     def handle_errors(
         self,
         sample: Any,
+        *,
+        skip_safe: bool = False,
     ) -> Generator[None, None, None]:
         """Context manager for handling exceptions during sample processing.
 
@@ -112,13 +117,22 @@ class ErrorContext:
             self._consecutive_failures = 0
         except GeneratorExit:
             raise
-        except SkipSample:
+        except SkipSample as e:
+            if skip_safe:
+                raise FatalSampleError.from_sample(
+                    sample, f"{self.name} cannot filter samples when marked skip-safe"
+                ) from e
             pass
         except SYSTEM_EXCEPTIONS as e:
             raise FatalSampleError.from_sample(
                 sample, f"{self.name} failed due to system exception: {e}."
             )
         except Exception as e:
+            if skip_safe:
+                raise FatalSampleError.from_sample(
+                    sample,
+                    f"{self.name} failed due to exception, but was marked as skip-safe: {e}.",
+                ) from e
             print(f"Except {e} in {self.name}")
             # Call the error handler if provided
             if self.handler is not None:

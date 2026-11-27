@@ -181,8 +181,6 @@ class TestDataset(unittest.TestCase):
 
         train_loader = get_savable_loader(
             train_dataset,
-            checkpoint_every_sec=0,
-            checkpoint_every_min_n_samples=1,
         )
 
         # Load 3 samples
@@ -203,8 +201,6 @@ class TestDataset(unittest.TestCase):
                 shuffle_buffer_size=100,
                 max_samples_per_sequence=None,
             ),
-            checkpoint_every_sec=0,
-            checkpoint_every_min_n_samples=1,
         )
         train_loader.restore_state_rank(state1)
         # Load 5 samples
@@ -235,8 +231,6 @@ class TestDataset(unittest.TestCase):
                     shuffle_buffer_size=None,
                     max_samples_per_sequence=None,
                 ),
-                checkpoint_every_min_n_samples=1,
-                checkpoint_every_sec=0,
             )
             lens.append(len(loader))
 

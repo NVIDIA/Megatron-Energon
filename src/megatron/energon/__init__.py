@@ -33,6 +33,8 @@ from megatron.energon.cache import (
     PrimaryFileStore,
     SystemFileStore,
 )
+from megatron.energon.dataloader import DataLoader
+from megatron.energon.dataloader import DataLoader as SavableDataLoader
 from megatron.energon.edataclass import edataclass
 from megatron.energon.errors import SkipSample, log_exception, reraise_exception
 from megatron.energon.flavors import (
@@ -78,6 +80,7 @@ from megatron.energon.flavors import (
     VQASample,
     VQAWebdataset,
 )
+from megatron.energon.flavors.base_dataset import RestoreKey
 from megatron.energon.flavors.common.filter_index import (
     FilterIndexWriter,
     FilterView,
@@ -97,13 +100,13 @@ from megatron.energon.recipe import (
     register_aux_filestore_protocol,
     traverse_recipe,
 )
-from megatron.energon.savable_loader import SavableDataLoader
 from megatron.energon.source_info import SourceInfo
 from megatron.energon.task_encoder import (
     AugmentTaskEncoder,
     Batch,
     Cooker,
     DefaultTaskEncoder,
+    PackingGroupConfig,
     TaskEncoder,
     basic_sample_keys,
     batch_list,
@@ -111,9 +114,13 @@ from megatron.energon.task_encoder import (
     batch_stack,
     cooker,
     generic_batch,
+    get_processing_dataset,
+    get_processing_datasets,
     get_train_dataset,
     get_val_dataset,
     get_val_datasets,
+    sample_size_metric,
+    skip_safe,
     stateless,
 )
 from megatron.energon.worker import WorkerConfig
@@ -121,18 +128,19 @@ from megatron.energon.wrappers import (
     BatchDataset,
     BlendDataset,
     ConcatDataset,
-    EpochizeDataset,
     FilterDataset,
     GcDataset,
     GroupBatchDataset,
     IterMapDataset,
-    LimitDataset,
     LogSampleDataset,
     MapDataset,
     MixBatchDataset,
+    PackedSamplesOutput,
     PackingDataset,
+    PartialSample,
     RepeatDataset,
     ShuffleBufferDataset,
+    StreamingPackingDataset,
     concat_pad,
     generic_concat,
     homogeneous_concat_mix,
@@ -181,7 +189,6 @@ __all__ = [
     "DefaultTaskEncoder",
     "DirectLazy",
     "edataclass",
-    "EpochizeDataset",
     "FileCacheLazy",
     "FileStore",
     "FileStoreCachePool",
@@ -193,6 +200,8 @@ __all__ = [
     "generic_batch",
     "generic_concat",
     "get_loader",
+    "get_processing_dataset",
+    "get_processing_datasets",
     "get_savable_loader",
     "get_train_dataset",
     "get_val_dataset",
@@ -207,7 +216,6 @@ __all__ = [
     "InterleavedWebdataset",
     "IterMapDataset",
     "Lazy",
-    "LimitDataset",
     "load_dataset",
     "log_exception",
     "LogSampleDataset",
@@ -224,15 +232,21 @@ __all__ = [
     "OCRWebdataset",
     "ParquetDatasetFactory",
     "ParquetShardListDatasetFactory",
+    "PackingGroupConfig",
+    "PartialSample",
     "PackingDataset",
     "PrimaryFileStore",
     "prepare_metadataset",
     "prepare_recipe",
     "RepeatDataset",
+    "PackedSamplesOutput",
     "reraise_exception",
     "Sample",
     "SampleDecoder",
+    "sample_size_metric",
+    "DataLoader",
     "SavableDataLoader",
+    "RestoreKey",
     "SavableDataset",
     "traverse_metadataset",
     "traverse_recipe",
@@ -242,7 +256,9 @@ __all__ = [
     "SkipSample",
     "SourceInfo",
     "StandardWebdatasetFactory",
+    "StreamingPackingDataset",
     "stateless",
+    "skip_safe",
     "SystemFileStore",
     "TaskEncoder",
     "TextSample",

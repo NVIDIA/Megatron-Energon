@@ -8,6 +8,8 @@ Please also take a look at [](basics_flow) to see the pipeline.
 
 If you don't specify any task encoder, a default version, the {py:class}`DefaultTaskEncoder <megatron.energon.DefaultTaskEncoder>` will be used.
 
+The Task Encoder's `decoder` class attribute controls automatic payload decoding before cooking and sample encoding. Set `decoder = None` when code needs the stored bytes—for example, for hashing, copying, validation, custom parsing, or linear offline data processing. See [](data_decoding) for the decoding contract and {ref}`linear-data-processing` for a complete example.
+
 For writing your own task encoder, create a class based on {py:class}`DefaultTaskEncoder <megatron.energon.DefaultTaskEncoder>`
 and override one or more of the following methods. The data flow of {py:func}`get_train_dataset <megatron.energon.get_train_dataset>` or {py:func}`get_val_dataset <megatron.energon.get_val_dataset>` is as follows:
 
@@ -19,12 +21,14 @@ and override one or more of the following methods. The data flow of {py:func}`ge
 - {py:meth}`def preencode_sample(self, sample: T_sample) -> T_sample <megatron.energon.TaskEncoder.preencode_sample>`
   - Can be used as a replacement to {py:func}`encode_sample <megatron.energon.DefaultTaskEncoder.encode_sample>`
   - Only used together with {py:meth}`postencode_sample <megatron.energon.TaskEncoder.postencode_sample>` (below). Use it if you need to instantiate lazy data before packing the selected samples. But it will also work when not using packing.
-- {py:meth}`def select_samples_to_pack(self, samples: List[T_encoded_sample]) -> List[List[T_encoded_sample]] <megatron.energon.TaskEncoder.select_samples_to_pack>`
-  - Optional. Allows for efficient sample packing. See [](../advanced/packing).
+- {py:meth}`def select_samples_to_pack(self, samples: List[T_encoded_sample]) -> Union[List[List[T_encoded_sample]], PackedSamplesOutput] <megatron.energon.TaskEncoder.select_samples_to_pack>`
+  - Optional. Allows for efficient sample packing. See [](../advanced/packing). May return {py:class}`PackedSamplesOutput <megatron.energon.PackedSamplesOutput>` to re-queue a pushback sequence onto the reading buffer.
+- {py:meth}`def select_next_pack(self, samples: Iterator[T_encoded_sample]) -> Union[List[List[T_encoded_sample]], PackedSamplesOutput] <megatron.energon.TaskEncoder.select_next_pack>`
+  - Optional. Enables streaming packing with `packing_buffer_size="stream"`. The method pulls just enough samples for the next pack and may return {py:class}`PackedSamplesOutput <megatron.energon.PackedSamplesOutput>` to carry remainders into the next pack.
 - {py:meth}`def postencode_sample(self, sample: T_sample) -> T_encoded_sample <megatron.energon.TaskEncoder.postencode_sample>`
   - Only used together with {py:meth}`preencode_sample <megatron.energon.TaskEncoder.preencode_sample>`. Use it if you need to instantiate lazy data before packing the selected samples. But it will also work when not using packing.
 - {py:meth}`def pack_selected_samples(self, samples: List[T_encoded_sample]) -> T_batch_sample] <megatron.energon.TaskEncoder.pack_selected_samples>`
-  - Required if select_samples_to_pack is used. Compresses a group of samples to a single sample.
+  - Required if `select_samples_to_pack` or `select_next_pack` is used. Compresses a group of samples to a single sample.
 - (samples are collected for a batch)
 - {py:meth}`def batch(self, batch: List[T_encoded_sample]) -> T_raw_batch <megatron.energon.DefaultTaskEncoder.batch>`
   - Collate the batch to a single sample, defaults to padded batching for tensors, lists for everything else.

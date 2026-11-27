@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import inspect
+from contextlib import ExitStack
+from dataclasses import dataclass
 from typing import (
     Any,
     Callable,
@@ -10,21 +12,38 @@ from typing import (
     Generic,
     Iterator,
     Optional,
-    Tuple,
     TypeVar,
     Union,
+    cast,
 )
 
+from megatron.energon.cache.base import FileStore
 from megatron.energon.errors import (
     ErrorContext,
     handle_restore_errors,
 )
-from megatron.energon.flavors.base_dataset import SavableDataset, add_sample_restore_key
+from megatron.energon.flavors.base_dataset import RestoreKey, SavableDataset, set_sample_restore_key
 from megatron.energon.worker import WorkerConfig
-from megatron.energon.wrappers.base import BaseWrapperDataset, SampleIndex, get_sample_restore_key
+from megatron.energon.wrappers.base import (
+    BaseWrapperDataset,
+    SampleIndex,
+    WrappedRestoreKey,
+    get_sample_restore_key,
+)
 
 T_sample = TypeVar("T_sample")
 T_sample_out = TypeVar("T_sample_out")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class MapRestoreKey(WrappedRestoreKey):
+    sample_idx: int
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class MapGenRestoreKey(MapRestoreKey):
+    #: Output position within the generator for this input sample.
+    gen_idx: int
 
 
 class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T_sample_out]):
@@ -32,9 +51,15 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
 
     map_fn: Callable[[T_sample], Union[T_sample_out, Generator[T_sample_out, None, None]]]
     stateless_map_fn: bool
+    map_fn_skip_safe: bool
+    _skip_mode: bool
+    _worker_local_fields = ("_skip_mode",)
     map_fn_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]]
+    failure_tolerance: int
+    #: Stores used by the mapping function and managed with its dataset lifecycle.
+    auxiliary_stores: tuple[FileStore, ...] = ()
     _sample_index: SampleIndex
-    _generator_sample_key: Optional[Any]
+    _generator_sample_key: RestoreKey | None
     _generator_offset: Optional[int]
     _map_failure_handler: ErrorContext
 
@@ -50,6 +75,7 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
         map_fn: Callable[[T_sample], Union[T_sample_out, Generator[T_sample_out, None, None]]],
         *,
         stateless_map_fn: bool = False,
+        map_fn_skip_safe: bool = False,
         map_fn_config: Optional[Union[Dict[str, Any], Callable[[], Dict[str, Any]]]] = None,
         failure_tolerance: int = 100,
         worker_config: WorkerConfig,
@@ -74,6 +100,7 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
         super().__init__(dataset, worker_config=worker_config)
         self.map_fn = map_fn
         self.stateless_map_fn = stateless_map_fn
+        self.map_fn_skip_safe = map_fn_skip_safe
         self.map_fn_config = map_fn_config
         self.failure_tolerance = failure_tolerance
         self._map_failure_handler = ErrorContext(
@@ -84,20 +111,45 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
 
         self.reset_state_own()
 
+    def worker_init(self) -> None:
+        super().worker_init()
+        for store in self.auxiliary_stores:
+            store.worker_init()
+
+    def worker_close(self) -> None:
+        with ExitStack() as stack:
+            stack.callback(super().worker_close)
+            for store in self.auxiliary_stores:
+                stack.callback(store.worker_close)
+
+    def close(self) -> None:
+        with ExitStack() as stack:
+            stack.callback(super().close)
+            for store in self.auxiliary_stores:
+                stack.callback(store.close)
+
     def reset_state_own(self) -> None:
         self._sample_index = SampleIndex(self.worker_config, src=self)
         self._generator_sample_key = None
         self._generator_offset = None
+        self._skip_mode = False
 
     def len_worker(self, worker_idx: int | None = None) -> int:
         return self.dataset.len_worker(worker_idx)
+
+    def set_skip_mode(self, active: bool) -> None:
+        if self.map_fn_skip_safe and not inspect.isgeneratorfunction(self.map_fn):
+            self.dataset.set_skip_mode(active)
+        else:
+            self.dataset.set_skip_mode(False)
+        self._skip_mode = active
 
     def __iter__(self) -> Iterator[T_sample_out]:
         if self._generator_sample_key is not None:
             assert self._generator_offset is not None
             sample = self.dataset.restore_sample(self._generator_sample_key)
             # Do not increment the sample index, use previous index
-            with self._sample_index.ctx(self._sample_index.current_idx) as sample_idx:
+            with self._sample_index.ctx(self._sample_index.current_idx - 1) as sample_idx:
                 mapped_sample = self.map_fn(sample)
             assert isinstance(mapped_sample, Generator)
             assert inspect.isgeneratorfunction(self.map_fn), (
@@ -111,21 +163,34 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
                 # Skip other samples
                 if idx >= target_offset:
                     self._generator_offset = idx + 1
-                    yield add_sample_restore_key(
+                    yield set_sample_restore_key(
                         inner_sample,
-                        sample_idx,
-                        idx,
-                        src=self,
+                        MapGenRestoreKey(
+                            sample_idx=sample_idx, gen_idx=idx, inner=self._generator_sample_key
+                        ),
                     )
             self._generator_sample_key = None
             self._generator_offset = None
 
         for sample in self.dataset:
+            if (
+                self._skip_mode
+                and self.map_fn_skip_safe
+                and not inspect.isgeneratorfunction(self.map_fn)
+            ):
+                self._sample_index.skip(1)
+                yield cast(T_sample_out, None)
+                continue
             restore_key = get_sample_restore_key(sample)
-            with self._map_failure_handler.handle_errors(sample):
+            with self._map_failure_handler.handle_errors(
+                sample,
+                skip_safe=self.map_fn_skip_safe
+                and (self._skip_mode or self.worker_config.logical_workers is not None),
+            ):
                 with self._sample_index.ctx() as sample_idx:
                     mapped_sample = self.map_fn(sample)
                 if isinstance(mapped_sample, Generator):
+                    assert not self.map_fn_skip_safe, "Generator in map_fn but skip_mode is active"
                     assert inspect.isgeneratorfunction(self.map_fn), (
                         f"Generator in {self.map_fn} but not marked as such."
                     )
@@ -138,20 +203,26 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
                     ):
                         self._generator_offset = idx + 1
                         self._map_failure_handler.reset()
-                        yield add_sample_restore_key(
-                            inner_sample,
-                            sample_idx,
-                            idx,
-                            src=self,
+                        yield (
+                            inner_sample
+                            if restore_key is None
+                            else set_sample_restore_key(
+                                inner_sample,
+                                MapGenRestoreKey(
+                                    sample_idx=sample_idx, gen_idx=idx, inner=restore_key
+                                ),
+                            )
                         )
                     self._generator_sample_key = None
                     self._generator_offset = None
                 else:
                     self._map_failure_handler.reset()
-                    yield add_sample_restore_key(
-                        mapped_sample,
-                        sample_idx,
-                        src=self,
+                    yield (
+                        mapped_sample
+                        if restore_key is None
+                        else set_sample_restore_key(
+                            mapped_sample, MapRestoreKey(sample_idx=sample_idx, inner=restore_key)
+                        )
                     )
 
     def can_restore_sample(self) -> bool:
@@ -163,36 +234,23 @@ class MapDataset(BaseWrapperDataset[T_sample, T_sample_out], Generic[T_sample, T
         )
         super().assert_can_restore()
 
-    def restore_sample(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> T_sample_out:
+    def restore_sample(self, restore_key: RestoreKey) -> T_sample_out:
         self.assert_can_restore()
-        if inspect.isgeneratorfunction(self.map_fn):
-            id, sample_idx, local_idx = restore_key[:3]
-            assert id == type(self).__name__
-            restore_key = restore_key[3:]
-            assert isinstance(local_idx, int)
-        else:
-            id, sample_idx = restore_key[:2]
-            assert id == type(self).__name__
-            restore_key = restore_key[2:]
-        inner_sample = self.dataset.restore_sample(restore_key)
+        key = cast(MapRestoreKey, restore_key)
+        inner_sample = self.dataset.restore_sample(key.inner)
 
         with handle_restore_errors(self.worker_config.restore_error_handler, inner_sample):
-            with self._sample_index.ctx(sample_idx):
+            with self._sample_index.ctx(key.sample_idx):
                 mapped_sample = self.map_fn(inner_sample)
-            if isinstance(mapped_sample, Generator):
-                assert inspect.isgeneratorfunction(self.map_fn), (
-                    f"Generator in {self.map_fn} but not marked as such."
-                )
-                for idx, (sample_idx, res_sample) in enumerate(
-                    self._sample_index.iter_ctx(mapped_sample, sample_idx)
+            if isinstance(key, MapGenRestoreKey):
+                assert isinstance(mapped_sample, Generator)
+                for idx, (_, sample) in enumerate(
+                    self._sample_index.iter_ctx(mapped_sample, key.sample_idx)
                 ):
-                    if idx == local_idx:
-                        return add_sample_restore_key(res_sample, sample_idx, local_idx, src=self)
-                assert False, (
-                    "Generator did not yield enough samples, but is marked stateless/deterministic."
-                )
-            else:
-                return add_sample_restore_key(mapped_sample, sample_idx, src=self)
+                    if idx == key.gen_idx:
+                        return set_sample_restore_key(sample, key)
+                raise ValueError(f"Generator output {key.gen_idx} is missing for {key!r}")
+            return set_sample_restore_key(mapped_sample, key)
 
     def config(self) -> Dict[str, Any]:
         return {

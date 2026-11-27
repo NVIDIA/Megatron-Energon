@@ -3,13 +3,24 @@
 
 from abc import ABC, abstractmethod
 from contextlib import ExitStack, contextmanager
-from typing import Any, Generator, Generic, Iterable, Optional, Tuple, Type, TypeVar, Union
+from dataclasses import dataclass
+from typing import (
+    Any,
+    Generator,
+    Generic,
+    Iterable,
+    Optional,
+    Tuple,
+    Type,
+    TypeVar,
+    Union,
+    cast,
+)
 
 from megatron.energon.flavors.base_dataset import (
     FlexState,
-    Sample,
+    RestoreKey,
     SavableDataset,
-    add_sample_restore_key,
 )
 from megatron.energon.savable import Savable
 from megatron.energon.worker import WorkerConfig
@@ -18,6 +29,20 @@ T = TypeVar("T")
 T_sample = TypeVar("T_sample", covariant=True)
 T_sample_out = TypeVar("T_sample_out", covariant=True)
 T_sample_in = TypeVar("T_sample_in", covariant=True)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class WrappedRestoreKey(RestoreKey):
+    """A key that wraps one child sample."""
+
+    inner: RestoreKey
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class MultiWrappedRestoreKey(RestoreKey):
+    """A key that groups the ordered inputs needed for one output."""
+
+    inner: tuple[RestoreKey | None, ...]
 
 
 class BaseWrapperDataset(SavableDataset[T_sample_out], Generic[T_sample_in, T_sample_out], ABC):
@@ -64,12 +89,25 @@ class BaseWrapperDataset(SavableDataset[T_sample_out], Generic[T_sample_in, T_sa
     def worker_has_samples(self) -> bool:
         return any(ds.worker_has_samples() for ds in self.datasets)
 
+    def set_skip_mode(self, active: bool) -> None:
+        for ds in self.datasets:
+            ds.set_skip_mode(active)
+
     def close(self) -> None:
         """Close all child datasets, even if closing one of them fails."""
         with ExitStack() as stack:
             # The same child may be wrapped multiple times, close it only once per call
             for dataset in {id(dataset): dataset for dataset in self.datasets}.values():
                 stack.callback(dataset.close)
+
+    def worker_init(self) -> None:
+        for dataset in {id(dataset): dataset for dataset in self.datasets}.values():
+            dataset.worker_init()
+
+    def worker_close(self) -> None:
+        with ExitStack() as stack:
+            for dataset in {id(dataset): dataset for dataset in self.datasets}.values():
+                stack.callback(dataset.worker_close)
 
     def _find_wrapped_dataset(self, cls: Type[SavableDataset]) -> Optional[SavableDataset]:
         """Find the outermost dataset wrapped in this dataset that is of type cls."""
@@ -83,19 +121,8 @@ class BaseWrapperDataset(SavableDataset[T_sample_out], Generic[T_sample_in, T_sa
                     return res
         return None
 
-    def restore_sample(self, restore_key: Tuple[Union[str, int, tuple], ...]) -> T_sample_out:
-        if len(self.datasets) == 1:
-            return self.datasets[0].restore_sample(restore_key)
-        else:
-            id, ds_idx = restore_key[:2]
-            assert id == type(self).__name__
-            restore_key = restore_key[2:]
-            assert isinstance(ds_idx, int)
-            return add_sample_restore_key(
-                self.datasets[ds_idx].restore_sample(restore_key),
-                ds_idx,
-                src=self,
-            )
+    def restore_sample(self, restore_key: RestoreKey) -> T_sample_out:
+        return self.dataset.restore_sample(restore_key)
 
     def save_state(self) -> FlexState:
         own_state = super().save_state()
@@ -108,6 +135,18 @@ class BaseWrapperDataset(SavableDataset[T_sample_out], Generic[T_sample_in, T_sa
             dataset.restore_state(dstate)
 
         super().restore_state(state)
+
+    @classmethod
+    def _wrap_child_state(cls, child: FlexState, **fields: Any) -> FlexState:
+        """Build a checkpoint for a single-child wrapper from its saved fields."""
+        assert fields.keys() == set(cls._savable_fields)
+        return FlexState(__class__=cls.__name__, datasets=[child], **fields)
+
+    @classmethod
+    def _unwrap_child_state(cls, state: FlexState) -> FlexState:
+        assert state["__class__"] == cls.__name__
+        (child,) = state["datasets"]
+        return child
 
     def reset_state_deep(self) -> None:
         """Resets the state of the inner datasets and then the own state."""
@@ -130,9 +169,8 @@ class SampleIndex(Savable):
     """A simple class to hold the sample index for one worker."""
 
     worker_config: WorkerConfig
+    src: Any
     current_idx: int
-
-    actives = 0
 
     def __init__(self, worker_config: WorkerConfig, *, src: Any) -> None:
         self.worker_config = worker_config
@@ -150,15 +188,11 @@ class SampleIndex(Savable):
             sample_idx = self.get_next()
         assert WorkerConfig.active_worker_config is not None
         WorkerConfig.active_worker_config.worker_push_sample_index(sample_idx)
-        # print("  " * SampleIndex.actives + f"Activated from {type(self.src).__name__}({id(self.src)}) {sample_idx} -> {WorkerConfig.active_worker_config._sample_index_stack}")
-        SampleIndex.actives += 1
         try:
             yield sample_idx
         finally:
             assert WorkerConfig.active_worker_config is not None
             popped = WorkerConfig.active_worker_config.worker_pop_sample_index()
-            SampleIndex.actives -= 1
-            # print("  " * SampleIndex.actives + f"Deactivate from {type(self.src).__name__}({id(self.src)}) {sample_idx} -> {WorkerConfig.active_worker_config._sample_index_stack}")
             assert popped == sample_idx, f"Expected {sample_idx}, got {popped}"
 
     def iter_ctx(
@@ -179,6 +213,10 @@ class SampleIndex(Savable):
             if hasattr(it, "close"):
                 it.close()
 
+    def skip(self, n: int = 1) -> None:
+        """Advance the sample index as if ``n`` outputs had been yielded."""
+        self.current_idx += n
+
     def save_state(self) -> int:
         return self.current_idx
 
@@ -189,11 +227,10 @@ class SampleIndex(Savable):
             self.current_idx = state
 
 
-def get_sample_restore_key(sample: Any) -> Optional[Union[str, int]]:
-    """Gets the restore key from an arbitrary sample."""
-    if isinstance(sample, Sample) or hasattr(sample, "__restore_key__"):
-        return sample.__restore_key__
-    elif isinstance(sample, dict) and "__restore_key__" in sample:
-        return sample["__restore_key__"]
+def get_sample_restore_key(sample: Any) -> RestoreKey | None:
+    """Get the typed restore address from a sample or batch, if it has one."""
+    if isinstance(sample, dict):
+        key = sample.get("__restore_key__")
     else:
-        return None
+        key = getattr(sample, "__restore_key__", None)
+    return cast(RestoreKey | None, key)

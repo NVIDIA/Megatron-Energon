@@ -34,8 +34,8 @@ def gc_init_worker(worker_id: int):
     It should be called as early as possible in the worker process, ideally in
     the worker_init_fn of the DataLoader.
 
-    By keeping a reference to all CUDA tensors in the worker process, we can
-    prevent the forked tensors from being garbage collected."""
+    Retain inherited CUDA tensors and CPU tensors that could own CUDA-pinned memory.
+    Their allocator cannot free these tensors safely in a forked worker."""
 
     global _frozen_gc_objects_initialized, _frozen_gc_objects
 
@@ -53,12 +53,14 @@ def gc_init_worker(worker_id: int):
         if object_type is not None
     )
 
+    # Querying whether a CPU tensor is pinned can itself touch CUDA in the child.
+    retain_cpu_tensors = torch.cuda._is_in_bad_fork()
     num_tensors = 0
     for o in gc.get_objects():
         try:
             if o is not reduce_op:
                 if isinstance(o, torch.Tensor):
-                    if isinstance(o, ShardedTensorBase) or o.is_cuda:
+                    if retain_cpu_tensors or isinstance(o, ShardedTensorBase) or o.is_cuda:
                         # Calling .is_cuda or any hasattr on ShardedTensor will raise an error
                         # Hence, o.is_cuda is only called if o is not a ShardedTensor (in the if above)
 

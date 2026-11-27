@@ -33,6 +33,16 @@ class Watchdog:
          2) if still alive after 10s, os._exit(1).
     """
 
+    _callback: Callable[[], None] | None
+    _cv: threading.Condition
+    _deadline: float | None
+    _dump_stacks: bool
+    _initial_timeout: float | None
+    _is_first_iteration: bool
+    _stop: bool
+    _timeout: float
+    _worker_thread: threading.Thread
+
     def __init__(
         self,
         timeout: float,
@@ -58,7 +68,7 @@ class Watchdog:
         # If _deadline is None, the watchdog is disabled.
         # Otherwise, _deadline = time.time() + _timeout if enabled.
         if enabled:
-            self._deadline: Optional[float] = perf_counter() + self._get_next_timeout()
+            self._deadline = perf_counter() + self._get_next_timeout()
         else:
             self._deadline = None
 

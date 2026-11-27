@@ -105,6 +105,8 @@ class BinIdxDatasetFactory(BaseSingleFileDatasetFactory[CrudeSample]):
 class DefaultBinIdxDatasetFactory(BinIdxDatasetFactory):
     """Adds tags to the sample and decodes token bytes back to a numpy array."""
 
+    _dtype: type
+
     @classmethod
     def detect_path(cls, path: EPath) -> EnergonDatasetType | None:
         if (

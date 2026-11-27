@@ -21,6 +21,8 @@ if TYPE_CHECKING:
 class DuplicateSampleKeyError(RuntimeError):
     """Raised when attempting to insert a duplicate sample key into the index."""
 
+    sample_key: str
+
     def __init__(self, sample_key: str) -> None:
         super().__init__(f"Duplicate sample key encountered while indexing: {sample_key!r}")
         self.sample_key = sample_key
@@ -510,10 +512,15 @@ class SqliteIndexReader:
         return (row[0], row[1]) if row is not None else None
 
     def close(self):
-        """Close the database connection."""
-        if self.db is not None:
-            self.db.thread_close()
+        """Release the database reader."""
+        self.thread_close()
+        if hasattr(self, "db"):
             del self.db
+
+    def thread_close(self) -> None:
+        """Release only the active thread's database connection."""
+        if db := getattr(self, "db", None):
+            db.thread_close()
 
     def __enter__(self):
         return self
