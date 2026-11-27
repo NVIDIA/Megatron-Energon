@@ -11,6 +11,7 @@ import logging
 import math
 import multiprocessing
 import os
+import pickle
 import random
 import shutil
 import sys
@@ -979,6 +980,52 @@ class TestDataset(unittest.TestCase):
         print(bs_hist)
         assert 150 <= bs_hist[10] <= 250
         assert 750 <= bs_hist[20] <= 850
+
+    def test_blend_save_restore_unused_datasets(self):
+        """Datasets that were not used yet save no generator state and still restore exactly."""
+        num_datasets = 16
+
+        def build_loader():
+            return get_savable_loader(
+                BlendDataset(
+                    *[
+                        (
+                            get_train_dataset(
+                                self.dataset_path,
+                                batch_size=1,
+                                worker_config=no_worker_config,
+                                shuffle_buffer_size=None,
+                                max_samples_per_sequence=None,
+                            ),
+                            1,
+                        )
+                        for _ in range(num_datasets)
+                    ],
+                    worker_config=no_worker_config,
+                )
+            )
+
+        def next_keys(loader, n):
+            return [batch.__key__ for _, batch in zip(range(n), loader)]
+
+        loader = build_loader()
+        next_keys(loader, 2)
+        state = loader.save_state_rank()
+        expected = next_keys(loader, 20)
+
+        # At most 2 of the blended datasets were used, the others do not store a generator state.
+        generator_state_size = torch.Generator().get_state().numel()
+        assert len(pickle.dumps(state)) < num_datasets / 2 * generator_state_size
+
+        # Save right after restoring, before the restored generators are used again.
+        restored_loader = build_loader()
+        restored_loader.restore_state_rank(state)
+        resaved_state = restored_loader.save_state_rank()
+        assert next_keys(restored_loader, 20) == expected
+
+        restored_loader = build_loader()
+        restored_loader.restore_state_rank(resaved_state)
+        assert next_keys(restored_loader, 20) == expected
 
     def test_mixing_homogeneous(self):
         @dataclass
